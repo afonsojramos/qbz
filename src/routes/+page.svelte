@@ -196,6 +196,13 @@
     volume?: number;
   };
 
+  type QconnectConnectionStatus = {
+    running: boolean;
+    transport_connected: boolean;
+    endpoint_url?: string | null;
+    last_error?: string | null;
+  };
+
   const MEDIA_SEEK_FALLBACK_SECS = 10;
 
   // Types
@@ -572,6 +579,8 @@
 
   // Cast State
   let isCastConnected = $state(false);
+  let isQobuzConnectConnected = $state(false);
+  let qobuzConnectBusy = $state(false);
 
   // Playlist Modal State (from uiStore subscription)
   let isPlaylistModalOpen = $state(false);
@@ -642,6 +651,32 @@
     } catch (err) {
       console.error('Failed to load favorites preferences:', err);
       favoritesDefaultTab = 'tracks';
+    }
+  }
+
+  async function refreshQobuzConnectStatus(): Promise<void> {
+    try {
+      const status = await invoke<QconnectConnectionStatus>('v2_qconnect_status');
+      isQobuzConnectConnected = Boolean(status.transport_connected);
+    } catch {
+      isQobuzConnectConnected = false;
+    }
+  }
+
+  async function handleQobuzConnectButton(): Promise<void> {
+    if (qobuzConnectBusy) return;
+    qobuzConnectBusy = true;
+    try {
+      if (isQobuzConnectConnected) {
+        await invoke('v2_qconnect_disconnect');
+      } else {
+        await invoke('v2_qconnect_connect', { options: null });
+      }
+    } catch (err) {
+      console.error('Qobuz Connect toggle failed:', err);
+    } finally {
+      await refreshQobuzConnectStatus();
+      qobuzConnectBusy = false;
     }
   }
 
@@ -2894,6 +2929,10 @@
   onMount(() => {
     // Bootstrap app (theme, mouse nav, Last.fm restore)
     const { cleanup: cleanupBootstrap } = bootstrapApp();
+    void refreshQobuzConnectStatus();
+    const qobuzConnectStatusInterval = setInterval(() => {
+      void refreshQobuzConnectStatus();
+    }, 5000);
 
     // Keyboard navigation
     document.addEventListener('keydown', handleKeydown);
@@ -3393,6 +3432,7 @@
       cleanupBootstrap();
       document.removeEventListener('keydown', handleKeydown);
       unregisterAll(); // Cleanup keybinding actions
+      clearInterval(qobuzConnectStatusInterval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       stopOfflineCacheEventListeners();
@@ -4209,6 +4249,8 @@
         onOpenFullScreen={openFullScreen}
         onCast={openCastPicker}
         {isCastConnected}
+        onQobuzConnect={handleQobuzConnectButton}
+        {isQobuzConnectConnected}
         onToggleLyrics={toggleLyricsSidebar}
         lyricsActive={lyricsSidebarVisible}
         onArtistClick={() => {
@@ -4244,6 +4286,8 @@
         onOpenFullScreen={openFullScreen}
         onCast={openCastPicker}
         {isCastConnected}
+        onQobuzConnect={handleQobuzConnectButton}
+        {isQobuzConnectConnected}
         queueOpen={isQueueOpen}
         {volume}
         onVolumeChange={handleVolumeChange}

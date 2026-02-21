@@ -62,9 +62,11 @@
     onOpenFullScreen?: () => void;
     onOpenMiniPlayer?: () => void;
     onCast?: () => void;
+    onQobuzConnect?: () => void;
     onToggleLyrics?: () => void;
     lyricsActive?: boolean;
     isCastConnected?: boolean;
+    isQobuzConnectConnected?: boolean;
     onArtistClick?: () => void;
     onAlbumClick?: () => void;
     onTrackClick?: () => void;
@@ -107,9 +109,11 @@
     onOpenFullScreen,
     onOpenMiniPlayer,
     onCast,
+    onQobuzConnect,
     onToggleLyrics,
     lyricsActive = false,
     isCastConnected = false,
+    isQobuzConnectConnected = false,
     onArtistClick,
     onAlbumClick,
     onTrackClick,
@@ -377,6 +381,15 @@
 
       <button
         class="control-btn"
+        class:qconnect-active={isQobuzConnectConnected}
+        onclick={onQobuzConnect}
+        title={isQobuzConnectConnected ? $t('player.qobuzConnectManage') : $t('player.qobuzConnect')}
+      >
+        <span class="qconnect-icon" aria-hidden="true"></span>
+      </button>
+
+      <button
+        class="control-btn"
         class:active={lyricsActive && !isOffline}
         class:disabled={isOffline}
         onclick={isOffline ? undefined : onToggleLyrics}
@@ -625,6 +638,11 @@
     animation: cast-pulse 2s ease-in-out infinite;
   }
 
+  .control-btn.qconnect-active {
+    color: var(--accent-primary, #6366f1);
+    animation: qconnect-pulse 2s ease-in-out infinite;
+  }
+
   .control-btn.disabled {
     color: var(--text-disabled);
     opacity: 0.5;
@@ -639,6 +657,26 @@
   @keyframes cast-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.6; }
+  }
+
+  @keyframes qconnect-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+
+  .qconnect-icon {
+    display: block;
+    width: 16px;
+    height: 16px;
+    background-color: currentColor;
+    mask-image: url('/qobuz-logo.svg');
+    mask-size: contain;
+    mask-repeat: no-repeat;
+    mask-position: center;
+    -webkit-mask-image: url('/qobuz-logo.svg');
+    -webkit-mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-position: center;
   }
 
   /* Section Separator */
