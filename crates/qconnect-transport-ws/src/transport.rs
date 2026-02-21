@@ -600,22 +600,52 @@ fn handle_incoming_binary(
             //   field 3 (bytes): the actual QConnectMessage protobuf
             // We must unwrap field 3 before passing to the decoders.
             let qconnect_bytes = match QCloudInnerEnvelope::decode(inner_payload.as_slice()) {
-                Ok(envelope) => envelope.message.unwrap_or_default(),
-                Err(_) => inner_payload,
+                Ok(envelope) => {
+                    let msg = envelope.message.unwrap_or_default();
+                    log::info!(
+                        "[QConnect/Decode] Envelope unwrapped: corr={:?} seq={:?} message_len={}",
+                        envelope.correlation_id,
+                        envelope.sequence,
+                        msg.len()
+                    );
+                    msg
+                }
+                Err(err) => {
+                    log::warn!(
+                        "[QConnect/Decode] Envelope decode failed ({}), using raw {} bytes",
+                        err,
+                        inner_payload.len()
+                    );
+                    inner_payload
+                }
             };
 
-            if let Ok(events) = decode_queue_server_events(&qconnect_bytes) {
-                for event in events {
-                    emit(events_tx, TransportEvent::InboundQueueServerEvent(event));
+            match decode_queue_server_events(&qconnect_bytes) {
+                Ok(events) => {
+                    log::info!("[QConnect/Decode] Queue events decoded: {}", events.len());
+                    for event in events {
+                        emit(events_tx, TransportEvent::InboundQueueServerEvent(event));
+                    }
+                }
+                Err(err) => {
+                    log::warn!("[QConnect/Decode] Queue events decode error: {}", err);
                 }
             }
 
-            if let Ok(commands) = decode_renderer_server_commands(&qconnect_bytes) {
-                for command in commands {
-                    emit(
-                        events_tx,
-                        TransportEvent::InboundRendererServerCommand(command),
-                    );
+            match decode_renderer_server_commands(&qconnect_bytes) {
+                Ok(commands) => {
+                    if !commands.is_empty() {
+                        log::info!("[QConnect/Decode] Renderer commands decoded: {}", commands.len());
+                    }
+                    for command in commands {
+                        emit(
+                            events_tx,
+                            TransportEvent::InboundRendererServerCommand(command),
+                        );
+                    }
+                }
+                Err(err) => {
+                    log::debug!("[QConnect/Decode] Renderer commands decode error: {}", err);
                 }
             }
 
