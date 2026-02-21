@@ -168,9 +168,6 @@
     syncQueueState,
     toggleShuffle as queueToggleShuffle,
     toggleRepeat as queueToggleRepeat,
-    addToQueueNext,
-    addToQueue,
-    addTracksToQueue,
     setQueue,
     clearQueue,
     playQueueIndex,
@@ -625,6 +622,7 @@
   let qobuzConnectDiagnosticsLogs = $state<QconnectDiagnosticsEntry[]>([]);
   const showQconnectDevDiagnostics = import.meta.env.DEV;
   const QCONNECT_DIAGNOSTIC_LOG_LIMIT = 200;
+  let qconnectSessionPersistenceSkipLogged = false;
 
   // Playlist Modal State (from uiStore subscription)
   let isPlaylistModalOpen = $state(false);
@@ -736,6 +734,23 @@
       return 'qconnect.admissionBlockedPlex';
     }
     return 'qconnect.admissionBlockedUnknown';
+  }
+
+  function isQconnectRemoteModeActive(): boolean {
+    return Boolean(isQobuzConnectConnected || qobuzConnectStatus.transport_connected);
+  }
+
+  function shouldPersistLocalSession(): boolean {
+    if (!isQconnectRemoteModeActive()) {
+      qconnectSessionPersistenceSkipLogged = false;
+      return true;
+    }
+
+    if (!qconnectSessionPersistenceSkipLogged) {
+      console.log('[Session] Skipping local session persistence while Qobuz Connect remote mode is active');
+      qconnectSessionPersistenceSkipLogged = true;
+    }
+    return false;
   }
 
   async function refreshQobuzConnectStatus(): Promise<void> {
@@ -1244,9 +1259,10 @@
     if (!album?.tracks?.length) return;
 
     const artwork = album.artwork || '';
+    let queuedCount = 0;
     for (let i = album.tracks.length - 1; i >= 0; i--) {
       const trk = album.tracks[i];
-      queueTrackNext({
+      const queued = await queueTrackNext({
         id: trk.id,
         title: trk.title,
         artist: trk.artist || album.artist || 'Unknown Artist',
@@ -1259,9 +1275,16 @@
         is_local: false,
         album_id: album.id,
         artist_id: trk.artistId ?? album.artistId
-      });
+      }, false, { silent: true });
+      if (queued) {
+        queuedCount += 1;
+      }
     }
-    showToast($t('toast.playingTracksNext', { values: { count: album.tracks.length } }), 'success');
+    if (queuedCount > 0) {
+      showToast($t('toast.playingTracksNext', { values: { count: queuedCount } }), 'success');
+    } else {
+      showToast($t('toast.failedAddToQueue'), 'error');
+    }
   }
 
   async function queueAlbumLaterById(albumId: string) {
@@ -1284,9 +1307,16 @@
       artist_id: trk.artistId ?? album.artistId
     }));
 
-    const success = await addTracksToQueue(queueTracks);
-    if (success) {
-      showToast($t('toast.addedTracksToQueue', { values: { count: queueTracks.length } }), 'success');
+    let queuedCount = 0;
+    for (const queueTrack of queueTracks) {
+      const queued = await queueTrackLater(queueTrack, false, { silent: true });
+      if (queued) {
+        queuedCount += 1;
+      }
+    }
+
+    if (queuedCount > 0) {
+      showToast($t('toast.addedTracksToQueue', { values: { count: queuedCount } }), 'success');
     } else {
       showToast($t('toast.failedAddToQueue'), 'error');
     }
@@ -1448,9 +1478,10 @@
 
     const tracks = playlist.tracks.items;
     // Add in reverse order so they play in correct sequence
+    let queuedCount = 0;
     for (let i = tracks.length - 1; i >= 0; i--) {
       const trk = tracks[i];
-      queueTrackNext({
+      const queued = await queueTrackNext({
         id: trk.id,
         title: trk.title,
         artist: trk.performer?.name || 'Unknown Artist',
@@ -1463,9 +1494,17 @@
         is_local: false,
         album_id: trk.album?.id,
         artist_id: trk.performer?.id
-      });
+      }, false, { silent: true });
+      if (queued) {
+        queuedCount += 1;
+      }
     }
-    showToast($t('toast.playingTracksNext', { values: { count: tracks.length } }), 'success');
+
+    if (queuedCount > 0) {
+      showToast($t('toast.playingTracksNext', { values: { count: queuedCount } }), 'success');
+    } else {
+      showToast($t('toast.failedAddToQueue'), 'error');
+    }
   }
 
   async function queuePlaylistLaterById(playlistId: number) {
@@ -1491,9 +1530,16 @@
       artist_id: trk.performer?.id
     }));
 
-    const success = await addTracksToQueue(queueTracks);
-    if (success) {
-      showToast($t('toast.addedTracksToQueue', { values: { count: queueTracks.length } }), 'success');
+    let queuedCount = 0;
+    for (const queueTrack of queueTracks) {
+      const queued = await queueTrackLater(queueTrack, false, { silent: true });
+      if (queued) {
+        queuedCount += 1;
+      }
+    }
+
+    if (queuedCount > 0) {
+      showToast($t('toast.addedTracksToQueue', { values: { count: queuedCount } }), 'success');
     } else {
       showToast($t('toast.failedAddToQueue'), 'error');
     }
@@ -1652,7 +1698,9 @@
     if (result.success) {
       showToast(result.enabled ? $t('toast.shuffleEnabled') : $t('toast.shuffleDisabled'), 'info');
       // Persist playback mode to session
-      saveSessionPlaybackMode(result.enabled, repeatMode);
+      if (shouldPersistLocalSession()) {
+        saveSessionPlaybackMode(result.enabled, repeatMode);
+      }
     }
   }
 
@@ -1666,7 +1714,9 @@
       };
       showToast(messages[result.mode], 'info');
       // Persist playback mode to session
-      saveSessionPlaybackMode(isShuffle, result.mode);
+      if (shouldPersistLocalSession()) {
+        saveSessionPlaybackMode(isShuffle, result.mode);
+      }
     }
   }
 
@@ -2148,9 +2198,10 @@
 
     const artwork = album.artwork || '';
     // Add in reverse order so first track ends up right after current
+    let queuedCount = 0;
     for (let i = playableTracks.length - 1; i >= 0; i--) {
       const trk = playableTracks[i];
-      queueTrackNext({
+      const queued = await queueTrackNext({
         id: trk.id,
         title: trk.title,
         artist: trk.artist || album.artist || 'Unknown Artist',
@@ -2163,9 +2214,17 @@
         is_local: false,
         album_id: album.id,
         artist_id: trk.artistId ?? album.artistId
-      });
+      }, false, { silent: true });
+      if (queued) {
+        queuedCount += 1;
+      }
     }
-    showToast($t('toast.playingTracksNext', { values: { count: playableTracks.length } }), 'success');
+
+    if (queuedCount > 0) {
+      showToast($t('toast.playingTracksNext', { values: { count: queuedCount } }), 'success');
+    } else {
+      showToast($t('toast.failedAddToQueue'), 'error');
+    }
   }
 
   // Add all album tracks to end of queue
@@ -2197,9 +2256,16 @@
       artist_id: trk.artistId ?? album.artistId
     }));
 
-    const success = await addTracksToQueue(queueTracks);
-    if (success) {
-      showToast($t('toast.addedTracksToQueue', { values: { count: queueTracks.length } }), 'success');
+    let queuedCount = 0;
+    for (const queueTrack of queueTracks) {
+      const queued = await queueTrackLater(queueTrack, false, { silent: true });
+      if (queued) {
+        queuedCount += 1;
+      }
+    }
+
+    if (queuedCount > 0) {
+      showToast($t('toast.addedTracksToQueue', { values: { count: queuedCount } }), 'success');
     } else {
       showToast($t('toast.failedAddToQueue'), 'error');
     }
@@ -2748,74 +2814,79 @@
       console.debug('[Reco] Score training failed:', err);
     });
 
-    // Restore previous session if available
+    // Restore previous local session only when Qobuz Connect remote mode is not active.
     try {
-      const session = await loadSessionState();
+      await refreshQobuzConnectStatus();
+      if (!isQconnectRemoteModeActive()) {
+        const session = await loadSessionState();
 
-      // Restore queue + track (visual only — paused at 0:00)
-      if (session && session.queue_tracks.length > 0) {
-        console.log('[Session] Restoring previous session...');
+        // Restore queue + track (visual only — paused at 0:00)
+        if (session && session.queue_tracks.length > 0) {
+          console.log('[Session] Restoring previous session...');
 
-        const tracks: BackendQueueTrack[] = session.queue_tracks.map(trk => ({
-          id: trk.id,
-          title: trk.title,
-          artist: trk.artist,
-          album: trk.album,
-          duration_secs: trk.duration_secs,
-          artwork_url: trk.artwork_url,
-          hires: trk.hires ?? false,
-          bit_depth: trk.bit_depth ?? null,
-          sample_rate: trk.sample_rate ?? null,
-          is_local: trk.is_local ?? false,
-          album_id: trk.album_id ?? null,
-          artist_id: trk.artist_id ?? null
-        }));
+          const tracks: BackendQueueTrack[] = session.queue_tracks.map(trk => ({
+            id: trk.id,
+            title: trk.title,
+            artist: trk.artist,
+            album: trk.album,
+            duration_secs: trk.duration_secs,
+            artwork_url: trk.artwork_url,
+            hires: trk.hires ?? false,
+            bit_depth: trk.bit_depth ?? null,
+            sample_rate: trk.sample_rate ?? null,
+            is_local: trk.is_local ?? false,
+            album_id: trk.album_id ?? null,
+            artist_id: trk.artist_id ?? null
+          }));
 
-        await setQueue(tracks, session.current_index ?? 0, true);
+          await setQueue(tracks, session.current_index ?? 0, true);
 
-        // Restore shuffle/repeat mode
-        if (session.shuffle_enabled) {
-          await invoke('v2_set_shuffle', { enabled: true });
+          // Restore shuffle/repeat mode
+          if (session.shuffle_enabled) {
+            await invoke('v2_set_shuffle', { enabled: true });
+          }
+          if (session.repeat_mode !== 'off') {
+            const v2Mode = session.repeat_mode.charAt(0).toUpperCase() + session.repeat_mode.slice(1);
+            await invoke('v2_set_repeat_mode', { mode: v2Mode });
+          }
+
+          // Restore volume
+          playerSetVolume(Math.round(session.volume * 100));
+
+          // Visual-only track restore: show in player bar paused at 0:00
+          if (session.current_index !== null && tracks[session.current_index]) {
+            const track = tracks[session.current_index];
+
+            // Use cached data for instant display (no network fetch needed)
+            const quality = track.hires
+              ? `${track.bit_depth ?? 24}/${track.sample_rate ? track.sample_rate / 1000 : 96}`
+              : 'CD';
+            setCurrentTrack({
+              id: track.id,
+              title: track.title,
+              artist: track.artist,
+              album: track.album,
+              artwork: track.artwork_url || '',
+              duration: track.duration_secs,
+              quality,
+              bitDepth: track.bit_depth ?? undefined,
+              samplingRate: track.sample_rate ?? undefined,
+            });
+
+            // First play will load a fresh stream instead of seeking
+            setPendingSessionRestore(track.id, 0);
+            console.log(`[Session] Track ${track.id} restored visually (paused at 0:00)`);
+          }
+
+          console.log('[Session] Session restored successfully');
         }
-        if (session.repeat_mode !== 'off') {
-          const v2Mode = session.repeat_mode.charAt(0).toUpperCase() + session.repeat_mode.slice(1);
-          await invoke('v2_set_repeat_mode', { mode: v2Mode });
+
+        // Restore last page (opt-in via settings)
+        if (session) {
+          restoreLastView(session);
         }
-
-        // Restore volume
-        playerSetVolume(Math.round(session.volume * 100));
-
-        // Visual-only track restore: show in player bar paused at 0:00
-        if (session.current_index !== null && tracks[session.current_index]) {
-          const track = tracks[session.current_index];
-
-          // Use cached data for instant display (no network fetch needed)
-          const quality = track.hires
-            ? `${track.bit_depth ?? 24}/${track.sample_rate ? track.sample_rate / 1000 : 96}`
-            : 'CD';
-          setCurrentTrack({
-            id: track.id,
-            title: track.title,
-            artist: track.artist,
-            album: track.album,
-            artwork: track.artwork_url || '',
-            duration: track.duration_secs,
-            quality,
-            bitDepth: track.bit_depth ?? undefined,
-            samplingRate: track.sample_rate ?? undefined,
-          });
-
-          // First play will load a fresh stream instead of seeking
-          setPendingSessionRestore(track.id, 0);
-          console.log(`[Session] Track ${track.id} restored visually (paused at 0:00)`);
-        }
-
-        console.log('[Session] Session restored successfully');
-      }
-
-      // Restore last page (opt-in via settings)
-      if (session) {
-        restoreLastView(session);
+      } else {
+        console.log('[Session] Skipping local session restore while Qobuz Connect remote mode is active');
       }
     } catch (err) {
       console.error('[Session] Failed to restore session:', err);
@@ -2898,6 +2969,7 @@
   // Save session state before window closes
   async function saveSessionBeforeClose() {
     if (!isLoggedIn) return;
+    if (!shouldPersistLocalSession()) return;
 
     try {
       // Build view context from current navigation state
@@ -2995,9 +3067,11 @@
   // Debounced full session save (coalesces rapid state changes into a single save)
   let sessionSaveDebounce: ReturnType<typeof setTimeout> | null = null;
   function debouncedFullSessionSave() {
+    if (!shouldPersistLocalSession()) return;
     if (sessionSaveDebounce) clearTimeout(sessionSaveDebounce);
     sessionSaveDebounce = setTimeout(() => {
       sessionSaveDebounce = null;
+      if (!shouldPersistLocalSession()) return;
       saveSessionBeforeClose();
     }, 2000);
   }
@@ -3006,8 +3080,10 @@
   let sessionSaveInterval: ReturnType<typeof setInterval> | null = null;
 
   $effect(() => {
+    const qconnectRemoteModeActive = isQconnectRemoteModeActive();
+
     // Start periodic save when playing, stop when paused/stopped
-    if (isPlaying && currentTrack && isLoggedIn) {
+    if (isPlaying && currentTrack && isLoggedIn && !qconnectRemoteModeActive) {
       if (!sessionSaveInterval) {
         sessionSaveInterval = setInterval(() => {
           saveSessionBeforeClose();
@@ -3223,24 +3299,25 @@
       volume = playerState.volume;
       isFavorite = playerState.isFavorite;
       normalizationGain = playerState.normalizationGain;
+      const allowLocalSessionPersistence = shouldPersistLocalSession();
 
       // Save position during playback (debounced to every 5s)
-      if (isPlaying && currentTrack && currentTime > 0) {
+      if (allowLocalSessionPersistence && isPlaying && currentTrack && currentTime > 0) {
         debouncedSavePosition(Math.floor(currentTime));
       }
 
       // Flush position save immediately when pausing
-      if (wasPlaying && !isPlaying && currentTrack && currentTime > 0) {
+      if (allowLocalSessionPersistence && wasPlaying && !isPlaying && currentTrack && currentTime > 0) {
         flushPositionSave(Math.floor(currentTime));
       }
 
       // Full session save on track change or pause (debounced 2s)
       const trackId = currentTrack?.id ?? null;
-      if (trackId !== prevTrackId) {
+      if (allowLocalSessionPersistence && trackId !== prevTrackId) {
         prevTrackId = trackId;
         if (trackId !== null) debouncedFullSessionSave();
       }
-      if (wasPlaying && !isPlaying && currentTrack) {
+      if (allowLocalSessionPersistence && wasPlaying && !isPlaying && currentTrack) {
         debouncedFullSessionSave();
       }
 
