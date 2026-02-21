@@ -1,6 +1,10 @@
-use std::sync::{Arc, OnceLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
 
 use async_trait::async_trait;
+use qbz_models::{Quality, QueueTrack, Track};
 use qconnect_app::{
     evaluate_remote_queue_admission, resolve_handoff_intent, HandoffIntent, QConnectQueueState,
     QConnectRendererState, QconnectApp, QconnectAppEvent, QconnectEventSink, QueueCommandType,
@@ -31,6 +35,7 @@ const DEFAULT_QCONNECT_DEVICE_BRAND: &str = "QBZ";
 const DEFAULT_QCONNECT_DEVICE_MODEL: &str = "QBZ";
 const DEFAULT_QCONNECT_DEVICE_TYPE: i32 = 5;
 const DEFAULT_QCONNECT_SOFTWARE_PREFIX: &str = "qbz";
+const QCONNECT_REMOTE_QUEUE_SOURCE: &str = "qobuz_connect_remote";
 static QCONNECT_DEVICE_UUID: OnceLock<String> = OnceLock::new();
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -271,17 +276,52 @@ struct QconnectServiceInner {
 struct TauriQconnectEventSink {
     app_handle: AppHandle,
     core_bridge: Arc<RwLock<Option<CoreBridge>>>,
+    sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
+}
+
+#[derive(Debug, Default)]
+struct QconnectRemoteSyncState {
+    last_renderer_queue_item_id: Option<u64>,
+    last_renderer_track_id: Option<u64>,
+    last_applied_queue_version: Option<(u64, u64)>,
 }
 
 #[async_trait]
 impl QconnectEventSink for TauriQconnectEventSink {
     async fn on_event(&self, event: QconnectAppEvent) {
-        if let QconnectAppEvent::RendererCommandApplied { command, state } = &event {
-            if let Err(err) =
-                apply_renderer_command_to_corebridge(&self.core_bridge, command, state).await
-            {
-                log::warn!("[QConnect] Failed to apply renderer command to CoreBridge: {err}");
+        match &event {
+            QconnectAppEvent::RendererUpdated(renderer_state) => {
+                let mut sync_state = self.sync_state.lock().await;
+                sync_state.last_renderer_queue_item_id = renderer_state
+                    .current_track
+                    .as_ref()
+                    .map(|item| item.queue_item_id);
+                sync_state.last_renderer_track_id = renderer_state
+                    .current_track
+                    .as_ref()
+                    .map(|item| item.track_id);
             }
+            QconnectAppEvent::QueueUpdated(queue_state) => {
+                if let Err(err) = materialize_remote_queue_to_corebridge(
+                    &self.core_bridge,
+                    &self.sync_state,
+                    queue_state,
+                )
+                .await
+                {
+                    log::warn!(
+                        "[QConnect] Failed to materialize remote queue in CoreBridge: {err}"
+                    );
+                }
+            }
+            QconnectAppEvent::RendererCommandApplied { command, state } => {
+                if let Err(err) =
+                    apply_renderer_command_to_corebridge(&self.core_bridge, command, state).await
+                {
+                    log::warn!("[QConnect] Failed to apply renderer command to CoreBridge: {err}");
+                }
+            }
+            _ => {}
         }
 
         if let Err(err) = self.app_handle.emit("qconnect:event", &event) {
@@ -320,6 +360,7 @@ impl QconnectServiceState {
         let sink = Arc::new(TauriQconnectEventSink {
             app_handle: app_handle.clone(),
             core_bridge,
+            sync_state: Arc::new(Mutex::new(QconnectRemoteSyncState::default())),
         });
         let app = Arc::new(QconnectApp::new(transport, sink));
 
@@ -485,9 +526,36 @@ async fn apply_renderer_command_to_corebridge(
         RendererCommand::SetState {
             playing_state,
             current_position_ms,
+            current_track,
             ..
         } => {
             let resolved_playing_state = renderer_state.playing_state.or(*playing_state);
+            let resolved_current_track = renderer_state
+                .current_track
+                .as_ref()
+                .or(current_track.as_ref());
+            if let Some(current_track) = resolved_current_track {
+                if let Err(err) =
+                    align_corebridge_queue_cursor(bridge, current_track.track_id).await
+                {
+                    log::warn!("[QConnect] Failed to align CoreBridge queue cursor: {err}");
+                }
+
+                if matches!(
+                    resolved_playing_state,
+                    Some(PLAYING_STATE_PLAYING | PLAYING_STATE_PAUSED)
+                ) {
+                    if let Err(err) =
+                        ensure_remote_track_loaded(bridge, current_track.track_id).await
+                    {
+                        log::warn!(
+                            "[QConnect] Failed to load remote track {}: {err}",
+                            current_track.track_id
+                        );
+                    }
+                }
+            }
+
             if let Some(value) = resolved_playing_state {
                 match value {
                     PLAYING_STATE_PLAYING => {
@@ -529,6 +597,232 @@ async fn apply_renderer_command_to_corebridge(
     }
 
     Ok(())
+}
+
+async fn materialize_remote_queue_to_corebridge(
+    core_bridge: &Arc<RwLock<Option<CoreBridge>>>,
+    sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
+    queue_state: &QConnectQueueState,
+) -> Result<(), String> {
+    let (renderer_queue_item_id, renderer_track_id, should_skip) = {
+        let mut state = sync_state.lock().await;
+        let queue_version = (queue_state.version.major, queue_state.version.minor);
+        if state.last_applied_queue_version == Some(queue_version) {
+            (
+                state.last_renderer_queue_item_id,
+                state.last_renderer_track_id,
+                true,
+            )
+        } else {
+            state.last_applied_queue_version = Some(queue_version);
+            (
+                state.last_renderer_queue_item_id,
+                state.last_renderer_track_id,
+                false,
+            )
+        }
+    };
+
+    if should_skip {
+        return Ok(());
+    }
+
+    let bridge_guard = core_bridge.read().await;
+    let Some(bridge) = bridge_guard.as_ref() else {
+        return Err("core bridge is not initialized yet".to_string());
+    };
+
+    if queue_state.queue_items.is_empty() {
+        bridge.clear_queue().await;
+        bridge.set_shuffle(false).await;
+        return Ok(());
+    }
+
+    let unique_track_ids = dedupe_track_ids(queue_state);
+    let fetched_tracks = bridge
+        .get_tracks_batch(&unique_track_ids)
+        .await
+        .map_err(|err| format!("fetch tracks batch for remote queue: {err}"))?;
+
+    let mut tracks_by_id = HashMap::with_capacity(fetched_tracks.len());
+    for track in fetched_tracks {
+        tracks_by_id.insert(track.id, model_track_to_core_queue_track(&track));
+    }
+
+    let mut queue_tracks = Vec::with_capacity(queue_state.queue_items.len());
+    for item in &queue_state.queue_items {
+        if let Some(queue_track) = tracks_by_id.get(&item.track_id) {
+            queue_tracks.push(queue_track.clone());
+            continue;
+        }
+
+        match bridge.get_track(item.track_id).await {
+            Ok(track) => {
+                let mapped = model_track_to_core_queue_track(&track);
+                tracks_by_id.insert(item.track_id, mapped.clone());
+                queue_tracks.push(mapped);
+            }
+            Err(err) => {
+                log::warn!(
+                    "[QConnect] Unable to hydrate remote queue track {}: {}",
+                    item.track_id,
+                    err
+                );
+            }
+        }
+    }
+
+    if queue_tracks.is_empty() {
+        return Err("remote queue materialization produced zero playable tracks".to_string());
+    }
+
+    let start_index =
+        resolve_remote_start_index(queue_state, renderer_queue_item_id, renderer_track_id)
+            .or(Some(0));
+    bridge.set_queue(queue_tracks, start_index).await;
+    bridge.set_shuffle(queue_state.shuffle_mode).await;
+
+    Ok(())
+}
+
+fn dedupe_track_ids(queue_state: &QConnectQueueState) -> Vec<u64> {
+    let mut unique = Vec::with_capacity(queue_state.queue_items.len());
+    for item in &queue_state.queue_items {
+        if !unique.contains(&item.track_id) {
+            unique.push(item.track_id);
+        }
+    }
+    unique
+}
+
+fn resolve_remote_start_index(
+    queue_state: &QConnectQueueState,
+    renderer_queue_item_id: Option<u64>,
+    renderer_track_id: Option<u64>,
+) -> Option<usize> {
+    if let Some(queue_item_id) = renderer_queue_item_id {
+        if let Some(index) = queue_state
+            .queue_items
+            .iter()
+            .position(|item| item.queue_item_id == queue_item_id)
+        {
+            return Some(index);
+        }
+    }
+
+    if let Some(track_id) = renderer_track_id {
+        if let Some(index) = queue_state
+            .queue_items
+            .iter()
+            .position(|item| item.track_id == track_id)
+        {
+            return Some(index);
+        }
+    }
+
+    None
+}
+
+async fn align_corebridge_queue_cursor(bridge: &CoreBridge, track_id: u64) -> Result<(), String> {
+    let (tracks, current_index) = bridge.get_all_queue_tracks().await;
+    if let Some(target_index) = tracks.iter().position(|track| track.id == track_id) {
+        if current_index != Some(target_index) {
+            let _ = bridge.play_index(target_index).await;
+        }
+        return Ok(());
+    }
+
+    let track = bridge
+        .get_track(track_id)
+        .await
+        .map_err(|err| format!("fetch current remote track {track_id}: {err}"))?;
+    let queue_track = model_track_to_core_queue_track(&track);
+    bridge.set_queue(vec![queue_track], Some(0)).await;
+    Ok(())
+}
+
+async fn ensure_remote_track_loaded(bridge: &CoreBridge, track_id: u64) -> Result<(), String> {
+    if bridge.get_playback_state().track_id == track_id {
+        return Ok(());
+    }
+
+    let stream_url = bridge
+        .get_stream_url(track_id, Quality::UltraHiRes)
+        .await
+        .map_err(|err| format!("resolve stream url for remote track {track_id}: {err}"))?;
+    let audio_data = download_remote_audio(&stream_url.url).await?;
+
+    bridge
+        .player()
+        .play_data(audio_data, track_id)
+        .map_err(|err| format!("play remote track {track_id}: {err}"))?;
+
+    Ok(())
+}
+
+async fn download_remote_audio(url: &str) -> Result<Vec<u8>, String> {
+    let response = reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await
+        .map_err(|err| format!("download remote audio request failed: {err}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "download remote audio failed with status {}",
+            response.status()
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| format!("read remote audio bytes failed: {err}"))?;
+    Ok(bytes.to_vec())
+}
+
+fn model_track_to_core_queue_track(track: &Track) -> QueueTrack {
+    let artwork_url = track
+        .album
+        .as_ref()
+        .and_then(|album| album.image.best().cloned());
+    let artist = track
+        .performer
+        .as_ref()
+        .map(|performer| performer.name.clone())
+        .unwrap_or_else(|| "Unknown Artist".to_string());
+    let album = track
+        .album
+        .as_ref()
+        .map(|album| album.title.clone())
+        .unwrap_or_else(|| "Unknown Album".to_string());
+    let album_id = track.album.as_ref().and_then(|album| {
+        let trimmed = album.id.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    let artist_id = track.performer.as_ref().map(|performer| performer.id);
+
+    QueueTrack {
+        id: track.id,
+        title: track.title.clone(),
+        artist,
+        album,
+        duration_secs: track.duration as u64,
+        artwork_url,
+        hires: track.hires,
+        bit_depth: track.maximum_bit_depth,
+        sample_rate: track.maximum_sampling_rate,
+        is_local: false,
+        album_id,
+        artist_id,
+        streamable: track.streamable,
+        source: Some(QCONNECT_REMOTE_QUEUE_SOURCE.to_string()),
+    }
 }
 
 fn normalize_volume_to_fraction(volume: i32) -> f32 {
@@ -609,7 +903,12 @@ fn default_qconnect_device_info() -> QconnectDeviceInfoPayload {
     let software_version = std::env::var("QBZ_QCONNECT_SOFTWARE_VERSION")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| format!("{DEFAULT_QCONNECT_SOFTWARE_PREFIX}/{}", env!("CARGO_PKG_VERSION")));
+        .unwrap_or_else(|| {
+            format!(
+                "{DEFAULT_QCONNECT_SOFTWARE_PREFIX}/{}",
+                env!("CARGO_PKG_VERSION")
+            )
+        });
     let device_type = std::env::var("QBZ_QCONNECT_DEVICE_TYPE")
         .ok()
         .and_then(|value| value.trim().parse::<i32>().ok())
@@ -739,7 +1038,10 @@ pub async fn v2_qconnect_send_command_with_admission(
     }
 
     service
-        .send_command(request.command_type.to_queue_command_type(), request.payload)
+        .send_command(
+            request.command_type.to_queue_command_type(),
+            request.payload,
+        )
         .await
         .map_err(RuntimeError::Internal)
 }
