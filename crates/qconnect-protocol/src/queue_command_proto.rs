@@ -74,8 +74,10 @@ pub struct QueueVersionRef {
 
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ErrorMessage {
-    #[prost(int32, optional, tag = "1")]
-    pub code: Option<i32>,
+    /// Server sends error codes as strings (e.g. "ERROR_QUEUE_INSERT_TRACKS"),
+    /// not integers. Wire type = LengthDelimited (string).
+    #[prost(string, optional, tag = "1")]
+    pub code: Option<String>,
     #[prost(string, optional, tag = "2")]
     pub message: Option<String>,
 }

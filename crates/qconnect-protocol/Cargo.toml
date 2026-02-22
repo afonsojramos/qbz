@@ -10,5 +10,6 @@ qconnect-core = { path = "../qconnect-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+log = { workspace = true }
 prost = "0.13"
 uuid = { version = "1", features = ["v4"] }

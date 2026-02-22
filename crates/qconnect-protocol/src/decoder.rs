@@ -488,14 +488,17 @@ fn map_queue_error(payload: QueueErrorMessage) -> Result<QueueServerEvent, Proto
     let error_code = payload
         .error
         .as_ref()
-        .and_then(|err| err.code)
-        .map(|code| code.to_string())
+        .and_then(|err| err.code.clone())
         .unwrap_or_else(|| "remote_error".to_string());
     let error_message = payload
         .error
         .as_ref()
         .and_then(|err| err.message.clone())
         .unwrap_or_else(|| "queue_error_message".to_string());
+
+    log::warn!(
+        "[QConnect/Decode] Queue error from server: code={error_code} message={error_message}"
+    );
 
     Ok(QueueServerEvent {
         event_type: QueueEventType::SrvrCtrlQueueErrorMessage,

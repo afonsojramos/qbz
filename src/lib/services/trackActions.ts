@@ -270,6 +270,7 @@ export async function queueTrackNext(
       const insertAfter = await getQconnectInsertAfterQueueItemId();
       const payload: Record<string, unknown> = {
         track_ids: [queueTrack.id],
+        context_uuid: crypto.randomUUID(),
         autoplay_reset: false,
         autoplay_loading: false
       };
@@ -337,6 +338,7 @@ export async function queueTrackLater(
     try {
       await sendQconnectQueueCommandWithAdmission('queue_add_tracks', origin, {
         track_ids: [queueTrack.id],
+        context_uuid: crypto.randomUUID(),
         autoplay_reset: false,
         autoplay_loading: false
       });
