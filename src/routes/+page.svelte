@@ -1691,6 +1691,10 @@
 
   function handleVolumeChange(newVolume: number) {
     playerSetVolume(newVolume);
+    // Report volume change to QConnect server when acting as renderer
+    if (isQobuzConnectConnected) {
+      invoke('v2_qconnect_report_volume', { volume: newVolume }).catch(() => {});
+    }
   }
 
   async function toggleShuffle() {
@@ -3319,6 +3323,23 @@
       }
       if (allowLocalSessionPersistence && wasPlaying && !isPlaying && currentTrack) {
         debouncedFullSessionSave();
+      }
+
+      // QConnect renderer state relay: report local state changes to server
+      if (isQobuzConnectConnected) {
+        const playingState = isPlaying ? 2 : (currentTrack ? 3 : 1);
+        const positionMs = Math.round((currentTime || 0) * 1000);
+        const durationMs = Math.round((playerState.duration || 0) * 1000);
+        // Only report on meaningful state transitions (play/pause change or track change)
+        if (wasPlaying !== isPlaying || (currentTrack?.id ?? 0) !== (prevTrackId ?? 0)) {
+          invoke('v2_qconnect_report_playback_state', {
+            playingState: playingState,
+            currentPosition: positionMs,
+            duration: durationMs,
+            currentQueueItemId: null,
+            nextQueueItemId: null,
+          }).catch(() => {});
+        }
       }
 
       // MiniPlayer IPC - DISABLED: incomplete feature, causes unnecessary IPC overhead
