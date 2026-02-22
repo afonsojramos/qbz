@@ -299,6 +299,7 @@ struct TauriQconnectEventSink {
 #[derive(Debug, Default)]
 struct QconnectRemoteSyncState {
     last_renderer_queue_item_id: Option<u64>,
+    last_renderer_next_queue_item_id: Option<u64>,
     last_renderer_track_id: Option<u64>,
     last_applied_queue_version: Option<(u64, u64)>,
     /// Session topology — stored from session management events (types 81-87).
@@ -347,6 +348,10 @@ impl QconnectEventSink for TauriQconnectEventSink {
                 let mut sync_state = self.sync_state.lock().await;
                 sync_state.last_renderer_queue_item_id = renderer_state
                     .current_track
+                    .as_ref()
+                    .map(|item| item.queue_item_id);
+                sync_state.last_renderer_next_queue_item_id = renderer_state
+                    .next_track
                     .as_ref()
                     .map(|item| item.queue_item_id);
                 sync_state.last_renderer_track_id = renderer_state
@@ -754,6 +759,21 @@ impl QconnectServiceState {
             runtime.app.queue_state_snapshot().await.version
         } else {
             qconnect_app::QueueVersion::default()
+        }
+    }
+
+    /// Get current and next queue_item_ids from the renderer state.
+    /// Used to auto-fill state reports when frontend doesn't know queue_item_ids.
+    async fn get_renderer_queue_item_ids(&self) -> (Option<u64>, Option<u64>) {
+        let guard = self.inner.lock().await;
+        if let Some(runtime) = &guard.runtime {
+            let sync_state = runtime.sync_state.lock().await;
+            (
+                sync_state.last_renderer_queue_item_id,
+                sync_state.last_renderer_next_queue_item_id,
+            )
+        } else {
+            (None, None)
         }
     }
 }
@@ -1547,7 +1567,8 @@ pub async fn v2_qconnect_session_snapshot(
 }
 
 /// Report current playback state to QConnect server.
-/// Called by playback commands (play, pause, resume, stop, seek, track change).
+/// Called by frontend on state transitions (play/pause, track change) and periodic position updates.
+/// Auto-fills queue_item_ids from renderer state when the frontend passes null.
 /// Fire-and-forget: errors are logged but do not block playback.
 #[tauri::command]
 pub async fn v2_qconnect_report_playback_state(
@@ -1562,6 +1583,19 @@ pub async fn v2_qconnect_report_playback_state(
         return Ok(());
     }
 
+    // Auto-fill queue_item_ids from renderer state if not provided by frontend.
+    // The frontend doesn't know about QConnect queue_item_ids, but the renderer
+    // state tracks them from server SET_STATE commands.
+    let (resolved_current_qid, resolved_next_qid) = if current_queue_item_id.is_some() {
+        (current_queue_item_id, next_queue_item_id)
+    } else {
+        let (renderer_current, renderer_next) = service.get_renderer_queue_item_ids().await;
+        (
+            renderer_current.and_then(|id| i32::try_from(id).ok()),
+            renderer_next.and_then(|id| i32::try_from(id).ok()),
+        )
+    };
+
     let queue_version = service.get_queue_version().await;
     let report = RendererReport::new(
         RendererReportType::RndrSrvrStateUpdated,
@@ -1572,8 +1606,8 @@ pub async fn v2_qconnect_report_playback_state(
             "buffer_state": BUFFER_STATE_OK,
             "current_position": current_position,
             "duration": duration,
-            "current_queue_item_id": current_queue_item_id,
-            "next_queue_item_id": next_queue_item_id,
+            "current_queue_item_id": resolved_current_qid,
+            "next_queue_item_id": resolved_next_qid,
             "queue_version": {
                 "major": queue_version.major,
                 "minor": queue_version.minor

@@ -3169,6 +3169,22 @@
       }
     }, 5000);
 
+    // Periodic QConnect position reports (every 5s) so controllers see track progress.
+    // Only fires when connected and playing. queue_item_ids auto-filled by backend.
+    const qconnectPositionReportInterval = setInterval(() => {
+      if (isQobuzConnectConnected && isPlaying && currentTrack) {
+        const positionMs = Math.round((currentTime || 0) * 1000);
+        const durationMs = Math.round((duration || 0) * 1000);
+        invoke('v2_qconnect_report_playback_state', {
+          playingState: 2,
+          currentPosition: positionMs,
+          duration: durationMs,
+          currentQueueItemId: null,
+          nextQueueItemId: null,
+        }).catch(() => {});
+      }
+    }, 5000);
+
     // Keyboard navigation
     document.addEventListener('keydown', handleKeydown);
 
@@ -3341,21 +3357,27 @@
 
       // Full session save on track change or pause (debounced 2s)
       const trackId = currentTrack?.id ?? null;
-      if (allowLocalSessionPersistence && trackId !== prevTrackId) {
+      const trackChanged = trackId !== prevTrackId;
+      // Always update prevTrackId (even during QConnect mode) to prevent
+      // the QConnect reporter from treating every tick as a track change.
+      if (trackChanged) {
         prevTrackId = trackId;
+      }
+      if (allowLocalSessionPersistence && trackChanged) {
         if (trackId !== null) debouncedFullSessionSave();
       }
       if (allowLocalSessionPersistence && wasPlaying && !isPlaying && currentTrack) {
         debouncedFullSessionSave();
       }
 
-      // QConnect renderer state relay: report local state changes to server
+      // QConnect renderer state relay: report state transitions to server.
+      // queue_item_ids are auto-filled by the backend from renderer state.
       if (isQobuzConnectConnected) {
         const playingState = isPlaying ? 2 : (currentTrack ? 3 : 1);
         const positionMs = Math.round((currentTime || 0) * 1000);
         const durationMs = Math.round((playerState.duration || 0) * 1000);
-        // Only report on meaningful state transitions (play/pause change or track change)
-        if (wasPlaying !== isPlaying || (currentTrack?.id ?? 0) !== (prevTrackId ?? 0)) {
+        // Report immediately on play/pause change or track change
+        if (wasPlaying !== isPlaying || trackChanged) {
           invoke('v2_qconnect_report_playback_state', {
             playingState: playingState,
             currentPosition: positionMs,
@@ -3727,6 +3749,7 @@
       document.removeEventListener('keydown', handleKeydown);
       unregisterAll(); // Cleanup keybinding actions
       clearInterval(qobuzConnectStatusInterval);
+      clearInterval(qconnectPositionReportInterval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       stopOfflineCacheEventListeners();
