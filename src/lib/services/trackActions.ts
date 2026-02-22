@@ -242,11 +242,18 @@ export async function queueTrackNext(
   const silent = options.silent === true;
   const qconnectConnected = await isQconnectConnected();
   console.log('[QConnect/PlayNext] connected=%s track=%d source=%s isLocal=%s', qconnectConnected, queueTrack.id, queueTrack.source, isLocal);
+
+  // When QConnect is active, try to send to the remote queue.
+  // If the track type is not eligible for remote (e.g. local library),
+  // fall through to the local queue instead.
+  let useLocalFallback = false;
+
   if (qconnectConnected) {
     const origin = resolveQconnectTrackOrigin(queueTrack, isLocal);
     console.log('[QConnect/PlayNext] origin=%s', origin);
     const admission = await evaluateQconnectAdmission(origin);
     console.log('[QConnect/PlayNext] admission=%o', admission);
+
     if (!admission) {
       console.warn('[QConnect/PlayNext] admission returned null (invoke failed)');
       if (!silent) {
@@ -257,16 +264,17 @@ export async function queueTrackNext(
 
     if (!admission.accepted) {
       console.warn('[QConnect/PlayNext] admission REJECTED: reason=%s handoff=%s', admission.reason, admission.handoff_intent);
-      if (!silent) {
-        showToast(translate(qconnectAdmissionReasonKey(admission.reason)), 'warning');
+      if (admission.handoff_intent === 'continue_locally') {
+        // Track type not eligible for remote queue (local/plex) — use local queue
+        console.log('[QConnect/PlayNext] handoff=continue_locally, falling through to local queue');
+        useLocalFallback = true;
+      } else {
+        if (!silent) {
+          showToast(translate(qconnectAdmissionReasonKey(admission.reason)), 'warning');
+        }
+        return false;
       }
-      if (!silent && admission.handoff_intent === 'continue_locally') {
-        showToast(translate('qconnect.handoffContinueLocallyHint'), 'info');
-      }
-      return false;
-    }
-
-    if (queueTrack.streamable === false) {
+    } else if (queueTrack.streamable === false) {
       console.warn('[QConnect/PlayNext] track not streamable');
       if (!silent) {
         showToast(translate('qconnect.streamNotEligible'), 'warning');
@@ -274,32 +282,34 @@ export async function queueTrackNext(
       return false;
     }
 
-    try {
-      const insertAfter = await getQconnectInsertAfterQueueItemId();
-      console.log('[QConnect/PlayNext] insertAfter=%s', insertAfter);
-      const payload: Record<string, unknown> = {
-        track_ids: [queueTrack.id],
-        context_uuid: crypto.randomUUID(),
-        autoplay_reset: false,
-        autoplay_loading: false
-      };
-      if (typeof insertAfter === 'number') {
-        payload.insert_after = insertAfter;
-      }
+    if (!useLocalFallback) {
+      try {
+        const insertAfter = await getQconnectInsertAfterQueueItemId();
+        console.log('[QConnect/PlayNext] insertAfter=%s', insertAfter);
+        const payload: Record<string, unknown> = {
+          track_ids: [queueTrack.id],
+          context_uuid: crypto.randomUUID(),
+          autoplay_reset: false,
+          autoplay_loading: false
+        };
+        if (typeof insertAfter === 'number') {
+          payload.insert_after = insertAfter;
+        }
 
-      console.log('[QConnect/PlayNext] sending queue_insert_tracks payload=%o', payload);
-      await sendQconnectQueueCommandWithAdmission('queue_insert_tracks', origin, payload);
-      console.log('[QConnect/PlayNext] queue_insert_tracks SUCCESS');
-      if (!silent) {
-        showToast(translate('qconnect.remoteQueuedNext'), 'success');
+        console.log('[QConnect/PlayNext] sending queue_insert_tracks payload=%o', payload);
+        await sendQconnectQueueCommandWithAdmission('queue_insert_tracks', origin, payload);
+        console.log('[QConnect/PlayNext] queue_insert_tracks SUCCESS');
+        if (!silent) {
+          showToast(translate('qconnect.remoteQueuedNext'), 'success');
+        }
+        return true;
+      } catch (err) {
+        console.error('[QConnect/PlayNext] FAILED:', err);
+        if (!silent) {
+          showToast(translate('qconnect.remoteQueueFailed'), 'error');
+        }
+        return false;
       }
-      return true;
-    } catch (err) {
-      console.error('[QConnect/PlayNext] FAILED:', err);
-      if (!silent) {
-        showToast(translate('qconnect.remoteQueueFailed'), 'error');
-      }
-      return false;
     }
   }
 
@@ -320,6 +330,8 @@ export async function queueTrackLater(
   const silent = options.silent === true;
   const qconnectConnected = await isQconnectConnected();
   console.log('[QConnect/AddToQueue] connected=%s track=%d source=%s isLocal=%s', qconnectConnected, queueTrack.id, queueTrack.source, isLocal);
+  let useLocalFallback = false;
+
   if (qconnectConnected) {
     const origin = resolveQconnectTrackOrigin(queueTrack, isLocal);
     console.log('[QConnect/AddToQueue] origin=%s', origin);
@@ -334,17 +346,17 @@ export async function queueTrackLater(
     }
 
     if (!admission.accepted) {
-      console.warn('[QConnect/AddToQueue] admission REJECTED: reason=%s', admission.reason);
-      if (!silent) {
-        showToast(translate(qconnectAdmissionReasonKey(admission.reason)), 'warning');
+      console.warn('[QConnect/AddToQueue] admission REJECTED: reason=%s handoff=%s', admission.reason, admission.handoff_intent);
+      if (admission.handoff_intent === 'continue_locally') {
+        console.log('[QConnect/AddToQueue] handoff=continue_locally, falling through to local queue');
+        useLocalFallback = true;
+      } else {
+        if (!silent) {
+          showToast(translate(qconnectAdmissionReasonKey(admission.reason)), 'warning');
+        }
+        return false;
       }
-      if (!silent && admission.handoff_intent === 'continue_locally') {
-        showToast(translate('qconnect.handoffContinueLocallyHint'), 'info');
-      }
-      return false;
-    }
-
-    if (queueTrack.streamable === false) {
+    } else if (queueTrack.streamable === false) {
       console.warn('[QConnect/AddToQueue] track not streamable');
       if (!silent) {
         showToast(translate('qconnect.streamNotEligible'), 'warning');
@@ -352,26 +364,28 @@ export async function queueTrackLater(
       return false;
     }
 
-    try {
-      const payload = {
-        track_ids: [queueTrack.id],
-        context_uuid: crypto.randomUUID(),
-        autoplay_reset: false,
-        autoplay_loading: false
-      };
-      console.log('[QConnect/AddToQueue] sending queue_add_tracks payload=%o', payload);
-      await sendQconnectQueueCommandWithAdmission('queue_add_tracks', origin, payload);
-      console.log('[QConnect/AddToQueue] queue_add_tracks SUCCESS');
-      if (!silent) {
-        showToast(translate('qconnect.remoteQueuedLater'), 'success');
+    if (!useLocalFallback) {
+      try {
+        const payload = {
+          track_ids: [queueTrack.id],
+          context_uuid: crypto.randomUUID(),
+          autoplay_reset: false,
+          autoplay_loading: false
+        };
+        console.log('[QConnect/AddToQueue] sending queue_add_tracks payload=%o', payload);
+        await sendQconnectQueueCommandWithAdmission('queue_add_tracks', origin, payload);
+        console.log('[QConnect/AddToQueue] queue_add_tracks SUCCESS');
+        if (!silent) {
+          showToast(translate('qconnect.remoteQueuedLater'), 'success');
+        }
+        return true;
+      } catch (err) {
+        console.error('[QConnect/AddToQueue] FAILED:', err);
+        if (!silent) {
+          showToast(translate('qconnect.remoteQueueFailed'), 'error');
+        }
+        return false;
       }
-      return true;
-    } catch (err) {
-      console.error('[QConnect/AddToQueue] FAILED:', err);
-      if (!silent) {
-        showToast(translate('qconnect.remoteQueueFailed'), 'error');
-      }
-      return false;
     }
   }
 

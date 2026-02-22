@@ -1298,7 +1298,9 @@
         sample_rate: trk.samplingRate ?? null,
         is_local: false,
         album_id: album.id,
-        artist_id: trk.artistId ?? album.artistId
+        artist_id: trk.artistId ?? album.artistId,
+        streamable: trk.streamable ?? true,
+        source: 'qobuz'
       }, false, { silent: true });
       if (queued) {
         queuedCount += 1;
@@ -1517,7 +1519,9 @@
         sample_rate: trk.maximum_sampling_rate ?? null,
         is_local: false,
         album_id: trk.album?.id,
-        artist_id: trk.performer?.id
+        artist_id: trk.performer?.id,
+        streamable: true,
+        source: 'qobuz'
       }, false, { silent: true });
       if (queued) {
         queuedCount += 1;
@@ -2241,7 +2245,9 @@
         sample_rate: trk.samplingRate ?? null,
         is_local: false,
         album_id: album.id,
-        artist_id: trk.artistId ?? album.artistId
+        artist_id: trk.artistId ?? album.artistId,
+        streamable: trk.streamable ?? true,
+        source: 'qobuz'
       }, false, { silent: true });
       if (queued) {
         queuedCount += 1;
