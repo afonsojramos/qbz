@@ -313,15 +313,37 @@ where
             return Ok(());
         };
 
+        // Detect echo SET_STATE commands: the server echoes every state report
+        // as a SET_STATE with only next_track (playing_state=None, current_track=None).
+        // These echoes must NOT trigger CoreBridge actions (align cursor, load track,
+        // resume/pause) or state reports, otherwise they destroy the local queue
+        // and cause feedback loops.
+        let is_echo = matches!(
+            &renderer_command,
+            RendererCommand::SetState {
+                playing_state,
+                current_track,
+                ..
+            } if playing_state.is_none() && current_track.is_none()
+        );
+
         let (snapshot, queue_version) = {
             let mut state = self.state.lock().await;
             apply_renderer_command(&mut state.renderer, &renderer_command, now_ms());
             (state.renderer.clone(), state.queue.version)
         };
 
+        // Always update renderer state (for tracking next_track etc.)
         self.sink
             .on_event(QconnectAppEvent::RendererUpdated(snapshot.clone()))
             .await;
+
+        if is_echo {
+            log::debug!(
+                "[QConnect] Skipping echo SET_STATE (no playing_state or current_track)"
+            );
+            return Ok(());
+        }
 
         self.sink
             .on_event(QconnectAppEvent::RendererCommandApplied {
