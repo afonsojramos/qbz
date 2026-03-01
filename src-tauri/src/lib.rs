@@ -424,6 +424,37 @@ fn apply_linux_webkit_workarounds() {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn should_use_main_window_transparency() -> bool {
+    let force_transparent = std::env::var("QBZ_FORCE_TRANSPARENT_WINDOWS")
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes"
+        })
+        .unwrap_or(false);
+    if force_transparent {
+        return true;
+    }
+
+    let force_opaque = std::env::var("QBZ_FORCE_OPAQUE_WINDOWS")
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes"
+        })
+        .unwrap_or(false);
+    if force_opaque {
+        return false;
+    }
+
+    // Stability-first default on Linux.
+    false
+}
+
+#[cfg(not(target_os = "linux"))]
+fn should_use_main_window_transparency() -> bool {
+    true
+}
+
 pub fn run() {
     // Load .env file if present (for development)
     // Silently ignore if not found (production builds use compile-time env vars)
@@ -730,6 +761,11 @@ pub fn run() {
                 gtk_decorations,
                 use_kwin_ssd
             );
+            let main_window_transparent = should_use_main_window_transparency();
+            log::info!(
+                "Main window transparency: {} (override with QBZ_FORCE_TRANSPARENT_WINDOWS=1 or QBZ_FORCE_OPAQUE_WINDOWS=1)",
+                main_window_transparent
+            );
             let main_window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -739,7 +775,7 @@ pub fn run() {
             .inner_size(saved_win_width, saved_win_height)
             .min_inner_size(800.0, 600.0)
             .decorations(gtk_decorations)
-            .transparent(true)
+            .transparent(main_window_transparent)
             .resizable(true)
             .zoom_hotkeys_enabled(true)
             .build()
