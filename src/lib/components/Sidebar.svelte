@@ -1054,8 +1054,12 @@
   }
 
   function handleSidebarSearchKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && sidebarSearchQuery) {
-      handleSidebarSearchClear();
+    if (e.key === 'Escape') {
+      if (sidebarSearchQuery) {
+        handleSidebarSearchClear();
+      } else {
+        sidebarSearchInput?.blur();
+      }
       e.preventDefault();
     }
   }

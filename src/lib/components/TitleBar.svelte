@@ -105,8 +105,12 @@
   }
 
   function handleSearchKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && searchQuery) {
-      onSearchClear?.();
+    if (e.key === 'Escape') {
+      if (searchQuery) {
+        onSearchClear?.();
+      } else {
+        searchInputEl?.blur();
+      }
       e.preventDefault();
     }
   }
