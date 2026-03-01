@@ -157,6 +157,7 @@
     onTrackPlayLater?: (track: DisplayTrack) => void;
     onTrackAddFavorite?: (trackId: number) => void;
     onTrackAddToPlaylist?: (trackId: number) => void;
+    onBulkAddToPlaylist?: (trackIds: number[]) => void;
     onTrackShareQobuz?: (trackId: number) => void;
     onTrackShareSonglink?: (track: DisplayTrack) => void;
     onTrackGoToAlbum?: (albumId: string) => void;
@@ -188,6 +189,7 @@
     onTrackPlayLater,
     onTrackAddFavorite,
     onTrackAddToPlaylist,
+    onBulkAddToPlaylist,
     onTrackShareQobuz,
     onTrackShareSonglink,
     onTrackGoToAlbum,
@@ -1160,11 +1162,10 @@
   }
 
   async function handleBulkAddToPlaylist() {
-    for (const trk of displayTracks) {
-      if (multiSelectedKeys.has(getTrackKey(trk)) && !trk.isLocal) {
-        onTrackAddToPlaylist?.(trk.id);
-      }
-    }
+    const trackIds = displayTracks
+      .filter(trk => multiSelectedKeys.has(getTrackKey(trk)) && !trk.isLocal)
+      .map(trk => trk.id);
+    if (trackIds.length > 0) onBulkAddToPlaylist?.(trackIds);
     multiSelectedKeys = new Set();
     multiSelectMode = false;
   }

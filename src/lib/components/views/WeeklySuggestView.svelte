@@ -27,6 +27,7 @@
     onTrackPlayNext?: (track: DisplayTrack) => void;
     onTrackPlayLater?: (track: DisplayTrack) => void;
     onTrackAddToPlaylist?: (trackId: number) => void;
+    onBulkAddToPlaylist?: (trackIds: number[]) => void;
     onTrackShareQobuz?: (trackId: number) => void;
     onTrackShareSonglink?: (track: DisplayTrack) => void;
     onTrackGoToAlbum?: (albumId: string) => void;
@@ -46,6 +47,7 @@
     onTrackPlayNext,
     onTrackPlayLater,
     onTrackAddToPlaylist,
+    onBulkAddToPlaylist,
     onTrackShareQobuz,
     onTrackShareSonglink,
     onTrackGoToAlbum,
@@ -116,7 +118,7 @@
   }
 
   async function handleBulkAddToPlaylist() {
-    for (const id of multiSelectedIds) { onTrackAddToPlaylist?.(id); }
+    onBulkAddToPlaylist?.([...multiSelectedIds]);
     multiSelectMode = false; multiSelectedIds = new Set();
   }
   let userPlaylists = $state<Playlist[]>([]);

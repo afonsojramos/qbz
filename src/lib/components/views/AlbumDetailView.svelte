@@ -89,6 +89,7 @@
     onPlayAllNext?: () => void;
     onPlayAllLater?: () => void;
     onAddTrackToPlaylist?: (trackId: number) => void;
+    onBulkAddToPlaylist?: (trackIds: number[]) => void;
     onAddAlbumToPlaylist?: () => void;
     onTrackDownload?: (track: Track) => void;
     onTrackRemoveDownload?: (trackId: number) => void;
@@ -137,6 +138,7 @@
     onPlayAllNext,
     onPlayAllLater,
     onAddTrackToPlaylist,
+    onBulkAddToPlaylist,
     onAddAlbumToPlaylist,
     onTrackDownload,
     onTrackRemoveDownload,
@@ -227,7 +229,7 @@
   }
 
   async function handleBulkAddToPlaylist() {
-    for (const id of multiSelectedIds) { onAddTrackToPlaylist?.(id); }
+    onBulkAddToPlaylist?.([...multiSelectedIds]);
     multiSelectMode = false; multiSelectedIds = new Set();
   }
 

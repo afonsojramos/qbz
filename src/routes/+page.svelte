@@ -3830,6 +3830,7 @@
           onPlayAllNext={handleAddAlbumToQueueNext}
           onPlayAllLater={handleAddAlbumToQueueLater}
           onAddTrackToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+          onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
           onAddAlbumToPlaylist={() => addAlbumToPlaylist(selectedAlbum)}
           onTrackDownload={handleTrackDownload}
           onTrackRemoveDownload={handleTrackRemoveDownload}
@@ -3879,6 +3880,7 @@
           onTrackPlayLater={queueQobuzTrackLater}
           onTrackAddFavorite={handleAddToFavorites}
           onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+          onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
           onAddAlbumToPlaylist={addAlbumToPlaylistById}
           onTrackShareQobuz={shareQobuzTrackLink}
           onTrackShareSonglink={(track) => shareSonglinkTrack(track.id, track.isrc)}
@@ -3927,6 +3929,7 @@
           onTrackPlayNext={queueQobuzTrackNext}
           onTrackPlayLater={queueQobuzTrackLater}
           onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+          onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
           onTrackAddFavorite={handleAddToFavorites}
           onTrackGoToAlbum={handleAlbumClick}
           activeTrackId={currentTrack?.id ?? null}
@@ -3973,6 +3976,7 @@
           onTrackPlayLater={queuePlaylistTrackLater}
           onTrackAddFavorite={handleAddToFavorites}
           onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+          onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
           onTrackShareQobuz={shareQobuzTrackLink}
           onTrackShareSonglink={(track) => shareSonglinkTrack(track.id, track.isrc)}
           onTrackGoToAlbum={handleAlbumClick}
@@ -4029,6 +4033,7 @@
             onTrackPlayLater={queuePlaylistTrackLater}
             onTrackAddFavorite={handleAddToFavorites}
             onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+            onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
             onTrackShareQobuz={shareQobuzTrackLink}
             onTrackShareSonglink={(track) => shareSonglinkTrack(track.id, track.isrc)}
             onTrackGoToAlbum={handleAlbumClick}
@@ -4219,6 +4224,7 @@
           onTrackPlayNext={queueDisplayTrackNext}
           onTrackPlayLater={queueDisplayTrackLater}
           onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+          onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
           onTrackShareQobuz={shareQobuzTrackLink}
           onTrackShareSonglink={(track) => shareSonglinkTrack(track.id, track.isrc)}
           onTrackGoToAlbum={handleAlbumClick}

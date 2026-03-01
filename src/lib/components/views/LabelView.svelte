@@ -66,6 +66,7 @@
     onTrackPlayLater?: (track: Track) => void;
     onTrackAddFavorite?: (trackId: number) => void;
     onTrackAddToPlaylist?: (trackId: number) => void;
+    onBulkAddToPlaylist?: (trackIds: number[]) => void;
     onTrackGoToAlbum?: (albumId: string) => void;
     activeTrackId?: number | null;
     isPlaybackActive?: boolean;
@@ -101,6 +102,7 @@
     onTrackPlayLater,
     onTrackAddFavorite,
     onTrackAddToPlaylist,
+    onBulkAddToPlaylist,
     onTrackGoToAlbum,
     activeTrackId = null,
     isPlaybackActive = false,
@@ -213,7 +215,7 @@
   }
 
   async function handleBulkAddToPlaylist() {
-    for (const id of multiSelectedIds) { onTrackAddToPlaylist?.(id); }
+    onBulkAddToPlaylist?.([...multiSelectedIds]);
     multiSelectMode = false; multiSelectedIds = new Set();
   }
 
