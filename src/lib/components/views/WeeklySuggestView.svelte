@@ -475,6 +475,15 @@
         <button class="action-btn-circle" onclick={openSaveAsPlaylist} disabled={loading || !result || result.tracks.items.length === 0} title={$t('yourMixes.actions.saveAsPlaylist')}>
           <ListPlus size={18} />
         </button>
+        <button
+          class="action-btn-circle"
+          class:is-active={multiSelectMode}
+          onclick={toggleMultiSelectMode}
+          disabled={loading || filteredTracks.length === 0}
+          title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+        >
+          <CheckSquare size={18} />
+        </button>
       </div>
     </div>
   </div>
@@ -498,14 +507,6 @@
         </button>
       {/if}
     </div>
-    <button
-      class="select-btn"
-      class:active={multiSelectMode}
-      onclick={toggleMultiSelectMode}
-      title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
-    >
-      <CheckSquare size={16} />
-    </button>
   </div>
 
   {#if !result && loading}
@@ -789,26 +790,6 @@
     gap: 16px;
     margin-top: 24px;
     margin-bottom: 16px;
-  }
-
-  .select-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 8px;
-    background: var(--bg-tertiary);
-    border: none;
-    border-radius: 8px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: color 150ms ease, background 150ms ease;
-  }
-
-  .select-btn:hover { color: var(--text-primary); }
-
-  .select-btn.active {
-    color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   }
 
   .search-container {
