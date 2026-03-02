@@ -613,6 +613,9 @@
   let playlistModalMode = $state<'create' | 'edit' | 'addTrack'>('create');
   let playlistModalTrackIds = $state<number[]>([]);
   let playlistModalTracksAreLocal = $state(false);
+  let playlistModalEditPlaylist = $state<{ id: number; name: string; tracks_count: number } | undefined>(undefined);
+  let playlistModalEditIsHidden = $state(false);
+  let playlistModalEditCurrentFolderId = $state<string | null>(null);
   let isPlaylistImportOpen = $state(false);
   let isAboutModalOpen = $state(false);
   let isShortcutsModalOpen = $state(false);
@@ -2515,12 +2518,43 @@
   }
 
   // Playlist Modal Functions
+  function clearPlaylistEditContext() {
+    playlistModalEditPlaylist = undefined;
+    playlistModalEditIsHidden = false;
+    playlistModalEditCurrentFolderId = null;
+  }
+
+  function handleSidebarPlaylistEdit(payload: {
+    id: number;
+    name: string;
+    tracks_count: number;
+    isHidden: boolean;
+    currentFolderId: string | null;
+  }) {
+    userPlaylists = sidebarRef?.getPlaylists() ?? [];
+    playlistModalEditPlaylist = {
+      id: payload.id,
+      name: payload.name,
+      tracks_count: payload.tracks_count
+    };
+    playlistModalEditIsHidden = payload.isHidden;
+    playlistModalEditCurrentFolderId = payload.currentFolderId;
+    openPlaylistModal('edit', []);
+  }
+
+  function handlePlaylistModalClose() {
+    clearPlaylistEditContext();
+    closePlaylistModal();
+  }
+
   function openCreatePlaylist() {
+    clearPlaylistEditContext();
     userPlaylists = sidebarRef?.getPlaylists() ?? [];
     openPlaylistModal('create', []);
   }
 
   function openAddToPlaylist(trackIds: number[], isLocal = false) {
+    clearPlaylistEditContext();
     userPlaylists = sidebarRef?.getPlaylists() ?? [];
     openPlaylistModal('addTrack', trackIds, isLocal);
   }
@@ -2531,6 +2565,8 @@
 
     if (playlistModalMode === 'addTrack') {
       showToast($t('toast.tracksAddedToPlaylist'), 'success');
+    } else if (playlistModalMode === 'edit') {
+      showToast($t('toast.playlistUpdated'), 'success');
     } else {
       showToast($t('toast.playlistCreated'), 'success');
     }
@@ -2548,6 +2584,8 @@
         sidebarRef?.updatePlaylistCounts(playlist.id, qobuzCount, localCount);
       }, 100);
     }
+
+    clearPlaylistEditContext();
   }
 
   function openImportPlaylist() {
@@ -3101,6 +3139,7 @@
     // Subscribe to UI state changes
     const unsubscribeUI = subscribeUI(() => {
       const uiState = getUIState();
+      const wasPlaylistModalOpen = isPlaylistModalOpen;
       // Close network sidebar and lyrics when queue opens
       if (uiState.isQueueOpen && !isQueueOpen) {
         closeContentSidebar('network');
@@ -3114,6 +3153,9 @@
       playlistModalMode = uiState.playlistModalMode;
       playlistModalTrackIds = uiState.playlistModalTrackIds;
       playlistModalTracksAreLocal = uiState.playlistModalTracksAreLocal;
+      if (wasPlaylistModalOpen && !uiState.isPlaylistModalOpen) {
+        clearPlaylistEditContext();
+      }
       isPlaylistImportOpen = uiState.isPlaylistImportOpen;
     });
 
@@ -3671,6 +3713,7 @@
       onCreatePlaylist={openCreatePlaylist}
       onImportPlaylist={openImportPlaylist}
       onPlaylistManagerClick={() => navigateTo('playlist-manager')}
+      onEditPlaylist={handleSidebarPlaylistEdit}
       onSettingsClick={() => navigateTo('settings')}
       onKeybindingsClick={() => isKeybindingsSettingsOpen = true}
       onAboutClick={() => isAboutModalOpen = true}
@@ -4506,10 +4549,13 @@
     <PlaylistModal
       isOpen={isPlaylistModalOpen}
       mode={playlistModalMode}
+      playlist={playlistModalMode === 'edit' ? playlistModalEditPlaylist : undefined}
       trackIds={playlistModalTrackIds}
       isLocalTracks={playlistModalTracksAreLocal}
+      isHidden={playlistModalMode === 'edit' ? playlistModalEditIsHidden : false}
+      currentFolderId={playlistModalMode === 'edit' ? playlistModalEditCurrentFolderId : null}
       {userPlaylists}
-      onClose={closePlaylistModal}
+      onClose={handlePlaylistModalClose}
       onSuccess={handlePlaylistCreated}
     />
 

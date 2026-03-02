@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Search, Home, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, MoreHorizontal, ArrowUpDown, ChevronRight, ChevronLeft, Folder, FolderPlus, X, User, Disc, Music, ShoppingBag } from 'lucide-svelte';
+  import { Search, Home, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, MoreHorizontal, ArrowUpDown, ChevronRight, ChevronLeft, Folder, FolderPlus, X, User, Disc, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
   import type { FavoritesPreferences } from '$lib/types';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
@@ -28,6 +28,7 @@
     toggleFolderExpanded,
     loadFolders,
     createFolder,
+    updateFolder,
     movePlaylistToFolder,
     type PlaylistFolder
   } from '$lib/stores/playlistFoldersStore';
@@ -74,6 +75,13 @@
     onCreatePlaylist?: () => void;
     onImportPlaylist?: () => void;
     onPlaylistManagerClick?: () => void;
+    onEditPlaylist?: (playlist: {
+      id: number;
+      name: string;
+      tracks_count: number;
+      isHidden: boolean;
+      currentFolderId: string | null;
+    }) => void;
     onSettingsClick?: () => void;
     onKeybindingsClick?: () => void;
     onAboutClick?: () => void;
@@ -95,6 +103,7 @@
     onCreatePlaylist,
     onImportPlaylist,
     onPlaylistManagerClick,
+    onEditPlaylist,
     onSettingsClick,
     onKeybindingsClick,
     onAboutClick,
@@ -160,16 +169,21 @@
     x: number;
     y: number;
     playlist: Playlist | null;
+    folder: PlaylistFolder | null;
     currentFolderId: string | null;
   }>({
     visible: false,
     x: 0,
     y: 0,
     playlist: null,
+    folder: null,
     currentFolderId: null
   });
   let contextMenuSearch = $state('');
   const FOLDER_SEARCH_THRESHOLD = 8;
+  let draggedPlaylistId = $state<number | null>(null);
+  let draggedFromFolderId = $state<string | null>(null);
+  let dragOverFolderId = $state<string | null>(null);
 
   // Collapsed folder popover state
   let folderPopover = $state<{
@@ -211,6 +225,7 @@
 
   // Filtered folders for context menu
   const filteredContextFolders = $derived.by(() => {
+    if (!contextMenu.playlist) return [];
     const available = folders.filter(f => f.id !== contextMenu.currentFolderId);
     if (!contextMenuSearch.trim()) return available;
     const query = contextMenuSearch.toLowerCase();
@@ -1205,12 +1220,35 @@
       x: e.clientX,
       y: e.clientY,
       playlist,
+      folder: null,
       currentFolderId
     };
   }
 
+  function handleFolderContextMenu(e: MouseEvent, folder: PlaylistFolder) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    openGlobalMenu(SIDEBAR_CONTEXT_MENU_ID);
+    contextMenu = {
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      playlist: null,
+      folder,
+      currentFolderId: folder.id
+    };
+  }
+
   function closeContextMenu() {
-    contextMenu = { ...contextMenu, visible: false };
+    contextMenu = {
+      visible: false,
+      x: 0,
+      y: 0,
+      playlist: null,
+      folder: null,
+      currentFolderId: null
+    };
     contextMenuSearch = '';
     closeGlobalMenu(SIDEBAR_CONTEXT_MENU_ID);
   }
@@ -1218,24 +1256,130 @@
   async function handleMoveToFolder(folderId: string | null) {
     if (!contextMenu.playlist) return;
 
-    const success = await movePlaylistToFolder(contextMenu.playlist.id, folderId);
-    if (success) {
-      // Update local settings
-      const updated = new Map(playlistSettings);
-      const existing = updated.get(contextMenu.playlist.id);
-      if (existing) {
-        updated.set(contextMenu.playlist.id, { ...existing, folder_id: folderId });
-      } else {
-        updated.set(contextMenu.playlist.id, {
-          qobuz_playlist_id: contextMenu.playlist.id,
-          hidden: false,
-          position: 0,
-          folder_id: folderId
-        });
-      }
-      playlistSettings = updated;
-    }
+    await movePlaylistAndUpdateLocal(contextMenu.playlist.id, folderId);
     closeContextMenu();
+  }
+
+  function getPlaylistFolderId(playlistId: number): string | null {
+    return playlistSettings.get(playlistId)?.folder_id ?? null;
+  }
+
+  async function movePlaylistAndUpdateLocal(playlistId: number, folderId: string | null): Promise<void> {
+    const success = await movePlaylistToFolder(playlistId, folderId);
+    if (!success) return;
+
+    const updated = new Map(playlistSettings);
+    const existing = updated.get(playlistId);
+    if (existing) {
+      updated.set(playlistId, { ...existing, folder_id: folderId });
+    } else {
+      updated.set(playlistId, {
+        qobuz_playlist_id: playlistId,
+        hidden: false,
+        position: 0,
+        folder_id: folderId
+      });
+    }
+    playlistSettings = updated;
+  }
+
+  async function toggleHiddenFromContextMenu() {
+    if (!contextMenu.playlist) return;
+    const playlistId = contextMenu.playlist.id;
+    const current = playlistSettings.get(playlistId);
+    const newHidden = !(current?.hidden ?? false);
+
+    try {
+      await invoke('v2_playlist_set_hidden', { playlistId, hidden: newHidden });
+      const updated = new Map(playlistSettings);
+      updated.set(playlistId, {
+        qobuz_playlist_id: playlistId,
+        hidden: newHidden,
+        position: current?.position ?? 0,
+        play_count: current?.play_count,
+        hasLocalContent: current?.hasLocalContent,
+        folder_id: current?.folder_id ?? null
+      });
+      playlistSettings = updated;
+      closeContextMenu();
+    } catch (err) {
+      console.error('Failed to toggle sidebar visibility for playlist:', err);
+    }
+  }
+
+  async function toggleFolderHiddenFromContextMenu() {
+    if (!contextMenu.folder) return;
+
+    const folder = contextMenu.folder;
+    const hidden = !(folder.is_hidden ?? false);
+    const updated = await updateFolder(folder.id, { isHidden: hidden });
+    if (updated) {
+      folders = getVisibleFolders();
+      if (hidden && folderPopover.folderId === folder.id) {
+        closeFolderPopover();
+      }
+      closeContextMenu();
+    }
+  }
+
+  function editPlaylistFromContextMenu() {
+    if (!contextMenu.playlist || !onEditPlaylist) return;
+
+    const playlistId = contextMenu.playlist.id;
+    const current = playlistSettings.get(playlistId);
+    onEditPlaylist({
+      id: contextMenu.playlist.id,
+      name: contextMenu.playlist.name,
+      tracks_count: contextMenu.playlist.tracks_count,
+      isHidden: current?.hidden ?? false,
+      currentFolderId: current?.folder_id ?? null
+    });
+    closeContextMenu();
+  }
+
+  function handlePlaylistDragStart(e: DragEvent, playlistId: number) {
+    const fromFolderId = getPlaylistFolderId(playlistId);
+    draggedPlaylistId = playlistId;
+    draggedFromFolderId = fromFolderId;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(playlistId));
+    }
+  }
+
+  function handlePlaylistDragEnd() {
+    draggedPlaylistId = null;
+    draggedFromFolderId = null;
+    dragOverFolderId = null;
+  }
+
+  function handleFolderDragOver(e: DragEvent, folderId: string) {
+    if (draggedPlaylistId === null || draggedFromFolderId === folderId) return;
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+    dragOverFolderId = folderId;
+  }
+
+  function handleFolderDragLeave(folderId: string) {
+    if (dragOverFolderId === folderId) {
+      dragOverFolderId = null;
+    }
+  }
+
+  async function handleFolderDrop(e: DragEvent, folderId: string) {
+    e.preventDefault();
+
+    if (draggedPlaylistId === null) return;
+    if (draggedFromFolderId === folderId) {
+      handlePlaylistDragEnd();
+      return;
+    }
+
+    const playlistId = draggedPlaylistId;
+    await movePlaylistAndUpdateLocal(playlistId, folderId);
+    handlePlaylistDragEnd();
   }
 
   // Close context menu and folder popover when clicking outside
@@ -1564,7 +1708,12 @@
                     {@const isFolderExp = isFolderExpanded(item.folder.id)}
                     <button
                       class="folder-header"
+                      class:drag-over={dragOverFolderId === item.folder.id}
                       onclick={() => handleToggleFolder(item.folder.id)}
+                      oncontextmenu={(e) => handleFolderContextMenu(e, item.folder)}
+                      ondragover={(e) => handleFolderDragOver(e, item.folder.id)}
+                      ondragleave={() => handleFolderDragLeave(item.folder.id)}
+                      ondrop={(e) => handleFolderDrop(e, item.folder.id)}
                     >
                       <Folder size={14} />
                       <span class="folder-name">{item.folder.name}</span>
@@ -1574,36 +1723,57 @@
                       </span>
                     </button>
                   {:else if item.type === 'folder-playlist'}
-                    <NavigationItem
-                      label={item.playlist.name}
-                      tooltip={getPlaylistTooltip(item.playlist, true)}
-                      active={activeView === 'playlist' && selectedPlaylistId === item.playlist.id}
-                      onclick={() => handlePlaylistClick(item.playlist)}
-                      onHover={() => loadPlaylistTooltip(item.playlist)}
-                      oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, item.folderId)}
-                      showLabel={true}
-                      indented={true}
+                    <div
+                      class="playlist-drag-wrapper"
+                      class:dragging={draggedPlaylistId === item.playlist.id}
+                      draggable={!isOffline && isExpanded}
+                      ondragstart={(e) => handlePlaylistDragStart(e, item.playlist.id)}
+                      ondragend={handlePlaylistDragEnd}
                     >
-                      {#snippet icon()}<ListMusic size={14} />{/snippet}
-                    </NavigationItem>
+                      <NavigationItem
+                        label={item.playlist.name}
+                        tooltip={getPlaylistTooltip(item.playlist, true)}
+                        active={activeView === 'playlist' && selectedPlaylistId === item.playlist.id}
+                        onclick={() => handlePlaylistClick(item.playlist)}
+                        onHover={() => loadPlaylistTooltip(item.playlist)}
+                        oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, item.folderId)}
+                        showLabel={true}
+                        indented={true}
+                      >
+                        {#snippet icon()}<ListMusic size={14} />{/snippet}
+                      </NavigationItem>
+                    </div>
                   {:else if item.type === 'root-playlist'}
-                    <NavigationItem
-                      label={item.playlist.name}
-                      tooltip={getPlaylistTooltip(item.playlist, isExpanded)}
-                      active={activeView === 'playlist' && selectedPlaylistId === item.playlist.id}
-                      onclick={() => handlePlaylistClick(item.playlist)}
-                      onHover={() => loadPlaylistTooltip(item.playlist)}
-                      oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, null)}
-                      showLabel={isExpanded}
+                    <div
+                      class="playlist-drag-wrapper"
+                      class:dragging={draggedPlaylistId === item.playlist.id}
+                      draggable={!isOffline && isExpanded}
+                      ondragstart={(e) => handlePlaylistDragStart(e, item.playlist.id)}
+                      ondragend={handlePlaylistDragEnd}
                     >
-                      {#snippet icon()}<ListMusic size={14} />{/snippet}
-                    </NavigationItem>
+                      <NavigationItem
+                        label={item.playlist.name}
+                        tooltip={getPlaylistTooltip(item.playlist, isExpanded)}
+                        active={activeView === 'playlist' && selectedPlaylistId === item.playlist.id}
+                        onclick={() => handlePlaylistClick(item.playlist)}
+                        onHover={() => loadPlaylistTooltip(item.playlist)}
+                        oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, null)}
+                        showLabel={isExpanded}
+                      >
+                        {#snippet icon()}<ListMusic size={14} />{/snippet}
+                      </NavigationItem>
+                    </div>
                   {:else if item.type === 'collapsed-folder'}
                     {@const folderPlaylists = getPlaylistsInFolder(item.folder.id)}
                     <button
                       class="collapsed-folder-btn"
+                      class:drag-over={dragOverFolderId === item.folder.id}
                       onclick={(e) => showFolderPopover(e, item.folder)}
+                      oncontextmenu={(e) => handleFolderContextMenu(e, item.folder)}
                       title="{item.folder.name} ({folderPlaylists.length})"
+                      ondragover={(e) => handleFolderDragOver(e, item.folder.id)}
+                      ondragleave={() => handleFolderDragLeave(item.folder.id)}
+                      ondrop={(e) => handleFolderDrop(e, item.folder.id)}
                     >
                       <Folder size={14} />
                     </button>
@@ -1709,6 +1879,7 @@
 {#if contextMenu.visible}
   {@const availableFolders = folders.filter(f => f.id !== contextMenu.currentFolderId)}
   {@const showSearch = availableFolders.length >= FOLDER_SEARCH_THRESHOLD}
+  {@const contextPlaylistHidden = contextMenu.playlist ? (playlistSettings.get(contextMenu.playlist.id)?.hidden ?? false) : false}
   <div
     class="context-menu"
     class:has-search={showSearch}
@@ -1718,51 +1889,85 @@
     onmouseleave={() => isHoveringContextMenu = false}
     role="menu"
   >
-    {#if availableFolders.length > 0}
-      <div class="context-menu-section">
-        <span class="context-menu-label">Move to folder</span>
-        {#if showSearch}
-          <div class="context-menu-search">
-            <Search size={14} />
-            <input
-              type="text"
-              placeholder="Search folders..."
-              bind:value={contextMenuSearch}
-              onclick={(e) => e.stopPropagation()}
-            />
-          </div>
+    {#if contextMenu.folder}
+      {@const contextFolderHidden = contextMenu.folder.is_hidden ?? false}
+      <button class="context-menu-item" onclick={toggleFolderHiddenFromContextMenu}>
+        {#if contextFolderHidden}
+          <Eye size={14} />
+          {$t('playlist.showInSidebar')}
+        {:else}
+          <EyeOff size={14} />
+          {$t('playlist.hideFromSidebar')}
         {/if}
-        <div class="context-menu-folders" class:scrollable={showSearch}>
-          {#each filteredContextFolders as folder (folder.id)}
-            <button
-              class="context-menu-item"
-              onclick={() => handleMoveToFolder(folder.id)}
-            >
-              <Folder size={14} />
-              {folder.name}
-            </button>
-          {/each}
-          {#if showSearch && filteredContextFolders.length === 0}
-            <div class="context-menu-empty">
-              No folders match
+      </button>
+    {:else}
+      {#if onEditPlaylist}
+        <button class="context-menu-item" onclick={editPlaylistFromContextMenu}>
+          <Pencil size={14} />
+          {$t('playlist.editPlaylist')}
+        </button>
+      {/if}
+
+      <button class="context-menu-item" onclick={toggleHiddenFromContextMenu}>
+        {#if contextPlaylistHidden}
+          <Eye size={14} />
+          {$t('playlist.showInSidebar')}
+        {:else}
+          <EyeOff size={14} />
+          {$t('playlist.hideFromSidebar')}
+        {/if}
+      </button>
+
+      {#if onEditPlaylist || contextMenu.playlist}
+        <div class="context-menu-divider"></div>
+      {/if}
+
+      {#if availableFolders.length > 0}
+        <div class="context-menu-section">
+          <span class="context-menu-label">{$t('playlist.moveToFolder')}</span>
+          {#if showSearch}
+            <div class="context-menu-search">
+              <Search size={14} />
+              <input
+                type="text"
+                placeholder={$t('placeholders.searchFolders')}
+                bind:value={contextMenuSearch}
+                onclick={(e) => e.stopPropagation()}
+              />
             </div>
           {/if}
+          <div class="context-menu-folders" class:scrollable={showSearch}>
+            {#each filteredContextFolders as folder (folder.id)}
+              <button
+                class="context-menu-item"
+                onclick={() => handleMoveToFolder(folder.id)}
+              >
+                <Folder size={14} />
+                {folder.name}
+              </button>
+            {/each}
+            {#if showSearch && filteredContextFolders.length === 0}
+              <div class="context-menu-empty">
+                {$t('playlist.noFoldersMatch')}
+              </div>
+            {/if}
+          </div>
         </div>
-      </div>
-    {/if}
-    {#if contextMenu.currentFolderId}
-      <button
-        class="context-menu-item"
-        onclick={() => handleMoveToFolder(null)}
-      >
-        <ChevronLeft size={14} />
-        Move to root
-      </button>
-    {/if}
-    {#if availableFolders.length === 0 && !contextMenu.currentFolderId}
-      <div class="context-menu-empty">
-        No folders yet
-      </div>
+      {/if}
+      {#if contextMenu.currentFolderId}
+        <button
+          class="context-menu-item"
+          onclick={() => handleMoveToFolder(null)}
+        >
+          <ChevronLeft size={14} />
+          {$t('playlist.moveToRoot')}
+        </button>
+      {/if}
+      {#if availableFolders.length === 0 && !contextMenu.currentFolderId}
+        <div class="context-menu-empty">
+          {$t('playlist.noFoldersYet')}
+        </div>
+      {/if}
     {/if}
   </div>
 {/if}
@@ -2110,6 +2315,14 @@
     will-change: transform;
   }
 
+  .playlist-drag-wrapper {
+    width: 100%;
+  }
+
+  .playlist-drag-wrapper.dragging {
+    opacity: 0.55;
+  }
+
   .playlists-scroll {
     overflow-y: overlay;
     overflow-x: hidden;
@@ -2163,6 +2376,11 @@
     background: var(--bg-hover);
   }
 
+  .folder-header.drag-over {
+    background: var(--bg-hover);
+    outline: 1px solid var(--accent-primary);
+  }
+
   .folder-chevron {
     display: flex;
     align-items: center;
@@ -2213,6 +2431,11 @@
 
   .collapsed-folder-btn:hover {
     background: var(--bg-hover);
+  }
+
+  .collapsed-folder-btn.drag-over {
+    background: var(--bg-hover);
+    outline: 1px solid var(--accent-primary);
   }
 
   /* Folder Popover (collapsed sidebar) */
@@ -2597,6 +2820,12 @@
 
   .context-menu-item:hover {
     background: var(--bg-hover);
+  }
+
+  .context-menu-divider {
+    height: 1px;
+    margin: 6px 0;
+    background: var(--bg-tertiary);
   }
 
   .context-menu-empty {

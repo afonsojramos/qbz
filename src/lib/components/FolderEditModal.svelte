@@ -1,7 +1,8 @@
 <script lang="ts">
   import { open } from '@tauri-apps/plugin-dialog';
   import Modal from './Modal.svelte';
-  import { Heart, Star, Music, Folder, Disc, Library, Headphones, Upload } from 'lucide-svelte';
+  import { Heart, Star, Music, Folder, Disc, Library, Headphones, Upload, Eye, EyeOff } from 'lucide-svelte';
+  import { t } from '$lib/i18n';
   import type { PlaylistFolder } from '$lib/stores/playlistFoldersStore';
 
   interface Props {
@@ -14,6 +15,7 @@
       iconPreset: string;
       iconColor: string;
       customImagePath?: string;
+      isHidden?: boolean;
     }) => void;
     onDelete?: (folder: PlaylistFolder) => void;
   }
@@ -25,6 +27,7 @@
   let customIconPreset = $state<string>('folder');
   let iconBackground = $state<string | null>(null);
   let useCustomImage = $state(false);
+  let folderHidden = $state(false);
   let saving = $state(false);
 
   const presetIcons = [
@@ -73,12 +76,14 @@
       customIconPreset = folder.icon_preset || 'folder';
       iconBackground = folder.icon_color || null;
       useCustomImage = folder.icon_type === 'custom' && !!folder.custom_image_path;
+      folderHidden = folder.is_hidden ?? false;
     } else {
       folderName = '';
       customIconPath = null;
       customIconPreset = 'folder';
       iconBackground = null;
       useCustomImage = false;
+      folderHidden = false;
     }
   }
 
@@ -112,7 +117,8 @@
         iconType: useCustomImage ? 'custom' : 'preset',
         iconPreset: customIconPreset,
         iconColor: iconBackground || '',
-        customImagePath: useCustomImage ? customIconPath || undefined : undefined
+        customImagePath: useCustomImage ? customIconPath || undefined : undefined,
+        isHidden: folderHidden
       });
       onClose();
     } finally {
@@ -138,7 +144,7 @@
   });
 </script>
 
-<Modal {isOpen} onClose={handleCancel} title={folder ? 'Edit Folder' : 'New Folder'} maxWidth="480px">
+<Modal {isOpen} onClose={handleCancel} title={folder ? $t('library.editFolder') : $t('playlist.newFolder', { default: 'New Folder' })} maxWidth="480px">
   {#snippet children()}
   <div class="folder-modal-content">
     <!-- Name input -->
@@ -221,6 +227,21 @@
           {/each}
         </div>
       </div>
+    </div>
+
+    <div class="modal-section">
+      <h3>{$t('playlist.visibility', { default: 'Visibility' })}</h3>
+      <label class="hidden-toggle">
+        <input type="checkbox" bind:checked={folderHidden} />
+        <span class="hidden-toggle-label">
+          {#if folderHidden}
+            <EyeOff size={14} />
+          {:else}
+            <Eye size={14} />
+          {/if}
+          {$t('playlist.hideFromSidebar')}
+        </span>
+      </label>
     </div>
   </div>
   {/snippet}
@@ -432,5 +453,26 @@
   /* Layout-specific: push danger button to the left */
   .modal-actions :global(.btn-danger) {
     margin-right: auto;
+  }
+
+  .hidden-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 14px;
+  }
+
+  .hidden-toggle input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-primary);
+  }
+
+  .hidden-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
 </style>

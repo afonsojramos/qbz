@@ -17,7 +17,6 @@
   import {
     subscribe as subscribeFolders,
     getFolders,
-    getVisibleFolders,
     loadFolders,
     createFolder,
     updateFolder,
@@ -128,6 +127,10 @@
   let folders = $state<PlaylistFolder[]>([]);
   let currentFolderId = $state<string | null>(null);
   let foldersCollapsed = $state(false);
+
+  function getSortedFolders(): PlaylistFolder[] {
+    return [...getFolders()].sort((a, b) => a.position - b.position);
+  }
 
   // Create/Edit folder modal state
   let showFolderModal = $state(false);
@@ -450,6 +453,7 @@
   onMount(() => {
     loadData();
     loadFolders();
+    folders = getSortedFolders();
 
     // Subscribe to offline state changes
     const unsubscribeOffline = subscribeOffline(() => {
@@ -459,7 +463,7 @@
 
     // Subscribe to folder changes
     const unsubscribeFolders = subscribeFolders(() => {
-      folders = getVisibleFolders();
+      folders = getSortedFolders();
     });
 
     return () => {
@@ -827,6 +831,7 @@
       iconPreset: string;
       iconColor: string;
       customImagePath?: string;
+      isHidden?: boolean;
     }
   ) {
     if (folder) {
@@ -836,19 +841,24 @@
         iconType: updates.iconType,
         iconPreset: updates.iconPreset,
         iconColor: updates.iconColor,
-        customImagePath: updates.customImagePath
+        customImagePath: updates.customImagePath,
+        isHidden: updates.isHidden
       });
     } else {
       // Create new folder
-      await createFolder(
+      const createdFolder = await createFolder(
         updates.name,
         updates.iconType,
         updates.iconPreset,
         updates.iconColor
       );
+
+      if (createdFolder && updates.isHidden) {
+        await updateFolder(createdFolder.id, { isHidden: true });
+      }
     }
 
-    folders = getVisibleFolders();
+    folders = getSortedFolders();
     closeFolderModal();
     onPlaylistsChanged?.();
   }
@@ -858,7 +868,7 @@
     if (!confirmed) return;
 
     await deleteFolder(folder.id);
-    folders = getVisibleFolders();
+    folders = getSortedFolders();
 
     // If we're inside the deleted folder, go back to root
     if (currentFolderId === folder.id) {
