@@ -375,22 +375,50 @@ impl AudioBackend for PipeWireBackend {
         log::info!("[PipeWire Backend] Creating fresh CPAL host...");
         let fresh_host = rodio::cpal::default_host();
 
-        // Find the "pulse" or "pipewire" CPAL device
-        let device = fresh_host
+        // Find a CPAL device backed by PulseAudio/PipeWire.
+        // Newer CPAL description().name() returns friendly labels like
+        // "PipeWire Sound Server" instead of raw ids ("pipewire"/"pulse").
+        let mut best_device: Option<rodio::cpal::Device> = None;
+        let mut best_score: u8 = 0;
+        let mut available_output_devices: Vec<String> = Vec::new();
+
+        for device in fresh_host
             .output_devices()
             .map_err(|e| format!("Failed to enumerate CPAL devices: {}", e))?
-            .find(|d| {
-                d.description()
-                    .ok()
-                    .map(|desc| {
-                        let device_name = desc.name();
-                        device_name == "pulse" || device_name == "pipewire"
-                    })
-                    .unwrap_or(false)
-            })
-            .ok_or_else(|| {
-                "Could not find 'pulse' or 'pipewire' CPAL device. Is PulseAudio/PipeWire running?".to_string()
-            })?;
+        {
+            let device_name = device
+                .description()
+                .map(|desc| desc.name().to_string())
+                .unwrap_or_else(|_| "unknown".to_string());
+            let device_name_lower = device_name.to_ascii_lowercase();
+            available_output_devices.push(device_name.clone());
+
+            let score = if device_name_lower == "pipewire" || device_name_lower == "pulse" {
+                3
+            } else if device_name_lower.contains("pipewire sound server")
+                || device_name_lower.contains("pulseaudio sound server")
+            {
+                2
+            } else if device_name_lower.contains("pipewire")
+                || device_name_lower.contains("pulseaudio")
+            {
+                1
+            } else {
+                0
+            };
+
+            if score > best_score {
+                best_score = score;
+                best_device = Some(device);
+            }
+        }
+
+        let device = best_device.ok_or_else(|| {
+            format!(
+                "Could not find 'pulse' or 'pipewire' CPAL device. Is PulseAudio/PipeWire running? Available output devices: {:?}",
+                available_output_devices
+            )
+        })?;
 
         let device_name = device
             .description()

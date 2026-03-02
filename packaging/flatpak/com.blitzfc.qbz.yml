@@ -21,6 +21,9 @@ finish-args:
   # User music library
   - --filesystem=xdg-music
 
+  # Required for tray icon visibility in Flatpak sandbox
+  - --filesystem=xdg-run/tray-icon:create
+
   # Notifications and tray
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
