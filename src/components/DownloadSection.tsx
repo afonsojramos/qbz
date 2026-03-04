@@ -150,12 +150,15 @@ const getInstallCmd = (type: DownloadItem['type'], fileName: string): string | u
     case 'deb': return `sudo dpkg -i ${fileName}`
     case 'rpm': return `sudo rpm -i ${fileName}`
     case 'flatpak': return `flatpak install --user ./${fileName}`
-    case 'tarball': return `tar -xzf ${fileName} && ./qbz`
+    case 'tarball': {
+      const dir = fileName.replace(/\.tar\.(gz|xz)$/, '').replace(/\.tgz$/, '')
+      return `tar -xzf ${fileName} && ./${dir}/qbz`
+    }
     default: return undefined
   }
 }
 
-const getHelperCmds = (type: DownloadItem['type']): { label: string; cmds: string[] } | undefined => {
+const getHelperCmds = (type: DownloadItem['type'], fileName?: string): { label: string; cmds: string[] } | undefined => {
   if (type === 'aur') {
     return { label: 'Or using a Helper?', cmds: ['yay -Syu qbz-bin', 'paru -Syu qbz-bin'] }
   }
@@ -165,6 +168,18 @@ const getHelperCmds = (type: DownloadItem['type']): { label: string; cmds: strin
       cmds: [
         'flatpak override --user --filesystem=/path/to/your/music com.blitzfc.qbz',
         'flatpak override --user --filesystem=/mnt/nas com.blitzfc.qbz',
+      ]
+    }
+  }
+  if (type === 'tarball' && fileName) {
+    const dir = fileName.replace(/\.tar\.(gz|xz)$/, '').replace(/\.tgz$/, '')
+    return {
+      label: 'Optional: Install .desktop entry and icon',
+      cmds: [
+        `sudo cp ${dir}/qbz /usr/local/bin/`,
+        `cp ${dir}/qbz.desktop ~/.local/share/applications/`,
+        `cp -r ${dir}/icons/* ~/.local/share/icons/`,
+        `gtk-update-icon-cache ~/.local/share/icons/hicolor/`,
       ]
     }
   }
@@ -193,7 +208,7 @@ const mapAssets = (assets: ReleaseAsset[]): DownloadItem[] =>
         arch: getArch(asset.name),
         installCmd: getInstallCmd(type, asset.name),
         depsCmd: getDepsCmd(type),
-        helperCmds: getHelperCmds(type),
+        helperCmds: getHelperCmds(type, asset.name),
         helperNote: undefined,
         glibcNote: (type === 'deb' || type === 'rpm') ? `downloads.glibcNote.${type}` : undefined,
       }
@@ -254,23 +269,42 @@ const snapItem: DownloadItem = {
 
 function ItemView({ item }: { item: DownloadItem }) {
   const { t } = useTranslation()
-  const isExternal = ['aur', 'flathub', 'snap'].includes(item.type)
+  const isStore = ['aur', 'flathub', 'snap'].includes(item.type)
   const storeLabel = item.type === 'aur' ? 'AUR'
     : item.type === 'flathub' ? 'Flathub'
     : item.type === 'snap' ? 'Snap Store'
     : null
 
+  // Contextual label: only show when needed to distinguish within a tab
+  // (e.g. Flatpak tab has both Flathub and GitHub Release items)
+  const displayLabel = storeLabel
+    ?? (item.type === 'flatpak' ? 'GitHub Release' : null)
+
+  // Download command for file-based items (not stores)
+  const downloadCmd = !isStore ? `wget ${item.url}` : undefined
+
   return (
     <div className="download-item">
       <div className="download-item__header">
         <div className="download-item__info">
-          <span className="download-item__label">{item.label}</span>
+          {displayLabel && <span className="download-item__label">{displayLabel}</span>}
           {item.arch && <span className="download-item__arch">{item.arch}</span>}
         </div>
-        <span className="download-item__file">
-          {storeLabel ?? `${item.fileName} \u00b7 ${formatBytes(item.size)}`}
-        </span>
+        {!isStore && (
+          <span className="download-item__file">
+            {item.fileName} · {formatBytes(item.size)}
+          </span>
+        )}
       </div>
+      {downloadCmd && (
+        <div className="terminal">
+          <code>
+            <span className="terminal__prompt">$</span>
+            <span className="terminal__cmd">{downloadCmd}</span>
+          </code>
+          <CopyButton text={downloadCmd} />
+        </div>
+      )}
       {item.installCmd && (
         <div className="terminal">
           <code>
@@ -318,8 +352,8 @@ function ItemView({ item }: { item: DownloadItem }) {
       <a
         className="btn btn-ghost btn-sm"
         href={item.url}
-        target={isExternal ? '_blank' : undefined}
-        rel={isExternal ? 'noreferrer' : undefined}
+        target={isStore ? '_blank' : undefined}
+        rel={isStore ? 'noreferrer' : undefined}
       >
         {storeLabel ? `View on ${storeLabel}` : 'Download'}
       </a>
