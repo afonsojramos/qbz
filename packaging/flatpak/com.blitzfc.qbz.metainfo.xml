@@ -11,12 +11,19 @@
       <li>Bit-perfect playback up to 24-bit/192kHz</li>
       <li>PipeWire and PulseAudio audio output</li>
       <li>DAC routing and exclusive mode support</li>
-      <li>Offline playlist support</li>
+      <li>Local music library with offline playback</li>
+      <li>Immersive and miniplayer display modes</li>
+      <li>Artist blacklist for personalized listening</li>
       <li>MPRIS integration for desktop media controls</li>
-      <li>Last.fm scrobbling support</li>
+      <li>Last.fm and ListenBrainz scrobbling</li>
+      <li>Plex library integration</li>
+      <li>Direct streaming or smart cache playback</li>
+      <li>Highly customizable interface and behavior</li>
     </ul>
   </description>
-  <developer_name>QBZ Contributors</developer_name>
+  <developer id="com.blitzfc">
+    <name>QBZ Contributors</name>
+  </developer>
   <url type="homepage">https://github.com/vicrodh/qbz</url>
   <url type="bugtracker">https://github.com/vicrodh/qbz/issues</url>
   <url type="vcs-browser">https://github.com/vicrodh/qbz</url>
@@ -26,20 +33,6 @@
     <color type="primary" scheme_preference="light">#2b6cb0</color>
     <color type="primary" scheme_preference="dark">#63b3ed</color>
   </branding>
-  <categories>
-    <category>AudioVideo</category>
-    <category>Audio</category>
-    <category>Music</category>
-    <category>Player</category>
-  </categories>
-  <keywords>
-    <keyword>music</keyword>
-    <keyword>audio</keyword>
-    <keyword>qobuz</keyword>
-    <keyword>hifi</keyword>
-    <keyword>streaming</keyword>
-    <keyword>audiophile</keyword>
-  </keywords>
   <launchable type="desktop-id">com.blitzfc.qbz.desktop</launchable>
   <provides>
     <binary>qbz</binary>
