@@ -179,7 +179,7 @@ const mapAssets = (assets: ReleaseAsset[]): DownloadItem[] =>
         depsCmd: getDepsCmd(type),
         helperCmds: getHelperCmds(type),
         helperNote: undefined,
-        glibcNote: (type === 'deb' || type === 'rpm') ? t(`downloads.glibcNote.${type}`) : undefined,
+        glibcNote: (type === 'deb' || type === 'rpm') ? `downloads.glibcNote.${type}` : undefined,
       }
     })
     .filter((item) => !DISABLED_TYPES.includes(item.type))
@@ -350,7 +350,7 @@ export function DownloadSection() {
                       </div>
                     )}
                     {item.glibcNote && (
-                      <p className="glibc-note">{item.glibcNote}</p>
+                      <p className="glibc-note">{t(item.glibcNote)}</p>
                     )}
                     {item.depsCmd && (
                       <details className="deps-details">
