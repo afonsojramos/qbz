@@ -13,6 +13,7 @@ import { loadSystemNotificationsPreference, flushScrobbleQueue } from '$lib/serv
 import { initOfflineStore, cleanupOfflineStore, onOnlineTransition, syncPendingPlaylists } from '$lib/stores/offlineStore';
 import { loadUnavailableTracks } from '$lib/stores/unavailableTracksStore';
 import { getNextZoomLevel } from '$lib/utils/zoom';
+import { getUserItem } from '$lib/utils/userStorage';
 import { getZoom, setZoom } from '$lib/stores/zoomStore';
 import { restoreAutoThemeVars } from '$lib/stores/autoThemeStore';
 
@@ -87,7 +88,7 @@ export function setupZoomControls(): () => void {
  */
 export async function restoreLastfmSession(): Promise<void> {
   try {
-    const savedSessionKey = localStorage.getItem('qbz-lastfm-session-key');
+    const savedSessionKey = getUserItem('qbz-lastfm-session-key');
 
     // Restore session if available (proxy handles credentials)
     if (savedSessionKey) {
