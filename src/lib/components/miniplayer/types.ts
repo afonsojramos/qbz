@@ -8,4 +8,5 @@ export interface MiniPlayerQueueTrack {
   artist: string;
   artwork?: string;
   quality?: string;
+  parental_warning?: boolean;
 }

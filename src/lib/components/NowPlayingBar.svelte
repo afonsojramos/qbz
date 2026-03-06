@@ -74,6 +74,7 @@
     normalizationGain?: number | null;
     onToggleNormalization?: () => void;
     controlsDisabled?: boolean;
+    explicit?: boolean;
   }
 
   let {
@@ -120,6 +121,7 @@
     normalizationGain = null,
     onToggleNormalization,
     controlsDisabled = false,
+    explicit = false,
   }: Props = $props();
 
   let progressRef: HTMLDivElement;
@@ -352,7 +354,12 @@
           </button>
 
           <div class="song-info">
-            <button class="song-title" title={$translateStore('actions.trackInfo')} onclick={onTrackClick}>{trackTitle}</button>
+            <div class="song-title-row">
+              <button class="song-title" title={$translateStore('actions.trackInfo')} onclick={onTrackClick}>{trackTitle}</button>
+              {#if explicit}
+                <span class="explicit-badge" title="Explicit"></span>
+              {/if}
+            </div>
             <div class="song-meta">
               <StackIcon size={12} class="stack-icon" onClick={onContextClick} />
               {#if artist}
@@ -843,6 +850,13 @@
     align-self: center;
   }
 
+  .song-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
   .song-title {
     font-size: 13px;
     font-weight: 500;
@@ -855,6 +869,17 @@
     padding: 0;
     cursor: help;
     text-align: left;
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .song-meta {

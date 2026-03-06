@@ -1742,7 +1742,8 @@
       isLocal,
       source,
       albumId: track.album_id ?? undefined,
-      artistId: track.artist_id ?? undefined
+      artistId: track.artist_id ?? undefined,
+      parental_warning: track.parental_warning ?? false
     }, { isLocal, source: source as 'qobuz' | 'local' | 'plex', showLoadingToast: false, gaplessTransition });
   }
 
@@ -4462,6 +4463,7 @@
             isTrackInfoOpen = true;
           }
         }}
+        explicit={currentTrack?.parental_warning === true}
       />
     {:else}
       <NowPlayingBar
@@ -4546,6 +4548,7 @@
         onPlayHistoryTrack={handlePlayHistoryTrack}
         isInfinitePlay={infinitePlayEnabled}
         onToggleInfinitePlay={handleToggleInfinitePlay}
+        explicit={currentTrack?.parental_warning === true}
       />
     {/if}
 

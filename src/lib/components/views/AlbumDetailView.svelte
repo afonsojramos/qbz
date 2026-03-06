@@ -43,6 +43,7 @@
     bitDepth?: number;
     samplingRate?: number;
     isrc?: string;
+    parental_warning?: boolean;
   }
 
   interface ArtistAlbum {
@@ -641,6 +642,7 @@
           artist={track.artist}
           duration={track.duration}
           quality={track.quality}
+          explicit={track.parental_warning === true}
           isPlaying={activeTrackId === track.id}
           isBlacklisted={trackBlacklisted}
           selectable={multiSelectMode}

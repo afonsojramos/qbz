@@ -114,7 +114,8 @@
         title: playerState.currentTrack.title,
         artist: playerState.currentTrack.artist,
         artwork: playerState.currentTrack.artwork,
-        quality: formatDurationLabel(playerState.duration || playerState.currentTrack.duration)
+        quality: formatDurationLabel(playerState.duration || playerState.currentTrack.duration),
+        parental_warning: playerState.currentTrack.parental_warning
       });
     }
 
@@ -127,7 +128,8 @@
         title: queueTrack.title,
         artist: queueTrack.artist,
         artwork: queueTrack.artwork,
-        quality: queueTrack.duration
+        quality: queueTrack.duration,
+        parental_warning: queueTrack.parental_warning
       });
     }
 
@@ -334,7 +336,8 @@
       isLocal,
       source,
       albumId: track.album_id ?? undefined,
-      artistId: track.artist_id ?? undefined
+      artistId: track.artist_id ?? undefined,
+      parental_warning: track.parental_warning ?? false
     }, {
       isLocal,
       source: source as 'qobuz' | 'local' | 'plex',
@@ -471,6 +474,7 @@
     onQueueTrackPlay={(trackId) => {
       void handleQueueTrackPlay(trackId);
     }}
+    explicit={playerState.currentTrack?.parental_warning === true}
   />
 
   {#if showAlwaysOnTopWarning}

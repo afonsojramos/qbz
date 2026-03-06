@@ -765,6 +765,7 @@ mod tests {
             artist_id: None,
             streamable: true,
             source: Some("test".to_string()),
+            parental_warning: false,
         }
     }
 

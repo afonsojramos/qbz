@@ -337,6 +337,7 @@
             trackId={trackId}
             number={getTrackNumber(item.track, item.index)}
             title={getTrackTitle(item.track)}
+            explicit={item.track.parental_warning === true}
             artist={trackArtist}
             album={albumName}
             showArtwork={showArtwork}

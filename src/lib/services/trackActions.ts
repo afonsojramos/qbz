@@ -47,7 +47,8 @@ export function buildQueueTrackFromQobuz(track: QobuzTrack): BackendQueueTrack {
     album_id: track.album?.id || null,
     artist_id: track.performer?.id ?? null,
     streamable: track.streamable ?? true,
-    source: 'qobuz'
+    source: 'qobuz',
+    parental_warning: track.parental_warning ?? false
   };
 }
 
@@ -78,7 +79,8 @@ export function buildQueueTrackFromAlbumTrack(
     album_id: track.albumId || albumId || null,
     artist_id: track.artistId ?? artistId ?? null,
     streamable: track.streamable ?? true,
-    source: 'qobuz'
+    source: 'qobuz',
+    parental_warning: track.parental_warning ?? false
   };
 }
 
@@ -102,7 +104,8 @@ export function buildQueueTrackFromPlaylistTrack(track: PlaylistTrack): BackendQ
     album_id: track.albumId || null,
     artist_id: track.artistId ?? null,
     streamable: track.streamable ?? true,
-    source: 'qobuz'
+    source: 'qobuz',
+    parental_warning: track.parental_warning ?? false
   };
 }
 
@@ -192,7 +195,8 @@ export function buildQueueTrackFromDisplayTrack(track: DisplayTrack): BackendQue
     sample_rate: track.samplingRate ?? null,
     is_local: track.isLocal ?? false,
     album_id: track.albumId || null,
-    artist_id: track.artistId ?? null
+    artist_id: track.artistId ?? null,
+    parental_warning: track.parental_warning ?? false
   };
 }
 

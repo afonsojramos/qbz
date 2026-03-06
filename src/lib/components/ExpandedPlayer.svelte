@@ -26,6 +26,7 @@
     onClose: () => void;
     artwork: string;
     trackTitle: string;
+    explicit?: boolean;
     artist: string;
     album: string;
     quality: string;
@@ -69,6 +70,7 @@
     onClose,
     artwork,
     trackTitle,
+    explicit = false,
     artist,
     album,
     quality,

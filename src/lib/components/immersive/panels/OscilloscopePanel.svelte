@@ -11,6 +11,7 @@
     trackTitle?: string;
     artist?: string;
     album?: string;
+    explicit?: boolean;
     quality?: string;
     bitDepth?: number;
     samplingRate?: number;
@@ -25,6 +26,7 @@
     trackTitle = '',
     artist = '',
     album = '',
+    explicit = false,
     quality,
     bitDepth,
     samplingRate,
@@ -270,6 +272,9 @@
   <div class="bottom-info">
     <div class="track-meta">
       <span class="track-title">{trackTitle}</span>
+      {#if explicit}
+        <span class="explicit-badge" title="Explicit"></span>
+      {/if}
       {#if album}
         <span class="track-album">{album}</span>
       {/if}
@@ -379,5 +384,16 @@
       width: 56px;
       height: 56px;
     }
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-primary, white);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 </style>

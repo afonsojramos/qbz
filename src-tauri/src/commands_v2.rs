@@ -5477,6 +5477,7 @@ fn track_to_queue_track_from_api(track: &crate::api::Track) -> CoreQueueTrack {
         artist_id,
         streamable: track.streamable,
         source: Some("qobuz".to_string()),
+        parental_warning: track.parental_warning,
     }
 }
 
@@ -5604,6 +5605,8 @@ pub struct V2QueueTrack {
     /// Source type: "qobuz", "local", "plex"
     #[serde(default)]
     pub source: Option<String>,
+    #[serde(default)]
+    pub parental_warning: bool,
 }
 
 fn default_streamable() -> bool {
@@ -5627,6 +5630,7 @@ impl From<V2QueueTrack> for crate::queue::QueueTrack {
             artist_id: t.artist_id,
             streamable: t.streamable,
             source: t.source,
+            parental_warning: t.parental_warning,
         }
     }
 }
@@ -5648,6 +5652,7 @@ impl From<crate::queue::QueueTrack> for V2QueueTrack {
             artist_id: t.artist_id,
             streamable: t.streamable,
             source: t.source,
+            parental_warning: t.parental_warning,
         }
     }
 }
@@ -5670,6 +5675,7 @@ impl From<V2QueueTrack> for CoreQueueTrack {
             artist_id: t.artist_id,
             streamable: t.streamable,
             source: t.source,
+            parental_warning: t.parental_warning,
         }
     }
 }
@@ -5691,6 +5697,7 @@ impl From<CoreQueueTrack> for V2QueueTrack {
             artist_id: t.artist_id,
             streamable: t.streamable,
             source: t.source,
+            parental_warning: t.parental_warning,
         }
     }
 }

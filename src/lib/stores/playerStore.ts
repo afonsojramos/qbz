@@ -58,6 +58,7 @@ export interface PlayingTrack {
   // Original track quality from metadata (for comparison with actual stream)
   originalBitDepth?: number;
   originalSamplingRate?: number;
+  parental_warning?: boolean;
 }
 
 interface BackendPlaybackState {

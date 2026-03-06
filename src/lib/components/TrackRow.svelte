@@ -37,6 +37,7 @@
     compact?: boolean; // Compact mode: smaller height, artist as column
     showArtwork?: boolean; // Optional artwork column (e.g., playlist detail)
     artworkUrl?: string;
+    explicit?: boolean; // Parental advisory / explicit content
     selectable?: boolean; // Multi-select mode: show checkbox
     selected?: boolean;
     onToggleSelect?: (e: MouseEvent) => void;
@@ -90,6 +91,7 @@
     hideDownload = false,
     hideFavorite = false,
     compact = false,
+    explicit = false,
     showArtwork = false,
     artworkUrl,
     selectable = false,
@@ -227,7 +229,12 @@
 
   <!-- Track Info -->
   <div class="track-info">
-    <div class="track-title" class:active={isPlaying}>{title}</div>
+    <div class="track-title-row">
+      <span class="track-title" class:active={isPlaying}>{title}</span>
+      {#if explicit}
+        <span class="explicit-badge" title="Explicit"></span>
+      {/if}
+    </div>
     {#if artist && !compact}
       {#if artistClickAction}
         <button class="track-artist track-link" type="button" onclick={handleArtistClick}>
@@ -545,6 +552,13 @@
     opacity: 0.7;
   }
 
+  .track-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
   .track-title {
     font-size: 14px;
     font-weight: 500;
@@ -556,6 +570,17 @@
 
   .track-title.active {
     color: var(--accent-primary);
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .track-artist {

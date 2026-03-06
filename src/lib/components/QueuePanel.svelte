@@ -17,6 +17,7 @@
     duration: string;
     available?: boolean;
     trackId?: number; // For favorite checking
+    parental_warning?: boolean;
   }
 
   interface IndexedQueueTrack {
@@ -311,7 +312,12 @@
                 {/if}
               </div>
               <div class="np-info">
-                <div class="np-title">{currentTrack.title}</div>
+                <div class="np-title-row">
+                  <span class="np-title">{currentTrack.title}</span>
+                  {#if currentTrack.parental_warning}
+                    <span class="explicit-badge" title="Explicit"></span>
+                  {/if}
+                </div>
                 <div class="np-artist">{currentTrack.artist}</div>
               </div>
               <button
@@ -359,7 +365,12 @@
                 >
                   <span class="track-number">{originalIndex + 1}</span>
                   <div class="track-info">
-                    <div class="track-title">{queueTrack.title}</div>
+                    <div class="track-title-row">
+                      <span class="track-title">{queueTrack.title}</span>
+                      {#if queueTrack.parental_warning}
+                        <span class="explicit-badge" title="Explicit"></span>
+                      {/if}
+                    </div>
                     <div class="track-artist">{queueTrack.artist}</div>
                   </div>
                   <span class="track-duration">{queueTrack.duration}</span>
@@ -700,6 +711,13 @@
     min-width: 0;
   }
 
+  .np-title-row, .track-title-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+
   .np-title {
     font-size: 14px;
     font-weight: 500;
@@ -707,6 +725,17 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .np-artist {

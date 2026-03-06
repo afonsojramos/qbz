@@ -350,7 +350,8 @@ export function convertQobuzAlbum(album: QobuzAlbum): AlbumDetail {
       albumId: album.id,
       artistId: track.performer?.id ?? album.artist?.id,
       isrc: track.isrc,
-      streamable: track.streamable ?? true
+      streamable: track.streamable ?? true,
+      parental_warning: track.parental_warning ?? false
     })) || [],
     upc: album.upc,
     goodies: album.goodies

@@ -36,6 +36,9 @@ pub struct QueueTrack {
     /// Source identifier (e.g., "qobuz", "local", "plex")
     #[serde(default)]
     pub source: Option<String>,
+    /// Parental advisory / explicit content
+    #[serde(default)]
+    pub parental_warning: bool,
 }
 
 fn default_streamable() -> bool {

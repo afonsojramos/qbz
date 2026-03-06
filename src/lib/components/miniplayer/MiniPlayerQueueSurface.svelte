@@ -55,7 +55,12 @@
           </div>
 
           <div class="row-meta">
-            <div class="row-title">{queueTrack.title}</div>
+            <div class="row-title-row">
+              <div class="row-title">{queueTrack.title}</div>
+              {#if queueTrack.parental_warning}
+                <span class="explicit-badge" title="Explicit"></span>
+              {/if}
+            </div>
             <div class="row-artist">{queueTrack.artist}</div>
           </div>
 
@@ -150,6 +155,13 @@
     flex: 1;
   }
 
+  .row-title-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+
   .row-title,
   .row-artist {
     white-space: nowrap;
@@ -161,6 +173,17 @@
     font-size: 13px;
     font-weight: 600;
     color: var(--text-secondary);
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .queue-row.active .row-title {

@@ -17,6 +17,7 @@ export interface QueueTrack {
   duration: string;
   available?: boolean; // Whether track is available (false when offline without local copy)
   trackId?: number; // For favorite checking
+  parental_warning?: boolean;
 }
 
 export interface BackendQueueTrack {
@@ -36,6 +37,7 @@ export interface BackendQueueTrack {
   streamable?: boolean;
   /** Track source: qobuz | local | plex */
   source?: string;
+  parental_warning?: boolean;
 }
 
 interface BackendQueueState {
@@ -211,7 +213,8 @@ export async function syncQueueState(): Promise<void> {
       title: track.title,
       artist: track.artist,
       duration: formatDuration(track.duration_secs),
-      available: !isOfflineMode || localTrackIds.has(track.id) || localCopies.has(track.id)
+      available: !isOfflineMode || localTrackIds.has(track.id) || localCopies.has(track.id),
+      parental_warning: track.parental_warning ?? false
     }));
 
     queueTotalTracks = queueState.total_tracks;

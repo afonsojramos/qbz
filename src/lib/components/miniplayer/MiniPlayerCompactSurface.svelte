@@ -5,9 +5,10 @@
     artwork?: string;
     title?: string;
     artist?: string;
+    explicit?: boolean;
   }
 
-  let { artwork, title, artist }: Props = $props();
+  let { artwork, title, artist, explicit = false }: Props = $props();
 </script>
 
 <div class="compact-surface">
@@ -18,7 +19,12 @@
   {/if}
 
   <div class="track-meta">
-    <div class="title">{title ?? $t('player.noTrackPlaying')}</div>
+    <div class="title-row">
+      <div class="title">{title ?? $t('player.noTrackPlaying')}</div>
+      {#if explicit}
+        <span class="explicit-badge" title="Explicit"></span>
+      {/if}
+    </div>
     <div class="artist">{artist ?? '—'}</div>
   </div>
 </div>
@@ -65,11 +71,29 @@
     text-overflow: ellipsis;
   }
 
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+
   .title {
     font-size: 13px;
     line-height: 1.2;
     font-weight: 600;
     color: var(--text-primary);
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .artist {

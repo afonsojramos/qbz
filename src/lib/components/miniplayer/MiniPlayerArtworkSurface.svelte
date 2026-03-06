@@ -6,9 +6,10 @@
     title?: string;
     artist?: string;
     album?: string;
+    explicit?: boolean;
   }
 
-  let { artwork, title, artist, album }: Props = $props();
+  let { artwork, title, artist, album, explicit = false }: Props = $props();
 
   let titleRef: HTMLDivElement | null = $state(null);
   let titleTextRef: HTMLSpanElement | null = $state(null);
@@ -64,13 +65,18 @@
   {/if}
 
   <div class="meta">
-    <div
-      class="title"
-      class:scrollable={titleOverflow > 0}
-      style="--ticker-offset: {titleOffset}; --ticker-duration: {titleDuration};"
-      bind:this={titleRef}
-    >
-      <span class="title-text" bind:this={titleTextRef}>{title ?? $t('player.noTrackPlaying')}</span>
+    <div class="title-row">
+      <div
+        class="title"
+        class:scrollable={titleOverflow > 0}
+        style="--ticker-offset: {titleOffset}; --ticker-duration: {titleDuration};"
+        bind:this={titleRef}
+      >
+        <span class="title-text" bind:this={titleTextRef}>{title ?? $t('player.noTrackPlaying')}</span>
+      </div>
+      {#if explicit}
+        <span class="explicit-badge" title="Explicit"></span>
+      {/if}
     </div>
 
     <div
@@ -133,6 +139,25 @@
     flex-direction: column;
     gap: 2px;
     overflow: hidden;
+  }
+
+  .title-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .title,

@@ -93,6 +93,8 @@
     // History
     historyTracks?: QueueTrack[];
     onPlayHistoryTrack?: (trackId: string) => void;
+    // Content flags
+    explicit?: boolean;
   }
 
   let {
@@ -140,7 +142,8 @@
     onQueuePlayTrack,
     onQueueClear,
     historyTracks = [],
-    onPlayHistoryTrack
+    onPlayHistoryTrack,
+    explicit = false
   }: Props = $props();
 
   // UI State
@@ -448,6 +451,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
           {queueTracks}
           {queueCurrentIndex}
           onNavigate={(index) => onQueuePlayTrack?.(index)}
@@ -466,6 +470,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'visualizer'}
         <!-- Visualizer: Audio spectrum with mirror mode -->
@@ -481,6 +486,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'oscilloscope'}
         <!-- Oscilloscope: Stereo L/R waveforms -->
@@ -496,6 +502,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'spectral-ribbon'}
         <SpectralRibbon
@@ -513,6 +520,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'neon-flow'}
         <NeonFlowPanel
@@ -527,6 +535,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'tunnel-flow'}
         <TunnelFlowPanel
@@ -541,6 +550,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'comet-flow'}
         <CometFlowPanel
@@ -555,6 +565,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'energy-bands'}
         <!-- Energy Bands: Concentric glowing rings driven by frequency bands -->
@@ -570,6 +581,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'lissajous'}
         <!-- Lissajous: Stereo X/Y phase visualization -->
@@ -585,6 +597,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'transient-pulse'}
         <!-- Transient Pulse: Expanding rings on beat detection -->
@@ -600,6 +613,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'album-reactive'}
         <!-- Album Reactive: Album art with breathing scale/glow -->
@@ -616,6 +630,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'lyrics-focus'}
         <!-- Lyrics Focus: Single line, large, centered -->
@@ -647,7 +662,12 @@
         <div class="artwork-section">
           <ImmersiveArtwork {artwork} {trackTitle} variant="floating" />
           <div class="split-track-info">
-            <h2 class="split-track-title">{trackTitle}</h2>
+            <div class="split-title-row">
+              <h2 class="split-track-title">{trackTitle}</h2>
+              {#if explicit}
+                <span class="explicit-badge" title="Explicit"></span>
+              {/if}
+            </div>
             <p class="split-track-artist">{artist}</p>
             {#if album}
               <p class="split-track-album">{album}</p>
@@ -791,16 +811,36 @@
     max-width: 380px;
   }
 
+  .split-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 0;
+    margin: 0 0 6px 0;
+  }
+
   .split-track-title {
     font-size: clamp(18px, 2.5vw, 24px);
     font-weight: 700;
     color: var(--text-primary, white);
-    margin: 0 0 6px 0;
+    margin: 0;
     text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
     /* Truncate long titles */
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-primary, white);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .split-track-artist {
