@@ -24,9 +24,36 @@ import { restoreAutoThemeVars } from '$lib/stores/autoThemeStore';
  */
 export function loadSavedTheme(): void {
   const savedTheme = localStorage.getItem('qbz-theme');
+  if (savedTheme === 'follow-system') {
+    applyFollowSystemTheme();
+    return;
+  }
   if (savedTheme) {
     document.documentElement.setAttribute('data-theme', savedTheme);
   }
+}
+
+/** Apply and listen for system dark/light preference changes */
+let followSystemCleanup: (() => void) | null = null;
+
+function applyFollowSystemTheme(): void {
+  stopFollowSystemTheme();
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  const apply = () => {
+    if (mq.matches) {
+      document.documentElement.removeAttribute('data-theme');
+    } else {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  };
+  apply();
+  mq.addEventListener('change', apply);
+  followSystemCleanup = () => mq.removeEventListener('change', apply);
+}
+
+export function stopFollowSystemTheme(): void {
+  followSystemCleanup?.();
+  followSystemCleanup = null;
 }
 
 /**
@@ -181,6 +208,7 @@ export function bootstrapApp(): BootstrapResult {
       cleanupMouse();
       cleanupZoom();
       cleanupOfflineStore();
+      stopFollowSystemTheme();
     }
   };
 }
