@@ -2420,25 +2420,9 @@ async fn try_deezer_metadata(url: &str, is_track: bool) -> Option<(String, Strin
 async fn try_spotify_metadata(url: &str, is_track: bool) -> Option<(String, String)> {
     let entity = if is_track { "track" } else { "album" };
     let id = extract_spotify_entity_id(url, entity)?;
-    let token = get_proxy_token("spotify").await?;
-    let api_url = format!("https://api.spotify.com/v1/{}s/{}", entity, id);
 
-    log::debug!("Link resolver: Spotify direct API: {}", api_url);
-    let data: serde_json::Value = reqwest::Client::new()
-        .get(&api_url)
-        .header("Authorization", format!("Bearer {}", token))
-        .send().await.ok()?
-        .json().await.ok()?;
-
-    let title = data.get("name")?.as_str()?.to_string();
-    let artist = data.get("artists")
-        .and_then(|a| a.as_array())
-        .and_then(|a| a.first())
-        .and_then(|a| a.get("name"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    Some((title, artist))
+    log::debug!("Link resolver: Spotify embed scrape for {} {}", entity, id);
+    crate::playlist_import::providers::spotify::fetch_embed_metadata(entity, &id).await
 }
 
 async fn try_tidal_metadata(url: &str, is_track: bool) -> Option<(String, String)> {
