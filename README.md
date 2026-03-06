@@ -136,7 +136,7 @@ sudo dnf install ./qbz-*.rpm
 
 > **Requires glibc 2.38+** (Fedora 39+, openSUSE Tumbleweed, RHEL 10+). For older releases, use Flatpak, Snap, or AppImage instead.
 
-> **Note:** Pre-built binaries include all API integrations (Last.fm, Discogs, Spotify, Apple Music, Tidal, Deezer) ready to use. If you build from source, you'll need to provide your own API keys.
+> **Note:** Pre-built binaries include all API integrations (Last.fm, Discogs, Apple Music, Tidal, Deezer) ready to use. Spotify playlist import uses embed scraping (no API key needed). If you build from source, you'll need to provide your own API keys for the other services.
 
 ## Features
 
@@ -397,14 +397,8 @@ DISCOGS_API_CLIENT_SECRET=your_consumer_secret
 
 #### Spotify Integration (Playlist Import)
 
-1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-2. Create a new application
-3. Add to `.env`:
-
-```env
-SPOTIFY_API_CLIENT_ID=your_client_id
-SPOTIFY_API_CLIENT_SECRET=your_client_secret
-```
+Spotify playlist import uses embed page scraping — no API credentials needed.
+Playlists are limited to the first ~50 tracks due to Spotify embed limitations.
 
 #### Tidal Integration (Playlist Import)
 

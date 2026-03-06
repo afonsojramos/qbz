@@ -2169,8 +2169,8 @@ pub async fn v2_resolve_music_link(
 
 /// Identify a cross-platform music URL and search Qobuz for the equivalent.
 ///
-/// Fast path: for Spotify/Tidal/Deezer, calls the platform API directly to get
-/// title+artist (~300ms). Fallback: uses Odesli API (~2-3s).
+/// Fast path: for Tidal/Deezer calls the platform API directly; for Spotify
+/// scrapes the embed page to get title+artist. Fallback: uses Odesli API (~2-3s).
 /// Then searches Qobuz with progressively simpler queries.
 async fn resolve_via_odesli_and_search(
     songlink: &crate::share::SongLinkClient,
