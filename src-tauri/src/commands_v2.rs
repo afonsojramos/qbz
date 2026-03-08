@@ -11484,13 +11484,26 @@ pub async fn v2_get_image_cache_stats(
 #[tauri::command]
 pub async fn v2_clear_image_cache(
     state: State<'_, crate::image_cache::ImageCacheState>,
+    reco_state: State<'_, crate::reco_store::RecoState>,
 ) -> Result<u64, String> {
-    let lock = state
-        .service
-        .lock()
-        .map_err(|e| format!("Lock error: {}", e))?;
-    match lock.as_ref() {
-        Some(service) => service.clear(),
-        None => Ok(0),
+    let freed = {
+        let lock = state
+            .service
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        match lock.as_ref() {
+            Some(service) => service.clear()?,
+            None => 0,
+        }
+    };
+
+    // Also clear reco meta image URLs so they re-resolve with correct sizes
+    {
+        let guard__ = reco_state.db.lock().await;
+        if let Some(db) = guard__.as_ref() {
+            let _ = db.clear_meta_caches();
+        }
     }
+
+    Ok(freed)
 }

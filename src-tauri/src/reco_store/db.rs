@@ -853,4 +853,14 @@ impl RecoStoreDb {
             .map_err(|e| format!("Failed to upsert artist meta: {}", e))?;
         Ok(())
     }
+
+    /// Clear all meta caches so entries re-resolve with fresh image URLs.
+    pub fn clear_meta_caches(&self) -> Result<(), String> {
+        self.conn
+            .execute_batch(
+                "DELETE FROM reco_album_meta; DELETE FROM reco_track_meta; DELETE FROM reco_artist_meta;",
+            )
+            .map_err(|e| format!("Failed to clear meta caches: {}", e))?;
+        Ok(())
+    }
 }
