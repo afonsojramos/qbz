@@ -2,6 +2,7 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import { Search, Disc3, Music, Mic2, User, X, ChevronLeft, ChevronRight, Crown, Heart, Play, MoreHorizontal, ListPlus } from 'lucide-svelte';
   import AlbumCard from '../AlbumCard.svelte';
   import SearchPlaylistCard from '../SearchPlaylistCard.svelte';
@@ -748,7 +749,7 @@
   }
 
   function getArtistImage(artist: Artist): string {
-    const defaultUrl = artist.image?.large || artist.image?.thumbnail || artist.image?.small || '';
+    const defaultUrl = artist.image?.small || artist.image?.thumbnail || artist.image?.large || '';
     return resolveArtistImage(artist.name, defaultUrl);
   }
 
@@ -1269,7 +1270,7 @@
                     </div>
                     {#if !failedArtistImages.has(artist.id) && getArtistImage(artist)}
                       <img
-                        src={getArtistImage(artist)}
+                        use:cachedSrc={getArtistImage(artist)}
                         alt={artist.name}
                         class="artist-image"
                         loading="lazy"
@@ -1554,7 +1555,7 @@
                         </div>
                         <!-- Image overlays placeholder when loaded -->
                         {#if !failedArtistImages.has(artist.id) && getArtistImage(artist)}
-                          <img src={getArtistImage(artist)} alt={artist.name} class="artist-image" loading="lazy" decoding="async" onerror={() => handleArtistImageError(artist.id)} />
+                          <img use:cachedSrc={getArtistImage(artist)} alt={artist.name} class="artist-image" loading="lazy" decoding="async" onerror={() => handleArtistImageError(artist.id)} />
                         {/if}
                       </div>
                       <div class="artist-name">{artist.name}</div>
@@ -1978,7 +1979,7 @@
                             <User size={40} />
                           </div>
                           {#if !failedArtistImages.has(artist.id) && getArtistImage(artist)}
-                            <img src={getArtistImage(artist)} alt={artist.name} class="artist-image" loading="lazy" decoding="async" onerror={() => handleArtistImageError(artist.id)} />
+                            <img use:cachedSrc={getArtistImage(artist)} alt={artist.name} class="artist-image" loading="lazy" decoding="async" onerror={() => handleArtistImageError(artist.id)} />
                           {/if}
                         </div>
                         <div class="artist-name">{artist.name}</div>
@@ -2505,6 +2506,7 @@
     border-radius: 50%;
     object-fit: cover;
     z-index: 1;
+    transition: opacity 0.15s ease-in;
   }
 
   .artist-image-placeholder {

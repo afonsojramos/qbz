@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { Music, User, Loader2, ArrowRight } from 'lucide-svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import { type OfflineCacheStatus } from '$lib/stores/offlineCacheState';
   import {
     getHomeCache,
@@ -20,7 +21,7 @@
   import HomeSettingsModal from '../HomeSettingsModal.svelte';
   import GenreFilterButton from '../GenreFilterButton.svelte';
   import PlaylistTagFilter from '../PlaylistTagFilter.svelte';
-  import { formatDuration, formatQuality, getQobuzImage } from '$lib/adapters/qobuzAdapters';
+  import { formatDuration, formatQuality, getQobuzImage, getQobuzImageForSize } from '$lib/adapters/qobuzAdapters';
   import { isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
   import {
     subscribe as subscribeHomeSettings,
@@ -586,7 +587,7 @@
     return {
       id: artist.id,
       name: artist.name,
-      image: resolveArtistImage(artist.name, getQobuzImage(artist.image)),
+      image: resolveArtistImage(artist.name, getQobuzImageForSize(artist.image, 'small')),
       playCount
     };
   }
@@ -1393,7 +1394,7 @@
                   </div>
                   {#if !failedArtistImages.has(artist.id) && artist.image}
                     <img
-                      src={artist.image}
+                      use:cachedSrc={artist.image}
                       alt={artist.name}
                       class="artist-image"
                       loading="lazy"
@@ -1761,6 +1762,7 @@
     inset: 0;
     object-fit: cover;
     z-index: 1;
+    transition: opacity 0.15s ease-in;
   }
 
   .artist-image-placeholder {

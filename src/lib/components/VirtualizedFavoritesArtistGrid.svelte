@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { Mic2 } from 'lucide-svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
 
   interface FavoriteArtist {
     id: number;
@@ -232,8 +233,8 @@
                 onclick={() => onArtistClick(artist.id)}
               >
                 <div class="artist-image">
-                  {#if artist.image?.large || artist.image?.thumbnail}
-                    <img src={artist.image?.large || artist.image?.thumbnail} alt={artist.name} loading="lazy" decoding="async" />
+                  {#if artist.image?.small || artist.image?.thumbnail}
+                    <img use:cachedSrc={artist.image?.small || artist.image?.thumbnail} alt={artist.name} loading="lazy" decoding="async" />
                   {:else}
                     <div class="artist-placeholder">
                       <Mic2 size={32} />
@@ -353,6 +354,7 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+    transition: opacity 0.15s ease-in;
   }
 
   .artist-placeholder {

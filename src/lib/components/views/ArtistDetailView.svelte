@@ -4,6 +4,7 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { setCustomImage, removeCustomImage as removeCustomImageFromStore } from '$lib/stores/customArtistImageStore';
   import { t } from 'svelte-i18n';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, MoreHorizontal, Info, Disc, Settings, CheckSquare } from 'lucide-svelte';
   import {
     isBlacklisted,
@@ -1468,7 +1469,7 @@
           </div>
         {:else}
           <img
-            src={imageOverride ?? artist.image}
+            use:cachedSrc={imageOverride ?? artist.image}
             alt={artist.name}
             class="artist-image"
             loading="lazy"
@@ -2918,6 +2919,7 @@
     border-radius: 50%;
     object-fit: cover;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    transition: opacity 0.15s ease-in;
   }
 
   .artist-image-placeholder {
