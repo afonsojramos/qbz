@@ -583,10 +583,13 @@ function mapReleaseType(releaseType: string): 'albums' | 'eps' | 'live' | 'other
       return 'albums';
     case 'ep':
     case 'single':
+    case 'epSingle':
       return 'eps';
     case 'live':
       return 'live';
     case 'compilation':
+    case 'boxset':
+    case 'download':
     case 'other':
     default:
       return 'others';
@@ -668,13 +671,21 @@ export function convertPageArtist(response: PageArtistResponse): ArtistDetail {
   const releaseHasMore: Record<string, boolean> = {};
 
   for (const group of releaseGroups) {
-    const category = mapReleaseType(group.type);
-    releaseHasMore[group.type] = group.has_more;
+    const groupCategory = mapReleaseType(group.type);
+    // Normalize the key so the UI can use consistent names (ep, not epSingle)
+    const hasMoreKey = group.type === 'epSingle' ? 'ep' : group.type;
+    releaseHasMore[hasMoreKey] = group.has_more;
     for (const release of group.items) {
       const summary = pageReleaseToSummary(release, response.id);
       if (!summary) continue;
 
-      switch (category) {
+      // For groups like "download", "other", "awardedRelease" that map to "others",
+      // re-categorize each item by its individual release_type (single → eps, album → albums, etc.)
+      const itemCategory = groupCategory === 'others' && release.release_type
+        ? mapReleaseType(release.release_type)
+        : groupCategory;
+
+      switch (itemCategory) {
         case 'albums':
           albums.push(summary);
           break;
@@ -769,48 +780,52 @@ export function appendPageReleases(
   newReleases: PageArtistRelease[],
   hasMore: boolean
 ): ArtistDetail {
-  const category = mapReleaseType(releaseType);
-  const newSummaries: ArtistAlbumSummaryFromPage[] = [];
+  const groupCategory = mapReleaseType(releaseType);
+
+  // Collect all existing IDs across categories for deduplication
+  const allExistingIds = new Set([
+    ...artist.albums.map(a => a.id),
+    ...artist.epsSingles.map(a => a.id),
+    ...artist.liveAlbums.map(a => a.id),
+    ...artist.others.map(a => a.id),
+  ]);
+
+  const newAlbums: ArtistAlbumSummaryFromPage[] = [];
+  const newEps: ArtistAlbumSummaryFromPage[] = [];
+  const newLive: ArtistAlbumSummaryFromPage[] = [];
+  const newOthers: ArtistAlbumSummaryFromPage[] = [];
 
   for (const release of newReleases) {
     const summary = pageReleaseToSummary(release, artist.id);
-    if (summary) newSummaries.push(summary);
+    if (!summary || allExistingIds.has(summary.id)) continue;
+
+    // Re-categorize items from "others" groups by their individual release_type
+    const itemCategory = groupCategory === 'others' && release.release_type
+      ? mapReleaseType(release.release_type)
+      : groupCategory;
+
+    switch (itemCategory) {
+      case 'albums': newAlbums.push(summary); break;
+      case 'eps': newEps.push(summary); break;
+      case 'live': newLive.push(summary); break;
+      case 'others': newOthers.push(summary); break;
+    }
   }
 
-  if (newSummaries.length === 0) return artist;
-
-  // Deduplicate against existing items in the target category
-  const existingIds = new Set(
-    (category === 'albums' ? artist.albums :
-     category === 'eps' ? artist.epsSingles :
-     category === 'live' ? artist.liveAlbums :
-     artist.others
-    ).map(a => a.id)
-  );
-
-  const unique = newSummaries.filter(s => !existingIds.has(s.id));
+  if (newAlbums.length + newEps.length + newLive.length + newOthers.length === 0) return artist;
 
   const updated = { ...artist };
-  switch (category) {
-    case 'albums':
-      updated.albums = [...artist.albums, ...unique];
-      break;
-    case 'eps':
-      updated.epsSingles = [...artist.epsSingles, ...unique];
-      break;
-    case 'live':
-      updated.liveAlbums = [...artist.liveAlbums, ...unique];
-      break;
-    case 'others':
-      updated.others = [...artist.others, ...unique];
-      break;
-  }
+  if (newAlbums.length) updated.albums = [...artist.albums, ...newAlbums];
+  if (newEps.length) updated.epsSingles = [...artist.epsSingles, ...newEps];
+  if (newLive.length) updated.liveAlbums = [...artist.liveAlbums, ...newLive];
+  if (newOthers.length) updated.others = [...artist.others, ...newOthers];
 
-  // Update has_more flag for this category
-  updated.releaseHasMore = { ...artist.releaseHasMore, [releaseType]: hasMore };
+  // Update has_more flag for this category (normalize epSingle → ep)
+  const hasMoreKey = releaseType === 'epSingle' ? 'ep' : releaseType;
+  updated.releaseHasMore = { ...artist.releaseHasMore, [hasMoreKey]: hasMore };
 
   // Merge new labels from album releases
-  if (category === 'albums') {
+  if (groupCategory === 'albums' || newAlbums.length > 0) {
     const existingLabelIds = new Set(artist.labels.map(l => l.id));
     const newLabels: { id: number; name: string }[] = [];
     for (const release of newReleases) {

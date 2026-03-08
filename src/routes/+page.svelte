@@ -176,7 +176,6 @@
     setVolume as playerSetVolume,
     stop as stopPlayback,
     setPendingSessionRestore,
-    setPlayerCurrentTime,
     startPolling,
     stopPolling,
     reset as resetPlayer,
@@ -840,15 +839,16 @@
 
       // The artist/page endpoint sometimes omits EPs & Singles from its
       // releases array. If they're missing, fetch them explicitly.
+      // If the artist/page response didn't include EPs & Singles, fetch them
       const hasEpGroup = (response.releases || []).some(
-        g => g.type === 'ep' || g.type === 'single'
+        g => g.type === 'ep' || g.type === 'single' || g.type === 'epSingle'
       );
       if (!hasEpGroup && selectedArtist.epsSingles.length === 0) {
         invoke<ReleasesGridResponse>('get_releases_grid', {
-          artistId, releaseType: 'ep', limit: 25, offset: 0
+          artistId, releaseType: 'epSingle', limit: 25, offset: 0
         }).then(result => {
           if (result.items.length > 0 && selectedArtist?.id === artistId) {
-            selectedArtist = appendPageReleases(selectedArtist, 'ep', result.items, result.has_more);
+            selectedArtist = appendPageReleases(selectedArtist, 'epSingle', result.items, result.has_more);
             console.log(`[Artist] Backfilled ${result.items.length} EPs & Singles`);
           }
         }).catch(err => console.debug('[Artist] EP backfill failed:', err));
@@ -1072,11 +1072,14 @@
   async function loadMoreArtistReleases(releaseType: string) {
     if (!selectedArtist || isArtistAlbumsLoading) return;
 
+    // Map UI release type to API release type
+    const apiReleaseType = releaseType === 'ep' || releaseType === 'single' ? 'epSingle' : releaseType;
+
     // Count current items for this release type to use as offset
     let currentCount = 0;
     switch (releaseType) {
       case 'album': currentCount = selectedArtist.albums.length; break;
-      case 'ep': case 'single': currentCount = selectedArtist.epsSingles.length; break;
+      case 'ep': case 'single': case 'epSingle': currentCount = selectedArtist.epsSingles.length; break;
       case 'live': currentCount = selectedArtist.liveAlbums.length; break;
       case 'compilation': case 'other': currentCount = selectedArtist.others.length; break;
     }
@@ -1085,7 +1088,7 @@
     try {
       const result = await invoke<ReleasesGridResponse>('get_releases_grid', {
         artistId: selectedArtist.id,
-        releaseType,
+        releaseType: apiReleaseType,
         limit: 25,
         offset: currentCount
       });
@@ -2780,13 +2783,8 @@
             samplingRate: track.sample_rate ?? undefined,
           });
 
-          // Show saved position in player bar; first play will seek to it
-          const savedPos = session.current_position_secs ?? 0;
-          if (savedPos > 0) {
-            setPlayerCurrentTime(savedPos);
-          }
-          setPendingSessionRestore(track.id, savedPos);
-          console.log(`[Session] Track ${track.id} restored visually (paused at ${savedPos}s)`);
+          setPendingSessionRestore(track.id);
+          console.log(`[Session] Track ${track.id} restored (ready to play from start)`);
         }
 
         console.log('[Session] Session restored successfully');
