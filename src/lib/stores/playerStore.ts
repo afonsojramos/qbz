@@ -165,7 +165,7 @@ let gaplessRequestInFlight = false;
 let gaplessAttemptTrackId: number | null = null;
 
 // Session restore state - when set, next play will load the track first
-let pendingSessionRestore: { trackId: number; position: number } | null = null;
+let pendingSessionRestore: { trackId: number } | null = null;
 
 // Listeners
 const listeners = new Set<() => void>();
@@ -315,22 +315,14 @@ export function setQueueEnded(ended: boolean): void {
   queueEnded = ended;
 }
 
-/**
- * Set visual-only current time (no backend seek). Used by session restore.
- */
-export function setPlayerCurrentTime(time: number): void {
-  currentTime = time;
-  notifyListeners();
-}
-
 // ============ Playback Controls ============
 
 /**
  * Set pending session restore - will load track on next play
  */
-export function setPendingSessionRestore(trackId: number, position: number): void {
-  pendingSessionRestore = { trackId, position };
-  console.log('[Player] Set pending session restore:', { trackId, position });
+export function setPendingSessionRestore(trackId: number): void {
+  pendingSessionRestore = { trackId };
+  console.log('[Player] Set pending session restore:', trackId);
 }
 
 /**
@@ -376,11 +368,10 @@ export async function togglePlay(): Promise<void> {
     if (newIsPlaying) {
       // Check if we need to load the track first (session restore)
       if (pendingSessionRestore && pendingSessionRestore.trackId === currentTrack.id) {
-        console.log('[Player] Loading restored track:', pendingSessionRestore.trackId);
-        const savedPosition = pendingSessionRestore.position;
+        console.log('[Player] Loading restored track from start:', pendingSessionRestore.trackId);
         pendingSessionRestore = null; // Clear before loading
 
-        // Restore source-specific playback
+        // Restore source-specific playback (always from start)
         if (currentTrack.source === 'plex') {
           const plexBaseUrl = getUserItem('qbz-plex-poc-base-url') || '';
           const plexToken = getUserItem('qbz-plex-poc-token') || '';
@@ -408,18 +399,6 @@ export async function togglePlay(): Promise<void> {
             trackId: currentTrack.id,
             quality: getStreamingQuality()
           });
-        }
-
-        // Seek to saved position after a short delay to let audio load
-        if (savedPosition > 0) {
-          setTimeout(async () => {
-            try {
-              await invoke('v2_seek', { position: savedPosition });
-              console.log('[Player] Seeked to restored position:', savedPosition);
-            } catch (seekErr) {
-              console.error('[Player] Failed to seek to restored position:', seekErr);
-            }
-          }, 500);
         }
 
       } else {
