@@ -498,6 +498,7 @@
             showArtwork={true}
             artworkUrl={getQobuzImage(track.album?.image)}
             isPlaying={isPlaybackActive && activeTrackId === track.id}
+            isActiveTrack={activeTrackId === track.id}
             isBlacklisted={trackBlacklisted}
             selectable={multiSelectMode}
             selected={multiSelectedIds.has(track.id)}

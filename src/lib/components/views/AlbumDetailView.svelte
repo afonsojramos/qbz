@@ -643,7 +643,8 @@
           duration={track.duration}
           quality={track.quality}
           explicit={track.parental_warning === true}
-          isPlaying={activeTrackId === track.id}
+          isPlaying={isPlaybackActive && activeTrackId === track.id}
+          isActiveTrack={activeTrackId === track.id}
           isBlacklisted={trackBlacklisted}
           selectable={multiSelectMode}
           selected={multiSelectedIds.has(track.id)}

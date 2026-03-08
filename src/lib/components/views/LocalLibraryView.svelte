@@ -3256,6 +3256,7 @@
               duration={formatDuration(track.duration_secs)}
               quality={getQualityBadge(track)}
               isPlaying={isPlaybackActive && activeTrackId === track.id}
+              isActiveTrack={activeTrackId === track.id}
               isLocal={true}
               localSource={track.source === 'plex' ? 'plex' : 'local'}
               hideDownload={true}

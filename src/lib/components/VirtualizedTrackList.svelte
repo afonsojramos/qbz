@@ -345,6 +345,7 @@
             duration={formatDuration(getTrackDuration(item.track))}
             quality={getQualityBadge(item.track)}
             isPlaying={isPlaybackActive && activeTrackId === trackId}
+            isActiveTrack={activeTrackId === trackId}
             isBlacklisted={trackBlacklisted}
             selectable={selectable}
             selected={selectedIds?.has(trackId) ?? false}

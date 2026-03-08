@@ -24,6 +24,7 @@
     duration: string;
     quality?: string;
     isPlaying?: boolean;
+    isActiveTrack?: boolean;
     isLocal?: boolean; // Whether this is a local library track
     localSource?: 'local' | 'plex';
     isUnavailable?: boolean; // Track removed from Qobuz or otherwise unavailable
@@ -80,6 +81,7 @@
     duration,
     quality,
     isPlaying = false,
+    isActiveTrack = false,
     isLocal = false,
     localSource = 'local',
     isUnavailable = false,
@@ -155,8 +157,8 @@
 
 <div
   class="track-row"
-  class:playing={isPlaying}
-  class:hovered={isHovered && !isPlaying && !isBlacklisted}
+  class:playing={isActiveTrack || isPlaying}
+  class:hovered={isHovered && !isActiveTrack && !isPlaying && !isBlacklisted}
   class:compact
   class:blacklisted={isBlacklisted}
   class:selected
@@ -196,13 +198,19 @@
       <span class="unavailable-icon" title={unavailableTooltip}>
         <AlertCircle size={16} />
       </span>
-    {:else if isPlaying}
+    {:else if isActiveTrack || isPlaying}
       {#if isHovered}
-        <button class="pause-btn" type="button" onclick={handlePauseClick} aria-label="Pause">
-          <Pause size={16} class="pause-icon" />
-        </button>
+        {#if isPlaying}
+          <button class="pause-btn" type="button" onclick={handlePauseClick} aria-label="Pause">
+            <Pause size={16} class="pause-icon" />
+          </button>
+        {:else}
+          <button class="pause-btn" type="button" onclick={handlePauseClick} aria-label="Resume">
+            <Play size={16} class="play-icon" fill="white" />
+          </button>
+        {/if}
       {:else}
-        <div class="playing-indicator">
+        <div class="playing-indicator" class:paused={!isPlaying}>
           <div class="bar"></div>
           <div class="bar"></div>
           <div class="bar"></div>
@@ -230,7 +238,7 @@
   <!-- Track Info -->
   <div class="track-info">
     <div class="track-title-row">
-      <span class="track-title" class:active={isPlaying}>{title}</span>
+      <span class="track-title" class:active={isActiveTrack || isPlaying}>{title}</span>
       {#if explicit}
         <span class="explicit-badge" title="Explicit"></span>
       {/if}
@@ -491,6 +499,11 @@
     border-radius: 9999px;
     transform-origin: bottom;
     animation: equalize 1s ease-in-out infinite;
+    animation-play-state: running;
+  }
+
+  .playing-indicator.paused .bar {
+    animation-play-state: paused;
   }
 
   .playing-indicator .bar:nth-child(1) {

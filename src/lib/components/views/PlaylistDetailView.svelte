@@ -2347,6 +2347,7 @@
                   ? 'Hi-Res'
                   : '-'}
               isPlaying={isTrackPlaying}
+              isActiveTrack={isActiveTrack}
               isLocal={track.isLocal}
               isUnavailable={removedFromQobuz && isOwnPlaylist}
               unavailableTooltip={removedFromQobuz ? $t('player.trackUnavailable') : undefined}

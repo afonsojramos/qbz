@@ -1327,7 +1327,7 @@
           </div>
           <div class="track-list compact">
             {#each continueTracks as track, index (track.id)}
-              {@const isActiveTrack = isPlaybackActive && activeTrackId === track.id}
+              {@const isThisActiveTrack = activeTrackId === track.id}
               {@const cacheStatus = getTrackOfflineCacheStatus?.(track.id) ?? { status: 'none' as const, progress: 0 }}
               {@const isTrackDownloaded = cacheStatus.status === 'ready'}
               {@const trackBlacklisted = track.artistId ? isArtistBlacklisted(track.artistId) : false}
@@ -1339,7 +1339,8 @@
                 album={track.album}
                 duration={track.duration}
                 quality={getTrackQuality(track)}
-                isPlaying={isActiveTrack}
+                isPlaying={isPlaybackActive && isThisActiveTrack}
+                isActiveTrack={isThisActiveTrack}
                 isBlacklisted={trackBlacklisted}
                 compact={true}
                 hideDownload={trackBlacklisted}
