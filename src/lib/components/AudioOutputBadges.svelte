@@ -68,8 +68,8 @@
   const tickerSpeed = 40; // pixels per second
   const deviceNameDuration = $derived(deviceNameOverflow > 0 ? `${(deviceNameOverflow + 16) / tickerSpeed}s` : '0s');
 
-  // Derived state
-  const currentDevice = $derived(outputStatus?.device_name ?? null);
+  // Derived state: active stream device, or configured device from settings as fallback
+  const currentDevice = $derived(outputStatus?.device_name ?? settings?.output_device ?? null);
 
   // Get PipeWire description for current device
   const pipewireDescription = $derived.by(() => {
@@ -94,7 +94,7 @@
 
   // Use PipeWire/ALSA description if available, otherwise fall back to heuristic
   const prettyDeviceName = $derived(
-    pipewireDescription ?? alsaDescription ?? (currentDevice ? getDevicePrettyName(currentDevice) : 'No device')
+    pipewireDescription ?? alsaDescription ?? (currentDevice ? getDevicePrettyName(currentDevice) : 'System Default')
   );
 
   const isExternal = $derived(currentDevice ? isExternalDevice(currentDevice) : false);
