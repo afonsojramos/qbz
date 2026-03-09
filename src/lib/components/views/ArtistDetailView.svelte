@@ -5,7 +5,7 @@
   import { setCustomImage, removeCustomImage as removeCustomImageFromStore } from '$lib/stores/customArtistImageStore';
   import { t } from 'svelte-i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
-  import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, MoreHorizontal, Info, Disc, Settings, CheckSquare } from 'lucide-svelte';
+  import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, MoreHorizontal, Info, Disc, Settings, CheckSquare, PanelRightClose } from 'lucide-svelte';
   import {
     isBlacklisted,
     isEnabled as isFilteringEnabled,
@@ -23,7 +23,7 @@
   import { saveScrollPosition, getSavedScrollPosition } from '$lib/stores/navigationStore';
   import { togglePlay } from '$lib/stores/playerStore';
   import { getQueue, syncQueueState, playQueueIndex } from '$lib/stores/queueStore';
-  import { subscribeContentSidebar, toggleContentSidebar, type ContentSidebarType } from '$lib/stores/sidebarStore';
+  import { subscribeContentSidebar, toggleContentSidebar, openContentSidebar, closeContentSidebar, getNetworkSidebarPreference, setNetworkSidebarPreference, clearPreviousContentSidebar, type ContentSidebarType } from '$lib/stores/sidebarStore';
   import {
     subscribe as subscribeFavorites,
     isTrackFavorite,
@@ -183,10 +183,22 @@
     contentFilteringEnabled = isFilteringEnabled();
   }
 
+  function handleToggleNetworkSidebar() {
+    toggleContentSidebar('network');
+    // Persist preference: if toggling off, user explicitly closed it
+    setNetworkSidebarPreference(!showNetworkSidebar);
+    clearPreviousContentSidebar();
+  }
+
   onMount(() => {
     unsubscribeSidebar = subscribeContentSidebar((active: ContentSidebarType) => {
       showNetworkSidebar = active === 'network';
     });
+
+    // Auto-open network sidebar if user preference says so
+    if (getNetworkSidebarPreference()) {
+      openContentSidebar('network');
+    }
 
     // Initialize blacklist state and subscribe to changes
     updateBlacklistState();
@@ -215,6 +227,9 @@
     unsubscribeSidebar?.();
     unsubscribeBlacklist?.();
     unsubscribeTrackFavorites?.();
+    // Close the network sidebar when leaving artist view
+    closeContentSidebar('network');
+    clearPreviousContentSidebar();
   });
   let similarArtists = $state<QobuzArtist[]>([]);
   let similarArtistsLoading = $state(false);
@@ -1682,7 +1697,7 @@
         <button
           class="network-btn"
           class:active={showNetworkSidebar}
-          onclick={() => toggleContentSidebar('network')}
+          onclick={handleToggleNetworkSidebar}
           title="Artist Network"
         >
           <img src="/element-connect.svg" alt="Network" class="network-icon" />
@@ -2545,15 +2560,9 @@
     <div class="network-sidebar-column">
     <aside class="network-sidebar">
       <div class="sidebar-header">
-        <div class="sidebar-header-icon">
-          <img src="/element-connect.svg" alt="" />
-        </div>
-        <div class="sidebar-header-text">
-          <h3 class="sidebar-title">Network</h3>
-          <div class="sidebar-subtitle">{artist.name}</div>
-        </div>
-        <button class="sidebar-close" onclick={() => toggleContentSidebar('network')} title="Close">
-          <X size={18} />
+        <h3 class="sidebar-title">Artist Network</h3>
+        <button class="sidebar-close" onclick={handleToggleNetworkSidebar} title="Close sidebar">
+          <PanelRightClose size={18} />
         </button>
       </div>
 
@@ -2602,13 +2611,13 @@
           </div>
         </section>
 
-        <!-- MusicBrainz Relationships (only shown if MB is enabled and available) -->
-        {#if mbAvailable}
+        <!-- MusicBrainz Relationships (only shown if MB is enabled and has data) -->
+        {#if mbAvailable && (mbRelationshipsLoading || hasRelationships)}
           <section class="sidebar-section">
             <h4 class="section-label">RELATIONSHIPS</h4>
             <div class="section-items">
               {#if mbRelationshipsLoading}
-                <span class="placeholder-text">Loading...</span>
+                <span class="placeholder-text">{$t('actions.loading')}</span>
               {:else if hasRelationships}
                 {#if groupedMembers.length > 0}
                   <div class="relationship-group">
@@ -2664,8 +2673,6 @@
                     {/each}
                   </div>
                 {/if}
-              {:else}
-                <span class="placeholder-text">No relationships found</span>
               {/if}
             </div>
           </section>
@@ -2804,50 +2811,21 @@
   .sidebar-header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 16px;
+    gap: 8px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--bg-tertiary);
     background: var(--bg-primary);
     flex-shrink: 0;
   }
 
-  .sidebar-header-icon {
-    width: 36px;
-    height: 36px;
-    display: grid;
-    place-items: center;
-    background: var(--bg-tertiary);
-    border-radius: 8px;
-    color: var(--accent-primary);
-  }
-
-  .sidebar-header-icon img {
-    width: 18px;
-    height: 18px;
-    filter: brightness(0) saturate(100%) invert(56%) sepia(63%) saturate(4848%) hue-rotate(230deg) brightness(102%) contrast(101%);
-  }
-
-  .sidebar-header-text {
-    flex: 1;
-    min-width: 0;
-  }
-
   .sidebar-title {
+    flex: 1;
     font-size: 12px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--text-muted);
     margin: 0;
-  }
-
-  .sidebar-subtitle {
-    font-size: 13px;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-top: 2px;
   }
 
   .sidebar-close {

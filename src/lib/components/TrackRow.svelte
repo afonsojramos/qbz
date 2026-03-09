@@ -209,12 +209,14 @@
             <Play size={16} class="play-icon" fill="white" />
           </button>
         {/if}
-      {:else}
-        <div class="playing-indicator" class:paused={!isPlaying}>
+      {:else if isPlaying}
+        <div class="playing-indicator">
           <div class="bar"></div>
           <div class="bar"></div>
           <div class="bar"></div>
         </div>
+      {:else}
+        <span>{number}</span>
       {/if}
     {:else if isHovered}
       <Play size={16} class="play-icon" fill="white" />
@@ -500,10 +502,6 @@
     transform-origin: bottom;
     animation: equalize 1s ease-in-out infinite;
     animation-play-state: running;
-  }
-
-  .playing-indicator.paused .bar {
-    animation-play-state: paused;
   }
 
   .playing-indicator .bar:nth-child(1) {

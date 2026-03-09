@@ -310,7 +310,7 @@
   import { enterMiniplayerMode } from '$lib/services/miniplayerService';
 
   // Sidebar mutual exclusion
-  import { closeContentSidebar, subscribeContentSidebar, type ContentSidebarType } from '$lib/stores/sidebarStore';
+  import { closeContentSidebar, restoreContentSidebar, subscribeContentSidebar, type ContentSidebarType } from '$lib/stores/sidebarStore';
 
   // Lyrics state management
   import {
@@ -3228,10 +3228,12 @@
     const unsubscribeUI = subscribeUI(() => {
       const uiState = getUIState();
       const wasPlaylistModalOpen = isPlaylistModalOpen;
-      // Close network sidebar and lyrics when queue opens
+      // Close network sidebar and lyrics when queue opens; restore when it closes
       if (uiState.isQueueOpen && !isQueueOpen) {
         closeContentSidebar('network');
         hideLyricsSidebar();
+      } else if (!uiState.isQueueOpen && isQueueOpen) {
+        restoreContentSidebar();
       }
       isQueueOpen = uiState.isQueueOpen;
       isFullScreenOpen = uiState.isFullScreenOpen;
@@ -3400,10 +3402,12 @@
       lyricsIsSynced = state.isSynced;
       lyricsActiveIndex = state.activeIndex;
       lyricsActiveProgress = state.activeProgress;
-      // Close network sidebar and queue when lyrics opens
+      // Close network sidebar and queue when lyrics opens; restore when it closes
       if (state.sidebarVisible && !lyricsSidebarVisible) {
         closeContentSidebar('network');
         closeQueue();
+      } else if (!state.sidebarVisible && lyricsSidebarVisible) {
+        restoreContentSidebar();
       }
       lyricsSidebarVisible = state.sidebarVisible;
     });
