@@ -8944,7 +8944,7 @@ pub async fn v2_discover_artists_by_location(
 
     // Deduplicate candidates across genre queries: mbid -> (name, score_sum, genre_hits, tags)
     let mut candidate_map: HashMap<String, (String, i32, usize, Vec<String>)> = HashMap::new();
-    let per_genre_limit = 100; // Get up to 100 per genre query for broader coverage
+    let per_genre_limit = 200; // Get up to 200 per genre query for broader coverage
 
     for genre in &search_genres {
         let search_result = state
@@ -8957,7 +8957,7 @@ pub async fn v2_discover_artists_by_location(
                 log::info!(
                     "[V2] tag:'{}' + area:'{}' returned {} artists",
                     genre,
-                    area_name,
+                    search_name,
                     response.artists.len()
                 );
 

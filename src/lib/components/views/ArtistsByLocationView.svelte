@@ -134,7 +134,7 @@
         country: context.location.country || null,
         genres: context.affinitySeeds.genres,
         tags: context.affinitySeeds.tags,
-        limit: 30,
+        limit: 50,
         offset,
       });
 
