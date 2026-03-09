@@ -802,7 +802,9 @@
           "off": "Aus",
           "offDesc": "Dunkle Volltonfarbe. Minimale GPU-Nutzung."
         },
-        "blurChangeNote": "Immersiv-Modus erneut oeffnen, um anzuwenden."
+        "blurChangeNote": "Immersiv-Modus erneut oeffnen, um anzuwenden.",
+        "perfDegraded": "QBZ hat Leistungsprobleme mit der immersiven Ansicht erkannt. Einige Effekte wurden vorübergehend deaktiviert. Du kannst sie unter Einstellungen > Darstellung wieder aktivieren.",
+        "perfDontShowAgain": "Nicht mehr anzeigen"
       },
       "immersiveFps": {
         "title": "Animationsbildrate",

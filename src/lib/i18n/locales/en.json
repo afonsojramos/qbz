@@ -839,7 +839,9 @@
           "off": "Off",
           "offDesc": "Solid dark color. Minimal GPU usage."
         },
-        "blurChangeNote": "Re-enter immersive mode to apply."
+        "blurChangeNote": "Re-enter immersive mode to apply.",
+        "perfDegraded": "QBZ detected performance issues with the immersive view. Some effects have been temporarily disabled. You can re-enable them from Settings > Appearance.",
+        "perfDontShowAgain": "Don't show this again"
       },
       "immersiveFps": {
         "title": "Animation Frame Rate",

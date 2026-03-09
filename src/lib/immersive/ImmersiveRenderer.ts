@@ -26,7 +26,6 @@ import type {
   ImmersiveMetrics,
   BackgroundMode,
 } from './types';
-import { showToast } from '$lib/stores/toastStore';
 
 // ============================================================================
 // State Store
@@ -141,15 +140,7 @@ function degradeBackgroundMode(): void {
   perfDegraded = true;
   lowFpsConsecutive = 0;
 
-  // Notify user
-  const modeLabel = newMode === 'lite' ? 'Lite' : 'Off';
-  showToast(
-    `Low FPS detected — background switched to ${modeLabel} for better performance`,
-    'info',
-    5000
-  );
-
-  // Emit event so ImmersiveBackground can react without full remount
+  // Emit event so ImmersiveBackground can react and show modal
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('immersive:background-degraded', {
       detail: { from: currentMode, to: newMode }

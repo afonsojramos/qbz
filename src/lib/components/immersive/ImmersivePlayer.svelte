@@ -1,6 +1,8 @@
 <script lang="ts">
   import { startActiveLineUpdates, setProgressTrackingEnabled } from '$lib/stores/lyricsStore';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { t } from '$lib/i18n';
+  import Modal from '$lib/components/Modal.svelte';
   import ImmersiveBackground from './ImmersiveBackground.svelte';
   import ImmersiveArtwork from './ImmersiveArtwork.svelte';
   import ImmersiveHeader, { type ImmersiveTab, type FocusTab, type ViewMode } from './ImmersiveHeader.svelte';
@@ -157,6 +159,25 @@
 
   const hasLyrics = $derived(lyricsLines.length > 0 || lyricsLoading);
   const AUTO_HIDE_DELAY = 4000;
+
+  // Performance degradation modal
+  let showPerfModal = $state(false);
+  let perfDontShowAgain = $state(false);
+  const PERF_MODAL_DISMISSED_KEY = 'qbz-immersive-perf-modal-dismissed';
+
+  function handlePerfDegraded() {
+    // Check if user opted out of this modal
+    const dismissed = localStorage.getItem(PERF_MODAL_DISMISSED_KEY);
+    if (dismissed === 'true') return;
+    showPerfModal = true;
+  }
+
+  function closePerfModal() {
+    if (perfDontShowAgain) {
+      localStorage.setItem(PERF_MODAL_DISMISSED_KEY, 'true');
+    }
+    showPerfModal = false;
+  }
 
   // Immersive view persistence
   type ImmersiveViewKey = 'coverflow' | 'static' | 'visualizer' | 'neon-flow' | 'tunnel-flow' | 'comet-flow' | 'oscilloscope' | 'spectral-ribbon' | 'energy-bands' | 'lissajous' | 'transient-pulse' | 'album-reactive' | 'lyrics-focus' | 'queue-focus' | 'split-lyrics' | 'split-trackInfo' | 'split-suggestions' | 'split-queue';
@@ -365,12 +386,14 @@
       resetHideTimer();
       checkWindowState();
       document.addEventListener('keydown', handleKeydown);
+      window.addEventListener('immersive:background-degraded', handlePerfDegraded);
 
       // Disable karaoke progress tracking in immersive mode (saves ~90% CPU on lyrics)
       setProgressTrackingEnabled(false);
 
       return () => {
         document.removeEventListener('keydown', handleKeydown);
+        window.removeEventListener('immersive:background-degraded', handlePerfDegraded);
         if (hideTimeout) clearTimeout(hideTimeout);
         document.documentElement.style.overflow = prevHtmlOverflow;
         document.body.style.overflow = prevBodyOverflow;
@@ -748,7 +771,60 @@
   </div>
 {/if}
 
+<!-- Performance degradation modal -->
+<Modal isOpen={showPerfModal} onClose={closePerfModal} title={$t('settings.immersive.title')} maxWidth="440px">
+  {#snippet children()}
+    <p class="perf-modal-text">{$t('settings.immersive.perfDegraded')}</p>
+    <label class="perf-modal-checkbox">
+      <input type="checkbox" bind:checked={perfDontShowAgain} />
+      <span>{$t('settings.immersive.perfDontShowAgain')}</span>
+    </label>
+  {/snippet}
+  {#snippet footer()}
+    <button class="perf-modal-ok" onclick={closePerfModal}>OK</button>
+  {/snippet}
+</Modal>
+
 <style>
+  .perf-modal-text {
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1.5;
+    margin: 0 0 16px 0;
+  }
+
+  .perf-modal-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  .perf-modal-checkbox input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
+  }
+
+  .perf-modal-ok {
+    padding: 8px 24px;
+    background: var(--accent-primary);
+    color: var(--text-on-accent, #fff);
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 150ms ease;
+  }
+
+  .perf-modal-ok:hover {
+    opacity: 0.9;
+  }
+
   .immersive-player {
     position: fixed;
     inset: 0;

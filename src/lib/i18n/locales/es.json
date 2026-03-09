@@ -839,7 +839,9 @@
           "off": "Desactivado",
           "offDesc": "Color oscuro solido. Uso minimo de GPU."
         },
-        "blurChangeNote": "Volver a entrar en modo inmersivo para aplicar."
+        "blurChangeNote": "Volver a entrar en modo inmersivo para aplicar.",
+        "perfDegraded": "QBZ detectó problemas de rendimiento con la vista inmersiva. Se han desactivado temporalmente algunos efectos. Puedes reactivarlos desde Configuración > Apariencia.",
+        "perfDontShowAgain": "No mostrar de nuevo"
       },
       "immersiveFps": {
         "title": "Tasa de cuadros",

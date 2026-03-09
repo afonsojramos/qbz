@@ -802,7 +802,9 @@
           "off": "Desactive",
           "offDesc": "Couleur sombre unie. Utilisation GPU minimale."
         },
-        "blurChangeNote": "Quitter et rouvrir le mode immersif pour appliquer."
+        "blurChangeNote": "Quitter et rouvrir le mode immersif pour appliquer.",
+        "perfDegraded": "QBZ a détecté des problèmes de performance avec la vue immersive. Certains effets ont été temporairement désactivés. Vous pouvez les réactiver depuis Paramètres > Apparence.",
+        "perfDontShowAgain": "Ne plus afficher"
       },
       "immersiveFps": {
         "title": "Frequence d'images",
