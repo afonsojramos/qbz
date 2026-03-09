@@ -2700,7 +2700,7 @@
               {#if mbMetadata.life_span?.begin}
                 <div class="origin-row">
                   <span class="origin-label">
-                    {mbMetadata.artist_type === 'Person' ? $t('artist.born') : $t('artist.founded')}
+                    {mbMetadata.artist_type === 'person' ? $t('artist.born') : $t('artist.founded')}
                   </span>
                   <span class="origin-value">{formatMbDate(mbMetadata.life_span)}</span>
                 </div>
@@ -2708,7 +2708,7 @@
               {#if mbMetadata.location}
                 <div class="origin-row">
                   <span class="origin-label">
-                    {mbMetadata.artist_type === 'Person' ? $t('artist.bornIn') : $t('artist.foundedIn')}
+                    {mbMetadata.artist_type === 'person' ? $t('artist.bornIn') : $t('artist.foundedIn')}
                   </span>
                   {#if onLocationClick && mbMetadata.location.precision !== 'country' || (mbMetadata.location.city)}
                     <button
@@ -2717,7 +2717,7 @@
                         if (!mbMetadata?.location || !mbArtistMbid) return;
                         const loc = mbMetadata.location;
                         const artistTypeMap: Record<string, 'Person' | 'Group' | 'Other'> = {
-                          'Person': 'Person', 'Group': 'Group'
+                          'person': 'Person', 'group': 'Group'
                         };
                         onLocationClick?.({
                           sourceArtistMbid: mbArtistMbid,
