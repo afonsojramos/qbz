@@ -860,19 +860,15 @@
   /**
    * Navigate to artist view and scroll to Discography section
    */
-  function handleViewArtistDiscography() {
+  async function handleViewArtistDiscography() {
     if (selectedAlbum?.artistId) {
-      // Store scroll target for artist view
       const artistId = selectedAlbum.artistId;
-      handleArtistClick(artistId).then(() => {
-        // Use setTimeout to allow the view to render before scrolling
-        setTimeout(() => {
-          const discographySection = document.querySelector('.artist-section');
-          if (discographySection) {
-            discographySection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }
-        }, 100);
-      });
+      await handleArtistClick(artistId);
+      await tick();
+      const discographySection = document.querySelector('.artist-section');
+      if (discographySection) {
+        discographySection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     }
   }
 
