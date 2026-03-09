@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { invoke } from '@tauri-apps/api/core';
-  import { ArrowLeft, Loader2, Music, Search, X, LayoutGrid, PanelLeftClose, Mic2, Disc3 } from 'lucide-svelte';
+  import { ArrowLeft, Loader2, Music, Search, X, LayoutGrid, PanelLeftClose, Mic2, Disc3, ChevronDown } from 'lucide-svelte';
   import VirtualizedFavoritesArtistGrid from '../VirtualizedFavoritesArtistGrid.svelte';
   import VirtualizedFavoritesArtistList from '../VirtualizedFavoritesArtistList.svelte';
   import AlbumCard from '../AlbumCard.svelte';
@@ -87,6 +87,7 @@
   let searchQuery = $state('');
   let searchExpanded = $state(false);
   let groupingEnabled = $state(false);
+  let showGroupMenu = $state(false);
 
   // Sidepanel state
   let selectedArtist = $state<FavoriteArtist | null>(null);
@@ -155,6 +156,8 @@
   });
 
   // Grouping
+  const ALPHA_LETTERS = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
   function alphaGroupKey(name: string): string {
     const first = name.charAt(0).toUpperCase();
     return /[A-Z]/.test(first) ? first : '#';
@@ -184,6 +187,19 @@
     if (groupingEnabled) return groupArtists(filteredArtists);
     return [{ key: '', id: 'scene-all', artists: filteredArtists }];
   });
+
+  // Alpha index for jump nav
+  let alphaGroupKeys = $derived(new Set(groups.map((g) => g.key)));
+
+  // Jump-nav scroll target
+  let scrollToGroupId = $state<string | undefined>(undefined);
+
+  function scrollToGroup(letter: string) {
+    if (!alphaGroupKeys.has(letter)) return;
+    scrollToGroupId = `scene-alpha-${letter}`;
+    // Reset after a tick to allow re-triggering the same letter
+    setTimeout(() => { scrollToGroupId = undefined; }, 100);
+  }
 
   // Album categorization for sidepanel
   let groupedAlbums = $derived.by(() => {
@@ -289,64 +305,62 @@
     </button>
   </div>
 
-  <!-- Header with flag -->
-  <div class="header">
+  <!-- Hero header with flag -->
+  <div class="hero-header">
     {#if flagUrl}
-      <img src={flagUrl} alt="" class="flag-icon" />
+      <div class="flag-wrapper">
+        <img src={flagUrl} alt="" class="flag-image" />
+      </div>
     {/if}
-    <h1>{sceneLabel || context.location.country || context.location.displayName}</h1>
-    {#if !loading && filteredArtists.length > 0}
-      <span class="results-count">
-        {filteredArtists.length}{searchQuery ? ` / ${allArtists.length}` : ''} {$t('nav.artists').toLowerCase()}
-      </span>
-    {/if}
-    <div class="header-search">
-      {#if !searchExpanded}
-        <button class="search-icon-btn" onclick={() => (searchExpanded = true)} title={$t('nav.search')}>
-          <Search size={16} />
-        </button>
-      {:else}
-        <div class="search-expanded">
-          <Search size={16} class="search-icon-inline" />
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            type="text"
-            placeholder={$t('placeholders.search')}
-            bind:value={searchQuery}
-            class="search-input-inline"
-            autofocus
-          />
-          <button class="search-clear-btn" onclick={() => { searchQuery = ''; searchExpanded = false; }}>
-            <X size={14} />
-          </button>
-        </div>
+    <div class="hero-info">
+      <h1>{sceneLabel || context.location.country || context.location.displayName}</h1>
+      {#if genreSummary || context.affinitySeeds.genres.length > 0}
+        <p class="hero-subtitle">
+          {$t('artist.sceneBased', {
+            values: {
+              artist: context.sourceArtistName,
+              genres: genreSummary || context.affinitySeeds.genres.slice(0, 3).join(' / '),
+            },
+          })}
+        </p>
       {/if}
     </div>
   </div>
 
-  <!-- Subtitle -->
-  {#if genreSummary || context.affinitySeeds.genres.length > 0}
-    <div class="scene-subtitle">
-      {$t('artist.sceneBased', {
-        values: {
-          artist: context.sourceArtistName,
-          genres: genreSummary || context.affinitySeeds.genres.slice(0, 3).join(' / '),
-        },
-      })}
-    </div>
-  {/if}
-
-  <!-- Controls bar -->
+  <!-- Nav bar with search + controls -->
   {#if !loading && !error && allArtists.length > 0}
-    <div class="controls-bar">
+    <div class="favorites-nav">
+      <div class="nav-left">
+        <span class="results-count">
+          {filteredArtists.length}{searchQuery ? ` / ${allArtists.length}` : ''} artists
+        </span>
+      </div>
       <div class="nav-right">
-        <button
-          class="control-btn"
-          class:active={groupingEnabled}
-          onclick={() => (groupingEnabled = !groupingEnabled)}
-        >
-          <span>{groupingEnabled ? 'A-Z' : 'Group'}</span>
-        </button>
+        <!-- Search -->
+        <div class="header-search">
+          {#if !searchExpanded}
+            <button class="search-icon-btn" onclick={() => (searchExpanded = true)} title={$t('nav.search')}>
+              <Search size={16} />
+            </button>
+          {:else}
+            <div class="search-expanded">
+              <Search size={16} class="search-icon-inline" />
+              <!-- svelte-ignore a11y_autofocus -->
+              <input
+                type="text"
+                placeholder={$t('placeholders.search')}
+                bind:value={searchQuery}
+                class="search-input-inline"
+                autofocus
+              />
+              <button class="search-clear-btn" onclick={() => { searchQuery = ''; searchExpanded = false; }}>
+                <X size={14} />
+              </button>
+            </div>
+          {/if}
+        </div>
+
+        <!-- View toggle -->
         <button
           class="control-btn icon-only"
           onclick={() => {
@@ -365,6 +379,34 @@
             <LayoutGrid size={16} />
           {/if}
         </button>
+
+        <!-- Group dropdown (grid mode only) -->
+        {#if viewMode === 'grid'}
+          <div class="dropdown-container">
+            <button class="control-btn" onclick={() => (showGroupMenu = !showGroupMenu)}>
+              <span>{groupingEnabled ? 'Group: A-Z' : 'Group: Off'}</span>
+              <ChevronDown size={14} />
+            </button>
+            {#if showGroupMenu}
+              <div class="dropdown-menu">
+                <button
+                  class="dropdown-item"
+                  class:selected={!groupingEnabled}
+                  onclick={() => { groupingEnabled = false; showGroupMenu = false; }}
+                >
+                  Off
+                </button>
+                <button
+                  class="dropdown-item"
+                  class:selected={groupingEnabled}
+                  onclick={() => { groupingEnabled = true; showGroupMenu = false; }}
+                >
+                  Alphabetical (A-Z)
+                </button>
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
     </div>
   {/if}
@@ -404,12 +446,30 @@
         <p>{$t('artist.noSceneResults')}</p>
       </div>
     {:else if viewMode === 'grid'}
-      <div class="scene-grid-container">
-        <VirtualizedFavoritesArtistGrid
-          {groups}
-          showGroupHeaders={groupingEnabled}
-          onArtistClick={(id) => onArtistClick(id)}
-        />
+      <div class="grid-with-alpha">
+        <div class="scene-grid-container">
+          <VirtualizedFavoritesArtistGrid
+            {groups}
+            showGroupHeaders={groupingEnabled}
+            onArtistClick={(id) => onArtistClick(id)}
+            {scrollToGroupId}
+          />
+        </div>
+
+        <!-- Alpha jump-nav sidebar -->
+        {#if groupingEnabled}
+          <div class="alpha-index">
+            {#each ALPHA_LETTERS as letter}
+              <button
+                class="alpha-letter"
+                class:disabled={!alphaGroupKeys.has(letter)}
+                onclick={() => scrollToGroup(letter)}
+              >
+                {letter}
+              </button>
+            {/each}
+          </div>
+        {/if}
       </div>
 
       {#if hasMore}
@@ -426,7 +486,7 @@
         </div>
       {/if}
     {:else}
-      <!-- Sidepanel mode: artist list + albums -->
+      <!-- Sidepanel mode -->
       <div class="artist-two-column-layout">
         <div class="artist-column">
           <VirtualizedFavoritesArtistList
@@ -540,13 +600,14 @@
     flex-direction: column;
     height: 100%;
     overflow: hidden;
+    padding-left: 18px;
+    padding-right: 8px;
   }
 
   /* Top bar - matches FavoritesView */
   .top-bar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     margin-bottom: 16px;
   }
 
@@ -567,46 +628,80 @@
     color: var(--text-secondary);
   }
 
-  /* Header with flag */
-  .header {
+  /* Hero header with large flag */
+  .hero-header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 4px;
-    min-height: 40px;
+    gap: 20px;
+    margin-bottom: 20px;
   }
 
-  .flag-icon {
-    width: 36px;
-    height: 36px;
+  .flag-wrapper {
+    width: 180px;
+    height: 180px;
     border-radius: 50%;
+    overflow: hidden;
     flex-shrink: 0;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+
+  .flag-image {
+    width: 100%;
+    height: 100%;
     object-fit: cover;
   }
 
-  .header h1 {
-    font-size: 22px;
+  .hero-info {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .hero-info h1 {
+    font-size: 28px;
     font-weight: 700;
     color: var(--text-primary);
     margin: 0;
     line-height: 1.2;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  }
+
+  .hero-subtitle {
+    font-size: 14px;
+    color: var(--text-muted);
+    line-height: 1.4;
+    margin: 0;
+  }
+
+  /* Nav bar - matches FavoritesView */
+  .favorites-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+    flex-shrink: 0;
+  }
+
+  .nav-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   .results-count {
     font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
-    flex-shrink: 0;
   }
 
-  .header-search {
-    margin-left: auto;
-    flex-shrink: 0;
-  }
-
+  /* Search */
   .search-icon-btn {
     display: flex;
     align-items: center;
@@ -672,30 +767,7 @@
     color: var(--text-primary);
   }
 
-  /* Subtitle */
-  .scene-subtitle {
-    font-size: 13px;
-    color: var(--text-muted);
-    line-height: 1.4;
-    margin-bottom: 12px;
-  }
-
-  /* Controls bar */
-  .controls-bar {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-bottom: 12px;
-    flex-shrink: 0;
-  }
-
-  .nav-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
+  /* Control buttons - matches FavoritesView */
   .control-btn {
     display: flex;
     align-items: center;
@@ -715,17 +787,53 @@
     color: var(--text-primary);
   }
 
-  .control-btn.active {
-    background: var(--accent-primary);
-    color: var(--text-on-accent, #fff);
-    border-color: var(--accent-primary);
-  }
-
   .control-btn.icon-only {
     width: 36px;
     height: 36px;
     padding: 0;
     justify-content: center;
+  }
+
+  /* Dropdown - matches FavoritesView */
+  .dropdown-container {
+    position: relative;
+  }
+
+  .dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 4px;
+    min-width: 160px;
+    z-index: 100;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  }
+
+  .dropdown-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 100ms ease;
+  }
+
+  .dropdown-item:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  .dropdown-item.selected {
+    color: var(--accent-primary);
+    font-weight: 600;
   }
 
   /* Content area */
@@ -737,13 +845,64 @@
     flex-direction: column;
   }
 
-  /* Grid container */
+  /* Grid with alpha sidebar */
+  .grid-with-alpha {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    gap: 0;
+  }
+
   .scene-grid-container {
     flex: 1;
     min-height: 0;
+    min-width: 0;
   }
 
-  /* Two-column sidepanel layout */
+  /* Alpha jump-nav sidebar */
+  .alpha-index {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 4px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    align-self: flex-start;
+    margin-left: 4px;
+    flex-shrink: 0;
+  }
+
+  .alpha-letter {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    opacity: 0.9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 100ms ease;
+  }
+
+  .alpha-letter:hover:not(.disabled) {
+    background: var(--bg-tertiary);
+    opacity: 1;
+  }
+
+  .alpha-letter.disabled {
+    opacity: 0.2;
+    cursor: default;
+  }
+
+  /* Two-column sidepanel layout - matches FavoritesView */
   .artist-two-column-layout {
     display: flex;
     gap: 0;
