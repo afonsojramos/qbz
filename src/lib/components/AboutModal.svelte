@@ -167,6 +167,11 @@
               boxdot
               <ExternalLink size={10} />
             </button>
+            <button class="contributor-link" onclick={() => handleOpenUrl('https://github.com/arminfelder')}>
+              <img src="https://github.com/arminfelder.png?size=28" alt="arminfelder" class="contributor-avatar" />
+              arminfelder
+              <ExternalLink size={10} />
+            </button>
           </div>
         </div>
 
