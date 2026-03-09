@@ -511,7 +511,6 @@
     border-radius: 10px;
     backdrop-filter: blur(16px);
     min-width: 140px;
-    animation: dropdownFadeIn 150ms ease;
   }
 
   .viz-dropdown {
@@ -520,6 +519,7 @@
     left: 50%;
     transform: translateX(-50%);
     z-index: 30;
+    animation: dropdownFadeIn 150ms ease;
   }
 
   @keyframes dropdownFadeIn {
@@ -553,13 +553,43 @@
 
   .viz-dropdown-submenu-wrapper {
     position: relative;
+    width: 100%;
   }
 
   .viz-submenu {
     position: absolute;
-    top: 0;
-    left: calc(100% + 6px);
+    bottom: 0;
+    left: calc(100% + 2px);
     z-index: 31;
+    width: 100%;
+    min-width: unset;
+    animation: submenuFadeIn 120ms ease;
+  }
+
+  /* Invisible bridge to prevent mouseout gap between Neon item and submenu */
+  .viz-dropdown-submenu-wrapper::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: -8px;
+    width: 8px;
+    height: 100%;
+    display: none;
+  }
+
+  .viz-dropdown-submenu-wrapper:hover::after {
+    display: block;
+  }
+
+  @keyframes submenuFadeIn {
+    from {
+      opacity: 0;
+      transform: translateX(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
   }
 
   :global(.submenu-chevron) {
