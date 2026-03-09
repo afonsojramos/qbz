@@ -8797,6 +8797,321 @@ pub async fn v2_musicbrainz_get_artist_metadata(
     Ok(metadata)
 }
 
+/// Discover artists from the same location using MusicBrainz + Qobuz validation.
+///
+/// Pipeline:
+/// 1. Check scene cache (30-day TTL)
+/// 2. Browse MB artists by area MBID (with tags)
+/// 3. Score candidates using genre affinity
+/// 4. Validate top candidates against Qobuz catalog
+/// 5. Cache and return sorted results
+#[tauri::command]
+pub async fn v2_discover_artists_by_location(
+    source_mbid: String,
+    area_id: Option<String>,
+    area_name: String,
+    genres: Vec<String>,
+    tags: Vec<String>,
+    limit: usize,
+    offset: usize,
+    state: State<'_, MusicBrainzSharedState>,
+    bridge: State<'_, CoreBridgeState>,
+    blacklist_state: State<'_, BlacklistState>,
+    runtime: State<'_, RuntimeManagerState>,
+) -> Result<crate::musicbrainz::LocationDiscoveryResponse, RuntimeError> {
+    use crate::musicbrainz::genre_normalization::{extract_affinity_seeds, genre_summary};
+    use crate::musicbrainz::location_discovery::{build_scene_cache_key, compute_affinity_score};
+    use crate::musicbrainz::models::{
+        AffinitySeeds, LocationCandidate, LocationDiscoveryResponse, Tag,
+    };
+
+    runtime
+        .manager()
+        .check_requirements(CommandRequirement::RequiresCoreBridgeAuth)
+        .await?;
+
+    log::info!(
+        "[V2] discover_artists_by_location: area={:?} name={} genres={:?} offset={}",
+        area_id,
+        area_name,
+        genres,
+        offset
+    );
+
+    // Build affinity seeds from the source artist's genres/tags
+    let source_seeds = AffinitySeeds {
+        genres: genres.clone(),
+        tags: tags.clone(),
+        normalized_seeds: genres
+            .iter()
+            .chain(tags.iter())
+            .cloned()
+            .collect(),
+    };
+
+    // Step 1: Resolve area ID if not provided
+    let resolved_area_id = if let Some(ref aid) = area_id {
+        aid.clone()
+    } else {
+        // Search MB for the area by name
+        let area_response = state
+            .client
+            .search_area(&area_name, None)
+            .await
+            .map_err(|e| RuntimeError::Internal(format!("Area search failed: {}", e)))?;
+
+        area_response
+            .areas
+            .first()
+            .map(|a| a.id.clone())
+            .ok_or_else(|| {
+                RuntimeError::Internal(format!("No area found for '{}'", area_name))
+            })?
+    };
+
+    // Step 2: Check scene cache (only for offset=0, cached results include all candidates)
+    let cache_key = build_scene_cache_key(&resolved_area_id, &source_seeds);
+    if offset == 0 {
+        let cache_opt = state.cache.lock().await;
+        if let Some(cache) = cache_opt.as_ref() {
+            if let Ok(Some(cached)) = cache.get_scene_cache(&cache_key) {
+                log::info!(
+                    "[V2] Scene cache hit for area {} ({} artists)",
+                    area_name,
+                    cached.artists.len()
+                );
+                return Ok(cached);
+            }
+        }
+    }
+
+    // Step 3: Browse MB artists by area (fetch up to 100 per page, get enough for scoring)
+    let browse_limit = 100.min(limit + offset + 50); // Get extra for filtering
+    let browse_response = state
+        .client
+        .browse_artists_by_area(&resolved_area_id, browse_limit, offset)
+        .await
+        .map_err(|e| RuntimeError::Internal(format!("Browse failed: {}", e)))?;
+
+    let total_mb = browse_response.artist_count.unwrap_or(0) as usize;
+    let mb_artists = browse_response.artists;
+
+    log::info!(
+        "[V2] Browse returned {} artists from area {} (total: {})",
+        mb_artists.len(),
+        area_name,
+        total_mb
+    );
+
+    // Step 4: Score candidates
+    let mut scored: Vec<(String, String, Vec<String>, i32)> = Vec::new(); // (mbid, name, genres, score)
+
+    for artist in &mb_artists {
+        // Skip the source artist
+        if artist.id == source_mbid {
+            continue;
+        }
+
+        let candidate_tags: Vec<String> = artist
+            .tags
+            .as_ref()
+            .map(|tag_list| {
+                tag_list
+                    .iter()
+                    .filter(|tag| tag.count.unwrap_or(0) > 0)
+                    .map(|tag| tag.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Determine location match for scoring
+        let same_city = artist
+            .begin_area
+            .as_ref()
+            .map(|ba| ba.id == resolved_area_id)
+            .unwrap_or(false);
+        let same_country = artist
+            .area
+            .as_ref()
+            .map(|a| a.id == resolved_area_id)
+            .unwrap_or(false)
+            || artist.country.is_some();
+
+        let score = compute_affinity_score(&candidate_tags, &source_seeds, same_city, same_country);
+
+        // Extract genre names for display
+        let candidate_seeds = extract_affinity_seeds(
+            &candidate_tags
+                .iter()
+                .map(|name| Tag {
+                    name: name.clone(),
+                    count: Some(1),
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        scored.push((
+            artist.id.clone(),
+            artist.name.clone(),
+            candidate_seeds.genres,
+            score,
+        ));
+    }
+
+    // Sort by score descending
+    scored.sort_by(|a, b| b.3.cmp(&a.3));
+
+    // Take top candidates for Qobuz validation
+    let candidates_to_validate: Vec<_> = scored.iter().take(limit).cloned().collect();
+
+    log::info!(
+        "[V2] Scored {} candidates, validating top {} against Qobuz",
+        scored.len(),
+        candidates_to_validate.len()
+    );
+
+    // Step 5: Validate against Qobuz
+    let bridge_guard = bridge.try_get().await;
+    let mut validated: Vec<LocationCandidate> = Vec::new();
+
+    if let Some(ref core_bridge) = bridge_guard {
+        for (mbid, mb_name, candidate_genres, score) in &candidates_to_validate {
+            // Check Qobuz validation cache first
+            let name_normalized =
+                crate::musicbrainz::cache::MusicBrainzCache::normalize_name(mb_name);
+            let cached_validation = {
+                let cache_opt = state.cache.lock().await;
+                if let Some(cache) = cache_opt.as_ref() {
+                    cache.get_qobuz_validation(&name_normalized).ok().flatten()
+                } else {
+                    None
+                }
+            };
+
+            if let Some(cached_json) = cached_validation {
+                // Parse cached validation result
+                if let Ok(candidate) =
+                    serde_json::from_str::<LocationCandidate>(&cached_json)
+                {
+                    if candidate.qobuz_id.is_some() {
+                        let qobuz_id = candidate.qobuz_id.unwrap();
+                        if !blacklist_state.is_blacklisted(qobuz_id as u64) {
+                            validated.push(LocationCandidate {
+                                mbid: mbid.clone(),
+                                mb_name: mb_name.clone(),
+                                qobuz_id: candidate.qobuz_id,
+                                qobuz_name: candidate.qobuz_name,
+                                qobuz_image: candidate.qobuz_image,
+                                score: *score,
+                                genres: candidate_genres.clone(),
+                            });
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            // Search Qobuz for this artist
+            match core_bridge.search_artists(mb_name, 1, 0, None).await {
+                Ok(search_results) => {
+                    if let Some(qobuz_artist) = search_results.items.first() {
+                        let qobuz_norm = normalize_artist_name(&qobuz_artist.name);
+                        let mb_norm = normalize_artist_name(mb_name);
+
+                        if qobuz_norm == mb_norm
+                            && !blacklist_state.is_blacklisted(qobuz_artist.id)
+                        {
+                            let image_url = qobuz_artist
+                                .image
+                                .as_ref()
+                                .and_then(|img| {
+                                    img.small
+                                        .as_ref()
+                                        .or(img.thumbnail.as_ref())
+                                        .cloned()
+                                });
+
+                            let candidate = LocationCandidate {
+                                mbid: mbid.clone(),
+                                mb_name: mb_name.clone(),
+                                qobuz_id: Some(qobuz_artist.id as i64),
+                                qobuz_name: Some(qobuz_artist.name.clone()),
+                                qobuz_image: image_url,
+                                score: *score,
+                                genres: candidate_genres.clone(),
+                            };
+
+                            // Cache the validation result
+                            if let Ok(json) = serde_json::to_string(&candidate) {
+                                let cache_opt = state.cache.lock().await;
+                                if let Some(cache) = cache_opt.as_ref() {
+                                    let _ =
+                                        cache.set_qobuz_validation(&name_normalized, &json);
+                                }
+                            }
+
+                            validated.push(candidate);
+                        } else {
+                            // Cache negative result
+                            let neg = LocationCandidate {
+                                mbid: mbid.clone(),
+                                mb_name: mb_name.clone(),
+                                qobuz_id: None,
+                                qobuz_name: None,
+                                qobuz_image: None,
+                                score: *score,
+                                genres: candidate_genres.clone(),
+                            };
+                            if let Ok(json) = serde_json::to_string(&neg) {
+                                let cache_opt = state.cache.lock().await;
+                                if let Some(cache) = cache_opt.as_ref() {
+                                    let _ =
+                                        cache.set_qobuz_validation(&name_normalized, &json);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[V2] Qobuz validation failed for '{}': {}",
+                        mb_name,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    log::info!(
+        "[V2] Scene discovery complete: {} validated artists from {}",
+        validated.len(),
+        area_name
+    );
+
+    let scene_label = format!("{} scene", area_name);
+    let genre_sum = genre_summary(&source_seeds);
+    let has_more = offset + mb_artists.len() < total_mb;
+
+    let response = LocationDiscoveryResponse {
+        artists: validated,
+        scene_label,
+        genre_summary: genre_sum,
+        total_candidates: total_mb,
+        has_more,
+    };
+
+    // Cache the full response (only for offset=0)
+    if offset == 0 {
+        let cache_opt = state.cache.lock().await;
+        if let Some(cache) = cache_opt.as_ref() {
+            let _ = cache.set_scene_cache(&cache_key, &response);
+        }
+    }
+
+    Ok(response)
+}
+
 // --- Last.fm V2 ---
 
 /// Get Last.fm auth token and URL (V2)

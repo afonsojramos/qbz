@@ -1541,6 +1541,7 @@ pub fn run() {
             commands_v2::v2_remote_metadata_get_album,
             commands_v2::v2_musicbrainz_get_artist_relationships,
             commands_v2::v2_musicbrainz_get_artist_metadata,
+            commands_v2::v2_discover_artists_by_location,
             commands_v2::v2_get_discovery_artists,
             commands_v2::v2_dismiss_discovery_artist,
             commands_v2::v2_lastfm_get_auth_url,
