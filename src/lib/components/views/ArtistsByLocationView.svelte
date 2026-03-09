@@ -363,7 +363,11 @@
   async function loadMore() {
     if (loadingMore || !hasMore) return;
     loadingMore = true;
+    loadingProgress = 0;
+    loadingPhase = 'searching';
+    await setupProgressListener();
     await discoverArtists(nextOffset);
+    cleanupProgressListener();
     loadingMore = false;
   }
 
@@ -609,15 +613,21 @@
 
       {#if hasMore}
         <div class="load-more-container">
-          <button class="load-more-button" onclick={loadMore} disabled={loadingMore}>
-            {#if loadingMore}
-              <Loader2 size={16} class="spin" />
-            {/if}
-            <span>
-              {$t('actions.loadMore')}
-              ({allArtists.length} / {totalCandidates})
-            </span>
-          </button>
+          {#if loadingMore}
+            <div class="load-more-progress">
+              <div class="load-more-bar">
+                <div class="load-more-bar-fill" style="width: {loadingProgress}%"></div>
+              </div>
+              <span class="load-more-status">{loadingProgress}%</span>
+            </div>
+          {:else}
+            <button class="load-more-button" onclick={loadMore}>
+              <span>
+                {$t('actions.loadMore')}
+                ({allArtists.length} / {totalCandidates})
+              </span>
+            </button>
+          {/if}
         </div>
       {/if}
     {:else}
@@ -1349,17 +1359,36 @@
     transition: background-color 150ms ease;
   }
 
-  .load-more-button:hover:not(:disabled) {
+  .load-more-button:hover {
     background: var(--bg-tertiary);
   }
 
-  .load-more-button:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
+  .load-more-progress {
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
 
-  :global(.load-more-button .spin) {
-    animation: spin 1s linear infinite;
+  .load-more-bar {
+    width: 200px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--bg-tertiary);
+    overflow: hidden;
+  }
+
+  .load-more-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent-primary);
+    transition: width 300ms ease-out;
+  }
+
+  .load-more-status {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 32px;
   }
 
   @keyframes spin {
