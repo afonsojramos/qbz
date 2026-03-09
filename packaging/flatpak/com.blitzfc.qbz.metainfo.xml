@@ -53,6 +53,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.1.19" date="2026-03-09">
+      <description>
+        <p>Artist discovery with tag-scoped recommendations and thumbs-down dismissals. Artist network sidebar with auto-open, state persistence, and restore after queue/lyrics. Comet visualizer with album art color extraction, music-reactive intensity, silence fading, and corner vignettes. Tauri dependency sync fix for distro packagers. Cargo.lock now tracked in git.</p>
+      </description>
+    </release>
     <release version="1.1.18" date="2026-02-26">
       <description>
         <p>Miniplayer window with compact and micro surfaces. OAuth browser login for new Qobuz auth flow. Window size persistence, HiDPI scaling fix, and artist image context menus.</p>

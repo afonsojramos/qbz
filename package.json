@@ -1,7 +1,7 @@
 {
   "name": "qbz-nix",
-  "version": "1.1.19-rc-1",
-  "description": "Native high-fidelity client for Qobuz\u2122 subscribers on Linux with Hi-Fi audio support (uses the Qobuz API; not certified by Qobuz)",
+  "version": "1.1.19",
+  "description": "Native high-fidelity client for Qobuz™ subscribers on Linux with Hi-Fi audio support (uses the Qobuz API; not certified by Qobuz)",
   "type": "module",
   "scripts": {
     "dev": "svelte-kit sync && vite dev",
