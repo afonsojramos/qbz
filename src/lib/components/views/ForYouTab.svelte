@@ -1427,7 +1427,7 @@
             </div>
           </div>
           <div class="radio-card-meta-title">{spotlightData!.artistName}</div>
-          <div class="radio-card-artist">&nbsp;</div>
+          <div class="radio-card-artist">{$t('home.qobuzRadioStation')}</div>
         </button>
 
         <!-- Playlist cards (if artist has Qobuz playlists) -->
@@ -1870,47 +1870,57 @@
 
   /* ---- Artist cards ---- */
   .artist-card {
-    flex-shrink: 0;
-    width: 140px;
+    width: 210px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
-    background: none;
-    border: none;
+    gap: 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 12px;
+    padding: 16px 12px;
+    color: var(--text-primary);
     cursor: pointer;
-    padding: 0;
-    color: inherit;
+    transition: border-color 150ms ease, background-color 150ms ease;
+  }
+
+  .artist-card:hover {
+    border-color: var(--accent-primary);
+    background-color: var(--bg-hover);
   }
 
   .artist-image-wrapper {
     position: relative;
-    width: 120px;
-    height: 120px;
+    width: 140px;
+    height: 140px;
     border-radius: 50%;
     overflow: hidden;
-    background: var(--bg-secondary);
   }
 
   .artist-image-placeholder {
-    position: absolute;
-    inset: 0;
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
+    background: linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
     color: var(--text-muted);
   }
 
   .artist-image {
     position: absolute;
     inset: 0;
-    width: 100%;
-    height: 100%;
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
     object-fit: cover;
+    z-index: 1;
+    transition: opacity 0.15s ease-in;
   }
 
   .artist-name {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
     text-align: center;
@@ -2030,11 +2040,22 @@
   /* ---- Artists to Follow ---- */
   .follow-artist-card {
     flex-shrink: 0;
-    width: 140px;
+    width: 210px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 12px;
+    padding: 16px 12px;
+    cursor: pointer;
+    transition: border-color 150ms ease, background-color 150ms ease;
+  }
+
+  .follow-artist-card:hover {
+    border-color: var(--accent-primary);
+    background-color: var(--bg-hover);
   }
 
   .follow-artist-image-btn {
@@ -2057,18 +2078,18 @@
   }
 
   .follow-artist-name {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
     text-align: center;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 140px;
+    width: 100%;
   }
 
   .follow-artist-label {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
