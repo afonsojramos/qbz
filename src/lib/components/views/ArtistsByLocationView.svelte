@@ -680,10 +680,7 @@
                     </div>
                   {:else}
                     <button class="load-more-button" onclick={loadMore}>
-                      <span>
-                        {$t('actions.loadMore')}
-                        ({allArtists.length} / {totalCandidates})
-                      </span>
+                      {$t('actions.loadMore')}
                     </button>
                   {/if}
                 </div>
