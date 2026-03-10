@@ -181,12 +181,53 @@
   let essentialsAlbums = $state<AlbumCardData[]>([]);
   let loadingEssentials = $state(false);
 
-  // Radio Stations: use recent albums as radio seeds
-  // Take first 8 recent albums as potential radio stations
-  const radioAlbums = $derived(recentAlbums.slice(0, 8));
+  // Radio Stations: mix of 3 recent + 3 favorites + 3 top-artist albums, no dupes
+  let radioAlbums = $state<AlbumCardData[]>([]);
+  let radioBuilt = false;
 
-  // Extract dominant colors for radio card backgrounds
+  function buildRadioStations() {
+    if (radioBuilt) return;
+    if (recentAlbums.length === 0 && favoriteAlbums.length === 0) return;
+    radioBuilt = true;
+
+    const seen = new Set<string>();
+    const result: AlbumCardData[] = [];
+
+    function addShuffled(source: AlbumCardData[], count: number) {
+      const candidates = source.filter(a => !seen.has(a.id));
+      const shuffled = [...candidates];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      for (const album of shuffled.slice(0, count)) {
+        seen.add(album.id);
+        result.push(album);
+      }
+    }
+
+    addShuffled(recentAlbums, 3);
+    addShuffled(favoriteAlbums, 3);
+
+    const topArtistIds = new Set(topArtists.map(a => a.id));
+    const topArtistAlbums = [...recentAlbums, ...favoriteAlbums].filter(
+      a => a.artistId && topArtistIds.has(a.artistId) && !seen.has(a.id)
+    );
+    addShuffled(topArtistAlbums, 3);
+
+    if (result.length < 9) {
+      const remaining = [...recentAlbums, ...favoriteAlbums].filter(a => !seen.has(a.id));
+      addShuffled(remaining, 9 - result.length);
+    }
+
+    radioAlbums = result;
+  }
+
+  // Build radio stations once data is available, extract colors
   $effect(() => {
+    if (!radioBuilt && (recentAlbums.length > 0 || favoriteAlbums.length > 0)) {
+      buildRadioStations();
+    }
     for (const album of radioAlbums) {
       if (!radioCardColors[album.id] && album.artwork) {
         extractRadioCardColor(album.id, album.artwork);
@@ -614,7 +655,7 @@
 </div>
 
 <!-- Radio Stations -->
-{#if loadingRecentAlbums}
+{#if loadingRecentAlbums || loadingFavoriteAlbums}
   <div class="skeleton-section">
     <div class="skeleton-title"></div>
     <div class="skeleton-row">
@@ -1238,7 +1279,7 @@
 
   .radio-card {
     flex-shrink: 0;
-    width: 180px;
+    width: 210px;
     cursor: pointer;
     background: none;
     border: none;
@@ -1253,8 +1294,8 @@
 
   .radio-card-visual {
     position: relative;
-    width: 180px;
-    height: 180px;
+    width: 210px;
+    height: 210px;
     border-radius: 8px;
     overflow: hidden;
     margin-bottom: 8px;
@@ -1267,8 +1308,8 @@
   .radio-card-art {
     position: relative;
     z-index: 1;
-    width: 110px;
-    height: 110px;
+    width: 130px;
+    height: 130px;
     object-fit: cover;
     border-radius: 4px;
   }
