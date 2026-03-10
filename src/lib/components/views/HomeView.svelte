@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { Music, User, Loader2, ArrowRight, Home } from 'lucide-svelte';
+  import ForYouTab from './ForYouTab.svelte';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import { type OfflineCacheStatus } from '$lib/stores/offlineCacheState';
   import {
@@ -1890,12 +1891,51 @@
       </div>
     {/if}
   {:else if activeTab === 'forYou'}
-    <!-- For You tab: personalized recommendations -->
-    <div class="tab-placeholder">
-      <User size={48} />
-      <h2>{$t('home.forYou')}</h2>
-      <p>Coming soon</p>
-    </div>
+    <ForYouTab
+      {recentAlbums}
+      {continueTracks}
+      {topArtists}
+      {favoriteAlbums}
+      {loadingRecentAlbums}
+      {loadingContinueTracks}
+      {loadingTopArtists}
+      {loadingFavoriteAlbums}
+      {onAlbumClick}
+      {onAlbumPlay}
+      {onAlbumPlayNext}
+      {onAlbumPlayLater}
+      {onAlbumShareQobuz}
+      {onAlbumShareSonglink}
+      {onAlbumDownload}
+      {onOpenAlbumFolder}
+      {onReDownloadAlbum}
+      {onAddAlbumToPlaylist}
+      {checkAlbumFullyDownloaded}
+      {downloadStateVersion}
+      {isAlbumDownloaded}
+      {loadAlbumDownloadStatus}
+      {onArtistClick}
+      {onTrackPlay}
+      {onTrackPlayNext}
+      {onTrackPlayLater}
+      {onTrackAddToPlaylist}
+      {onTrackShareQobuz}
+      {onTrackShareSonglink}
+      {onTrackGoToAlbum}
+      {onTrackGoToArtist}
+      {onTrackShowInfo}
+      {onTrackDownload}
+      {onTrackRemoveDownload}
+      {onTrackReDownload}
+      {checkTrackDownloaded}
+      {getTrackOfflineCacheStatus}
+      {activeTrackId}
+      {isPlaybackActive}
+      {onNavigateDailyQ}
+      {onNavigateWeeklyQ}
+      {onNavigateFavQ}
+      {onNavigateTopQ}
+    />
   {/if}
 
   <!-- Settings Modal -->
