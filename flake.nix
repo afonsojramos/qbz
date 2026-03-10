@@ -10,25 +10,39 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+
+        # ──────────────────────────────────────────────
+        # VERSION BUMP: update version, rev, and hashes
+        # when tagging a new release.
+        # ──────────────────────────────────────────────
+        qbzVersion = "1.1.19";
+        qbzRev     = "v${qbzVersion}";
+        srcHash    = ""; # nix build will report the correct hash on first run
+        npmHash    = ""; # nix build will report the correct hash on first run
       in
       {
         packages.default = pkgs.rustPlatform.buildRustPackage rec {
           pname = "qbz";
-          version = "1.1.19";
+          version = qbzVersion;
 
-          src = ./.;
+          src = pkgs.fetchFromGitHub {
+            owner = "vicrodh";
+            repo  = "qbz";
+            rev   = qbzRev;
+            hash  = srcHash;
+          };
 
           cargoRoot = "src-tauri";
           buildAndTestSubdir = cargoRoot;
 
           cargoLock = {
-            lockFile = ./src-tauri/Cargo.lock;
+            lockFile = "${src}/src-tauri/Cargo.lock";
           };
 
           npmDeps = pkgs.fetchNpmDeps {
             name = "${pname}-${version}-npm-deps";
             inherit src;
-            hash = ""; # Run `nix build` once — Nix will report the correct hash
+            hash = npmHash;
           };
 
           env.LIBCLANG_PATH = "${pkgs.lib.getLib pkgs.llvmPackages.libclang}/lib";
