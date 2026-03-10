@@ -1358,6 +1358,11 @@
                   decoding="async"
                 />
               {/if}
+              <img
+                src="/image_radio_shadows.png"
+                alt=""
+                class="radio-card-shadow"
+              />
               <span class="spotlight-top-tracks-label">{$t('home.topTracksLabel')}</span>
               <div class="radio-card-hover-overlay" class:visible={isTopTracksLoading}>
                 {#if isTopTracksLoading}
@@ -2177,10 +2182,10 @@
   .spotlight-top-tracks-art {
     position: relative;
     z-index: 1;
-    width: 100px;
-    height: 100px;
+    width: 130px;
+    height: 130px;
     object-fit: cover;
-    border-radius: 50%;
+    border-radius: 4px;
   }
 
   .spotlight-top-tracks-label {
