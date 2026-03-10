@@ -155,6 +155,7 @@
   // For You-specific state
   let failedArtistImages = $state<Set<number>>(new Set());
   let radioLoading = $state<string | null>(null); // album ID currently creating radio
+  let radioCardColors = $state<Record<string, string>>({}); // album ID -> dominant color
 
   // Phase 2: Artists to Follow
   let suggestedArtists = $state<SuggestedArtist[]>([]);
@@ -183,6 +184,15 @@
   // Radio Stations: use recent albums as radio seeds
   // Take first 8 recent albums as potential radio stations
   const radioAlbums = $derived(recentAlbums.slice(0, 8));
+
+  // Extract dominant colors for radio card backgrounds
+  $effect(() => {
+    for (const album of radioAlbums) {
+      if (!radioCardColors[album.id] && album.artwork) {
+        extractRadioCardColor(album.id, album.artwork);
+      }
+    }
+  });
 
   // Load Phase 2+3 sections when component mounts (once)
   onMount(() => {
@@ -468,6 +478,41 @@
     }
   }
 
+  function extractRadioCardColor(albumId: string, artworkUrl: string) {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 8;
+        canvas.height = 8;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, 8, 8);
+        const data = ctx.getImageData(0, 0, 8, 8).data;
+        // Sample several pixels and average
+        let rSum = 0, gSum = 0, bSum = 0, count = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          rSum += data[i];
+          gSum += data[i + 1];
+          bSum += data[i + 2];
+          count++;
+        }
+        const r = Math.round(rSum / count);
+        const g = Math.round(gSum / count);
+        const b = Math.round(bSum / count);
+        // Slightly darken for better contrast with white text
+        const dr = Math.round(r * 0.7);
+        const dg = Math.round(g * 0.7);
+        const db = Math.round(b * 0.7);
+        radioCardColors = { ...radioCardColors, [albumId]: `rgb(${dr}, ${dg}, ${db})` };
+      } catch {
+        // Canvas tainted - ignore
+      }
+    };
+    img.src = artworkUrl;
+  }
+
   function handleArtistImageError(artistId: number) {
     failedArtistImages = new Set([...failedArtistImages, artistId]);
   }
@@ -584,13 +629,17 @@
     </div>
     <div class="radio-scroll-row">
       {#each radioAlbums as album (album.id)}
+        {@const isThisLoading = radioLoading === album.id}
         <button
           class="radio-card"
-          class:loading={radioLoading === album.id}
+          class:loading={isThisLoading}
           onclick={() => handleRadioPlay(album.id, album.title)}
           disabled={radioLoading !== null}
         >
-          <div class="radio-card-visual">
+          <div
+            class="radio-card-visual"
+            style:background-color={radioCardColors[album.id] || 'var(--bg-tertiary)'}
+          >
             <img
               use:cachedSrc={album.artwork}
               alt={album.title}
@@ -604,13 +653,21 @@
               class="radio-card-shadow"
             />
             <span class="radio-card-label">{$t('home.radioLabel')}</span>
-            {#if radioLoading === album.id}
-              <div class="radio-card-loading">
-                <Loader2 size={24} class="spinner" />
-              </div>
-            {/if}
+            <div class="radio-card-hover-overlay" class:visible={isThisLoading}>
+              {#if isThisLoading}
+                <div class="radio-play-spinner">
+                  <svg viewBox="0 0 50 50" class="radio-spinner-svg">
+                    <circle cx="25" cy="25" r="20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+                  </svg>
+                </div>
+              {:else}
+                <button class="radio-overlay-play-btn" type="button">
+                  <Play size={18} fill="white" color="white" />
+                </button>
+              {/if}
+            </div>
           </div>
-          <div class="radio-card-title" title={album.title}>{album.title}</div>
+          <div class="radio-card-meta-title" title={album.title}>{album.title}</div>
           <div class="radio-card-artist">{album.artist}</div>
         </button>
       {/each}
@@ -1187,15 +1244,10 @@
     padding: 0;
     text-align: left;
     color: inherit;
-    transition: opacity 150ms ease;
   }
 
   .radio-card:disabled {
     cursor: wait;
-  }
-
-  .radio-card.loading {
-    opacity: 0.7;
   }
 
   .radio-card-visual {
@@ -1205,12 +1257,19 @@
     border-radius: 8px;
     overflow: hidden;
     margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 400ms ease;
   }
 
   .radio-card-art {
-    width: 100%;
-    height: 100%;
+    position: relative;
+    z-index: 1;
+    width: 114px;
+    height: 114px;
     object-fit: cover;
+    border-radius: 4px;
   }
 
   .radio-card-shadow {
@@ -1222,32 +1281,99 @@
     pointer-events: none;
     mix-blend-mode: multiply;
     opacity: 0.7;
+    z-index: 2;
   }
 
   .radio-card-label {
     position: absolute;
-    bottom: 12px;
+    bottom: 10px;
     left: 0;
     right: 0;
     text-align: center;
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 300;
-    letter-spacing: 0.25em;
+    letter-spacing: 0.35em;
+    padding-left: 0.35em;
     color: rgba(255, 255, 255, 0.85);
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
     pointer-events: none;
+    z-index: 3;
   }
 
-  .radio-card-loading {
+  .radio-card-hover-overlay {
     position: absolute;
     inset: 0;
+    z-index: 4;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    transition: opacity 150ms ease;
+    background: rgba(10, 10, 10, 0.75);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: inherit;
+    pointer-events: none;
   }
 
-  .radio-card-title {
+  .radio-card:hover .radio-card-hover-overlay,
+  .radio-card-hover-overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .radio-overlay-play-btn {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.85), 0 0 1px rgba(0, 0, 0, 0.3);
+    transition: transform 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+  }
+
+  .radio-overlay-play-btn:hover {
+    background-color: rgba(0, 0, 0, 0.3);
+    box-shadow: inset 0 0 0 1px var(--accent-primary), 0 0 4px rgba(0, 0, 0, 0.5);
+  }
+
+  .radio-play-spinner {
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .radio-spinner-svg {
+    width: 34px;
+    height: 34px;
+    animation: radio-spin 1.2s linear infinite;
+  }
+
+  .radio-spinner-svg circle {
+    stroke-dasharray: 90, 150;
+    stroke-dashoffset: 0;
+    animation: radio-dash 1.2s ease-in-out infinite;
+  }
+
+  @keyframes radio-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @keyframes radio-dash {
+    0% { stroke-dasharray: 1, 200; stroke-dashoffset: 0; }
+    50% { stroke-dasharray: 90, 200; stroke-dashoffset: -35; }
+    100% { stroke-dasharray: 90, 200; stroke-dashoffset: -125; }
+  }
+
+  .radio-card-meta-title {
     font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
