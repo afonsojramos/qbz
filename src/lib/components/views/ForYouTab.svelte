@@ -175,6 +175,11 @@
   let forgottenAlbums = $state<AlbumCardData[]>([]);
   let loadingForgottenAlbums = $state(false);
 
+  // Phase 3: Essentials [Genre]
+  let essentialsGenreName = $state('');
+  let essentialsAlbums = $state<AlbumCardData[]>([]);
+  let loadingEssentials = $state(false);
+
   // Radio Stations: use recent albums as radio seeds
   // Take first 8 recent albums as potential radio stations
   const radioAlbums = $derived(recentAlbums.slice(0, 8));
@@ -187,6 +192,7 @@
       loadSpotlight();
       loadSimilarAlbums();
       loadForgottenFavorites();
+      loadEssentials();
     }
   });
 
@@ -327,6 +333,52 @@
       console.error('Failed to load forgotten favorites:', err);
     } finally {
       loadingForgottenAlbums = false;
+    }
+  }
+
+  interface TopGenre {
+    id: number;
+    name: string;
+  }
+
+  async function loadEssentials() {
+    loadingEssentials = true;
+
+    try {
+      // Get user's top genres
+      const genres = await invoke<TopGenre[]>('v2_reco_get_top_genres', { limit: 3 });
+      if (genres.length === 0) return;
+
+      // Use the top genre for essentials
+      const topGenre = genres[0];
+      essentialsGenreName = topGenre.name;
+
+      // Fetch essential/ideal discography albums for that genre
+      const result = await invoke<{ items: AlbumSuggestResult[]; total: number }>('v2_get_featured_albums', {
+        featuredType: 'ideal-discography',
+        limit: 12,
+        offset: 0,
+        genreId: topGenre.id
+      });
+
+      essentialsAlbums = (result.items || []).map(album => ({
+        id: album.id,
+        artwork: album.image?.large || album.image?.small || '',
+        title: album.title,
+        artist: album.artist?.name || '',
+        artistId: album.artist?.id,
+        genre: album.genre?.name || '',
+        quality: formatQuality(
+          album.hires,
+          album.maximum_bit_depth,
+          album.maximum_sampling_rate
+        ),
+        releaseDate: album.release_date_original
+      }));
+    } catch (err) {
+      console.error('Failed to load essentials:', err);
+    } finally {
+      loadingEssentials = false;
     }
   }
 
@@ -472,7 +524,8 @@
     topArtists.length > 0 ||
     favoriteAlbums.length > 0 ||
     similarAlbums.length > 0 ||
-    forgottenAlbums.length > 0
+    forgottenAlbums.length > 0 ||
+    essentialsAlbums.length > 0
   );
 
   const anyLoading = $derived(
@@ -813,6 +866,48 @@
   <HorizontalScrollRow>
     {#snippet children()}
       {#each forgottenAlbums as album}
+        <AlbumCard
+          albumId={album.id}
+          artwork={album.artwork}
+          title={album.title}
+          artist={album.artist}
+          artistId={album.artistId}
+          onArtistClick={onArtistClick}
+          genre={album.genre}
+          releaseDate={album.releaseDate}
+          size="large"
+          quality={album.quality}
+          onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
+          onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
+          onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
+          onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+          onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
+          onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
+          onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
+          isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
+          onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
+          onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
+          {downloadStateVersion}
+          onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+        />
+      {/each}
+      <div class="spacer"></div>
+    {/snippet}
+  </HorizontalScrollRow>
+{/if}
+
+<!-- Essentials [Genre] -->
+{#if loadingEssentials}
+  <div class="skeleton-section">
+    <div class="skeleton-title"></div>
+    <div class="skeleton-row">
+      {#each { length: 6 } as _}<div class="skeleton-card"></div>{/each}
+    </div>
+  </div>
+{:else if essentialsAlbums.length > 0}
+  <HorizontalScrollRow title={$t('home.essentials', { values: { genre: essentialsGenreName } })}>
+    {#snippet children()}
+      {#each essentialsAlbums as album}
         <AlbumCard
           albumId={album.id}
           artwork={album.artwork}

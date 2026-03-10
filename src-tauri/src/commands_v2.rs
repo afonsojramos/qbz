@@ -4437,6 +4437,28 @@ pub async fn v2_reco_get_forgotten_favorites(
     .await
 }
 
+/// Get user's top genres by play count
+#[tauri::command]
+pub async fn v2_reco_get_top_genres(
+    limit: Option<u32>,
+    reco_state: State<'_, RecoState>,
+) -> Result<Vec<TopGenre>, String> {
+    let guard = reco_state.db.lock().await;
+    let db = guard.as_ref().ok_or("No active session")?;
+    let genres = db.get_top_genre_ids(limit.unwrap_or(5))?;
+    Ok(genres
+        .into_iter()
+        .map(|(id, name)| TopGenre { id, name })
+        .collect())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopGenre {
+    pub id: u64,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct V2LibraryCacheStats {

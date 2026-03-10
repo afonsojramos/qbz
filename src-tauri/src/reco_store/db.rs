@@ -425,6 +425,36 @@ impl RecoStoreDb {
         Ok(albums)
     }
 
+    /// Get the user's most-played genres by event count
+    pub fn get_top_genre_ids(&self, limit: u32) -> Result<Vec<(u64, String)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                r#"
+                SELECT e.genre_id, COALESCE(m.genre_name, ''), COUNT(*) AS play_count
+                FROM reco_events e
+                LEFT JOIN reco_album_meta m ON e.album_id = m.album_id
+                WHERE e.genre_id IS NOT NULL AND e.genre_id > 0
+                GROUP BY e.genre_id
+                ORDER BY play_count DESC
+                LIMIT ?
+                "#,
+            )
+            .map_err(|e| format!("Failed to prepare top genres query: {}", e))?;
+
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("Failed to query top genres: {}", e))?;
+
+        let mut genres = Vec::new();
+        for row in rows {
+            genres.push(row.map_err(|e| format!("Failed to read genre row: {}", e))?);
+        }
+        Ok(genres)
+    }
+
     pub fn get_favorite_track_ids(&self, limit: u32) -> Result<Vec<u64>, String> {
         let mut stmt = self
             .conn
