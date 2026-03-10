@@ -574,8 +574,25 @@ pub fn clear_oauth_token() -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// Returns true if the config directory is writable (required for encryption salt).
+    /// NixOS sandbox builds and CI environments lack a writable HOME.
+    fn has_writable_config_dir() -> bool {
+        if let Some(path) = dirs::config_dir() {
+            let test_dir = path.join("qbz");
+            if std::fs::create_dir_all(&test_dir).is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
     #[test]
     fn test_encryption_roundtrip() {
+        // Skip in environments without a writable config dir (NixOS sandbox, CI)
+        if std::env::var("CI").is_ok() || !has_writable_config_dir() {
+            return;
+        }
+
         let credentials = QobuzCredentials {
             email: "test@example.com".to_string(),
             password: format!("test-pass-{}", std::process::id()),
@@ -590,9 +607,8 @@ mod tests {
 
     #[test]
     fn test_credentials_roundtrip() {
-        // Note: This test requires a working keyring service
-        // Skip in CI environments
-        if std::env::var("CI").is_ok() {
+        // Skip in environments without keyring or writable config dir
+        if std::env::var("CI").is_ok() || !has_writable_config_dir() {
             return;
         }
 

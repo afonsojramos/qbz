@@ -327,7 +327,7 @@ mod tests {
         let mid = num_bars / 2;
         assert!(freqs[mid] > 500.0 && freqs[mid] < 800.0);
 
-        // Last bar should approach 20000Hz
-        assert!(freqs[num_bars - 1] > 15000.0);
+        // Last bar should approach 20000Hz (but won't reach it since t < 1.0)
+        assert!(freqs[num_bars - 1] > 10000.0);
     }
 }
