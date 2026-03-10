@@ -9161,6 +9161,7 @@ pub async fn v2_discover_artists_by_location(
                             qobuz_image: image_url,
                             score: *score,
                             genres: candidate_genres.clone(),
+                            qobuz_albums_count: qobuz_artist.albums_count,
                         };
 
                         if let Ok(json) = serde_json::to_string(&candidate) {

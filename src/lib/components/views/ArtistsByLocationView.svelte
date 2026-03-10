@@ -3,7 +3,7 @@
   import { t } from '$lib/i18n';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { ArrowLeft, Loader2, Music, Search, X, LayoutGrid, PanelLeftClose, Mic2, Disc3, ChevronDown, Filter, Globe, Share2 } from 'lucide-svelte';
+  import { ArrowLeft, Loader2, Music, Search, X, LayoutGrid, PanelLeftClose, Mic2, Disc3, ChevronDown, Filter, SlidersHorizontal, Globe, Share2 } from 'lucide-svelte';
   import VirtualizedFavoritesArtistGrid from '../VirtualizedFavoritesArtistGrid.svelte';
   import VirtualizedFavoritesArtistList from '../VirtualizedFavoritesArtistList.svelte';
   import AlbumCard from '../AlbumCard.svelte';
@@ -37,6 +37,7 @@
     qobuz_image?: string;
     score: number;
     genres: string[];
+    qobuz_albums_count?: number;
   }
 
   interface LocationDiscoveryResponse {
@@ -90,7 +91,11 @@
   let groupingEnabled = $state(false);
   let showGroupMenu = $state(false);
   let activeGenreFilters = $state<Set<string>>(new Set());
-  let showGenreFilters = $state(false);
+  let showGenrePopup = $state(false);
+  let genreSearchQuery = $state('');
+  let genreFilterBtnEl = $state<HTMLButtonElement | null>(null);
+  let heroScrolledPast = $state(false);
+  let genrePopupEl = $state<HTMLDivElement | null>(null);
 
   // Sidepanel state
   let selectedArtist = $state<FavoriteArtist | null>(null);
@@ -166,6 +171,7 @@
         id: candidate.qobuz_id!,
         name: candidate.qobuz_name || candidate.mb_name,
         image: candidate.qobuz_image ? { small: candidate.qobuz_image } : undefined,
+        albums_count: candidate.qobuz_albums_count,
       }));
   }
 
@@ -216,6 +222,21 @@
 
   function clearGenreFilters() {
     activeGenreFilters = new Set();
+  }
+
+  // Genres filtered by search in popup
+  let filteredGenres = $derived.by(() => {
+    if (!genreSearchQuery.trim()) return availableGenres;
+    const q = genreSearchQuery.toLowerCase();
+    return availableGenres.filter((genre) => genre.toLowerCase().includes(q));
+  });
+
+  function handleGenrePopupClickOutside(e: MouseEvent) {
+    if (!showGenrePopup) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('.genre-popup') || target.closest('.genre-filter-trigger')) return;
+    showGenrePopup = false;
+    genreSearchQuery = '';
   }
 
   // Client-side search + genre filter
@@ -382,17 +403,19 @@
     stopLoadingAnimation();
     cleanupProgressListener();
     loading = false;
+    document.addEventListener('click', handleGenrePopupClickOutside);
   });
 
   onDestroy(() => {
     stopLoadingAnimation();
     cleanupProgressListener();
+    document.removeEventListener('click', handleGenrePopupClickOutside);
   });
 </script>
 
 <div class="scene-view">
   {#if !loading}
-    <!-- Top bar with back button -->
+    <!-- Back button (always visible) -->
     <div class="top-bar">
       <button class="back-btn" onclick={onBack}>
         <ArrowLeft size={16} />
@@ -400,27 +423,18 @@
       </button>
     </div>
 
-    <!-- Hero header with flag -->
-    <div class="hero-header">
-      {#if flagUrl}
-        <div class="flag-wrapper">
-          <img src={flagUrl} alt="" class="flag-image" />
-        </div>
-      {/if}
-      <div class="hero-info">
-        <h1>{sceneLabel || context.location.country || context.location.displayName}</h1>
-        {#if genreSummary || context.affinitySeeds.genres.length > 0}
-          <p class="hero-subtitle">
-            {$t('artist.sceneBased', {
-              values: {
-                artist: context.sourceArtistName,
-                genres: genreSummary || context.affinitySeeds.genres.slice(0, 3).join(' / '),
-              },
-            })}
-          </p>
+    <!-- Compact sticky header (appears when hero scrolls out) -->
+    {#if heroScrolledPast}
+      <div class="compact-header">
+        {#if flagUrl}
+          <img src={flagUrl} alt="" class="compact-flag" />
+        {/if}
+        <span class="compact-title">{sceneLabel || context.location.country || context.location.displayName}</span>
+        {#if genreSummary}
+          <span class="compact-subtitle">{genreSummary}</span>
         {/if}
       </div>
-    </div>
+    {/if}
   {/if}
 
   <!-- Nav bar with search + controls -->
@@ -456,19 +470,78 @@
           {/if}
         </div>
 
-        <!-- Genre filter toggle -->
+        <!-- Genre filter popup trigger -->
         {#if availableGenres.length > 1}
-          <button
-            class="control-btn icon-only"
-            class:active-filter={showGenreFilters || activeGenreFilters.size > 0}
-            onclick={() => { showGenreFilters = !showGenreFilters; }}
-            title="Filter by genre"
-          >
-            <Filter size={16} />
-            {#if activeGenreFilters.size > 0}
-              <span class="filter-badge">{activeGenreFilters.size}</span>
+          <div class="genre-filter-container">
+            <button
+              class="control-btn icon-only genre-filter-trigger"
+              class:active-filter={activeGenreFilters.size > 0}
+              bind:this={genreFilterBtnEl}
+              onclick={() => { showGenrePopup = !showGenrePopup; genreSearchQuery = ''; }}
+              title="Filter by genre"
+            >
+              <Filter size={16} />
+              {#if activeGenreFilters.size > 0}
+                <span class="filter-badge">{activeGenreFilters.size}</span>
+              {/if}
+            </button>
+
+            {#if showGenrePopup}
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <div class="genre-popup" bind:this={genrePopupEl} onclick={(e) => e.stopPropagation()}>
+                <div class="genre-popup-header">
+                  <div class="genre-popup-title">
+                    <SlidersHorizontal size={16} />
+                    <span>{$t('genreFilter.title')}</span>
+                  </div>
+                  <button class="genre-popup-close" onclick={() => { showGenrePopup = false; genreSearchQuery = ''; }}>
+                    <X size={16} />
+                  </button>
+                </div>
+                {#if availableGenres.length > 9}
+                  <div class="genre-popup-search-row">
+                    <Search size={14} />
+                    <input
+                      type="text"
+                      placeholder={$t('placeholders.search')}
+                      bind:value={genreSearchQuery}
+                      class="genre-popup-search-input"
+                    />
+                    {#if genreSearchQuery}
+                      <button class="genre-popup-search-clear" onclick={() => { genreSearchQuery = ''; }}>
+                        <X size={12} />
+                      </button>
+                    {/if}
+                  </div>
+                {/if}
+                <div class="genre-popup-grid">
+                  {#each filteredGenres as genre}
+                    <button
+                      class="genre-card"
+                      class:selected={activeGenreFilters.has(genre)}
+                      onclick={() => toggleGenreFilter(genre)}
+                    >
+                      <span class="genre-name">{genre}</span>
+                      <span class="check-circle" class:checked={activeGenreFilters.has(genre)}></span>
+                    </button>
+                  {/each}
+                  {#if filteredGenres.length === 0}
+                    <div class="genre-popup-empty">{$t('search.noResults')}</div>
+                  {/if}
+                </div>
+                <div class="genre-popup-footer">
+                  <button
+                    class="genre-clear-btn"
+                    onclick={() => { clearGenreFilters(); showGenrePopup = false; }}
+                    disabled={activeGenreFilters.size === 0}
+                  >
+                    {$t('genreFilter.clearFilter')}
+                  </button>
+                </div>
+              </div>
             {/if}
-          </button>
+          </div>
         {/if}
 
         <!-- View toggle -->
@@ -522,27 +595,6 @@
     </div>
   {/if}
 
-  <!-- Genre filter buttons (toggled) -->
-  {#if showGenreFilters && !loading && !error && availableGenres.length > 1}
-    <div class="genre-filters">
-      {#if activeGenreFilters.size > 0}
-        <button class="genre-pill active clear-pill" onclick={clearGenreFilters}>
-          <X size={12} />
-          <span>{$t('actions.clearAll')}</span>
-        </button>
-      {/if}
-      {#each availableGenres as genre}
-        <button
-          class="genre-pill"
-          class:active={activeGenreFilters.has(genre)}
-          onclick={() => toggleGenreFilter(genre)}
-        >
-          {genre}
-        </button>
-      {/each}
-    </div>
-  {/if}
-
   <!-- Content -->
   <div class="scene-content">
     {#if loading}
@@ -592,7 +644,52 @@
             showGroupHeaders={groupingEnabled}
             onArtistClick={(id) => onArtistClick(id, mbidByQobuzId.get(id))}
             {scrollToGroupId}
-          />
+            onScrollPastHeader={(isPast) => { heroScrolledPast = isPast; }}
+          >
+            {#snippet header()}
+              <div class="hero-header">
+                {#if flagUrl}
+                  <div class="flag-wrapper">
+                    <img src={flagUrl} alt="" class="flag-image" />
+                  </div>
+                {/if}
+                <div class="hero-info">
+                  <h1>{sceneLabel || context.location.country || context.location.displayName}</h1>
+                  {#if genreSummary || context.affinitySeeds.genres.length > 0}
+                    <p class="hero-subtitle">
+                      {$t('artist.sceneBased', {
+                        values: {
+                          artist: context.sourceArtistName,
+                          genres: genreSummary || context.affinitySeeds.genres.slice(0, 3).join(' / '),
+                        },
+                      })}
+                    </p>
+                  {/if}
+                </div>
+              </div>
+            {/snippet}
+            {#snippet footer()}
+              {#if hasMore}
+                <div class="load-more-inline">
+                  {#if loadingMore}
+                    <div class="load-more-progress">
+                      <div class="load-more-bar">
+                        <div class="load-more-bar-fill" style="width: {loadingProgress}%"></div>
+                      </div>
+                      <span class="load-more-status">{loadingProgress}%</span>
+                    </div>
+                  {:else}
+                    <button class="load-more-button" onclick={loadMore}>
+                      <span>
+                        {$t('actions.loadMore')}
+                        ({allArtists.length} / {totalCandidates})
+                      </span>
+                    </button>
+                  {/if}
+                </div>
+              {/if}
+            {/snippet}
+          </VirtualizedFavoritesArtistGrid>
         </div>
 
         <!-- Alpha jump-nav sidebar -->
@@ -610,26 +707,6 @@
           </div>
         {/if}
       </div>
-
-      {#if hasMore}
-        <div class="load-more-container">
-          {#if loadingMore}
-            <div class="load-more-progress">
-              <div class="load-more-bar">
-                <div class="load-more-bar-fill" style="width: {loadingProgress}%"></div>
-              </div>
-              <span class="load-more-status">{loadingProgress}%</span>
-            </div>
-          {:else}
-            <button class="load-more-button" onclick={loadMore}>
-              <span>
-                {$t('actions.loadMore')}
-                ({allArtists.length} / {totalCandidates})
-              </span>
-            </button>
-          {/if}
-        </div>
-      {/if}
     {:else}
       <!-- Sidepanel mode -->
       <div class="artist-two-column-layout">
@@ -756,6 +833,7 @@
   .top-bar {
     display: flex;
     align-items: center;
+    flex-shrink: 0;
   }
 
   .back-btn {
@@ -769,7 +847,7 @@
     cursor: pointer;
     padding: 0;
     margin-top: 24px;
-    margin-bottom: 24px;
+    margin-bottom: 12px;
     transition: color 150ms ease;
   }
 
@@ -777,17 +855,53 @@
     color: var(--text-secondary);
   }
 
-  /* Hero header with large flag */
+  /* Compact sticky header (on scroll past hero) */
+  .compact-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 8px;
+  }
+
+  .compact-flag {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    object-fit: cover;
+  }
+
+  .compact-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .compact-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Hero header with large flag (inside scroll content) */
   .hero-header {
     display: flex;
     align-items: center;
     gap: 20px;
-    margin-bottom: 20px;
+    padding-bottom: 20px;
   }
 
   .flag-wrapper {
-    width: 180px;
-    height: 180px;
+    width: 140px;
+    height: 140px;
     border-radius: 50%;
     overflow: hidden;
     flex-shrink: 0;
@@ -1008,54 +1122,221 @@
     justify-content: center;
   }
 
-  /* Genre filter buttons */
-  .genre-filters {
+  /* Genre filter popup — matches GenreFilterPopup style */
+  .genre-filter-container {
+    position: relative;
+  }
+
+  .genre-popup {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    width: 530px;
+    max-height: 440px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    z-index: 200;
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 12px;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .genre-popup-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
   }
 
-  .genre-pill {
+  .genre-popup-title {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 6px 12px;
-    border-radius: 8px;
-    border: 1px solid var(--border-subtle);
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .genre-popup-close {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .genre-popup-close:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .genre-popup-search-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .genre-popup-search-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+    min-width: 0;
+  }
+
+  .genre-popup-search-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .genre-popup-search-clear {
+    width: 20px;
+    height: 20px;
+    border: none;
     background: var(--bg-tertiary);
     color: var(--text-muted);
-    font-size: 12px;
+    border-radius: 50%;
     cursor: pointer;
-    transition: all 150ms ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .genre-popup-search-clear:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .genre-popup-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    padding: 12px;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .genre-card {
+    height: 36px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    cursor: pointer;
+    background: var(--bg-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+  }
+
+  .genre-card:hover {
+    background: var(--bg-hover);
+    border-color: var(--text-muted);
+  }
+
+  .genre-card.selected {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+  }
+
+  .genre-card.selected:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
+
+  .genre-name {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-primary);
+    line-height: 1.2;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .genre-pill:hover {
-    background: var(--bg-hover);
-    color: var(--text-secondary);
+  .genre-card.selected .genre-name {
+    color: white;
   }
 
-  .genre-pill.active {
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
-    color: var(--bg-primary);
-    font-weight: 600;
+  .check-circle {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-muted);
+    background: transparent;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+    position: relative;
   }
 
-  .genre-pill.active:hover {
-    opacity: 0.85;
+  .check-circle.checked {
+    border-color: white;
+    background: white;
   }
 
-  .genre-pill.clear-pill {
-    background: var(--bg-secondary);
-    border-color: var(--text-muted);
-    color: var(--text-secondary);
+  .check-circle.checked::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 4px;
+    height: 7px;
+    border: solid var(--accent-primary);
+    border-width: 0 1.5px 1.5px 0;
+    transform: translate(-50%, -60%) rotate(45deg);
   }
 
-  .genre-pill.clear-pill:hover {
+  .genre-popup-footer {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+
+  .genre-clear-btn {
+    width: 100%;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
     background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 150ms ease, color 150ms ease;
+  }
+
+  .genre-clear-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .genre-clear-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .genre-popup-empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 16px 0;
   }
 
   /* Content area */
@@ -1337,12 +1618,11 @@
     font-size: 14px;
   }
 
-  /* Load more */
-  .load-more-container {
+  /* Load more (inline at bottom of scroll content) */
+  .load-more-inline {
     display: flex;
     justify-content: center;
-    padding: 16px 0 8px;
-    flex-shrink: 0;
+    padding: 16px 0 24px;
   }
 
   .load-more-button {

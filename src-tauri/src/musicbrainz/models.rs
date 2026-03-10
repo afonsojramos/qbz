@@ -618,6 +618,8 @@ pub struct LocationCandidate {
     pub score: i32,
     /// Primary genres of this candidate
     pub genres: Vec<String>,
+    /// Number of albums on Qobuz (from validation)
+    pub qobuz_albums_count: Option<u32>,
 }
 
 /// Response from the location discovery pipeline
