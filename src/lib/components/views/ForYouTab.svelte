@@ -622,12 +622,14 @@
     </div>
   </div>
 {:else if radioAlbums.length > 0}
-  <div class="section">
-    <div class="section-header">
-      <h2 class="section-title">{$t('home.radioStations')}</h2>
-      <p class="section-subtitle">{$t('home.radioStationsDesc')}</p>
-    </div>
-    <div class="radio-scroll-row">
+  <HorizontalScrollRow>
+    {#snippet header()}
+      <div class="section-header-col">
+        <h2 class="section-title">{$t('home.radioStations')}</h2>
+        <p class="section-subtitle">{$t('home.radioStationsDesc')}</p>
+      </div>
+    {/snippet}
+    {#snippet children()}
       {#each radioAlbums as album (album.id)}
         {@const isThisLoading = radioLoading === album.id}
         <button
@@ -671,8 +673,9 @@
           <div class="radio-card-artist">{album.artist}</div>
         </button>
       {/each}
-    </div>
-  </div>
+      <div class="spacer"></div>
+    {/snippet}
+  </HorizontalScrollRow>
 {/if}
 
 <!-- Continue Listening -->
@@ -914,13 +917,13 @@
     </div>
   </div>
 {:else if forgottenAlbums.length > 0}
-  <div class="section">
-    <div class="section-header">
-      <h2 class="section-title">{$t('home.rediscoverLibrary')}</h2>
-      <p class="section-subtitle">{$t('home.rediscoverLibraryDesc')}</p>
-    </div>
-  </div>
   <HorizontalScrollRow>
+    {#snippet header()}
+      <div class="section-header-col">
+        <h2 class="section-title">{$t('home.rediscoverLibrary')}</h2>
+        <p class="section-subtitle">{$t('home.rediscoverLibraryDesc')}</p>
+      </div>
+    {/snippet}
     {#snippet children()}
       {#each forgottenAlbums as album}
         <AlbumCard
@@ -1004,12 +1007,14 @@
     </div>
   </div>
 {:else if suggestedArtists.length > 0}
-  <div class="section">
-    <div class="section-header">
-      <h2 class="section-title">{$t('home.artistsToFollow')}</h2>
-      <p class="section-subtitle">{$t('home.artistsToFollowDesc')}</p>
-    </div>
-    <div class="artists-follow-row">
+  <HorizontalScrollRow>
+    {#snippet header()}
+      <div class="section-header-col">
+        <h2 class="section-title">{$t('home.artistsToFollow')}</h2>
+        <p class="section-subtitle">{$t('home.artistsToFollowDesc')}</p>
+      </div>
+    {/snippet}
+    {#snippet children()}
       {#each suggestedArtists as artist (artist.id)}
         <div class="follow-artist-card">
           <button class="follow-artist-image-btn" onclick={() => onArtistClick?.(artist.id)}>
@@ -1048,8 +1053,9 @@
           </button>
         </div>
       {/each}
-    </div>
-  </div>
+      <div class="spacer"></div>
+    {/snippet}
+  </HorizontalScrollRow>
 {/if}
 
 <!-- Spotlight -->
@@ -1222,18 +1228,13 @@
     margin: 0;
   }
 
-  /* ---- Radio Stations ---- */
-  .radio-scroll-row {
+  .section-header-col {
     display: flex;
-    gap: 16px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-    scrollbar-width: none;
+    flex-direction: column;
+    gap: 2px;
   }
 
-  .radio-scroll-row::-webkit-scrollbar {
-    display: none;
-  }
+  /* ---- Radio Stations ---- */
 
   .radio-card {
     flex-shrink: 0;
@@ -1266,8 +1267,8 @@
   .radio-card-art {
     position: relative;
     z-index: 1;
-    width: 114px;
-    height: 114px;
+    width: 110px;
+    height: 110px;
     object-fit: cover;
     border-radius: 4px;
   }
@@ -1707,18 +1708,6 @@
   }
 
   /* ---- Artists to Follow ---- */
-  .artists-follow-row {
-    display: flex;
-    gap: 20px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-    scrollbar-width: none;
-  }
-
-  .artists-follow-row::-webkit-scrollbar {
-    display: none;
-  }
-
   .follow-artist-card {
     flex-shrink: 0;
     width: 140px;
