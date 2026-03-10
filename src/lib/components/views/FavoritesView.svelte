@@ -1981,7 +1981,7 @@
         <!-- Virtualized artist grid (grouped or ungrouped) -->
         {@const artistGridGroups = artistGroupingEnabled
           ? groupArtists(withCustomImages(filteredArtists))
-          : [{ key: '', id: 'all', artists: filteredArtists }]}
+          : [{ key: '', id: 'all', artists: withCustomImages(filteredArtists) }]}
         {@const artistAlphaGroups = artistGroupingEnabled
           ? new Set(artistGridGroups.map(grp => grp.key))
           : new Set<string>()}

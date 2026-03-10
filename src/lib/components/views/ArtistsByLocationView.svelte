@@ -8,6 +8,7 @@
   import VirtualizedFavoritesArtistList from '../VirtualizedFavoritesArtistList.svelte';
   import AlbumCard from '../AlbumCard.svelte';
   import { categorizeAlbum } from '$lib/adapters/qobuzAdapters';
+  import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import type { QobuzAlbum } from '$lib/types';
 
   interface LocationContext {
@@ -167,12 +168,17 @@
   function candidatesToFavoriteArtists(candidates: LocationCandidate[]): FavoriteArtist[] {
     return candidates
       .filter((candidate) => candidate.qobuz_id != null)
-      .map((candidate) => ({
-        id: candidate.qobuz_id!,
-        name: candidate.qobuz_name || candidate.mb_name,
-        image: candidate.qobuz_image ? { small: candidate.qobuz_image } : undefined,
-        albums_count: candidate.qobuz_albums_count,
-      }));
+      .map((candidate) => {
+        const name = candidate.qobuz_name || candidate.mb_name;
+        const defaultUrl = candidate.qobuz_image || '';
+        const resolved = resolveArtistImage(name, defaultUrl);
+        return {
+          id: candidate.qobuz_id!,
+          name,
+          image: resolved ? { small: resolved } : undefined,
+          albums_count: candidate.qobuz_albums_count,
+        };
+      });
   }
 
   // Lookup: qobuz_id -> mbid for passing correct MBID on click
