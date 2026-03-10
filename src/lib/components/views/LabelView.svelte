@@ -428,7 +428,7 @@
       artist: track.performer?.name || pageData?.name || '',
       album: track.album?.title || '',
       duration_secs: track.duration,
-      artwork_url: track.album?.image?.large || track.album?.image?.thumbnail || '',
+      artwork_url: track.album?.image?.small || track.album?.image?.thumbnail || '',
       hires: track.hires_streamable ?? false,
       bit_depth: track.maximum_bit_depth ?? null,
       sample_rate: track.maximum_sampling_rate ?? null,
@@ -1026,7 +1026,7 @@
             {#each releases.slice(0, 20) as album (album.id)}
               <AlbumCard
                 albumId={album.id}
-                artwork={album.image?.large || album.image?.thumbnail || ''}
+                artwork={album.image?.small || album.image?.thumbnail || ''}
                 title={album.title}
                 artist={album.artist?.name || ''}
                 artistId={album.artist?.id}
@@ -1061,7 +1061,7 @@
             {#each criticsPicks.slice(0, 20) as album (album.id)}
               <AlbumCard
                 albumId={album.id}
-                artwork={album.image?.large || album.image?.thumbnail || ''}
+                artwork={album.image?.small || album.image?.thumbnail || ''}
                 title={album.title}
                 artist={album.artist?.name || ''}
                 artistId={album.artist?.id}

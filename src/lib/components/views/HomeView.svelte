@@ -540,7 +540,7 @@
   function discoverAlbumToCardData(album: DiscoverAlbum): AlbumCardData {
     return {
       id: album.id,
-      artwork: album.image?.large || album.image?.small || '',
+      artwork: album.image?.small || album.image?.large || '',
       title: album.title,
       artist: album.artists?.[0]?.name || 'Unknown Artist',
       artistId: album.artists?.[0]?.id,
@@ -1236,7 +1236,7 @@
             {#each essentialDiscography as album (album.id)}
               <AlbumCard
                 albumId={album.id}
-                artwork={album.image?.large || album.image?.small || ''}
+                artwork={album.image?.small || album.image?.large || ''}
                 title={album.title}
                 artist={album.artists?.[0]?.name || 'Unknown Artist'}
                 artistId={album.artists?.[0]?.id}

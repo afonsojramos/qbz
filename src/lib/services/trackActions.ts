@@ -26,7 +26,7 @@ function showToast(message: string, type: ToastType): void {
 // ============ Queue Builders ============
 
 export function buildQueueTrackFromQobuz(track: QobuzTrack): BackendQueueTrack {
-  const artwork = track.album?.image?.large || track.album?.image?.thumbnail || track.album?.image?.small || '';
+  const artwork = track.album?.image?.small || track.album?.image?.thumbnail || track.album?.image?.large || '';
 
   // Log if track is not streamable (for debugging unavailable tracks)
   if (track.streamable === false) {

@@ -34,10 +34,10 @@ export function formatDuration(seconds: number): string {
 export const formatDurationMinutes = formatDuration;
 
 /**
- * Extract best available image from Qobuz image object (always picks largest)
+ * Extract best available image from Qobuz image object (picks 230px small for cards)
  */
 export function getQobuzImage(image?: { large?: string; thumbnail?: string; small?: string }): string {
-  return image?.large || image?.thumbnail || image?.small || '';
+  return image?.small || image?.large || image?.thumbnail || '';
 }
 
 /** Image display sizes for context-aware selection */
@@ -351,7 +351,7 @@ function toArtistPlaylists(playlists: QobuzPlaylist[] | undefined): ArtistPlayli
  * Convert Qobuz API album response to UI AlbumDetail model
  */
 export function convertQobuzAlbum(album: QobuzAlbum): AlbumDetail {
-  const artwork = getQobuzImage(album.image);
+  const artwork = getQobuzImageForSize(album.image, 'large');
   const quality = formatAlbumQuality(
     album.hires_streamable,
     album.maximum_bit_depth,
@@ -472,7 +472,7 @@ function extractLabelsFromAlbums(albums: QobuzAlbum[], artistId: number): { id: 
  * Convert Qobuz API artist response to UI ArtistDetail model
  */
 export function convertQobuzArtist(artist: QobuzArtist): ArtistDetail {
-  const image = getQobuzImage(artist.image);
+  const image = getQobuzImageForSize(artist.image, 'large');
   const albumItems = artist.albums?.items || [];
   const albumsFetched = (artist.albums?.offset || 0) + albumItems.length;
 

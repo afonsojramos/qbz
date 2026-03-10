@@ -559,7 +559,7 @@
       title: track.title,
       artist: track.performer?.name,
       album: track.album?.title,
-      albumArt: track.album?.image?.large || track.album?.image?.thumbnail || track.album?.image?.small,
+      albumArt: track.album?.image?.small || track.album?.image?.thumbnail || track.album?.image?.large,
       albumId: track.album?.id,
       artistId: track.performer?.id,
       duration: formatDuration(track.duration),

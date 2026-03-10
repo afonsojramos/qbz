@@ -312,7 +312,7 @@
                 {/if}
                 <AlbumCard
                   albumId={album.id}
-                  artwork={album.image?.large || album.image?.thumbnail || ''}
+                  artwork={album.image?.small || album.image?.thumbnail || ''}
                   title={album.title}
                   artist={album.artist.name}
                   genre={getGenreLabel?.(album) ?? album.genre?.name ?? ''}

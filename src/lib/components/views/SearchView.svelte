@@ -688,11 +688,11 @@
   }
 
   function getAlbumArtwork(album: Album): string {
-    return album.image?.large || album.image?.thumbnail || album.image?.small || '';
+    return album.image?.small || album.image?.thumbnail || album.image?.large || '';
   }
 
   function getTrackArtwork(track: Track): string {
-    return track.album?.image?.large || track.album?.image?.thumbnail || track.album?.image?.small || '';
+    return track.album?.image?.small || track.album?.image?.thumbnail || track.album?.image?.large || '';
   }
 
   function buildSearchQueueTracks(tracks: Track[]) {
@@ -702,7 +702,7 @@
       artist: track.performer?.name || 'Unknown Artist',
       album: track.album?.title || '',
       duration_secs: track.duration,
-      artwork_url: track.album?.image?.large || track.album?.image?.thumbnail || track.album?.image?.small || '',
+      artwork_url: track.album?.image?.small || track.album?.image?.thumbnail || track.album?.image?.large || '',
       hires: track.hires_streamable ?? false,
       bit_depth: track.maximum_bit_depth ?? null,
       sample_rate: track.maximum_sampling_rate ?? null,

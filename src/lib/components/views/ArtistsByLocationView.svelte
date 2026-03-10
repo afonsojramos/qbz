@@ -675,7 +675,7 @@
                     {#each groupedAlbums.discography as album (album.id)}
                       <AlbumCard
                         albumId={album.id}
-                        artwork={album.image?.large || album.image?.small || ''}
+                        artwork={album.image?.small || album.image?.large || ''}
                         title={album.title}
                         artist={album.artist?.name || ''}
                         genre={album.genre?.name}
@@ -697,7 +697,7 @@
                     {#each groupedAlbums.epsSingles as album (album.id)}
                       <AlbumCard
                         albumId={album.id}
-                        artwork={album.image?.large || album.image?.small || ''}
+                        artwork={album.image?.small || album.image?.large || ''}
                         title={album.title}
                         artist={album.artist?.name || ''}
                         genre={album.genre?.name}
@@ -719,7 +719,7 @@
                     {#each groupedAlbums.liveAlbums as album (album.id)}
                       <AlbumCard
                         albumId={album.id}
-                        artwork={album.image?.large || album.image?.small || ''}
+                        artwork={album.image?.small || album.image?.large || ''}
                         title={album.title}
                         artist={album.artist?.name || ''}
                         genre={album.genre?.name}

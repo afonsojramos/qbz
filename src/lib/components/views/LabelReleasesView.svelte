@@ -484,7 +484,7 @@
             {#each group.albums as album (album.id)}
               <AlbumCard
                 albumId={album.id}
-                artwork={album.image?.large || album.image?.thumbnail || ''}
+                artwork={album.image?.small || album.image?.thumbnail || ''}
                 title={album.title}
                 artist={album.artist?.name || 'Unknown Artist'}
                 artistId={album.artist?.id}
@@ -515,7 +515,7 @@
         {#each processedAlbums as album (album.id)}
           <AlbumCard
             albumId={album.id}
-            artwork={album.image?.large || album.image?.thumbnail || ''}
+            artwork={album.image?.small || album.image?.thumbnail || ''}
             title={album.title}
             artist={album.artist?.name || 'Unknown Artist'}
             artistId={album.artist?.id}
