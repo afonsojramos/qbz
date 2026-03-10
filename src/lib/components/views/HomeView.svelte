@@ -880,14 +880,13 @@
 </script>
 
 <div class="home-view" bind:this={homeViewEl} onscroll={handleHomeScroll}>
-  <!-- Header: greeting row + centered tabs -->
-  {#if homeSettings.greeting.enabled}
-    <div class="greeting-row">
-      <h2 class="greeting">{getGreetingText()}</h2>
-    </div>
-  {/if}
+  <!-- Header with greeting + centered tabs + actions -->
   <div class="home-header">
-    <div class="header-left"></div>
+    <div class="header-left">
+      {#if homeSettings.greeting.enabled}
+        <h2 class="greeting">{getGreetingText()}</h2>
+      {/if}
+    </div>
     <div class="home-tabs">
       <button
         class="home-tab"
@@ -912,8 +911,8 @@
       </button>
     </div>
     <div class="header-actions">
+      <GenreFilterButton onFilterChange={handleGenreFilterChange} />
       {#if activeTab === 'home'}
-        <GenreFilterButton onFilterChange={handleGenreFilterChange} />
         <button class="settings-btn" onclick={() => isSettingsModalOpen = true} title={$t('home.customizeHome')}>
           <img
             src="/home-gear.svg"
@@ -2083,10 +2082,6 @@
     50% { opacity: 0.7; }
   }
 
-  .greeting-row {
-    margin-bottom: 12px;
-  }
-
   .greeting {
     font-size: 24px;
     font-weight: 600;
@@ -2107,6 +2102,8 @@
   .header-left {
     position: absolute;
     left: 0;
+    display: flex;
+    align-items: center;
   }
 
   .home-tabs {
