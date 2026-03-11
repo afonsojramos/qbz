@@ -96,11 +96,12 @@ souvlaki = "0.7"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 # PDF rendering with MuPDF engine (high-quality rasterization for booklet viewer)
-# NOTE: Use sys-lib-* features to link common libs from system, avoiding symbol
-# conflicts with GTK/GdkPixbuf used by tauri-plugin-dialog on Linux.
+# NOTE: Use sys-lib-* for zlib/harfbuzz/freetype to avoid symbol conflicts with
+# GTK/GdkPixbuf. But NOT libjpeg — Ubuntu ships libjpeg8 (libjpeg.so.8) while
+# Debian/Fedora ship libjpeg62-turbo (libjpeg.so.62). Let mupdf vendor its own
+# libjpeg to avoid cross-distro breakage (GitHub #161, #162).
 mupdf = { version = "0.5", default-features = false, features = [
   "system-fonts",
-  "sys-lib-libjpeg",
   "sys-lib-zlib",
   "sys-lib-harfbuzz",
   "sys-lib-freetype",
