@@ -4143,6 +4143,12 @@
           onCreateAlbumRadio={handleCreateAlbumRadio}
           {radioLoading}
         />
+      {:else if activeView === 'artist' && !selectedArtist}
+        <!-- Defensive fallback: artist view active but no data loaded yet -->
+        <div class="view-error">
+          <p>{$t('toast.failedLoadArtist')}</p>
+          <button class="view-error-back" onclick={navGoBack}>{$t('actions.back')}</button>
+        </div>
       {:else if activeView === 'artist' && selectedArtist}
         <ArtistDetailView
           artist={selectedArtist}
@@ -4254,6 +4260,12 @@
           activeTrackId={currentTrack?.id ?? null}
           isPlaybackActive={isPlaying}
         />
+      {:else if activeView === 'playlist' && !selectedPlaylistId}
+        <!-- Defensive fallback: playlist view active but no data loaded yet -->
+        <div class="view-error">
+          <p>{$t('toast.failedLoadPlaylist')}</p>
+          <button class="view-error-back" onclick={navGoBack}>{$t('actions.back')}</button>
+        </div>
       {:else if activeView === 'playlist' && selectedPlaylistId}
         <PlaylistDetailView
           playlistId={selectedPlaylistId}
@@ -4591,6 +4603,12 @@
           onAlbumClick={handleAlbumClick}
           onAlbumPlay={playAlbumById}
         />
+      {:else if activeView !== 'home'}
+        <!-- Catch-all fallback: view has no matching data, show loading/error -->
+        <div class="view-error">
+          <p>{$t('actions.loading')}</p>
+          <button class="view-error-back" onclick={() => navigateTo('home')}>{$t('actions.backToHome')}</button>
+        </div>
       {/if}
     </main>
 
