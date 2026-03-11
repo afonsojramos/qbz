@@ -313,7 +313,7 @@ fn cached_audio_incompatible_with_hw(
     }
 }
 
-/// Download audio from URL
+/// Download audio from URL (full download before playback)
 ///
 /// Uses only a connect timeout (no total timeout) because Hi-Res+ tracks
 /// can be 100-200MB and take several minutes on slower connections.
@@ -350,6 +350,184 @@ async fn download_audio(url: &str) -> Result<Vec<u8>, String> {
 
     log::info!("[V2] Downloaded {} bytes", bytes.len());
     Ok(bytes.to_vec())
+}
+
+/// Stream info from probing a URL (HEAD + first 64KB)
+struct V2StreamInfo {
+    content_length: u64,
+    sample_rate: u32,
+    channels: u16,
+    bit_depth: u32,
+    speed_mbps: f64,
+}
+
+/// Probe a stream URL to get content length, audio format, and download speed
+async fn v2_get_stream_info(url: &str) -> Result<V2StreamInfo, String> {
+    use std::time::{Duration, Instant};
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    // HEAD request to get content length
+    let head_response = client
+        .head(url)
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await
+        .map_err(|e| format!("HEAD request failed: {}", e))?;
+
+    if !head_response.status().is_success() {
+        return Err(format!("HEAD request failed: {}", head_response.status()));
+    }
+
+    let content_length = head_response
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .ok_or_else(|| "No content-length header".to_string())?;
+
+    // Download first 64KB to probe audio format and measure speed
+    let start_time = Instant::now();
+    let range_response = client
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0")
+        .header("Range", "bytes=0-65535")
+        .send()
+        .await
+        .map_err(|e| format!("Range request failed: {}", e))?;
+
+    let initial_bytes = range_response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read initial bytes: {}", e))?;
+
+    let elapsed = start_time.elapsed();
+    let speed_mbps = if elapsed.as_secs_f64() > 0.0 {
+        (initial_bytes.len() as f64 / elapsed.as_secs_f64()) / (1024.0 * 1024.0)
+    } else {
+        10.0
+    };
+
+    log::info!(
+        "[V2] Probe: {}KB in {:.0}ms = {:.1} MB/s",
+        initial_bytes.len() / 1024,
+        elapsed.as_millis(),
+        speed_mbps
+    );
+
+    // Extract audio format from FLAC header
+    let (sample_rate, channels, bit_depth) = if initial_bytes.len() >= 26
+        && initial_bytes.starts_with(b"fLaC")
+    {
+        let sr = ((initial_bytes[18] as u32) << 12)
+            | ((initial_bytes[19] as u32) << 4)
+            | ((initial_bytes[20] as u32) >> 4);
+        let ch = ((initial_bytes[20] >> 1) & 0x07) + 1;
+        let bps = ((initial_bytes[20] & 0x01) << 4) | ((initial_bytes[21] >> 4) & 0x0F);
+        (sr, ch as u16, (bps + 1) as u32)
+    } else {
+        log::warn!("[V2] Non-FLAC stream, using defaults (44100Hz, 2ch, 16-bit)");
+        (44100, 2, 16)
+    };
+
+    Ok(V2StreamInfo {
+        content_length,
+        sample_rate,
+        channels,
+        bit_depth,
+        speed_mbps,
+    })
+}
+
+/// Download audio chunks and push them to the player's streaming buffer
+async fn v2_download_and_stream(
+    url: &str,
+    writer: qbz_player::BufferWriter,
+    track_id: u64,
+    cache: Arc<crate::cache::AudioCache>,
+    content_length: u64,
+    skip_cache: bool,
+) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use std::time::{Duration, Instant};
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    log::info!(
+        "[V2/STREAMING] Starting download for track {} ({:.2} MB)",
+        track_id,
+        content_length as f64 / (1024.0 * 1024.0)
+    );
+
+    let response = client
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to start stream: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Stream request failed: {}", response.status()));
+    }
+
+    let mut all_data = Vec::with_capacity(content_length as usize);
+    let mut stream = response.bytes_stream();
+    let mut bytes_received = 0u64;
+    let start_time = Instant::now();
+    let mut last_log_time = Instant::now();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| format!("Stream chunk error: {}", e))?;
+        bytes_received += chunk.len() as u64;
+
+        all_data.extend_from_slice(&chunk);
+
+        if let Err(e) = writer.push_chunk(&chunk) {
+            log::error!("[V2/STREAMING] Failed to push chunk: {}", e);
+        }
+
+        // Log progress every ~2s
+        let now = Instant::now();
+        if now.duration_since(last_log_time) >= Duration::from_secs(2) {
+            let progress = (bytes_received as f64 / content_length as f64) * 100.0;
+            let avg_speed =
+                (bytes_received as f64 / start_time.elapsed().as_secs_f64()) / (1024.0 * 1024.0);
+            log::info!(
+                "[V2/STREAMING] {:.1}% ({:.2}/{:.2} MB) @ {:.2} MB/s",
+                progress,
+                bytes_received as f64 / (1024.0 * 1024.0),
+                content_length as f64 / (1024.0 * 1024.0),
+                avg_speed
+            );
+            last_log_time = now;
+        }
+    }
+
+    if let Err(e) = writer.complete() {
+        log::error!("[V2/STREAMING] Failed to mark buffer complete: {}", e);
+    }
+
+    let total_time = start_time.elapsed();
+    log::info!(
+        "[V2/STREAMING] Complete: {:.2} MB in {:.1}s ({:.2} MB/s)",
+        bytes_received as f64 / (1024.0 * 1024.0),
+        total_time.as_secs_f64(),
+        (bytes_received as f64 / total_time.as_secs_f64()) / (1024.0 * 1024.0)
+    );
+
+    if !skip_cache {
+        cache.insert(track_id, all_data);
+        log::info!("[V2/STREAMING] Track {} cached for future playback", track_id);
+    }
+
+    Ok(())
 }
 
 fn v2_teardown_type_alias_state<S>(state: &Arc<Mutex<Option<S>>>) {
@@ -6806,6 +6984,7 @@ pub struct V2PlayTrackResult {
 pub async fn v2_play_track(
     track_id: u64,
     quality: Option<String>,
+    duration_secs: Option<u64>,
     bridge: State<'_, CoreBridgeState>,
     offline_cache: State<'_, OfflineCacheState>,
     audio_settings: State<'_, AudioSettingsState>,
@@ -6847,17 +7026,19 @@ pub async fn v2_play_track(
         }
     };
 
-    // Check streaming_only setting
-    let streaming_only = {
+    // Check streaming settings
+    let (stream_first_enabled, streaming_only) = {
         let guard = audio_settings
             .store
             .lock()
             .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
-        guard
+        match guard
             .as_ref()
             .and_then(|s| s.get_settings().ok())
-            .map(|s| s.streaming_only)
-            .unwrap_or(false)
+        {
+            Some(s) => (s.stream_first_track, s.streaming_only),
+            None => (false, false),
+        }
     };
 
     // Determine hardware device ID for sample rate compatibility checks (ALSA only)
@@ -7092,7 +7273,98 @@ pub async fn v2_play_track(
         }
     }
 
-    // Download the audio
+    if stream_first_enabled {
+        // Streaming path: start playback before full download completes
+        log::info!(
+            "[V2/STREAMING] Track {} - streaming from network (cache_after: {})",
+            track_id,
+            !streaming_only
+        );
+
+        let stream_info = v2_get_stream_info(&stream_url.url)
+            .await
+            .map_err(RuntimeError::Internal)?;
+
+        log::info!(
+            "[V2/STREAMING] Info: {:.2} MB, {}Hz, {} ch, {}-bit, {:.1} MB/s",
+            stream_info.content_length as f64 / (1024.0 * 1024.0),
+            stream_info.sample_rate,
+            stream_info.channels,
+            stream_info.bit_depth,
+            stream_info.speed_mbps
+        );
+
+        let buffer_writer = player
+            .play_streaming_dynamic(
+                track_id,
+                stream_info.sample_rate,
+                stream_info.channels,
+                stream_info.bit_depth,
+                stream_info.content_length,
+                stream_info.speed_mbps,
+                duration_secs.unwrap_or(0),
+            )
+            .map_err(RuntimeError::Internal)?;
+
+        // Capture format_id before spawning background task
+        let actual_format_id = stream_url.format_id;
+        let url = stream_url.url.clone();
+        let cache_clone = cache.clone();
+        let content_len = stream_info.content_length;
+        let skip_cache = streaming_only;
+
+        // Spawn background download that feeds chunks to the player buffer
+        tokio::spawn(async move {
+            match v2_download_and_stream(
+                &url,
+                buffer_writer,
+                track_id,
+                cache_clone,
+                content_len,
+                skip_cache,
+            )
+            .await
+            {
+                Ok(()) => {
+                    if skip_cache {
+                        log::info!(
+                            "[V2/STREAMING COMPLETE] Track {} - NOT cached (streaming_only)",
+                            track_id
+                        );
+                    } else {
+                        log::info!(
+                            "[V2/STREAMING COMPLETE] Track {} - cached for instant replay",
+                            track_id
+                        );
+                    }
+                }
+                Err(e) => log::error!("[V2/STREAMING ERROR] Track {}: {}", track_id, e),
+            }
+        });
+
+        // Prefetch next tracks in background
+        let upcoming_tracks = bridge_guard.peek_upcoming(V2_PREFETCH_LOOKAHEAD).await;
+        drop(bridge_guard);
+        spawn_v2_prefetch_with_hw_check(
+            bridge.0.clone(),
+            cache,
+            upcoming_tracks,
+            final_quality,
+            streaming_only,
+            hw_device_id,
+        );
+
+        return Ok(V2PlayTrackResult {
+            format_id: Some(actual_format_id),
+        });
+    }
+
+    // Standard download path (streaming disabled) - full download before playback
+    log::info!(
+        "[V2/DOWNLOAD] Track {} - full download before playback (cache_after: {})",
+        track_id,
+        !streaming_only
+    );
     let audio_data = download_audio(&stream_url.url)
         .await
         .map_err(RuntimeError::Internal)?;

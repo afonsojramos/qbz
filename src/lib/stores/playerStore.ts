@@ -397,7 +397,8 @@ export async function togglePlay(): Promise<void> {
           // Qobuz track - use v2_play_track
           await invoke('v2_play_track', {
             trackId: currentTrack.id,
-            quality: getStreamingQuality()
+            quality: getStreamingQuality(),
+            durationSecs: currentTrack.duration ? Math.round(currentTrack.duration) : null
           });
         }
 
