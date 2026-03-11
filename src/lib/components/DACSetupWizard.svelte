@@ -248,8 +248,13 @@
   function generatePulseConfig(): string[] {
     const fileName = dacNodeName ? `99-qbz-bitperfect-${dacShortName()}.conf` : '99-qbz-bitperfect.conf';
     const rules = selectedApps.map(app => {
+      // Match both PulseAudio client (has process.binary) and ALSA stream
+      // (only has application.name = "PipeWire ALSA [binary]")
       return `  {
-    matches = [ { application.process.binary = "${app}" } ]
+    matches = [
+      { application.process.binary = "${app}" }
+      { application.name = "PipeWire ALSA [${app}]" }
+    ]
     actions = { update-props = { resample.disable = true, channelmix.disable = true } }
   }`;
     }).join('\n');
