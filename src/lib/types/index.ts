@@ -31,6 +31,7 @@ export interface QobuzTrack {
   streamable?: boolean;
   maximum_bit_depth?: number;
   maximum_sampling_rate?: number;
+  parental_warning?: boolean;
   isrc?: string;
   performers?: string;
   composer?: { id?: number; name: string };
@@ -102,7 +103,18 @@ export interface QobuzAlbum {
   maximum_bit_depth?: number;
   maximum_sampling_rate?: number;
   tracks?: { items: QobuzTrack[] };
+  parental_warning?: boolean;
   upc?: string;
+  goodies?: QobuzGoody[];
+}
+
+export interface QobuzGoody {
+  id: number;
+  name: string;
+  url: string;
+  original_url: string;
+  file_format_id?: number;
+  description?: string;
 }
 
 export interface QobuzPlaylist {
@@ -165,6 +177,7 @@ export interface Track {
   isrc?: string;
   /** Whether the track is streamable (false = unavailable on Qobuz) */
   streamable?: boolean;
+  parental_warning?: boolean;
 }
 
 export interface AlbumDetail {
@@ -183,6 +196,7 @@ export interface AlbumDetail {
   duration: string;
   tracks: Track[];
   upc?: string; // Universal Product Code for album.link sharing
+  goodies?: QobuzGoody[];
 }
 
 export interface ArtistDetail {
@@ -322,6 +336,7 @@ export interface PlaylistTrack {
   isrc?: string;
   /** Whether the track is streamable (false = unavailable on Qobuz) */
   streamable?: boolean;
+  parental_warning?: boolean;
 }
 
 /**
@@ -343,6 +358,7 @@ export interface DisplayTrack {
   bitDepth?: number;
   samplingRate?: number;
   isrc?: string;
+  parental_warning?: boolean;
   isLocal?: boolean;
   localTrackId?: number;
   artworkPath?: string;

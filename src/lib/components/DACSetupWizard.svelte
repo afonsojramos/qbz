@@ -76,7 +76,7 @@
   let currentStep = $state<WizardStep>('welcome');
   let completedSteps = $state(new Set<WizardStep>());
   let dacNodeName = $state('');
-  let selectedApps = $state(['QBZ']);
+  let selectedApps = $state(['qbz']);
   let welcomeConfirmed = $state(false);
   let precheckDone = $state(false);
   let backupConfirmed = $state(false);
@@ -172,7 +172,7 @@
       currentStep = 'welcome';
       completedSteps = new Set();
       dacNodeName = '';
-      selectedApps = ['QBZ'];
+      selectedApps = ['qbz'];
       welcomeConfirmed = false;
       precheckDone = false;
       backupConfirmed = false;
@@ -244,21 +244,24 @@
   }
 
   // Generate stream rules config command based on selected apps
-  // Uses pipewire.conf.d/stream.rules (applies to ALL clients: ALSA, PulseAudio, JACK)
+  // Uses client.conf.d/stream.rules (applies to ALSA/PulseAudio plugin clients)
   function generatePulseConfig(): string[] {
     const fileName = dacNodeName ? `99-qbz-bitperfect-${dacShortName()}.conf` : '99-qbz-bitperfect.conf';
     const rules = selectedApps.map(app => {
-      const matchKey = app === 'QBZ' ? 'application.name' : 'application.process.binary';
-      const matchValue = app === 'QBZ' ? 'QBZ' : app.toLowerCase();
+      // Match both PulseAudio client (has process.binary) and ALSA stream
+      // (only has application.name = "PipeWire ALSA [binary]")
       return `  {
-    matches = [ { ${matchKey} = "${matchValue}" } ]
+    matches = [
+      { application.process.binary = "${app}" }
+      { application.name = "PipeWire ALSA [${app}]" }
+    ]
     actions = { update-props = { resample.disable = true, channelmix.disable = true } }
   }`;
     }).join('\n');
 
     return [
-      'mkdir -p ~/.config/pipewire/pipewire.conf.d',
-      `cat > ~/.config/pipewire/pipewire.conf.d/${fileName} << 'EOF'`,
+      'mkdir -p ~/.config/pipewire/client.conf.d',
+      `cat > ~/.config/pipewire/client.conf.d/${fileName} << 'EOF'`,
       '# QBZ DAC Setup - Per-App Bit-Perfect',
       'stream.rules = [',
       rules,
@@ -272,7 +275,7 @@
     const name = dacNodeName ? dacShortName() : null;
     return [
       `~/.config/pipewire/pipewire.conf.d/${name ? `99-qbz-dac-${name}.conf` : '99-qbz-dac.conf'}`,
-      `~/.config/pipewire/pipewire.conf.d/${name ? `99-qbz-bitperfect-${name}.conf` : '99-qbz-bitperfect.conf'}`,
+      `~/.config/pipewire/client.conf.d/${name ? `99-qbz-bitperfect-${name}.conf` : '99-qbz-bitperfect.conf'}`,
       `~/.config/wireplumber/wireplumber.conf.d/${name ? `99-qbz-dac-${name}.conf` : '99-qbz-dac.conf'}`
     ];
   }
@@ -310,11 +313,14 @@
 <svelte:document onkeydown={handleKeydown} />
 
 {#if isOpen}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="wizard-backdrop" onclick={handleBackdropClick} role="presentation">
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div
       class="wizard-modal"
       role="dialog"
       aria-modal="true"
+      tabindex="-1"
       onclick={(e) => e.stopPropagation()}
     >
       <!-- Header -->
@@ -430,9 +436,10 @@
               />
 
               <div class="input-group">
-                <label class="input-label">{$t('dacWizard.detectDac.inputLabel')}</label>
+                <label class="input-label" for="dac-node-name">{$t('dacWizard.detectDac.inputLabel')}</label>
                 <p class="input-warning">{$t('dacWizard.detectDac.inputWarning')}</p>
                 <input
+                  id="dac-node-name"
                   type="text"
                   class="text-input mono"
                   class:valid={dacValidation === 'valid'}
@@ -571,7 +578,7 @@
               <p class="body-text">{$t('dacWizard.pipewireConfig.explanation')}</p>
 
               <div class="sample-rate-selector">
-                <label class="selector-label">{$t('dacWizard.pipewireConfig.selectRates')}</label>
+                <span class="selector-label">{$t('dacWizard.pipewireConfig.selectRates')}</span>
                 <div class="rate-checkboxes">
                   {#each COMMON_SAMPLE_RATES as rate}
                     <label class="rate-checkbox" class:detected={dacCapabilities?.sample_rates.includes(rate)}>
@@ -809,7 +816,7 @@
     border-radius: 6px;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -1007,7 +1014,7 @@
   }
 
   .text-input.mono {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-sans);
   }
 
   .text-input::placeholder {
@@ -1138,7 +1145,7 @@
   }
 
   .cap-value.rates {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-sans);
     color: var(--color-success, #22c55e);
   }
 
@@ -1170,7 +1177,7 @@
     border: 1px solid var(--border-subtle);
     border-radius: 6px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     font-size: 13px;
     color: var(--text-primary);
   }
@@ -1233,7 +1240,7 @@
 
   .targeting-value {
     font-size: 14px;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-sans);
     color: var(--accent-primary);
     word-break: break-all;
   }
@@ -1333,7 +1340,7 @@
 
   .config-list code {
     font-size: 12px;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
   }
 
@@ -1351,7 +1358,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     border: none;
   }
 

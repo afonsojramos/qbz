@@ -583,8 +583,11 @@ export function startPositionPolling(): void {
         trackEnded = lastTransportState === 'PLAYING' && 
           (transportState === 'STOPPED' || transportState === 'NO_MEDIA_PRESENT');
       } else if (state.protocol === 'chromecast') {
-        // Chromecast: IDLE state with FINISHED reason
-        trackEnded = transportState === 'IDLE' && idleReason === 'FINISHED';
+        // Chromecast: was PLAYING/BUFFERING, now IDLE (with or without FINISHED reason)
+        // When a track ends, the Chromecast media session may clear entries entirely,
+        // returning IDLE with no idle_reason. We detect the transition instead.
+        trackEnded = (lastTransportState === 'PLAYING' || lastTransportState === 'BUFFERING') &&
+          transportState === 'IDLE';
       }
       
       if (trackEnded && !trackEndDetected) {

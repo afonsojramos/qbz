@@ -539,7 +539,7 @@
     border-radius: 6px;
     color: var(--text-secondary);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .refresh-btn:hover:not(:disabled) {
@@ -685,7 +685,7 @@
   .track-duration {
     font-size: 13px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
     width: 48px;
     text-align: right;
@@ -729,7 +729,7 @@
     border: none;
     border-radius: 4px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .action-btn.add {

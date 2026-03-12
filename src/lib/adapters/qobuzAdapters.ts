@@ -34,10 +34,46 @@ export function formatDuration(seconds: number): string {
 export const formatDurationMinutes = formatDuration;
 
 /**
- * Extract best available image from Qobuz image object
+ * Extract best available image from Qobuz image object (picks 230px small for cards)
  */
 export function getQobuzImage(image?: { large?: string; thumbnail?: string; small?: string }): string {
-  return image?.large || image?.thumbnail || image?.small || '';
+  return image?.small || image?.large || image?.thumbnail || '';
+}
+
+/** Image display sizes for context-aware selection */
+export type ImageSize = 'thumb' | 'small' | 'large';
+
+/**
+ * Pick the right Qobuz image URL for the display context.
+ * - 'thumb' (50px): queue rows, compact lists
+ * - 'small' (230px): grid cards, search results, sidebar
+ * - 'large' (600px): album/artist detail hero, lightbox
+ */
+export function getQobuzImageForSize(
+  image?: { large?: string; thumbnail?: string; small?: string },
+  size: ImageSize = 'small'
+): string {
+  if (!image) return '';
+  switch (size) {
+    case 'thumb':
+      return image.thumbnail || image.small || image.large || '';
+    case 'small':
+      return image.small || image.large || image.thumbnail || '';
+    case 'large':
+      return image.large || image.small || image.thumbnail || '';
+  }
+}
+
+/**
+ * Resize a Qobuz CDN image URL to a different size variant.
+ * Qobuz URLs follow: static.qobuz.com/images/covers/{hash}_{size}.jpg
+ * Supported sizes: 50, 230, 300, 600
+ */
+export function resizeQobuzUrl(url: string, targetSize: number): string {
+  if (!url) return url;
+  return url
+    .replace(/_\d+\.jpg$/, `_${targetSize}.jpg`)
+    .replace(/\/\d+x\d+\//, `/${targetSize}x${targetSize}/`);
 }
 
 /**
@@ -251,7 +287,7 @@ function isStudioAlbum(album: QobuzAlbum): boolean {
 }
 
 function toArtistAlbumSummary(album: QobuzAlbum): ArtistAlbumSummary {
-  const artwork = getQobuzImage(album.image);
+  const artwork = getQobuzImageForSize(album.image, 'small');
   const quality = formatQuality(
     album.hires_streamable,
     album.maximum_bit_depth,
@@ -283,7 +319,7 @@ function buildCompilationAlbums(tracks: QobuzTrack[] | undefined): ArtistAlbumSu
     compilations.push({
       id: album.id,
       title: album.title,
-      artwork: getQobuzImage(album.image),
+      artwork: getQobuzImageForSize(album.image, 'small'),
       year: undefined,
       quality: formatQuality(
         track.hires_streamable,
@@ -315,7 +351,7 @@ function toArtistPlaylists(playlists: QobuzPlaylist[] | undefined): ArtistPlayli
  * Convert Qobuz API album response to UI AlbumDetail model
  */
 export function convertQobuzAlbum(album: QobuzAlbum): AlbumDetail {
-  const artwork = getQobuzImage(album.image);
+  const artwork = getQobuzImageForSize(album.image, 'large');
   const quality = formatAlbumQuality(
     album.hires_streamable,
     album.maximum_bit_depth,
@@ -350,9 +386,11 @@ export function convertQobuzAlbum(album: QobuzAlbum): AlbumDetail {
       albumId: album.id,
       artistId: track.performer?.id ?? album.artist?.id,
       isrc: track.isrc,
-      streamable: track.streamable ?? true
+      streamable: track.streamable ?? true,
+      parental_warning: track.parental_warning ?? false
     })) || [],
-    upc: album.upc
+    upc: album.upc,
+    goodies: album.goodies
   };
 }
 
@@ -434,7 +472,7 @@ function extractLabelsFromAlbums(albums: QobuzAlbum[], artistId: number): { id: 
  * Convert Qobuz API artist response to UI ArtistDetail model
  */
 export function convertQobuzArtist(artist: QobuzArtist): ArtistDetail {
-  const image = getQobuzImage(artist.image);
+  const image = getQobuzImageForSize(artist.image, 'large');
   const albumItems = artist.albums?.items || [];
   const albumsFetched = (artist.albums?.offset || 0) + albumItems.length;
 
@@ -581,10 +619,13 @@ function mapReleaseType(releaseType: string): 'albums' | 'eps' | 'live' | 'other
       return 'albums';
     case 'ep':
     case 'single':
+    case 'epSingle':
       return 'eps';
     case 'live':
       return 'live';
     case 'compilation':
+    case 'boxset':
+    case 'download':
     case 'other':
     default:
       return 'others';
@@ -604,8 +645,7 @@ function pageReleaseToSummary(
     return null;
   }
 
-  const image = release.image;
-  const artwork = image?.large || image?.thumbnail || image?.small || '';
+  const artwork = getQobuzImageForSize(release.image, 'small');
   const hires = release.rights?.hires_streamable ?? false;
   const quality = formatQuality(
     hires,
@@ -666,13 +706,23 @@ export function convertPageArtist(response: PageArtistResponse): ArtistDetail {
   const releaseHasMore: Record<string, boolean> = {};
 
   for (const group of releaseGroups) {
-    const category = mapReleaseType(group.type);
-    releaseHasMore[group.type] = group.has_more;
+    const groupCategory = mapReleaseType(group.type);
+    // Normalize the key so the UI can use consistent names (ep, not epSingle)
+    const hasMoreKey = group.type === 'epSingle' ? 'ep' : group.type;
+    releaseHasMore[hasMoreKey] = group.has_more;
     for (const release of group.items) {
       const summary = pageReleaseToSummary(release, response.id);
       if (!summary) continue;
 
-      switch (category) {
+      // Only re-categorize items from the "download" group by their individual release_type,
+      // since "download" is a distribution channel, not a content type.
+      // Groups like "other" and "compilation" are intentional content classifications
+      // (e.g., podcast episodes have release_type "album" but belong in Others).
+      const itemCategory = group.type === 'download' && release.release_type
+        ? mapReleaseType(release.release_type)
+        : groupCategory;
+
+      switch (itemCategory) {
         case 'albums':
           albums.push(summary);
           break;
@@ -698,11 +748,10 @@ export function convertPageArtist(response: PageArtistResponse): ArtistDetail {
       const album = track.album;
       if (!album?.id || seen.has(album.id)) continue;
       seen.add(album.id);
-      const albumImage = album.image;
       compilations.push({
         id: album.id,
         title: album.title,
-        artwork: albumImage?.large || albumImage?.thumbnail || albumImage?.small || '',
+        artwork: getQobuzImageForSize(album.image, 'small'),
         year: undefined,
         releaseDate: undefined,
         quality: formatQuality(
@@ -767,48 +816,52 @@ export function appendPageReleases(
   newReleases: PageArtistRelease[],
   hasMore: boolean
 ): ArtistDetail {
-  const category = mapReleaseType(releaseType);
-  const newSummaries: ArtistAlbumSummaryFromPage[] = [];
+  const groupCategory = mapReleaseType(releaseType);
+
+  // Collect all existing IDs across categories for deduplication
+  const allExistingIds = new Set([
+    ...artist.albums.map(a => a.id),
+    ...artist.epsSingles.map(a => a.id),
+    ...artist.liveAlbums.map(a => a.id),
+    ...artist.others.map(a => a.id),
+  ]);
+
+  const newAlbums: ArtistAlbumSummaryFromPage[] = [];
+  const newEps: ArtistAlbumSummaryFromPage[] = [];
+  const newLive: ArtistAlbumSummaryFromPage[] = [];
+  const newOthers: ArtistAlbumSummaryFromPage[] = [];
 
   for (const release of newReleases) {
     const summary = pageReleaseToSummary(release, artist.id);
-    if (summary) newSummaries.push(summary);
+    if (!summary || allExistingIds.has(summary.id)) continue;
+
+    // Only re-categorize items from the "download" group (distribution channel, not content type)
+    const itemCategory = releaseType === 'download' && release.release_type
+      ? mapReleaseType(release.release_type)
+      : groupCategory;
+
+    switch (itemCategory) {
+      case 'albums': newAlbums.push(summary); break;
+      case 'eps': newEps.push(summary); break;
+      case 'live': newLive.push(summary); break;
+      case 'others': newOthers.push(summary); break;
+    }
   }
 
-  if (newSummaries.length === 0) return artist;
-
-  // Deduplicate against existing items in the target category
-  const existingIds = new Set(
-    (category === 'albums' ? artist.albums :
-     category === 'eps' ? artist.epsSingles :
-     category === 'live' ? artist.liveAlbums :
-     artist.others
-    ).map(a => a.id)
-  );
-
-  const unique = newSummaries.filter(s => !existingIds.has(s.id));
+  if (newAlbums.length + newEps.length + newLive.length + newOthers.length === 0) return artist;
 
   const updated = { ...artist };
-  switch (category) {
-    case 'albums':
-      updated.albums = [...artist.albums, ...unique];
-      break;
-    case 'eps':
-      updated.epsSingles = [...artist.epsSingles, ...unique];
-      break;
-    case 'live':
-      updated.liveAlbums = [...artist.liveAlbums, ...unique];
-      break;
-    case 'others':
-      updated.others = [...artist.others, ...unique];
-      break;
-  }
+  if (newAlbums.length) updated.albums = [...artist.albums, ...newAlbums];
+  if (newEps.length) updated.epsSingles = [...artist.epsSingles, ...newEps];
+  if (newLive.length) updated.liveAlbums = [...artist.liveAlbums, ...newLive];
+  if (newOthers.length) updated.others = [...artist.others, ...newOthers];
 
-  // Update has_more flag for this category
-  updated.releaseHasMore = { ...artist.releaseHasMore, [releaseType]: hasMore };
+  // Update has_more flag for this category (normalize epSingle → ep)
+  const hasMoreKey = releaseType === 'epSingle' ? 'ep' : releaseType;
+  updated.releaseHasMore = { ...artist.releaseHasMore, [hasMoreKey]: hasMore };
 
   // Merge new labels from album releases
-  if (category === 'albums') {
+  if (groupCategory === 'albums' || newAlbums.length > 0) {
     const existingLabelIds = new Set(artist.labels.map(l => l.id));
     const newLabels: { id: number; name: string }[] = [];
     for (const release of newReleases) {

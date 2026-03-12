@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+  import { setCustomImage } from '$lib/stores/customArtistImageStore';
   import { getThumbnailUrl, getCachedThumbnailUrl } from '$lib/services/thumbnailService';
   import { open, ask } from '@tauri-apps/plugin-dialog';
   import { onMount, onDestroy, tick } from 'svelte';
@@ -2487,11 +2488,36 @@
     }
 
     const discs = [...groups.keys()].sort((a, b) => a - b);
-    return discs.map(disc => ({
-      disc,
-      label: `Disc ${disc}`,
-      tracks: groups.get(disc) ?? []
-    }));
+
+    // Detect "box set" pattern: many discs with only 1 track each
+    // (e.g., compilations tagged as disc 1 track 1, disc 2 track 1, etc.)
+    // In this case, flatten into a single section with index-based numbering
+    const singleTrackDiscs = discs.filter(disc => (groups.get(disc)?.length ?? 0) === 1).length;
+    const isFlattenableBoxSet = discs.length > 3 && singleTrackDiscs > discs.length * 0.8;
+
+    if (isFlattenableBoxSet) {
+      return [{
+        disc: 0,
+        label: '',
+        tracks: sorted,
+        useIndexNumbering: true
+      }];
+    }
+
+    const sections = discs.map(disc => {
+      const sectionTracks = groups.get(disc) ?? [];
+      // Detect degenerate track numbering: if >1 track and all share the same
+      // track_number (e.g., all "1"), the tags are unreliable for this section
+      const hasDegenerate = sectionTracks.length > 1 &&
+        sectionTracks.every(item => item.track_number === sectionTracks[0].track_number);
+      return {
+        disc,
+        label: `Disc ${disc}`,
+        tracks: sectionTracks,
+        useIndexNumbering: hasDegenerate
+      };
+    });
+    return sections;
   }
 
   // Memoization cache for artwork URLs to avoid repeated convertFileSrc calls
@@ -2976,16 +3002,17 @@
 
       const imagePath = Array.isArray(selected) ? selected[0] : selected;
       
-      // Save to database
-      await invoke('v2_library_set_custom_artist_image', {
+      // Save to database (returns resized paths)
+      const result = await invoke<{ image_path: string; thumbnail_path: string }>('v2_library_set_custom_artist_image', {
         artistName,
         customImagePath: imagePath
       });
 
-      // Update local state
-      const imageUrl = convertFileSrc(imagePath);
+      // Update local state with resized thumbnail
+      const imageUrl = convertFileSrc(result.thumbnail_path);
       artistImages.set(artistName, imageUrl);
       artistImages = new Map(artistImages);
+      setCustomImage(artistName, convertFileSrc(result.image_path));
     } catch (err) {
       console.error('Failed to upload custom artist image:', err);
     }
@@ -3248,12 +3275,13 @@
           {/if}
           {#each section.tracks as track, index (track.id)}
             <TrackRow
-              number={track.track_number ?? index + 1}
+              number={section.useIndexNumbering ? index + 1 : (track.track_number || index + 1)}
               title={track.title}
               artist={track.artist !== selectedAlbum?.artist ? track.artist : undefined}
               duration={formatDuration(track.duration_secs)}
               quality={getQualityBadge(track)}
               isPlaying={isPlaybackActive && activeTrackId === track.id}
+              isActiveTrack={activeTrackId === track.id}
               isLocal={true}
               localSource={track.source === 'plex' ? 'plex' : 'local'}
               hideDownload={true}
@@ -3577,8 +3605,8 @@
             {:else}
               <div class="album-list">
                 {#each hiddenAlbums as album (album.id)}
-                  <div class="album-row" role="button" tabindex="0">
-                    <div class="album-row-art" onclick={() => handleAlbumClick(album)}>
+                  <div class="album-row" role="button" tabindex="0" onclick={() => handleAlbumClick(album)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleAlbumClick(album); } }}>
+                    <div class="album-row-art">
                       {#if album.artwork_path}
                         <img src={getArtworkUrl(album.artwork_path)} alt={album.title} loading="lazy" decoding="async" />
                       {:else}
@@ -3587,7 +3615,7 @@
                         </div>
                       {/if}
                     </div>
-                    <div class="album-row-info" onclick={() => handleAlbumClick(album)}>
+                    <div class="album-row-info">
                       <div class="album-row-title">{album.title}</div>
                       <div class="album-row-artist">{album.artist}</div>
                       <div class="album-row-meta">
@@ -3675,8 +3703,10 @@
                 {/if}
               </button>
               {#if showFilterPanel}
+                <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
                 <div
                   class="filter-panel"
+                  role="region"
                   onmouseenter={clearFilterPanelTimer}
                   onmouseleave={startFilterPanelTimer}
                   onclick={handleFilterPanelActivity}
@@ -3972,7 +4002,7 @@
                         onPlayNext={() => handleAlbumQueueNextFromGrid(album)}
                         onPlayLater={() => handleAlbumQueueLaterFromGrid(album)}
                         onclick={() => handleAlbumClick(album)}
-                        sourceBadge={album.source === 'plex' ? 'plex' : (album.source === 'qobuz_download' ? 'qobuz_download' : 'user')}
+                        sourceBadge={album.source === 'plex' ? 'plex' : album.source === 'qobuz_purchase' ? 'qobuz_purchase' : album.source === 'qobuz_download' ? 'qobuz_download' : 'user'}
                       />
                     {/each}
                   </div>
@@ -4106,8 +4136,9 @@
 
 <!-- Album Settings Modal -->
 {#if showAlbumEditModal && selectedAlbum}
-  <div class="modal-overlay" onclick={() => showAlbumEditModal = false}>
-    <div class="modal" onclick={(e: MouseEvent) => e.stopPropagation()}>
+  <div class="modal-overlay" onclick={() => showAlbumEditModal = false} role="presentation">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e: MouseEvent) => e.stopPropagation()}>
       <div class="modal-header">
         <h2>Album Settings</h2>
         <button class="close-btn" onclick={() => showAlbumEditModal = false}>
@@ -4148,7 +4179,7 @@
 
           <div class="form-group">
             <div class="artwork-layout-header" class:discogs-active={discogsFetchSuccessful}>
-              <label>Album Artwork</label>
+              <span class="form-label">Album Artwork</span>
               {#if discogsFetchSuccessful}
                 <div class="discogs-layout-label">Select Artwork from Discogs</div>
               {/if}
@@ -4360,7 +4391,7 @@
     border-radius: 8px;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .icon-btn:hover {
@@ -4458,7 +4489,7 @@
     color: var(--text-secondary);
     font-size: 12px;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .stop-scan-btn:hover {
@@ -4627,7 +4658,7 @@
     flex: 1;
     font-size: 13px;
     color: var(--text-primary);
-    font-family: var(--font-mono, 'Courier New', monospace);
+    font-family: var(--font-sans);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -4672,7 +4703,7 @@
   .folder-path {
     font-size: 13px;
     color: var(--text-primary);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
   }
 
   .settings-actions {
@@ -4759,7 +4790,7 @@
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .danger-btn-small:hover {
@@ -4895,7 +4926,7 @@
     color: var(--text-muted);
     border-radius: 4px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .search-close-btn:hover {
@@ -4921,7 +4952,7 @@
     border-radius: 8px;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .control-btn:hover {
@@ -5136,7 +5167,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -5202,7 +5233,7 @@
     border-radius: 6px;
     cursor: pointer;
     text-align: left;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .sort-menu .dropdown-item:hover {
@@ -5489,12 +5520,13 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 16px;
+    padding: 0;
     background: none;
     border: none;
     color: var(--text-muted);
     font-size: 14px;
     cursor: pointer;
+    margin-top: 24px;
     margin-bottom: 24px;
     transition: color 150ms ease;
   }
@@ -5691,7 +5723,7 @@
     color: var(--text-muted);
     cursor: pointer;
     border-radius: 6px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .edit-btn:hover {
@@ -5751,7 +5783,7 @@
     color: var(--text-muted);
     cursor: pointer;
     border-radius: 6px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .close-btn:hover {
@@ -5807,7 +5839,7 @@
     border-radius: 10px;
     color: var(--text-primary);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .album-action-btn:hover:not(:disabled) {
@@ -5823,7 +5855,7 @@
     margin-bottom: 20px;
   }
 
-  .form-group label {
+  .form-group .form-label {
     display: block;
     font-size: 13px;
     font-weight: 500;
@@ -5843,7 +5875,7 @@
     grid-template-columns: 1fr 1fr;
   }
 
-  .artwork-layout-header label {
+  .artwork-layout-header .form-label {
     margin-bottom: 0;
   }
 
@@ -5947,7 +5979,7 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .discogs-btn:hover:not(:disabled) {
@@ -5996,7 +6028,7 @@
     border-radius: 8px;
     overflow: hidden;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .discogs-option:hover {
@@ -6068,7 +6100,7 @@
     border-radius: 6px;
     color: var(--text-primary);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .carousel-btn:hover:not(:disabled) {

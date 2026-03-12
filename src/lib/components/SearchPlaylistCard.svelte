@@ -1,8 +1,14 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, onMount } from 'svelte';
   import { Play, Heart, MoreHorizontal, ListPlus, Library, Share2, ListMusic } from 'lucide-svelte';
   import PlaylistCollage from './PlaylistCollage.svelte';
   import type { Playlist } from '$lib/stores/searchState';
+  import {
+    openMenu as openGlobalMenu,
+    closeMenu as closeGlobalMenu,
+    subscribe as subscribeGlobal,
+    getActiveMenuId
+  } from '$lib/stores/floatingMenuStore';
 
   interface Props {
     playlist: Playlist;
@@ -28,6 +34,20 @@
   let menuTriggerRef: HTMLButtonElement | null = null;
   let menuEl = $state<HTMLDivElement | null>(null);
   let menuStyle = $state('');
+
+  // Global floating menu coordination
+  const _menuTimestamp = Date.now();
+  const menuId = $derived(`search-playlist-${playlist.id}-${_menuTimestamp}`);
+
+  onMount(() => {
+    const unsubscribe = subscribeGlobal(() => {
+      const activeId = getActiveMenuId();
+      if (activeId !== null && activeId !== menuId && menuOpen) {
+        menuOpen = false;
+      }
+    });
+    return unsubscribe;
+  });
 
   // Ticker animation for long titles
   let titleRef: HTMLDivElement | null = $state(null);
@@ -79,19 +99,32 @@
     };
   }
 
-  async function positionMenu() {
+  async function positionMenu(coords?: { x: number; y: number }) {
     await tick();
-    if (!menuTriggerRef || !menuEl) return;
-    const triggerRect = menuTriggerRef.getBoundingClientRect();
+    if (!menuEl) return;
     const menuRect = menuEl.getBoundingClientRect();
-    let left = triggerRect.right - menuRect.width;
-    let top = triggerRect.bottom + 8;
-    if (left < 8) left = 8;
-    if (left + menuRect.width > window.innerWidth - 8) {
-      left = window.innerWidth - menuRect.width - 8;
+    const padding = 8;
+    let left: number;
+    let top: number;
+
+    if (coords) {
+      left = coords.x;
+      top = coords.y;
+    } else if (menuTriggerRef) {
+      const triggerRect = menuTriggerRef.getBoundingClientRect();
+      left = triggerRect.right - menuRect.width;
+      top = triggerRect.bottom + 8;
+    } else {
+      return;
     }
-    if (top + menuRect.height > window.innerHeight - 8) {
-      top = triggerRect.top - menuRect.height - 8;
+
+    if (left < padding) left = padding;
+    if (left + menuRect.width > window.innerWidth - padding) {
+      left = window.innerWidth - menuRect.width - padding;
+    }
+    if (top + menuRect.height > window.innerHeight - padding) {
+      top = coords ? coords.y - menuRect.height : (menuTriggerRef ? menuTriggerRef.getBoundingClientRect().top - menuRect.height - 8 : padding);
+      if (top < padding) top = padding;
     }
     menuStyle = `left: ${left}px; top: ${top}px;`;
   }
@@ -99,11 +132,17 @@
   function toggleMenu(event: MouseEvent) {
     event.stopPropagation();
     menuOpen = !menuOpen;
-    if (menuOpen) positionMenu();
+    if (menuOpen) {
+      openGlobalMenu(menuId);
+      positionMenu();
+    } else {
+      closeGlobalMenu(menuId);
+    }
   }
 
   function closeMenu() {
     menuOpen = false;
+    closeGlobalMenu(menuId);
   }
 
   // Close menu on click outside
@@ -126,6 +165,7 @@
   class="playlist-card"
   class:menu-open={menuOpen}
   onclick={handleCardClick}
+  oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); menuOpen = true; openGlobalMenu(menuId); positionMenu({ x: e.clientX, y: e.clientY }); }}
   onmouseenter={measureOverflowOnce}
   onfocus={measureOverflowOnce}
   role="button"
@@ -262,7 +302,7 @@
     justify-content: center;
     cursor: pointer;
     box-shadow: inset 0 0 0 1px rgba(255,255,255,0.85);
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .overlay-btn:hover {

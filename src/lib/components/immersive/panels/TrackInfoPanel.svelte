@@ -8,9 +8,10 @@
     trackId?: number;
     onArtistClick?: (artistId: number) => void;
     onLabelClick?: (labelId: number, labelName: string) => void;
+    centeredLayout?: boolean;
   }
 
-  let { trackId, onArtistClick, onLabelClick }: Props = $props();
+  let { trackId, onArtistClick, onLabelClick, centeredLayout = false }: Props = $props();
 
   let loading = $state(false);
   let error = $state<string | null>(null);
@@ -135,7 +136,7 @@
   );
 </script>
 
-<div class="track-info-panel">
+<div class="track-info-panel" class:centered-layout={centeredLayout}>
   {#if loading}
     <div class="loading-state">
       <Loader2 size={28} class="spinner" />
@@ -233,6 +234,14 @@
     overflow: hidden;
   }
 
+  .track-info-panel.centered-layout {
+    flex: 0 1 auto;
+    width: 100%;
+    min-height: 320px;
+    height: clamp(340px, 62vh, 760px);
+    max-height: 80vh;
+  }
+
   .loading-state,
   .error-state,
   .empty-state {
@@ -324,7 +333,7 @@
   }
 
   .metadata-value.mono {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-sans);
     font-size: 12px;
     color: var(--alpha-70, rgba(255, 255, 255, 0.7));
   }

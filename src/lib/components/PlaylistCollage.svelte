@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Music } from 'lucide-svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
 
   interface Props {
     artworks: string[];
@@ -55,20 +56,20 @@
       <Music size={size * 0.3} />
     </div>
   {:else if count === 1}
-    <img src={uniqueArtworks[0]} alt="" class="cover full" />
+    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover full" />
   {:else if count === 2}
-    <img src={uniqueArtworks[0]} alt="" class="cover half-left" />
-    <img src={uniqueArtworks[1]} alt="" class="cover half-right" />
+    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover half-left" />
+    <img use:cachedSrc={uniqueArtworks[1]} alt="" class="cover half-right" />
   {:else if count === 3}
-    <img src={uniqueArtworks[0]} alt="" class="cover half-left" />
-    <img src={uniqueArtworks[1]} alt="" class="cover quarter top-right" />
-    <img src={uniqueArtworks[2]} alt="" class="cover quarter bottom-right" />
+    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover half-left" />
+    <img use:cachedSrc={uniqueArtworks[1]} alt="" class="cover quarter top-right" />
+    <img use:cachedSrc={uniqueArtworks[2]} alt="" class="cover quarter bottom-right" />
   {:else}
     <!-- 4 covers: 3 small stacked left, 1 large right -->
-    <img src={uniqueArtworks[0]} alt="" class="cover small-top" />
-    <img src={uniqueArtworks[1]} alt="" class="cover small-mid" />
-    <img src={uniqueArtworks[2]} alt="" class="cover small-bot" />
-    <img src={uniqueArtworks[3]} alt="" class="cover large-right" />
+    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover small-top" />
+    <img use:cachedSrc={uniqueArtworks[1]} alt="" class="cover small-mid" />
+    <img use:cachedSrc={uniqueArtworks[2]} alt="" class="cover small-bot" />
+    <img use:cachedSrc={uniqueArtworks[3]} alt="" class="cover large-right" />
   {/if}
 </div>
 

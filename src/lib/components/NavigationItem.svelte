@@ -17,13 +17,23 @@
 
   let { icon, label, badge, tooltip, active = false, onclick, onHover, oncontextmenu, class: className = '', showLabel = true, indented = false }: Props = $props();
 
-  // When label is hidden, always show tooltip on hover
+  // Show custom tooltip in both expanded and collapsed sidebar.
+  // Collapsed mode falls back to label when explicit tooltip is missing.
   const effectiveTooltip = $derived(showLabel ? tooltip : (tooltip || label));
 
   let showTooltip = $state(false);
   let tooltipTimeout: ReturnType<typeof setTimeout> | null = null;
   let buttonRef: HTMLButtonElement | null = null;
   let tooltipStyle = $state('');
+
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      }
+    };
+  }
 
   function handleMouseEnter() {
     // Call hover callback immediately (for lazy loading)
@@ -33,7 +43,7 @@
     tooltipTimeout = setTimeout(() => {
       updateTooltipPosition();
       showTooltip = true;
-    }, 500); // Delay before showing tooltip
+    }, 350); // Slightly faster than before for better discoverability
   }
 
   function handleMouseLeave() {
@@ -47,7 +57,17 @@
   function updateTooltipPosition() {
     if (!buttonRef) return;
     const rect = buttonRef.getBoundingClientRect();
-    tooltipStyle = `left: ${rect.right + 8}px; top: ${rect.top + rect.height / 2}px; transform: translateY(-50%);`;
+    const padding = 8;
+    let left = rect.right + 8;
+    let top = rect.top + rect.height / 2;
+
+    // Keep tooltip on-screen while preferring the right side of the item.
+    if (left > window.innerWidth - padding - 40) {
+      left = Math.max(padding, rect.left - 180);
+    }
+    top = Math.min(window.innerHeight - padding, Math.max(padding, top));
+
+    tooltipStyle = `left: ${left}px; top: ${top}px; transform: translateY(-50%);`;
   }
 </script>
 
@@ -75,7 +95,7 @@
 </button>
 
 {#if showTooltip && effectiveTooltip}
-  <div class="custom-tooltip" class:bold-first-line={!showLabel} style={tooltipStyle}>
+  <div use:portal class="custom-tooltip" class:bold-first-line={!showLabel} style={tooltipStyle}>
     {effectiveTooltip}
   </div>
 {/if}
@@ -94,7 +114,7 @@
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     text-align: left;
   }
 
@@ -152,7 +172,7 @@
     white-space: pre-line;
     line-height: 1.5;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-    z-index: 10000;
+    z-index: 220000;
     pointer-events: none;
     min-width: 120px;
     max-width: 200px;

@@ -211,15 +211,19 @@ impl AnalyzerState {
             self.track_id, phase, measured_lufs, self.target_lufs, adjustment_db, gain
         );
 
-        // Update shared atomic
-        if let Some(ref atomic) = self.gain_atomic {
-            atomic.store(gain.to_bits(), Ordering::Relaxed);
+        // Only update the live gain on the FIRST measurement.
+        // Refinements update the cache only — applying gain changes mid-song
+        // causes audible volume fluctuations within a single track.
+        if !self.initial_done {
+            if let Some(ref atomic) = self.gain_atomic {
+                atomic.store(gain.to_bits(), Ordering::Relaxed);
+            }
         }
 
         self.samples_at_last_measure = self.samples_fed;
         self.initial_done = true;
 
-        // Cache the result (store the adjustment in dB, not the linear gain)
+        // Always cache the latest measurement for next playback
         cache.set(self.track_id, adjustment_db, 0.0, "ebur128");
     }
 }

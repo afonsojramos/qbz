@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import { Search, Disc3, Music, Mic2, User, X, ChevronLeft, ChevronRight, Crown, Heart, Play, MoreHorizontal, ListPlus } from 'lucide-svelte';
   import AlbumCard from '../AlbumCard.svelte';
   import SearchPlaylistCard from '../SearchPlaylistCard.svelte';
@@ -13,15 +15,18 @@
   import { saveScrollPosition, getSavedScrollPosition } from '$lib/stores/navigationStore';
   import { t } from '$lib/i18n';
 
-  let searchInput: HTMLInputElement | null = null;
+  let searchInput = $state<HTMLInputElement | null>(null);
   let albumsCarouselContainer = $state<HTMLDivElement | null>(null);
   let artistsCarouselContainer = $state<HTMLDivElement | null>(null);
-  let scrollContainer: HTMLDivElement | null = null;
+  let scrollContainer = $state<HTMLDivElement | null>(null);
   let isScrolled = $state(false);
   let currentAlbumPage = $state(0);
   let currentArtistPage = $state(0);
   let albumsPerPage = $state(5);
   let artistsPerPage = $state(5);
+  // Right-click context menu state
+  let contextMenuTrackId = $state<number | null>(null);
+  let contextMenuPos = $state<{ x: number; y: number } | null>(null);
   // NOTE: totalAlbumPages/totalArtistPages are defined after allResults declaration
 
   onMount(() => {
@@ -268,6 +273,7 @@
     onPlaylistShareQobuz?: (playlistId: number) => void;
     activeTrackId?: number | null;
     isPlaybackActive?: boolean;
+    searchInTitlebar?: boolean;
   }
 
   let {
@@ -305,7 +311,8 @@
     onPlaylistCopyToLibrary,
     onPlaylistShareQobuz,
     activeTrackId = null,
-    isPlaybackActive = false
+    isPlaybackActive = false,
+    searchInTitlebar = false
   }: Props = $props();
 
   interface Album {
@@ -546,7 +553,7 @@
         artistResults = results;
         console.log('Artist results:', artistResults);
       } else if (activeTab === 'playlists') {
-        const results = await invoke<SearchResults<Playlist>>('search_playlists', {
+        const results = await invoke<SearchResults<Playlist>>('v2_search_playlists', {
           query: searchQuery,
           limit: PAGE_SIZE,
           offset: 0
@@ -618,7 +625,7 @@
         };
       } else if (activeTab === 'playlists' && playlistResults && hasMorePlaylists) {
         const newOffset = playlistResults.offset + playlistResults.items.length;
-        const moreResults = await invoke<SearchResults<Playlist>>('search_playlists', {
+        const moreResults = await invoke<SearchResults<Playlist>>('v2_search_playlists', {
           query: query.trim(),
           limit: PAGE_SIZE,
           offset: newOffset
@@ -681,11 +688,11 @@
   }
 
   function getAlbumArtwork(album: Album): string {
-    return album.image?.large || album.image?.thumbnail || album.image?.small || '';
+    return album.image?.small || album.image?.thumbnail || album.image?.large || '';
   }
 
   function getTrackArtwork(track: Track): string {
-    return track.album?.image?.large || track.album?.image?.thumbnail || track.album?.image?.small || '';
+    return track.album?.image?.small || track.album?.image?.thumbnail || track.album?.image?.large || '';
   }
 
   function buildSearchQueueTracks(tracks: Track[]) {
@@ -695,7 +702,7 @@
       artist: track.performer?.name || 'Unknown Artist',
       album: track.album?.title || '',
       duration_secs: track.duration,
-      artwork_url: track.album?.image?.large || track.album?.image?.thumbnail || track.album?.image?.small || '',
+      artwork_url: track.album?.image?.small || track.album?.image?.thumbnail || track.album?.image?.large || '',
       hires: track.hires_streamable ?? false,
       bit_depth: track.maximum_bit_depth ?? null,
       sample_rate: track.maximum_sampling_rate ?? null,
@@ -742,7 +749,8 @@
   }
 
   function getArtistImage(artist: Artist): string {
-    return artist.image?.large || artist.image?.thumbnail || artist.image?.small || '';
+    const defaultUrl = artist.image?.small || artist.image?.thumbnail || artist.image?.large || '';
+    return resolveArtistImage(artist.name, defaultUrl);
   }
 
   // Title case query for better API results (Qobuz returns most_popular more consistently with proper capitalization)
@@ -841,9 +849,9 @@
   }
 
   // --- Albums tab virtualization ---
-  const ALBUM_CARD_WIDTH = 180;
-  const ALBUM_CARD_HEIGHT = 290;
-  const ALBUM_GAP_X = 14;
+  const ALBUM_CARD_WIDTH = 210;
+  const ALBUM_CARD_HEIGHT = 310;
+  const ALBUM_GAP_X = 22;
   const ALBUM_GAP_Y = 24;
   const LOAD_MORE_HEIGHT = 80;
   const V_BUFFER = 5;
@@ -853,10 +861,13 @@
   let albumsContainerHeight = $state(0);
   let albumsContainerWidth = $state(0);
   let albumsResizeObs: ResizeObserver | null = null;
+  let lastKnownAlbumCols = 1;
 
   let albumGridCols = $derived.by(() => {
-    if (albumsContainerWidth === 0) return 1;
-    return Math.max(1, Math.floor((albumsContainerWidth + ALBUM_GAP_X) / (ALBUM_CARD_WIDTH + ALBUM_GAP_X)));
+    if (albumsContainerWidth === 0) return lastKnownAlbumCols;
+    const cols = Math.max(1, Math.floor((albumsContainerWidth + ALBUM_GAP_X) / (ALBUM_CARD_WIDTH + ALBUM_GAP_X)));
+    lastKnownAlbumCols = cols;
+    return cols;
   });
 
   interface AlbumVirtualRow {
@@ -980,10 +991,13 @@
   let artistsContainerHeight = $state(0);
   let artistsContainerWidth = $state(0);
   let artistsResizeObs: ResizeObserver | null = null;
+  let lastKnownArtistCols = 1;
 
   let artistGridCols = $derived.by(() => {
-    if (artistsContainerWidth === 0) return 1;
-    return Math.max(1, Math.floor((artistsContainerWidth + ARTIST_GAP) / (ARTIST_CARD_WIDTH + ARTIST_GAP)));
+    if (artistsContainerWidth === 0) return lastKnownArtistCols;
+    const cols = Math.max(1, Math.floor((artistsContainerWidth + ARTIST_GAP) / (ARTIST_CARD_WIDTH + ARTIST_GAP)));
+    lastKnownArtistCols = cols;
+    return cols;
   });
 
   interface ArtistVirtualRow {
@@ -1051,7 +1065,8 @@
       artistsContainerHeight = viewportH;
     }
 
-    if (albumsVirtualEl && !albumsResizeObs) {
+    if (albumsVirtualEl) {
+      albumsResizeObs?.disconnect();
       albumsContainerWidth = albumsVirtualEl.clientWidth;
       albumsResizeObs = new ResizeObserver((entries) => {
         for (const entry of entries) {
@@ -1060,7 +1075,8 @@
       });
       albumsResizeObs.observe(albumsVirtualEl);
     }
-    if (artistsVirtualEl && !artistsResizeObs) {
+    if (artistsVirtualEl) {
+      artistsResizeObs?.disconnect();
       artistsContainerWidth = artistsVirtualEl.clientWidth;
       artistsResizeObs = new ResizeObserver((entries) => {
         for (const entry of entries) {
@@ -1097,22 +1113,24 @@
 
   <!-- Sticky Header Container -->
   <div class="sticky-header" class:scrolled={isScrolled}>
-    <div class="search-input-container" class:compact={isScrolled}>
-      <Search size={isScrolled ? 18 : 20} class="search-icon" />
-      <input
-        type="text"
-        placeholder={$t('search.placeholder')}
-        bind:value={query}
-        oninput={debounceSearch}
-        class="search-input"
-        bind:this={searchInput}
-      />
-      {#if query.trim()}
-        <button class="search-clear" onclick={clearSearch} aria-label={$t('actions.clear')}>
-          <X size={18} />
-        </button>
-      {/if}
-    </div>
+    {#if !searchInTitlebar}
+      <div class="search-input-container" class:compact={isScrolled}>
+        <Search size={isScrolled ? 18 : 20} class="search-icon" />
+        <input
+          type="text"
+          placeholder={$t('search.placeholder')}
+          bind:value={query}
+          oninput={debounceSearch}
+          class="search-input"
+          bind:this={searchInput}
+        />
+        {#if query.trim()}
+          <button class="search-clear" onclick={clearSearch} aria-label={$t('actions.clear')}>
+            <X size={18} />
+          </button>
+        {/if}
+      </div>
+    {/if}
 
     <!-- Tabs and Filters Row -->
     <div class="tabs-row">
@@ -1252,7 +1270,7 @@
                     </div>
                     {#if !failedArtistImages.has(artist.id) && getArtistImage(artist)}
                       <img
-                        src={getArtistImage(artist)}
+                        use:cachedSrc={getArtistImage(artist)}
                         alt={artist.name}
                         class="artist-image"
                         loading="lazy"
@@ -1324,11 +1342,14 @@
                           <MoreHorizontal size={16} />
                         </button>
                         {#if mostPopularMenuOpen}
+                          <!-- svelte-ignore a11y_click_events_have_key_events -->
                           <div
                             class="popular-menu"
                             bind:this={popularMenuEl}
                             style={popularMenuStyle}
                             use:portal
+                            role="menu"
+                            tabindex="-1"
                             onclick={(e) => e.stopPropagation()}
                           >
                             <button class="menu-item" onclick={() => { onAlbumPlay?.(album.id); mostPopularMenuOpen = false; }}>
@@ -1381,6 +1402,7 @@
                 </div>
               {:else if allResults.most_popular?.type === 'tracks'}
                 {@const track = allResults.most_popular.content}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div class="popular-card most-popular-card" class:menu-open={mostPopularMenuOpen} onmouseenter={measurePopularOverflow}>
                   <div class="popular-card-artwork">
                     {#if track.album?.image?.large || track.album?.image?.small}
@@ -1422,11 +1444,14 @@
                           <MoreHorizontal size={16} />
                         </button>
                         {#if mostPopularMenuOpen}
+                          <!-- svelte-ignore a11y_click_events_have_key_events -->
                           <div
                             class="popular-menu"
                             bind:this={popularMenuEl}
                             style={popularMenuStyle}
                             use:portal
+                            role="menu"
+                            tabindex="-1"
                             onclick={(e) => e.stopPropagation()}
                           >
                             <button class="menu-item" onclick={() => { handleSearchTrackPlay(track, 0); mostPopularMenuOpen = false; }}>
@@ -1530,7 +1555,7 @@
                         </div>
                         <!-- Image overlays placeholder when loaded -->
                         {#if !failedArtistImages.has(artist.id) && getArtistImage(artist)}
-                          <img src={getArtistImage(artist)} alt={artist.name} class="artist-image" loading="lazy" decoding="async" onerror={() => handleArtistImageError(artist.id)} />
+                          <img use:cachedSrc={getArtistImage(artist)} alt={artist.name} class="artist-image" loading="lazy" decoding="async" onerror={() => handleArtistImageError(artist.id)} />
                         {/if}
                       </div>
                       <div class="artist-name">{artist.name}</div>
@@ -1645,6 +1670,11 @@
                     tabindex="0"
                     onclick={() => handleSearchTrackPlay(track, index)}
                     onkeydown={(e) => e.key === 'Enter' && handleSearchTrackPlay(track, index)}
+                    oncontextmenu={(e) => {
+                      e.preventDefault();
+                      contextMenuTrackId = track.id;
+                      contextMenuPos = { x: e.clientX, y: e.clientY };
+                    }}
                   >
                     <div class="track-number">{index + 1}</div>
                     <div class="track-artwork-container">
@@ -1727,6 +1757,8 @@
                         isTrackDownloaded={isTrackDownloaded}
                         onReDownload={isTrackDownloaded && onTrackReDownload ? () => onTrackReDownload(track) : undefined}
                         onRemoveDownload={isTrackDownloaded && onTrackRemoveDownload ? () => onTrackRemoveDownload(track.id) : undefined}
+                        contextMenuPosition={contextMenuTrackId === track.id ? contextMenuPos : null}
+                        onContextMenuClosed={() => { contextMenuTrackId = null; contextMenuPos = null; }}
                       />
                     </div>
                   </div>
@@ -1828,6 +1860,11 @@
                     tabindex="0"
                     onclick={() => handleSearchTrackPlay(track, index)}
                     onkeydown={(e) => e.key === 'Enter' && handleSearchTrackPlay(track, index)}
+                    oncontextmenu={(e) => {
+                      e.preventDefault();
+                      contextMenuTrackId = track.id;
+                      contextMenuPos = { x: e.clientX, y: e.clientY };
+                    }}
                   >
                     <div class="track-number">{index + 1}</div>
                     <div class="track-artwork-container">
@@ -1908,6 +1945,8 @@
                         isTrackDownloaded={isTrackDownloaded}
                         onReDownload={isTrackDownloaded && onTrackReDownload ? () => onTrackReDownload(track) : undefined}
                         onRemoveDownload={isTrackDownloaded && onTrackRemoveDownload ? () => onTrackRemoveDownload(track.id) : undefined}
+                        contextMenuPosition={contextMenuTrackId === track.id ? contextMenuPos : null}
+                        onContextMenuClosed={() => { contextMenuTrackId = null; contextMenuPos = null; }}
                       />
                     </div>
                   </div>
@@ -1940,7 +1979,7 @@
                             <User size={40} />
                           </div>
                           {#if !failedArtistImages.has(artist.id) && getArtistImage(artist)}
-                            <img src={getArtistImage(artist)} alt={artist.name} class="artist-image" loading="lazy" decoding="async" onerror={() => handleArtistImageError(artist.id)} />
+                            <img use:cachedSrc={getArtistImage(artist)} alt={artist.name} class="artist-image" loading="lazy" decoding="async" onerror={() => handleArtistImageError(artist.id)} />
                           {/if}
                         </div>
                         <div class="artist-name">{artist.name}</div>
@@ -1997,10 +2036,7 @@
   .search-view {
     width: 100%;
     height: 100%;
-    padding: 24px;
-    padding-left: 18px;
-    padding-right: 24px;
-    padding-bottom: 100px;
+    padding: 8px 24px 100px 18px;
     overflow-y: scroll;
   }
 
@@ -2082,7 +2118,7 @@
     font-size: 16px;
     color: var(--text-primary);
     outline: none;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .search-input:focus {
@@ -2172,7 +2208,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .tab:hover {
@@ -2226,7 +2262,7 @@
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     opacity: 0;
     pointer-events: none;
   }
@@ -2298,7 +2334,7 @@
   .albums-grid-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 24px 14px;
+    gap: 24px 22px;
   }
 
   .artists-grid-row {
@@ -2396,7 +2432,7 @@
   .track-duration {
     font-size: 13px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
   }
 
@@ -2467,6 +2503,7 @@
     border-radius: 50%;
     object-fit: cover;
     z-index: 1;
+    transition: opacity 0.15s ease-in;
   }
 
   .artist-image-placeholder {
@@ -2515,7 +2552,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .load-more-btn:hover:not(:disabled) {
@@ -2887,7 +2924,7 @@
     background-color: transparent;
     color: var(--text-primary);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .carousel-btn:hover:not(:disabled) {
@@ -2908,7 +2945,7 @@
     cursor: pointer;
     padding: 4px 8px;
     border-radius: 4px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .view-all-link:hover {
@@ -2972,7 +3009,7 @@
     border: 2px solid var(--bg-tertiary);
     border-radius: 8px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .view-more-cover:hover {

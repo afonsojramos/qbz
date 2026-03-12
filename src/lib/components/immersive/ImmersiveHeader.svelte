@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { Disc3, Disc, Mic2, ListMusic, Music2, Info, Radio, Maximize, Minimize, ChevronDown, X, Square, Copy, Minus, Image, Activity, AudioWaveform, CircleDot, Crosshair, Zap, HeartPulse } from 'lucide-svelte';
+  import { Disc3, Disc, Mic2, ListMusic, Music2, Info, Radio, Maximize, Minimize, ChevronDown, X, Square, Copy, Minus, Image, Activity, AudioWaveform, CircleDot, Crosshair, Zap, HeartPulse, Move } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { getCurrentWindow } from '@tauri-apps/api/window';
 
   export type ImmersiveTab = 'lyrics' | 'trackInfo' | 'suggestions' | 'queue';
-  export type FocusTab = 'coverflow' | 'static' | 'visualizer' | 'oscilloscope' | 'spectral-ribbon' | 'energy-bands' | 'lissajous' | 'transient-pulse' | 'album-reactive' | 'lyrics-focus' | 'queue-focus';
+  export type FocusTab = 'coverflow' | 'static' | 'visualizer' | 'neon-flow' | 'tunnel-flow' | 'comet-flow' | 'oscilloscope' | 'spectral-ribbon' | 'energy-bands' | 'lissajous' | 'transient-pulse' | 'album-reactive' | 'linebed' | 'lyrics-focus' | 'queue-focus';
   export type ViewMode = 'focus' | 'split';
 
-  const VISUALIZER_TABS: FocusTab[] = ['visualizer', 'oscilloscope', 'spectral-ribbon', 'energy-bands', 'lissajous', 'transient-pulse', 'album-reactive'];
+  const VISUALIZER_TABS: FocusTab[] = ['visualizer', 'neon-flow', 'tunnel-flow', 'comet-flow', 'oscilloscope', 'spectral-ribbon', 'energy-bands', 'lissajous', 'transient-pulse', 'album-reactive', 'linebed'];
 
   interface Props {
     viewMode: ViewMode;
@@ -56,6 +56,7 @@
   // Visualizer dropdown state
   let isVizDropdownOpen = $state(false);
   let vizDropdownTimeout: ReturnType<typeof setTimeout> | null = null;
+  let isNeonSubmenuOpen = $state(false);
 
   function handleWindowControlsEnter() {
     if (collapseTimeout) {
@@ -82,12 +83,14 @@
   function handleVizDropdownLeave() {
     vizDropdownTimeout = setTimeout(() => {
       isVizDropdownOpen = false;
+      isNeonSubmenuOpen = false;
     }, 250);
   }
 
   function selectVisualizerTab(tab: FocusTab) {
     onFocusTabChange(tab);
     isVizDropdownOpen = false;
+    isNeonSubmenuOpen = false;
   }
 
   async function handleCloseApp() {
@@ -96,6 +99,15 @@
     } else {
       const window = getCurrentWindow();
       await window.close();
+    }
+  }
+
+  async function handleDragStart() {
+    try {
+      const window = getCurrentWindow();
+      await window.startDragging();
+    } catch {
+      // Ignore drag errors (e.g., fullscreen mode)
     }
   }
 
@@ -109,29 +121,39 @@
   ].filter(tab => tab.enabled));
 
   // Top-level focus tabs (non-visualizer)
-  const focusTabsTop: { id: FocusTab; label: string; icon: typeof Disc3 }[] = [
-    { id: 'coverflow', label: 'Coverflow', icon: Disc3 },
-    { id: 'static', label: 'Static', icon: Image },
+  const focusTabsTop: { id: FocusTab; labelKey: string; icon: typeof Disc3 }[] = [
+    { id: 'coverflow', labelKey: 'settings.appearance.immersiveViews.coverflow', icon: Disc3 },
+    { id: 'static', labelKey: 'settings.appearance.immersiveViews.static', icon: Image },
   ];
 
-  const focusTabsBottom: { id: FocusTab; label: string; icon: typeof Disc3 }[] = [
-    { id: 'lyrics-focus', label: 'Lyrics', icon: Mic2 },
-    { id: 'queue-focus', label: 'Queue', icon: ListMusic },
+  const focusTabsBottom: { id: FocusTab; labelKey: string; icon: typeof Disc3 }[] = [
+    { id: 'lyrics-focus', labelKey: 'settings.appearance.immersiveViews.lyrics-focus', icon: Mic2 },
+    { id: 'queue-focus', labelKey: 'settings.appearance.immersiveViews.queue-focus', icon: ListMusic },
   ];
 
   // Visualizer sub-options
-  const vizOptions: { id: FocusTab; label: string; icon: typeof Activity }[] = [
-    { id: 'visualizer', label: 'Bars', icon: Activity },
-    { id: 'oscilloscope', label: 'Scope', icon: AudioWaveform },
-    { id: 'spectral-ribbon', label: 'Ribbon', icon: AudioWaveform },
-    { id: 'energy-bands', label: 'Energy', icon: CircleDot },
-    { id: 'lissajous', label: 'X/Y', icon: Crosshair },
-    { id: 'transient-pulse', label: 'Pulse', icon: Zap },
-    { id: 'album-reactive', label: 'Reactive', icon: HeartPulse },
+  const vizOptions: { id: FocusTab; labelKey: string; icon: typeof Activity }[] = [
+    { id: 'visualizer', labelKey: 'settings.appearance.immersiveFps.panels.visualizer', icon: Activity },
+    { id: 'oscilloscope', labelKey: 'settings.appearance.immersiveFps.panels.oscilloscope', icon: AudioWaveform },
+    { id: 'spectral-ribbon', labelKey: 'settings.appearance.immersiveFps.panels.spectral-ribbon', icon: AudioWaveform },
+    { id: 'energy-bands', labelKey: 'settings.appearance.immersiveFps.panels.energy-bands', icon: CircleDot },
+    { id: 'lissajous', labelKey: 'settings.appearance.immersiveFps.panels.lissajous', icon: Crosshair },
+    { id: 'transient-pulse', labelKey: 'settings.appearance.immersiveFps.panels.transient-pulse', icon: Zap },
+    { id: 'album-reactive', labelKey: 'settings.appearance.immersiveFps.panels.album-reactive', icon: HeartPulse },
+    { id: 'linebed', labelKey: 'settings.appearance.immersiveFps.panels.linebed', icon: AudioWaveform },
   ];
 
   const isVisualizerActive = $derived(VISUALIZER_TABS.includes(activeFocusTab));
   const activeVizOption = $derived(vizOptions.find(opt => opt.id === activeFocusTab));
+  const activeVizLabelKey = $derived(
+    activeFocusTab === 'neon-flow'
+      ? 'settings.appearance.immersiveFps.panels.neon-laser'
+      : activeFocusTab === 'tunnel-flow'
+        ? 'settings.appearance.immersiveFps.panels.tunnel-flow'
+        : activeFocusTab === 'comet-flow'
+          ? 'settings.appearance.immersiveFps.panels.comet-flow'
+        : (activeVizOption?.labelKey ?? 'settings.appearance.immersiveViews.visualizer')
+  );
 
   const isFocusMode = $derived(viewMode === 'focus');
 </script>
@@ -146,11 +168,11 @@
     <button
       class="mode-toggle"
       onclick={() => onViewModeChange(isFocusMode ? 'split' : 'focus')}
-      title={isFocusMode ? 'Switch to Split View (V)' : 'Switch to Focus View (V)'}
+      title={isFocusMode ? 'Switch to Split View (V)' : 'Switch to Immersive View (V)'}
     >
       <img
         src={isFocusMode ? '/split-view.svg' : '/lotus.svg'}
-        alt={isFocusMode ? 'Split Mode' : 'Focus Mode'}
+        alt={isFocusMode ? 'Split Mode' : 'Immersive Mode'}
         class="mode-icon"
       />
     </button>
@@ -165,7 +187,7 @@
           onclick={() => onFocusTabChange(tab.id)}
         >
           <tab.icon size={16} />
-          <span class="tab-label">{tab.label}</span>
+          <span class="tab-label">{$t(tab.labelKey)}</span>
         </button>
       {/each}
 
@@ -188,11 +210,20 @@
           }}
         >
           {#if activeVizOption}
-            <svelte:component this={activeVizOption.icon} size={16} />
+            {@const VizIcon = activeVizOption.icon}
+            <VizIcon size={16} />
+          {:else if activeFocusTab === 'neon-flow'}
+            <img src="/laser.svg" alt="" class="viz-img-icon" aria-hidden="true" />
+          {:else if activeFocusTab === 'tunnel-flow'}
+            <img src="/cube-svgrepo-com.svg" alt="" class="viz-img-icon" aria-hidden="true" />
+          {:else if activeFocusTab === 'comet-flow'}
+            <Disc size={16} />
           {:else}
             <Activity size={16} />
           {/if}
-          <span class="tab-label">{isVisualizerActive && activeVizOption ? activeVizOption.label : 'Visualizer'}</span>
+          <span class="tab-label">
+            {isVisualizerActive ? $t(activeVizLabelKey) : $t('settings.appearance.immersiveViews.visualizer')}
+          </span>
           <ChevronDown size={12} class="viz-chevron" />
         </button>
 
@@ -205,9 +236,55 @@
                 onclick={() => selectVisualizerTab(opt.id)}
               >
                 <opt.icon size={14} />
-                <span>{opt.label}</span>
+                <span>{$t(opt.labelKey)}</span>
               </button>
             {/each}
+
+            <div
+              class="viz-dropdown-submenu-wrapper"
+              onmouseenter={() => (isNeonSubmenuOpen = true)}
+              onmouseleave={() => (isNeonSubmenuOpen = false)}
+              role="group"
+            >
+              <button
+                class="viz-dropdown-item"
+                class:active={activeFocusTab === 'neon-flow' || activeFocusTab === 'tunnel-flow' || activeFocusTab === 'comet-flow'}
+                onclick={() => (isNeonSubmenuOpen = !isNeonSubmenuOpen)}
+              >
+                <img src="/bulb.svg" alt="" class="viz-img-icon" aria-hidden="true" />
+                <span>{$t('settings.appearance.immersiveViews.neon')}</span>
+                <ChevronDown size={12} class="submenu-chevron" />
+              </button>
+
+              {#if isNeonSubmenuOpen}
+                <div class="viz-submenu">
+                  <button
+                    class="viz-dropdown-item"
+                    class:active={activeFocusTab === 'neon-flow'}
+                    onclick={() => selectVisualizerTab('neon-flow')}
+                  >
+                    <img src="/laser.svg" alt="" class="viz-img-icon" aria-hidden="true" />
+                    <span>{$t('settings.appearance.immersiveFps.panels.neon-laser')}</span>
+                  </button>
+                  <button
+                    class="viz-dropdown-item"
+                    class:active={activeFocusTab === 'tunnel-flow'}
+                    onclick={() => selectVisualizerTab('tunnel-flow')}
+                  >
+                    <img src="/cube-svgrepo-com.svg" alt="" class="viz-img-icon" aria-hidden="true" />
+                    <span>{$t('settings.appearance.immersiveFps.panels.tunnel-flow')}</span>
+                  </button>
+                  <button
+                    class="viz-dropdown-item"
+                    class:active={activeFocusTab === 'comet-flow'}
+                    onclick={() => selectVisualizerTab('comet-flow')}
+                  >
+                    <Disc size={14} />
+                    <span>{$t('settings.appearance.immersiveFps.panels.comet-flow')}</span>
+                  </button>
+                </div>
+              {/if}
+            </div>
           </div>
         {/if}
       </div>
@@ -220,7 +297,7 @@
           onclick={() => onFocusTabChange(tab.id)}
         >
           <tab.icon size={16} />
-          <span class="tab-label">{tab.label}</span>
+          <span class="tab-label">{$t(tab.labelKey)}</span>
         </button>
       {/each}
     {:else}
@@ -249,6 +326,13 @@
     >
       <!-- Expanded buttons (appear on hover) -->
       <div class="expanded-buttons">
+        <button
+          class="window-btn drag-btn"
+          onmousedown={handleDragStart}
+          title={$t('player.dragWindow')}
+        >
+          <Move size={16} />
+        </button>
         <button
           class="window-btn"
           onclick={onToggleFullscreen}
@@ -345,7 +429,7 @@
     border: none;
     border-radius: 8px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .mode-toggle:hover {
@@ -394,7 +478,7 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .tab:hover {
@@ -417,11 +501,8 @@
     transition: transform 150ms ease;
   }
 
-  .viz-dropdown {
-    position: absolute;
-    top: calc(100% + 8px);
-    left: 50%;
-    transform: translateX(-50%);
+  .viz-dropdown,
+  .viz-submenu {
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -431,6 +512,13 @@
     border-radius: 10px;
     backdrop-filter: blur(16px);
     min-width: 140px;
+  }
+
+  .viz-dropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
     z-index: 30;
     animation: dropdownFadeIn 150ms ease;
   }
@@ -450,6 +538,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    width: 100%;
     padding: 8px 14px;
     background: none;
     border: none;
@@ -458,8 +547,64 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 120ms ease;
+    transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
     white-space: nowrap;
+    text-align: left;
+  }
+
+  .viz-dropdown-submenu-wrapper {
+    position: relative;
+    width: 100%;
+  }
+
+  .viz-submenu {
+    position: absolute;
+    bottom: 0;
+    left: calc(100% + 2px);
+    z-index: 31;
+    width: 100%;
+    min-width: unset;
+    animation: submenuFadeIn 120ms ease;
+  }
+
+  /* Invisible bridge to prevent mouseout gap between Neon item and submenu */
+  .viz-dropdown-submenu-wrapper::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: -8px;
+    width: 8px;
+    height: 100%;
+    display: none;
+  }
+
+  .viz-dropdown-submenu-wrapper:hover::after {
+    display: block;
+  }
+
+  @keyframes submenuFadeIn {
+    from {
+      opacity: 0;
+      transform: translateX(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  :global(.submenu-chevron) {
+    margin-left: auto;
+    transform: rotate(-90deg);
+    opacity: 0.5;
+    transition: transform 150ms ease;
+  }
+
+  .viz-img-icon {
+    width: 14px;
+    height: 14px;
+    filter: var(--icon-filter, brightness(0) invert(1));
+    opacity: 0.9;
   }
 
   .viz-dropdown-item:hover {
@@ -492,7 +637,7 @@
     border-radius: 20px;
     padding: 4px;
     overflow: hidden;
-    transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: opacity 250ms cubic-bezier(0.4, 0, 0.2, 1), background-color 250ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .window-trigger {
@@ -505,7 +650,7 @@
     border: none;
     border-radius: 50%;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -531,11 +676,11 @@
     max-width: 0;
     opacity: 0;
     overflow: hidden;
-    transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: max-width 250ms cubic-bezier(0.4, 0, 0.2, 1), opacity 250ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .window-controls.expanded .expanded-buttons {
-    max-width: 200px;
+    max-width: 240px;
     opacity: 1;
     margin-right: 4px;
   }
@@ -551,13 +696,21 @@
     border-radius: 50%;
     color: rgba(255, 255, 255, 0.85);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
   .window-btn:hover {
     color: var(--text-primary, white);
     background: var(--alpha-15, rgba(255, 255, 255, 0.15));
+  }
+
+  .window-btn.drag-btn {
+    cursor: grab;
+  }
+
+  .window-btn.drag-btn:active {
+    cursor: grabbing;
   }
 
   .window-btn.close:hover {

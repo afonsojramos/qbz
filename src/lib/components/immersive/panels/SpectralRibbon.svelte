@@ -3,6 +3,7 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import QualityBadge from '$lib/components/QualityBadge.svelte';
+  import { getPanelFrameInterval } from '$lib/immersive/fpsConfig';
 
   interface Props {
     enabled?: boolean;
@@ -13,6 +14,7 @@
     trackTitle?: string;
     artist?: string;
     album?: string;
+    explicit?: boolean;
     quality?: string;
     bitDepth?: number;
     samplingRate?: number;
@@ -30,6 +32,7 @@
     trackTitle = '',
     artist = '',
     album = '',
+    explicit = false,
     quality,
     bitDepth,
     samplingRate,
@@ -38,10 +41,9 @@
     format
   }: Props = $props();
 
-  const NUM_BANDS = 190;
+  const NUM_BANDS = 512;
   const HISTORY_BINS = 4096;
-  const TARGET_FPS = 60;
-  const FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
+  const FRAME_INTERVAL_MS = getPanelFrameInterval('spectral-ribbon');
 
   let canvasRef: HTMLCanvasElement | null = $state(null);
   let canvasCtx: CanvasRenderingContext2D | null = null;
@@ -99,7 +101,7 @@
     const srHz = Math.round(normalizedSampleRateHz());
     const bits = bitDepth ?? originalBitDepth ?? 0;
     const bitsLabel = bits > 0 ? `${bits} bits` : 'unknown bits';
-    return `Stream 1/1: ${formatTypeLabel()}, ${srHz} Hz, ${bitsLabel}, FFT:1024, Bands:${NUM_BANDS}`;
+    return `Stream 1/1: ${formatTypeLabel()}, ${srHz} Hz, ${bitsLabel}, FFT:4096, Bands:${NUM_BANDS}`;
   }
 
   function computePlotRect(width: number, height: number): PlotRect {
@@ -570,6 +572,9 @@
   <div class="bottom-info">
     <div class="track-meta">
       <span class="track-title">{trackTitle}</span>
+      {#if explicit}
+        <span class="explicit-badge" title="Explicit"></span>
+      {/if}
       {#if album}
         <span class="track-album">{album}</span>
       {/if}
@@ -617,7 +622,7 @@
 
   .spek-header-text {
     display: inline-block;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    font-family: var(--font-sans);
     font-size: 15px;
     color: rgba(215, 255, 225, 0.94);
     text-shadow: 0 1px 5px rgba(0, 0, 0, 0.45);
@@ -714,5 +719,16 @@
       width: 56px;
       height: 56px;
     }
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-primary, white);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 </style>

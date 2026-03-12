@@ -90,6 +90,7 @@ export function setRuntimeEnabled(enabled: boolean): void {
 
 /**
  * Get the current immersive configuration.
+ * Includes migration from legacy disableBlurBackground to backgroundMode.
  */
 export function getConfig(): ImmersiveConfig {
   if (typeof localStorage === 'undefined') return { ...DEFAULT_IMMERSIVE_CONFIG };
@@ -99,7 +100,14 @@ export function getConfig(): ImmersiveConfig {
     if (!stored) return { ...DEFAULT_IMMERSIVE_CONFIG };
 
     const parsed = JSON.parse(stored);
-    return { ...DEFAULT_IMMERSIVE_CONFIG, ...parsed };
+    const config = { ...DEFAULT_IMMERSIVE_CONFIG, ...parsed };
+
+    // Migration: disableBlurBackground → backgroundMode
+    if (!parsed.backgroundMode) {
+      config.backgroundMode = parsed.disableBlurBackground ? 'off' : 'full';
+    }
+
+    return config;
   } catch {
     return { ...DEFAULT_IMMERSIVE_CONFIG };
   }

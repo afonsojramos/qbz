@@ -183,9 +183,10 @@
 
       <!-- Connected Device Banner -->
       {#if castState.isConnected && castState.device}
+        {@const ProtocolIcon = getProtocolIcon(castState.protocol!)}
         <div class="connected-banner">
           <div class="connected-info">
-            <svelte:component this={getProtocolIcon(castState.protocol!)} size={20} />
+            <ProtocolIcon size={20} />
             <div class="connected-text">
               <span class="connected-label">Connected to</span>
               <span class="connected-name">{castState.device.name}</span>
@@ -249,13 +250,14 @@
           {:else}
             <div class="devices">
               {#each devices() as device}
+                {@const CastIcon = getProtocolIcon(activeProtocol)}
                 <button class="device" onclick={() => handleConnect(device)}>
                   <Monitor size={24} />
                   <div class="device-info">
                     <span class="device-name">{device.name}</span>
                     <span class="device-ip">{device.ip}</span>
                   </div>
-                  <svelte:component this={getProtocolIcon(activeProtocol)} size={20} class="cast-icon" />
+                  <CastIcon size={20} class="cast-icon" />
                 </button>
               {/each}
             </div>
@@ -335,7 +337,7 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .protocol-tab:hover {
@@ -404,7 +406,7 @@
     border: 1px solid var(--bg-tertiary);
     border-radius: 8px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     text-align: left;
     width: 100%;
     color: var(--text-primary);
@@ -491,7 +493,7 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .disconnect-btn:hover {

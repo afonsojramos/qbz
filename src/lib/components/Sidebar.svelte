@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Search, Home, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, MoreHorizontal, ArrowUpDown, ChevronRight, ChevronLeft, Folder, FolderPlus, X, User, Disc, Music, ShoppingBag } from 'lucide-svelte';
+  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, MoreHorizontal, ArrowUpDown, ChevronRight, ChevronLeft, Folder, FolderPlus, X, User, Disc, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
   import type { FavoritesPreferences } from '$lib/types';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
@@ -28,6 +28,7 @@
     toggleFolderExpanded,
     loadFolders,
     createFolder,
+    updateFolder,
     movePlaylistToFolder,
     type PlaylistFolder
   } from '$lib/stores/playlistFoldersStore';
@@ -74,6 +75,13 @@
     onCreatePlaylist?: () => void;
     onImportPlaylist?: () => void;
     onPlaylistManagerClick?: () => void;
+    onEditPlaylist?: (playlist: {
+      id: number;
+      name: string;
+      tracks_count: number;
+      isHidden: boolean;
+      currentFolderId: string | null;
+    }) => void;
     onSettingsClick?: () => void;
     onKeybindingsClick?: () => void;
     onAboutClick?: () => void;
@@ -84,6 +92,11 @@
     onToggle?: () => void;
     showTitleBar?: boolean;
     showPurchases?: boolean;
+    searchInTitlebar?: boolean;
+    discoverInTitlebar?: boolean;
+    favoritesInTitlebar?: boolean;
+    libraryInTitlebar?: boolean;
+    purchasesInTitlebar?: boolean;
   }
 
   let {
@@ -94,6 +107,7 @@
     onCreatePlaylist,
     onImportPlaylist,
     onPlaylistManagerClick,
+    onEditPlaylist,
     onSettingsClick,
     onKeybindingsClick,
     onAboutClick,
@@ -103,7 +117,12 @@
     isExpanded = true,
     onToggle,
     showTitleBar = true,
-    showPurchases = false
+    showPurchases = false,
+    searchInTitlebar = false,
+    discoverInTitlebar = false,
+    favoritesInTitlebar = false,
+    libraryInTitlebar = false,
+    purchasesInTitlebar = false
   }: Props = $props();
 
   let userPlaylists = $state<Playlist[]>([]);
@@ -158,16 +177,21 @@
     x: number;
     y: number;
     playlist: Playlist | null;
+    folder: PlaylistFolder | null;
     currentFolderId: string | null;
   }>({
     visible: false,
     x: 0,
     y: 0,
     playlist: null,
+    folder: null,
     currentFolderId: null
   });
   let contextMenuSearch = $state('');
   const FOLDER_SEARCH_THRESHOLD = 8;
+  let draggedPlaylistId = $state<number | null>(null);
+  let draggedFromFolderId = $state<string | null>(null);
+  let dragOverFolderId = $state<string | null>(null);
 
   // Collapsed folder popover state
   let folderPopover = $state<{
@@ -209,6 +233,7 @@
 
   // Filtered folders for context menu
   const filteredContextFolders = $derived.by(() => {
+    if (!contextMenu.playlist) return [];
     const available = folders.filter(f => f.id !== contextMenu.currentFolderId);
     if (!contextMenuSearch.trim()) return available;
     const query = contextMenuSearch.toLowerCase();
@@ -470,13 +495,12 @@
   }
 
   // Focus and clear the search input (for keybinding)
-  export function focusSearch() {
+  export async function focusSearch() {
     sidebarSearchQuery = '';
     clearSearchState();
-    // Wait for next tick to ensure input is ready, then focus
-    setTimeout(() => {
-      sidebarSearchInput?.focus();
-    }, 0);
+    // Wait for Svelte to flush DOM updates (e.g. sidebar expanding)
+    await tick();
+    sidebarSearchInput?.focus();
   }
 
   // Update counts for a specific playlist (single source of truth from detail view)
@@ -1053,8 +1077,12 @@
   }
 
   function handleSidebarSearchKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && sidebarSearchQuery) {
-      handleSidebarSearchClear();
+    if (e.key === 'Escape') {
+      if (sidebarSearchQuery) {
+        handleSidebarSearchClear();
+      } else {
+        sidebarSearchInput?.blur();
+      }
       e.preventDefault();
     }
   }
@@ -1200,12 +1228,35 @@
       x: e.clientX,
       y: e.clientY,
       playlist,
+      folder: null,
       currentFolderId
     };
   }
 
+  function handleFolderContextMenu(e: MouseEvent, folder: PlaylistFolder) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    openGlobalMenu(SIDEBAR_CONTEXT_MENU_ID);
+    contextMenu = {
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      playlist: null,
+      folder,
+      currentFolderId: folder.id
+    };
+  }
+
   function closeContextMenu() {
-    contextMenu = { ...contextMenu, visible: false };
+    contextMenu = {
+      visible: false,
+      x: 0,
+      y: 0,
+      playlist: null,
+      folder: null,
+      currentFolderId: null
+    };
     contextMenuSearch = '';
     closeGlobalMenu(SIDEBAR_CONTEXT_MENU_ID);
   }
@@ -1213,24 +1264,130 @@
   async function handleMoveToFolder(folderId: string | null) {
     if (!contextMenu.playlist) return;
 
-    const success = await movePlaylistToFolder(contextMenu.playlist.id, folderId);
-    if (success) {
-      // Update local settings
-      const updated = new Map(playlistSettings);
-      const existing = updated.get(contextMenu.playlist.id);
-      if (existing) {
-        updated.set(contextMenu.playlist.id, { ...existing, folder_id: folderId });
-      } else {
-        updated.set(contextMenu.playlist.id, {
-          qobuz_playlist_id: contextMenu.playlist.id,
-          hidden: false,
-          position: 0,
-          folder_id: folderId
-        });
-      }
-      playlistSettings = updated;
-    }
+    await movePlaylistAndUpdateLocal(contextMenu.playlist.id, folderId);
     closeContextMenu();
+  }
+
+  function getPlaylistFolderId(playlistId: number): string | null {
+    return playlistSettings.get(playlistId)?.folder_id ?? null;
+  }
+
+  async function movePlaylistAndUpdateLocal(playlistId: number, folderId: string | null): Promise<void> {
+    const success = await movePlaylistToFolder(playlistId, folderId);
+    if (!success) return;
+
+    const updated = new Map(playlistSettings);
+    const existing = updated.get(playlistId);
+    if (existing) {
+      updated.set(playlistId, { ...existing, folder_id: folderId });
+    } else {
+      updated.set(playlistId, {
+        qobuz_playlist_id: playlistId,
+        hidden: false,
+        position: 0,
+        folder_id: folderId
+      });
+    }
+    playlistSettings = updated;
+  }
+
+  async function toggleHiddenFromContextMenu() {
+    if (!contextMenu.playlist) return;
+    const playlistId = contextMenu.playlist.id;
+    const current = playlistSettings.get(playlistId);
+    const newHidden = !(current?.hidden ?? false);
+
+    try {
+      await invoke('v2_playlist_set_hidden', { playlistId, hidden: newHidden });
+      const updated = new Map(playlistSettings);
+      updated.set(playlistId, {
+        qobuz_playlist_id: playlistId,
+        hidden: newHidden,
+        position: current?.position ?? 0,
+        play_count: current?.play_count,
+        hasLocalContent: current?.hasLocalContent,
+        folder_id: current?.folder_id ?? null
+      });
+      playlistSettings = updated;
+      closeContextMenu();
+    } catch (err) {
+      console.error('Failed to toggle sidebar visibility for playlist:', err);
+    }
+  }
+
+  async function toggleFolderHiddenFromContextMenu() {
+    if (!contextMenu.folder) return;
+
+    const folder = contextMenu.folder;
+    const hidden = !(folder.is_hidden ?? false);
+    const updated = await updateFolder(folder.id, { isHidden: hidden });
+    if (updated) {
+      folders = getVisibleFolders();
+      if (hidden && folderPopover.folderId === folder.id) {
+        closeFolderPopover();
+      }
+      closeContextMenu();
+    }
+  }
+
+  function editPlaylistFromContextMenu() {
+    if (!contextMenu.playlist || !onEditPlaylist) return;
+
+    const playlistId = contextMenu.playlist.id;
+    const current = playlistSettings.get(playlistId);
+    onEditPlaylist({
+      id: contextMenu.playlist.id,
+      name: contextMenu.playlist.name,
+      tracks_count: contextMenu.playlist.tracks_count,
+      isHidden: current?.hidden ?? false,
+      currentFolderId: current?.folder_id ?? null
+    });
+    closeContextMenu();
+  }
+
+  function handlePlaylistDragStart(e: DragEvent, playlistId: number) {
+    const fromFolderId = getPlaylistFolderId(playlistId);
+    draggedPlaylistId = playlistId;
+    draggedFromFolderId = fromFolderId;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(playlistId));
+    }
+  }
+
+  function handlePlaylistDragEnd() {
+    draggedPlaylistId = null;
+    draggedFromFolderId = null;
+    dragOverFolderId = null;
+  }
+
+  function handleFolderDragOver(e: DragEvent, folderId: string) {
+    if (draggedPlaylistId === null || draggedFromFolderId === folderId) return;
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+    dragOverFolderId = folderId;
+  }
+
+  function handleFolderDragLeave(folderId: string) {
+    if (dragOverFolderId === folderId) {
+      dragOverFolderId = null;
+    }
+  }
+
+  async function handleFolderDrop(e: DragEvent, folderId: string) {
+    e.preventDefault();
+
+    if (draggedPlaylistId === null) return;
+    if (draggedFromFolderId === folderId) {
+      handlePlaylistDragEnd();
+      return;
+    }
+
+    const playlistId = draggedPlaylistId;
+    await movePlaylistAndUpdateLocal(playlistId, folderId);
+    handlePlaylistDragEnd();
   }
 
   // Close context menu and folder popover when clicking outside
@@ -1258,46 +1415,49 @@
 <aside class="sidebar" class:collapsed={!isExpanded} class:no-titlebar={!showTitleBar}>
   <!-- Scrollable Content Area -->
   <div class="content">
-    <!-- Search Bar -->
-    <div
-      class="search-container"
-      class:collapsed={!isExpanded}
-      class:has-text={sidebarSearchQuery.trim().length > 0}
-    >
-      <Search class="search-icon" size={16} />
-      {#if isExpanded}
-        <input
-          type="text"
-          class="search-input"
-          placeholder={$t('nav.search')}
-          bind:value={sidebarSearchQuery}
-          bind:this={sidebarSearchInput}
-          oninput={handleSidebarSearchInput}
-          onclick={handleSidebarSearchClick}
-          onfocus={handleSidebarSearchFocus}
-          onkeydown={handleSidebarSearchKeydown}
-        />
-        {#if sidebarSearchQuery.trim()}
+    <!-- Search Bar (hidden when search is in titlebar) -->
+    {#if !searchInTitlebar}
+      <div
+        class="search-container"
+        class:collapsed={!isExpanded}
+        class:has-text={sidebarSearchQuery.trim().length > 0}
+      >
+        <Search class="search-icon" size={16} />
+        {#if isExpanded}
+          <input
+            type="text"
+            class="search-input"
+            placeholder={$t('nav.search')}
+            bind:value={sidebarSearchQuery}
+            bind:this={sidebarSearchInput}
+            oninput={handleSidebarSearchInput}
+            onclick={handleSidebarSearchClick}
+            onfocus={handleSidebarSearchFocus}
+            onkeydown={handleSidebarSearchKeydown}
+          />
+          {#if sidebarSearchQuery.trim()}
+            <button
+              type="button"
+              class="search-clear"
+              onclick={handleSidebarSearchClear}
+              title={$t('actions.clear')}
+            >
+              <X size={14} />
+            </button>
+          {/if}
+        {:else}
           <button
             type="button"
-            class="search-clear"
-            onclick={handleSidebarSearchClear}
-            title={$t('actions.clear')}
-          >
-            <X size={14} />
-          </button>
+            class="search-collapsed-btn"
+            onclick={() => handleViewChange('search')}
+            title={$t('nav.search')}
+          ></button>
         {/if}
-      {:else}
-        <button
-          type="button"
-          class="search-collapsed-btn"
-          onclick={() => handleViewChange('search')}
-          title={$t('nav.search')}
-        ></button>
-      {/if}
-    </div>
+      </div>
+    {/if}
 
-    <!-- Navigation Section -->
+    <!-- Navigation Section (hidden when Discover is in titlebar) -->
+    {#if !discoverInTitlebar}
     <nav class="nav-section">
       <NavigationItem
         label={$t('nav.home')}
@@ -1305,11 +1465,13 @@
         onclick={() => handleViewChange('home')}
         showLabel={isExpanded}
       >
-        {#snippet icon()}<Home size={14} />{/snippet}
+        {#snippet icon()}<svg width="14" height="14" viewBox="0 0 64 64" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><circle cx="32" cy="32" r="4"/><path d="M32,0C14.328,0,0,14.328,0,32s14.328,32,32,32s32-14.328,32-32S49.672,0,32,0z M40,40l-22,6l6-22l22-6L40,40z"/></svg>{/snippet}
       </NavigationItem>
     </nav>
+    {/if}
 
-    <!-- Favorites Section (hybrid: Home style with expandable sub-items) -->
+    <!-- Favorites Section (hidden when Favorites is in titlebar) -->
+    {#if !favoritesInTitlebar}
     <nav class="nav-section favorites-section">
       {#if isExpanded}
         <!-- Main Favorites item with chevron -->
@@ -1376,9 +1538,10 @@
         </button>
       {/if}
     </nav>
+    {/if}
 
-    <!-- Purchases Section (conditional on settings toggle) -->
-    {#if showPurchases}
+    <!-- Purchases Section (hidden when Purchases is in titlebar) -->
+    {#if showPurchases && !purchasesInTitlebar}
       <nav class="nav-section">
         <NavigationItem
           label={$t('nav.purchases')}
@@ -1467,6 +1630,8 @@
           class="dropdown-menu"
           bind:this={menuEl}
           style={menuStyle}
+          role="menu"
+          tabindex="-1"
           onmouseenter={() => isHoveringDropdown = true}
           onmouseleave={() => isHoveringDropdown = false}
         >
@@ -1478,6 +1643,7 @@
             tabindex="0"
             onmouseenter={openSubmenu}
             onmouseleave={closeSubmenuDelayed}
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSubmenu(); } }}
           >
             <ArrowUpDown size={14} />
             <span class="menu-label">{$t('library.sortBy')}</span>
@@ -1490,6 +1656,8 @@
               class="submenu"
               bind:this={submenuEl}
               style={submenuStyle}
+              role="menu"
+              tabindex="-1"
               onmouseenter={openSubmenu}
               onmouseleave={closeSubmenuDelayed}
             >
@@ -1557,7 +1725,12 @@
                     {@const isFolderExp = isFolderExpanded(item.folder.id)}
                     <button
                       class="folder-header"
+                      class:drag-over={dragOverFolderId === item.folder.id}
                       onclick={() => handleToggleFolder(item.folder.id)}
+                      oncontextmenu={(e) => handleFolderContextMenu(e, item.folder)}
+                      ondragover={(e) => handleFolderDragOver(e, item.folder.id)}
+                      ondragleave={() => handleFolderDragLeave(item.folder.id)}
+                      ondrop={(e) => handleFolderDrop(e, item.folder.id)}
                     >
                       <Folder size={14} />
                       <span class="folder-name">{item.folder.name}</span>
@@ -1567,36 +1740,59 @@
                       </span>
                     </button>
                   {:else if item.type === 'folder-playlist'}
-                    <NavigationItem
-                      label={item.playlist.name}
-                      tooltip={getPlaylistTooltip(item.playlist, true)}
-                      active={activeView === 'playlist' && selectedPlaylistId === item.playlist.id}
-                      onclick={() => handlePlaylistClick(item.playlist)}
-                      onHover={() => loadPlaylistTooltip(item.playlist)}
-                      oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, item.folderId)}
-                      showLabel={true}
-                      indented={true}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div
+                      class="playlist-drag-wrapper"
+                      class:dragging={draggedPlaylistId === item.playlist.id}
+                      draggable={!isOffline && isExpanded}
+                      ondragstart={(e) => handlePlaylistDragStart(e, item.playlist.id)}
+                      ondragend={handlePlaylistDragEnd}
                     >
-                      {#snippet icon()}<ListMusic size={14} />{/snippet}
-                    </NavigationItem>
+                      <NavigationItem
+                        label={item.playlist.name}
+                        tooltip={getPlaylistTooltip(item.playlist, true)}
+                        active={activeView === 'playlist' && selectedPlaylistId === item.playlist.id}
+                        onclick={() => handlePlaylistClick(item.playlist)}
+                        onHover={() => loadPlaylistTooltip(item.playlist)}
+                        oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, item.folderId)}
+                        showLabel={true}
+                        indented={true}
+                      >
+                        {#snippet icon()}<ListMusic size={14} />{/snippet}
+                      </NavigationItem>
+                    </div>
                   {:else if item.type === 'root-playlist'}
-                    <NavigationItem
-                      label={item.playlist.name}
-                      tooltip={getPlaylistTooltip(item.playlist, isExpanded)}
-                      active={activeView === 'playlist' && selectedPlaylistId === item.playlist.id}
-                      onclick={() => handlePlaylistClick(item.playlist)}
-                      onHover={() => loadPlaylistTooltip(item.playlist)}
-                      oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, null)}
-                      showLabel={isExpanded}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div
+                      class="playlist-drag-wrapper"
+                      class:dragging={draggedPlaylistId === item.playlist.id}
+                      draggable={!isOffline && isExpanded}
+                      ondragstart={(e) => handlePlaylistDragStart(e, item.playlist.id)}
+                      ondragend={handlePlaylistDragEnd}
                     >
-                      {#snippet icon()}<ListMusic size={14} />{/snippet}
-                    </NavigationItem>
+                      <NavigationItem
+                        label={item.playlist.name}
+                        tooltip={getPlaylistTooltip(item.playlist, isExpanded)}
+                        active={activeView === 'playlist' && selectedPlaylistId === item.playlist.id}
+                        onclick={() => handlePlaylistClick(item.playlist)}
+                        onHover={() => loadPlaylistTooltip(item.playlist)}
+                        oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, null)}
+                        showLabel={isExpanded}
+                      >
+                        {#snippet icon()}<ListMusic size={14} />{/snippet}
+                      </NavigationItem>
+                    </div>
                   {:else if item.type === 'collapsed-folder'}
                     {@const folderPlaylists = getPlaylistsInFolder(item.folder.id)}
                     <button
                       class="collapsed-folder-btn"
+                      class:drag-over={dragOverFolderId === item.folder.id}
                       onclick={(e) => showFolderPopover(e, item.folder)}
+                      oncontextmenu={(e) => handleFolderContextMenu(e, item.folder)}
                       title="{item.folder.name} ({folderPlaylists.length})"
+                      ondragover={(e) => handleFolderDragOver(e, item.folder.id)}
+                      ondragleave={() => handleFolderDragLeave(item.folder.id)}
+                      ondrop={(e) => handleFolderDrop(e, item.folder.id)}
                     >
                       <Folder size={14} />
                     </button>
@@ -1618,7 +1814,8 @@
     </div>
     {/if}
 
-    <!-- Local Library Section -->
+    <!-- Local Library Section (hidden when Library is in titlebar) -->
+    {#if !libraryInTitlebar}
     <div class="section local-library-section">
       {#if isExpanded}
         <button class="section-header-btn" onclick={() => { localLibraryCollapsed = !localLibraryCollapsed; saveSidebarCollapseState(); }}>
@@ -1641,6 +1838,7 @@
         </NavigationItem>
       {/if}
     </div>
+    {/if}
   </div>
 
   <!-- Toggle Button (Edge position) -->
@@ -1670,7 +1868,7 @@
 </aside>
 
 <!-- Favorites menu popover (when sidebar collapsed) - outside sidebar to avoid overflow clipping -->
-{#if showFavoritesMenu && !isExpanded}
+{#if showFavoritesMenu && !isExpanded && !favoritesInTitlebar}
   <div
     class="favorites-popover"
     style="left: {favoritesMenuPos.x}px; top: {favoritesMenuPos.y}px;"
@@ -1702,6 +1900,8 @@
 {#if contextMenu.visible}
   {@const availableFolders = folders.filter(f => f.id !== contextMenu.currentFolderId)}
   {@const showSearch = availableFolders.length >= FOLDER_SEARCH_THRESHOLD}
+  {@const contextPlaylistHidden = contextMenu.playlist ? (playlistSettings.get(contextMenu.playlist.id)?.hidden ?? false) : false}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     class="context-menu"
     class:has-search={showSearch}
@@ -1710,58 +1910,94 @@
     onmouseenter={() => isHoveringContextMenu = true}
     onmouseleave={() => isHoveringContextMenu = false}
     role="menu"
+    tabindex="-1"
   >
-    {#if availableFolders.length > 0}
-      <div class="context-menu-section">
-        <span class="context-menu-label">Move to folder</span>
-        {#if showSearch}
-          <div class="context-menu-search">
-            <Search size={14} />
-            <input
-              type="text"
-              placeholder="Search folders..."
-              bind:value={contextMenuSearch}
-              onclick={(e) => e.stopPropagation()}
-            />
-          </div>
+    {#if contextMenu.folder}
+      {@const contextFolderHidden = contextMenu.folder.is_hidden ?? false}
+      <button class="context-menu-item" onclick={toggleFolderHiddenFromContextMenu}>
+        {#if contextFolderHidden}
+          <Eye size={14} />
+          {$t('playlist.showInSidebar')}
+        {:else}
+          <EyeOff size={14} />
+          {$t('playlist.hideFromSidebar')}
         {/if}
-        <div class="context-menu-folders" class:scrollable={showSearch}>
-          {#each filteredContextFolders as folder (folder.id)}
-            <button
-              class="context-menu-item"
-              onclick={() => handleMoveToFolder(folder.id)}
-            >
-              <Folder size={14} />
-              {folder.name}
-            </button>
-          {/each}
-          {#if showSearch && filteredContextFolders.length === 0}
-            <div class="context-menu-empty">
-              No folders match
+      </button>
+    {:else}
+      {#if onEditPlaylist}
+        <button class="context-menu-item" onclick={editPlaylistFromContextMenu}>
+          <Pencil size={14} />
+          {$t('playlist.editPlaylist')}
+        </button>
+      {/if}
+
+      <button class="context-menu-item" onclick={toggleHiddenFromContextMenu}>
+        {#if contextPlaylistHidden}
+          <Eye size={14} />
+          {$t('playlist.showInSidebar')}
+        {:else}
+          <EyeOff size={14} />
+          {$t('playlist.hideFromSidebar')}
+        {/if}
+      </button>
+
+      {#if onEditPlaylist || contextMenu.playlist}
+        <div class="context-menu-divider"></div>
+      {/if}
+
+      {#if availableFolders.length > 0}
+        <div class="context-menu-section">
+          <span class="context-menu-label">{$t('playlist.moveToFolder')}</span>
+          {#if showSearch}
+            <div class="context-menu-search">
+              <Search size={14} />
+              <input
+                type="text"
+                placeholder={$t('placeholders.searchFolders')}
+                bind:value={contextMenuSearch}
+                onclick={(e) => e.stopPropagation()}
+              />
             </div>
           {/if}
+          <div class="context-menu-folders" class:scrollable={showSearch}>
+            {#each filteredContextFolders as folder (folder.id)}
+              <button
+                class="context-menu-item"
+                onclick={() => handleMoveToFolder(folder.id)}
+              >
+                <Folder size={14} />
+                {folder.name}
+              </button>
+            {/each}
+            {#if showSearch && filteredContextFolders.length === 0}
+              <div class="context-menu-empty">
+                {$t('playlist.noFoldersMatch')}
+              </div>
+            {/if}
+          </div>
         </div>
-      </div>
-    {/if}
-    {#if contextMenu.currentFolderId}
-      <button
-        class="context-menu-item"
-        onclick={() => handleMoveToFolder(null)}
-      >
-        <ChevronLeft size={14} />
-        Move to root
-      </button>
-    {/if}
-    {#if availableFolders.length === 0 && !contextMenu.currentFolderId}
-      <div class="context-menu-empty">
-        No folders yet
-      </div>
+      {/if}
+      {#if contextMenu.currentFolderId}
+        <button
+          class="context-menu-item"
+          onclick={() => handleMoveToFolder(null)}
+        >
+          <ChevronLeft size={14} />
+          {$t('playlist.moveToRoot')}
+        </button>
+      {/if}
+      {#if availableFolders.length === 0 && !contextMenu.currentFolderId}
+        <div class="context-menu-empty">
+          {$t('playlist.noFoldersYet')}
+        </div>
+      {/if}
     {/if}
   </div>
 {/if}
 
 <!-- Collapsed Folder Popover -->
 {#if folderPopover.visible}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     class="folder-popover"
     style="left: {folderPopover.x}px; top: {folderPopover.y}px;"
@@ -1769,6 +2005,7 @@
     onmouseenter={() => isHoveringFolderPopover = true}
     onmouseleave={() => isHoveringFolderPopover = false}
     role="menu"
+    tabindex="-1"
   >
     <div class="folder-popover-header">
       <Folder size={14} />
@@ -1799,10 +2036,12 @@
 <!-- Create Folder Modal -->
 {#if showCreateFolderModal}
   <div class="modal-overlay" onclick={cancelCreateFolder} role="presentation">
-    <div class="modal-content create-folder-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="modal-content create-folder-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
       <h2 class="modal-title">{$t('playlist.newFolder', { default: 'New Folder' })}</h2>
       <div class="form-group">
         <label for="folder-name">{$t('common.name', { default: 'Name' })}</label>
+        <!-- svelte-ignore a11y_autofocus -->
         <input
           id="folder-name"
           type="text"
@@ -1838,7 +2077,7 @@
     z-index: 2000;
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 136px); /* 104px NowPlayingBar + 32px TitleBar */
+    height: calc(100vh - 148px); /* 104px NowPlayingBar + 44px TitleBar */
     transition: width 200ms ease, min-width 200ms ease;
   }
 
@@ -1854,8 +2093,7 @@
   .content {
     flex: 1;
     overflow: hidden;
-    padding: 12px;
-    padding-bottom: 0;
+    padding: 6px 12px 0 12px;
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -2103,6 +2341,14 @@
     will-change: transform;
   }
 
+  .playlist-drag-wrapper {
+    width: 100%;
+  }
+
+  .playlist-drag-wrapper.dragging {
+    opacity: 0.55;
+  }
+
   .playlists-scroll {
     overflow-y: overlay;
     overflow-x: hidden;
@@ -2154,6 +2400,11 @@
 
   .folder-header:hover {
     background: var(--bg-hover);
+  }
+
+  .folder-header.drag-over {
+    background: var(--bg-hover);
+    outline: 1px solid var(--accent-primary);
   }
 
   .folder-chevron {
@@ -2208,6 +2459,11 @@
     background: var(--bg-hover);
   }
 
+  .collapsed-folder-btn.drag-over {
+    background: var(--bg-hover);
+    outline: 1px solid var(--accent-primary);
+  }
+
   /* Folder Popover (collapsed sidebar) */
   .folder-popover {
     position: fixed;
@@ -2255,7 +2511,7 @@
     cursor: pointer;
     color: var(--text-muted);
     text-align: left;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .folder-popover-item:hover {
@@ -2592,6 +2848,12 @@
     background: var(--bg-hover);
   }
 
+  .context-menu-divider {
+    height: 1px;
+    margin: 6px 0;
+    background: var(--bg-tertiary);
+  }
+
   .context-menu-empty {
     padding: 12px;
     font-size: 12px;
@@ -2626,7 +2888,7 @@
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     text-align: left;
   }
 

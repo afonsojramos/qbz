@@ -26,6 +26,7 @@
     onClose: () => void;
     artwork: string;
     trackTitle: string;
+    explicit?: boolean;
     artist: string;
     album: string;
     quality: string;
@@ -69,6 +70,7 @@
     onClose,
     artwork,
     trackTitle,
+    explicit = false,
     artist,
     album,
     quality,
@@ -343,7 +345,7 @@
           <button class="action-btn" onclick={onOpenQueue} title="Queue">
             <List size={22} />
           </button>
-          <button class="action-btn" onclick={onOpenFocusMode} title="Focus Mode">
+          <button class="action-btn" onclick={onOpenFocusMode} title="Immersive Mode">
             <Maximize2 size={22} />
           </button>
           <button
@@ -460,7 +462,7 @@
     border-radius: 50%;
     color: var(--alpha-70);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .close-btn:hover {
@@ -578,7 +580,7 @@
     justify-content: space-between;
     font-size: 12px;
     color: var(--alpha-50);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
     margin-bottom: 8px;
   }
@@ -628,7 +630,7 @@
     border: none;
     color: var(--alpha-60);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     position: relative;
     padding: 8px;
     border-radius: 50%;
@@ -751,7 +753,7 @@
     border-radius: 50%;
     color: var(--alpha-60);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .action-btn:hover {

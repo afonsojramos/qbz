@@ -84,11 +84,14 @@
 <svelte:document onkeydown={handleKeydown} />
 
 {#if isOpen}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="wizard-backdrop" onclick={handleBackdropClick} role="presentation">
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div
       class="wizard-modal"
       role="dialog"
       aria-modal="true"
+      tabindex="-1"
       onclick={(e) => e.stopPropagation()}
     >
       <!-- Header -->
@@ -452,7 +455,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .close-btn:hover {
@@ -621,7 +624,7 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .platform-tab:hover {
@@ -722,7 +725,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .btn-primary {

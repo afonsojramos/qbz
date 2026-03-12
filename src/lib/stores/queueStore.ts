@@ -17,6 +17,7 @@ export interface QueueTrack {
   duration: string;
   available?: boolean; // Whether track is available (false when offline without local copy)
   trackId?: number; // For favorite checking
+  parental_warning?: boolean;
 }
 
 export interface BackendQueueTrack {
@@ -36,6 +37,7 @@ export interface BackendQueueTrack {
   streamable?: boolean;
   /** Track source: qobuz | local | plex */
   source?: string;
+  parental_warning?: boolean;
 }
 
 interface BackendQueueState {
@@ -152,7 +154,7 @@ export async function updateLocalCopiesSet(): Promise<void> {
   }
 
   try {
-    const trackIds = queue.map(t => parseInt(t.id)).filter(id => !isNaN(id));
+    const trackIds = queue.map(track => parseInt(track.id)).filter(id => !isNaN(id));
     if (trackIds.length === 0) {
       tracksWithLocalCopies = new Set();
       return;
@@ -164,10 +166,10 @@ export async function updateLocalCopiesSet(): Promise<void> {
     tracksWithLocalCopies = new Set(localIds);
 
     // Update queue availability
-    queue = queue.map(t => {
-      const numId = parseInt(t.id);
+    queue = queue.map(track => {
+      const numId = parseInt(track.id);
       return {
-        ...t,
+        ...track,
         available: isNaN(numId) || localTrackIds.has(numId) || tracksWithLocalCopies.has(numId)
       };
     });
@@ -188,7 +190,7 @@ export async function syncQueueState(): Promise<void> {
     const queueState = await invoke<BackendQueueState>('v2_get_queue_state');
 
     // Get track IDs for local copy check
-    const trackIds = queueState.upcoming.map(t => t.id);
+    const trackIds = queueState.upcoming.map(track => track.id);
 
     // Check local copies if in offline mode
     let localCopies = new Set<number>();
@@ -205,13 +207,14 @@ export async function syncQueueState(): Promise<void> {
     }
 
     // Convert backend queue tracks to frontend format
-    queue = queueState.upcoming.map(t => ({
-      id: String(t.id),
-      artwork: t.artwork_url || '',
-      title: t.title,
-      artist: t.artist,
-      duration: formatDuration(t.duration_secs),
-      available: !isOfflineMode || localTrackIds.has(t.id) || localCopies.has(t.id)
+    queue = queueState.upcoming.map(track => ({
+      id: String(track.id),
+      artwork: track.artwork_url || '',
+      title: track.title,
+      artist: track.artist,
+      duration: formatDuration(track.duration_secs),
+      available: !isOfflineMode || localTrackIds.has(track.id) || localCopies.has(track.id),
+      parental_warning: track.parental_warning ?? false
     }));
 
     queueTotalTracks = queueState.total_tracks;
@@ -307,6 +310,21 @@ export async function addTracksToQueue(tracks: BackendQueueTrack[]): Promise<boo
     return true;
   } catch (err) {
     console.error('Failed to add tracks to queue:', err);
+    return false;
+  }
+}
+
+/**
+ * Add multiple tracks to play next in queue (V2)
+ * Backend reverses the order so they play in the correct sequence.
+ */
+export async function addTracksToQueueNext(tracks: BackendQueueTrack[]): Promise<boolean> {
+  try {
+    await invoke('v2_add_tracks_to_queue_next', { tracks });
+    await syncQueueState();
+    return true;
+  } catch (err) {
+    console.error('Failed to add tracks to queue next:', err);
     return false;
   }
 }

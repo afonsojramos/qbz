@@ -1,7 +1,9 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { onMount, onDestroy } from 'svelte';
-  import { ArrowLeft, Disc3, Play, Music, MoreHorizontal, Heart, User, ChevronDown, ChevronUp } from 'lucide-svelte';
+  import { ArrowLeft, Disc3, Play, Music, MoreHorizontal, Heart, User, ChevronDown, ChevronUp, CheckSquare } from 'lucide-svelte';
+  import BulkActionBar from '../BulkActionBar.svelte';
   import { t } from '$lib/i18n';
   import AlbumCard from '../AlbumCard.svelte';
   import HorizontalScrollRow from '../HorizontalScrollRow.svelte';
@@ -64,6 +66,7 @@
     onTrackPlayLater?: (track: Track) => void;
     onTrackAddFavorite?: (trackId: number) => void;
     onTrackAddToPlaylist?: (trackId: number) => void;
+    onBulkAddToPlaylist?: (trackIds: number[]) => void;
     onTrackGoToAlbum?: (albumId: string) => void;
     activeTrackId?: number | null;
     isPlaybackActive?: boolean;
@@ -99,6 +102,7 @@
     onTrackPlayLater,
     onTrackAddFavorite,
     onTrackAddToPlaylist,
+    onBulkAddToPlaylist,
     onTrackGoToAlbum,
     activeTrackId = null,
     isPlaybackActive = false,
@@ -182,6 +186,43 @@
 
   let visibleTracks = $derived(topTracks.slice(0, visibleTracksCount));
   let canLoadMoreTracks = $derived(visibleTracksCount < 50 && topTracks.length > visibleTracksCount);
+
+  // Multi-select (popular tracks)
+  let multiSelectMode = $state(false);
+  let multiSelectedIds = $state(new Set<number>());
+
+  function toggleMultiSelectMode() {
+    multiSelectMode = !multiSelectMode;
+    if (!multiSelectMode) multiSelectedIds = new Set();
+  }
+
+  function toggleMultiSelect(id: number) {
+    const next = new Set(multiSelectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    multiSelectedIds = next;
+  }
+
+  async function handleBulkPlayNext() {
+    const selected = visibleTracks.filter(trk => multiSelectedIds.has(trk.id));
+    await invoke('v2_add_tracks_to_queue_next', { tracks: buildTopTracksQueue(selected) });
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkPlayLater() {
+    const selected = visibleTracks.filter(trk => multiSelectedIds.has(trk.id));
+    await invoke('v2_add_tracks_to_queue', { tracks: buildTopTracksQueue(selected) });
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkAddToPlaylist() {
+    onBulkAddToPlaylist?.([...multiSelectedIds]);
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkAddFavorites() {
+    for (const id of multiSelectedIds) { onTrackAddFavorite?.(id); }
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
 
   function loadMoreTracks() {
     if (visibleTracksCount === 5) {
@@ -387,7 +428,7 @@
       artist: track.performer?.name || pageData?.name || '',
       album: track.album?.title || '',
       duration_secs: track.duration,
-      artwork_url: track.album?.image?.large || track.album?.image?.thumbnail || '',
+      artwork_url: track.album?.image?.small || track.album?.image?.thumbnail || '',
       hires: track.hires_streamable ?? false,
       bit_depth: track.maximum_bit_depth ?? null,
       sample_rate: track.maximum_sampling_rate ?? null,
@@ -525,7 +566,11 @@
   }
 
   function getArtistImageUrl(artist: Record<string, unknown>): string | null {
-    // 0. Check fetched image cache
+    // 0a. Check custom artist image overrides
+    const artistName = getArtistName(artist);
+    const customUrl = resolveArtistImage(artistName, '');
+    if (customUrl) return customUrl;
+    // 0b. Check fetched image cache
     const cached = artistImageMap.get(artist.id as number);
     if (cached) return cached;
     // 1. image object (most common in search results)
@@ -778,6 +823,15 @@
             <button class="action-btn-circle primary" onclick={handlePlayAllTracks} title="Play All">
               <Play size={20} fill="currentColor" color="currentColor" />
             </button>
+            <button
+              class="action-btn-circle"
+              class:is-active={multiSelectMode}
+              onclick={toggleMultiSelectMode}
+              disabled={topTracks.length === 0}
+              title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+            >
+              <CheckSquare size={18} />
+            </button>
             <div class="context-menu-wrapper">
               <button
                 class="action-btn-circle"
@@ -813,16 +867,30 @@
             <div
               class="track-row"
               class:playing={isActiveTrack}
+              class:multi-selected={multiSelectMode && multiSelectedIds.has(track.id)}
               role="button"
               tabindex="0"
               data-track-id={track.id}
-              onclick={() => handleTrackPlay(track, index)}
-              onkeydown={(e) => e.key === 'Enter' && handleTrackPlay(track, index)}
+              onclick={() => multiSelectMode ? toggleMultiSelect(track.id) : handleTrackPlay(track, index)}
+              onkeydown={(e) => e.key === 'Enter' && (multiSelectMode ? toggleMultiSelect(track.id) : handleTrackPlay(track, index))}
               oncontextmenu={(e) => {
+                if (multiSelectMode) return;
                 e.preventDefault();
                 trackContextMenu = { trackId: track.id, x: e.clientX, y: e.clientY };
               }}
             >
+              {#if multiSelectMode}
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+                <label class="track-checkbox-wrap" onclick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={multiSelectedIds.has(track.id)}
+                    onchange={() => toggleMultiSelect(track.id)}
+                    aria-label={$t('actions.select')}
+                    style="width:15px;height:15px;cursor:pointer;accent-color:var(--accent-primary);"
+                  />
+                </label>
+              {/if}
               <div class="track-number">{index + 1}</div>
               <div class="track-artwork">
                 <div class="track-artwork-placeholder">
@@ -922,6 +990,14 @@
             </div>
           {/each}
         </div>
+        <BulkActionBar
+          count={multiSelectedIds.size}
+          onPlayNext={handleBulkPlayNext}
+          onPlayLater={handleBulkPlayLater}
+          onAddToPlaylist={handleBulkAddToPlaylist}
+          onAddFavorites={onTrackAddFavorite ? handleBulkAddFavorites : undefined}
+          onClearSelection={() => { multiSelectedIds = new Set(); }}
+        />
         {#if canLoadMoreTracks}
           <button class="load-more-link" onclick={loadMoreTracks}>
             {$t('label.showMore')} <ChevronDown size={14} />
@@ -950,7 +1026,7 @@
             {#each releases.slice(0, 20) as album (album.id)}
               <AlbumCard
                 albumId={album.id}
-                artwork={album.image?.large || album.image?.thumbnail || ''}
+                artwork={album.image?.small || album.image?.thumbnail || ''}
                 title={album.title}
                 artist={album.artist?.name || ''}
                 artistId={album.artist?.id}
@@ -985,7 +1061,7 @@
             {#each criticsPicks.slice(0, 20) as album (album.id)}
               <AlbumCard
                 albumId={album.id}
-                artwork={album.image?.large || album.image?.thumbnail || ''}
+                artwork={album.image?.small || album.image?.thumbnail || ''}
                 title={album.title}
                 artist={album.artist?.name || ''}
                 artistId={album.artist?.id}
@@ -1151,7 +1227,7 @@
     display: flex; align-items: center; gap: 8px;
     font-size: 14px; color: var(--text-muted);
     background: none; border: none; cursor: pointer;
-    margin-top: 24px; margin-bottom: 24px; transition: color 150ms ease;
+    margin-top: 8px; margin-bottom: 24px; transition: color 150ms ease;
   }
   .back-btn:hover { color: var(--text-secondary); }
 
@@ -1241,6 +1317,7 @@
   .action-btn-circle:hover { background-color: var(--bg-hover); color: var(--text-primary); }
   .action-btn-circle.primary { background-color: var(--accent-primary); color: white; }
   .action-btn-circle.primary:hover { opacity: 0.9; }
+  .action-btn-circle.is-active { background-color: var(--accent-primary); color: white; }
   .see-all-btn {
     background: none; border: none; color: var(--text-muted);
     font-size: 13px; font-weight: 500; cursor: pointer;
@@ -1275,6 +1352,8 @@
     width: 100%; transition: background-color 150ms ease;
   }
   .track-row:hover { background-color: var(--bg-tertiary); }
+  .track-row.multi-selected { background-color: rgba(var(--accent-primary-rgb, 92, 107, 192), 0.15); }
+  .track-checkbox-wrap { display: flex; align-items: center; flex-shrink: 0; }
   .track-number { width: 24px; font-size: 14px; color: var(--text-muted); text-align: center; }
   .track-artwork {
     width: 40px; height: 40px; border-radius: 4px;
@@ -1335,7 +1414,7 @@
   }
   .track-link:hover { color: var(--text-primary); text-decoration: underline; text-underline-offset: 2px; }
   .track-quality { display: flex; align-items: center; }
-  .track-duration { font-size: 13px; color: var(--text-muted); font-family: var(--font-mono); }
+  .track-duration { font-size: 13px; color: var(--text-muted); font-family: var(--font-sans); }
   .track-actions { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
   .track-favorite-btn {
     display: flex; align-items: center; justify-content: center;

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { History, Play } from 'lucide-svelte';
   import { t } from '$lib/i18n';
+  import { cachedSrc } from '$lib/actions/cachedImage';
 
   interface QueueTrack {
     id: string | number;
@@ -56,7 +57,7 @@
             >
               <Play size={14} />
             </button>
-            <img src={track.artwork} alt="" class="track-artwork" />
+            <img use:cachedSrc={track.artwork} alt="" class="track-artwork" />
             <div class="track-info">
               <div class="track-title">{track.title}</div>
               <div class="track-artist">{track.artist}</div>
@@ -161,7 +162,7 @@
     color: var(--alpha-70, rgba(255, 255, 255, 0.7));
     cursor: pointer;
     opacity: 0;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -208,7 +209,7 @@
 
   .track-duration {
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--alpha-50, rgba(255, 255, 255, 0.5));
     flex-shrink: 0;
   }

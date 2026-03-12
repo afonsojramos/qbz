@@ -137,6 +137,42 @@ pub struct ListenBrainzStatus {
     pub enabled: bool,
 }
 
+// ==================== Discovery Models ====================
+
+/// A similar artist from ListenBrainz Labs similar-artists API
+#[derive(Debug, Clone, Deserialize)]
+pub struct LbSimilarArtist {
+    pub artist_mbid: String,
+    pub name: String,
+    pub score: f64,
+    #[serde(default)]
+    pub reference_mbid: Option<String>,
+    #[serde(default)]
+    pub comment: Option<String>,
+    #[serde(default, rename = "type")]
+    pub artist_type: Option<String>,
+    #[serde(default)]
+    pub gender: Option<String>,
+}
+
+/// A discovery candidate extracted from ListenBrainz data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveryArtist {
+    /// MusicBrainz artist ID
+    pub mbid: String,
+    /// Display name
+    pub name: String,
+    /// Normalized name for dedup (lowercase, trimmed)
+    pub normalized_name: String,
+    /// Raw similarity score from ListenBrainz
+    pub affinity_score: f64,
+    /// Similarity percentage (0-100), normalized from raw score
+    pub similarity_percent: f64,
+    /// Optional Qobuz artist ID if resolved
+    pub qobuz_id: Option<u64>,
+}
+
 /// Queued listen for offline submission
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

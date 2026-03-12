@@ -11,6 +11,9 @@ pub mod runtime;
 pub mod session_lifecycle;
 pub mod tauri_adapter;
 
+pub mod auto_theme;
+pub mod autoconfig_graphics;
+
 pub mod api;
 pub mod api_cache;
 pub mod api_server;
@@ -24,6 +27,8 @@ pub mod config;
 pub mod credentials;
 pub mod discogs;
 pub mod flatpak;
+pub mod image_cache;
+pub mod snap;
 pub mod lastfm;
 pub mod library;
 pub mod listenbrainz;
@@ -36,6 +41,7 @@ pub mod network;
 pub mod offline;
 pub mod offline_cache;
 pub mod playback_context;
+#[allow(deprecated)]
 pub mod player;
 pub mod playlist_import;
 pub mod plex;
@@ -48,6 +54,7 @@ pub mod tray;
 pub mod updates;
 pub mod user_data;
 pub mod visualizer;
+pub mod pdf_viewer;
 
 use std::sync::Arc;
 use rustls::crypto::{aws_lc_rs, CryptoProvider};
@@ -93,8 +100,8 @@ impl AppState {
         device_name: Option<String>,
         audio_settings: config::audio_settings::AudioSettings,
     ) -> Self {
-        // Create playback cache (L2 - disk, 500MB)
-        let playback_cache = match PlaybackCache::new(500 * 1024 * 1024) {
+        // Create playback cache (L2 - disk, 800MB)
+        let playback_cache = match PlaybackCache::new(800 * 1024 * 1024) {
             Ok(cache) => Some(Arc::new(cache)),
             Err(e) => {
                 log::warn!(
@@ -105,9 +112,9 @@ impl AppState {
             }
         };
 
-        // Create audio cache (L1 - memory, 300MB) with optional disk spillover
+        // Create audio cache (L1 - memory, 400MB) with optional disk spillover
         let audio_cache = if let Some(pc) = playback_cache {
-            Arc::new(AudioCache::with_playback_cache(300 * 1024 * 1024, pc))
+            Arc::new(AudioCache::with_playback_cache(400 * 1024 * 1024, pc))
         } else {
             Arc::new(AudioCache::default())
         };
@@ -160,6 +167,298 @@ pub fn update_media_controls_metadata(
     media_controls.set_metadata(&track_info);
 }
 
+/// Add a KWin window rule that forces server-side decorations (SSD) for QBZ.
+///
+/// GTK3 on Wayland hardcodes CLIENT_SIDE in the xdg-decoration protocol,
+/// so KWin scripting alone can't override it. Window rules operate at a
+/// deeper level (applied during window setup, before protocol negotiation)
+/// and can force KWin to draw native SSD.
+///
+/// The rule is written to ~/.config/kwinrulesrc and persists across sessions.
+/// It's removed when the user disables system title bar.
+fn setup_kwin_window_rule() -> Result<(), String> {
+    let config_path = dirs::config_dir()
+        .ok_or_else(|| "Could not determine config directory".to_string())?
+        .join("kwinrulesrc");
+
+    // Read existing rules to find next available slot and check for existing QBZ rule
+    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let mut existing_count: u32 = 0;
+    let mut qbz_rule_group: Option<u32> = None;
+
+    for line in existing.lines() {
+        // Parse [General] count=N
+        if line.starts_with("count=") {
+            if let Ok(n) = line.trim_start_matches("count=").parse::<u32>() {
+                existing_count = n;
+            }
+        }
+        // Check if we already have a QBZ rule
+        if line.contains("Description=QBZ Native Title Bar") {
+            // Find the group number from context — we'll just scan backwards
+            // Simpler: track current group
+        }
+    }
+
+    // Parse INI to find existing QBZ rule group
+    let mut current_group: Option<u32> = None;
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let inner = &trimmed[1..trimmed.len() - 1];
+            current_group = inner.parse::<u32>().ok();
+        }
+        if trimmed == "Description=QBZ Native Title Bar" {
+            qbz_rule_group = current_group;
+        }
+    }
+
+    let rule_num = if let Some(num) = qbz_rule_group {
+        log::info!("KWin window rule for QBZ already exists (group {}), updating", num);
+        num
+    } else {
+        existing_count + 1
+    };
+
+    // Write the rule using kwriteconfig6
+    let group = rule_num.to_string();
+    let rules: &[(&str, &str)] = &[
+        ("Description", "QBZ Native Title Bar"),
+        ("noborder", "false"),
+        ("noborderrule", "2"),       // 2 = Force
+        ("wmclass", "qbz"),
+        ("wmclasscomplete", "false"),
+        ("wmclassmatch", "1"),       // 1 = Exact match
+        ("types", "1"),              // 1 = Normal windows
+    ];
+
+    for (key, value) in rules {
+        let output = std::process::Command::new("kwriteconfig6")
+            .args(["--file", "kwinrulesrc", "--group", &group, "--key", key, value])
+            .output()
+            .map_err(|e| format!("kwriteconfig6 failed: {}", e))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "kwriteconfig6 --key {} failed: {}",
+                key,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+
+    // Update the count in [General] if we added a new rule
+    if qbz_rule_group.is_none() {
+        let new_count = (existing_count + 1).to_string();
+        let output = std::process::Command::new("kwriteconfig6")
+            .args(["--file", "kwinrulesrc", "--group", "General", "--key", "count", &new_count])
+            .output()
+            .map_err(|e| format!("kwriteconfig6 count update failed: {}", e))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "kwriteconfig6 count failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+
+    // Tell KWin to reload rules
+    let output = std::process::Command::new("qdbus6")
+        .args(["org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure"])
+        .output()
+        .map_err(|e| format!("qdbus6 reconfigure failed: {}", e))?;
+
+    if !output.status.success() {
+        log::warn!(
+            "KWin reconfigure failed (non-fatal): {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    log::info!("KWin window rule set for native title bar (group {})", rule_num);
+    Ok(())
+}
+
+/// Remove the KWin window rule for QBZ when system title bar is disabled.
+#[allow(dead_code)]
+fn remove_kwin_window_rule() {
+    // Find and remove QBZ rule from kwinrulesrc
+    let config_path = match dirs::config_dir() {
+        Some(p) => p.join("kwinrulesrc"),
+        None => return,
+    };
+
+    let existing = match std::fs::read_to_string(&config_path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    // Find the QBZ rule group number
+    let mut current_group: Option<String> = None;
+    let mut qbz_group: Option<String> = None;
+
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            current_group = Some(trimmed[1..trimmed.len() - 1].to_string());
+        }
+        if trimmed == "Description=QBZ Native Title Bar" {
+            qbz_group = current_group.clone();
+        }
+    }
+
+    if let Some(group) = qbz_group {
+        // Delete the group using kwriteconfig6
+        let _ = std::process::Command::new("kwriteconfig6")
+            .args(["--file", "kwinrulesrc", "--group", &group, "--delete-group"])
+            .output();
+
+        // Decrement count
+        let mut count: u32 = 0;
+        for line in existing.lines() {
+            if line.starts_with("count=") {
+                count = line.trim_start_matches("count=").parse().unwrap_or(0);
+            }
+        }
+        if count > 0 {
+            let new_count = (count - 1).to_string();
+            let _ = std::process::Command::new("kwriteconfig6")
+                .args(["--file", "kwinrulesrc", "--group", "General", "--key", "count", &new_count])
+                .output();
+        }
+
+        // Reconfigure KWin
+        let _ = std::process::Command::new("qdbus6")
+            .args(["org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure"])
+            .output();
+
+        log::info!("KWin window rule for QBZ removed");
+    }
+}
+
+/// Get the primary screen resolution in logical pixels.
+/// Tries multiple methods: Wayland (wlr-randr, wayland-info), X11 (xdpyinfo).
+/// Returns (width, height) or None if detection fails.
+#[cfg(target_os = "linux")]
+fn get_screen_resolution() -> Option<(f64, f64)> {
+    use std::process::Command;
+
+    // Method 1: Try xdpyinfo (works on X11 and XWayland)
+    if let Ok(output) = Command::new("xdpyinfo").output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Look for "dimensions:    WIDTHxHEIGHT pixels"
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("dimensions:") {
+                    // Parse "dimensions:    3840x2160 pixels (...)"
+                    if let Some(dims) = trimmed.split_whitespace().nth(1) {
+                        let parts: Vec<&str> = dims.split('x').collect();
+                        if parts.len() == 2 {
+                            if let (Ok(w), Ok(h)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+                                log::info!("Screen resolution detected via xdpyinfo: {}x{}", w as u32, h as u32);
+                                return Some((w, h));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Method 2: Try xrandr (widely available)
+    if let Ok(output) = Command::new("xrandr").arg("--current").output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Look for line with " connected " and a resolution like "2560x1440+0+0"
+            for line in stdout.lines() {
+                if line.contains(" connected ") {
+                    // Parse "DP-1 connected primary 2560x1440+0+0 ..."
+                    for token in line.split_whitespace() {
+                        if token.contains('x') && token.contains('+') {
+                            // "2560x1440+0+0"
+                            let res_part = token.split('+').next().unwrap_or("");
+                            let parts: Vec<&str> = res_part.split('x').collect();
+                            if parts.len() == 2 {
+                                if let (Ok(w), Ok(h)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+                                    log::info!("Screen resolution detected via xrandr: {}x{}", w as u32, h as u32);
+                                    return Some((w, h));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    log::warn!("Could not detect screen resolution");
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn apply_linux_webkit_workarounds() {
+    let force_gpu = std::env::var("QBZ_WEBKIT_FORCE_GPU")
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes"
+        })
+        .unwrap_or(false);
+
+    if force_gpu {
+        log::warn!(
+            "QBZ_WEBKIT_FORCE_GPU is enabled; skipping Linux WebKit safety workarounds"
+        );
+        return;
+    }
+
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        log::warn!(
+            "Enabled WEBKIT_DISABLE_DMABUF_RENDERER=1 (stability workaround for Linux WebKit/EGL teardown)"
+        );
+    }
+
+    if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        log::warn!(
+            "Enabled WEBKIT_DISABLE_COMPOSITING_MODE=1 (stability workaround for Linux WebKit/EGL teardown)"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn should_use_main_window_transparency() -> bool {
+    let force_transparent = std::env::var("QBZ_FORCE_TRANSPARENT_WINDOWS")
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes"
+        })
+        .unwrap_or(false);
+    if force_transparent {
+        return true;
+    }
+
+    let force_opaque = std::env::var("QBZ_FORCE_OPAQUE_WINDOWS")
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes"
+        })
+        .unwrap_or(false);
+    if force_opaque {
+        return false;
+    }
+
+    // Stability-first default on Linux.
+    false
+}
+
+#[cfg(not(target_os = "linux"))]
+fn should_use_main_window_transparency() -> bool {
+    true
+}
+
 pub fn run() {
     // Load .env file if present (for development)
     // Silently ignore if not found (production builds use compile-time env vars)
@@ -178,6 +477,9 @@ pub fn run() {
         .init();
 
     log::info!("QBZ starting...");
+
+    #[cfg(target_os = "linux")]
+    apply_linux_webkit_workarounds();
 
     // Migrate data from old App ID if needed
     match flatpak::migrate_app_id_data() {
@@ -223,7 +525,7 @@ pub fn run() {
                     .ok()
             });
         if let Some(settings) = user_settings {
-            log::info!("Loaded tray settings from last active user {}", last_uid);
+            log::info!("Loaded tray settings from last active user profile");
             settings
         } else {
             config::tray_settings::TraySettingsStore::new()
@@ -242,15 +544,88 @@ pub fn run() {
         tray_settings.close_to_tray
     );
 
-    // Read window settings for decoration configuration before window creation.
+    // Read window settings for decoration and size configuration before window creation.
     let window_settings = config::window_settings::WindowSettingsStore::new()
         .and_then(|store| store.get_settings())
         .unwrap_or_default();
     log::info!(
-        "Window settings: use_system_titlebar={}",
-        window_settings.use_system_titlebar
+        "Window settings: use_system_titlebar={}, size={}x{}, maximized={}",
+        window_settings.use_system_titlebar,
+        window_settings.window_width as u32,
+        window_settings.window_height as u32,
+        window_settings.is_maximized,
     );
     let use_system_titlebar = window_settings.use_system_titlebar;
+    let mut saved_win_width = window_settings.window_width;
+    let mut saved_win_height = window_settings.window_height;
+    let saved_win_maximized = window_settings.is_maximized;
+
+    // Safety: clamp window size to screen resolution.
+    // Prevents the window from opening larger than the display (issue #139).
+    // This also handles corrupt DB values that pass the 200..32767 validation
+    // but exceed the actual monitor dimensions.
+    #[cfg(target_os = "linux")]
+    {
+        // Read current screen resolution from xdpyinfo or Wayland
+        if let Some((screen_w, screen_h)) = get_screen_resolution() {
+            // Leave room for taskbar/panels (90% of screen)
+            let max_w = screen_w * 0.95;
+            let max_h = screen_h * 0.95;
+            if saved_win_width > max_w || saved_win_height > max_h {
+                log::warn!(
+                    "Window size {}x{} exceeds screen {}x{}, clamping to {}x{}",
+                    saved_win_width as u32, saved_win_height as u32,
+                    screen_w as u32, screen_h as u32,
+                    max_w as u32, max_h as u32
+                );
+                saved_win_width = saved_win_width.min(max_w);
+                saved_win_height = saved_win_height.min(max_h);
+            }
+        }
+    }
+
+    // One-time cleanup: remove the KWin SSD window rule written by QBZ 1.1.14.
+    // That version wrote a kwinrulesrc entry forcing server-side decorations; it
+    // was removed in 1.1.15 due to a GTK3/WebKit heap corruption bug. We silently
+    // delete the stale rule so KWin stops applying SSD on existing installs.
+    // No qdbus6 reconfigure call here — KWin picks it up on next restart, and
+    // users affected can run `qdbus6 org.kde.KWin /KWin reconfigure` manually or
+    // just restart their session. This block does nothing if the rule is absent.
+    {
+        if let Some(path) = dirs::config_dir().map(|d| d.join("kwinrulesrc")) {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if content.contains("Description=QBZ Native Title Bar") {
+                    // Strip the [N] group that contains our rule
+                    let mut out = String::with_capacity(content.len());
+                    let mut skip = false;
+                    for line in content.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                            skip = false;
+                        }
+                        if trimmed == "Description=QBZ Native Title Bar" {
+                            // Remove the header we already wrote + this section
+                            // by trimming back to the previous newline
+                            if let Some(pos) = out.rfind('[') {
+                                out.truncate(pos);
+                            }
+                            skip = true;
+                            continue;
+                        }
+                        if !skip {
+                            out.push_str(line);
+                            out.push('\n');
+                        }
+                    }
+                    if let Err(e) = std::fs::write(&path, out) {
+                        log::warn!("[Cleanup] Failed to remove stale KWin rule: {}", e);
+                    } else {
+                        log::info!("[Cleanup] Removed stale KWin SSD rule from kwinrulesrc");
+                    }
+                }
+            }
+        }
+    }
 
     // Initialize casting state (Chromecast, DLNA) — device-level, not per-user
     let cast_state = cast::CastState::new().expect("Failed to initialize Chromecast state");
@@ -300,6 +675,22 @@ pub fn run() {
     let listenbrainz_v2_state = integrations_v2::ListenBrainzV2State::new();
     let musicbrainz_v2_state = integrations_v2::MusicBrainzV2State::new();
     let lastfm_v2_state = integrations_v2::LastFmV2State::new();
+    let image_cache_settings_state = config::ImageCacheSettingsState::new()
+        .unwrap_or_else(|e| {
+            log::warn!(
+                "Failed to initialize image cache settings: {}. Using empty state.",
+                e
+            );
+            config::ImageCacheSettingsState::new_empty()
+        });
+    let image_cache_state = image_cache::ImageCacheState::new()
+        .unwrap_or_else(|e| {
+            log::warn!(
+                "Failed to initialize image cache: {}. Using empty state.",
+                e
+            );
+            image_cache::ImageCacheState::new_empty()
+        });
     let developer_settings_state = config::developer_settings::DeveloperSettingsState::new()
         .unwrap_or_else(|e| {
             log::warn!(
@@ -366,23 +757,52 @@ pub fn run() {
         .manage(qconnect_service::QconnectServiceState::new())
         .manage(user_data_paths)
         .setup(move |app| {
-            // Create main window programmatically so we can set the correct
-            // decoration state at creation time. On Linux/Wayland, windows
-            // created with decorations:false cannot reliably switch to
-            // decorations:true at runtime (WM buttons don't work). By
-            // creating the window with the right value from the start, the
-            // WM sees the correct state when the window is first mapped.
-            log::info!("Creating main window (decorations={})", use_system_titlebar);
-            tauri::WebviewWindowBuilder::new(
+            // On KDE Plasma + Wayland, GTK3 always uses client-side decorations
+            // (CSD) regardless of GTK_CSD env var, because it hardcodes
+            // CLIENT_SIDE in the xdg-decoration protocol. This means
+            // decorations(true) shows a GTK/Breeze-GTK title bar, not the
+            // native KDE Breeze one.
+            //
+            // Workaround: create the window with decorations=false (no GTK CSD),
+            // then load a KWin script via D-Bus that forces KWin to draw its own
+            // server-side decorations (SSD) for QBZ. This gives a single, native
+            // KDE title bar identical to Dolphin/Konsole.
+            let is_kde_wayland = std::env::var("GDK_BACKEND")
+                .map(|v| v == "wayland")
+                .unwrap_or(false)
+                && auto_theme::system::detect_desktop_environment()
+                    == auto_theme::system::DesktopEnvironment::KdePlasma;
+
+            let use_kwin_ssd = use_system_titlebar && is_kde_wayland;
+
+            // On KDE Wayland: always decorations=false, KWin script adds SSD
+            // On other DEs: use decorations directly (GTK CSD is acceptable)
+            let gtk_decorations = if use_kwin_ssd {
+                false
+            } else {
+                use_system_titlebar
+            };
+
+            log::info!(
+                "Creating main window (decorations={}, kwin_ssd={})",
+                gtk_decorations,
+                use_kwin_ssd
+            );
+            let main_window_transparent = should_use_main_window_transparency();
+            log::info!(
+                "Main window transparency: {} (override with QBZ_FORCE_TRANSPARENT_WINDOWS=1 or QBZ_FORCE_OPAQUE_WINDOWS=1)",
+                main_window_transparent
+            );
+            let main_window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::App(std::path::PathBuf::from("index.html")),
             )
             .title("QBZ")
-            .inner_size(1280.0, 800.0)
+            .inner_size(saved_win_width, saved_win_height)
             .min_inner_size(800.0, 600.0)
-            .decorations(use_system_titlebar)
-            .transparent(true)
+            .decorations(gtk_decorations)
+            .transparent(main_window_transparent)
             .resizable(true)
             .zoom_hotkeys_enabled(true)
             .build()
@@ -390,6 +810,59 @@ pub fn run() {
                 log::error!("Failed to create main window: {}", e);
                 e
             })?;
+
+            // Restore maximized state
+            if saved_win_maximized {
+                let _ = main_window.maximize();
+            }
+
+            // Persist window size across sessions.
+            // - Resize (non-maximized): saves width/height so last user size is remembered.
+            // - CloseRequested: saves the maximized flag.
+            {
+                let ws_state = app.state::<config::window_settings::WindowSettingsState>();
+                let store = std::sync::Arc::clone(&ws_state.store);
+                let win_for_events = main_window.clone();
+                main_window.on_window_event(move |event| {
+                    match event {
+                        tauri::WindowEvent::Resized(size) => {
+                            if size.width > 0 && size.height > 0 {
+                                let maximized = win_for_events.is_maximized().unwrap_or(false);
+                                if !maximized {
+                                    // Convert physical pixels to logical pixels
+                                    // inner_size() expects logical, Resized gives physical
+                                    let scale = win_for_events.scale_factor().unwrap_or(1.0);
+                                    let logical_w = size.width as f64 / scale;
+                                    let logical_h = size.height as f64 / scale;
+                                    if let Ok(guard) = store.lock() {
+                                        if let Some(s) = guard.as_ref() {
+                                            let _ = s.set_window_size(logical_w, logical_h);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        tauri::WindowEvent::CloseRequested { .. } => {
+                            let maximized = win_for_events.is_maximized().unwrap_or(false);
+                            if let Ok(guard) = store.lock() {
+                                if let Some(s) = guard.as_ref() {
+                                    let _ = s.set_is_maximized(maximized);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            }
+
+            // Add KWin window rule to force server-side decorations for QBZ
+            if use_kwin_ssd {
+                std::thread::spawn(|| {
+                    if let Err(e) = setup_kwin_window_rule() {
+                        log::warn!("Failed to set KWin window rule: {}", e);
+                    }
+                });
+            }
 
             // Initialize system tray icon (only if enabled)
             if enable_tray {
@@ -619,9 +1092,12 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(move |window, event| {
-            // Handle close to tray — read dynamically from state so per-user
-            // settings take effect after login without needing a restart.
+            // Only handle close-to-tray for the main window.
+            // Secondary windows (miniplayer, oauth) are managed elsewhere.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
                 let close_to_tray = window
                     .app_handle()
                     .try_state::<config::tray_settings::TraySettingsState>()
@@ -631,8 +1107,19 @@ pub fn run() {
                 if close_to_tray {
                     log::info!("Close to tray: hiding window instead of closing");
                     let _ = window.hide();
+                    // Also hide the miniplayer if open
+                    if let Some(mini) = window.app_handle().webview_windows().get("miniplayer") {
+                        let _ = mini.hide();
+                    }
                     api.prevent_close();
                 } else {
+                    let open_windows: Vec<String> =
+                        window.app_handle().webview_windows().keys().cloned().collect();
+                    log::info!(
+                        "App closing requested by user; open windows before exit: {:?}",
+                        open_windows
+                    );
+
                     // Cleanup cast devices on actual close
                     log::info!("App closing: cleaning up cast devices");
 
@@ -642,10 +1129,12 @@ pub fn run() {
                         let _ = cast_state.chromecast.disconnect();
                     }
 
-                    // Note: DLNA connection will be dropped when the app exits,
-                    // which will naturally close the connection. The tokio Mutex
-                    // prevents us from synchronously stopping playback here.
                     log::info!("DLNA connection will be cleaned up on drop");
+
+                    // Allow Tauri's normal close flow for the main window.
+                    // Forcing app_handle.exit(0) from CloseRequested can race
+                    // WebKit process teardown on Linux (EGL/TLS destructors).
+                    // Letting the window close naturally reduces shutdown races.
                 }
             }
         })
@@ -678,6 +1167,9 @@ pub fn run() {
         .manage(developer_settings_state)
         .manage(graphics_settings_state)
         .manage(window_settings_state)
+        .manage(image_cache_settings_state)
+        .manage(image_cache_state)
+        .manage(pdf_viewer::BookletState::new())
         // V2 integration states (qbz-integrations crate)
         .manage(listenbrainz_v2_state)
         .manage(musicbrainz_v2_state)
@@ -711,6 +1203,7 @@ pub fn run() {
             commands_v2::v2_init_client,
             commands_v2::v2_auto_login,
             commands_v2::v2_manual_login,
+            commands_v2::v2_start_oauth_login,
             commands_v2::v2_get_user_info,
             commands_v2::v2_save_credentials,
             commands_v2::v2_clear_saved_credentials,
@@ -738,6 +1231,7 @@ pub fn run() {
             flatpak::get_flatpak_help_text,
             config::legal_settings::get_qobuz_tos_accepted,
             updates::has_flatpak_welcome_been_shown,
+            updates::has_snap_welcome_been_shown,
             lyrics::commands::lyrics_get,
             config::favorites_cache::is_track_favorite,
             commands_v2::v2_set_api_locale,
@@ -748,6 +1242,7 @@ pub fn run() {
             commands_v2::v2_get_tray_settings,
             commands_v2::v2_set_autoplay_mode,
             commands_v2::v2_set_show_context_icon,
+            commands_v2::v2_set_persist_session,
             commands_v2::v2_get_playback_preferences,
             commands_v2::v2_get_favorites_preferences,
             commands_v2::v2_save_favorites_preferences,
@@ -773,6 +1268,7 @@ pub fn run() {
             commands_v2::v2_set_hardware_acceleration,
             commands_v2::v2_set_gdk_scale,
             commands_v2::v2_set_gdk_dpi_scale,
+            commands_v2::v2_set_gsk_renderer,
             commands_v2::v2_clear_cache,
             commands_v2::v2_clear_artist_cache,
             commands_v2::v2_get_vector_store_stats,
@@ -909,12 +1405,17 @@ pub fn run() {
             commands_v2::v2_remote_control_regenerate_token,
             commands_v2::v2_remote_control_get_pairing_qr,
             commands_v2::v2_is_running_in_flatpak,
+            commands_v2::v2_is_running_in_snap,
+            commands_v2::v2_mark_snap_welcome_shown,
             commands_v2::v2_detect_legacy_cached_files,
             commands_v2::v2_reco_log_event,
             commands_v2::v2_reco_train_scores,
             commands_v2::v2_reco_get_home,
             commands_v2::v2_reco_get_home_ml,
             commands_v2::v2_reco_get_home_resolved,
+            commands_v2::v2_get_album_suggestions,
+            commands_v2::v2_reco_get_forgotten_favorites,
+            commands_v2::v2_reco_get_top_genres,
             commands_v2::v2_library_get_cache_stats,
             commands_v2::v2_library_get_stats,
             commands_v2::v2_library_get_albums,
@@ -929,6 +1430,13 @@ pub fn run() {
             commands_v2::v2_library_update_folder_path,
             commands_v2::v2_library_cache_artist_image,
             commands_v2::v2_library_set_custom_artist_image,
+            commands_v2::v2_library_remove_custom_artist_image,
+            commands_v2::v2_library_get_artist_image,
+            commands_v2::v2_library_get_all_custom_artist_images,
+            commands_v2::v2_library_set_custom_album_cover,
+            commands_v2::v2_library_remove_custom_album_cover,
+            commands_v2::v2_library_get_all_custom_album_covers,
+            commands_v2::v2_save_image_url_to_file,
             commands_v2::v2_show_track_notification,
             commands_v2::v2_subscribe_playlist,
             commands_v2::v2_cache_track_for_offline,
@@ -971,6 +1479,8 @@ pub fn run() {
             commands_v2::v2_clear_queue,
             commands_v2::v2_add_to_queue,
             commands_v2::v2_add_to_queue_next,
+            commands_v2::v2_bulk_add_to_queue,
+            commands_v2::v2_bulk_add_to_queue_next,
             commands_v2::v2_set_queue,
             commands_v2::v2_remove_from_queue,
             commands_v2::v2_remove_upcoming_track,
@@ -1031,6 +1541,7 @@ pub fn run() {
             commands_v2::v2_set_audio_exclusive_mode,
             commands_v2::v2_set_audio_dac_passthrough,
             commands_v2::v2_set_audio_pw_force_bitperfect,
+            commands_v2::v2_set_sync_audio_on_startup,
             commands_v2::v2_set_audio_sample_rate,
             commands_v2::v2_set_audio_backend_type,
             commands_v2::v2_set_audio_alsa_plugin,
@@ -1060,6 +1571,10 @@ pub fn run() {
             commands_v2::v2_remote_metadata_search,
             commands_v2::v2_remote_metadata_get_album,
             commands_v2::v2_musicbrainz_get_artist_relationships,
+            commands_v2::v2_musicbrainz_get_artist_metadata,
+            commands_v2::v2_discover_artists_by_location,
+            commands_v2::v2_get_discovery_artists,
+            commands_v2::v2_dismiss_discovery_artist,
             commands_v2::v2_lastfm_get_auth_url,
             commands_v2::v2_lastfm_complete_auth,
             commands_v2::v2_lastfm_is_authenticated,
@@ -1083,6 +1598,7 @@ pub fn run() {
             commands_v2::v2_sync_cached_favorite_tracks,
             commands_v2::v2_cache_favorite_track,
             commands_v2::v2_uncache_favorite_track,
+            commands_v2::v2_bulk_add_favorites,
             commands_v2::v2_clear_favorites_cache,
             commands_v2::v2_get_cached_favorite_albums,
             commands_v2::v2_sync_cached_favorite_albums,
@@ -1128,7 +1644,82 @@ pub fn run() {
             commands_v2::v2_check_qobuzapp_handler,
             commands_v2::v2_register_qobuzapp_handler,
             commands_v2::v2_deregister_qobuzapp_handler,
+            // Auto-theme
+            commands_v2::v2_detect_desktop_environment,
+            commands_v2::v2_get_system_wallpaper,
+            commands_v2::v2_get_system_accent_color,
+            commands_v2::v2_generate_theme_from_image,
+            commands_v2::v2_generate_theme_from_wallpaper,
+            commands_v2::v2_generate_theme_from_system_colors,
+            commands_v2::v2_get_system_color_scheme,
+            commands_v2::v2_extract_palette,
+            commands_v2::v2_fetch_url_bytes,
+            // PDF booklet viewer (MuPDF backend)
+            pdf_viewer::v2_booklet_open,
+            pdf_viewer::v2_booklet_render_page,
+            pdf_viewer::v2_booklet_save,
+            pdf_viewer::v2_booklet_close,
+            // Image cache
+            commands_v2::v2_get_cached_image,
+            commands_v2::v2_get_image_cache_settings,
+            commands_v2::v2_set_image_cache_enabled,
+            commands_v2::v2_set_image_cache_max_size,
+            commands_v2::v2_get_image_cache_stats,
+            commands_v2::v2_clear_image_cache,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            match event {
+                tauri::RunEvent::WindowEvent { label, event, .. } => {
+                    if label == "main" {
+                        if let tauri::WindowEvent::Destroyed = event {
+                            let close_to_tray = app_handle
+                                .try_state::<config::tray_settings::TraySettingsState>()
+                                .and_then(|state| state.get_settings().ok())
+                                .map(|s| s.close_to_tray)
+                                .unwrap_or(false);
+
+                            if !close_to_tray {
+                                log::info!(
+                                    "RunEvent::WindowEvent::Destroyed(main) with close_to_tray=false; exiting app"
+                                );
+                                app_handle.exit(0);
+                            }
+                        }
+                    }
+                }
+                tauri::RunEvent::Exit => {
+                    let open_windows: Vec<String> =
+                        app_handle.webview_windows().keys().cloned().collect();
+                    log::info!("RunEvent::Exit — windows visible to app: {:?}", open_windows);
+
+                    // Graceful shutdown: stop audio and visualizer BEFORE process
+                    // teardown. The stop() calls are fire-and-forget via channel,
+                    // so we must wait for the audio threads to actually drop their
+                    // CPAL streams.
+                    log::info!("RunEvent::Exit — stopping audio and visualizer");
+
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        state.visualizer.set_enabled(false);
+                        let _ = state.player.stop();
+                    }
+
+                    if let Some(bridge_state) = app_handle.try_state::<core_bridge::CoreBridgeState>()
+                    {
+                        if let Ok(guard) = bridge_state.0.try_read() {
+                            if let Some(bridge) = guard.as_ref() {
+                                let _ = bridge.player().stop();
+                            }
+                        }
+                    }
+
+                    // Wait for audio threads to process stop and drop CPAL streams.
+                    // Without this, exit() can free heap while CPAL threads still run.
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    log::info!("RunEvent::Exit — shutdown complete");
+                }
+                _ => {}
+            }
+        });
 }

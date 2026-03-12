@@ -88,11 +88,13 @@
     onclick={handleBackdropClick}
     role="presentation"
   >
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="modal"
       role="dialog"
       aria-modal="true"
       aria-labelledby="shortcuts-modal-title"
+      tabindex="-1"
       onclick={(e) => e.stopPropagation()}
     >
       <header class="modal-header">
@@ -148,7 +150,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
+    z-index: 3000;
     backdrop-filter: blur(4px);
     animation: fadeIn 150ms ease-out;
   }
@@ -162,7 +164,7 @@
     background: var(--bg-secondary);
     border-radius: 12px;
     width: 90%;
-    max-width: 500px;
+    max-width: 660px;
     max-height: 80vh;
     display: flex;
     flex-direction: column;
@@ -213,7 +215,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .close-btn:hover {
@@ -225,10 +227,14 @@
     flex: 1;
     overflow-y: auto;
     padding: 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 24px;
   }
 
   .category-section {
     margin-bottom: 24px;
+    break-inside: avoid;
   }
 
   .category-section:last-child {
@@ -293,7 +299,7 @@
     color: var(--text-secondary);
     font-size: 14px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .customize-btn:hover {
@@ -315,6 +321,7 @@
 
     .modal-content {
       padding: 16px;
+      grid-template-columns: 1fr;
     }
 
     .shortcut-row {

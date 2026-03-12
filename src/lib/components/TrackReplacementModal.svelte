@@ -125,7 +125,9 @@
 </script>
 
 {#if isOpen}
-  <div class="modal-overlay" onclick={onClose} onkeydown={handleKeydown} role="dialog" aria-modal="true">
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="modal-overlay" onclick={onClose} onkeydown={handleKeydown} role="dialog" aria-modal="true" tabindex="-1">
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="modal-content" onclick={(e) => e.stopPropagation()}>
       <div class="modal-header">
         <h2>{$t('playlist.findReplacement')}</h2>
@@ -199,6 +201,7 @@
                 </div>
                 <div class="track-duration">{formatDuration(track.duration)}</div>
                 {#if onPreview}
+                  <!-- svelte-ignore node_invalid_placement_ssr -->
                   <button
                     class="preview-btn"
                     onclick={(e) => handlePreview(e, track)}
@@ -285,7 +288,7 @@
     cursor: pointer;
     padding: 4px;
     border-radius: 4px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .close-btn:hover {
@@ -347,7 +350,7 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -407,7 +410,7 @@
     border: none;
     border-radius: 8px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     text-align: left;
   }
 
@@ -495,7 +498,7 @@
   .track-duration {
     font-size: 13px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     width: 45px;
     text-align: right;
   }
@@ -511,7 +514,7 @@
     border-radius: 50%;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     opacity: 0;
   }
 
@@ -550,7 +553,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .cancel-btn {

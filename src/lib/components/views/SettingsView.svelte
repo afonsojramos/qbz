@@ -4,7 +4,7 @@
   import ViewTransition from '../ViewTransition.svelte';
   import { getCurrentWebview } from '@tauri-apps/api/webview';
   import { writeText as copyToClipboard } from '@tauri-apps/plugin-clipboard-manager';
-  import { ask } from '@tauri-apps/plugin-dialog';
+  import { ask, open as openFileDialog } from '@tauri-apps/plugin-dialog';
   import { ArrowLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Sun, Moon, SunMoon, Ban, AlertTriangle, RefreshCw } from 'lucide-svelte';
   import Toggle from '../Toggle.svelte';
   import Dropdown from '../Dropdown.svelte';
@@ -38,8 +38,19 @@
   import MigrationModal from '../MigrationModal.svelte';
   import { getDevicePrettyName } from '$lib/utils/audioDeviceNames';
   import { getUserItem, setUserItem, removeUserItem } from '$lib/utils/userStorage';
+  import { getConfig as getImmersiveConfig, setConfig as setImmersiveConfig } from '$lib/immersive';
   import { ZOOM_OPTIONS, findZoomOption, getZoomLevelFromOption } from '$lib/utils/zoom';
   import { getZoom, setZoom, subscribeZoom } from '$lib/stores/zoomStore';
+  import {
+    enableAutoTheme,
+    disableAutoTheme,
+    isAutoThemeActive,
+    getAutoThemePrefs,
+    updateThemeVariable,
+    EDITABLE_THEME_VARS,
+    autoThemeStore,
+    type AutoThemeSource,
+  } from '$lib/stores/autoThemeStore';
   import {
     subscribe as subscribeOffline,
     getStatus as getOfflineStatus,
@@ -65,12 +76,48 @@
     getHideTitleBar,
     setHideTitleBar,
     getUseSystemTitleBar,
-    setUseSystemTitleBar
+    setUseSystemTitleBar,
+    getShowWindowControls,
+    setShowWindowControls
   } from '$lib/stores/titleBarStore';
+  import {
+    subscribe as subscribeSearchBarLocation,
+    getSearchBarLocation,
+    setSearchBarLocation,
+    type SearchBarLocation
+  } from '$lib/stores/searchBarLocationStore';
+  import {
+    subscribe as subscribeTitlebarNav,
+    isTitlebarNavEnabled,
+    getTitlebarNavConfig,
+    setTitlebarNavPosition,
+    setDiscoverInTitlebar,
+    setFavoritesInTitlebar,
+    setLibraryInTitlebar,
+    setPurchasesInTitlebar,
+    type TitlebarNavPosition
+  } from '$lib/stores/titlebarNavStore';
+  import {
+    subscribe as subscribeWindowControls,
+    getWindowControls,
+    setButtonPosition,
+    setButtonShape,
+    setButtonSize,
+    applyPreset,
+    setPresetCustom,
+    setButtonColor,
+    PRESETS,
+    type ButtonPosition,
+    type ButtonShape,
+    type ButtonSize,
+    type ButtonColorSet,
+    type WindowControlsConfig
+  } from '$lib/stores/windowControlsStore';
   import {
     getPlaybackPreferences,
     setAutoplayMode,
     setShowContextIcon,
+    setPersistSession,
     type AutoplayMode
   } from '$lib/stores/playbackPreferencesStore';
   import {
@@ -224,6 +271,12 @@
   let artworkCacheStats = $state<{ artwork_cache_bytes: number; thumbnails_cache_bytes: number; artwork_file_count: number; thumbnail_file_count: number } | null>(null);
   let isClearingAllCaches = $state(false);
 
+  // Image cache state (Qobuz CDN images)
+  let imageCacheEnabled = $state(true);
+  let imageCacheMaxSizeMb = $state(200);
+  let imageCacheStats = $state<{ total_bytes: number; file_count: number } | null>(null);
+  let isClearingImageCache = $state(false);
+
   // Reset & factory reset state
   let isResettingAudio = $state(false);
   let factoryResetConfirmed = $state(false);
@@ -245,6 +298,9 @@
   // Flatpak detection state
   let isFlatpak = $state(false);
   let flatpakHelpText = $state('');
+
+  // Snap detection state
+  let isSnap = $state(false);
   let isCheckingNetwork = $state(false);
 
   // Updates state
@@ -262,31 +318,16 @@
   let blacklistCount = $state(getBlacklistCount());
   let blacklistEnabled = $state(isBlacklistEnabled());
 
-  // Section navigation
-  let settingsViewEl: HTMLDivElement;
-  let audioSection: HTMLElement;
-  let playbackSection: HTMLElement;
-  let offlineModeSection: HTMLElement;
-  let appearanceSection: HTMLElement;
-  let downloadsSection: HTMLElement;
-  let contentFilteringSection: HTMLElement;
-  let integrationsSection: HTMLElement;
-  let remoteControlSection: HTMLElement;
-  let updatesSection: HTMLElement;
-  let storageSection: HTMLElement;
-  let flatpakSection = $state<HTMLElement | null>(null);
+  // Section navigation (tab-based: one section visible at a time)
   let activeSection = $state('audio');
 
-  // Collapsible sections state (closed by default)
-  let offlineLibraryCollapsed = $state(true);
-  let storageCollapsed = $state(true);
-  let developerCollapsed = $state(true);
   let forceDmabuf = $state(false);
   let hardwareAcceleration = $state(true);
   let verboseLogCapture = $state(false);
   let forceX11 = $state(false);
   let gdkScale = $state('');
   let gdkDpiScale = $state('');
+  let gskRenderer = $state('');
   let compositionCollapsed = $state(true);
   // Graphics startup status (for showing degraded mode warning)
   let graphicsUsingFallback = $state(false);
@@ -295,13 +336,15 @@
   let graphicsHwAccelEnabled = $state(true);
   let showLogsModal = $state(false);
 
-  type CompositionProfileId = 'nativeWayland' | 'x11Balanced' | 'x11Performance';
+  type CompositionProfileId = 'nativeWayland' | 'x11Balanced' | 'x11Performance' | 'maxPerformance';
 
   type CompositionProfile = {
     id: CompositionProfileId;
     forceX11: boolean;
     gdkScale: string;
     gdkDpiScale: string;
+    gskRenderer: string;
+    backgroundMode: 'full' | 'lite' | 'off';
     labelKey: string;
     descKey: string;
   };
@@ -312,6 +355,8 @@
       forceX11: false,
       gdkScale: '',
       gdkDpiScale: '',
+      gskRenderer: '',
+      backgroundMode: 'full',
       labelKey: 'settings.appearance.composition.profiles.nativeWaylandLabel',
       descKey: 'settings.appearance.composition.profiles.nativeWaylandDesc',
     },
@@ -320,6 +365,8 @@
       forceX11: true,
       gdkScale: '1',
       gdkDpiScale: '1.1',
+      gskRenderer: '',
+      backgroundMode: 'full',
       labelKey: 'settings.appearance.composition.profiles.x11BalancedLabel',
       descKey: 'settings.appearance.composition.profiles.x11BalancedDesc',
     },
@@ -328,8 +375,20 @@
       forceX11: true,
       gdkScale: '1',
       gdkDpiScale: '1',
+      gskRenderer: '',
+      backgroundMode: 'off',
       labelKey: 'settings.appearance.composition.profiles.x11PerformanceLabel',
       descKey: 'settings.appearance.composition.profiles.x11PerformanceDesc',
+    },
+    {
+      id: 'maxPerformance',
+      forceX11: false,
+      gdkScale: '',
+      gdkDpiScale: '',
+      gskRenderer: 'cairo',
+      backgroundMode: 'off',
+      labelKey: 'settings.appearance.composition.profiles.maxPerformanceLabel',
+      descKey: 'settings.appearance.composition.profiles.maxPerformanceDesc',
     },
   ];
 
@@ -337,48 +396,23 @@
   const navSectionIds = [
     { id: 'audio', labelKey: 'settings.audio.title' },
     { id: 'playback', labelKey: 'settings.playback.title' },
-    { id: 'offline', labelKey: 'offline.title' },
     { id: 'appearance', labelKey: 'settings.appearance.title' },
     { id: 'downloads', labelKey: 'settings.offlineLibrary.title' },
     { id: 'content-filtering', labelKey: 'settings.contentFiltering.title' },
     { id: 'integrations', labelKey: 'settings.integrations.title' },
     { id: 'updates', labelKey: 'nav.updates' },
-    { id: 'remote-control', labelKey: 'settings.integrations.remoteControl' },
     { id: 'storage', labelKey: 'settings.storage.title' },
+    { id: 'developer', labelKey: 'settings.developer.title' },
   ];
 
-  // Navigation section definitions (dynamic: includes Flatpak only when running in Flatpak)
-  // NOTE: If adding new sections, add them BEFORE Flatpak. Flatpak must always be last.
-  const navSectionDefs = $derived(
-    isFlatpak
-      ? [...navSectionIds, { id: 'flatpak', labelKey: 'nav.flatpak' }]
-      : navSectionIds
-  );
+  // Navigation section definitions (dynamic: includes sandbox sections when detected)
+  const navSectionDefs = $derived.by(() => {
+    const sections = [...navSectionIds];
+    if (isFlatpak) sections.push({ id: 'flatpak', labelKey: 'nav.flatpak' });
+    if (isSnap) sections.push({ id: 'snap', labelKey: 'nav.snap' });
+    return sections;
+  });
 
-  // Get section element by id (resolved at call time, not definition time)
-  function getSectionEl(id: string): HTMLElement | null {
-    switch (id) {
-      case 'audio': return audioSection;
-      case 'playback': return playbackSection;
-      case 'offline': return offlineModeSection;
-      case 'appearance': return appearanceSection;
-      case 'downloads': return downloadsSection;
-      case 'content-filtering': return contentFilteringSection;
-      case 'integrations': return integrationsSection;
-      case 'remote-control': return remoteControlSection;
-      case 'updates': return updatesSection;
-      case 'storage': return storageSection;
-      case 'flatpak': return flatpakSection;
-      default: return null;
-    }
-  }
-
-  function scrollToSection(id: string) {
-    const el = getSectionEl(id);
-    if (!el) return;
-    activeSection = id;
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
 
   async function handleUpdateCheckOnLaunchToggle(enabled: boolean): Promise<void> {
     await setCheckOnLaunch(enabled);
@@ -471,9 +505,12 @@
   }
 
   const themes: Record<string, ThemeInfo> = {
-    // Dark themes
+    // Core themes
     'Dark':              { value: '',                 type: 'dark' },
     'OLED Black':        { value: 'oled',             type: 'dark' },
+    'Light':             { value: 'light',            type: 'light' },
+    'System':            { value: 'auto',             type: 'dark' },
+    // Dark themes
     'Warm':              { value: 'warm',             type: 'dark' },
     'Nord':              { value: 'nord',             type: 'dark' },
     'Dracula':           { value: 'dracula',          type: 'dark' },
@@ -490,7 +527,6 @@
     'Zoey':              { value: 'zoey',             type: 'dark' },
     'Mira':              { value: 'mira',             type: 'dark' },
     // Light themes
-    'Light':             { value: 'light',            type: 'light' },
     'Rose Pine Dawn':    { value: 'rose-pine-dawn',   type: 'light' },
     'Breeze Light':      { value: 'breeze-light',     type: 'light' },
     'Adwaita Light':     { value: 'adwaita-light',    type: 'light' },
@@ -529,24 +565,130 @@
     else themeFilter = 'all';
   }
 
+  // Auto-theme state
+  // Sources: 'system' = accent first + wallpaper fallback, 'wallpaper' = explicit wallpaper, 'image' = custom image
+  let autoThemeSource = $state<AutoThemeSource>('system');
+  let autoThemeGenerating = $state(false);
+  let autoThemeError = $state<string | null>(null);
+  let autoThemeDE = $state<string | null>(null);
+  let autoThemeSwatches = $state<Record<string, string>>({});
+  let autoThemeCustomPath = $state<string | null>(null);
+  let autoThemeFailedModal = $state(false);
+  let autoThemeFailedMessage = $state('');
+
+  // Source options (use labelKey pattern to avoid $t() in $derived per ADR-001)
+  const autoThemeSourceOptions = [
+    { value: 'system' as AutoThemeSource, labelKey: 'settings.appearance.autoThemeSourceSystem' },
+    { value: 'wallpaper' as AutoThemeSource, labelKey: 'settings.appearance.autoThemeSourceWallpaper' },
+    { value: 'image' as AutoThemeSource, labelKey: 'settings.appearance.autoThemeSourceImage' },
+  ];
+
+  async function handleAutoThemeGenerate() {
+    autoThemeGenerating = true;
+    autoThemeError = null;
+    autoThemeFailedModal = false;
+    try {
+      if (autoThemeSource === 'image' && autoThemeCustomPath) {
+        await enableAutoTheme('image', autoThemeCustomPath);
+      } else if (autoThemeSource === 'wallpaper') {
+        await enableAutoTheme('wallpaper');
+      } else {
+        // 'system': accent first, wallpaper fallback (handled in store)
+        await enableAutoTheme('system');
+      }
+      // Update editable swatches from generated theme variables
+      const storeState = $autoThemeStore;
+      if (storeState.theme) {
+        const vars = storeState.theme.variables;
+        const swatches: Record<string, string> = {};
+        for (const entry of EDITABLE_THEME_VARS) {
+          if (vars[entry.varName]) swatches[entry.varName] = vars[entry.varName];
+        }
+        autoThemeSwatches = swatches;
+      }
+      autoThemeDE = storeState.detectedDE;
+      showToast($t('settings.appearance.autoThemeApplied'), 'success');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      autoThemeError = message;
+      // Show failure modal and fallback to dark theme
+      autoThemeFailedMessage = message;
+      autoThemeFailedModal = true;
+      fallbackToStaticTheme();
+    } finally {
+      autoThemeGenerating = false;
+    }
+  }
+
+  /** Fallback to Dark theme when auto-theme fails */
+  function fallbackToStaticTheme() {
+    disableAutoTheme();
+    theme = 'Dark';
+    applyTheme('');
+    localStorage.setItem('qbz-theme', '');
+    autoThemeSwatches = {};
+    autoThemeDE = null;
+  }
+
+  function dismissAutoThemeFailedModal() {
+    autoThemeFailedModal = false;
+    autoThemeFailedMessage = '';
+  }
+
+  function handleAutoThemeFailedSelectImage() {
+    autoThemeFailedModal = false;
+    autoThemeFailedMessage = '';
+    theme = 'System';
+    autoThemeSource = 'image';
+    void handleAutoThemeSelectImage();
+  }
+
+  async function handleAutoThemeSelectImage() {
+    try {
+      const selected = await openFileDialog({
+        multiple: false,
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }],
+      });
+      if (selected && typeof selected === 'string') {
+        autoThemeCustomPath = selected;
+        autoThemeSource = 'image';
+        await handleAutoThemeGenerate();
+      }
+    } catch (err) {
+      console.error('Failed to open file picker:', err);
+    }
+  }
+
+  function handleAutoThemeSourceChange(newSource: string) {
+    const match = autoThemeSourceOptions.find(opt => $t(opt.labelKey) === newSource);
+    if (match) {
+      autoThemeSource = match.value;
+      if (match.value !== 'image') {
+        void handleAutoThemeGenerate();
+      }
+    }
+  }
+
   // Language mapping: display name -> locale code
   const languageToLocale: Record<string, string | null> = {
     'Auto': null,
     'English': 'en',
     'Español': 'es',
     'Français': 'fr',
-    'Deutsch': 'de'
+    'Deutsch': 'de',
+    'Português': 'pt'
   };
 
   const localeToLanguage: Record<string, string> = {
     'en': 'English',
     'es': 'Español',
     'fr': 'Français',
-    'de': 'Deutsch'
+    'de': 'Deutsch',
+    'pt': 'Português'
   };
 
   // Available languages (only those with translations)
-  const availableLanguages = ['Auto', 'English', 'Español', 'Français', 'Deutsch'];
+  const availableLanguages = ['Auto', 'English', 'Español', 'Français', 'Deutsch', 'Português'];
 
   // Font family selection
   const fontFamilies: Record<string, string> = {
@@ -586,6 +728,7 @@
   let exclusiveMode = $state(false);
   let dacPassthrough = $state(false);
   let pwForceBitperfect = $state(false);
+  let syncAudioOnStartup = $state(false);
   let selectedBackend = $state<string>('Auto');
   let selectedAlsaPlugin = $state<string>('hw (Direct Hardware)');
   let alsaHardwareVolume = $state(false);
@@ -753,22 +896,17 @@
       ? 'settings.audio.dacPassthroughDisabledDesc'
       : null
   );
-  let gaplessDisabled = $derived(
-    selectedBackend === 'ALSA Direct' || streamingOnly || dacPassthrough
-  );
+  let gaplessDisabled = $derived(streamingOnly);
   let gaplessDisabledReasonKey = $derived(
-    selectedBackend === 'ALSA Direct'
-      ? 'settings.playback.gaplessDisabledAlsa'
-      : dacPassthrough
-        ? 'settings.playback.gaplessDisabledDac'
-        : streamingOnly
-          ? 'settings.playback.gaplessDisabledStreaming'
-          : null
+    streamingOnly
+      ? 'settings.playback.gaplessDisabledStreaming'
+      : null
   );
 
   // Playback settings
   let autoplayMode = $state<AutoplayMode>('continue');
   let showContextIcon = $state(true);
+  let persistSession = $state(false);
   let gaplessPlayback = $state(true);
   let crossfade = $state(0);
   let normalizeVolume = $state(false);
@@ -786,10 +924,141 @@
   // Title bar settings
   let hideTitleBar = $state(getHideTitleBar());
   let useSystemTitleBar = $state(getUseSystemTitleBar());
+  let windowControlsVisible = $state(getShowWindowControls());
+
+  // Search bar location
+  let searchInTitlebar = $state(getSearchBarLocation() === 'titlebar');
+
+  // Titlebar nav (per-item toggles)
+  let tbNavConfig = $state(getTitlebarNavConfig());
+  let titlebarNavAnyEnabled = $state(isTitlebarNavEnabled());
+  let titlebarNavPos = $state<TitlebarNavPosition>(getTitlebarNavConfig().position);
+
+  // Window controls customization
+  let wcConfig = $state<WindowControlsConfig>(getWindowControls());
+
+  const POSITION_ENTRIES: Array<{ key: ButtonPosition; i18nSuffix: string }> = [
+    { key: 'right', i18nSuffix: 'Right' },
+    { key: 'left', i18nSuffix: 'Left' },
+  ];
+  const SHAPE_ENTRIES: Array<{ key: ButtonShape; i18nSuffix: string }> = [
+    { key: 'rectangular', i18nSuffix: 'Rectangular' },
+    { key: 'circular', i18nSuffix: 'Circular' },
+    { key: 'square', i18nSuffix: 'Square' },
+  ];
+  const PRESET_ENTRIES: Array<{ key: string; i18nSuffix: string }> = [
+    { key: 'default', i18nSuffix: 'Default' },
+    { key: 'macos', i18nSuffix: 'MacOS' },
+    { key: 'adwaita', i18nSuffix: 'Adwaita' },
+    { key: 'monochrome', i18nSuffix: 'Monochrome' },
+    { key: 'custom', i18nSuffix: 'Custom' },
+  ];
+
+  function getWcPositionOptions(): string[] {
+    return POSITION_ENTRIES.map(entry => $t(`settings.appearance.windowControlsPosition${entry.i18nSuffix}`));
+  }
+
+  function getWcPositionDisplay(): string {
+    const entry = POSITION_ENTRIES.find(entry => entry.key === wcConfig.position) ?? POSITION_ENTRIES[0];
+    return $t(`settings.appearance.windowControlsPosition${entry.i18nSuffix}`);
+  }
+
+  function handleWcPositionChange(displayValue: string): void {
+    const options = getWcPositionOptions();
+    const index = options.indexOf(displayValue);
+    if (index >= 0) {
+      setButtonPosition(POSITION_ENTRIES[index].key);
+    }
+  }
+
+  function getWcShapeOptions(): string[] {
+    return SHAPE_ENTRIES.map(entry => $t(`settings.appearance.windowControlsStyle${entry.i18nSuffix}`));
+  }
+
+  function getWcShapeDisplay(): string {
+    const entry = SHAPE_ENTRIES.find(entry => entry.key === wcConfig.shape) ?? SHAPE_ENTRIES[0];
+    return $t(`settings.appearance.windowControlsStyle${entry.i18nSuffix}`);
+  }
+
+  function handleWcShapeChange(displayValue: string): void {
+    const options = getWcShapeOptions();
+    const index = options.indexOf(displayValue);
+    if (index >= 0) {
+      setButtonShape(SHAPE_ENTRIES[index].key);
+    }
+  }
+
+  function getWcPresetOptions(): string[] {
+    return PRESET_ENTRIES.map(entry => $t(`settings.appearance.windowControlsColorPreset${entry.i18nSuffix}`));
+  }
+
+  function getWcPresetDisplay(): string {
+    const entry = PRESET_ENTRIES.find(entry => entry.key === wcConfig.preset) ?? PRESET_ENTRIES[0];
+    return $t(`settings.appearance.windowControlsColorPreset${entry.i18nSuffix}`);
+  }
+
+  function handleWcPresetChange(displayValue: string): void {
+    const options = getWcPresetOptions();
+    const index = options.indexOf(displayValue);
+    if (index >= 0) {
+      const presetKey = PRESET_ENTRIES[index].key;
+      if (presetKey === 'custom') {
+        setPresetCustom();
+      } else {
+        applyPreset(presetKey);
+      }
+    }
+  }
+
+  const SIZE_ENTRIES: Array<{ key: ButtonSize; i18nSuffix: string }> = [
+    { key: 'small', i18nSuffix: 'Small' },
+    { key: 'normal', i18nSuffix: 'Normal' },
+    { key: 'large', i18nSuffix: 'Large' },
+  ];
+
+  function getWcSizeOptions(): string[] {
+    return SIZE_ENTRIES.map(entry => $t(`settings.appearance.windowControlsSize${entry.i18nSuffix}`));
+  }
+
+  function getWcSizeDisplay(): string {
+    const entry = SIZE_ENTRIES.find(entry => entry.key === wcConfig.size) ?? SIZE_ENTRIES[1];
+    return $t(`settings.appearance.windowControlsSize${entry.i18nSuffix}`);
+  }
+
+  function handleWcSizeChange(displayValue: string): void {
+    const options = getWcSizeOptions();
+    const index = options.indexOf(displayValue);
+    if (index >= 0) {
+      setButtonSize(SIZE_ENTRIES[index].key);
+    }
+  }
+
+  const WC_BUTTONS = ['close', 'maximize', 'minimize'] as const;
+  const WC_COLOR_FIELDS = ['bg', 'bgHover', 'bgActive', 'fg', 'fgHover', 'fgActive'] as const;
+
+  function getWcColor(button: 'close' | 'maximize' | 'minimize', field: keyof ButtonColorSet): string {
+    const colorSet = wcConfig[`${button}Colors` as keyof WindowControlsConfig] as ButtonColorSet;
+    const val = colorSet?.[field];
+    if (!val) return '#888888';
+    // Convert named/rgba colors to hex for color input (best effort)
+    if (val === 'transparent') return '#000000';
+    if (val.startsWith('#')) return val.length === 7 ? val : val;
+    if (val.startsWith('rgba')) {
+      // Parse rgba to hex (ignore alpha)
+      const match = val.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      if (match) {
+        const r = parseInt(match[1]).toString(16).padStart(2, '0');
+        const g = parseInt(match[2]).toString(16).padStart(2, '0');
+        const b = parseInt(match[3]).toString(16).padStart(2, '0');
+        return `#${r}${g}${b}`;
+      }
+    }
+    return '#888888';
+  }
 
   // Immersive default view
   const IMMERSIVE_VIEW_KEYS = [
-    'remember', 'coverflow', 'static', 'vinyl', 'visualizer',
+    'remember', 'coverflow', 'static', 'vinyl', 'visualizer', 'neon-flow', 'tunnel-flow', 'comet-flow',
     'lyrics-focus', 'queue-focus',
     'split-lyrics', 'split-trackInfo', 'split-suggestions', 'split-queue'
   ] as const;
@@ -812,6 +1081,80 @@
       const key = IMMERSIVE_VIEW_KEYS[index];
       immersiveDefaultView = key;
       setUserItem('qbz-immersive-default-view', key);
+    }
+  }
+
+  // Immersive background mode
+  const BACKGROUND_MODES = ['full', 'lite', 'off'] as const;
+  let backgroundMode = $state(getImmersiveConfig().backgroundMode ?? 'full');
+
+  function getBackgroundModeLabel(mode: string): string {
+    return $t(`settings.appearance.immersive.backgroundModes.${mode}`);
+  }
+
+  function handleBackgroundModeChange(label: string) {
+    const mode = BACKGROUND_MODES.find(m => getBackgroundModeLabel(m) === label);
+    if (!mode) return;
+    backgroundMode = mode;
+    setImmersiveConfig({ backgroundMode: mode, disableBlurBackground: mode === 'off' });
+    showToast($t('settings.appearance.immersive.blurChangeNote'), 'info');
+  }
+
+  // Immersive FPS settings (per-panel)
+  const FPS_KEY_PREFIX = 'qbz-immersive-fps-';
+  const FPS_OPTIONS = ['0', '15', '30', '60', '120'] as const;
+  const FPS_PANEL_IDS = [
+    'ambient', 'visualizer', 'lissajous', 'oscilloscope',
+    'energy-bands', 'transient-pulse', 'album-reactive', 'spectral-ribbon', 'neon-flow', 'tunnel-flow', 'comet-flow', 'linebed'
+  ] as const;
+
+  let immersiveFpsCollapsed = $state(true);
+  let panelFpsValues: Record<string, string> = $state(
+    Object.fromEntries(FPS_PANEL_IDS.map(id => [id, getUserItem(`${FPS_KEY_PREFIX}${id}`) || '15']))
+  );
+
+  function getFpsOptions(): string[] {
+    return FPS_OPTIONS.map(val =>
+      $t(`settings.appearance.fpsOptions.${val === '0' ? 'disabled' : val}`)
+    );
+  }
+
+  function getFpsDisplayValue(panelId: string): string {
+    const val = panelFpsValues[panelId] || '15';
+    const key = val === '0' ? 'disabled' : val;
+    return $t(`settings.appearance.fpsOptions.${key}`);
+  }
+
+  function handleFpsChange(panelId: string, displayValue: string) {
+    const options = getFpsOptions();
+    const index = options.indexOf(displayValue);
+    if (index >= 0) {
+      panelFpsValues[panelId] = FPS_OPTIONS[index];
+      setUserItem(`${FPS_KEY_PREFIX}${panelId}`, FPS_OPTIONS[index]);
+    }
+  }
+
+  // Mini player default view
+  const MINIPLAYER_VIEW_KEYS = ['remember', 'micro', 'compact', 'artwork', 'queue', 'lyrics'] as const;
+  let miniPlayerDefaultView = $state(
+    getUserItem('qbz-miniplayer-default-view') || 'remember'
+  );
+
+  function getMiniPlayerViewOptions(): string[] {
+    return MINIPLAYER_VIEW_KEYS.map(key => $t(`settings.appearance.miniplayerViews.${key}`));
+  }
+
+  function getMiniPlayerViewDisplayValue(): string {
+    return $t(`settings.appearance.miniplayerViews.${miniPlayerDefaultView}`);
+  }
+
+  function handleMiniPlayerViewChange(displayValue: string) {
+    const options = getMiniPlayerViewOptions();
+    const index = options.indexOf(displayValue);
+    if (index >= 0) {
+      const key = MINIPLAYER_VIEW_KEYS[index];
+      miniPlayerDefaultView = key;
+      setUserItem('qbz-miniplayer-default-view', key);
     }
   }
 
@@ -882,7 +1225,6 @@
   let remoteControlQrData = $state('');
   let remoteControlUrl = $state('');
   let showRemoteControlGuide = $state(false);
-  let remoteControlCollapsed = $state(true);
 
   // Plex LAN POC state
   let plexEnabled = $state(getUserItem('qbz-plex-enabled') === 'true');
@@ -930,7 +1272,7 @@
       qobuzLinkHandlerEnabled = enabled;
     } catch (err) {
       console.error('Failed to toggle qobuzapp handler:', err);
-      showToast(get(t)('settings.integrations.qobuzLinkHandlerError'), 'error');
+      showToast($t('settings.integrations.qobuzLinkHandlerError'), 'error');
     } finally {
       qobuzLinkHandlerBusy = false;
     }
@@ -938,10 +1280,31 @@
 
   // Load saved settings on mount
   onMount(() => {
-    // Load theme
+    // Load theme (check for auto-theme first)
     const savedTheme = localStorage.getItem('qbz-theme') || '';
-    theme = themeReverseMap[savedTheme] || 'Dark';
-    applyTheme(savedTheme);
+    if (savedTheme === 'auto') {
+      theme = 'System';
+      // Restore auto-theme preferences
+      const prefs = getAutoThemePrefs();
+      if (prefs) {
+        autoThemeSource = prefs.source;
+        autoThemeCustomPath = prefs.customImagePath ?? null;
+      }
+      // Update editable swatches from store state
+      const storeState = $autoThemeStore;
+      if (storeState.theme) {
+        const vars = storeState.theme.variables;
+        const swatches: Record<string, string> = {};
+        for (const entry of EDITABLE_THEME_VARS) {
+          if (vars[entry.varName]) swatches[entry.varName] = vars[entry.varName];
+        }
+        autoThemeSwatches = swatches;
+      }
+      autoThemeDE = storeState.detectedDE;
+    } else {
+      theme = themeReverseMap[savedTheme] || 'Dark';
+      applyTheme(savedTheme);
+    }
 
     // Load font
     const savedFont = localStorage.getItem('qbz-font-family') || '';
@@ -999,6 +1362,10 @@
     // Load artwork cache stats
     loadArtworkCacheStats();
 
+    // Load image cache settings and stats
+    loadImageCacheSettings();
+    loadImageCacheStats();
+
     // Load audio devices first (includes PipeWire sinks), then settings
     // Also load backends and ALSA plugins
     Promise.all([
@@ -1050,8 +1417,9 @@
       updatesCurrentVersion = getUpdatesCurrentVersion();
     });
 
-    // Detect if running in Flatpak
+    // Detect sandbox environments
     loadFlatpakStatus();
+    loadSnapStatus();
 
     // Check for legacy cached files
     checkLegacyCachedFiles();
@@ -1069,6 +1437,7 @@
       forceX11 = settings.force_x11;
       gdkScale = settings.gdk_scale || '';
       gdkDpiScale = settings.gdk_dpi_scale || '';
+      gskRenderer = settings.gsk_renderer || '';
       hardwareAcceleration = settings.hardware_acceleration;
     }).catch(() => {});
 
@@ -1090,6 +1459,24 @@
     const unsubscribeTitleBar = subscribeTitleBar(() => {
       hideTitleBar = getHideTitleBar();
       useSystemTitleBar = getUseSystemTitleBar();
+      windowControlsVisible = getShowWindowControls();
+    });
+
+    // Subscribe to search bar location changes
+    const unsubscribeSearchBarLoc = subscribeSearchBarLocation(() => {
+      searchInTitlebar = getSearchBarLocation() === 'titlebar';
+    });
+
+    // Subscribe to titlebar nav changes
+    const unsubscribeTitlebarNavSub = subscribeTitlebarNav(() => {
+      tbNavConfig = getTitlebarNavConfig();
+      titlebarNavAnyEnabled = isTitlebarNavEnabled();
+      titlebarNavPos = tbNavConfig.position;
+    });
+
+    // Subscribe to window controls customization changes
+    const unsubscribeWindowControls = subscribeWindowControls(() => {
+      wcConfig = getWindowControls();
     });
 
     // Subscribe to blacklist state changes
@@ -1098,30 +1485,6 @@
       blacklistEnabled = isBlacklistEnabled();
     });
 
-    // Scroll tracking for navigation
-    const handleScroll = () => {
-      if (!settingsViewEl) return;
-      const offset = 60; // Account for sticky nav height
-
-      // Find which section is currently in view
-      for (const def of navSectionDefs) {
-        const el = getSectionEl(def.id);
-        if (!el) continue;
-        const rect = el.getBoundingClientRect();
-        const containerRect = settingsViewEl.getBoundingClientRect();
-        const relativeTop = rect.top - containerRect.top;
-
-        if (relativeTop <= offset + 50 && relativeTop + rect.height > offset) {
-          if (activeSection !== def.id) {
-            activeSection = def.id;
-          }
-          break;
-        }
-      }
-    };
-
-    settingsViewEl?.addEventListener('scroll', handleScroll);
-
     return () => {
       if (plexAuthPollTimer) {
         clearInterval(plexAuthPollTimer);
@@ -1129,9 +1492,11 @@
       unsubscribeOffline();
       unsubscribeZoom();
       unsubscribeTitleBar();
+      unsubscribeSearchBarLoc();
+      unsubscribeTitlebarNavSub();
+      unsubscribeWindowControls();
       unsubscribeUpdates();
       unsubscribeBlacklist();
-      settingsViewEl?.removeEventListener('scroll', handleScroll);
     };
   });
 
@@ -1309,9 +1674,10 @@
       listenbrainzUsername = userInfo.user_name;
       listenbrainzToken = '';
       showListenBrainzConfig = false;
-    } catch (err) {
-      console.error('Failed to connect to ListenBrainz:', err);
-      alert(`ListenBrainz error: ${err}`);
+    } catch (err: any) {
+      const details = err?.details || err?.message || String(err);
+      console.error('Failed to connect to ListenBrainz:', details);
+      showToast(`ListenBrainz: ${details}`, 'error');
     } finally {
       listenbrainzConnecting = false;
     }
@@ -1534,10 +1900,10 @@
     if (!plexAuthCode) return;
     try {
       await copyToClipboard(plexAuthCode);
-      showToast(get(t)('settings.integrations.plexCodeCopied'), 'success');
+      showToast($t('settings.integrations.plexCodeCopied'), 'success');
     } catch (error) {
       console.error('Failed copying Plex code:', error);
-      showToast(get(t)('settings.integrations.plexCodeCopyFailed'), 'error');
+      showToast($t('settings.integrations.plexCodeCopyFailed'), 'error');
     }
   }
 
@@ -1556,11 +1922,11 @@
   }
 
   async function handlePlexDisconnect() {
-    const confirmed = await ask(get(t)('settings.integrations.plexDisconnectConfirmDesc'), {
-      title: get(t)('settings.integrations.plexDisconnectConfirmTitle'),
+    const confirmed = await ask($t('settings.integrations.plexDisconnectConfirmDesc'), {
+      title: $t('settings.integrations.plexDisconnectConfirmTitle'),
       kind: 'warning',
-      okLabel: get(t)('settings.integrations.plexDisconnectConfirmOk'),
-      cancelLabel: get(t)('actions.cancel')
+      okLabel: $t('settings.integrations.plexDisconnectConfirmOk'),
+      cancelLabel: $t('actions.cancel')
     });
     if (!confirmed) return;
 
@@ -1594,11 +1960,11 @@
   }
 
   async function handlePlexClearCache() {
-    const confirmed = await ask(get(t)('settings.integrations.plexClearCacheConfirmDesc'), {
-      title: get(t)('settings.integrations.plexClearCacheConfirmTitle'),
+    const confirmed = await ask($t('settings.integrations.plexClearCacheConfirmDesc'), {
+      title: $t('settings.integrations.plexClearCacheConfirmTitle'),
       kind: 'warning',
-      okLabel: get(t)('settings.integrations.plexClearCacheConfirmOk'),
-      cancelLabel: get(t)('actions.cancel')
+      okLabel: $t('settings.integrations.plexClearCacheConfirmOk'),
+      cancelLabel: $t('actions.cancel')
     });
     if (!confirmed) return;
 
@@ -1862,12 +2228,12 @@
 
   async function handleRemoteControlRegenerateToken() {
     const confirmed = await ask(
-      get(t)('settings.integrations.remoteControlRegenerateDesc'),
+      $t('settings.integrations.remoteControlRegenerateDesc'),
       {
-        title: get(t)('settings.integrations.remoteControlRegenerateTitle'),
+        title: $t('settings.integrations.remoteControlRegenerateTitle'),
         kind: 'warning',
-        okLabel: get(t)('settings.integrations.remoteControlRegenerateConfirm'),
-        cancelLabel: get(t)('actions.cancel')
+        okLabel: $t('settings.integrations.remoteControlRegenerateConfirm'),
+        cancelLabel: $t('actions.cancel')
       }
     );
 
@@ -1897,7 +2263,7 @@
     if (!remoteControlToken) return;
     try {
       await copyToClipboard(remoteControlToken);
-      showToast(get(t)('toast.copied'), 'success');
+      showToast($t('toast.copied'), 'success');
     } catch (err) {
       console.error('Failed to copy token:', err);
     }
@@ -1907,7 +2273,7 @@
     if (!remoteControlCertUrl) return;
     try {
       await copyToClipboard(remoteControlCertUrl);
-      showToast(get(t)('toast.copied'), 'success');
+      showToast($t('toast.copied'), 'success');
     } catch (err) {
       console.error('Failed to copy certificate URL:', err);
     }
@@ -2057,7 +2423,7 @@
     } else {
       // 'Auto' - use browser locale, defaulting to 'en'
       const browserLocale = navigator.language.split('-')[0];
-      const supportedLocale = ['en', 'es', 'fr', 'de'].includes(browserLocale) ? browserLocale : 'en';
+      const supportedLocale = ['en', 'es', 'fr', 'de', 'pt'].includes(browserLocale) ? browserLocale : 'en';
       await setLocale(supportedLocale);
       // Clear the stored locale so it uses browser detection on next load
       localStorage.removeItem('qbz-locale');
@@ -2086,6 +2452,7 @@
     device_max_sample_rate: number | null;
     gapless_enabled: boolean;
     pw_force_bitperfect: boolean;
+    sync_audio_on_startup: boolean;
   }
 
   interface BackendInfo {
@@ -2217,6 +2584,14 @@
     }
   }
 
+  async function loadSnapStatus() {
+    try {
+      isSnap = await invoke<boolean>('v2_is_running_in_snap');
+    } catch (err) {
+      console.error('Failed to check Snap status:', err);
+    }
+  }
+
   async function loadAudioSettings() {
     try {
       const settings = await invoke<AudioSettings>('v2_get_audio_settings');
@@ -2231,6 +2606,7 @@
       exclusiveMode = settings.exclusive_mode;
       dacPassthrough = settings.dac_passthrough;
       pwForceBitperfect = settings.pw_force_bitperfect;
+      syncAudioOnStartup = settings.sync_audio_on_startup;
 
       // Load backend and plugin settings
       if (settings.backend_type) {
@@ -2342,13 +2718,6 @@
   async function handleDacPassthroughChange(enabled: boolean) {
     dacPassthrough = enabled;
 
-    // Gapless not compatible with DAC Passthrough
-    if (enabled && gaplessPlayback) {
-      gaplessPlayback = false;
-      await invoke('v2_set_audio_gapless_enabled', { enabled: false });
-      console.log('[Audio] Disabled gapless playback (not compatible with DAC Passthrough)');
-    }
-
     // Disabling DAC Passthrough also disables PW force bit-perfect
     if (!enabled && pwForceBitperfect) {
       pwForceBitperfect = false;
@@ -2384,6 +2753,16 @@
       console.log('[Audio] PW force bit-perfect changed:', enabled);
     } catch (err) {
       console.error('[Audio] Failed to change PW force bit-perfect:', err);
+    }
+  }
+
+  async function handleSyncAudioOnStartupChange(enabled: boolean) {
+    syncAudioOnStartup = enabled;
+    try {
+      await invoke('v2_set_sync_audio_on_startup', { enabled });
+      console.log('[Audio] Sync audio on startup changed:', enabled);
+    } catch (err) {
+      console.error('[Audio] Failed to change sync audio on startup:', err);
     }
   }
 
@@ -2657,8 +3036,10 @@
       console.log('[Settings] Loaded preferences:', prefs);
       autoplayMode = prefs.autoplay_mode;
       showContextIcon = prefs.show_context_icon;
+      persistSession = prefs.persist_session;
       console.log('[Settings] Set autoplayMode to:', autoplayMode);
       console.log('[Settings] Set showContextIcon to:', showContextIcon);
+      console.log('[Settings] Set persistSession to:', persistSession);
     } catch (err) {
       console.error('Failed to load playback preferences:', err);
     }
@@ -2733,6 +3114,17 @@
     } catch (err) {
       console.error('[Settings] Failed to set show context icon:', err);
       showToast($t('toast.failedSaveIconVisibility'), 'error');
+    }
+  }
+
+  async function handlePersistSessionChange(persist: boolean) {
+    console.log('[Settings] Changing persist session to:', persist);
+    try {
+      await setPersistSession(persist);
+      persistSession = persist;
+      console.log('[Settings] Persist session saved successfully');
+    } catch (err) {
+      console.error('[Settings] Failed to set persist session:', err);
     }
   }
 
@@ -2900,6 +3292,58 @@
     }
   }
 
+  // Image cache functions
+  async function loadImageCacheSettings() {
+    try {
+      const settings = await invoke<{ enabled: boolean; max_size_mb: number }>('v2_get_image_cache_settings');
+      imageCacheEnabled = settings.enabled;
+      imageCacheMaxSizeMb = settings.max_size_mb;
+    } catch (err) {
+      console.error('Failed to load image cache settings:', err);
+    }
+  }
+
+  async function loadImageCacheStats() {
+    try {
+      imageCacheStats = await invoke<{ total_bytes: number; file_count: number }>('v2_get_image_cache_stats');
+    } catch (err) {
+      console.error('Failed to load image cache stats:', err);
+      imageCacheStats = null;
+    }
+  }
+
+  async function handleImageCacheEnabledChange(enabled: boolean) {
+    imageCacheEnabled = enabled;
+    try {
+      await invoke('v2_set_image_cache_enabled', { enabled });
+    } catch (err) {
+      console.error('Failed to update image cache enabled:', err);
+    }
+  }
+
+  async function handleImageCacheMaxSizeChange(maxSizeMb: number) {
+    imageCacheMaxSizeMb = maxSizeMb;
+    try {
+      await invoke('v2_set_image_cache_max_size', { maxSizeMb });
+      await loadImageCacheStats();
+    } catch (err) {
+      console.error('Failed to update image cache max size:', err);
+    }
+  }
+
+  async function handleClearImageCache() {
+    if (isClearingImageCache) return;
+    isClearingImageCache = true;
+    try {
+      await invoke('v2_clear_image_cache');
+      await loadImageCacheStats();
+    } catch (err) {
+      console.error('Failed to clear image cache:', err);
+    } finally {
+      isClearingImageCache = false;
+    }
+  }
+
   async function handleClearAllCaches() {
     if (isClearingAllCaches) return;
     isClearingAllCaches = true;
@@ -2911,7 +3355,8 @@
         invoke('v2_musicbrainz_clear_cache'),
         invoke('v2_clear_vector_store'),
         invoke('v2_library_clear_artwork_cache'),
-        invoke('v2_library_clear_thumbnails_cache')
+        invoke('v2_library_clear_thumbnails_cache'),
+        invoke('v2_clear_image_cache')
       ]);
       console.log('All caches cleared');
       // Reload all stats
@@ -2920,7 +3365,8 @@
         loadLyricsCacheStats(),
         loadMusicBrainzCacheStats(),
         loadVectorStoreStats(),
-        loadArtworkCacheStats()
+        loadArtworkCacheStats(),
+        loadImageCacheStats()
       ]);
     } catch (err) {
       console.error('Failed to clear all caches:', err);
@@ -3041,6 +3487,8 @@
         profile.forceX11 === forceX11
         && normalizeScaleValue(profile.gdkScale) === currentScale
         && normalizeScaleValue(profile.gdkDpiScale) === currentDpiScale
+        && profile.gskRenderer === gskRenderer
+        && profile.backgroundMode === backgroundMode
       ) {
         return profile.id;
       }
@@ -3057,16 +3505,22 @@
     const previousForceX11 = forceX11;
     const previousGdkScale = gdkScale;
     const previousGdkDpiScale = gdkDpiScale;
+    const previousGskRenderer = gskRenderer;
+    const previousBackgroundMode = backgroundMode;
 
     // Optimistic UI update so toggles/inputs reflect the selected profile immediately
     forceX11 = profile.forceX11;
     gdkScale = profile.gdkScale;
     gdkDpiScale = profile.gdkDpiScale;
+    gskRenderer = profile.gskRenderer;
+    backgroundMode = profile.backgroundMode;
 
     try {
       await invoke('v2_set_force_x11', { enabled: profile.forceX11 });
       await invoke('v2_set_gdk_scale', { value: profile.gdkScale || null });
       await invoke('v2_set_gdk_dpi_scale', { value: profile.gdkDpiScale || null });
+      await invoke('v2_set_gsk_renderer', { value: profile.gskRenderer || null });
+      setImmersiveConfig({ backgroundMode: profile.backgroundMode, disableBlurBackground: profile.backgroundMode === 'off' });
 
       showToast(
         $t('settings.appearance.composition.profiles.applied', { values: { profile: $t(profile.labelKey) } }),
@@ -3078,6 +3532,8 @@
       forceX11 = previousForceX11;
       gdkScale = previousGdkScale;
       gdkDpiScale = previousGdkDpiScale;
+      gskRenderer = previousGskRenderer;
+      backgroundMode = previousBackgroundMode;
       console.error('Failed to apply composition profile:', err);
       showToast(String(err), 'error');
     }
@@ -3090,6 +3546,38 @@
       showToast($t('settings.developer.restartRequired'), 'info');
     } catch (err) {
       console.error('Failed to set force_dmabuf:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  const GSK_RENDERER_KEYS = ['', 'gl', 'ngl', 'vulkan', 'cairo'] as const;
+
+  function getGskRendererOptions(): string[] {
+    return GSK_RENDERER_KEYS.map(key => {
+      if (key === '') return $t('settings.appearance.composition.gskRendererAuto');
+      if (key === 'cairo') return $t('settings.appearance.composition.gskRendererCairo');
+      return key.toUpperCase();
+    });
+  }
+
+  function getGskRendererDisplayValue(): string {
+    if (!gskRenderer) return $t('settings.appearance.composition.gskRendererAuto');
+    if (gskRenderer === 'cairo') return $t('settings.appearance.composition.gskRendererCairo');
+    return gskRenderer.toUpperCase();
+  }
+
+  async function handleGskRendererChange(displayValue: string) {
+    const options = getGskRendererOptions();
+    const index = options.indexOf(displayValue);
+    if (index < 0) return;
+    const key = GSK_RENDERER_KEYS[index];
+    gskRenderer = key;
+    const value = key || null;
+    try {
+      await invoke('v2_set_gsk_renderer', { value });
+      showToast($t('settings.developer.restartRequired'), 'info');
+    } catch (err) {
+      console.error('Failed to set gsk_renderer:', err);
       showToast(String(err), 'error');
     }
   }
@@ -3126,10 +3614,26 @@
   }
 
   function handleThemeChange(newTheme: string) {
+    // If switching away from System, disable auto-theme
+    if (theme === 'System' && newTheme !== 'System') {
+      disableAutoTheme();
+      autoThemeSwatches = {};
+      autoThemeDE = null;
+      autoThemeError = null;
+      autoThemeFailedModal = false;
+    }
+
     theme = newTheme;
-    const themeValue = themeMap[newTheme] || '';
-    applyTheme(themeValue);
-    localStorage.setItem('qbz-theme', themeValue);
+
+    if (newTheme === 'System') {
+      // Default source is 'system' (accent first, wallpaper fallback)
+      autoThemeSource = 'system';
+      void handleAutoThemeGenerate();
+    } else {
+      const themeValue = themeMap[newTheme] || '';
+      applyTheme(themeValue);
+      localStorage.setItem('qbz-theme', themeValue);
+    }
   }
 
   async function handleZoomChange(value: string) {
@@ -3161,7 +3665,7 @@
 </script>
 
 <ViewTransition duration={200} distance={12} direction="up">
-<div class="settings-view" bind:this={settingsViewEl}>
+<div class="settings-view">
   <!-- Loading Overlay for Device Enumeration -->
   {#if isLoadingDevices}
     <div class="loading-overlay">
@@ -3203,7 +3707,7 @@
       <button
         class="nav-link"
         class:active={activeSection === section.id}
-        onclick={() => scrollToSection(section.id)}
+        onclick={() => activeSection = section.id}
       >
         {$t(section.labelKey)}
       </button>
@@ -3211,7 +3715,8 @@
   </nav>
 
   <!-- Audio Section -->
-  <section class="section" bind:this={audioSection}>
+  {#if activeSection === 'audio'}
+  <section class="section">
     <h3 class="section-title">{$t('settings.audio.title')}</h3>
     <div class="setting-row">
       <div class="setting-info">
@@ -3420,6 +3925,13 @@
     {/if}
     {/if}
     <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.audio.syncAudioOnStartup')}</span>
+        <span class="setting-desc">{$t('settings.audio.syncAudioOnStartupDesc')}</span>
+      </div>
+      <Toggle enabled={syncAudioOnStartup} onchange={handleSyncAudioOnStartupChange} />
+    </div>
+    <div class="setting-row">
       <span class="setting-label">{$t('settings.audio.currentSampleRate')}</span>
       <span class="setting-value" class:muted={!hardwareStatus?.is_active}>
         {#if hardwareStatus?.is_active && hardwareStatus.hardware_sample_rate}
@@ -3446,9 +3958,11 @@
       </button>
     </div>
   </section>
+  {/if}
 
   <!-- Playback Section -->
-  <section class="section" bind:this={playbackSection}>
+  {#if activeSection === 'playback'}
+  <section class="section">
     <h3 class="section-title">{$t('settings.playback.title')}</h3>
     <div class="setting-row">
       <div class="setting-info">
@@ -3466,7 +3980,14 @@
     </div>
     <div class="setting-row">
       <div class="setting-info">
-        <span class="setting-label">{$t('settings.playback.gapless')} <span class="experimental-inline">{$t('settings.playback.experimental')}</span></span>
+        <span class="setting-label">{$t('settings.playback.persistSession')}</span>
+        <span class="setting-desc">{$t('settings.playback.persistSessionDesc')}</span>
+      </div>
+      <Toggle enabled={persistSession} onchange={handlePersistSessionChange} />
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.playback.gapless')}</span>
         <span class="setting-desc">{gaplessDisabledReasonKey ? $t(gaplessDisabledReasonKey) : $t('settings.playback.gaplessDesc')}</span>
       </div>
       <Toggle enabled={gaplessPlayback} onchange={handleGaplessPlaybackChange} disabled={gaplessDisabled} />
@@ -3514,82 +4035,11 @@
       <Toggle enabled={normalizeVolume} onchange={(v) => (normalizeVolume = v)} />
     </div> -->
   </section>
-
-  <!-- Offline Mode Section -->
-  <section class="section" bind:this={offlineModeSection}>
-    <h3 class="section-title">{$t('offline.title')}</h3>
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">{$t('offline.status')}</span>
-        <span class="setting-desc status-indicator" class:offline={offlineStatus.isOffline}>
-          {#if offlineStatus.isOffline}
-            {#if offlineStatus.reason === 'no_network'}
-              {$t('offline.noNetwork')}
-            {:else if offlineStatus.reason === 'not_logged_in'}
-              {$t('offline.notLoggedIn')}
-            {:else if offlineStatus.reason === 'manual_override'}
-              {$t('offline.manualMode')}
-            {:else}
-              {$t('offline.offlineReason')}
-            {/if}
-          {:else}
-            {$t('offline.online')}
-          {/if}
-        </span>
-      </div>
-    </div>
-    <div class="setting-row" class:last={!offlineSettings.manualOfflineMode}>
-      <div class="setting-info">
-        <span class="setting-label">{$t('offline.enableManual')}</span>
-        <span class="setting-desc">{$t('offline.enableManualDesc')}</span>
-      </div>
-      <Toggle enabled={offlineSettings.manualOfflineMode} onchange={handleManualOfflineChange} />
-    </div>
-    <!-- Temporarily disabled: Show Partial Playlists -->
-    <!-- <div class="setting-row" class:last={!offlineSettings.manualOfflineMode}>
-      <div class="setting-info">
-        <span class="setting-label">{$t('offline.showPartialPlaylists')}</span>
-        <span class="setting-desc">{$t('offline.showPartialPlaylistsDesc')}</span>
-      </div>
-      <Toggle enabled={offlineSettings.showPartialPlaylists} onchange={handleShowPartialPlaylistsChange} />
-    </div> -->
-
-    <!-- Manual offline mode specific settings -->
-    {#if offlineSettings.manualOfflineMode}
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-label">{$t('offline.allowCast')}</span>
-          <span class="setting-desc">{$t('offline.allowCastDesc')}</span>
-        </div>
-        <Toggle enabled={offlineSettings.allowCastWhileOffline} onchange={handleAllowCastChange} />
-      </div>
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-label">{$t('offline.allowImmediateScrobbling')}</span>
-          <span class="setting-desc">{$t('offline.allowImmediateScrobblingDesc')}</span>
-        </div>
-        <Toggle enabled={offlineSettings.allowImmediateScrobbling} onchange={handleAllowImmediateScrobblingChange} />
-      </div>
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-label">{$t('offline.allowAccumulatedScrobbling')}</span>
-          <span class="setting-desc">{$t('offline.allowAccumulatedScrobblingDesc')}</span>
-          <small class="setting-note">{$t('offline.scrobbleTimeLimit')}</small>
-        </div>
-        <Toggle enabled={offlineSettings.allowAccumulatedScrobbling} onchange={handleAllowAccumulatedScrobblingChange} />
-      </div>
-      <div class="setting-row last">
-        <div class="setting-info">
-          <span class="setting-label">{$t('offline.showNetworkFolders')}</span>
-          <span class="setting-desc">{$t('offline.showNetworkFoldersDesc')}</span>
-        </div>
-        <Toggle enabled={offlineSettings.showNetworkFoldersInManualOffline} onchange={handleShowNetworkFoldersChange} />
-      </div>
-    {/if}
-  </section>
+  {/if}
 
   <!-- Appearance Section -->
-  <section class="section" bind:this={appearanceSection}>
+  {#if activeSection === 'appearance'}
+  <section class="section">
     <h3 class="section-title">{$t('settings.appearance.title')}</h3>
     <div class="setting-row">
       <span class="setting-label">{$t('settings.appearance.theme')}</span>
@@ -3614,6 +4064,109 @@
         />
       </div>
     </div>
+
+    <!-- Auto-Theme generating overlay -->
+    {#if autoThemeGenerating}
+      <div class="auto-theme-overlay">
+        <div class="auto-theme-overlay-content">
+          <Loader2 size={32} class="spinner" />
+          <span>{$t('settings.appearance.autoThemeGenerating')}</span>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Auto-Theme failure modal -->
+    {#if autoThemeFailedModal}
+      <div class="auto-theme-modal-backdrop" role="presentation" onclick={dismissAutoThemeFailedModal}>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div class="auto-theme-modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+          <h3>{$t('settings.appearance.autoThemeError')}</h3>
+          <p class="auto-theme-modal-message">{autoThemeFailedMessage}</p>
+          <p class="auto-theme-modal-hint">{$t('settings.appearance.autoThemeFailedHint')}</p>
+          <div class="auto-theme-modal-actions">
+            <button class="btn-secondary" onclick={dismissAutoThemeFailedModal}>
+              {$t('actions.ok')}
+            </button>
+            <button class="btn-primary" onclick={handleAutoThemeFailedSelectImage}>
+              {$t('settings.appearance.autoThemeSelectImage')}
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Auto-Theme controls (visible when System theme is selected) -->
+    {#if theme === 'System'}
+      <div class="auto-theme-panel">
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">{$t('settings.appearance.autoThemeSource')}</span>
+            <span class="setting-desc">{$t('settings.appearance.autoThemeDesc')}</span>
+          </div>
+          <Dropdown
+            value={autoThemeSourceOptions.find(opt => opt.value === autoThemeSource) ? $t(autoThemeSourceOptions.find(opt => opt.value === autoThemeSource)!.labelKey) : ''}
+            options={autoThemeSourceOptions.map(opt => $t(opt.labelKey))}
+            onchange={handleAutoThemeSourceChange}
+          />
+        </div>
+
+        {#if autoThemeSource === 'image'}
+          <div class="setting-row">
+            <span class="setting-label">
+              {#if autoThemeCustomPath}
+                {autoThemeCustomPath.split('/').pop()}
+              {:else}
+                {$t('settings.appearance.autoThemeSelectImage')}
+              {/if}
+            </span>
+            <button class="btn-secondary" onclick={handleAutoThemeSelectImage}>
+              {$t('settings.appearance.autoThemeSelectImage')}
+            </button>
+          </div>
+        {/if}
+
+        {#if autoThemeDE}
+          <div class="auto-theme-status">
+            <span>{$t('settings.appearance.autoThemeDetectedDE', { values: { de: autoThemeDE } })}</span>
+            <span class="auto-theme-experimental">{$t('settings.appearance.autoThemeExperimental')}</span>
+          </div>
+        {/if}
+
+        {#if Object.keys(autoThemeSwatches).length > 0}
+          <div class="auto-theme-palette">
+            {#each EDITABLE_THEME_VARS as entry}
+              {#if autoThemeSwatches[entry.varName]}
+                <label class="palette-swatch-wrapper" title={$t(entry.labelKey)}>
+                  <div
+                    class="palette-swatch"
+                    style="background-color: {autoThemeSwatches[entry.varName]}"
+                  ></div>
+                  <span class="palette-swatch-label">{$t(entry.labelKey)}</span>
+                  <input
+                    type="color"
+                    class="palette-swatch-input"
+                    value={autoThemeSwatches[entry.varName]}
+                    oninput={(ev) => {
+                      const hex = ev.currentTarget.value;
+                      autoThemeSwatches[entry.varName] = hex;
+                      updateThemeVariable(entry.varName, hex);
+                    }}
+                  />
+                </label>
+              {/if}
+            {/each}
+          </div>
+        {/if}
+
+        <div class="setting-row">
+          <button class="btn-secondary" onclick={handleAutoThemeGenerate} disabled={autoThemeGenerating}>
+            <RefreshCw size={14} />
+            <span>{$t('settings.appearance.autoThemeRegenerate')}</span>
+          </button>
+        </div>
+      </div>
+    {/if}
+
     <div class="setting-row">
       <span class="setting-label">{$t('settings.appearance.language')}</span>
       <Dropdown
@@ -3661,11 +4214,167 @@
       <Toggle enabled={hideTitleBar} onchange={(v) => setHideTitleBar(v)} disabled={useSystemTitleBar} />
     </div>
     <div class="setting-row">
-      <span class="setting-label">{$t('settings.appearance.immersiveDefaultView')}</span>
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.searchInTitleBar')}</span>
+        <span class="setting-desc">{$t('settings.appearance.searchInTitleBarDesc')}</span>
+      </div>
+      <Toggle
+        enabled={searchInTitlebar}
+        onchange={(v) => setSearchBarLocation(v ? 'titlebar' : 'sidebar')}
+        disabled={hideTitleBar || useSystemTitleBar}
+      />
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.navInTitleBar')}</span>
+        <span class="setting-desc">{$t('settings.appearance.navInTitleBarDesc')}</span>
+      </div>
+    </div>
+    <div class="setting-row indented-setting">
+      <span class="setting-label">{$t('nav.home')}</span>
+      <Toggle
+        enabled={tbNavConfig.discover}
+        onchange={(v) => setDiscoverInTitlebar(v)}
+        disabled={hideTitleBar || useSystemTitleBar}
+      />
+    </div>
+    <div class="setting-row indented-setting">
+      <span class="setting-label">{$t('nav.favorites')}</span>
+      <Toggle
+        enabled={tbNavConfig.favorites}
+        onchange={(v) => setFavoritesInTitlebar(v)}
+        disabled={hideTitleBar || useSystemTitleBar}
+      />
+    </div>
+    <div class="setting-row indented-setting">
+      <span class="setting-label">{$t('library.title')}</span>
+      <Toggle
+        enabled={tbNavConfig.library}
+        onchange={(v) => setLibraryInTitlebar(v)}
+        disabled={hideTitleBar || useSystemTitleBar}
+      />
+    </div>
+    <div class="setting-row indented-setting">
+      <span class="setting-label">{$t('nav.purchases')}</span>
+      <Toggle
+        enabled={tbNavConfig.purchases}
+        onchange={(v) => setPurchasesInTitlebar(v)}
+        disabled={hideTitleBar || useSystemTitleBar}
+      />
+    </div>
+    {#if titlebarNavAnyEnabled && !hideTitleBar && !useSystemTitleBar}
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.navInTitleBarPosition')}</span>
+        <span class="setting-desc">{$t('settings.appearance.navInTitleBarPositionDesc')}</span>
+      </div>
       <Dropdown
-        value={getImmersiveViewDisplayValue()}
-        options={getImmersiveViewOptions()}
-        onchange={handleImmersiveViewChange}
+        value={titlebarNavPos === 'auto' ? $t('settings.appearance.navPositionAuto') : titlebarNavPos === 'left' ? $t('settings.appearance.windowControlsPositionLeft') : $t('settings.appearance.windowControlsPositionRight')}
+        options={[
+          $t('settings.appearance.navPositionAuto'),
+          $t('settings.appearance.windowControlsPositionLeft'),
+          $t('settings.appearance.windowControlsPositionRight')
+        ]}
+        onchange={(v) => {
+          const autoLabel = $t('settings.appearance.navPositionAuto');
+          const leftLabel = $t('settings.appearance.windowControlsPositionLeft');
+          if (v === autoLabel) setTitlebarNavPosition('auto');
+          else if (v === leftLabel) setTitlebarNavPosition('left');
+          else setTitlebarNavPosition('right');
+        }}
+      />
+    </div>
+    {/if}
+    <div class="setting-row" class:disabled-section={hideTitleBar || useSystemTitleBar}>
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.windowControlsPosition')}</span>
+        <span class="setting-desc">{$t('settings.appearance.windowControlsPositionDesc')}</span>
+      </div>
+      <Dropdown
+        value={getWcPositionDisplay()}
+        options={getWcPositionOptions()}
+        onchange={handleWcPositionChange}
+      />
+    </div>
+    <div class="setting-row" class:disabled-section={hideTitleBar || useSystemTitleBar}>
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.windowControlsStyle')}</span>
+        <span class="setting-desc">{$t('settings.appearance.windowControlsStyleDesc')}</span>
+      </div>
+      <Dropdown
+        value={getWcShapeDisplay()}
+        options={getWcShapeOptions()}
+        onchange={handleWcShapeChange}
+      />
+    </div>
+    <div class="setting-row" class:disabled-section={hideTitleBar || useSystemTitleBar}>
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.windowControlsSize')}</span>
+        <span class="setting-desc">{$t('settings.appearance.windowControlsSizeDesc')}</span>
+      </div>
+      <Dropdown
+        value={getWcSizeDisplay()}
+        options={getWcSizeOptions()}
+        onchange={handleWcSizeChange}
+      />
+    </div>
+    <div class="setting-row" class:disabled-section={hideTitleBar || useSystemTitleBar}>
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.windowControlsColorPreset')}</span>
+        <span class="setting-desc">{$t('settings.appearance.windowControlsColorPresetDesc')}</span>
+      </div>
+      <Dropdown
+        value={getWcPresetDisplay()}
+        options={getWcPresetOptions()}
+        onchange={handleWcPresetChange}
+      />
+    </div>
+    {#if wcConfig.preset === 'custom'}
+      <div class="wc-custom-panel" class:disabled-section={hideTitleBar || useSystemTitleBar}>
+        <span class="wc-custom-panel-title">{$t('settings.appearance.windowControlsCustomColors')}</span>
+        {#each WC_BUTTONS as btn}
+          <div class="wc-color-group">
+            <span class="wc-color-group-label">{$t(`settings.appearance.windowControls${btn.charAt(0).toUpperCase() + btn.slice(1)}`)}</span>
+            <div class="wc-color-swatches">
+              {#each WC_COLOR_FIELDS as field}
+                <label class="palette-swatch-wrapper" title={$t(`settings.appearance.windowControls${field.charAt(0).toUpperCase() + field.slice(1)}`)}>
+                  <div
+                    class="palette-swatch"
+                    style="background-color: {getWcColor(btn, field)}"
+                  ></div>
+                  <span class="palette-swatch-label">{$t(`settings.appearance.windowControls${field.charAt(0).toUpperCase() + field.slice(1)}`)}</span>
+                  <input
+                    type="color"
+                    class="palette-swatch-input"
+                    value={getWcColor(btn, field)}
+                    oninput={(ev) => {
+                      setButtonColor(btn, field, ev.currentTarget.value);
+                    }}
+                  />
+                </label>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.showWindowControls')}</span>
+        <span class="setting-desc">{$t('settings.appearance.showWindowControlsDesc')}</span>
+      </div>
+      <Toggle
+        enabled={windowControlsVisible}
+        onchange={(v) => setShowWindowControls(v)}
+        disabled={hideTitleBar || useSystemTitleBar}
+      />
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">{$t('settings.appearance.miniplayerDefaultView')}</span>
+      <Dropdown
+        value={getMiniPlayerViewDisplayValue()}
+        options={getMiniPlayerViewOptions()}
+        onchange={handleMiniPlayerViewChange}
       />
     </div>
     <div class="setting-row">
@@ -3688,16 +4397,53 @@
       <Toggle enabled={purchasesEnabled} onchange={handlePurchasesToggle} />
     </div>
 
+    <!-- System Tray subsection -->
+    <h4 class="subsection-title">{$t('settings.appearance.tray.title')}</h4>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.tray.enableTray')}</span>
+        <span class="setting-desc">{$t('settings.appearance.tray.enableTrayDesc')}</span>
+      </div>
+      <Toggle enabled={enableTray} onchange={(v) => handleEnableTrayChange(v)} />
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.tray.minimizeToTray')}</span>
+        <span class="setting-desc">{$t('settings.appearance.tray.minimizeToTrayDesc')}</span>
+      </div>
+      <Toggle enabled={minimizeToTray} onchange={(v) => handleMinimizeToTrayChange(v)} disabled={!enableTray} />
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.tray.closeToTray')}</span>
+        <span class="setting-desc">{$t('settings.appearance.tray.closeToTrayDesc')}</span>
+      </div>
+      <Toggle enabled={closeToTray} onchange={(v) => handleCloseToTrayChange(v)} disabled={!enableTray} />
+    </div>
+
+    <!-- Immersive subsection -->
+    <h4 class="subsection-title">{$t('settings.appearance.immersive.title')}</h4>
+    <div class="setting-row">
+      <span class="setting-label">{$t('settings.appearance.immersiveDefaultView')}</span>
+      <Dropdown
+        value={getImmersiveViewDisplayValue()}
+        options={getImmersiveViewOptions()}
+        onchange={handleImmersiveViewChange}
+      />
+    </div>
+
     <!-- Composition subsection (collapsible) -->
     <div class="collapsible-section composition-subsection">
       <button class="section-title-btn" onclick={() => compositionCollapsed = !compositionCollapsed}>
-        <span class="section-title composition-title">{$t('settings.appearance.composition.title')}</span>
+        <div class="section-title-row">
+          <span class="section-title composition-title">{$t('settings.appearance.composition.title')}</span>
+          {#if compositionCollapsed}
+            <ChevronDown size={16} />
+          {:else}
+            <ChevronUp size={16} />
+          {/if}
+        </div>
         <span class="section-summary">{$t('settings.appearance.composition.summary')}</span>
-        {#if compositionCollapsed}
-          <ChevronDown size={16} />
-        {:else}
-          <ChevronUp size={16} />
-        {/if}
       </button>
       {#if !compositionCollapsed}
         <p class="section-note">{$t('settings.appearance.composition.helpText')}</p>
@@ -3777,20 +4523,33 @@
               onblur={handleGdkScaleChange}
             />
           </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-label">{$t('settings.appearance.composition.gdkDpiScale')}</span>
-              <span class="setting-desc">{$t('settings.appearance.composition.gdkDpiScaleDesc')}</span>
-            </div>
-            <input
-              class="composition-input"
-              type="text"
-              placeholder="auto"
-              bind:value={gdkDpiScale}
-              onblur={handleGdkDpiScaleChange}
-            />
-          </div>
         {/if}
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">{$t('settings.appearance.composition.gdkDpiScale')}</span>
+            <span class="setting-desc">{$t('settings.appearance.composition.gdkDpiScaleDesc')}</span>
+          </div>
+          <input
+            class="composition-input"
+            type="text"
+            placeholder="auto"
+            bind:value={gdkDpiScale}
+            onblur={handleGdkDpiScaleChange}
+          />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">{$t('settings.appearance.composition.gskRenderer')}</span>
+            <span class="setting-desc">{$t('settings.appearance.composition.gskRendererDesc')}</span>
+          </div>
+          <Dropdown
+            value={getGskRendererDisplayValue()}
+            options={getGskRendererOptions()}
+            onchange={handleGskRendererChange}
+          />
+        </div>
 
         <div class="composition-env-section">
           <span class="composition-env-title">{$t('settings.appearance.composition.envVarsTitle')}</span>
@@ -3825,112 +4584,184 @@
       {/if}
     </div>
 
-    <!-- System Tray subsection -->
-    <h4 class="subsection-title">{$t('settings.appearance.tray.title')}</h4>
     <div class="setting-row">
       <div class="setting-info">
-        <span class="setting-label">{$t('settings.appearance.tray.enableTray')}</span>
-        <span class="setting-desc">{$t('settings.appearance.tray.enableTrayDesc')}</span>
+        <span class="setting-label">{$t('settings.appearance.immersive.backgroundMode')}</span>
+        <span class="setting-desc">{$t('settings.appearance.immersive.backgroundModeDesc')}</span>
       </div>
-      <Toggle enabled={enableTray} onchange={(v) => handleEnableTrayChange(v)} />
+      <Dropdown
+        value={getBackgroundModeLabel(backgroundMode)}
+        options={BACKGROUND_MODES.map(m => getBackgroundModeLabel(m))}
+        onchange={handleBackgroundModeChange}
+      />
     </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">{$t('settings.appearance.tray.minimizeToTray')}</span>
-        <span class="setting-desc">{$t('settings.appearance.tray.minimizeToTrayDesc')}</span>
-      </div>
-      <Toggle enabled={minimizeToTray} onchange={(v) => handleMinimizeToTrayChange(v)} disabled={!enableTray} />
-    </div>
-    <div class="setting-row last">
-      <div class="setting-info">
-        <span class="setting-label">{$t('settings.appearance.tray.closeToTray')}</span>
-        <span class="setting-desc">{$t('settings.appearance.tray.closeToTrayDesc')}</span>
-      </div>
-      <Toggle enabled={closeToTray} onchange={(v) => handleCloseToTrayChange(v)} disabled={!enableTray} />
+
+    <div class="collapsible-section composition-subsection">
+      <button class="section-title-btn" onclick={() => immersiveFpsCollapsed = !immersiveFpsCollapsed}>
+        <div class="section-title-row">
+          <span class="section-title composition-title">{$t('settings.appearance.immersiveFps.title')}</span>
+          {#if immersiveFpsCollapsed}
+            <ChevronDown size={16} />
+          {:else}
+            <ChevronUp size={16} />
+          {/if}
+        </div>
+        <span class="section-summary">{$t('settings.appearance.immersiveFps.summary')}</span>
+      </button>
+      {#if !immersiveFpsCollapsed}
+        <p class="section-note">{$t('settings.appearance.immersiveFps.desc')}</p>
+        {#each FPS_PANEL_IDS as panelId}
+          <div class="setting-row">
+            <span class="setting-label">{$t(`settings.appearance.immersiveFps.panels.${panelId}`)}</span>
+            <Dropdown
+              value={getFpsDisplayValue(panelId)}
+              options={getFpsOptions()}
+              onchange={(val) => handleFpsChange(panelId, val)}
+            />
+          </div>
+        {/each}
+      {/if}
     </div>
   </section>
+  {/if}
 
+  <!-- Offline Library & Offline Mode Section (merged) -->
+  {#if activeSection === 'downloads'}
+  <section class="section">
+    <h3 class="section-title">{$t('settings.offlineLibrary.title')}</h3>
 
-  <!-- Offline Library Section -->
-  <section class="section collapsible-section" bind:this={downloadsSection}>
-    <button class="section-title-btn" onclick={() => offlineLibraryCollapsed = !offlineLibraryCollapsed}>
-      <h3 class="section-title">{$t('settings.offlineLibrary.title')}</h3>
-      <span class="section-summary">{$t('settings.offlineLibrary.sectionSummary')}</span>
-      {#if offlineLibraryCollapsed}
-        <ChevronDown size={16} />
-      {:else}
-        <ChevronUp size={16} />
-      {/if}
-    </button>
-    {#if !offlineLibraryCollapsed}
-      <p class="section-note">{$t('settings.offlineLibrary.disclaimer')}</p>
-      <div class="setting-row">
-        <span class="setting-label">{$t('settings.offlineLibrary.cachedTracks')}</span>
-        <span class="setting-value">
-          {#if downloadStats}
-            {downloadStats.readyTracks} tracks ({formatBytes(downloadStats.totalSizeBytes)})
+    <!-- Offline Mode settings -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('offline.status')}</span>
+        <span class="setting-desc status-indicator" class:offline={offlineStatus.isOffline}>
+          {#if offlineStatus.isOffline}
+            {#if offlineStatus.reason === 'no_network'}
+              {$t('offline.noNetwork')}
+            {:else if offlineStatus.reason === 'not_logged_in'}
+              {$t('offline.notLoggedIn')}
+            {:else if offlineStatus.reason === 'manual_override'}
+              {$t('offline.manualMode')}
+            {:else}
+              {$t('offline.offlineReason')}
+            {/if}
           {:else}
-            Loading...
+            {$t('offline.online')}
           {/if}
         </span>
       </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('offline.enableManual')}</span>
+        <span class="setting-desc">{$t('offline.enableManualDesc')}</span>
+      </div>
+      <Toggle enabled={offlineSettings.manualOfflineMode} onchange={handleManualOfflineChange} />
+    </div>
+
+    <!-- Manual offline mode specific settings -->
+    {#if offlineSettings.manualOfflineMode}
       <div class="setting-row">
-        <div class="setting-with-description">
-          <span class="setting-label">{$t('settings.offlineLibrary.showInLibrary')}</span>
-          <span class="setting-description">{$t('settings.offlineLibrary.showInLibraryDesc')}</span>
+        <div class="setting-info">
+          <span class="setting-label">{$t('offline.allowCast')}</span>
+          <span class="setting-desc">{$t('offline.allowCastDesc')}</span>
         </div>
-        <Toggle enabled={showQobuzDownloadsInLibrary} onchange={handleShowDownloadsChange} />
+        <Toggle enabled={offlineSettings.allowCastWhileOffline} onchange={handleAllowCastChange} />
       </div>
       <div class="setting-row">
-        <div class="setting-with-description">
-          <span class="setting-label">{$t('settings.offlineLibrary.repair')}</span>
-          <span class="setting-description">{$t('settings.offlineLibrary.repairDesc')}</span>
+        <div class="setting-info">
+          <span class="setting-label">{$t('offline.allowImmediateScrobbling')}</span>
+          <span class="setting-desc">{$t('offline.allowImmediateScrobblingDesc')}</span>
         </div>
-        <button
-          class="clear-btn"
-          onclick={handleRepairDownloads}
-          disabled={isRepairingDownloads || !downloadStats || downloadStats.readyTracks === 0}
-        >
-          {isRepairingDownloads ? $t('settings.offlineLibrary.repairing') : $t('actions.repair')}
-        </button>
+        <Toggle enabled={offlineSettings.allowImmediateScrobbling} onchange={handleAllowImmediateScrobblingChange} />
       </div>
       <div class="setting-row">
-        <span class="setting-label">{$t('settings.offlineLibrary.clearCache')}</span>
-        <button
-          class="clear-btn"
-          onclick={handleClearDownloads}
-          disabled={isClearingDownloads || !downloadStats || downloadStats.readyTracks === 0}
-        >
-          {isClearingDownloads ? $t('settings.storage.clearing') : $t('settings.offlineLibrary.clearCache')}
-        </button>
+        <div class="setting-info">
+          <span class="setting-label">{$t('offline.allowAccumulatedScrobbling')}</span>
+          <span class="setting-desc">{$t('offline.allowAccumulatedScrobblingDesc')}</span>
+          <small class="setting-note">{$t('offline.scrobbleTimeLimit')}</small>
+        </div>
+        <Toggle enabled={offlineSettings.allowAccumulatedScrobbling} onchange={handleAllowAccumulatedScrobblingChange} />
       </div>
       <div class="setting-row">
-        <div class="setting-with-description">
-          <span class="setting-label">{$t('settings.offlineLibrary.manageCache')}</span>
-          <span class="setting-description">{$t('settings.offlineLibrary.manageCacheDesc')}</span>
+        <div class="setting-info">
+          <span class="setting-label">{$t('offline.showNetworkFolders')}</span>
+          <span class="setting-desc">{$t('offline.showNetworkFoldersDesc')}</span>
         </div>
-        <button
-          class="clear-btn"
-          onclick={handleOpenCacheFolder}
-        >
-          {$t('settings.offlineLibrary.openFolder')}
-        </button>
-      </div>
-      <div class="setting-row last">
-        <div class="setting-with-description">
-          <span class="setting-label">{$t('settings.library.fetchArtistImages')}</span>
-          <span class="setting-description">{$t('settings.library.fetchArtistImagesDesc')}</span>
-        </div>
-        <Toggle enabled={fetchQobuzArtistImages} onchange={(v) => {
-          fetchQobuzArtistImages = v;
-          setUserItem('qbz-fetch-artist-images', String(v));
-        }} />
+        <Toggle enabled={offlineSettings.showNetworkFoldersInManualOffline} onchange={handleShowNetworkFoldersChange} />
       </div>
     {/if}
+
+    <!-- Offline Library / Cache management -->
+    <p class="section-note">{$t('settings.offlineLibrary.disclaimer')}</p>
+    <div class="setting-row">
+      <span class="setting-label">{$t('settings.offlineLibrary.cachedTracks')}</span>
+      <span class="setting-value">
+        {#if downloadStats}
+          {downloadStats.readyTracks} tracks ({formatBytes(downloadStats.totalSizeBytes)})
+        {:else}
+          Loading...
+        {/if}
+      </span>
+    </div>
+    <div class="setting-row">
+      <div class="setting-with-description">
+        <span class="setting-label">{$t('settings.offlineLibrary.showInLibrary')}</span>
+        <span class="setting-description">{$t('settings.offlineLibrary.showInLibraryDesc')}</span>
+      </div>
+      <Toggle enabled={showQobuzDownloadsInLibrary} onchange={handleShowDownloadsChange} />
+    </div>
+    <div class="setting-row">
+      <div class="setting-with-description">
+        <span class="setting-label">{$t('settings.offlineLibrary.repair')}</span>
+        <span class="setting-description">{$t('settings.offlineLibrary.repairDesc')}</span>
+      </div>
+      <button
+        class="clear-btn"
+        onclick={handleRepairDownloads}
+        disabled={isRepairingDownloads || !downloadStats || downloadStats.readyTracks === 0}
+      >
+        {isRepairingDownloads ? $t('settings.offlineLibrary.repairing') : $t('actions.repair')}
+      </button>
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">{$t('settings.offlineLibrary.clearCache')}</span>
+      <button
+        class="clear-btn"
+        onclick={handleClearDownloads}
+        disabled={isClearingDownloads || !downloadStats || downloadStats.readyTracks === 0}
+      >
+        {isClearingDownloads ? $t('settings.storage.clearing') : $t('settings.offlineLibrary.clearCache')}
+      </button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-with-description">
+        <span class="setting-label">{$t('settings.offlineLibrary.manageCache')}</span>
+        <span class="setting-description">{$t('settings.offlineLibrary.manageCacheDesc')}</span>
+      </div>
+      <button
+        class="clear-btn"
+        onclick={handleOpenCacheFolder}
+      >
+        {$t('settings.offlineLibrary.openFolder')}
+      </button>
+    </div>
+    <div class="setting-row last">
+      <div class="setting-with-description">
+        <span class="setting-label">{$t('settings.library.fetchArtistImages')}</span>
+        <span class="setting-description">{$t('settings.library.fetchArtistImagesDesc')}</span>
+      </div>
+      <Toggle enabled={fetchQobuzArtistImages} onchange={(v) => {
+        fetchQobuzArtistImages = v;
+        setUserItem('qbz-fetch-artist-images', String(v));
+      }} />
+    </div>
   </section>
+  {/if}
 
   <!-- Content Filtering Section -->
-  <section class="section" bind:this={contentFilteringSection}>
+  {#if activeSection === 'content-filtering'}
+  <section class="section">
     <h3 class="section-title">{$t('settings.contentFiltering.title')}</h3>
     <div class="setting-row last">
       <div class="setting-info">
@@ -3953,9 +4784,11 @@
       </button>
     </div>
   </section>
+  {/if}
 
   <!-- Integrations Section -->
-  <section class="section" bind:this={integrationsSection}>
+  {#if activeSection === 'integrations'}
+  <section class="section">
     <h3 class="section-title">{$t('settings.integrations.title')}</h3>
 
     <!-- Qobuz Link Handler -->
@@ -4325,9 +5158,11 @@
       </div>
     {/if}
   </section>
+  {/if}
 
   <!-- Updates Section -->
-  <section class="section" bind:this={updatesSection}>
+  {#if activeSection === 'updates'}
+  <section class="section">
     <h3 class="section-title">{$t('settings.updates.title')}</h3>
 
     <div class="setting-row">
@@ -4386,26 +5221,224 @@
       </button>
     </div>
   </section>
+  {/if}
 
-  <!-- Remote Control Section (collapsible) -->
-  <section class="section collapsible-section" id="remote-control" bind:this={remoteControlSection}>
-    <button class="section-title-btn" onclick={() => remoteControlCollapsed = !remoteControlCollapsed}>
-      <h3 class="section-title">{$t('settings.integrations.remoteControl')}</h3>
-      <span class="experimental-badge">{$t('settings.integrations.remoteControlExperimental')}</span>
-      {#if remoteControlCollapsed}
-        <ChevronDown size={16} />
-      {:else}
-        <ChevronUp size={16} />
-      {/if}
-    </button>
-    {#if !remoteControlCollapsed}
-    <!-- TODO: Re-enable when setup guide content is complete
-    <div class="section-header-actions">
-      <button class="setup-guide-btn" onclick={() => showRemoteControlGuide = true}>
-        {$t('settings.integrations.remoteControlSetupGuide')}
+  {#if isUpdateResultOpen}
+    <UpdateCheckResultModal
+      isOpen={isUpdateResultOpen}
+      status={updateResultStatus}
+      newVersion={updateResultRelease?.version ?? ''}
+      onClose={handleCloseUpdateResult}
+      onVisitReleasePage={handleVisitReleaseFromResult}
+    />
+  {/if}
+
+  {#if settingsWhatsNewRelease}
+    <WhatsNewModal
+      isOpen={isSettingsWhatsNewOpen}
+      release={settingsWhatsNewRelease}
+      showTitleBar={showTitleBar}
+      onClose={handleCloseSettingsWhatsNew}
+    />
+  {/if}
+
+  <!-- Storage Section (Memory Cache) -->
+  {#if activeSection === 'storage'}
+  <section class="section">
+    <h3 class="section-title">{$t('settings.storage.title')}</h3>
+    <p class="section-note">{$t('settings.storage.queueCacheNote')}</p>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.storage.clearCache')}</span>
+        <small class="setting-note">
+          {#if cacheStats}
+            {$t('settings.storage.queueCacheStats', {
+              values: {
+                tracks: cacheStats.cached_tracks,
+                used: formatBytes(cacheStats.current_size_bytes),
+                max: formatBytes(cacheStats.max_size_bytes)
+              }
+            })}
+          {:else}
+            {$t('actions.loading')}
+          {/if}
+        </small>
+      </div>
+      <button
+        class="clear-btn"
+        onclick={handleClearCache}
+        disabled={isClearing || !cacheStats || cacheStats.current_size_bytes === 0}
+      >
+        {isClearing ? $t('settings.storage.clearing') : $t('actions.clear')}
       </button>
     </div>
-    -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.lyrics.clearLyrics')}</span>
+        <small class="setting-note">
+          {#if lyricsCacheStats}
+            {$t('settings.lyrics.cacheStats', {
+              values: {
+                entries: lyricsCacheStats.entries,
+                size: formatBytes(lyricsCacheStats.sizeBytes)
+              }
+            })}
+          {:else}
+            -
+          {/if}
+        </small>
+      </div>
+      <button
+        class="clear-btn"
+        onclick={handleClearLyricsCache}
+        disabled={isClearingLyrics}
+      >
+        {isClearingLyrics ? $t('settings.storage.clearing') : $t('actions.clear')}
+      </button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.integrations.musicbrainzCache')}</span>
+        <small class="setting-note">
+          {#if musicBrainzCacheStats}
+            {musicBrainzCacheStats.artists} artists, {musicBrainzCacheStats.relations} relations, {musicBrainzCacheStats.recordings} recordings
+          {:else}
+            -
+          {/if}
+        </small>
+      </div>
+      <button
+        class="clear-btn"
+        onclick={handleClearMusicBrainzCache}
+        disabled={isClearingMusicBrainz || !musicBrainzCacheStats || (musicBrainzCacheStats.artists === 0 && musicBrainzCacheStats.relations === 0 && musicBrainzCacheStats.recordings === 0)}
+      >
+        {isClearingMusicBrainz ? $t('settings.storage.clearing') : $t('actions.clear')}
+      </button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">Artist Vectors (Suggestions)</span>
+        <small class="setting-note">
+          {#if vectorStoreStats}
+            {vectorStoreStats.artist_count} artists, {vectorStoreStats.entry_count} relations
+          {:else}
+            -
+          {/if}
+        </small>
+      </div>
+      <button
+        class="clear-btn"
+        onclick={handleClearVectorStore}
+        disabled={isClearingVectorStore || !vectorStoreStats || vectorStoreStats.entry_count === 0}
+      >
+        {isClearingVectorStore ? $t('settings.storage.clearing') : $t('actions.clear')}
+      </button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.storage.imageCacheEnabled')}</span>
+        <span class="setting-desc">{$t('settings.storage.imageCacheEnabledDesc')}</span>
+      </div>
+      <Toggle enabled={imageCacheEnabled} onchange={() => handleImageCacheEnabledChange(!imageCacheEnabled)} />
+    </div>
+    {#if imageCacheEnabled}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">{$t('settings.storage.imageCacheMaxSize')}</span>
+          <small class="setting-note">
+            {#if imageCacheStats}
+              {imageCacheStats.file_count} {$t('settings.storage.imageCacheFiles')} ({formatBytes(imageCacheStats.total_bytes)})
+            {:else}
+              -
+            {/if}
+          </small>
+        </div>
+        <input
+          class="remote-control-input"
+          type="number"
+          min="50"
+          max="2000"
+          step="50"
+          value={imageCacheMaxSizeMb}
+          onchange={(e) => handleImageCacheMaxSizeChange(Number((e.target as HTMLInputElement).value))}
+        />
+      </div>
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">{$t('settings.storage.imageCacheClear')}</span>
+          <small class="setting-note">{$t('settings.storage.imageCacheClearDesc')}</small>
+        </div>
+        <button
+          class="clear-btn"
+          onclick={handleClearImageCache}
+          disabled={isClearingImageCache || !imageCacheStats || imageCacheStats.total_bytes === 0}
+        >
+          {isClearingImageCache ? $t('settings.storage.clearing') : $t('actions.clear')}
+        </button>
+      </div>
+    {/if}
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">Clear All Caches</span>
+        <small class="setting-note">
+          Clears all cached data above
+        </small>
+      </div>
+      <button
+        class="clear-btn"
+        onclick={handleClearAllCaches}
+        disabled={isClearingAllCaches}
+      >
+        {isClearingAllCaches ? $t('settings.storage.clearing') : $t('actions.clearAll')}
+      </button>
+    </div>
+    <div class="setting-row last">
+      <div class="danger-zone">
+        <div class="danger-zone-header">
+          <span class="setting-label danger-label">{$t('settings.storage.factoryResetTitle')}</span>
+          <span class="setting-desc">{$t('settings.storage.factoryResetDesc')}</span>
+        </div>
+        <div class="factory-reset-controls">
+          <label class="checkbox-label">
+            <input type="checkbox" bind:checked={factoryResetConfirmed} />
+            <span>{$t('settings.storage.factoryResetCheckbox')}</span>
+          </label>
+          <button
+            class="factory-reset-btn"
+            onclick={handleFactoryReset}
+            disabled={!factoryResetConfirmed || isFactoryResetting}
+          >
+            {isFactoryResetting ? $t('settings.storage.clearing') : $t('settings.storage.factoryResetButton')}
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+  {/if}
+
+  <!-- Developer Mode Section -->
+  {#if activeSection === 'developer'}
+  <section class="section">
+    <h3 class="section-title">{$t('settings.developer.title')}</h3>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.developer.verboseLogCapture')}</span>
+        <small class="setting-note">{$t('settings.developer.verboseLogCaptureDesc')}</small>
+      </div>
+      <Toggle enabled={verboseLogCapture} onchange={handleVerboseLogCaptureChange} />
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.developer.viewLogs')}</span>
+        <small class="setting-note">{$t('settings.developer.viewLogsDesc')}</small>
+      </div>
+      <button class="clear-btn" onclick={() => showLogsModal = true}>
+        {$t('settings.developer.viewLogs')}
+      </button>
+    </div>
+
+    <!-- Remote Control (subsection within Developer) -->
+    <h4 class="subsection-title">{$t('settings.integrations.remoteControl')} <span class="experimental-badge">{$t('settings.integrations.remoteControlExperimental')}</span></h4>
 
     <div class="setting-row">
       <div class="setting-info">
@@ -4549,231 +5582,49 @@
         </div>
       </div>
     {/if}
-    {/if}
   </section>
-
-  {#if isUpdateResultOpen}
-    <UpdateCheckResultModal
-      isOpen={isUpdateResultOpen}
-      status={updateResultStatus}
-      newVersion={updateResultRelease?.version ?? ''}
-      onClose={handleCloseUpdateResult}
-      onVisitReleasePage={handleVisitReleaseFromResult}
-    />
   {/if}
-
-  {#if settingsWhatsNewRelease}
-    <WhatsNewModal
-      isOpen={isSettingsWhatsNewOpen}
-      release={settingsWhatsNewRelease}
-      showTitleBar={showTitleBar}
-      onClose={handleCloseSettingsWhatsNew}
-    />
-  {/if}
-
-  <!-- Storage Section (Memory Cache) -->
-  <section class="section collapsible-section" bind:this={storageSection}>
-    <button class="section-title-btn" onclick={() => storageCollapsed = !storageCollapsed}>
-      <h3 class="section-title">{$t('settings.storage.title')}</h3>
-      <span class="section-summary">{$t('settings.storage.sectionSummary')}</span>
-      {#if storageCollapsed}
-        <ChevronDown size={16} />
-      {:else}
-        <ChevronUp size={16} />
-      {/if}
-    </button>
-    {#if !storageCollapsed}
-    <p class="section-note">{$t('settings.storage.queueCacheNote')}</p>
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">{$t('settings.storage.clearCache')}</span>
-        <small class="setting-note">
-          {#if cacheStats}
-            {$t('settings.storage.queueCacheStats', {
-              values: {
-                tracks: cacheStats.cached_tracks,
-                used: formatBytes(cacheStats.current_size_bytes),
-                max: formatBytes(cacheStats.max_size_bytes)
-              }
-            })}
-          {:else}
-            {$t('actions.loading')}
-          {/if}
-        </small>
-      </div>
-      <button
-        class="clear-btn"
-        onclick={handleClearCache}
-        disabled={isClearing || !cacheStats || cacheStats.current_size_bytes === 0}
-      >
-        {isClearing ? $t('settings.storage.clearing') : $t('actions.clear')}
-      </button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">{$t('settings.lyrics.clearLyrics')}</span>
-        <small class="setting-note">
-          {#if lyricsCacheStats}
-            {$t('settings.lyrics.cacheStats', {
-              values: {
-                entries: lyricsCacheStats.entries,
-                size: formatBytes(lyricsCacheStats.sizeBytes)
-              }
-            })}
-          {:else}
-            -
-          {/if}
-        </small>
-      </div>
-      <button
-        class="clear-btn"
-        onclick={handleClearLyricsCache}
-        disabled={isClearingLyrics}
-      >
-        {isClearingLyrics ? $t('settings.storage.clearing') : $t('actions.clear')}
-      </button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">{$t('settings.integrations.musicbrainzCache')}</span>
-        <small class="setting-note">
-          {#if musicBrainzCacheStats}
-            {musicBrainzCacheStats.artists} artists, {musicBrainzCacheStats.relations} relations, {musicBrainzCacheStats.recordings} recordings
-          {:else}
-            -
-          {/if}
-        </small>
-      </div>
-      <button
-        class="clear-btn"
-        onclick={handleClearMusicBrainzCache}
-        disabled={isClearingMusicBrainz || !musicBrainzCacheStats || (musicBrainzCacheStats.artists === 0 && musicBrainzCacheStats.relations === 0 && musicBrainzCacheStats.recordings === 0)}
-      >
-        {isClearingMusicBrainz ? $t('settings.storage.clearing') : $t('actions.clear')}
-      </button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">Artist Vectors (Suggestions)</span>
-        <small class="setting-note">
-          {#if vectorStoreStats}
-            {vectorStoreStats.artist_count} artists, {vectorStoreStats.entry_count} relations
-          {:else}
-            -
-          {/if}
-        </small>
-      </div>
-      <button
-        class="clear-btn"
-        onclick={handleClearVectorStore}
-        disabled={isClearingVectorStore || !vectorStoreStats || vectorStoreStats.entry_count === 0}
-      >
-        {isClearingVectorStore ? $t('settings.storage.clearing') : $t('actions.clear')}
-      </button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">Artwork Thumbnails</span>
-        <small class="setting-note">
-          {#if artworkCacheStats}
-            {@const thumbCount = artworkCacheStats.thumbnail_file_count ?? 0}
-            {@const thumbBytes = artworkCacheStats.thumbnails_cache_bytes ?? 0}
-            {@const legacyCount = artworkCacheStats.artwork_file_count ?? 0}
-            {@const legacyBytes = artworkCacheStats.artwork_cache_bytes ?? 0}
-            {#if thumbCount > 0 || legacyCount > 0}
-              {#if thumbCount > 0}{thumbCount} thumbnails ({formatBytes(thumbBytes)}){/if}{#if thumbCount > 0 && legacyCount > 0}, {/if}{#if legacyCount > 0}{legacyCount} legacy files ({formatBytes(legacyBytes)}){/if}
-            {:else}
-              No cached artwork
-            {/if}
-          {:else}
-            -
-          {/if}
-        </small>
-      </div>
-      <button
-        class="clear-btn"
-        onclick={handleClearArtworkCache}
-        disabled={isClearingArtwork || !artworkCacheStats || ((artworkCacheStats.thumbnails_cache_bytes ?? 0) === 0 && (artworkCacheStats.artwork_cache_bytes ?? 0) === 0)}
-      >
-        {isClearingArtwork ? $t('settings.storage.clearing') : $t('actions.clear')}
-      </button>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">Clear All Caches</span>
-        <small class="setting-note">
-          Clears all cached data above
-        </small>
-      </div>
-      <button
-        class="clear-btn"
-        onclick={handleClearAllCaches}
-        disabled={isClearingAllCaches}
-      >
-        {isClearingAllCaches ? $t('settings.storage.clearing') : $t('actions.clearAll')}
-      </button>
-    </div>
-    <div class="setting-row last">
-      <div class="danger-zone">
-        <div class="danger-zone-header">
-          <span class="setting-label danger-label">{$t('settings.storage.factoryResetTitle')}</span>
-          <span class="setting-desc">{$t('settings.storage.factoryResetDesc')}</span>
-        </div>
-        <div class="factory-reset-controls">
-          <label class="checkbox-label">
-            <input type="checkbox" bind:checked={factoryResetConfirmed} />
-            <span>{$t('settings.storage.factoryResetCheckbox')}</span>
-          </label>
-          <button
-            class="factory-reset-btn"
-            onclick={handleFactoryReset}
-            disabled={!factoryResetConfirmed || isFactoryResetting}
-          >
-            {isFactoryResetting ? $t('settings.storage.clearing') : $t('settings.storage.factoryResetButton')}
-          </button>
-        </div>
-      </div>
-    </div>
-    {/if}
-  </section>
-
-  <!-- Developer Mode Section (not in jump-nav, collapsed by default) -->
-  <section class="section collapsible-section">
-    <button class="section-title-btn" onclick={() => developerCollapsed = !developerCollapsed}>
-      <h3 class="section-title">{$t('settings.developer.title')}</h3>
-      <span class="section-summary">{$t('settings.developer.summary')}</span>
-      {#if developerCollapsed}
-        <ChevronDown size={16} />
-      {:else}
-        <ChevronUp size={16} />
-      {/if}
-    </button>
-    {#if !developerCollapsed}
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">{$t('settings.developer.verboseLogCapture')}</span>
-        <small class="setting-note">{$t('settings.developer.verboseLogCaptureDesc')}</small>
-      </div>
-      <Toggle enabled={verboseLogCapture} onchange={handleVerboseLogCaptureChange} />
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">{$t('settings.developer.viewLogs')}</span>
-        <small class="setting-note">{$t('settings.developer.viewLogsDesc')}</small>
-      </div>
-      <button class="clear-btn" onclick={() => showLogsModal = true}>
-        {$t('settings.developer.viewLogs')}
-      </button>
-    </div>
-    {/if}
-  </section>
 
   <LogsModal isOpen={showLogsModal} onClose={() => showLogsModal = false} />
 
+  <!-- Snap Section (only shown when running in Snap) -->
+  {#if activeSection === 'snap' && isSnap}
+    <section class="section snap-section" id="snap">
+      <h3 class="section-title">Snap Sandbox</h3>
+      <div class="flatpak-info">
+        <p class="flatpak-intro">
+          QBZ is running inside a Snap sandbox. Some audio interfaces need to be connected manually for the best experience.
+        </p>
+        <div class="flatpak-guide">
+          <h4>Required Plug Connections</h4>
+          <p>Run these commands to enable full audio support:</p>
+          <div class="copyable-command">
+            <pre class="code-block">sudo snap connect qbz-player:alsa
+sudo snap connect qbz-player:pulseaudio
+sudo snap connect qbz-player:pipewire
+sudo snap connect qbz-player:mpris</pre>
+            <button class="copy-btn" onclick={() => copyCommand('snap-required', 'sudo snap connect qbz-player:alsa\nsudo snap connect qbz-player:pulseaudio\nsudo snap connect qbz-player:pipewire\nsudo snap connect qbz-player:mpris')}>
+              {copiedCommands['snap-required'] ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
+          <h4>Optional (External Drives / NAS)</h4>
+          <div class="copyable-command">
+            <pre class="code-block">sudo snap connect qbz-player:removable-media</pre>
+            <button class="copy-btn" onclick={() => copyCommand('snap-optional', 'sudo snap connect qbz-player:removable-media')}>
+              {copiedCommands['snap-optional'] ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
+          <p class="flatpak-note">
+            <strong>Note:</strong> These settings persist across reboots and updates. You only need to run them once, then restart QBZ.
+          </p>
+        </div>
+      </div>
+    </section>
+  {/if}
+
   <!-- Flatpak Section (only shown when running in Flatpak) -->
-  <!-- NOTE: Keep this section LAST. If adding new settings sections, add them BEFORE this one. -->
-  {#if isFlatpak}
-    <section class="section flatpak-section" id="flatpak" bind:this={flatpakSection}>
+  {#if activeSection === 'flatpak' && isFlatpak}
+    <section class="section flatpak-section" id="flatpak">
       <h3 class="section-title">Flatpak Sandbox</h3>
       <div class="flatpak-info">
         <p class="flatpak-intro">
@@ -4889,7 +5740,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     border-radius: 6px;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -4919,7 +5770,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     border-radius: 6px;
     color: white;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -4948,7 +5799,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     opacity: 0;
     visibility: hidden;
     transform: translateY(-4px);
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     z-index: 100;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
     white-space: nowrap;
@@ -5031,7 +5882,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
   }
 
   .header {
-    padding-top: 24px;
+    padding-top: 8px;
     margin-bottom: 32px;
   }
 
@@ -5044,7 +5895,8 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     background: none;
     border: none;
     cursor: pointer;
-    margin-bottom: 16px;
+    margin-top: 8px;
+    margin-bottom: 24px;
     transition: color 150ms ease;
   }
 
@@ -5121,15 +5973,6 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     background: rgba(239, 68, 68, 0.15);
     color: #ef4444;
     border: 1px solid rgba(239, 68, 68, 0.3);
-  }
-
-  .experimental-inline {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-    color: var(--text-muted);
-    opacity: 0.7;
   }
 
   .subsection-title {
@@ -5225,8 +6068,9 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
   /* Collapsible sections */
   .collapsible-section .section-title-btn {
     display: flex;
-    align-items: baseline;
-    gap: 12px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
     width: 100%;
     padding: 0;
     margin-bottom: 8px;
@@ -5236,19 +6080,22 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     color: var(--text-muted);
   }
 
+  .collapsible-section .section-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+
   .collapsible-section .section-title-btn .section-title {
     margin-bottom: 0;
     flex-shrink: 0;
   }
 
   .section-summary {
-    flex: 1;
     font-size: 12px;
     color: var(--text-muted);
     text-align: left;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .collapsible-section .section-title-btn :global(svg) {
@@ -5259,11 +6106,6 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
 
   .collapsible-section .section-title-btn:hover :global(svg) {
     color: var(--text-primary);
-  }
-
-  .collapsible-section .section-title-btn .experimental-badge {
-    flex-shrink: 0;
-    margin-left: -4px;
   }
 
   /* Composition subsection (inside Appearance) */
@@ -5377,7 +6219,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     padding: 4px 8px;
     border-radius: 4px;
     background: var(--bg-tertiary);
-    font-family: monospace;
+    font-family: var(--font-sans);
     font-size: 12px;
     color: var(--text-primary);
     user-select: all;
@@ -5426,7 +6268,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     padding: 2px 6px;
     border-radius: 4px;
     background: var(--bg-tertiary);
-    font-family: monospace;
+    font-family: var(--font-sans);
     font-size: 11px;
     color: var(--text-primary);
   }
@@ -5446,6 +6288,11 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
 
   .setting-row.last {
     border-bottom: none;
+  }
+
+  .setting-row.indented-setting {
+    padding-left: 20px;
+    height: 40px;
   }
 
   .setting-label {
@@ -5536,7 +6383,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     background-color: var(--accent-primary);
     color: white;
     border: none;
@@ -5771,7 +6618,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .auth-start-btn {
@@ -5812,7 +6659,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     background: none;
     border: 1px solid var(--text-muted);
     color: var(--text-muted);
@@ -6056,6 +6903,239 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
   .theme-filter-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+
+  /* Auto-Theme Panel */
+  .auto-theme-panel {
+    margin: 0 0 8px 0;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border-radius: 10px;
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .auto-theme-status {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    padding: 4px 0;
+  }
+
+  .auto-theme-experimental {
+    font-size: 0.75rem;
+    color: var(--warning);
+    opacity: 0.85;
+  }
+
+  .auto-theme-palette {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 8px 0;
+  }
+
+  .palette-swatch-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    position: relative;
+  }
+
+  .palette-swatch {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    border: 2px solid var(--border-subtle);
+    transition: transform 150ms ease, border-color 150ms ease;
+  }
+
+  .palette-swatch-wrapper:hover .palette-swatch {
+    transform: scale(1.12);
+    border-color: var(--text-muted);
+  }
+
+  .palette-swatch-label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-align: center;
+    max-width: 48px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .palette-swatch-input {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 36px;
+    height: 36px;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  /* Disabled section overlay */
+  .disabled-section {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  /* Window Controls Custom Colors Panel */
+  .wc-custom-panel {
+    margin: 0 0 8px 0;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border-radius: 10px;
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .wc-custom-panel-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .wc-color-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .wc-color-group-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-muted);
+  }
+
+  .wc-color-swatches {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .btn-secondary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .btn-secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 18px;
+    background: var(--accent-primary);
+    border: none;
+    border-radius: 8px;
+    color: var(--btn-primary-text, #ffffff);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    transition: background-color 150ms ease;
+  }
+
+  .btn-primary:hover {
+    background: var(--accent-hover);
+  }
+
+  /* Auto-Theme Generating Overlay */
+  .auto-theme-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+  }
+
+  .auto-theme-overlay-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    color: #ffffff;
+    font-size: 1rem;
+  }
+
+  /* Auto-Theme Failure Modal */
+  .auto-theme-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 3100;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+  }
+
+  .auto-theme-modal {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    padding: 28px 32px;
+    max-width: 440px;
+    width: 90%;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .auto-theme-modal h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: var(--danger);
+  }
+
+  .auto-theme-modal-message {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  .auto-theme-modal-hint {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .auto-theme-modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 8px;
   }
 
   /* Content Filtering Section */

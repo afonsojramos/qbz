@@ -95,23 +95,35 @@ jobs:
           # Install SDK extensions - flatpak-builder will auto-resolve the correct version based on the SDK
           flatpak install --user -y --noninteractive flathub \
             org.freedesktop.Sdk.Extension.node20//25.08 \
-            org.freedesktop.Sdk.Extension.rust-stable//25.08
+            org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+            org.freedesktop.Sdk.Extension.llvm20//25.08
 
       - name: Build Flatpak
+        id: build_flatpak
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           mkdir -p flatpak-build flatpak-repo dist
+          BUNDLE_NAME="QBZ.flatpak"
+          if [[ -n "$VERSION" ]]; then
+            BUNDLE_NAME="qbz_${VERSION}_x86_64.flatpak"
+          fi
           flatpak-builder --user --force-clean --repo=flatpak-repo \
             flatpak-build packaging/flatpak/com.blitzfc.qbz.yml
-          flatpak build-bundle flatpak-repo dist/QBZ.flatpak com.blitzfc.qbz
+          flatpak build-bundle flatpak-repo "dist/${BUNDLE_NAME}" com.blitzfc.qbz
+          echo "bundle_name=${BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
+          ls -la dist
 
       - name: Upload Flatpak bundle
         uses: actions/upload-artifact@v4
         with:
           name: qbz-flatpak
-          path: dist/QBZ.flatpak
+          path: dist/${{ steps.build_flatpak.outputs.bundle_name }}
 
       - name: Publish GitHub Release Asset
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/QBZ.flatpak
+          files: dist/${{ steps.build_flatpak.outputs.bundle_name }}
+          prerelease: ${{ contains(steps.release.outputs.version, '-rc') }}
+          make_latest: ${{ contains(steps.release.outputs.version, '-rc') && 'false' || 'true' }}

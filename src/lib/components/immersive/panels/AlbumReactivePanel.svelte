@@ -3,6 +3,7 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import QualityBadge from '$lib/components/QualityBadge.svelte';
+  import { getPanelFrameInterval } from '$lib/immersive/fpsConfig';
 
   interface Props {
     enabled?: boolean;
@@ -10,6 +11,7 @@
     trackTitle?: string;
     artist?: string;
     album?: string;
+    explicit?: boolean;
     isPlaying?: boolean;
     quality?: string;
     bitDepth?: number;
@@ -25,6 +27,7 @@
     trackTitle = '',
     artist = '',
     album = '',
+    explicit = false,
     isPlaying = false,
     quality,
     bitDepth,
@@ -45,7 +48,7 @@
 
   let animationFrame: number | null = null;
   let lastRenderTime = 0;
-  const FRAME_INTERVAL = 1000 / 30;
+  const FRAME_INTERVAL = getPanelFrameInterval('album-reactive');
 
   // Artwork-derived glow color
   let glowColor = $state('rgba(100, 100, 255, 0.3)');
@@ -194,7 +197,12 @@
         <span>Now Playing</span>
       </div>
     {/if}
-    <h1 class="track-title">{trackTitle}</h1>
+    <div class="track-title-row">
+      <h1 class="track-title">{trackTitle}</h1>
+      {#if explicit}
+        <span class="explicit-badge" title="Explicit"></span>
+      {/if}
+    </div>
     <p class="track-artist">{artist}</p>
     {#if album}
       <p class="track-album">{album}</p>
@@ -309,12 +317,31 @@
     50% { transform: scaleY(1); }
   }
 
+  .track-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
   .track-title {
     font-size: clamp(20px, 3vw, 28px);
     font-weight: 700;
     color: var(--text-primary, white);
     margin: 0;
     text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-primary, white);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .track-artist {

@@ -21,7 +21,7 @@ export { eventToShortcut, formatShortcutDisplay, isInputTarget };
 // Types
 // ============================================================================
 
-export type KeybindingCategory = 'playback' | 'navigation' | 'ui' | 'focus';
+export type KeybindingCategory = 'playback' | 'navigation' | 'ui' | 'focus' | 'mini';
 
 export interface KeybindingAction {
   /** Unique identifier, e.g., 'playback.toggle' */
@@ -52,7 +52,8 @@ export const CATEGORIES: CategoryInfo[] = [
   { id: 'playback', label: 'Playback', description: 'Playback controls' },
   { id: 'navigation', label: 'Navigation', description: 'App navigation' },
   { id: 'ui', label: 'Interface', description: 'UI elements' },
-  { id: 'focus', label: 'Focus Mode', description: 'Focus mode controls' },
+  { id: 'focus', label: 'Immersive', description: 'Immersive mode controls' },
+  { id: 'mini', label: 'Mini Player', description: 'Mini player controls' },
 ];
 
 export const ACTIONS: KeybindingAction[] = [
@@ -104,11 +105,18 @@ export const ACTIONS: KeybindingAction[] = [
 
   // UI
   {
-    id: 'ui.focusMode',
-    label: 'Focus Mode',
+    id: 'ui.sidebar',
+    label: 'Toggle Sidebar',
     category: 'ui',
-    defaultShortcut: 'f',
-    description: 'Toggle focus mode',
+    defaultShortcut: 'Shift+S',
+    description: 'Expand or collapse the sidebar',
+  },
+  {
+    id: 'ui.focusMode',
+    label: 'Immersive Mode',
+    category: 'ui',
+    defaultShortcut: 'Shift+I',
+    description: 'Toggle immersive mode',
   },
   {
     id: 'ui.queue',
@@ -137,6 +145,13 @@ export const ACTIONS: KeybindingAction[] = [
     category: 'ui',
     defaultShortcut: 'Ctrl+l',
     description: 'Paste and open a Qobuz link',
+  },
+  {
+    id: 'ui.miniPlayer',
+    label: 'Toggle Mini Player',
+    category: 'ui',
+    defaultShortcut: 'Shift+M',
+    description: 'Toggle mini player mode',
   },
 
   // Focus Mode specific
@@ -170,6 +185,48 @@ export const ACTIONS: KeybindingAction[] = [
     category: 'focus',
     defaultShortcut: 'Shift+ArrowLeft',
     description: 'Seek back 10 seconds',
+    contextual: true,
+  },
+
+  // Mini Player specific
+  {
+    id: 'mini.micro',
+    label: 'Micro View',
+    category: 'mini',
+    defaultShortcut: '1',
+    description: 'Switch to micro view',
+    contextual: true,
+  },
+  {
+    id: 'mini.compact',
+    label: 'Compact View',
+    category: 'mini',
+    defaultShortcut: '2',
+    description: 'Switch to compact view',
+    contextual: true,
+  },
+  {
+    id: 'mini.artwork',
+    label: 'Artwork View',
+    category: 'mini',
+    defaultShortcut: '3',
+    description: 'Switch to artwork view',
+    contextual: true,
+  },
+  {
+    id: 'mini.queue',
+    label: 'Queue View',
+    category: 'mini',
+    defaultShortcut: '4',
+    description: 'Switch to queue view',
+    contextual: true,
+  },
+  {
+    id: 'mini.lyrics',
+    label: 'Lyrics View',
+    category: 'mini',
+    defaultShortcut: '5',
+    description: 'Switch to lyrics view',
     contextual: true,
   },
 ];
@@ -405,7 +462,7 @@ export function getConflictingAction(
  */
 export function handleKeydown(
   event: KeyboardEvent,
-  context: { focusMode?: boolean } = {}
+  context: { focusMode?: boolean; miniPlayerMode?: boolean } = {}
 ): boolean {
   // Ignore if we're in an input
   if (isInputTarget(event)) {
@@ -422,6 +479,9 @@ export function handleKeydown(
   const action = ACTIONS.find((a) => a.id === actionId);
   if (action?.contextual) {
     if (action.category === 'focus' && !context.focusMode) {
+      return false;
+    }
+    if (action.category === 'mini' && !context.miniPlayerMode) {
       return false;
     }
   }

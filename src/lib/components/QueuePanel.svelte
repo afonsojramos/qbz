@@ -1,7 +1,13 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { X, Search, Heart, MoreVertical, Trash2, ListPlus, Info } from 'lucide-svelte';
   import { t } from '$lib/i18n';
-  import { invoke } from '@tauri-apps/api/core';
+  import { cachedSrc } from '$lib/actions/cachedImage';
+  import {
+    isTrackFavorite,
+    toggleTrackFavorite as storeToggleTrackFavorite,
+    subscribe as subscribeFavorites
+  } from '$lib/stores/favoritesStore';
   import { getUserItem, setUserItem } from '$lib/utils/userStorage';
 
   interface QueueTrack {
@@ -12,6 +18,7 @@
     duration: string;
     available?: boolean;
     trackId?: number; // For favorite checking
+    parental_warning?: boolean;
   }
 
   interface IndexedQueueTrack {
@@ -68,6 +75,7 @@
 
   // Favorite state for current track
   let currentTrackFavorite = $state(false);
+  let unsubscribeFavorites: (() => void) | null = null;
 
   // Hover state for history tracks
   let hoveredHistoryTrack = $state<string | null>(null);
@@ -109,34 +117,35 @@
     }
   }
 
-  // Check favorite status when current track changes
-  $effect(() => {
-    if (currentTrack?.trackId) {
-      checkFavoriteStatus(currentTrack.trackId);
-    } else {
+  function syncCurrentTrackFavorite(): void {
+    if (!currentTrack?.trackId) {
       currentTrackFavorite = false;
+      return;
     }
+    currentTrackFavorite = isTrackFavorite(currentTrack.trackId);
+  }
+
+  // Keep current-track favorite state in sync with global favorites store
+  $effect(() => {
+    if (unsubscribeFavorites) return;
+    unsubscribeFavorites = subscribeFavorites(syncCurrentTrackFavorite);
+    syncCurrentTrackFavorite();
   });
 
-  async function checkFavoriteStatus(trackId: number) {
-    try {
-      const result = await invoke<boolean>('is_track_favorite', { trackId });
-      currentTrackFavorite = result;
-    } catch {
-      currentTrackFavorite = false;
-    }
-  }
+  onDestroy(() => {
+    unsubscribeFavorites?.();
+    unsubscribeFavorites = null;
+  });
+
+  // Re-evaluate when current track changes
+  $effect(() => {
+    syncCurrentTrackFavorite();
+  });
 
   async function toggleCurrentTrackFavorite() {
     if (!currentTrack?.trackId) return;
     try {
-      if (currentTrackFavorite) {
-        await invoke('v2_remove_favorite', { favType: 'tracks', itemId: String(currentTrack.trackId) });
-        currentTrackFavorite = false;
-      } else {
-        await invoke('v2_add_favorite', { favType: 'tracks', itemId: String(currentTrack.trackId) });
-        currentTrackFavorite = true;
-      }
+      currentTrackFavorite = await storeToggleTrackFavorite(currentTrack.trackId);
     } catch (err) {
       console.error('Failed to toggle favorite:', err);
     }
@@ -262,6 +271,7 @@
 </script>
 
 <!-- Queue Panel -->
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 <aside class="queue-panel" onclick={handlePanelClick}>
   <!-- Header with Tabs -->
   <div class="header">
@@ -303,7 +313,12 @@
                 {/if}
               </div>
               <div class="np-info">
-                <div class="np-title">{currentTrack.title}</div>
+                <div class="np-title-row">
+                  <span class="np-title">{currentTrack.title}</span>
+                  {#if currentTrack.parental_warning}
+                    <span class="explicit-badge" title="Explicit"></span>
+                  {/if}
+                </div>
                 <div class="np-artist">{currentTrack.artist}</div>
               </div>
               <button
@@ -347,10 +362,16 @@
                   ondragend={handleDragEnd}
                   role="button"
                   tabindex={isUnavailable ? -1 : 0}
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTrackClick(queueTrack); } }}
                 >
                   <span class="track-number">{originalIndex + 1}</span>
                   <div class="track-info">
-                    <div class="track-title">{queueTrack.title}</div>
+                    <div class="track-title-row">
+                      <span class="track-title">{queueTrack.title}</span>
+                      {#if queueTrack.parental_warning}
+                        <span class="explicit-badge" title="Explicit"></span>
+                      {/if}
+                    </div>
                     <div class="track-artist">{queueTrack.artist}</div>
                   </div>
                   <span class="track-duration">{queueTrack.duration}</span>
@@ -408,8 +429,9 @@
                   onmouseleave={() => hoveredHistoryTrack = null}
                   role="button"
                   tabindex="0"
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleHistoryTrackClick(track); } }}
                 >
-                  <img src={track.artwork} alt={track.title} class="history-artwork" />
+                  <img use:cachedSrc={track.artwork} alt={track.title} class="history-artwork" />
                   <div class="track-info">
                     <div class="track-title">{track.title}</div>
                     <div class="track-artist">{track.artist}</div>
@@ -690,6 +712,13 @@
     min-width: 0;
   }
 
+  .np-title-row, .track-title-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+
   .np-title {
     font-size: 14px;
     font-weight: 500;
@@ -697,6 +726,17 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .np-artist {
@@ -718,7 +758,7 @@
     color: var(--text-muted);
     cursor: pointer;
     border-radius: 6px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -799,7 +839,7 @@
   .track-duration {
     font-size: 12px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
     flex-shrink: 0;
   }
@@ -823,7 +863,7 @@
     color: var(--text-muted);
     cursor: pointer;
     opacity: 0;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .queue-track:hover .track-menu-btn,
@@ -863,7 +903,7 @@
     font-size: 13px;
     text-align: left;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .menu-item:hover {
@@ -1033,7 +1073,7 @@
     color: var(--text-muted);
     cursor: pointer;
     border-radius: 6px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .footer-icon-btn:hover {

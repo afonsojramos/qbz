@@ -29,6 +29,8 @@ pub struct PersistedQueueTrack {
     pub streamable: bool,
     #[serde(default)]
     pub source: Option<String>,
+    #[serde(default)]
+    pub parental_warning: bool,
 }
 
 /// Represents the full persisted session state
@@ -345,6 +347,7 @@ impl SessionStore {
                     artist_id: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
                     streamable: true, // Default to true for persisted tracks
                     source: row.get(12)?,
+                    parental_warning: false, // Not persisted in DB
                 })
             })
             .map_err(|e| format!("Failed to query queue tracks: {}", e))?

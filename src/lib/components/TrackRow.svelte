@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { Play, Pause, Heart, HardDrive, AlertCircle, Ban, Music } from 'lucide-svelte';
   import { t } from '$lib/i18n';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import TrackMenu from './TrackMenu.svelte';
   import DownloadButton from './DownloadButton.svelte';
   import {
@@ -24,6 +25,7 @@
     duration: string;
     quality?: string;
     isPlaying?: boolean;
+    isActiveTrack?: boolean;
     isLocal?: boolean; // Whether this is a local library track
     localSource?: 'local' | 'plex';
     isUnavailable?: boolean; // Track removed from Qobuz or otherwise unavailable
@@ -37,6 +39,10 @@
     compact?: boolean; // Compact mode: smaller height, artist as column
     showArtwork?: boolean; // Optional artwork column (e.g., playlist detail)
     artworkUrl?: string;
+    explicit?: boolean; // Parental advisory / explicit content
+    selectable?: boolean; // Multi-select mode: show checkbox
+    selected?: boolean;
+    onToggleSelect?: (e: MouseEvent) => void;
     onPlay?: () => void;
     onArtistClick?: () => void;
     onAlbumClick?: () => void;
@@ -76,6 +82,7 @@
     duration,
     quality,
     isPlaying = false,
+    isActiveTrack = false,
     isLocal = false,
     localSource = 'local',
     isUnavailable = false,
@@ -87,8 +94,12 @@
     hideDownload = false,
     hideFavorite = false,
     compact = false,
+    explicit = false,
     showArtwork = false,
     artworkUrl,
+    selectable = false,
+    selected = false,
+    onToggleSelect,
     onPlay,
     onArtistClick,
     onAlbumClick,
@@ -116,7 +127,7 @@
       const unsubscribe = subscribeFavorites(() => {
         favoriteFromStore = isTrackFavorite(trackId);
         isToggling = isTrackToggling(trackId);
-      });
+      }, trackId);
       return unsubscribe;
     }
   });
@@ -147,23 +158,37 @@
 
 <div
   class="track-row"
-  class:playing={isPlaying}
-  class:hovered={isHovered && !isPlaying && !isBlacklisted}
+  class:playing={isActiveTrack || isPlaying}
+  class:hovered={isHovered && !isActiveTrack && !isPlaying && !isBlacklisted}
   class:compact
   class:blacklisted={isBlacklisted}
+  class:selected
   data-track-id={trackId ?? undefined}
   onmouseenter={() => (isHovered = true)}
   onmouseleave={() => (isHovered = false)}
-  onclick={isBlacklisted ? undefined : onPlay}
+  onclick={selectable ? onToggleSelect : (isBlacklisted ? undefined : onPlay)}
   oncontextmenu={(e) => {
-    if (isBlacklisted) return;
+    if (isBlacklisted || selectable) return;
     e.preventDefault();
     contextMenuPos = { x: e.clientX, y: e.clientY };
   }}
   role="button"
   tabindex={isBlacklisted ? -1 : 0}
-  onkeydown={(e) => e.key === 'Enter' && !isBlacklisted && onPlay?.()}
+  onkeydown={(e) => e.key === 'Enter' && !isBlacklisted && (selectable ? onToggleSelect?.(e as unknown as MouseEvent) : onPlay?.())}
 >
+  <!-- Checkbox (select mode) -->
+  {#if selectable}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="track-checkbox" onclick={(e) => e.stopPropagation()}>
+      <input
+        type="checkbox"
+        checked={selected}
+        onchange={onToggleSelect as unknown as (e: Event) => void}
+        aria-label="Select track"
+      />
+    </div>
+  {/if}
+
   <!-- Track Number / Play Button / Unavailable Indicator -->
   <div class="track-number" class:unavailable={isUnavailable} class:blacklisted={isBlacklisted}>
     {#if isBlacklisted}
@@ -174,17 +199,25 @@
       <span class="unavailable-icon" title={unavailableTooltip}>
         <AlertCircle size={16} />
       </span>
-    {:else if isPlaying}
+    {:else if isActiveTrack || isPlaying}
       {#if isHovered}
-        <button class="pause-btn" type="button" onclick={handlePauseClick} aria-label="Pause">
-          <Pause size={16} class="pause-icon" />
-        </button>
-      {:else}
+        {#if isPlaying}
+          <button class="pause-btn" type="button" onclick={handlePauseClick} aria-label="Pause">
+            <Pause size={16} class="pause-icon" />
+          </button>
+        {:else}
+          <button class="pause-btn" type="button" onclick={handlePauseClick} aria-label="Resume">
+            <Play size={16} class="play-icon" fill="white" />
+          </button>
+        {/if}
+      {:else if isPlaying}
         <div class="playing-indicator">
           <div class="bar"></div>
           <div class="bar"></div>
           <div class="bar"></div>
         </div>
+      {:else}
+        <span>{number}</span>
       {/if}
     {:else if isHovered}
       <Play size={16} class="play-icon" fill="white" />
@@ -200,14 +233,19 @@
         <Music size={14} />
       </div>
       {#if artworkUrl}
-        <img src={artworkUrl} alt={title} loading="lazy" decoding="async" />
+        <img use:cachedSrc={artworkUrl} alt={title} loading="lazy" decoding="async" />
       {/if}
     </div>
   {/if}
 
   <!-- Track Info -->
   <div class="track-info">
-    <div class="track-title" class:active={isPlaying}>{title}</div>
+    <div class="track-title-row">
+      <span class="track-title" class:active={isActiveTrack || isPlaying}>{title}</span>
+      {#if explicit}
+        <span class="explicit-badge" title="Explicit"></span>
+      {/if}
+    </div>
     {#if artist && !compact}
       {#if artistClickAction}
         <button class="track-artist track-link" type="button" onclick={handleArtistClick}>
@@ -356,6 +394,29 @@
     width: 32px;
   }
 
+  .track-row.selected {
+    background-color: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  }
+
+  .track-row.selected.hovered {
+    background-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  }
+
+  .track-checkbox {
+    width: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .track-checkbox input[type='checkbox'] {
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+    accent-color: var(--accent-primary);
+  }
+
   .track-number {
     width: 48px;
     display: flex;
@@ -441,6 +502,7 @@
     border-radius: 9999px;
     transform-origin: bottom;
     animation: equalize 1s ease-in-out infinite;
+    animation-play-state: running;
   }
 
   .playing-indicator .bar:nth-child(1) {
@@ -502,6 +564,13 @@
     opacity: 0.7;
   }
 
+  .track-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
   .track-title {
     font-size: 14px;
     font-weight: 500;
@@ -513,6 +582,17 @@
 
   .track-title.active {
     color: var(--accent-primary);
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .track-artist {
@@ -560,7 +640,7 @@
   .track-duration {
     font-size: 14px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
     width: 80px;
     text-align: center;

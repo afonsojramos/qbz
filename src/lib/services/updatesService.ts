@@ -27,6 +27,7 @@ const DEV_FAKE_BODY_KEY = 'qbz-updates-dev-fake-body';
 
 let sessionId = '';
 let launchFlowStarted = false;
+let sessionIdSequence = 0;
 
 /** Reset launch flow state on logout so re-login can re-evaluate. */
 export function resetLaunchFlow(): void {
@@ -40,7 +41,19 @@ function ensureSessionId(): string {
     sessionId = 'server';
     return sessionId;
   }
-  sessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  let entropyPart = `${Date.now()}-${sessionIdSequence++}`;
+  if (typeof crypto !== 'undefined') {
+    if (typeof crypto.randomUUID === 'function') {
+      entropyPart = crypto.randomUUID();
+    } else if (typeof crypto.getRandomValues === 'function') {
+      const buffer = new Uint8Array(12);
+      crypto.getRandomValues(buffer);
+      entropyPart = Array.from(buffer, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+  }
+
+  sessionId = `${Date.now()}-${entropyPart}`;
   try {
     localStorage.setItem(SESSION_ID_KEY, sessionId);
   } catch {
@@ -131,6 +144,7 @@ function getDevFakeRelease(currentVersion: string): ReleaseInfo | null {
 export interface LaunchUpdateDecision {
   currentVersion: string;
   showFlatpakWelcome: boolean;
+  showSnapWelcome: boolean;
   whatsNewRelease: ReleaseInfo | null;
   updateRelease: ReleaseInfo | null;
 }
@@ -161,6 +175,31 @@ export async function markFlatpakWelcomeShown(): Promise<void> {
 }
 
 /**
+ * Check if running in Snap and if welcome modal has been shown.
+ */
+async function shouldShowSnapWelcome(): Promise<boolean> {
+  try {
+    const isSnap = await invoke<boolean>('v2_is_running_in_snap');
+    if (!isSnap) return false;
+    const alreadyShown = await invoke<boolean>('has_snap_welcome_been_shown');
+    return !alreadyShown;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mark Snap welcome modal as shown.
+ */
+export async function markSnapWelcomeShown(): Promise<void> {
+  try {
+    await invoke('v2_mark_snap_welcome_shown');
+  } catch (error) {
+    console.debug('[Updates] Failed to mark snap welcome shown:', error);
+  }
+}
+
+/**
  * Decide which modals should be shown on launch.
  *
  * Priority (shown sequentially, one after another):
@@ -173,6 +212,7 @@ export async function decideLaunchModals(): Promise<LaunchUpdateDecision> {
     return {
       currentVersion: getCurrentVersion(),
       showFlatpakWelcome: false,
+      showSnapWelcome: false,
       whatsNewRelease: null,
       updateRelease: null,
     };
@@ -190,17 +230,21 @@ export async function decideLaunchModals(): Promise<LaunchUpdateDecision> {
   const currentVersion = getCurrentVersion();
 
   if (getSessionFlag(SESSION_CHECK_DONE_KEY)) {
-    return { currentVersion, showFlatpakWelcome: false, whatsNewRelease: null, updateRelease: null };
+    return { currentVersion, showFlatpakWelcome: false, showSnapWelcome: false, whatsNewRelease: null, updateRelease: null };
   }
   setSessionFlag(SESSION_CHECK_DONE_KEY);
 
   // Collect all modals that need to be shown
   let showFlatpakWelcome = false;
+  let showSnapWelcome = false;
   let whatsNewRelease: ReleaseInfo | null = null;
   let updateRelease: ReleaseInfo | null = null;
 
-  // Phase 1: Flatpak welcome (highest priority, shown first)
+  // Phase 1: Sandbox welcome (highest priority, shown first)
   showFlatpakWelcome = await shouldShowFlatpakWelcome();
+  if (!showFlatpakWelcome) {
+    showSnapWelcome = await shouldShowSnapWelcome();
+  }
 
   // Phase 2: What's New for current version
   if (prefs.showWhatsNewOnLaunch && currentVersion) {
@@ -241,7 +285,7 @@ export async function decideLaunchModals(): Promise<LaunchUpdateDecision> {
     }
   }
 
-  return { currentVersion, showFlatpakWelcome, whatsNewRelease, updateRelease };
+  return { currentVersion, showFlatpakWelcome, showSnapWelcome, whatsNewRelease, updateRelease };
 }
 
 export async function openReleasePageAndAcknowledge(release: ReleaseInfo): Promise<void> {

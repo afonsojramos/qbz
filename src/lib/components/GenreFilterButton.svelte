@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import { SlidersHorizontal, ChevronDown } from 'lucide-svelte';
   import { t } from '$lib/i18n';
-  import { get } from 'svelte/store';
   import GenreFilterPopup from './GenreFilterPopup.svelte';
   import {
     hasActiveFilter,
@@ -60,8 +59,7 @@
     if (selectedNames.length === 1) {
       selectedGenreName = selectedNames[0];
     } else if (selectedNames.length > 1) {
-      const translate = get(t);
-      selectedGenreName = translate('genreFilter.genresCount', { values: { count: selectedNames.length } });
+      selectedGenreName = $t('genreFilter.genresCount', { values: { count: selectedNames.length } });
     } else {
       selectedGenreName = null;
     }
@@ -130,14 +128,14 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 12px;
+    padding: 7px 14px;
     border: 1px solid var(--border-subtle);
     border-radius: 6px;
     background: transparent;
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: 13px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .genre-filter-btn:hover {
@@ -176,7 +174,7 @@
     padding: 8px 12px;
     font-size: 12px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .control-btn:hover {

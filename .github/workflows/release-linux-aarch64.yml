@@ -124,3 +124,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          prerelease: ${{ contains(steps.release.outputs.version, '-rc') }}
+          make_latest: ${{ contains(steps.release.outputs.version, '-rc') && 'false' || 'true' }}

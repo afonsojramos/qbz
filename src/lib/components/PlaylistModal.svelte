@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { X, Trash2, EyeOff, Eye, Folder } from 'lucide-svelte';
+  import { open } from '@tauri-apps/plugin-dialog';
+  import { X, Trash2, EyeOff, Eye, Folder, ImagePlus } from 'lucide-svelte';
   import { logPlaylistAdd } from '$lib/services/recoService';
   import { subscribe as subscribeOffline, getStatus, createPendingPlaylist } from '$lib/stores/offlineStore';
   import { showToast } from '$lib/stores/toastStore';
@@ -18,6 +19,10 @@
     id: number;
     name: string;
     tracks_count: number;
+  }
+
+  interface PlaylistSettings {
+    custom_artwork_path?: string;
   }
 
   interface Props {
@@ -57,6 +62,7 @@
   let selectedPlaylistId = $state<number | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  let customArtworkPath = $state<string | null>(null);
 
   // Searchable playlist dropdown state
   let playlistSearchQuery = $state('');
@@ -212,22 +218,75 @@
         isPublic = false;
         hidden = isHidden;
         folderId = currentFolderId;
+        customArtworkPath = null;
+        void loadCustomArtwork(playlist.id);
       } else if (mode === 'create') {
         name = '';
         description = '';
         isPublic = false;
         hidden = false;
         folderId = null;
+        customArtworkPath = null;
       } else if (mode === 'addTrack') {
         selectedPlaylistId = null;
         folderId = null;
         playlistSearchQuery = '';
         isPlaylistDropdownOpen = false;
         highlightedIndex = -1;
+        customArtworkPath = null;
         loadLocalTrackCounts();
       }
     }
   });
+
+  async function loadCustomArtwork(playlistId: number) {
+    try {
+      const settings = await invoke<PlaylistSettings | null>('v2_playlist_get_settings', { playlistId });
+      if (isOpen && mode === 'edit' && playlist?.id === playlistId) {
+        customArtworkPath = settings?.custom_artwork_path || null;
+      }
+    } catch (err) {
+      console.error('Failed to load playlist artwork:', err);
+    }
+  }
+
+  function resolveArtworkPath(path: string): string {
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return path;
+    }
+    return `asset://localhost/${encodeURIComponent(path)}`;
+  }
+
+  async function selectCustomArtwork() {
+    if (!playlist || mode !== 'edit') return;
+
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
+      });
+
+      if (selected && typeof selected === 'string') {
+        await invoke('v2_playlist_set_artwork', { playlistId: playlist.id, artworkPath: selected });
+        customArtworkPath = selected;
+      }
+    } catch (err) {
+      console.error('Failed to set custom artwork:', err);
+      error = String(err);
+    }
+  }
+
+  async function clearCustomArtwork() {
+    if (!playlist || mode !== 'edit') return;
+
+    try {
+      await invoke('v2_playlist_set_artwork', { playlistId: playlist.id, artworkPath: null });
+      customArtworkPath = null;
+    } catch (err) {
+      console.error('Failed to clear custom artwork:', err);
+      error = String(err);
+    }
+  }
 
   async function handleCreate() {
     if (!name.trim()) {
@@ -601,6 +660,7 @@
     aria-modal="true"
     tabindex="-1"
   >
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
     <div class="modal" onclick={(e) => e.stopPropagation()}>
       <div class="modal-header">
         <h2>
@@ -720,6 +780,48 @@
               disabled={loading}
             ></textarea>
           </div>
+
+          {#if mode === 'edit'}
+            <div class="form-group">
+              <span class="form-label">{$t('playlist.customArtwork')}</span>
+              <div class="playlist-artwork-editor">
+                <div class="playlist-artwork-preview">
+                  {#if customArtworkPath}
+                    <img
+                      src={resolveArtworkPath(customArtworkPath)}
+                      alt={name || playlist?.name || $t('playlist.customArtwork')}
+                    />
+                  {:else}
+                    <div class="playlist-artwork-placeholder">
+                      <ImagePlus size={16} />
+                    </div>
+                  {/if}
+                </div>
+                <div class="playlist-artwork-actions">
+                  <button
+                    type="button"
+                    class="artwork-action-btn"
+                    onclick={selectCustomArtwork}
+                    disabled={loading}
+                  >
+                    <ImagePlus size={14} />
+                    <span>{$t('playlist.setCustomArtwork')}</span>
+                  </button>
+                  {#if customArtworkPath}
+                    <button
+                      type="button"
+                      class="artwork-action-btn danger"
+                      onclick={clearCustomArtwork}
+                      disabled={loading}
+                    >
+                      <Trash2 size={14} />
+                      <span>{$t('playlist.removeCustomArtwork')}</span>
+                    </button>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          {/if}
 
           {#if folders.length > 0}
             <div class="form-group">
@@ -921,7 +1023,8 @@
     margin-bottom: 16px;
   }
 
-  .form-group label {
+  .form-group label,
+  .form-group .form-label {
     display: block;
     font-size: 13px;
     font-weight: 500;
@@ -996,7 +1099,7 @@
     background: var(--bg-tertiary);
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .clear-selection:hover {
@@ -1083,6 +1186,76 @@
     min-height: 80px;
   }
 
+  .playlist-artwork-editor {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .playlist-artwork-preview {
+    width: 72px;
+    height: 72px;
+    flex-shrink: 0;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--bg-tertiary);
+    background: var(--bg-primary);
+  }
+
+  .playlist-artwork-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .playlist-artwork-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+  }
+
+  .playlist-artwork-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .artwork-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: fit-content;
+    min-height: 32px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--bg-tertiary);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+  }
+
+  .artwork-action-btn:hover:not(:disabled) {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+  }
+
+  .artwork-action-btn.danger:hover:not(:disabled) {
+    border-color: rgba(239, 68, 68, 0.6);
+    color: #ef4444;
+  }
+
+  .artwork-action-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
   .form-group.checkbox label {
     display: flex;
     align-items: center;
@@ -1151,7 +1324,7 @@
     font-size: 13px;
     color: #ef4444;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .btn-danger-sm:hover:not(:disabled) {
@@ -1181,7 +1354,7 @@
     border-radius: 6px;
     font-size: 13px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     border: none;
   }
 

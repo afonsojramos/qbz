@@ -7,16 +7,20 @@
 //! This abstraction allows the player to work with both approaches transparently.
 
 use crate::audio::AlsaDirectStream;
-use rodio::{OutputStreamHandle, Sink, Source};
+use rodio::{mixer::Mixer, Player as RodioPlayer, Source};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+/// Type-erased source iterator for ALSA Direct gapless queueing
+type BoxedSourceIter = Box<dyn Iterator<Item = f32> + Send>;
+
 /// Unified playback engine
 pub enum PlaybackEngine {
     /// Rodio-based (PipeWire, Pulse, ALSA via CPAL)
-    Rodio { sink: Sink },
+    Rodio { sink: RodioPlayer },
     /// Direct ALSA (hw: devices, bit-perfect)
     AlsaDirect {
         stream: Arc<AlsaDirectStream>,
@@ -26,14 +30,15 @@ pub enum PlaybackEngine {
         duration_frames: Arc<AtomicU64>,
         playback_thread: Option<thread::JoinHandle<()>>,
         hardware_volume: bool, // Use ALSA mixer for volume control
+        /// Channel to send next source for gapless playback
+        next_source_tx: Option<mpsc::SyncSender<BoxedSourceIter>>,
     },
 }
 
 impl PlaybackEngine {
     /// Create Rodio engine
-    pub fn new_rodio(stream_handle: &OutputStreamHandle) -> Result<Self, String> {
-        let sink =
-            Sink::try_new(stream_handle).map_err(|e| format!("Failed to create Sink: {}", e))?;
+    pub fn new_rodio(mixer: &Mixer) -> Result<Self, String> {
+        let sink = RodioPlayer::connect_new(mixer);
 
         Ok(Self::Rodio { sink })
     }
@@ -48,6 +53,7 @@ impl PlaybackEngine {
             duration_frames: Arc::new(AtomicU64::new(0)),
             playback_thread: None,
             hardware_volume,
+            next_source_tx: None,
         }
     }
 
@@ -69,12 +75,22 @@ impl PlaybackEngine {
                 duration_frames,
                 playback_thread,
                 hardware_volume: _,
+                next_source_tx,
             } => {
-                // For ALSA Direct, we need to spawn a thread that:
-                // 1. Streams f32 samples from source (no buffering entire file)
-                // 2. Writes to ALSA PCM (converts f32 to hardware format)
-                // 3. Tracks position
-                // 4. Supports pause/resume without terminating
+                // If playback thread is already running, send the source for gapless queueing
+                if playback_thread.is_some() {
+                    if let Some(ref tx) = next_source_tx {
+                        let boxed: BoxedSourceIter = Box::new(source.into_iter());
+                        return tx.try_send(boxed).map_err(|_| {
+                            "ALSA Direct gapless: next source channel full or closed".to_string()
+                        });
+                    }
+                    return Err("ALSA Direct: playback thread running but no gapless channel".to_string());
+                }
+
+                // First source — spawn the playback thread with a gapless channel
+                let (tx, rx) = mpsc::sync_channel::<BoxedSourceIter>(1);
+                *next_source_tx = Some(tx);
 
                 let stream_clone = stream.clone();
                 let is_playing_clone = is_playing.clone();
@@ -88,34 +104,28 @@ impl PlaybackEngine {
                 should_stop.store(false, Ordering::SeqCst);
                 position_clone.store(0, Ordering::SeqCst);
 
-                log::info!("[ALSA Direct Engine] Starting streaming playback thread");
+                log::info!("[ALSA Direct Engine] Starting streaming playback thread (gapless-capable)");
+
+                let initial_source: BoxedSourceIter = Box::new(source.into_iter());
 
                 let handle = thread::spawn(move || {
-                    // Stream samples in chunks (no pre-buffering entire file)
-                    const CHUNK_SIZE: usize = 8192; // frames per chunk
+                    const CHUNK_SIZE: usize = 8192;
                     let chunk_samples = CHUNK_SIZE * channels as usize;
-
                     let mut buffer_f32 = Vec::with_capacity(chunk_samples);
-
                     let mut total_frames: u64 = 0;
-                    let mut source_iter = source.into_iter();
-                    let mut natural_end = false;
+                    let mut source_iter: BoxedSourceIter = initial_source;
 
                     'playback: loop {
-                        // Check if we should stop completely (not just pause)
                         if should_stop_clone.load(Ordering::SeqCst) {
                             log::info!("[ALSA Direct Engine] Stop requested, terminating thread");
                             break 'playback;
                         }
 
-                        // Check if paused - wait instead of terminating
                         while !is_playing_clone.load(Ordering::SeqCst) {
-                            // Still check for stop while paused
                             if should_stop_clone.load(Ordering::SeqCst) {
                                 log::info!("[ALSA Direct Engine] Stop requested while paused");
                                 break 'playback;
                             }
-                            // Sleep briefly to avoid busy-waiting
                             std::thread::sleep(Duration::from_millis(50));
                         }
 
@@ -124,43 +134,48 @@ impl PlaybackEngine {
                         for _ in 0..chunk_samples {
                             match source_iter.next() {
                                 Some(sample) => buffer_f32.push(sample),
-                                None => break, // End of stream
+                                None => break,
                             }
                         }
 
                         if buffer_f32.is_empty() {
-                            // End of stream
-                            log::info!(
-                                "[ALSA Direct Engine] Stream ended (total frames: {})",
-                                total_frames
-                            );
-                            natural_end = true;
-                            break 'playback;
+                            // Current source ended — check for queued next source (gapless)
+                            match rx.try_recv() {
+                                Ok(next) => {
+                                    log::info!(
+                                        "[ALSA Direct Engine] Gapless transition (total frames: {})",
+                                        total_frames
+                                    );
+                                    source_iter = next;
+                                    total_frames = 0;
+                                    position_clone.store(0, Ordering::SeqCst);
+                                    duration_clone.store(0, Ordering::SeqCst);
+                                    continue 'playback;
+                                }
+                                Err(_) => {
+                                    // No next source — natural end
+                                    log::info!(
+                                        "[ALSA Direct Engine] Stream ended (total frames: {})",
+                                        total_frames
+                                    );
+                                    log::info!("[ALSA Direct Engine] Song ended naturally, draining buffer");
+                                    if let Err(e) = stream_clone.drain() {
+                                        log::warn!("[ALSA Direct Engine] Drain failed: {}", e);
+                                    }
+                                    break 'playback;
+                                }
+                            }
                         }
 
-                        // Write to ALSA (auto-converts based on detected format)
-                        // This is bit-perfect: no resampling, no mixing, direct to hardware
                         if let Err(e) = stream_clone.write_f32(&buffer_f32) {
                             log::error!("[ALSA Direct Engine] Write failed: {}", e);
                             break 'playback;
                         }
 
-                        // Update position
                         let frames_written = buffer_f32.len() / channels as usize;
                         total_frames += frames_written as u64;
                         position_clone.store(total_frames, Ordering::SeqCst);
                         duration_clone.store(total_frames, Ordering::SeqCst);
-                    }
-
-                    // Only drain if song ended naturally (not skipped/stopped)
-                    // This prevents 2-5s delay when rapidly changing tracks
-                    if natural_end {
-                        log::info!("[ALSA Direct Engine] Song ended naturally, draining buffer");
-                        if let Err(e) = stream_clone.drain() {
-                            log::warn!("[ALSA Direct Engine] Drain failed: {}", e);
-                        }
-                    } else {
-                        log::info!("[ALSA Direct Engine] Playback interrupted, skipping drain for faster response");
                     }
 
                     is_playing_clone.store(false, Ordering::SeqCst);
@@ -206,9 +221,12 @@ impl PlaybackEngine {
                 is_playing,
                 should_stop,
                 playback_thread,
+                next_source_tx,
                 ..
             } => {
                 log::info!("[ALSA Direct Engine] Stop requested");
+                // Drop the gapless channel so the playback thread won't wait for next source
+                drop(next_source_tx);
                 // Signal thread to stop completely
                 should_stop.store(true, Ordering::SeqCst);
                 is_playing.store(false, Ordering::SeqCst);

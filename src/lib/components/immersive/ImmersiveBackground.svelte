@@ -6,12 +6,15 @@
    * Uses WebGL2 when available (with ambient motion), falls back to CSS blur.
    */
 
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import {
     BUILD_IMMERSIVE_ENABLED,
     isWebGL2Available,
     isRuntimeEnabled,
+    getConfig,
+    generateAtmosphere,
   } from '$lib/immersive';
+  import type { BackgroundMode } from '$lib/immersive';
 
   interface Props {
     artwork: string;
@@ -24,8 +27,13 @@
   let { artwork, enableAmbient = true, ambientIntensity }: Props = $props();
 
   // Determine which renderer to use
+  let backgroundMode: BackgroundMode = $state('full');
   let useWebGL = $state(false);
   let useFallback = $state(false);
+  let useSolidColor = $state(false);
+  let useLiteMode = $state(false);
+  let solidColor = $state('#0a0a0b');
+  let liteImageUrl = $state('');
   let WebGLCanvas: typeof import('$lib/immersive/ImmersiveAmbientCanvas.svelte').default | null = $state(null);
 
   // Fallback state (CSS-based blur)
@@ -37,23 +45,92 @@
   let isTransitioning = $state(false);
   let previousArtwork = $state('');
 
+  /**
+   * Switch to a degraded background mode (called by performance watchdog).
+   */
+  async function switchToMode(mode: BackgroundMode): Promise<void> {
+    console.log(`[ImmersiveBackground] Switching to mode: ${mode}`);
+
+    // Reset all mode flags
+    useWebGL = false;
+    useFallback = false;
+    useSolidColor = false;
+    useLiteMode = false;
+    WebGLCanvas = null;
+    backgroundMode = mode;
+
+    if (mode === 'off') {
+      useSolidColor = true;
+      if (artwork) extractDominantColor(artwork);
+    } else if (mode === 'lite') {
+      useLiteMode = true;
+      if (artwork) {
+        try {
+          liteImageUrl = await generateAtmosphere(artwork);
+        } catch (err) {
+          console.warn('[ImmersiveBackground] Lite mode texture failed:', err);
+        }
+      }
+    }
+  }
+
+  function handleBackgroundDegraded(event: Event): void {
+    const detail = (event as CustomEvent).detail;
+    if (detail?.to) {
+      switchToMode(detail.to as BackgroundMode);
+    }
+  }
+
   // Check capabilities and load WebGL component if available
   onMount(async () => {
+    // Listen for performance watchdog degradation events
+    window.addEventListener('immersive:background-degraded', handleBackgroundDegraded);
+
+    const config = getConfig();
+    backgroundMode = config.backgroundMode ?? 'full';
+
+    if (backgroundMode === 'off') {
+      useSolidColor = true;
+      console.log('[ImmersiveBackground] Background mode: off (solid color)');
+      if (artwork) {
+        extractDominantColor(artwork);
+      }
+      return;
+    }
+
+    if (backgroundMode === 'lite') {
+      useLiteMode = true;
+      console.log('[ImmersiveBackground] Background mode: lite (CSS transform)');
+      if (artwork) {
+        try {
+          liteImageUrl = await generateAtmosphere(artwork);
+        } catch (err) {
+          console.warn('[ImmersiveBackground] Lite mode texture failed:', err);
+        }
+      }
+      return;
+    }
+
+    // Full mode: WebGL2 → CSS fallback
     if (BUILD_IMMERSIVE_ENABLED && isRuntimeEnabled() && isWebGL2Available()) {
       try {
         // Dynamic import - only loads if WebGL2 is available
         const module = await import('$lib/immersive/ImmersiveAmbientCanvas.svelte');
         WebGLCanvas = module.default;
         useWebGL = true;
-        console.log('[ImmersiveBackground] Using WebGL2 renderer');
+        console.log('[ImmersiveBackground] Background mode: full (WebGL2)');
       } catch (e) {
         console.warn('[ImmersiveBackground] Failed to load WebGL canvas:', e);
         useFallback = true;
       }
     } else {
       useFallback = true;
-      console.log('[ImmersiveBackground] Using CSS fallback');
+      console.log('[ImmersiveBackground] Background mode: full (CSS fallback)');
     }
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('immersive:background-degraded', handleBackgroundDegraded);
   });
 
   /**
@@ -63,6 +140,39 @@
     console.warn('[ImmersiveBackground] WebGL failed, switching to CSS fallback');
     useWebGL = false;
     useFallback = true;
+  }
+
+  // =====================================================
+  // Solid Color Mode (blur disabled)
+  // Extracts dominant color from artwork at tiny resolution
+  // =====================================================
+
+  function extractDominantColor(imageUrl: string): void {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 4;
+      canvas.height = 4;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(img, 0, 0, 4, 4);
+      const data = ctx.getImageData(0, 0, 4, 4).data;
+      let rSum = 0, gSum = 0, bSum = 0;
+      const pixels = 16;
+      for (let i = 0; i < data.length; i += 4) {
+        rSum += data[i];
+        gSum += data[i + 1];
+        bSum += data[i + 2];
+      }
+      // Darken to 30% brightness for comfortable background
+      const darken = 0.3;
+      const r = Math.round((rSum / pixels) * darken);
+      const g = Math.round((gSum / pixels) * darken);
+      const b = Math.round((bSum / pixels) * darken);
+      solidColor = `rgb(${r}, ${g}, ${b})`;
+    };
+    img.src = imageUrl;
   }
 
   // =====================================================
@@ -208,8 +318,22 @@
       isTransitioning = true;
 
       // After fade out, update artwork
-      setTimeout(() => {
+      setTimeout(async () => {
         previousArtwork = artwork;
+
+        // For solid color mode, re-extract dominant color
+        if (useSolidColor) {
+          extractDominantColor(artwork);
+        }
+
+        // For lite mode, regenerate atmosphere data URL
+        if (useLiteMode) {
+          try {
+            liteImageUrl = await generateAtmosphere(artwork);
+          } catch (err) {
+            console.warn('[ImmersiveBackground] Lite mode texture update failed:', err);
+          }
+        }
 
         // For fallback renderer, regenerate background
         if (useFallback) {
@@ -229,7 +353,19 @@
 
 <div class="immersive-background">
   <div class="background-layer" class:transitioning={isTransitioning}>
-    {#if useWebGL && WebGLCanvas}
+    {#if useSolidColor}
+      <!-- Solid color mode (off) -->
+      <div class="solid-background" style="background-color: {solidColor}"></div>
+    {:else if useLiteMode}
+      <!-- Lite mode: pre-blurred image with CSS transform animation -->
+      {#if liteImageUrl}
+        <div
+          class="lite-background"
+          style="background-image: url({liteImageUrl})"
+          aria-hidden="true"
+        ></div>
+      {/if}
+    {:else if useWebGL && WebGLCanvas}
       <!-- WebGL2 Renderer with ambient motion -->
       <WebGLCanvas
         artworkUrl={artwork}
@@ -297,6 +433,31 @@
 
   .loading .background-canvas {
     opacity: 0;
+  }
+
+  .solid-background {
+    position: absolute;
+    inset: 0;
+    transition: background-color 500ms ease-out;
+  }
+
+  /* Lite mode: pre-blurred image with compositor-driven CSS animation */
+  .lite-background {
+    position: absolute;
+    inset: -80px;
+    width: calc(100% + 160px);
+    height: calc(100% + 160px);
+    background-size: cover;
+    background-position: center;
+    animation: lite-drift 40s ease-in-out infinite alternate;
+    will-change: transform;
+  }
+
+  @keyframes lite-drift {
+    0%   { transform: scale(1.15) translate(0, 0) rotate(0deg); }
+    33%  { transform: scale(1.20) translate(15px, -10px) rotate(1deg); }
+    66%  { transform: scale(1.12) translate(-10px, 12px) rotate(-0.5deg); }
+    100% { transform: scale(1.18) translate(8px, -8px) rotate(0.5deg); }
   }
 
   .loading-placeholder {

@@ -89,7 +89,10 @@ export function toggleSidebar(): void {
 
 export type ContentSidebarType = 'lyrics' | 'queue' | 'network' | null;
 
+const NETWORK_SIDEBAR_KEY = 'qbz-network-sidebar-open';
+
 let activeContentSidebar: ContentSidebarType = null;
+let previousContentSidebar: ContentSidebarType = null;
 const contentSidebarListeners = new Set<(type: ContentSidebarType) => void>();
 
 function notifyContentSidebarListeners(): void {
@@ -123,13 +126,32 @@ export function openContentSidebar(type: ContentSidebarType): void {
 }
 
 /**
- * Close a content sidebar
+ * Close a content sidebar, saving previous state for restore
  */
 export function closeContentSidebar(type: ContentSidebarType): void {
   if (activeContentSidebar === type) {
+    previousContentSidebar = type;
     activeContentSidebar = null;
     notifyContentSidebarListeners();
   }
+}
+
+/**
+ * Restore the previously active content sidebar (e.g. after queue/lyrics closes)
+ */
+export function restoreContentSidebar(): void {
+  if (previousContentSidebar && activeContentSidebar === null) {
+    activeContentSidebar = previousContentSidebar;
+    previousContentSidebar = null;
+    notifyContentSidebarListeners();
+  }
+}
+
+/**
+ * Clear the saved previous sidebar (e.g. when user explicitly closes)
+ */
+export function clearPreviousContentSidebar(): void {
+  previousContentSidebar = null;
 }
 
 /**
@@ -138,8 +160,32 @@ export function closeContentSidebar(type: ContentSidebarType): void {
 export function toggleContentSidebar(type: ContentSidebarType): void {
   if (activeContentSidebar === type) {
     activeContentSidebar = null;
+    previousContentSidebar = null;
   } else {
     activeContentSidebar = type;
   }
   notifyContentSidebarListeners();
+}
+
+/**
+ * Get persisted network sidebar preference (default: open)
+ */
+export function getNetworkSidebarPreference(): boolean {
+  try {
+    const saved = localStorage.getItem(NETWORK_SIDEBAR_KEY);
+    return saved === null ? true : saved === 'true';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Persist network sidebar preference
+ */
+export function setNetworkSidebarPreference(open: boolean): void {
+  try {
+    localStorage.setItem(NETWORK_SIDEBAR_KEY, String(open));
+  } catch {
+    // localStorage not available
+  }
 }

@@ -45,7 +45,9 @@
 </script>
 
 {#if isOpen}
-  <div class="modal-backdrop" onclick={onClose}>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="modal-backdrop" onclick={onClose} role="presentation">
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
     <div class="modal" onclick={(e) => e.stopPropagation()}>
       <!-- Header -->
       <div class="modal-header">
@@ -96,6 +98,8 @@
           <div class="info-grid">
             <span class="label">Version</span>
             <span class="value">{appVersion}</span>
+            <span class="label">Codename</span>
+            <span class="value codename">Limpiando la casa</span>
             <span class="label">License</span>
             <span class="value">MIT</span>
             <span class="label">Platform</span>
@@ -161,6 +165,11 @@
             <button class="contributor-link" onclick={() => handleOpenUrl('https://github.com/boxdot')}>
               <img src="https://github.com/boxdot.png?size=28" alt="boxdot" class="contributor-avatar" />
               boxdot
+              <ExternalLink size={10} />
+            </button>
+            <button class="contributor-link" onclick={() => handleOpenUrl('https://github.com/arminfelder')}>
+              <img src="https://github.com/arminfelder.png?size=28" alt="arminfelder" class="contributor-avatar" />
+              arminfelder
               <ExternalLink size={10} />
             </button>
           </div>
@@ -253,7 +262,7 @@
   .version {
     font-size: 13px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
   }
 
   .close-btn {
@@ -267,7 +276,7 @@
     border-radius: 8px;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .close-btn:hover {
@@ -304,7 +313,7 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .link-btn:hover {
@@ -342,12 +351,18 @@
 
   .value {
     color: var(--text-primary);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
   }
 
   .commit {
     color: var(--text-muted);
     font-size: 11px;
+  }
+
+  .codename {
+    font-family: var(--font-sans);
+    font-style: italic;
+    color: var(--text-secondary);
   }
 
   .attributions {
@@ -378,7 +393,7 @@
     font-weight: 500;
     color: var(--text-primary);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .author-pill:hover {
@@ -413,7 +428,7 @@
     font-size: 13px;
     color: var(--text-primary);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .contributor-link:hover {

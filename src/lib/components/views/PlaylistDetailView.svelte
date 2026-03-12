@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft, Play, Shuffle, ListMusic, Search, X, ChevronDown, ChevronRight, ChevronUp, ImagePlus, Edit3, BarChart2, Heart, CloudDownload, ListPlus, GripVertical } from 'lucide-svelte';
+  import { ArrowLeft, Play, Shuffle, ListMusic, Search, X, ChevronDown, ChevronRight, ChevronUp, ImagePlus, Edit3, BarChart2, Heart, CloudDownload, ListPlus, GripVertical, CheckSquare } from 'lucide-svelte';
   import AlbumMenu from '../AlbumMenu.svelte';
   import PlaylistCollage from '../PlaylistCollage.svelte';
   import PlaylistModal from '../PlaylistModal.svelte';
@@ -10,6 +10,7 @@
   import { open, ask } from '@tauri-apps/plugin-dialog';
   import TrackRow from '../TrackRow.svelte';
   import PlaylistSuggestions from '../PlaylistSuggestions.svelte';
+  import BulkActionBar from '../BulkActionBar.svelte';
   import { extractAdaptiveArtists } from '$lib/services/playlistSuggestionsService';
   import { type OfflineCacheStatus, cacheTrackForOffline, cacheTracksForOfflineBatch, getOfflineCacheState } from '$lib/stores/offlineCacheState';
   import {
@@ -22,9 +23,10 @@
   import { isTrackUnavailable, clearTrackUnavailable, subscribe as subscribeUnavailable } from '$lib/stores/unavailableTracksStore';
   import { isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
   import { showToast } from '$lib/stores/toastStore';
-  import { get } from 'svelte/store';
+  import { sanitizeHtml } from '$lib/utils/sanitize';
   import { t } from '$lib/i18n';
   import { onMount, tick } from 'svelte';
+  import { getUserItem, setUserItem } from '$lib/utils/userStorage';
 
   interface PlaylistTrack {
     id: number;
@@ -156,6 +158,7 @@
     onTrackPlayLater?: (track: DisplayTrack) => void;
     onTrackAddFavorite?: (trackId: number) => void;
     onTrackAddToPlaylist?: (trackId: number) => void;
+    onBulkAddToPlaylist?: (trackIds: number[]) => void;
     onTrackShareQobuz?: (trackId: number) => void;
     onTrackShareSonglink?: (track: DisplayTrack) => void;
     onTrackGoToAlbum?: (albumId: string) => void;
@@ -187,6 +190,7 @@
     onTrackPlayLater,
     onTrackAddFavorite,
     onTrackAddToPlaylist,
+    onBulkAddToPlaylist,
     onTrackShareQobuz,
     onTrackShareSonglink,
     onTrackGoToAlbum,
@@ -294,6 +298,10 @@
   let selectedTrackKeys = $state<Set<string>>(new Set());  // Set of "trackId:isLocal" keys
   let isSelectionMode = $derived(isCustomOrderMode && selectedTrackKeys.size > 0);
 
+  // Multi-select state (bulk actions, works in all sort modes)
+  let multiSelectMode = $state(false);
+  let multiSelectedKeys = $state(new Set<string>());
+
   // User ownership state (to show "Copy to Library" button for non-owned playlists)
   let currentUserId = $state<number | null>(null);
   let isOwnPlaylist = $derived(playlist !== null && currentUserId !== null && playlist.owner.id === currentUserId);
@@ -304,12 +312,12 @@
   let replacementModalOpen = $state(false);
   let trackToReplace = $state<DisplayTrack | null>(null);
 
-  // Track copied playlists in localStorage
+  // Track copied playlists in user-scoped storage
   const COPIED_PLAYLISTS_KEY = 'qbz_copied_playlists';
 
   function getCopiedPlaylists(): Set<number> {
     try {
-      const stored = localStorage.getItem(COPIED_PLAYLISTS_KEY);
+      const stored = getUserItem(COPIED_PLAYLISTS_KEY);
       return stored ? new Set(JSON.parse(stored)) : new Set();
     } catch {
       return new Set();
@@ -319,7 +327,7 @@
   function markPlaylistAsCopied(id: number) {
     const copied = getCopiedPlaylists();
     copied.add(id);
-    localStorage.setItem(COPIED_PLAYLISTS_KEY, JSON.stringify([...copied]));
+    setUserItem(COPIED_PLAYLISTS_KEY, JSON.stringify([...copied]));
     isCopied = true;
   }
 
@@ -368,7 +376,7 @@
     requestAnimationFrame(() => {
       if (scrollContainer) {
         trackListViewHeight = scrollContainer.clientHeight;
-        const saved = getSavedScrollPosition('playlist');
+        const saved = getSavedScrollPosition('playlist', playlistId);
         if (saved > 0) {
           scrollContainer.scrollTop = saved;
         }
@@ -551,7 +559,7 @@
       title: track.title,
       artist: track.performer?.name,
       album: track.album?.title,
-      albumArt: track.album?.image?.large || track.album?.image?.thumbnail || track.album?.image?.small,
+      albumArt: track.album?.image?.small || track.album?.image?.thumbnail || track.album?.image?.large,
       albumId: track.album?.id,
       artistId: track.performer?.id,
       duration: formatDuration(track.duration),
@@ -958,8 +966,8 @@
   async function initCustomOrderFromCurrentTracks() {
     // Get all tracks in current display order (before custom sort applied)
     const allTracks = [...tracks];
-    const localTracksInPlaylist = localTracks.map((t, idx) => ({
-      ...t,
+    const localTracksInPlaylist = localTracks.map((trackItem, idx) => ({
+      ...trackItem,
       playlist_position: idx
     }));
 
@@ -1124,6 +1132,77 @@
       newSet.add(getTrackKey(track));
     }
     selectedTrackKeys = newSet;
+  }
+
+  function toggleMultiSelectMode() {
+    multiSelectMode = !multiSelectMode;
+    if (!multiSelectMode) multiSelectedKeys = new Set();
+  }
+
+  function toggleMultiSelect(track: DisplayTrack) {
+    const key = getTrackKey(track);
+    const next = new Set(multiSelectedKeys);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    multiSelectedKeys = next;
+  }
+
+  async function handleBulkPlayNext() {
+    const selected = displayTracks.filter(trk => multiSelectedKeys.has(getTrackKey(trk)));
+    const { queueTracks } = buildQueueTracks(selected);
+    await invoke('v2_add_tracks_to_queue_next', { tracks: queueTracks });
+    multiSelectedKeys = new Set();
+    multiSelectMode = false;
+  }
+
+  async function handleBulkPlayLater() {
+    const selected = displayTracks.filter(trk => multiSelectedKeys.has(getTrackKey(trk)));
+    const { queueTracks } = buildQueueTracks(selected);
+    await invoke('v2_add_tracks_to_queue', { tracks: queueTracks });
+    multiSelectedKeys = new Set();
+    multiSelectMode = false;
+  }
+
+  async function handleBulkAddToPlaylist() {
+    const trackIds = displayTracks
+      .filter(trk => multiSelectedKeys.has(getTrackKey(trk)) && !trk.isLocal)
+      .map(trk => trk.id);
+    if (trackIds.length > 0) onBulkAddToPlaylist?.(trackIds);
+    multiSelectedKeys = new Set();
+    multiSelectMode = false;
+  }
+
+  async function handleBulkRemoveFromPlaylist() {
+    const selected = displayTracks.filter(trk => multiSelectedKeys.has(getTrackKey(trk)));
+    const localTrackIds: number[] = [];
+    const playlistTrackIds: number[] = [];
+    const fallbackTrackIds: number[] = [];
+
+    for (const trk of selected) {
+      if (trk.isLocal && trk.localTrackId) {
+        localTrackIds.push(trk.localTrackId);
+      } else if (trk.playlistTrackId) {
+        playlistTrackIds.push(trk.playlistTrackId);
+      } else {
+        fallbackTrackIds.push(trk.id);
+      }
+    }
+
+    for (const localTrackId of localTrackIds) {
+      await invoke('v2_playlist_remove_local_track', { playlistId, localTrackId });
+    }
+    if (playlistTrackIds.length > 0) {
+      await invoke('v2_remove_tracks_from_playlist', { playlistId, playlistTrackIds });
+    }
+    if (fallbackTrackIds.length > 0) {
+      await invoke('v2_remove_tracks_from_playlist', { playlistId, trackIds: fallbackTrackIds });
+    }
+
+    multiSelectedKeys = new Set();
+    multiSelectMode = false;
+    await loadPlaylist();
+    if (localTrackIds.length > 0) await loadLocalTracks();
+    notifyParentOfCounts();
+    onPlaylistUpdated?.();
   }
 
   // Move all selected tracks up one position (as a group)
@@ -1386,7 +1465,7 @@
   function handlePlaylistScroll(e: Event) {
     const container = e.target as HTMLElement;
     // Save scroll position for navigation restoration
-    saveScrollPosition('playlist', container.scrollTop);
+    saveScrollPosition('playlist', container.scrollTop, playlistId);
     // Update virtual scroll state relative to the track list position
     if (trackListEl) {
       const trackListTop = trackListEl.offsetTop;
@@ -1911,7 +1990,6 @@
   }
 
   async function handleMakePlaylistOffline() {
-    const translate = get(t);
     // Filter to Qobuz-only tracks (not local)
     const qobuzTracks = displayTracks.filter(track => !track.isLocal);
 
@@ -1922,16 +2000,16 @@
     });
 
     if (tracksToCache.length === 0) {
-      showToast(translate('toast.allTracksOffline'), 'info');
+      showToast($t('toast.allTracksOffline'), 'info');
       return;
     }
 
     // Warn for large playlists
     if (tracksToCache.length > 300) {
       const confirmed = await ask(
-        translate('playlist.makeOfflineConfirmDesc', { values: { count: tracksToCache.length } }),
+        $t('playlist.makeOfflineConfirmDesc', { values: { count: tracksToCache.length } }),
         {
-          title: translate('playlist.makeOfflineConfirmTitle'),
+          title: $t('playlist.makeOfflineConfirmTitle'),
           kind: 'warning'
         }
       );
@@ -1939,7 +2017,7 @@
     }
 
     const playlistName = playlist?.name || '';
-    showToast(translate('playlist.preparingPlaylistOffline', { values: { count: tracksToCache.length, name: playlistName } }), 'info');
+    showToast($t('playlist.preparingPlaylistOffline', { values: { count: tracksToCache.length, name: playlistName } }), 'info');
 
     try {
       await cacheTracksForOfflineBatch(tracksToCache.map(track => ({
@@ -2020,7 +2098,7 @@
         <span class="playlist-label">Playlist</span>
         <h1 class="playlist-title">{playlist.name}</h1>
         {#if playlist.description}
-          <p class="playlist-description">{playlist.description}</p>
+          <p class="playlist-description">{@html sanitizeHtml(playlist.description)}</p>
         {/if}
         <div class="playlist-info">
           <span class="owner">{playlist.owner.name}</span>
@@ -2128,6 +2206,15 @@
         {/if}
       </div>
 
+      <!-- Multi-select toggle -->
+      <button
+        class="sort-btn icon-only"
+        class:active={multiSelectMode}
+        onclick={toggleMultiSelectMode}
+        title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+      >
+        <CheckSquare size={16} />
+      </button>
     </div>
 
     <!-- Track List (virtualized) -->
@@ -2155,7 +2242,7 @@
         </div>
       {/if}
       <div class="track-list-header">
-        {#if isCustomOrderMode}
+        {#if isCustomOrderMode || multiSelectMode}
           <div class="col-checkbox"></div>
         {/if}
         <div class="col-number">#</div>
@@ -2182,11 +2269,13 @@
           {@const available = isTrackAvailable(track)}
           {@const removedFromQobuz = isTrackRemovedFromQobuz(track)}
           {@const trackBlacklisted = !track.isLocal && track.artistId ? isArtistBlacklisted(track.artistId) : false}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="track-row-wrapper virtual-track-item"
             class:unavailable={!available}
             class:removed-from-qobuz={removedFromQobuz}
             class:custom-order-mode={isCustomOrderMode}
+            class:multi-selected={multiSelectMode && multiSelectedKeys.has(getTrackKey(track))}
             class:dragging={draggedTrackIdx === idx}
             class:drag-over={dragOverIdx === idx && draggedTrackIdx !== idx}
             style="transform: translateY({idx * TRACK_ROW_HEIGHT}px); height: {TRACK_ROW_HEIGHT}px;"
@@ -2199,13 +2288,27 @@
             ondragend={handleDragEnd}
             ondrop={(e) => handleDrop(e, idx)}
           >
+            {#if multiSelectMode && !isCustomOrderMode}
+              {@const trackKey = getTrackKey(track)}
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+              <label class="track-checkbox" onclick={(e: MouseEvent) => e.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={multiSelectedKeys.has(trackKey)}
+                  onchange={() => toggleMultiSelect(track)}
+                  aria-label={$t('actions.select')}
+                />
+              </label>
+            {/if}
             {#if isCustomOrderMode}
               {@const trackKey = getTrackKey(track)}
-              <label class="track-checkbox" onclick={(e) => e.stopPropagation()}>
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+              <label class="track-checkbox" onclick={(e: MouseEvent) => e.stopPropagation()}>
                 <input
                   type="checkbox"
                   checked={selectedTrackKeys.has(trackKey)}
                   onchange={() => toggleTrackSelection(track)}
+                  aria-label={$t('actions.select')}
                 />
               </label>
               <div class="reorder-controls">
@@ -2245,6 +2348,7 @@
                   ? 'Hi-Res'
                   : '-'}
               isPlaying={isTrackPlaying}
+              isActiveTrack={isActiveTrack}
               isLocal={track.isLocal}
               isUnavailable={removedFromQobuz && isOwnPlaylist}
               unavailableTooltip={removedFromQobuz ? $t('player.trackUnavailable') : undefined}
@@ -2292,6 +2396,15 @@
         </div>
       {/if}
     </div>
+
+    <BulkActionBar
+      count={multiSelectedKeys.size}
+      onPlayNext={handleBulkPlayNext}
+      onPlayLater={handleBulkPlayLater}
+      onAddToPlaylist={handleBulkAddToPlaylist}
+      onRemoveFromPlaylist={handleBulkRemoveFromPlaylist}
+      onClearSelection={() => { multiSelectedKeys = new Set(); }}
+    />
 
     <!-- Bottom spacer when no suggestions will render (prevents back-to-top covering last track actions) -->
     {#if !isOwnPlaylist || !suggestionsEnabled || searchQuery}
@@ -2357,10 +2470,7 @@
 
 <style>
   .playlist-detail {
-    padding: 24px;
-    padding-left: 18px;
-    padding-right: 8px;
-    padding-bottom: 100px;
+    padding: 8px 8px 100px 18px;
     overflow-y: auto;
     height: 100%;
   }
@@ -2394,12 +2504,14 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 16px;
+    padding: 0;
     background: none;
     border: none;
-    color: var(--text-secondary);
+    color: var(--text-muted);
     cursor: pointer;
     font-size: 14px;
+    margin-top: 8px;
+    margin-bottom: 24px;
     transition: color 150ms ease;
   }
 
@@ -2418,7 +2530,7 @@
     color: var(--text-muted);
     cursor: pointer;
     border-radius: 6px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .edit-btn:hover {
@@ -2553,7 +2665,7 @@
     border-radius: 50%;
     color: white;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .artwork-btn:hover {
@@ -2601,6 +2713,15 @@
     color: var(--text-secondary);
     margin: 0 0 12px 0;
     line-height: 1.4;
+  }
+
+  .playlist-description :global(a) {
+    color: var(--accent-primary);
+    text-decoration: none;
+  }
+
+  .playlist-description :global(a:hover) {
+    text-decoration: underline;
   }
 
   .playlist-info {
@@ -2793,6 +2914,17 @@
     color: var(--text-primary);
   }
 
+  .sort-btn.icon-only {
+    min-width: unset;
+    padding: 6px 8px;
+    justify-content: center;
+  }
+
+  .sort-btn.active {
+    color: var(--accent-primary);
+    border-color: var(--accent-primary);
+  }
+
   .sort-btn .chevron {
     display: flex;
     transition: transform 150ms ease;
@@ -2829,7 +2961,7 @@
     text-align: left;
     cursor: pointer;
     border-radius: 4px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     white-space: nowrap;
   }
 
@@ -2911,6 +3043,10 @@
   .track-row-wrapper.removed-from-qobuz :global(.track-row .track-number),
   .track-row-wrapper.removed-from-qobuz :global(.track-row .play-button) {
     pointer-events: none;
+  }
+
+  .track-row-wrapper.multi-selected :global(.track-row) {
+    background-color: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   }
 
   /* Custom order mode */
@@ -3015,7 +3151,7 @@
     color: var(--text-secondary);
     font-size: 12px;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .batch-btn:hover {
@@ -3076,13 +3212,6 @@
   .suggestions-manual-btn:hover {
     background: var(--alpha-12);
     border-color: var(--alpha-20);
-  }
-
-  /* Playlist API image (pre-made collage from Qobuz) */
-  .playlist-api-image {
-    border-radius: 8px;
-    object-fit: cover;
-    display: block;
   }
 
   .track-list-bottom-spacer {

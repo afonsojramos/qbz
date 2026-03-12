@@ -10,7 +10,7 @@
 
   // App definitions with binary names for config
   const predefinedApps = [
-    { id: 'qbz', labelKey: 'dacWizard.pulseConfig.apps.qbz', binary: 'QBZ', disabled: true },
+    { id: 'qbz', labelKey: 'dacWizard.pulseConfig.apps.qbz', binary: 'qbz', disabled: true },
     { id: 'vlc', labelKey: 'dacWizard.pulseConfig.apps.vlc', binary: 'vlc' },
     { id: 'deadbeef', labelKey: 'dacWizard.pulseConfig.apps.deadbeef', binary: 'deadbeef' },
     { id: 'strawberry', labelKey: 'dacWizard.pulseConfig.apps.strawberry', binary: 'strawberry' },
@@ -26,7 +26,7 @@
   }
 
   function toggleApp(binary: string) {
-    if (binary === 'QBZ') return; // QBZ is always selected
+    if (binary === 'qbz') return; // QBZ is always selected
 
     if (isSelected(binary)) {
       selectedApps = selectedApps.filter(a => a !== binary);
@@ -131,7 +131,7 @@
     border: 1px solid var(--border-subtle);
     border-radius: 6px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .app-option:hover:not(.disabled) {
@@ -176,7 +176,7 @@
     border-radius: 6px;
     font-size: 14px;
     color: var(--text-primary);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-sans);
   }
 
   .custom-input:focus {
@@ -236,7 +236,7 @@
     color: white;
     border-radius: 4px;
     font-size: 13px;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-sans);
   }
 
   .remove-btn {

@@ -7,8 +7,9 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::api::QobuzClient;
-use crate::musicbrainz::models::{ArtistFullResponse, ArtistRelationships, Period, RelatedArtist};
-use crate::musicbrainz::{MusicBrainzCache, MusicBrainzClient};
+use qbz_integrations::musicbrainz::cache::MusicBrainzCache;
+use qbz_integrations::musicbrainz::{ArtistFullResponse, ArtistRelationships, Period, RelatedArtist};
+use qbz_integrations::MusicBrainzClient;
 
 use super::sparse_vector::SparseVector;
 use super::store::ArtistVectorStore;
@@ -18,8 +19,8 @@ use super::weights::RelationshipWeights;
 pub struct ArtistVectorBuilder {
     /// Vector store for persistence
     store: Arc<Mutex<Option<ArtistVectorStore>>>,
-    /// MusicBrainz client for relationship data
-    mb_client: Arc<MusicBrainzClient>,
+    /// MusicBrainz client for relationship data (behind Mutex for shared ownership)
+    mb_client: Arc<Mutex<MusicBrainzClient>>,
     /// MusicBrainz cache
     mb_cache: Arc<Mutex<Option<MusicBrainzCache>>>,
     /// Qobuz client for similar artists
@@ -45,7 +46,7 @@ impl ArtistVectorBuilder {
     /// Create a new builder with the given dependencies
     pub fn new(
         store: Arc<Mutex<Option<ArtistVectorStore>>>,
-        mb_client: Arc<MusicBrainzClient>,
+        mb_client: Arc<Mutex<MusicBrainzClient>>,
         mb_cache: Arc<Mutex<Option<MusicBrainzCache>>>,
         qobuz_client: Arc<RwLock<QobuzClient>>,
         weights: RelationshipWeights,
@@ -196,10 +197,12 @@ impl ArtistVectorBuilder {
                 artist_mbid
             );
             // Fetch from API
-            let response = self
-                .mb_client
+            let mb_client = self.mb_client.lock().await;
+            let response = mb_client
                 .get_artist_with_relations(artist_mbid)
-                .await?;
+                .await
+                .map_err(|e| e.to_string())?;
+            drop(mb_client);
             log::info!(
                 "[VectorBuilder] MusicBrainz API response received for {}",
                 artist_mbid
@@ -361,8 +364,8 @@ impl ArtistVectorBuilder {
 /// This is a best-effort match based on artist name
 pub async fn resolve_qobuz_to_mbid(
     qobuz_client: &Arc<RwLock<QobuzClient>>,
-    mb_client: &Arc<MusicBrainzClient>,
-    _mb_cache: &Arc<Mutex<MusicBrainzCache>>,
+    mb_client: &Arc<Mutex<MusicBrainzClient>>,
+    _mb_cache: &Arc<Mutex<Option<MusicBrainzCache>>>,
     qobuz_artist_id: u64,
 ) -> Result<Option<String>, String> {
     // Get artist name from Qobuz
@@ -376,7 +379,11 @@ pub async fn resolve_qobuz_to_mbid(
     };
 
     // Search MusicBrainz for this artist
-    let mb_result = mb_client.search_artist(&artist_name).await?;
+    let client = mb_client.lock().await;
+    let mb_result = client
+        .search_artist(&artist_name, 10)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Return first high-confidence match (score >= 80)
     if let Some(artist) = mb_result.artists.first() {

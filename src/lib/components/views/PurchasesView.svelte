@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { get } from 'svelte/store';
   import { t } from '$lib/i18n';
   import {
     Search, X, Download, Check, Loader2, Music, Disc3, ShoppingBag,
@@ -8,7 +7,7 @@
   import AlbumCard from '../AlbumCard.svelte';
   import QualityBadge from '../QualityBadge.svelte';
   import { getPurchasesByType, getPurchaseIds, searchPurchases, getDownloadedTrackIds, getFormats } from '$lib/services/purchases';
-  import { allTrackStatuses, startTrackDownload } from '$lib/stores/purchaseDownloadStore';
+  import { allTrackStatuses, startTrackDownload, type TrackDownloadStatus } from '$lib/stores/purchaseDownloadStore';
   import { showToast } from '$lib/stores/toastStore';
   import { formatDuration, getQobuzImage } from '$lib/adapters/qobuzAdapters';
   import {
@@ -16,7 +15,7 @@
     getHideDownloaded, setHideDownloaded,
   } from '$lib/stores/purchasesStore';
   import { getUserItem, setUserItem } from '$lib/utils/userStorage';
-  import type { PurchasedAlbum, PurchasedTrack } from '$lib/types/purchases';
+  import type { PurchasedAlbum, PurchasedTrack, PurchaseFormatOption } from '$lib/types/purchases';
   import type { DisplayTrack } from '$lib/types';
 
   type PurchasesTab = 'albums' | 'tracks';
@@ -96,6 +95,12 @@
   let trackGroupMode = $state<TrackGroupMode>('artist');
   let showTrackGroupMenu = $state(false);
 
+  // Track format picker popup
+  let formatPickerTrack = $state<PurchasedTrack | null>(null);
+  let formatPickerFormats = $state<PurchaseFormatOption[]>([]);
+  let formatPickerLoading = $state(false);
+  let formatPickerAnchor = $state<{ top: number; right: number } | null>(null);
+
   // Persist filter changes
   $effect(() => { setHideUnavailable(filterHideUnavailable); });
   $effect(() => { setUserItem('qbz-purchases-quality-filter', filterQuality); });
@@ -107,6 +112,7 @@
     showAlbumSortMenu = false;
     showFilterPanel = false;
     showTrackGroupMenu = false;
+    closeFormatPicker();
   }
 
   const albumSortOptions = [
@@ -288,13 +294,16 @@
   async function loadPurchasesMetadata() {
     if (metadataLoaded) return;
 
-    const [dlIds, idsResponse] = await Promise.all([
+    // Fetch totals per type separately — a single unfiltered call with limit=1
+    // only returns the first type's total, leaving the other at 0.
+    const [dlIds, albumIds, trackIds] = await Promise.all([
       getDownloadedTrackIds().catch(() => new Set<number>()),
-      getPurchaseIds(1, 0).catch(() => null),
+      getPurchaseIds(1, 0, 'albums').catch(() => null),
+      getPurchaseIds(1, 0, 'tracks').catch(() => null),
     ]);
     downloadedTrackIds = dlIds;
-    totalAlbumPurchases = idsResponse?.albums?.total ?? 0;
-    totalTrackPurchases = idsResponse?.tracks?.total ?? 0;
+    totalAlbumPurchases = albumIds?.albums?.total ?? 0;
+    totalTrackPurchases = trackIds?.tracks?.total ?? 0;
     metadataLoaded = true;
   }
 
@@ -329,7 +338,12 @@
         }
       }
     } catch (err) {
-      error = String(err);
+      const msg = String(err);
+      if (msg.includes('Load failed') || msg.includes('fetch') || msg.includes('NetworkError')) {
+        error = 'purchases.loadFailed';
+      } else {
+        error = msg;
+      }
     } finally {
       loading = false;
     }
@@ -352,7 +366,12 @@
         albumsLoaded = true;
         tracksLoaded = true;
       } catch (err) {
-        error = String(err);
+        const msg = String(err);
+        if (msg.includes('Load failed') || msg.includes('fetch') || msg.includes('NetworkError')) {
+          error = 'purchases.loadFailed';
+        } else {
+          error = msg;
+        }
       } finally {
         loading = false;
       }
@@ -387,25 +406,55 @@
     };
   }
 
-  function getTrackDownloadStatus(trackId: number): 'downloading' | 'complete' | 'failed' | null {
+  function getTrackDownloadStatus(trackId: number): TrackDownloadStatus | null {
     return $allTrackStatuses[trackId] || null;
+  }
+
+  function closeFormatPicker() {
+    formatPickerTrack = null;
+    formatPickerFormats = [];
+    formatPickerLoading = false;
+    formatPickerAnchor = null;
   }
 
   async function handleTrackDownload(event: MouseEvent, track: PurchasedTrack) {
     event.stopPropagation();
 
     if (!track.album?.id) {
-      showToast(get(t)('purchases.errors.noAlbum'), 'error');
+      showToast($t('purchases.errors.noAlbum'), 'error');
       return;
     }
 
     try {
       const formats = await getFormats(track.album.id);
       if (formats.length === 0) {
-        showToast(get(t)('purchases.errors.noFormats'), 'error');
+        showToast($t('purchases.errors.noFormats'), 'error');
         return;
       }
 
+      // Single format: proceed directly
+      if (formats.length === 1) {
+        await executeTrackDownload(track, formats[0]);
+        return;
+      }
+
+      // Multiple formats: show picker popup
+      const btn = event.currentTarget as HTMLElement;
+      const rect = btn.getBoundingClientRect();
+      formatPickerTrack = track;
+      formatPickerFormats = formats;
+      formatPickerAnchor = { top: rect.bottom + 4, right: window.innerWidth - rect.right };
+    } catch (err) {
+      console.error('Track download error:', err);
+      showToast($t('purchases.errors.downloadFailed'), 'error');
+    }
+  }
+
+  async function executeTrackDownload(track: PurchasedTrack, format: PurchaseFormatOption) {
+    closeFormatPicker();
+    if (!track.album?.id) return;
+
+    try {
       const { open } = await import('@tauri-apps/plugin-dialog');
       const { audioDir } = await import('@tauri-apps/api/path');
       const defaultPath = await audioDir();
@@ -413,14 +462,13 @@
         directory: true,
         multiple: false,
         defaultPath,
-        title: get(t)('purchases.chooseFolder'),
+        title: $t('purchases.chooseFolder'),
       });
 
       if (!dest || typeof dest !== 'string') return;
 
-      const qualityDir = formats[0].label.replace(/\//g, '-').trim();
-      const finalDest = qualityDir ? `${dest}/${qualityDir}` : dest;
-      startTrackDownload(track.album.id, track.id, formats[0].id, finalDest);
+      const qualityDir = format.label.replace(/\//g, '-').trim();
+      startTrackDownload(track.album.id, track.id, format.id, dest, qualityDir);
     } catch (err) {
       console.error('Track download error:', err);
     }
@@ -784,7 +832,8 @@
       </div>
     {:else if error}
       <div class="empty">
-        <p>{error}</p>
+        <ShoppingBag size={48} />
+        <p>{error.startsWith('purchases.') ? $t(error) : error}</p>
       </div>
     {:else if activeTab === 'albums'}
       {#if filteredAlbums.length === 0}
@@ -870,6 +919,7 @@
             {#each group.items as track (track.id)}
               {@const dlStatus = getTrackDownloadStatus(track.id)}
               {@const isDownloaded = track.downloaded || dlStatus === 'complete'}
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
               <div
                 class="track-row"
                 class:active={activeTrackId === track.id}
@@ -879,6 +929,7 @@
                 onclick={() => track.streamable && onTrackPlay?.(toDisplayTrack(track))}
                 role={track.streamable && onTrackPlay ? 'button' : undefined}
                 tabindex={track.streamable && onTrackPlay ? 0 : undefined}
+                onkeydown={track.streamable && onTrackPlay ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTrackPlay?.(toDisplayTrack(track)); } } : undefined}
               >
                 <div class="track-artwork">
                   {#if track.album?.image}
@@ -920,7 +971,14 @@
                   {formatPurchaseDate(track.purchased_at)}
                 </div>
                 {#if dlStatus === 'complete' || isDownloaded}
-                  <span class="download-done"><Check size={14} /></span>
+                  <button
+                    class="download-btn redownload"
+                    onclick={(e) => handleTrackDownload(e, track)}
+                    title={$t('purchases.downloadTrack')}
+                  >
+                    <span class="redownload-check"><Check size={14} /></span>
+                    <span class="redownload-icon"><Download size={14} /></span>
+                  </button>
                 {:else if dlStatus === 'downloading'}
                   <span class="download-active"><Loader2 size={14} class="spin" /></span>
                 {:else if dlStatus === 'failed'}
@@ -939,14 +997,33 @@
       {/if}
     {/if}
   </div>
+
+  <!-- Format picker popup for track downloads -->
+  {#if formatPickerTrack && formatPickerAnchor}
+    <div class="format-picker-backdrop" onclick={closeFormatPicker} role="presentation"></div>
+    <div
+      class="format-picker"
+      style="top: {formatPickerAnchor.top}px; right: {formatPickerAnchor.right}px;"
+    >
+      <div class="format-picker-header">{$t('purchases.selectFormat')}</div>
+      {#each formatPickerFormats as fmt (fmt.id)}
+        <button
+          class="format-picker-item"
+          onclick={() => formatPickerTrack && executeTrackDownload(formatPickerTrack, fmt)}
+        >
+          <span class="format-label">{fmt.label}</span>
+          {#if fmt.bit_depth && fmt.sampling_rate}
+            <span class="format-detail">{fmt.bit_depth}/{fmt.sampling_rate}</span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+  {/if}
 </div>
 
 <style>
   .purchases-view {
-    padding: 24px;
-    padding-left: 18px;
-    padding-right: 8px;
-    padding-bottom: 100px;
+    padding: 8px 8px 100px 18px;
     overflow-y: auto;
     height: 100%;
   }
@@ -1092,7 +1169,7 @@
     color: var(--text-muted);
     cursor: pointer;
     border-radius: 6px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .search-icon-btn:hover {
@@ -1135,7 +1212,7 @@
     color: var(--text-muted);
     cursor: pointer;
     border-radius: 4px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -1173,7 +1250,7 @@
     padding: 8px 12px;
     font-size: 12px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .control-btn:hover {
@@ -1391,7 +1468,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -1740,7 +1817,7 @@
     background: var(--bg-tertiary);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .download-btn:hover {
@@ -1754,14 +1831,32 @@
     color: var(--error, #f44336);
   }
 
-  .download-done {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
+  .download-btn.redownload {
+    border-color: transparent;
+    background: transparent;
     color: var(--success, #4caf50);
+  }
+
+  .download-btn.redownload .redownload-check {
+    display: flex;
+  }
+
+  .download-btn.redownload .redownload-icon {
+    display: none;
+  }
+
+  .download-btn.redownload:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--border-subtle);
+    color: var(--text-secondary);
+  }
+
+  .download-btn.redownload:hover .redownload-check {
+    display: none;
+  }
+
+  .download-btn.redownload:hover .redownload-icon {
+    display: flex;
   }
 
   .download-active {
@@ -1779,6 +1874,59 @@
   }
 
   .track-row.downloaded {
-    opacity: 0.6;
+    opacity: 0.75;
+  }
+
+  /* Format picker popup */
+  .format-picker-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+  }
+
+  .format-picker {
+    position: fixed;
+    z-index: 3001;
+    min-width: 180px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    padding: 4px;
+    overflow: hidden;
+  }
+
+  .format-picker-header {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 8px 12px 4px;
+    letter-spacing: 0.5px;
+  }
+
+  .format-picker-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: none;
+    color: var(--text-primary);
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 13px;
+    text-align: left;
+    transition: background 100ms ease;
+  }
+
+  .format-picker-item:hover {
+    background: var(--bg-hover);
+  }
+
+  .format-detail {
+    font-size: 11px;
+    color: var(--text-muted);
   }
 </style>

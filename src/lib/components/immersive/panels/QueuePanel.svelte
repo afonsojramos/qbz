@@ -1,6 +1,7 @@
 <script lang="ts">
   import { List, Play, History } from 'lucide-svelte';
   import { t } from '$lib/i18n';
+  import { cachedSrc } from '$lib/actions/cachedImage';
 
   interface QueueTrack {
     id: string | number;
@@ -15,6 +16,7 @@
     currentIndex: number;
     onPlayTrack: (index: number) => void;
     onClear?: () => void;
+    centeredLayout?: boolean;
     // History props
     historyTracks?: QueueTrack[];
     onPlayHistoryTrack?: (trackId: string) => void;
@@ -25,6 +27,7 @@
     currentIndex = 0,
     onPlayTrack,
     onClear,
+    centeredLayout = false,
     historyTracks = [],
     onPlayHistoryTrack
   }: Props = $props();
@@ -46,7 +49,7 @@
   }
 </script>
 
-<div class="queue-panel">
+<div class="queue-panel" class:centered-layout={centeredLayout}>
   <!-- Header with sub-tabs -->
   <div class="panel-header">
     <div class="sub-tabs">
@@ -87,7 +90,7 @@
       <div class="section">
         <div class="section-label">{$t('player.nowPlaying') || 'Now Playing'}</div>
         <div class="track-item current">
-          <img src={currentTrack.artwork} alt="" class="track-artwork" />
+          <img use:cachedSrc={currentTrack.artwork} alt="" class="track-artwork" />
           <div class="track-info">
             <div class="track-title">{currentTrack.title}</div>
             <div class="track-artist">{currentTrack.artist}</div>
@@ -113,7 +116,7 @@
               >
                 <Play size={14} />
               </button>
-              <img src={track.artwork} alt="" class="track-artwork" />
+              <img use:cachedSrc={track.artwork} alt="" class="track-artwork" />
               <div class="track-info">
                 <div class="track-title">{track.title}</div>
                 <div class="track-artist">{track.artist}</div>
@@ -142,7 +145,7 @@
               >
                 <Play size={14} />
               </button>
-              <img src={track.artwork} alt="" class="track-artwork" />
+              <img use:cachedSrc={track.artwork} alt="" class="track-artwork" />
               <div class="track-info">
                 <div class="track-title">{track.title}</div>
                 <div class="track-artist">{track.artist}</div>
@@ -167,6 +170,14 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  .queue-panel.centered-layout {
+    flex: 0 1 auto;
+    width: 100%;
+    min-height: 320px;
+    height: clamp(340px, 62vh, 760px);
+    max-height: 80vh;
   }
 
   .panel-header {
@@ -196,7 +207,7 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .sub-tab:hover {
@@ -226,7 +237,7 @@
     color: var(--alpha-70, rgba(255, 255, 255, 0.7));
     font-size: 12px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .clear-btn:hover {
@@ -312,7 +323,7 @@
     color: var(--alpha-70, rgba(255, 255, 255, 0.7));
     cursor: pointer;
     opacity: 0;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -359,7 +370,7 @@
 
   .track-duration {
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--alpha-50, rgba(255, 255, 255, 0.5));
     flex-shrink: 0;
   }

@@ -168,12 +168,14 @@
       return;
     }
 
-    // Trigger-button mode: check if click is outside both the trigger container and the menu (which is in portal)
-    const isOutsideTrigger = menuRef && !menuRef.contains(target);
-    const isOutsideMenu = menuEl && !menuEl.contains(target);
-    const isOutsideSubmenu = submenuEl && !submenuEl.contains(target);
-    const isOutsideDownloadSubmenu = downloadSubmenuEl && !downloadSubmenuEl.contains(target);
-    if (isOutsideTrigger && isOutsideMenu && isOutsideSubmenu && isOutsideDownloadSubmenu) {
+    // Trigger-button mode: check if click is outside both the trigger container and the menu (which is in portal).
+    // Use `!el || !el.contains(target)` so that a null ref (submenu not rendered) counts as "outside".
+    const isOutsideTrigger = !menuRef || !menuRef.contains(target);
+    const isOutsideMenu = !menuEl || !menuEl.contains(target);
+    const isOutsideSubmenu = !submenuEl || !submenuEl.contains(target);
+    const isOutsideDownloadSubmenu = !downloadSubmenuEl || !downloadSubmenuEl.contains(target);
+    const isOutsideRadioSubmenu = !radioSubmenuEl || !radioSubmenuEl.contains(target);
+    if (isOutsideTrigger && isOutsideMenu && isOutsideSubmenu && isOutsideDownloadSubmenu && isOutsideRadioSubmenu) {
       closeMenu();
     }
   }
@@ -454,9 +456,11 @@
 </script>
 
 {#if hasMenu}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions, a11y_no_noninteractive_element_interactions -->
   <div
     class="track-menu"
     bind:this={menuRef}
+    role="presentation"
     onmousedown={(e) => e.stopPropagation()}
     onclick={(e) => e.stopPropagation()}
   >
@@ -477,6 +481,7 @@
     </button>
 
     {#if isOpen}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="menu"
         class:open-left={openSide === 'left'}
@@ -485,6 +490,8 @@
         bind:this={menuEl}
         style={menuStyle}
         use:portal
+        role="menu"
+        tabindex="-1"
         onmouseenter={() => { isHoveringAnyMenu = true; }}
         onmouseleave={() => { isHoveringAnyMenu = false; }}
       >
@@ -522,9 +529,12 @@
             {/if}
             {#if hasRadio}
               {#if onCreateQbzRadio && onCreateQobuzRadio}
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                 <div
                   class="menu-item submenu-trigger"
                   bind:this={radioTriggerRef}
+                  role="menuitem"
+                  tabindex="-1"
                   onmouseenter={() => {
                     radioOpen = true;
                     shareOpen = false;
@@ -541,10 +551,13 @@
                   <span>Create radio</span>
                   <ChevronRight size={14} class="chevron" />
                   {#if radioOpen}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div
                       class="submenu"
                       bind:this={radioSubmenuEl}
                       style={radioSubmenuStyle}
+                      role="menu"
+                      tabindex="-1"
                       onmouseenter={() => { isHoveringRadioSubmenu = true; }}
                       onmouseleave={() => { isHoveringRadioSubmenu = false; }}
                     >
@@ -604,9 +617,12 @@
           {/if}
 
           {#if hasShare}
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
             <div
               class="menu-item submenu-trigger"
               bind:this={shareTriggerRef}
+              role="menuitem"
+              tabindex="-1"
               onmouseenter={() => {
                 shareOpen = true;
                 downloadOpen = false;
@@ -623,10 +639,13 @@
               <span>Share</span>
               <ChevronRight size={14} class="chevron" />
               {#if shareOpen}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
                   class="submenu"
                   bind:this={submenuEl}
                   style={submenuStyle}
+                  role="menu"
+                  tabindex="-1"
                   onmouseenter={() => { isHoveringShareSubmenu = true; }}
                   onmouseleave={() => { isHoveringShareSubmenu = false; }}
                 >
@@ -653,9 +672,12 @@
 
           {#if hasDownload}
             {#if isTrackDownloaded}
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
               <div
                 class="menu-item submenu-trigger"
                 bind:this={downloadTriggerRef}
+                role="menuitem"
+                tabindex="-1"
                 onmouseenter={() => {
                   downloadOpen = true;
                   shareOpen = false;
@@ -672,10 +694,13 @@
                 <span>Make available offline</span>
                 <ChevronRight size={14} class="chevron" />
                 {#if downloadOpen}
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <div
                     class="submenu"
                     bind:this={downloadSubmenuEl}
                     style={downloadSubmenuStyle}
+                    role="menu"
+                    tabindex="-1"
                     onmouseenter={() => { isHoveringDownloadSubmenu = true; }}
                     onmouseleave={() => { isHoveringDownloadSubmenu = false; }}
                   >

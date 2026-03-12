@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { Music, User, Loader2, ArrowRight } from 'lucide-svelte';
+  import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
+  import { Music, User, Loader2, ArrowRight, Home } from 'lucide-svelte';
+  import ForYouTab from './ForYouTab.svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import { type OfflineCacheStatus } from '$lib/stores/offlineCacheState';
   import {
     getHomeCache,
@@ -19,7 +22,7 @@
   import HomeSettingsModal from '../HomeSettingsModal.svelte';
   import GenreFilterButton from '../GenreFilterButton.svelte';
   import PlaylistTagFilter from '../PlaylistTagFilter.svelte';
-  import { formatDuration, formatQuality, getQobuzImage } from '$lib/adapters/qobuzAdapters';
+  import { formatDuration, formatQuality, getQobuzImage, getQobuzImageForSize } from '$lib/adapters/qobuzAdapters';
   import { isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
   import {
     subscribe as subscribeHomeSettings,
@@ -133,6 +136,8 @@
     onNavigateWeeklyQ?: () => void;
     onNavigateFavQ?: () => void;
     onNavigateTopQ?: () => void;
+    homeTab?: 'home' | 'editorPicks' | 'forYou';
+    onTabChange?: (tab: 'home' | 'editorPicks' | 'forYou') => void;
   }
 
   let {
@@ -183,11 +188,42 @@
     onNavigateWeeklyQ,
     onNavigateFavQ,
     onNavigateTopQ,
+    homeTab,
+    onTabChange,
   }: Props = $props();
 
   // Home settings state
   let homeSettings = $state<HomeSettings>(getSettings());
   let isSettingsModalOpen = $state(false);
+
+  // Tab state
+  type HomeTab = 'home' | 'editorPicks' | 'forYou';
+  const LAST_TAB_KEY = 'qbz_home_last_tab';
+
+  function getInitialTab(): HomeTab {
+    if (homeTab) return homeTab;
+    try {
+      const saved = localStorage.getItem(LAST_TAB_KEY);
+      if (saved === 'home' || saved === 'editorPicks' || saved === 'forYou') return saved;
+    } catch { /* ignore */ }
+    return 'home';
+  }
+
+  let activeTab = $state<HomeTab>(getInitialTab());
+
+  function switchTab(tab: HomeTab) {
+    if (activeTab === tab) return;
+    activeTab = tab;
+    try { localStorage.setItem(LAST_TAB_KEY, tab); } catch { /* ignore */ }
+    onTabChange?.(tab);
+  }
+
+  // Sync with external homeTab prop (back/forward navigation)
+  $effect(() => {
+    if (homeTab && homeTab !== activeTab) {
+      activeTab = homeTab;
+    }
+  });
 
   // Computed greeting with i18n support — never call $t() inside $derived()
   function getGreetingText(): string {
@@ -198,12 +234,6 @@
     return $t(info.key, { values: { name: info.name } });
   }
 
-
-  // Check if a section is visible
-  function isSectionVisible(sectionId: HomeSectionId): boolean {
-    const section = homeSettings.sections.find(s => s.id === sectionId);
-    return section?.visible ?? true;
-  }
 
   // Get ordered visible sections
   const visibleSections = $derived(
@@ -378,6 +408,8 @@
       homeSettings = getSettings();
       homeLimits = getSettings().limits;
       clearHomeCache();
+      // Reload data silently so changes apply immediately
+      loadHome({ showSkeletons: false });
     });
 
     const currentGenreIds = Array.from(getSelectedGenreIds());
@@ -412,10 +444,15 @@
     }
   });
 
+  // Scroll state for sticky header
+  let isScrolled = $state(false);
+  const SCROLL_THRESHOLD = 60; // px before sticky header appears
+
   // Save scroll position incrementally
   function handleHomeScroll(e: Event) {
     const target = e.target as HTMLElement;
     updateHomeCacheScrollTop(target.scrollTop);
+    isScrolled = target.scrollTop > SCROLL_THRESHOLD;
   }
 
   function handleArtistImageError(artistId: number) {
@@ -536,7 +573,7 @@
   function discoverAlbumToCardData(album: DiscoverAlbum): AlbumCardData {
     return {
       id: album.id,
-      artwork: album.image?.large || album.image?.small || '',
+      artwork: album.image?.small || album.image?.large || '',
       title: album.title,
       artist: album.artists?.[0]?.name || 'Unknown Artist',
       artistId: album.artists?.[0]?.id,
@@ -585,7 +622,7 @@
     return {
       id: artist.id,
       name: artist.name,
-      image: getQobuzImage(artist.image),
+      image: resolveArtistImage(artist.name, getQobuzImageForSize(artist.image, 'small')),
       playCount
     };
   }
@@ -618,7 +655,7 @@
 
       await setPlaybackContext(
         'home_list',
-        'continue_listening',
+        'home:continue_listening',
         'Continue Listening',
         'qobuz',
         trackIds,
@@ -699,8 +736,8 @@
       const response = await invoke<DiscoverResponse>('v2_get_discover_index', { genreIds: apiGenreIds });
       const c = response.containers;
 
-      // Extract editorial album sections
-      if (isSectionVisible('newReleases') && c.new_releases?.data?.items) {
+      // Extract editorial album sections (always fetch, visibility applied in template)
+      if (c.new_releases?.data?.items) {
         newReleases = c.new_releases.data.items.slice(0, homeLimits.featuredAlbums).map(discoverAlbumToCardData);
         loadingNewReleases = false;
         await tick();
@@ -709,7 +746,7 @@
         loadingNewReleases = false;
       }
 
-      if (isSectionVisible('pressAwards') && c.press_awards?.data?.items) {
+      if (c.press_awards?.data?.items) {
         pressAwards = c.press_awards.data.items.slice(0, homeLimits.featuredAlbums).map(discoverAlbumToCardData);
         loadingPressAwards = false;
         await tick();
@@ -718,7 +755,7 @@
         loadingPressAwards = false;
       }
 
-      if (isSectionVisible('mostStreamed') && c.most_streamed?.data?.items) {
+      if (c.most_streamed?.data?.items) {
         mostStreamed = c.most_streamed.data.items.slice(0, homeLimits.featuredAlbums).map(discoverAlbumToCardData);
         loadingMostStreamed = false;
         await tick();
@@ -727,7 +764,7 @@
         loadingMostStreamed = false;
       }
 
-      if (isSectionVisible('qobuzissimes') && c.qobuzissims?.data?.items) {
+      if (c.qobuzissims?.data?.items) {
         qobuzissimes = c.qobuzissims.data.items.slice(0, homeLimits.featuredAlbums).map(discoverAlbumToCardData);
         loadingQobuzissimes = false;
         await tick();
@@ -736,7 +773,7 @@
         loadingQobuzissimes = false;
       }
 
-      if (isSectionVisible('editorPicks') && c.album_of_the_week?.data?.items) {
+      if (c.album_of_the_week?.data?.items) {
         editorPicks = c.album_of_the_week.data.items.slice(0, homeLimits.featuredAlbums).map(discoverAlbumToCardData);
         loadingEditorPicks = false;
         await tick();
@@ -746,7 +783,7 @@
       }
 
       // Extract playlists (limited) - initial load without tag filter
-      if (isSectionVisible('qobuzPlaylists') && c.playlists?.data?.items) {
+      if (c.playlists?.data?.items) {
         qobuzPlaylists = c.playlists.data.items.slice(0, LIMITS.qobuzPlaylists);
       }
       loadingQobuzPlaylists = false;
@@ -759,7 +796,7 @@
       }
 
       // Extract essential discography (limited)
-      if (isSectionVisible('essentialDiscography') && c.ideal_discography?.data?.items) {
+      if (c.ideal_discography?.data?.items) {
         essentialDiscography = c.ideal_discography.data.items.slice(0, LIMITS.essentialDiscography);
       }
       loadingEssentialDiscography = false;
@@ -811,43 +848,27 @@
     try {
       const resolved = await mlPromise;
 
-      // Recently Played Albums
-      if (isSectionVisible('recentAlbums')) {
-        const filtered = filterAlbumsByGenre(resolved.recentlyPlayedAlbums).slice(0, homeLimits.recentAlbums);
-        recentAlbums = filtered;
-        loadingRecentAlbums = false;
-        await tick();
-        loadAllAlbumDownloadStatuses(filtered).catch(() => {});
-      } else {
-        loadingRecentAlbums = false;
-      }
+      // Recently Played Albums (always fetch, visibility applied in template)
+      const filteredRecent = filterAlbumsByGenre(resolved.recentlyPlayedAlbums).slice(0, homeLimits.recentAlbums);
+      recentAlbums = filteredRecent;
+      loadingRecentAlbums = false;
+      await tick();
+      loadAllAlbumDownloadStatuses(filteredRecent).catch(() => {});
 
       // Continue Listening Tracks
-      if (isSectionVisible('continueTracks')) {
-        continueTracks = resolved.continueListeningTracks;
-        loadingContinueTracks = false;
-      } else {
-        loadingContinueTracks = false;
-      }
+      continueTracks = resolved.continueListeningTracks;
+      loadingContinueTracks = false;
 
       // Top Artists
-      if (isSectionVisible('topArtists')) {
-        topArtists = resolved.topArtists;
-        loadingTopArtists = false;
-      } else {
-        loadingTopArtists = false;
-      }
+      topArtists = resolved.topArtists;
+      loadingTopArtists = false;
 
       // Favorite Albums
-      if (isSectionVisible('favoriteAlbums')) {
-        const filtered = filterAlbumsByGenre(resolved.favoriteAlbums).slice(0, homeLimits.favoriteAlbums);
-        favoriteAlbums = filtered;
-        loadingFavoriteAlbums = false;
-        await tick();
-        loadAllAlbumDownloadStatuses(filtered).catch(() => {});
-      } else {
-        loadingFavoriteAlbums = false;
-      }
+      const filteredFavs = filterAlbumsByGenre(resolved.favoriteAlbums).slice(0, homeLimits.favoriteAlbums);
+      favoriteAlbums = filteredFavs;
+      loadingFavoriteAlbums = false;
+      await tick();
+      loadAllAlbumDownloadStatuses(filteredFavs).catch(() => {});
 
     } catch (err) {
       console.error('Home resolved failed:', err);
@@ -864,28 +885,97 @@
 </script>
 
 <div class="home-view" bind:this={homeViewEl} onscroll={handleHomeScroll}>
-  <!-- Header with greeting, filter and settings -->
-  <div class="home-header">
-    {#if homeSettings.greeting.enabled}
-      <h2 class="greeting">{getGreetingText()}</h2>
-    {:else}
-      <div></div>
-    {/if}
-    <div class="header-actions">
-      <GenreFilterButton onFilterChange={handleGenreFilterChange} />
-      <button class="settings-btn" onclick={() => isSettingsModalOpen = true} title={$t('home.customizeHome')}>
-        <img
-          src="/home-gear.svg"
-          alt="Settings"
-          class="settings-icon"
-          width="22"
-          height="22"
-          style="width:22px;height:22px;filter:invert(1) opacity(0.8);"
-        />
+  {#if isScrolled}
+    <div class="sticky-header">
+      <div class="sticky-tabs">
+        <button
+          class="home-tab compact"
+          class:active={activeTab === 'home'}
+          onclick={() => switchTab('home')}
+        >
+          <Home size={13} />
+        </button>
+        <button
+          class="home-tab compact"
+          class:active={activeTab === 'editorPicks'}
+          onclick={() => switchTab('editorPicks')}
+        >
+          {$t('home.tabEditorPicks')}
+        </button>
+        <button
+          class="home-tab compact"
+          class:active={activeTab === 'forYou'}
+          onclick={() => switchTab('forYou')}
+        >
+          {$t('home.tabForYou')}
+        </button>
+      </div>
+      <div class="sticky-actions">
+        {#if activeTab === 'home'}
+          <button class="settings-btn" onclick={() => isSettingsModalOpen = true} title={$t('home.customizeHome')}>
+            <img
+              src="/home-gear.svg"
+              alt="Settings"
+              class="settings-icon"
+              width="18"
+              height="18"
+              style="width:18px;height:18px;filter:invert(1) opacity(0.8);"
+            />
+          </button>
+        {/if}
+        <GenreFilterButton onFilterChange={handleGenreFilterChange} context="home" variant="default" />
+      </div>
+    </div>
+  {/if}
+
+  <!-- Header with greeting + centered tabs + actions -->
+  <div class="home-header" class:scrolled={isScrolled}>
+    <div class="header-left">
+      {#if homeSettings.greeting.enabled}
+        <h2 class="greeting">{getGreetingText()}</h2>
+      {/if}
+    </div>
+    <div class="home-tabs">
+      <button
+        class="home-tab"
+        class:active={activeTab === 'home'}
+        onclick={() => switchTab('home')}
+      >
+        <Home size={14} />
       </button>
+      <button
+        class="home-tab"
+        class:active={activeTab === 'editorPicks'}
+        onclick={() => switchTab('editorPicks')}
+      >
+        {$t('home.tabEditorPicks')}
+      </button>
+      <button
+        class="home-tab"
+        class:active={activeTab === 'forYou'}
+        onclick={() => switchTab('forYou')}
+      >
+        {$t('home.tabForYou')}
+      </button>
+    </div>
+    <div class="header-actions">
+      {#if activeTab === 'home'}
+        <button class="settings-btn" onclick={() => isSettingsModalOpen = true} title={$t('home.customizeHome')}>
+          <img
+            src="/home-gear.svg"
+            alt="Settings"
+            class="settings-icon"
+            width="22"
+            height="22"
+            style="width:22px;height:22px;filter:invert(1) opacity(0.8);"
+          />
+        </button>
+      {/if}
+      <GenreFilterButton onFilterChange={handleGenreFilterChange} />
     </div>
   </div>
 
+  {#if activeTab === 'home'}
   {#if error}
     <div class="home-state">
       <div class="state-icon">
@@ -1232,7 +1322,7 @@
             {#each essentialDiscography as album (album.id)}
               <AlbumCard
                 albumId={album.id}
-                artwork={album.image?.large || album.image?.small || ''}
+                artwork={album.image?.small || album.image?.large || ''}
                 title={album.title}
                 artist={album.artists?.[0]?.name || 'Unknown Artist'}
                 artistId={album.artists?.[0]?.id}
@@ -1323,7 +1413,7 @@
           </div>
           <div class="track-list compact">
             {#each continueTracks as track, index (track.id)}
-              {@const isActiveTrack = isPlaybackActive && activeTrackId === track.id}
+              {@const isThisActiveTrack = activeTrackId === track.id}
               {@const cacheStatus = getTrackOfflineCacheStatus?.(track.id) ?? { status: 'none' as const, progress: 0 }}
               {@const isTrackDownloaded = cacheStatus.status === 'ready'}
               {@const trackBlacklisted = track.artistId ? isArtistBlacklisted(track.artistId) : false}
@@ -1335,7 +1425,8 @@
                 album={track.album}
                 duration={track.duration}
                 quality={getTrackQuality(track)}
-                isPlaying={isActiveTrack}
+                isPlaying={isPlaybackActive && isThisActiveTrack}
+                isActiveTrack={isThisActiveTrack}
                 isBlacklisted={trackBlacklisted}
                 compact={true}
                 hideDownload={trackBlacklisted}
@@ -1392,7 +1483,7 @@
                   </div>
                   {#if !failedArtistImages.has(artist.id) && artist.image}
                     <img
-                      src={artist.image}
+                      use:cachedSrc={artist.image}
                       alt={artist.name}
                       class="artist-image"
                       loading="lazy"
@@ -1503,6 +1594,427 @@
       <p>{$t('home.startListeningDescription')}</p>
     </div>
   {/if}
+  {:else if activeTab === 'editorPicks'}
+    <!-- Editor's Picks tab: curated Qobuz editorial content (fixed order, no customization) -->
+
+    <!-- New Releases -->
+    {#if loadingNewReleases}
+      <div class="skeleton-section">
+        <div class="skeleton-title"></div>
+        <div class="skeleton-row">
+          {#each { length: 6 } as _}<div class="skeleton-card"></div>{/each}
+        </div>
+      </div>
+    {:else if newReleases.length > 0}
+      <HorizontalScrollRow>
+        {#snippet header()}
+          <div class="section-header-group">
+            <h2 class="section-title">{$t('home.newReleases')}</h2>
+            {#if onNavigateNewReleases}
+              <button class="see-all-link" onclick={onNavigateNewReleases}>{$t('home.seeAll')}<ArrowRight size={14} /></button>
+            {/if}
+          </div>
+        {/snippet}
+        {#snippet children()}
+          {#each newReleases as album}
+            <AlbumCard
+              albumId={album.id}
+              artwork={album.artwork}
+              title={album.title}
+              artist={album.artist}
+              artistId={album.artistId}
+              onArtistClick={onArtistClick}
+              genre={album.genre}
+              releaseDate={album.releaseDate}
+              size="large"
+              quality={album.quality}
+              onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
+              onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
+              onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
+              onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+              onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
+              onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
+              onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
+              isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
+              onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
+              onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
+              {downloadStateVersion}
+              onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+            />
+          {/each}
+          <div class="spacer"></div>
+        {/snippet}
+      </HorizontalScrollRow>
+    {/if}
+
+    <!-- Editor's Picks / Album of the Week -->
+    {#if loadingEditorPicks}
+      <div class="skeleton-section">
+        <div class="skeleton-title"></div>
+        <div class="skeleton-row">
+          {#each { length: 6 } as _}<div class="skeleton-card"></div>{/each}
+        </div>
+      </div>
+    {:else if editorPicks.length > 0}
+      <HorizontalScrollRow>
+        {#snippet header()}
+          <div class="section-header-group">
+            <h2 class="section-title">{$t('home.editorPicks')}</h2>
+            {#if onNavigateAlbumsOfTheWeek}
+              <button class="see-all-link" onclick={onNavigateAlbumsOfTheWeek}>{$t('home.seeAll')}<ArrowRight size={14} /></button>
+            {/if}
+          </div>
+        {/snippet}
+        {#snippet children()}
+          {#each editorPicks as album}
+            <AlbumCard
+              albumId={album.id}
+              artwork={album.artwork}
+              title={album.title}
+              artist={album.artist}
+              artistId={album.artistId}
+              onArtistClick={onArtistClick}
+              genre={album.genre}
+              releaseDate={album.releaseDate}
+              size="large"
+              quality={album.quality}
+              onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
+              onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
+              onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
+              onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+              onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
+              onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
+              onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
+              isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
+              onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
+              onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
+              {downloadStateVersion}
+              onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+            />
+          {/each}
+          <div class="spacer"></div>
+        {/snippet}
+      </HorizontalScrollRow>
+    {/if}
+
+    <!-- Qobuzissimes -->
+    {#if loadingQobuzissimes}
+      <div class="skeleton-section">
+        <div class="skeleton-title"></div>
+        <div class="skeleton-row">
+          {#each { length: 6 } as _}<div class="skeleton-card"></div>{/each}
+        </div>
+      </div>
+    {:else if qobuzissimes.length > 0}
+      <HorizontalScrollRow>
+        {#snippet header()}
+          <div class="section-header-group">
+            <h2 class="section-title">{$t('home.qobuzissimes')}</h2>
+            {#if onNavigateQobuzissimes}
+              <button class="see-all-link" onclick={onNavigateQobuzissimes}>{$t('home.seeAll')}<ArrowRight size={14} /></button>
+            {/if}
+          </div>
+        {/snippet}
+        {#snippet children()}
+          {#each qobuzissimes as album}
+            <AlbumCard
+              albumId={album.id}
+              artwork={album.artwork}
+              title={album.title}
+              artist={album.artist}
+              artistId={album.artistId}
+              onArtistClick={onArtistClick}
+              genre={album.genre}
+              releaseDate={album.releaseDate}
+              size="large"
+              quality={album.quality}
+              onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
+              onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
+              onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
+              onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+              onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
+              onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
+              onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
+              isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
+              onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
+              onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
+              {downloadStateVersion}
+              onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+            />
+          {/each}
+          <div class="spacer"></div>
+        {/snippet}
+      </HorizontalScrollRow>
+    {/if}
+
+    <!-- Press Awards -->
+    {#if loadingPressAwards}
+      <div class="skeleton-section">
+        <div class="skeleton-title"></div>
+        <div class="skeleton-row">
+          {#each { length: 6 } as _}<div class="skeleton-card"></div>{/each}
+        </div>
+      </div>
+    {:else if pressAwards.length > 0}
+      <HorizontalScrollRow>
+        {#snippet header()}
+          <div class="section-header-group">
+            <h2 class="section-title">{$t('home.pressAwards')}</h2>
+            {#if onNavigatePressAccolades}
+              <button class="see-all-link" onclick={onNavigatePressAccolades}>{$t('home.seeAll')}<ArrowRight size={14} /></button>
+            {/if}
+          </div>
+        {/snippet}
+        {#snippet children()}
+          {#each pressAwards as album}
+            <AlbumCard
+              albumId={album.id}
+              artwork={album.artwork}
+              title={album.title}
+              artist={album.artist}
+              artistId={album.artistId}
+              onArtistClick={onArtistClick}
+              genre={album.genre}
+              releaseDate={album.releaseDate}
+              size="large"
+              quality={album.quality}
+              onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
+              onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
+              onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
+              onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+              onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
+              onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
+              onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
+              isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
+              onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
+              onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
+              {downloadStateVersion}
+              onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+            />
+          {/each}
+          <div class="spacer"></div>
+        {/snippet}
+      </HorizontalScrollRow>
+    {/if}
+
+    <!-- Most Streamed -->
+    {#if loadingMostStreamed}
+      <div class="skeleton-section">
+        <div class="skeleton-title"></div>
+        <div class="skeleton-row">
+          {#each { length: 6 } as _}<div class="skeleton-card"></div>{/each}
+        </div>
+      </div>
+    {:else if mostStreamed.length > 0}
+      <HorizontalScrollRow>
+        {#snippet header()}
+          <div class="section-header-group">
+            <h2 class="section-title">{$t('home.popularAlbums')}</h2>
+            {#if onNavigateTopAlbums}
+              <button class="see-all-link" onclick={onNavigateTopAlbums}>{$t('home.seeAll')}<ArrowRight size={14} /></button>
+            {/if}
+          </div>
+        {/snippet}
+        {#snippet children()}
+          {#each mostStreamed as album}
+            <AlbumCard
+              albumId={album.id}
+              artwork={album.artwork}
+              title={album.title}
+              artist={album.artist}
+              artistId={album.artistId}
+              onArtistClick={onArtistClick}
+              genre={album.genre}
+              releaseDate={album.releaseDate}
+              size="large"
+              quality={album.quality}
+              onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
+              onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
+              onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
+              onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+              onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
+              onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
+              onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
+              isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
+              onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
+              onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
+              {downloadStateVersion}
+              onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+            />
+          {/each}
+          <div class="spacer"></div>
+        {/snippet}
+      </HorizontalScrollRow>
+    {/if}
+
+    <!-- Essential Discography -->
+    {#if loadingEssentialDiscography}
+      <div class="skeleton-section">
+        <div class="skeleton-title"></div>
+        <div class="skeleton-row">
+          {#each { length: 6 } as _}<div class="skeleton-card"></div>{/each}
+        </div>
+      </div>
+    {:else if essentialDiscography.length > 0}
+      <HorizontalScrollRow>
+        {#snippet header()}
+          <div class="section-header-group">
+            <h2 class="section-title">{$t('home.essentialDiscography')}</h2>
+            {#if onNavigateIdealDiscography}
+              <button class="see-all-link" onclick={onNavigateIdealDiscography}>{$t('home.seeAll')}<ArrowRight size={14} /></button>
+            {/if}
+          </div>
+        {/snippet}
+        {#snippet children()}
+          {#each essentialDiscography as album (album.id)}
+            <AlbumCard
+              albumId={album.id}
+              artwork={album.image?.small || album.image?.large || ''}
+              title={album.title}
+              artist={album.artists?.[0]?.name || 'Unknown Artist'}
+              artistId={album.artists?.[0]?.id}
+              onArtistClick={onArtistClick}
+              genre={album.genre?.name || ''}
+              releaseDate={album.dates?.original}
+              size="large"
+              quality={formatQuality(
+                (album.audio_info?.maximum_bit_depth ?? 16) > 16,
+                album.audio_info?.maximum_bit_depth,
+                album.audio_info?.maximum_sampling_rate
+              )}
+              onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
+              onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
+              onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
+              onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+              onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
+              onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
+              onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
+              isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
+              onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
+              onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
+              {downloadStateVersion}
+              onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+            />
+          {/each}
+          <div class="spacer"></div>
+        {/snippet}
+      </HorizontalScrollRow>
+    {/if}
+
+    <!-- Qobuz Playlists -->
+    {#if loadingQobuzPlaylists}
+      <div class="skeleton-section">
+        <div class="skeleton-title"></div>
+        <div class="skeleton-row">
+          {#each { length: 5 } as _}<div class="skeleton-card-wide"></div>{/each}
+        </div>
+      </div>
+    {:else if qobuzPlaylists.length > 0}
+      <HorizontalScrollRow>
+        {#snippet header()}
+          <div class="section-header-with-tags">
+            <div class="section-header-group">
+              <h2 class="section-title">{$t('home.qobuzPlaylists')}</h2>
+              {#if onNavigateQobuzPlaylists}
+                <button class="see-all-link" onclick={onNavigateQobuzPlaylists}>{$t('home.seeAll')}<ArrowRight size={14} /></button>
+              {/if}
+            </div>
+            {#if playlistTags.length > 0}
+              <PlaylistTagFilter
+                tags={playlistTags}
+                selectedTag={selectedTagSlug}
+                onTagChange={handleTagChange}
+              />
+            {/if}
+          </div>
+        {/snippet}
+        {#snippet children()}
+          {#if loadingQobuzPlaylists}
+            <div class="loading-playlists">
+              <Loader2 size={24} class="spinner" />
+            </div>
+          {:else}
+            {#each qobuzPlaylists as playlist (playlist.id)}
+              <QobuzPlaylistCard
+                playlistId={playlist.id}
+                name={playlist.name}
+                owner={playlist.owner?.name || 'Qobuz'}
+                image={playlist.image?.rectangle || playlist.image?.covers?.[0]}
+                trackCount={playlist.tracks_count}
+                duration={playlist.duration}
+                genre={playlist.genres?.[0]?.name}
+                onclick={onPlaylistClick ? () => onPlaylistClick(playlist.id) : undefined}
+                onPlay={onPlaylistPlay ? () => onPlaylistPlay(playlist.id) : undefined}
+                onPlayNext={onPlaylistPlayNext ? () => onPlaylistPlayNext(playlist.id) : undefined}
+                onPlayLater={onPlaylistPlayLater ? () => onPlaylistPlayLater(playlist.id) : undefined}
+                onCopyToLibrary={onPlaylistCopyToLibrary ? () => onPlaylistCopyToLibrary(playlist.id) : undefined}
+                onShareQobuz={onPlaylistShareQobuz ? () => onPlaylistShareQobuz(playlist.id) : undefined}
+              />
+            {/each}
+          {/if}
+          <div class="spacer"></div>
+        {/snippet}
+      </HorizontalScrollRow>
+    {/if}
+
+    <!-- Empty state for Editor's Picks -->
+    {#if !loadingNewReleases && !loadingEditorPicks && !loadingQobuzissimes && !loadingPressAwards && !loadingMostStreamed && !loadingEssentialDiscography && !loadingQobuzPlaylists && newReleases.length === 0 && editorPicks.length === 0 && qobuzissimes.length === 0 && pressAwards.length === 0 && mostStreamed.length === 0 && essentialDiscography.length === 0 && qobuzPlaylists.length === 0}
+      <div class="home-state">
+        <div class="state-icon">
+          <Music size={48} />
+        </div>
+        <h1>{$t('home.startListening')}</h1>
+        <p>{$t('home.startListeningDescription')}</p>
+      </div>
+    {/if}
+  {:else if activeTab === 'forYou'}
+    <ForYouTab
+      {recentAlbums}
+      {continueTracks}
+      {topArtists}
+      {favoriteAlbums}
+      {loadingRecentAlbums}
+      {loadingContinueTracks}
+      {loadingTopArtists}
+      {loadingFavoriteAlbums}
+      {onAlbumClick}
+      {onAlbumPlay}
+      {onAlbumPlayNext}
+      {onAlbumPlayLater}
+      {onAlbumShareQobuz}
+      {onAlbumShareSonglink}
+      {onAlbumDownload}
+      {onOpenAlbumFolder}
+      {onReDownloadAlbum}
+      {onAddAlbumToPlaylist}
+      {checkAlbumFullyDownloaded}
+      {downloadStateVersion}
+      {isAlbumDownloaded}
+      {loadAlbumDownloadStatus}
+      {onArtistClick}
+      {onTrackPlay}
+      {onTrackPlayNext}
+      {onTrackPlayLater}
+      {onTrackAddToPlaylist}
+      {onTrackShareQobuz}
+      {onTrackShareSonglink}
+      {onTrackGoToAlbum}
+      {onTrackGoToArtist}
+      {onTrackShowInfo}
+      {onTrackDownload}
+      {onTrackRemoveDownload}
+      {onTrackReDownload}
+      {checkTrackDownloaded}
+      {getTrackOfflineCacheStatus}
+      {activeTrackId}
+      {isPlaybackActive}
+      {onNavigateDailyQ}
+      {onNavigateWeeklyQ}
+      {onNavigateFavQ}
+      {onNavigateTopQ}
+      {onPlaylistClick}
+    />
+  {/if}
 
   <!-- Settings Modal -->
   <HomeSettingsModal
@@ -1515,22 +2027,29 @@
   .home-view {
     width: 100%;
     height: 100%;
-    padding: 24px;
-    padding-left: 18px;
-    padding-right: 8px;
-    padding-bottom: 100px;
+    padding: 0 8px 100px 18px;
     overflow-y: auto;
     position: relative;
   }
 
-  /* Add spacing between sections - using :global to affect child components */
-  .home-view > :global(*:not(:first-child)) {
-    margin-top: 60px !important;
+  /* Sticky header gets no extra margin from section spacing */
+  .home-view > :global(.sticky-header) {
+    margin-top: 0 !important;
   }
 
-  /* Second child (first section after header) gets less spacing */
-  .home-view > :global(*:nth-child(2)) {
+  /* Add spacing between sections - using :global to affect child components */
+  .home-view > :global(*:not(:first-child):not(.sticky-header)) {
     margin-top: 30px !important;
+  }
+
+  /* First section after header (home-header) gets less spacing */
+  .home-view > :global(.home-header + *) {
+    margin-top: 16px !important;
+  }
+
+  /* Home header itself gets no extra top margin */
+  .home-view > :global(.home-header) {
+    margin-top: 0 !important;
   }
 
   /* Custom scrollbar */
@@ -1573,8 +2092,8 @@
   }
 
   .skeleton-card {
-    width: 180px;
-    height: 240px;
+    width: 210px;
+    height: 270px;
     background: var(--bg-tertiary);
     border-radius: 12px;
     flex-shrink: 0;
@@ -1591,8 +2110,8 @@
   }
 
   .skeleton-artist {
-    width: 180px;
-    height: 220px;
+    width: 210px;
+    height: 250px;
     background: var(--bg-tertiary);
     border-radius: 12px;
     flex-shrink: 0;
@@ -1618,11 +2137,43 @@
     50% { opacity: 0.7; }
   }
 
-  .home-header {
+  /* ---- Sticky compact header ---- */
+  .sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    margin-bottom: 24px;
+    justify-content: center;
+    gap: 12px;
+    padding: 10px 24px;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--alpha-6);
+    box-shadow: 0 4px 8px -4px rgba(0, 0, 0, 0.5);
+    margin: 0 -8px 0 -18px;
+    width: calc(100% + 26px);
+  }
+
+  .sticky-tabs {
+    display: flex;
+    align-items: center;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    padding: 3px;
+    gap: 2px;
+  }
+
+  .sticky-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    position: absolute;
+    right: 8px;
+  }
+
+  .home-tab.compact {
+    padding: 5px 12px;
+    font-size: 12px;
   }
 
   .greeting {
@@ -1630,13 +2181,78 @@
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;
+    white-space: nowrap;
+    transition: opacity 180ms ease;
+  }
+
+  .home-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-top: 24px;
+    margin-bottom: 24px;
+    gap: 16px;
+    position: relative;
+  }
+
+  .home-header.scrolled .greeting {
+    opacity: 0;
+  }
+
+  .header-left {
+    position: absolute;
+    left: 0;
+    display: flex;
+    align-items: center;
+  }
+
+  .home-tabs {
+    display: flex;
+    align-items: center;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    padding: 4px;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+
+  .home-tab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 16px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  .home-tab:hover {
+    color: var(--text-primary);
+  }
+
+  .home-tab.active {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   }
 
   .header-actions {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
+    position: absolute;
+    right: 0;
   }
+
 
   .settings-btn {
     display: flex;
@@ -1648,7 +2264,7 @@
     border: none;
     border-radius: 8px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     opacity: 0.7;
   }
 
@@ -1696,8 +2312,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 180px;
-    min-height: 180px;
+    min-width: 210px;
+    min-height: 210px;
     color: var(--text-muted);
   }
 
@@ -1721,7 +2337,7 @@
   }
 
   .artist-card {
-    width: 180px;
+    width: 210px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1760,6 +2376,7 @@
     inset: 0;
     object-fit: cover;
     z-index: 1;
+    transition: opacity 0.15s ease-in;
   }
 
   .artist-image-placeholder {
@@ -1872,7 +2489,7 @@
 
   .mix-card {
     flex-shrink: 0;
-    width: 180px;
+    width: 210px;
     cursor: pointer;
     background: none;
     border: none;
@@ -1882,8 +2499,8 @@
   }
 
   .mix-card-artwork {
-    width: 180px;
-    height: 180px;
+    width: 210px;
+    height: 210px;
     border-radius: 8px;
     overflow: hidden;
     margin-bottom: 8px;

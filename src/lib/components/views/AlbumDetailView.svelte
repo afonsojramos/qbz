@@ -1,10 +1,21 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+  import { open, save } from '@tauri-apps/plugin-dialog';
+  import { openUrl } from '@tauri-apps/plugin-opener';
   import { t } from 'svelte-i18n';
-  import { ArrowLeft, Play, Shuffle, Heart, Radio, CloudDownload, ChevronLeft, ChevronRight } from 'lucide-svelte';
+  import { showToast } from '$lib/stores/toastStore';
+  import {
+    hasCustomAlbumCover,
+    setCustomAlbumCover,
+    removeCustomAlbumCover as removeCustomCoverFromStore
+  } from '$lib/stores/customAlbumCoverStore';
+  import { ArrowLeft, Play, Shuffle, Heart, Radio, CloudDownload, ChevronLeft, ChevronRight, Loader2, CheckSquare, BookOpen } from 'lucide-svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import AlbumCard from '../AlbumCard.svelte';
   import TrackRow from '../TrackRow.svelte';
   import AlbumMenu from '../AlbumMenu.svelte';
+  import BulkActionBar from '../BulkActionBar.svelte';
   import ViewTransition from '../ViewTransition.svelte';
   import { getOfflineCacheState, type OfflineCacheStatus, isAlbumFullyCached } from '$lib/stores/offlineCacheState';
   import { consumeContextTrackFocus } from '$lib/stores/playbackContextStore';
@@ -16,6 +27,9 @@
     toggleAlbumFavorite
   } from '$lib/stores/albumFavoritesStore';
   import { isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
+  import ImageLightbox from '../ImageLightbox.svelte';
+  import BookletViewer from '../BookletViewer.svelte';
+  import type { QobuzGoody } from '$lib/types';
 
   interface Track {
     id: number;
@@ -30,6 +44,7 @@
     bitDepth?: number;
     samplingRate?: number;
     isrc?: string;
+    parental_warning?: boolean;
   }
 
   interface ArtistAlbum {
@@ -57,6 +72,7 @@
       trackCount: number;
       duration: string;
       tracks: Track[];
+      goodies?: QobuzGoody[];
     };
     onBack: () => void;
     onArtistClick?: () => void;
@@ -75,6 +91,7 @@
     onPlayAllNext?: () => void;
     onPlayAllLater?: () => void;
     onAddTrackToPlaylist?: (trackId: number) => void;
+    onBulkAddToPlaylist?: (trackIds: number[]) => void;
     onAddAlbumToPlaylist?: () => void;
     onTrackDownload?: (track: Track) => void;
     onTrackRemoveDownload?: (trackId: number) => void;
@@ -101,6 +118,7 @@
     checkRelatedAlbumDownloaded?: (albumId: string) => Promise<boolean>;
     onShowAlbumCredits?: () => void;
     onCreateAlbumRadio?: () => void;
+    radioLoading?: boolean;
   }
 
   let {
@@ -122,6 +140,7 @@
     onPlayAllNext,
     onPlayAllLater,
     onAddTrackToPlaylist,
+    onBulkAddToPlaylist,
     onAddAlbumToPlaylist,
     onTrackDownload,
     onTrackRemoveDownload,
@@ -146,12 +165,80 @@
     onViewArtistDiscography,
     checkRelatedAlbumDownloaded,
     onShowAlbumCredits,
-    onCreateAlbumRadio
+    onCreateAlbumRadio,
+    radioLoading = false
   }: Props = $props();
 
   let isFavorite = $state(false);
   let isFavoriteLoading = $state(false);
+  let lightboxOpen = $state(false);
+  let bookletOpen = $state(false);
+
+  // Booklet: find first PDF goody
+  const bookletGoody = $derived(
+    album.goodies?.find((goody: QobuzGoody) => goody.url && goody.url.endsWith('.pdf')) ?? null
+  );
+
+  // Cover context menu
+  let showCoverMenu = $state(false);
+  let coverMenuPos = $state({ x: 0, y: 0 });
+  let hasCustomCover = $state(false);
+  let coverOverride = $state<string | null>(null);
   let scrollContainer: HTMLDivElement | null = $state(null);
+
+  // Multi-select
+  let multiSelectMode = $state(false);
+  let multiSelectedIds = $state(new Set<number>());
+
+  function toggleMultiSelectMode() {
+    multiSelectMode = !multiSelectMode;
+    if (!multiSelectMode) multiSelectedIds = new Set();
+  }
+
+  function toggleMultiSelect(id: number) {
+    const next = new Set(multiSelectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    multiSelectedIds = next;
+  }
+
+  function buildAlbumQueueTracks(tracks: Track[]) {
+    return tracks.map(trk => ({
+      id: trk.id,
+      title: trk.title,
+      artist: trk.artist || album.artist,
+      album: album.title,
+      duration_secs: trk.durationSeconds,
+      artwork_url: album.artwork || null,
+      hires: trk.hires ?? false,
+      bit_depth: trk.bitDepth ?? null,
+      sample_rate: trk.samplingRate ?? null,
+      is_local: false,
+      album_id: album.id || null,
+      artist_id: album.artistId ?? null,
+    }));
+  }
+
+  async function handleBulkPlayNext() {
+    const selected = album.tracks.filter(track => multiSelectedIds.has(track.id));
+    await invoke('v2_add_tracks_to_queue_next', { tracks: buildAlbumQueueTracks(selected) });
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkPlayLater() {
+    const selected = album.tracks.filter(track => multiSelectedIds.has(track.id));
+    await invoke('v2_add_tracks_to_queue', { tracks: buildAlbumQueueTracks(selected) });
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkAddToPlaylist() {
+    onBulkAddToPlaylist?.([...multiSelectedIds]);
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkAddFavorites() {
+    for (const id of multiSelectedIds) { onTrackAddFavorite?.(id); }
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
 
   // Carousel state for "By the same artist" section
   let carouselContainer: HTMLDivElement | null = $state(null);
@@ -249,12 +336,85 @@
   }
 
   // Check if album is in favorites on mount
+  // --- Custom album cover handlers ---
+
+  function loadCustomCoverStatus() {
+    hasCustomCover = hasCustomAlbumCover(album.id);
+  }
+
+  async function handleAddCustomCover() {
+    showCoverMenu = false;
+    const selected = await open({
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      multiple: false
+    });
+    if (!selected) return;
+
+    try {
+      const result = await invoke<{ image_path: string; thumbnail_path: string }>(
+        'v2_library_set_custom_album_cover',
+        { albumId: album.id, customImagePath: selected }
+      );
+      coverOverride = convertFileSrc(result.image_path);
+      hasCustomCover = true;
+      setCustomAlbumCover(album.id, convertFileSrc(result.image_path));
+      showToast($t('album.customCoverSet'), 'success');
+    } catch (err) {
+      showToast(`${$t('album.customCoverError')}: ${err}`, 'error');
+    }
+  }
+
+  async function handleRemoveCustomCover() {
+    showCoverMenu = false;
+    try {
+      await invoke('v2_library_remove_custom_album_cover', { albumId: album.id });
+      coverOverride = null;
+      hasCustomCover = false;
+      removeCustomCoverFromStore(album.id);
+      showToast($t('album.customCoverRemoved'), 'success');
+    } catch (err) {
+      showToast(`${$t('album.customCoverError')}: ${err}`, 'error');
+    }
+  }
+
+  async function handleOpenCoverInBrowser() {
+    showCoverMenu = false;
+    const url = coverOverride ?? album.artwork;
+    if (url && !url.startsWith('asset://')) {
+      await openUrl(url).catch(err => console.error('Failed to open URL:', err));
+    }
+  }
+
+  async function handleSaveCoverAs() {
+    showCoverMenu = false;
+    const artworkUrl = coverOverride ?? album.artwork;
+    if (!artworkUrl) return;
+
+    const dest = await save({
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }],
+      defaultPath: `${album.title} - Cover.jpg`
+    });
+    if (!dest) return;
+
+    try {
+      if (artworkUrl.startsWith('asset://') || artworkUrl.startsWith('http://asset.localhost')) {
+        showToast($t('album.customCoverError'), 'error');
+        return;
+      }
+      await invoke('v2_save_image_url_to_file', { url: artworkUrl, destPath: dest });
+      showToast($t('album.customCoverSet'), 'success');
+    } catch (err) {
+      showToast(`${$t('album.customCoverError')}: ${err}`, 'error');
+    }
+  }
+
   onMount(() => {
     let unsubscribe: (() => void) | null = null;
     (async () => {
       try {
         await loadAlbumFavorites();
         isFavorite = isAlbumFavorite(album.id);
+        loadCustomCoverStatus();
         unsubscribe = subscribeAlbumFavorites(() => {
           isFavorite = isAlbumFavorite(album.id);
         });
@@ -265,7 +425,7 @@
 
     // Restore scroll position
     requestAnimationFrame(() => {
-      const saved = getSavedScrollPosition('album');
+      const saved = getSavedScrollPosition('album', album.id);
       if (scrollContainer && saved > 0) {
         scrollContainer.scrollTop = saved;
       }
@@ -315,7 +475,7 @@
 </script>
 
 <ViewTransition duration={200} distance={12} direction="up">
-<div class="album-detail" bind:this={scrollContainer} onscroll={(e) => saveScrollPosition('album', (e.target as HTMLElement).scrollTop)}>
+<div class="album-detail" bind:this={scrollContainer} onscroll={(e) => saveScrollPosition('album', (e.target as HTMLElement).scrollTop, album.id)}>
   <!-- Back Navigation -->
   <button class="back-btn" onclick={onBack}>
     <ArrowLeft size={16} />
@@ -325,8 +485,15 @@
   <!-- Album Header -->
   <div class="album-header">
     <!-- Album Artwork -->
-    <div class="artwork">
-      <img src={album.artwork} alt={album.title} />
+    <div
+      class="artwork"
+      onclick={() => lightboxOpen = true}
+      onkeydown={(e) => { if (e.key === 'Enter') lightboxOpen = true; }}
+      oncontextmenu={(e) => { e.preventDefault(); coverMenuPos = { x: e.clientX, y: e.clientY }; showCoverMenu = true; }}
+      role="button"
+      tabindex="0"
+    >
+      <img use:cachedSrc={coverOverride ?? album.artwork} alt={album.title} />
     </div>
 
     <!-- Album Metadata -->
@@ -387,8 +554,13 @@
             class="action-btn-circle"
             onclick={onCreateAlbumRadio}
             title={$t('radio.albumRadio')}
+            disabled={radioLoading}
           >
-            <Radio size={18} />
+            {#if radioLoading}
+              <Loader2 size={18} class="spin" />
+            {:else}
+              <Radio size={18} />
+            {/if}
           </button>
         {/if}
         {#if onShowAlbumCredits}
@@ -403,6 +575,15 @@
             </svg>
           </button>
         {/if}
+        {#if bookletGoody}
+          <button
+            class="action-btn-circle"
+            onclick={() => bookletOpen = true}
+            title={$t('album.viewBooklet')}
+          >
+            <BookOpen size={18} />
+          </button>
+        {/if}
         <AlbumMenu
           onPlayNext={onPlayAllNext}
           onPlayLater={onPlayAllLater}
@@ -414,6 +595,14 @@
           onOpenContainingFolder={onOpenAlbumFolder}
           onReDownloadAlbum={onReDownloadAlbum}
         />
+        <button
+          class="action-btn-circle"
+          class:is-active={multiSelectMode}
+          onclick={toggleMultiSelectMode}
+          title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+        >
+          <CheckSquare size={18} />
+        </button>
       </div>
     </div>
   </div>
@@ -454,8 +643,13 @@
           artist={track.artist}
           duration={track.duration}
           quality={track.quality}
-          isPlaying={activeTrackId === track.id}
+          explicit={track.parental_warning === true}
+          isPlaying={isPlaybackActive && activeTrackId === track.id}
+          isActiveTrack={activeTrackId === track.id}
           isBlacklisted={trackBlacklisted}
+          selectable={multiSelectMode}
+          selected={multiSelectedIds.has(track.id)}
+          onToggleSelect={() => toggleMultiSelect(track.id)}
           downloadStatus={downloadInfo.status}
           downloadProgress={downloadInfo.progress}
           hideFavorite={trackBlacklisted}
@@ -489,6 +683,14 @@
       {/each}
       {/if}
     </div>
+    <BulkActionBar
+      count={multiSelectedIds.size}
+      onPlayNext={handleBulkPlayNext}
+      onPlayLater={handleBulkPlayLater}
+      onAddToPlaylist={handleBulkAddToPlaylist}
+      onAddFavorites={onTrackAddFavorite ? handleBulkAddFavorites : undefined}
+      onClearSelection={() => { multiSelectedIds = new Set(); }}
+    />
   </div>
 
   <!-- By the same artist Section -->
@@ -565,14 +767,61 @@
 </div>
 </ViewTransition>
 
+<ImageLightbox
+  isOpen={lightboxOpen}
+  onClose={() => lightboxOpen = false}
+  src={coverOverride ?? album.artwork}
+  alt={album.title}
+/>
+
+{#if bookletGoody}
+  <BookletViewer
+    isOpen={bookletOpen}
+    onClose={() => bookletOpen = false}
+    url={bookletGoody.original_url || bookletGoody.url}
+    title={bookletGoody.name || $t('album.booklet')}
+  />
+{/if}
+
+{#if showCoverMenu}
+  <div
+    class="cover-context-backdrop"
+    onclick={() => showCoverMenu = false}
+    onkeydown={(e) => { if (e.key === 'Escape') showCoverMenu = false; }}
+    role="button"
+    tabindex="-1"
+  ></div>
+  <div
+    class="cover-context-menu"
+    style="left: {coverMenuPos.x}px; top: {coverMenuPos.y}px;"
+  >
+    {#if hasCustomCover}
+      <button class="cover-context-item" onclick={handleAddCustomCover}>
+        {$t('album.changeCover')}
+      </button>
+      <button class="cover-context-item danger" onclick={handleRemoveCustomCover}>
+        {$t('album.removeCover')}
+      </button>
+    {:else}
+      <button class="cover-context-item" onclick={handleAddCustomCover}>
+        {$t('album.addCover')}
+      </button>
+    {/if}
+    <div class="cover-context-divider"></div>
+    <button class="cover-context-item" onclick={handleOpenCoverInBrowser}>
+      {$t('album.openInBrowser')}
+    </button>
+    <button class="cover-context-item" onclick={handleSaveCoverAs}>
+      {$t('album.saveAs')}
+    </button>
+  </div>
+{/if}
+
 <style>
   .album-detail {
     width: 100%;
     height: 100%;
-    padding: 24px;
-    padding-left: 18px;
-    padding-right: 8px;
-    padding-bottom: 100px;
+    padding: 8px 8px 100px 18px;
     overflow-y: auto;
   }
 
@@ -603,6 +852,7 @@
     background: none;
     border: none;
     cursor: pointer;
+    margin-top: 8px;
     margin-bottom: 24px;
     transition: color 150ms ease;
   }
@@ -624,6 +874,7 @@
     border-radius: 12px;
     overflow: hidden;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    cursor: pointer;
   }
 
   .artwork img {
@@ -825,7 +1076,7 @@
     background-color: transparent;
     color: var(--text-primary);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .carousel-btn:hover:not(:disabled) {
@@ -871,7 +1122,7 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .view-more-cover:hover {
@@ -927,5 +1178,69 @@
 
   .retry-btn:hover {
     background: var(--bg-hover);
+  }
+
+  :global(.spin) {
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Cover context menu */
+  .cover-context-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2999;
+  }
+
+  .cover-context-menu {
+    position: fixed;
+    z-index: 3000;
+    background: var(--bg-secondary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 8px;
+    padding: 4px;
+    min-width: 200px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    animation: coverMenuIn 100ms ease;
+  }
+
+  @keyframes coverMenuIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .cover-context-item {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: none;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 100ms ease;
+  }
+
+  .cover-context-item:hover {
+    background: var(--bg-hover);
+  }
+
+  .cover-context-item.danger {
+    color: var(--color-error, #ef4444);
+  }
+
+  .cover-context-item.danger:hover {
+    background: rgba(239, 68, 68, 0.1);
+  }
+
+  .cover-context-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 4px 8px;
   }
 </style>

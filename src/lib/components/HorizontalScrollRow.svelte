@@ -117,7 +117,8 @@
 
   .content {
     display: flex;
-    gap: 16px;
+    align-items: flex-start;
+    gap: 22px;
     width: max-content;
   }
 </style>

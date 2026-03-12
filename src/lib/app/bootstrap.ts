@@ -13,7 +13,9 @@ import { loadSystemNotificationsPreference, flushScrobbleQueue } from '$lib/serv
 import { initOfflineStore, cleanupOfflineStore, onOnlineTransition, syncPendingPlaylists } from '$lib/stores/offlineStore';
 import { loadUnavailableTracks } from '$lib/stores/unavailableTracksStore';
 import { getNextZoomLevel } from '$lib/utils/zoom';
+import { getUserItem } from '$lib/utils/userStorage';
 import { getZoom, setZoom } from '$lib/stores/zoomStore';
+import { restoreAutoThemeVars } from '$lib/stores/autoThemeStore';
 
 // ============ Theme Management ============
 
@@ -86,7 +88,7 @@ export function setupZoomControls(): () => void {
  */
 export async function restoreLastfmSession(): Promise<void> {
   try {
-    const savedSessionKey = localStorage.getItem('qbz-lastfm-session-key');
+    const savedSessionKey = getUserItem('qbz-lastfm-session-key');
 
     // Restore session if available (proxy handles credentials)
     if (savedSessionKey) {
@@ -134,7 +136,8 @@ export interface BootstrapResult {
  * @returns Object with cleanup function for onDestroy
  */
 export function bootstrapApp(): BootstrapResult {
-  // Load theme and font
+  // Load theme and font (auto-theme vars first to prevent FOUC)
+  restoreAutoThemeVars();
   loadSavedTheme();
   loadSavedFont();
   void applySavedZoom();

@@ -1,14 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { get } from 'svelte/store';
   import { t } from '$lib/i18n';
   import { invoke } from '@tauri-apps/api/core';
-  import { ArrowLeft, Download, Check, Loader2, AlertTriangle, Library, Play } from 'lucide-svelte';
+  import { ArrowLeft, Download, Check, Loader2, AlertTriangle, Library, Play, X } from 'lucide-svelte';
   import QualityBadge from '../QualityBadge.svelte';
   import Dropdown from '../Dropdown.svelte';
   import ViewTransition from '../ViewTransition.svelte';
   import { getAlbumDetail, getFormats } from '$lib/services/purchases';
-  import { purchaseDownloads, startAlbumDownload, startTrackDownload } from '$lib/stores/purchaseDownloadStore';
+  import { purchaseDownloads, startAlbumDownload, startTrackDownload, cancelAlbumDownload, getAlbumDownloadFormatId, clearAlbumDownloadState } from '$lib/stores/purchaseDownloadStore';
   import type { TrackDownloadStatus } from '$lib/stores/purchaseDownloadStore';
   import { formatDuration, getQobuzImage } from '$lib/adapters/qobuzAdapters';
   import { showToast } from '$lib/stores/toastStore';
@@ -45,7 +44,11 @@
   const albumDlState = $derived($purchaseDownloads[albumId] ?? null);
   const downloadStatuses = $derived(albumDlState?.trackStatuses ?? {});
   const isDownloadingAll = $derived(albumDlState?.isDownloadingAll ?? false);
-  const allComplete = $derived(albumDlState?.allComplete ?? false);
+  // Only show "all complete" if the download was for the currently selected format
+  const allComplete = $derived(
+    (albumDlState?.allComplete ?? false) &&
+    (albumDlState?.formatId === undefined || albumDlState?.formatId === selectedFormatId)
+  );
   const downloadDestination = $derived(albumDlState?.destination ?? null);
 
   let addingToLibrary = $state(false);
@@ -54,11 +57,14 @@
     if (!downloadDestination || addingToLibrary) return;
     addingToLibrary = true;
     try {
-      await invoke('v2_library_add_folder', { path: downloadDestination });
-      showToast(get(t)('purchases.addToLibrarySuccess'), 'success');
+      const folder = await invoke<{ id: number }>('v2_library_add_folder', { path: downloadDestination });
+      clearAlbumDownloadState(albumId);
+      showToast($t('purchases.addToLibrarySuccess'), 'success');
+      // Trigger a background scan so the library indexes the new files
+      invoke('v2_library_scan_folder', { folderId: folder.id }).catch(() => {});
     } catch (err) {
       console.error('Failed to add folder to library:', err);
-      showToast(get(t)('purchases.addToLibraryError'), 'error');
+      showToast($t('purchases.addToLibraryError'), 'error');
     } finally {
       addingToLibrary = false;
     }
@@ -92,7 +98,14 @@
   }
 
   function getTrackStatus(trackId: number): TrackDownloadStatus | null {
-    return downloadStatuses[trackId] || null;
+    const status = downloadStatuses[trackId] || null;
+    if (!status) return null;
+    // Only show 'complete' if the in-memory download was for the currently selected format
+    if (status === 'complete') {
+      const dlFormatId = getAlbumDownloadFormatId(albumId);
+      if (dlFormatId !== undefined && dlFormatId !== selectedFormatId) return null;
+    }
+    return status;
   }
 
   function groupByDisc(trackList: PurchasedTrack[]): Map<number, PurchasedTrack[]> {
@@ -146,16 +159,15 @@
         directory: true,
         multiple: false,
         defaultPath,
-        title: get(t)('purchases.chooseFolder'),
+        title: $t('purchases.chooseFolder'),
       });
       if (dest && typeof dest === 'string') {
         const qualityDir = qualityFolderName(selectedFormatId);
-        const finalDest = qualityDir ? `${dest}/${qualityDir}` : dest;
         if (action === 'all') {
           const trackIds = (album.tracks?.items || []).map((track) => track.id);
-          startAlbumDownload(albumId, trackIds, selectedFormatId, finalDest);
+          startAlbumDownload(albumId, trackIds, selectedFormatId, dest, qualityDir);
         } else {
-          startTrackDownload(albumId, action, selectedFormatId, finalDest);
+          startTrackDownload(albumId, action, selectedFormatId, dest, qualityDir);
         }
       }
     } catch (err) {
@@ -189,6 +201,10 @@
   const isMultiDisc = $derived(discGroups.size > 1);
   const completedCount = $derived(
     Object.values(downloadStatuses).filter((s) => s === 'complete').length
+  );
+  const wasCancelled = $derived(
+    !isDownloadingAll && !allComplete &&
+    Object.values(downloadStatuses).some((s) => s === 'cancelled')
   );
   const totalTracks = $derived(album?.tracks?.items?.length || 0);
   const totalDurationSeconds = $derived(
@@ -298,21 +314,33 @@
     </div>
 
     <!-- Download progress -->
-    {#if isDownloadingAll || allComplete}
+    {#if isDownloadingAll || allComplete || wasCancelled}
       <div class="progress-section">
         <div class="progress-label">
           {#if allComplete}
             <Check size={14} />
             <span>{$t('purchases.complete')}</span>
+          {:else if wasCancelled}
+            <X size={14} />
+            <span>{$t('purchases.downloadCancelled', { values: { completed: completedCount, total: totalTracks } })}</span>
           {:else}
             <Loader2 size={14} class="spin" />
             <span>{$t('purchases.downloadProgress', { values: { current: completedCount, total: totalTracks } })}</span>
+            <button
+              class="cancel-download-btn"
+              onclick={() => cancelAlbumDownload(albumId)}
+              title={$t('purchases.cancelDownload')}
+            >
+              <X size={12} />
+              <span>{$t('actions.cancel')}</span>
+            </button>
           {/if}
         </div>
         <div class="progress-bar">
           <div
             class="progress-fill"
             class:complete={allComplete}
+            class:cancelled={wasCancelled}
             style="width: {totalTracks > 0 ? (completedCount / totalTracks) * 100 : 0}%"
           ></div>
         </div>
@@ -359,16 +387,20 @@
           {#each discTracks as track (track.id)}
             {@const status = getTrackStatus(track.id)}
             {@const isActive = activeTrackId === track.id}
+            {@const isDownloadedForFormat = selectedFormatId !== null && (track.downloaded_format_ids ?? []).includes(selectedFormatId)}
+            {@const isDownloaded = isDownloadedForFormat || status === 'complete'}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
             <div
               class="track-row"
               class:downloading={status === 'downloading'}
-              class:complete={status === 'complete'}
+              class:complete={isDownloaded}
               class:failed={status === 'failed'}
               class:active={isActive}
               class:clickable={track.streamable && !!onTrackPlay}
               onclick={() => track.streamable && onTrackPlay?.(toDisplayTrack(track))}
               role={track.streamable && onTrackPlay ? 'button' : undefined}
               tabindex={track.streamable && onTrackPlay ? 0 : undefined}
+              onkeydown={track.streamable && onTrackPlay ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTrackPlay?.(toDisplayTrack(track)); } } : undefined}
             >
               <div class="col-number">
                 {#if isActive && isPlaybackActive}
@@ -377,8 +409,6 @@
                   </div>
                 {:else if status === 'downloading'}
                   <Loader2 size={14} class="spin" />
-                {:else if status === 'complete'}
-                  <Check size={14} class="status-complete" />
                 {:else}
                   <span>{track.track_number}</span>
                 {/if}
@@ -398,8 +428,15 @@
                 {/if}
               </div>
               <div class="col-download">
-                {#if status === 'complete'}
-                  <span class="download-done"><Check size={14} /></span>
+                {#if isDownloaded}
+                  <button
+                    class="download-track-btn redownload"
+                    onclick={(e) => { e.stopPropagation(); promptForFolder(track.id); }}
+                    title={$t('purchases.downloadTrack')}
+                  >
+                    <span class="redownload-check"><Check size={14} /></span>
+                    <span class="redownload-icon"><Download size={14} /></span>
+                  </button>
                 {:else if status === 'downloading'}
                   <span class="download-active"><Loader2 size={14} class="spin" /></span>
                 {:else if status === 'failed'}
@@ -433,10 +470,7 @@
   .purchase-album-detail {
     width: 100%;
     height: 100%;
-    padding: 24px;
-    padding-left: 18px;
-    padding-right: 8px;
-    padding-bottom: 100px;
+    padding: 8px 8px 100px 18px;
     overflow-y: auto;
   }
 
@@ -467,6 +501,7 @@
     background: none;
     border: none;
     cursor: pointer;
+    margin-top: 8px;
     margin-bottom: 24px;
     transition: color 150ms ease;
   }
@@ -646,6 +681,31 @@
 
   .progress-fill.complete {
     background: var(--success, #4caf50);
+  }
+
+  .progress-fill.cancelled {
+    background: var(--text-muted);
+  }
+
+  .cancel-download-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+  }
+
+  .cancel-download-btn:hover {
+    color: var(--color-error, #ef4444);
+    border-color: var(--color-error, #ef4444);
+    background: rgba(239, 68, 68, 0.08);
   }
 
   /* Add to Library */
@@ -840,12 +900,6 @@
     justify-content: center;
   }
 
-  .download-done {
-    color: var(--success, #4caf50);
-    display: flex;
-    align-items: center;
-  }
-
   .download-active {
     color: var(--accent-primary);
     display: flex;
@@ -863,7 +917,7 @@
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     opacity: 0;
   }
 
@@ -878,6 +932,31 @@
   .download-track-btn.failed {
     color: var(--error, #f44336);
     opacity: 1;
+  }
+
+  .download-track-btn.redownload {
+    opacity: 1;
+    color: var(--success, #4caf50);
+  }
+
+  .download-track-btn.redownload .redownload-check {
+    display: flex;
+  }
+
+  .download-track-btn.redownload .redownload-icon {
+    display: none;
+  }
+
+  .download-track-btn.redownload:hover {
+    color: var(--text-muted);
+  }
+
+  .download-track-btn.redownload:hover .redownload-check {
+    display: none;
+  }
+
+  .download-track-btn.redownload:hover .redownload-icon {
+    display: flex;
   }
 
   .track-row.clickable {

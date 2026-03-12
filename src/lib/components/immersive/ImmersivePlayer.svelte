@@ -1,6 +1,8 @@
 <script lang="ts">
   import { startActiveLineUpdates, setProgressTrackingEnabled } from '$lib/stores/lyricsStore';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { t } from '$lib/i18n';
+  import Modal from '$lib/components/Modal.svelte';
   import ImmersiveBackground from './ImmersiveBackground.svelte';
   import ImmersiveArtwork from './ImmersiveArtwork.svelte';
   import ImmersiveHeader, { type ImmersiveTab, type FocusTab, type ViewMode } from './ImmersiveHeader.svelte';
@@ -12,12 +14,16 @@
   import CoverflowPanel from './panels/CoverflowPanel.svelte';
   import StaticPanel from './panels/StaticPanel.svelte';
   import VisualizerPanel from './panels/VisualizerPanel.svelte';
+  import NeonFlowPanel from './panels/NeonFlowPanel.svelte';
+  import TunnelFlowPanel from './panels/TunnelFlowPanel.svelte';
+  import CometFlowPanel from './panels/CometFlowPanel.svelte';
   import OscilloscopePanel from './panels/OscilloscopePanel.svelte';
   import SpectralRibbon from './panels/SpectralRibbon.svelte';
   import EnergyBandsPanel from './panels/EnergyBandsPanel.svelte';
   import LissajousPanel from './panels/LissajousPanel.svelte';
   import TransientPulsePanel from './panels/TransientPulsePanel.svelte';
   import AlbumReactivePanel from './panels/AlbumReactivePanel.svelte';
+  import LinebedPanel from './panels/LinebedPanel.svelte';
   import LyricsFocusPanel from './panels/LyricsFocusPanel.svelte';
   import QualityBadge from '$lib/components/QualityBadge.svelte';
   import { getUserItem, setUserItem } from '$lib/utils/userStorage';
@@ -90,6 +96,8 @@
     // History
     historyTracks?: QueueTrack[];
     onPlayHistoryTrack?: (trackId: string) => void;
+    // Content flags
+    explicit?: boolean;
   }
 
   let {
@@ -137,7 +145,8 @@
     onQueuePlayTrack,
     onQueueClear,
     historyTracks = [],
-    onPlayHistoryTrack
+    onPlayHistoryTrack,
+    explicit = false
   }: Props = $props();
 
   // UI State
@@ -152,8 +161,27 @@
   const hasLyrics = $derived(lyricsLines.length > 0 || lyricsLoading);
   const AUTO_HIDE_DELAY = 4000;
 
+  // Performance degradation modal
+  let showPerfModal = $state(false);
+  let perfDontShowAgain = $state(false);
+  const PERF_MODAL_DISMISSED_KEY = 'qbz-immersive-perf-modal-dismissed';
+
+  function handlePerfDegraded() {
+    // Check if user opted out of this modal
+    const dismissed = localStorage.getItem(PERF_MODAL_DISMISSED_KEY);
+    if (dismissed === 'true') return;
+    showPerfModal = true;
+  }
+
+  function closePerfModal() {
+    if (perfDontShowAgain) {
+      localStorage.setItem(PERF_MODAL_DISMISSED_KEY, 'true');
+    }
+    showPerfModal = false;
+  }
+
   // Immersive view persistence
-  type ImmersiveViewKey = 'coverflow' | 'static' | 'visualizer' | 'oscilloscope' | 'spectral-ribbon' | 'energy-bands' | 'lissajous' | 'transient-pulse' | 'album-reactive' | 'lyrics-focus' | 'queue-focus' | 'split-lyrics' | 'split-trackInfo' | 'split-suggestions' | 'split-queue';
+  type ImmersiveViewKey = 'coverflow' | 'static' | 'visualizer' | 'neon-flow' | 'tunnel-flow' | 'comet-flow' | 'oscilloscope' | 'spectral-ribbon' | 'energy-bands' | 'lissajous' | 'transient-pulse' | 'album-reactive' | 'lyrics-focus' | 'queue-focus' | 'split-lyrics' | 'split-trackInfo' | 'split-suggestions' | 'split-queue';
 
   function applyStoredView(key: ImmersiveViewKey) {
     if (key.startsWith('split-')) {
@@ -330,6 +358,18 @@
       case 'R':
         if (viewMode === 'focus') activeFocusTab = 'spectral-ribbon';
         break;
+      case 'n':
+      case 'N':
+        if (viewMode === 'focus') activeFocusTab = 'neon-flow';
+        break;
+      case 'u':
+      case 'U':
+        if (viewMode === 'focus') activeFocusTab = 'tunnel-flow';
+        break;
+      case 'c':
+      case 'C':
+        if (viewMode === 'focus') activeFocusTab = 'comet-flow';
+        break;
     }
     saveLastUsedView();
     resetHideTimer();
@@ -347,12 +387,14 @@
       resetHideTimer();
       checkWindowState();
       document.addEventListener('keydown', handleKeydown);
+      window.addEventListener('immersive:background-degraded', handlePerfDegraded);
 
       // Disable karaoke progress tracking in immersive mode (saves ~90% CPU on lyrics)
       setProgressTrackingEnabled(false);
 
       return () => {
         document.removeEventListener('keydown', handleKeydown);
+        window.removeEventListener('immersive:background-degraded', handlePerfDegraded);
         if (hideTimeout) clearTimeout(hideTimeout);
         document.documentElement.style.overflow = prevHtmlOverflow;
         document.body.style.overflow = prevBodyOverflow;
@@ -392,7 +434,7 @@
     ></div>
 
     <!-- Background (skip for canvas-based visualizers that render their own black background) -->
-    {#if activeFocusTab !== 'visualizer' && activeFocusTab !== 'oscilloscope' && activeFocusTab !== 'spectral-ribbon' && activeFocusTab !== 'energy-bands' && activeFocusTab !== 'lissajous' && activeFocusTab !== 'transient-pulse'}
+    {#if activeFocusTab !== 'visualizer' && activeFocusTab !== 'neon-flow' && activeFocusTab !== 'tunnel-flow' && activeFocusTab !== 'comet-flow' && activeFocusTab !== 'oscilloscope' && activeFocusTab !== 'spectral-ribbon' && activeFocusTab !== 'energy-bands' && activeFocusTab !== 'lissajous' && activeFocusTab !== 'transient-pulse'}
       <ImmersiveBackground {artwork} />
     {/if}
 
@@ -433,6 +475,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
           {queueTracks}
           {queueCurrentIndex}
           onNavigate={(index) => onQueuePlayTrack?.(index)}
@@ -451,6 +494,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'visualizer'}
         <!-- Visualizer: Audio spectrum with mirror mode -->
@@ -466,6 +510,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'oscilloscope'}
         <!-- Oscilloscope: Stereo L/R waveforms -->
@@ -481,6 +526,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'spectral-ribbon'}
         <SpectralRibbon
@@ -498,6 +544,52 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
+        />
+      {:else if activeFocusTab === 'neon-flow'}
+        <NeonFlowPanel
+          enabled={true}
+          {artwork}
+          {trackTitle}
+          {artist}
+          {album}
+          {quality}
+          {bitDepth}
+          {samplingRate}
+          {originalBitDepth}
+          {originalSamplingRate}
+          {format}
+          {explicit}
+        />
+      {:else if activeFocusTab === 'tunnel-flow'}
+        <TunnelFlowPanel
+          enabled={true}
+          {artwork}
+          {trackTitle}
+          {artist}
+          {album}
+          {quality}
+          {bitDepth}
+          {samplingRate}
+          {originalBitDepth}
+          {originalSamplingRate}
+          {format}
+          {explicit}
+        />
+      {:else if activeFocusTab === 'comet-flow'}
+        <CometFlowPanel
+          enabled={true}
+          {artwork}
+          {trackTitle}
+          {artist}
+          {album}
+          {quality}
+          {bitDepth}
+          {samplingRate}
+          {originalBitDepth}
+          {originalSamplingRate}
+          {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'energy-bands'}
         <!-- Energy Bands: Concentric glowing rings driven by frequency bands -->
@@ -513,6 +605,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'lissajous'}
         <!-- Lissajous: Stereo X/Y phase visualization -->
@@ -528,6 +621,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'transient-pulse'}
         <!-- Transient Pulse: Expanding rings on beat detection -->
@@ -543,6 +637,7 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'album-reactive'}
         <!-- Album Reactive: Album art with breathing scale/glow -->
@@ -559,6 +654,22 @@
           {originalBitDepth}
           {originalSamplingRate}
           {format}
+          {explicit}
+        />
+      {:else if activeFocusTab === 'linebed'}
+        <LinebedPanel
+          enabled={true}
+          {artwork}
+          {trackTitle}
+          {artist}
+          {album}
+          {quality}
+          {bitDepth}
+          {samplingRate}
+          {originalBitDepth}
+          {originalSamplingRate}
+          {format}
+          {explicit}
         />
       {:else if activeFocusTab === 'lyrics-focus'}
         <!-- Lyrics Focus: Single line, large, centered -->
@@ -590,7 +701,12 @@
         <div class="artwork-section">
           <ImmersiveArtwork {artwork} {trackTitle} variant="floating" />
           <div class="split-track-info">
-            <h2 class="split-track-title">{trackTitle}</h2>
+            <div class="split-title-row">
+              <h2 class="split-track-title">{trackTitle}</h2>
+              {#if explicit}
+                <span class="explicit-badge" title="Explicit"></span>
+              {/if}
+            </div>
             <p class="split-track-artist">{artist}</p>
             {#if album}
               <p class="split-track-album">{album}</p>
@@ -602,7 +718,10 @@
         </div>
 
         <!-- Right: Active Panel -->
-        <div class="panel-section">
+        <div
+          class="panel-section"
+          class:centered-panel={activeTab === 'trackInfo' || activeTab === 'suggestions' || activeTab === 'queue'}
+        >
           {#if activeTab === 'lyrics'}
             <LyricsPanel
               lines={lyricsLines}
@@ -613,7 +732,7 @@
               error={lyricsError}
             />
           {:else if activeTab === 'trackInfo'}
-            <TrackInfoPanel {trackId} />
+            <TrackInfoPanel {trackId} centeredLayout={true} />
           {:else if activeTab === 'suggestions'}
             <SuggestionsPanel
               {trackId}
@@ -621,6 +740,7 @@
               artistName={artist}
               trackName={trackTitle}
               currentArtwork={artwork}
+              centeredLayout={true}
             />
           {:else if activeTab === 'queue'}
             <QueuePanel
@@ -630,6 +750,7 @@
               onClear={onQueueClear}
               {historyTracks}
               onPlayHistoryTrack={(trackId) => onPlayHistoryTrack?.(trackId)}
+              centeredLayout={true}
             />
           {/if}
         </div>
@@ -666,7 +787,60 @@
   </div>
 {/if}
 
+<!-- Performance degradation modal -->
+<Modal isOpen={showPerfModal} onClose={closePerfModal} title={$t('settings.immersive.title')} maxWidth="440px">
+  {#snippet children()}
+    <p class="perf-modal-text">{$t('settings.immersive.perfDegraded')}</p>
+    <label class="perf-modal-checkbox">
+      <input type="checkbox" bind:checked={perfDontShowAgain} />
+      <span>{$t('settings.immersive.perfDontShowAgain')}</span>
+    </label>
+  {/snippet}
+  {#snippet footer()}
+    <button class="perf-modal-ok" onclick={closePerfModal}>OK</button>
+  {/snippet}
+</Modal>
+
 <style>
+  .perf-modal-text {
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1.5;
+    margin: 0 0 16px 0;
+  }
+
+  .perf-modal-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  .perf-modal-checkbox input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
+  }
+
+  .perf-modal-ok {
+    padding: 8px 24px;
+    background: var(--accent-primary);
+    color: var(--text-on-accent, #fff);
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 150ms ease;
+  }
+
+  .perf-modal-ok:hover {
+    opacity: 0.9;
+  }
+
   .immersive-player {
     position: fixed;
     inset: 0;
@@ -729,16 +903,36 @@
     max-width: 380px;
   }
 
+  .split-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 0;
+    margin: 0 0 6px 0;
+  }
+
   .split-track-title {
     font-size: clamp(18px, 2.5vw, 24px);
     font-weight: 700;
     color: var(--text-primary, white);
-    margin: 0 0 6px 0;
+    margin: 0;
     text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
     /* Truncate long titles */
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-primary, white);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .split-track-artist {
@@ -775,6 +969,10 @@
     display: flex;
     flex-direction: column;
     align-self: center;
+  }
+
+  .panel-section.centered-panel {
+    justify-content: center;
   }
 
   /* Focus mode panels (queue) */

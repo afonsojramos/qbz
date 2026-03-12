@@ -22,11 +22,10 @@ use std::sync::mpsc::{self, Sender, SyncSender, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use rodio::{Decoder, OutputStream, Source};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Source};
 use rodio::buffer::SamplesBuffer;
-use rodio::decoder::Mp4Type;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
-use rodio::cpal::{StreamConfig, SampleRate, BufferSize, SupportedStreamConfig, SupportedBufferSize, SampleFormat};
+use rodio::cpal::{StreamConfig, BufferSize, SupportedStreamConfig, SupportedBufferSize, SampleFormat};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
@@ -131,9 +130,16 @@ impl Seek for CursorMediaSource {
 /// Audio specifications extracted from decoded audio
 #[allow(dead_code)]
 struct AudioSpecs {
-    samples: SamplesBuffer<f32>,
+    samples: SamplesBuffer,
     sample_rate: u32,
     channels: u16,
+}
+
+fn cpal_device_name(device: &rodio::cpal::Device) -> Option<String> {
+    device
+        .description()
+        .ok()
+        .map(|description| description.name().to_string())
 }
 
 fn decode_with_symphonia(data: &[u8]) -> Result<AudioSpecs, String> {
@@ -204,7 +210,11 @@ fn decode_with_symphonia(data: &[u8]) -> Result<AudioSpecs, String> {
     }
 
     Ok(AudioSpecs {
-        samples: SamplesBuffer::new(channels, sample_rate, samples),
+        samples: SamplesBuffer::new(
+            std::num::NonZero::new(channels).unwrap(),
+            std::num::NonZero::new(sample_rate).unwrap(),
+            samples,
+        ),
         sample_rate,
         channels,
     })
@@ -305,23 +315,22 @@ fn decode_with_fallback(
         }
     }
 
-    let mp4_attempts = [Mp4Type::M4a, Mp4Type::Mp4];
-    for hint in mp4_attempts {
-        let hint_label = format!("{:?}", hint);
+    // Try mp4 fallback (rodio 0.22 removed Mp4Type hint)
+    {
         let attempt = panic::catch_unwind(AssertUnwindSafe(|| {
-            Decoder::new_mp4(BufReader::new(Cursor::new(data.to_vec())), hint)
+            Decoder::new_mp4(BufReader::new(Cursor::new(data.to_vec())))
         }));
 
         match attempt {
             Ok(Ok(decoder)) => {
-                log::info!("Decoded audio using mp4 fallback ({})", hint_label);
+                log::info!("Decoded audio using mp4 fallback");
                 return Ok(Box::new(decoder));
             }
             Ok(Err(err)) => {
-                log::warn!("mp4 fallback ({}) failed: {}", hint_label, err);
+                log::warn!("mp4 fallback failed: {}", err);
             }
             Err(_) => {
-                log::warn!("mp4 fallback ({}) panicked", hint_label);
+                log::warn!("mp4 fallback panicked");
             }
         }
     }
@@ -335,29 +344,27 @@ fn decode_with_fallback(
     }
 }
 
-/// Create OutputStream with custom sample rate configuration
+/// Create MixerDeviceSink with custom sample rate configuration
 fn create_output_stream_with_config(
-    device: &rodio::cpal::Device,
+    device: rodio::cpal::Device,
     sample_rate: u32,
     channels: u16,
     exclusive_mode: bool,
-) -> Result<(OutputStream, rodio::OutputStreamHandle), String> {
+) -> Result<MixerDeviceSink, String> {
     log::info!(
-        "Creating OutputStream: {}Hz, {} channels, exclusive: {}",
+        "Creating MixerDeviceSink: {}Hz, {} channels, exclusive: {}",
         sample_rate,
         channels,
         exclusive_mode
     );
 
     // Create StreamConfig with desired sample rate
+    // Note: buffer_size here is unused — with_supported_config() resets it.
+    // The actual buffer size is set via with_buffer_size() below.
     let config = StreamConfig {
         channels,
-        sample_rate: SampleRate(sample_rate),
-        buffer_size: if exclusive_mode {
-            BufferSize::Fixed(512)  // Lower latency for exclusive mode
-        } else {
-            BufferSize::Default
-        },
+        sample_rate,
+        buffer_size: BufferSize::Default,
     };
 
     // Check if device supports this configuration
@@ -368,15 +375,15 @@ fn create_output_stream_with_config(
     let mut found_matching = false;
     for range in supported_configs {
         if range.channels() == channels
-            && sample_rate >= range.min_sample_rate().0
-            && sample_rate <= range.max_sample_rate().0
+            && sample_rate >= range.min_sample_rate()
+            && sample_rate <= range.max_sample_rate()
         {
             found_matching = true;
             log::info!(
                 "Device supports {}Hz (range: {}-{}Hz)",
                 sample_rate,
-                range.min_sample_rate().0,
-                range.max_sample_rate().0
+                range.min_sample_rate(),
+                range.max_sample_rate()
             );
             break;
         }
@@ -397,14 +404,37 @@ fn create_output_stream_with_config(
         SampleFormat::F32,
     );
 
-    // Create OutputStream with custom config
-    match OutputStream::try_from_device_config(device, supported_config) {
-        Ok((stream, handle)) => {
-            log::info!("OutputStream created successfully at {}Hz", sample_rate);
-            Ok((stream, handle))
+    // Compute buffer size — must be applied AFTER with_supported_config()
+    // because that method resets buffer_size to Default via ..Default::default().
+    // MixerDeviceSink has zero internal buffering, so CPAL's buffer is the
+    // ONLY buffer between the mixer and audio hardware.
+    let cpal_buffer_size = if exclusive_mode {
+        BufferSize::Fixed(512)  // Low latency for exclusive mode
+    } else {
+        // ~100ms buffer, matching old vendored cpal period size.
+        // Prevents underruns at high sample rates (192kHz = 19200 frames).
+        BufferSize::Fixed(sample_rate / 10)
+    };
+    log::info!("Buffer size: {:?}", cpal_buffer_size);
+
+    // Create MixerDeviceSink with custom config
+    match DeviceSinkBuilder::from_device(device) {
+        Ok(builder) => {
+            match builder.with_supported_config(&supported_config)
+                .with_buffer_size(cpal_buffer_size)
+                .open_stream() {
+                Ok(mixer_sink) => {
+                    log::info!("MixerDeviceSink created successfully at {}Hz", sample_rate);
+                    Ok(mixer_sink)
+                }
+                Err(e) => {
+                    log::error!("Failed to open stream at {}Hz: {}", sample_rate, e);
+                    Err(format!("Failed to create output stream: {}", e))
+                }
+            }
         }
         Err(e) => {
-            log::error!("❌ Failed to create OutputStream at {}Hz: {}", sample_rate, e);
+            log::error!("Failed to create device sink builder: {}", e);
             Err(format!("Failed to create output stream: {}", e))
         }
     }
@@ -412,7 +442,7 @@ fn create_output_stream_with_config(
 
 /// Output stream type - either rodio or ALSA Direct
 enum StreamType {
-    Rodio(OutputStream, rodio::OutputStreamHandle),
+    Rodio(MixerDeviceSink),
     #[cfg(target_os = "linux")]
     AlsaDirect(Arc<qbz_audio::AlsaDirectStream>),
 }
@@ -486,12 +516,12 @@ fn try_init_stream_with_backend(
 
     // Fallback to regular rodio stream (PipeWire, Pulse, ALSA via CPAL)
     match backend.create_output_stream(&config) {
-        Ok(stream) => {
+        Ok(mixer_sink) => {
             log::info!("Stream created via {:?} backend at {}Hz", backend_type, sample_rate);
-            Some(Ok(StreamType::Rodio(stream.0, stream.1)))
+            Some(Ok(StreamType::Rodio(mixer_sink)))
         }
         Err(e) => {
-            log::error!("❌ Backend stream creation failed: {}", e);
+            log::error!("Backend stream creation failed: {}", e);
             Some(Err(e))
         }
     }
@@ -844,7 +874,7 @@ impl Player {
                     let found = host.output_devices()
                         .ok()
                         .and_then(|mut devices| {
-                            devices.find(|d| d.name().ok().as_ref() == Some(name))
+                            devices.find(|d| cpal_device_name(d).as_deref() == Some(name.as_str()))
                         });
 
                     match found {
@@ -868,7 +898,7 @@ impl Player {
 
                 let device = match device {
                     Some(d) => {
-                        if let Ok(name) = d.name() {
+                        if let Some(name) = cpal_device_name(&d) {
                             log::info!("Using audio device: {}", name);
                             state.set_current_device(Some(name));
                         }
@@ -881,17 +911,19 @@ impl Player {
                     }
                 };
 
-                match OutputStream::try_from_device(&device) {
-                    Ok((stream, handle)) => {
+                match DeviceSinkBuilder::from_device(device)
+                    .and_then(|b| b.open_sink_or_fallback())
+                {
+                    Ok(mixer_sink) => {
                         log::info!("Audio output initialized successfully");
-                        Some(StreamType::Rodio(stream, handle))
+                        Some(StreamType::Rodio(mixer_sink))
                     }
                     Err(e) => {
                         log::error!("Failed to create audio output on device: {}. Trying default...", e);
-                        match OutputStream::try_default() {
-                            Ok((stream, handle)) => {
+                        match DeviceSinkBuilder::open_default_sink() {
+                            Ok(mixer_sink) => {
                                 log::info!("Fallback to default audio output succeeded");
-                                Some(StreamType::Rodio(stream, handle))
+                                Some(StreamType::Rodio(mixer_sink))
                             }
                             Err(e2) => {
                                 log::error!("Failed to create default audio output: {}", e2);
@@ -996,7 +1028,7 @@ impl Player {
                                 if (dac_passthrough || using_alsa_direct) && format_changed {
                                     let mode = if using_alsa_direct { "ALSA Direct" } else { "DAC passthrough" };
                                     log::info!(
-                                        "Sample rate/channels changed from {:?}Hz/{:?}ch to {}Hz/{}ch - recreating OutputStream ({})",
+                                        "Sample rate/channels changed from {:?}Hz/{:?}ch to {}Hz/{}ch - recreating audio stream ({})",
                                         *current_sample_rate,
                                         *current_channels,
                                         sample_rate,
@@ -1004,7 +1036,7 @@ impl Player {
                                         mode
                                     );
                                 } else {
-                                    log::info!("Creating initial OutputStream");
+                                    log::info!("Creating initial audio stream");
                                 }
                                 // Drop old stream
                                 drop(stream_opt.take());
@@ -1036,7 +1068,7 @@ impl Player {
                                             let found = host.output_devices()
                                                 .ok()
                                                 .and_then(|mut devices| {
-                                                    devices.find(|d| d.name().ok().as_ref() == Some(name))
+                                                    devices.find(|d| cpal_device_name(d).as_deref() == Some(name.as_str()))
                                                 });
 
                                             match found {
@@ -1066,17 +1098,17 @@ impl Player {
                                         };
 
                                         // Set current device name
-                                        if let Ok(name) = device.name() {
+                                        if let Some(name) = cpal_device_name(&device) {
                                             log::info!("Using audio device: {}", name);
                                             thread_state.set_current_device(Some(name));
                                         }
 
                                         create_output_stream_with_config(
-                                            &device,
+                                            device,
                                             sample_rate,
                                             channels,
                                             dac_passthrough,
-                                        ).map(|(stream, handle)| StreamType::Rodio(stream, handle))
+                                        ).map(StreamType::Rodio)
                                     }
                                 }
                             } else {
@@ -1086,7 +1118,7 @@ impl Player {
                                     host.output_devices()
                                         .ok()
                                         .and_then(|mut devices| {
-                                            devices.find(|d| d.name().ok().as_ref() == Some(name))
+                                            devices.find(|d| cpal_device_name(d).as_deref() == Some(name.as_str()))
                                         })
                                         .or_else(|| {
                                             log::warn!("Device '{}' not found, using default", name);
@@ -1103,16 +1135,16 @@ impl Player {
                                     return;
                                 };
 
-                                if let Ok(name) = device.name() {
+                                if let Some(name) = cpal_device_name(&device) {
                                     thread_state.set_current_device(Some(name));
                                 }
 
                                 create_output_stream_with_config(
-                                    &device,
+                                    device,
                                     sample_rate,
                                     channels,
                                     dac_passthrough,
-                                ).map(|(stream, handle)| StreamType::Rodio(stream, handle))
+                                ).map(StreamType::Rodio)
                             };
 
                             // Handle stream creation result
@@ -1151,7 +1183,7 @@ impl Player {
                         } else if format_changed {
                             // Format changed but DAC passthrough is disabled - reuse existing stream
                             log::info!(
-                                "Audio format changed from {:?}Hz/{:?}ch to {}Hz/{}ch - reusing OutputStream (DAC passthrough disabled, gapless enabled)",
+                                "Audio format changed from {:?}Hz/{:?}ch to {}Hz/{}ch - reusing audio stream (DAC passthrough disabled, gapless enabled)",
                                 *current_sample_rate,
                                 *current_channels,
                                 sample_rate,
@@ -1168,7 +1200,7 @@ impl Player {
                         if let Some(engine) = current_engine.take() {
                             engine.stop();
                             // Small delay to allow the audio sink to fully release its
-                            // reference to the OutputStreamHandle before creating a new sink.
+                            // reference to the mixer before creating a new player.
                             // This prevents "resource busy" errors on rapid track switches.
                             std::thread::sleep(Duration::from_millis(50));
                         }
@@ -1178,8 +1210,8 @@ impl Player {
 
                         // Create PlaybackEngine from StreamType
                         let mut engine = match stream {
-                            StreamType::Rodio(_stream, handle) => {
-                                match PlaybackEngine::new_rodio(handle) {
+                            StreamType::Rodio(ref mixer_sink) => {
+                                match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
                                     Ok(e) => {
                                         *consecutive_sink_failures = 0;
                                         thread_state.set_stream_error(false);
@@ -1353,7 +1385,7 @@ impl Player {
                                 if (dac_passthrough || using_alsa_direct) && format_changed {
                                     let mode = if using_alsa_direct { "ALSA Direct" } else { "DAC passthrough" };
                                     log::info!(
-                                        "Streaming: Sample rate/channels changed to {}Hz/{}ch - recreating OutputStream ({})",
+                                        "Streaming: Sample rate/channels changed to {}Hz/{}ch - recreating audio stream ({})",
                                         sample_rate,
                                         channels,
                                         mode
@@ -1380,7 +1412,7 @@ impl Player {
                                             host.output_devices()
                                                 .ok()
                                                 .and_then(|mut devices| {
-                                                    devices.find(|d| d.name().ok().as_ref() == Some(name))
+                                                    devices.find(|d| cpal_device_name(d).as_deref() == Some(name.as_str()))
                                                 })
                                                 .or_else(|| host.default_output_device())
                                         } else {
@@ -1393,16 +1425,16 @@ impl Player {
                                             return;
                                         };
 
-                                        if let Ok(name) = device.name() {
+                                        if let Some(name) = cpal_device_name(&device) {
                                             thread_state.set_current_device(Some(name));
                                         }
 
                                         create_output_stream_with_config(
-                                            &device,
+                                            device,
                                             sample_rate,
                                             channels,
                                             dac_passthrough,
-                                        ).map(|(stream, handle)| StreamType::Rodio(stream, handle))
+                                        ).map(StreamType::Rodio)
                                     }
                                 }
                             } else {
@@ -1412,8 +1444,8 @@ impl Player {
                                     thread_state.set_stream_error(true);
                                     return;
                                 };
-                                create_output_stream_with_config(&device, sample_rate, channels, dac_passthrough)
-                                    .map(|(stream, handle)| StreamType::Rodio(stream, handle))
+                                create_output_stream_with_config(device, sample_rate, channels, dac_passthrough)
+                                    .map(StreamType::Rodio)
                             };
 
                             match stream_result {
@@ -1446,8 +1478,8 @@ impl Player {
 
                         // Create PlaybackEngine
                         let mut engine = match stream {
-                            StreamType::Rodio(_stream, handle) => {
-                                match PlaybackEngine::new_rodio(handle) {
+                            StreamType::Rodio(ref mixer_sink) => {
+                                match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
                                     Ok(e) => {
                                         *consecutive_sink_failures = 0;
                                         thread_state.set_stream_error(false);
@@ -1639,8 +1671,8 @@ impl Player {
                             };
 
                             let mut engine = match stream {
-                                StreamType::Rodio(_stream, handle) => {
-                                    match PlaybackEngine::new_rodio(handle) {
+                                StreamType::Rodio(ref mixer_sink) => {
+                                    match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
                                         Ok(e) => e,
                                         Err(e) => {
                                             log::error!("Failed to create engine for resume: {}", e);
@@ -1760,8 +1792,8 @@ impl Player {
                         }
 
                         let mut engine = match stream {
-                            StreamType::Rodio(_stream, handle) => {
-                                match PlaybackEngine::new_rodio(handle) {
+                            StreamType::Rodio(ref mixer_sink) => {
+                                match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
                                     Ok(e) => e,
                                     Err(e) => {
                                         log::error!("Failed to create rodio engine for seek: {}", e);
@@ -1870,13 +1902,6 @@ impl Player {
                                 return;
                             }
                         };
-
-                        // Only Rodio supports sink queueing
-                        if engine.is_alsa_direct() {
-                            log::info!("Gapless: ALSA Direct backend, cannot queue — ignoring PlayNext for track {}", track_id);
-                            thread_state.set_gapless_ready(false);
-                            return;
-                        }
 
                         // Verify format compatibility (same sample rate and channels)
                         if let (Some(cur_sr), Some(cur_ch)) = (*current_sample_rate, *current_channels) {
@@ -2035,6 +2060,29 @@ impl Player {
                                         thread_state.set_gapless_next_track_id(0);
                                         gapless_pending = None;
                                         gapless_request_armed = false;
+                                    }
+                                }
+
+                                // ALSA Direct gapless: the writer thread signals transitions
+                                // via an atomic flag instead of position-based detection
+                                if let Some(ref engine) = current_engine {
+                                    if engine.take_source_transition() {
+                                        if let Some(ref pending) = gapless_pending {
+                                            log::info!(
+                                                "ALSA Direct gapless transition: track {} -> {}",
+                                                thread_state.current_track_id.load(Ordering::SeqCst),
+                                                pending.track_id
+                                            );
+                                            thread_state.current_track_id.store(pending.track_id, Ordering::SeqCst);
+                                            thread_state.duration.store(pending.duration_secs, Ordering::SeqCst);
+                                            thread_state.start_playback_timer(0);
+                                            current_audio_data = Some(pending.data.clone());
+                                            current_normalization_gain = pending.normalization_gain;
+                                            thread_state.set_normalization_gain(pending.normalization_gain);
+                                            thread_state.set_gapless_next_track_id(0);
+                                            gapless_pending = None;
+                                            gapless_request_armed = false;
+                                        }
                                     }
                                 }
 

@@ -6,6 +6,7 @@ pub const BASE_URL: &str = "https://www.qobuz.com/api.json/0.2";
 pub mod paths {
     // User
     pub const USER_LOGIN: &str = "/user/login";
+    pub const OAUTH_CALLBACK: &str = "/oauth/callback";
     pub const PURCHASE_GET_USER_PURCHASES: &str = "/purchase/getUserPurchases";
     pub const PURCHASE_GET_USER_PURCHASES_IDS: &str = "/purchase/getUserPurchasesIds";
     pub const DYNAMIC_SUGGEST: &str = "/dynamic/suggest";
@@ -20,6 +21,7 @@ pub mod paths {
     pub const ALBUM_GET: &str = "/album/get";
     pub const ALBUM_SEARCH: &str = "/album/search";
     pub const ALBUM_GET_FEATURED: &str = "/album/getFeatured";
+    pub const ALBUM_SUGGEST: &str = "/album/suggest";
 
     // Artist
     pub const ARTIST_GET: &str = "/artist/get";

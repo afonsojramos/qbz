@@ -64,6 +64,17 @@ impl RecoStoreDb {
                 CREATE INDEX IF NOT EXISTS idx_reco_events_artist ON reco_events(artist_id);
                 CREATE INDEX IF NOT EXISTS idx_reco_events_created ON reco_events(created_at);
 
+                -- Composite indexes for GROUP BY + ORDER BY queries in get_home_seeds
+                CREATE INDEX IF NOT EXISTS idx_reco_events_play_albums
+                    ON reco_events(event_type, album_id, created_at DESC)
+                    WHERE album_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_reco_events_play_tracks
+                    ON reco_events(event_type, track_id, created_at DESC)
+                    WHERE track_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_reco_events_play_artists
+                    ON reco_events(event_type, artist_id, created_at DESC)
+                    WHERE artist_id IS NOT NULL;
+
                 CREATE TABLE IF NOT EXISTS reco_scores (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     score_type TEXT NOT NULL,
@@ -79,6 +90,10 @@ impl RecoStoreDb {
                 CREATE INDEX IF NOT EXISTS idx_reco_scores_track ON reco_scores(track_id);
                 CREATE INDEX IF NOT EXISTS idx_reco_scores_album ON reco_scores(album_id);
                 CREATE INDEX IF NOT EXISTS idx_reco_scores_artist ON reco_scores(artist_id);
+
+                -- Composite index for scored lookups (score_type + item_type + ORDER BY score)
+                CREATE INDEX IF NOT EXISTS idx_reco_scores_lookup
+                    ON reco_scores(score_type, item_type, score DESC);
                 "#,
             )
             .map_err(|e| format!("Failed to initialize reco database: {}", e))?;
@@ -86,6 +101,7 @@ impl RecoStoreDb {
         // Migrations - run after base schema
         self.migrate_add_genre_id()?;
         self.migrate_add_meta_tables()?;
+        self.migrate_add_discovery_dismissals()?;
 
         Ok(())
     }
@@ -369,6 +385,74 @@ impl RecoStoreDb {
             albums.push(row.map_err(|e| format!("Failed to read favorite album row: {}", e))?);
         }
         Ok(albums)
+    }
+
+    /// Get favorite album IDs that haven't been played recently ("forgotten favorites")
+    pub fn get_forgotten_favorite_album_ids(
+        &self,
+        limit: u32,
+        recency_days: u32,
+    ) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                r#"
+                SELECT f.album_id
+                FROM reco_events f
+                WHERE f.event_type = 'favorite' AND f.album_id IS NOT NULL
+                  AND f.album_id NOT IN (
+                    SELECT DISTINCT p.album_id
+                    FROM reco_events p
+                    WHERE p.event_type = 'play'
+                      AND p.album_id IS NOT NULL
+                      AND p.created_at > datetime('now', '-' || ? || ' days')
+                  )
+                GROUP BY f.album_id
+                ORDER BY RANDOM()
+                LIMIT ?
+                "#,
+            )
+            .map_err(|e| format!("Failed to prepare forgotten favorites query: {}", e))?;
+
+        let rows = stmt
+            .query_map(params![recency_days, limit], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Failed to query forgotten favorites: {}", e))?;
+
+        let mut albums = Vec::new();
+        for row in rows {
+            albums.push(row.map_err(|e| format!("Failed to read forgotten favorite row: {}", e))?);
+        }
+        Ok(albums)
+    }
+
+    /// Get the user's most-played genres by event count
+    pub fn get_top_genre_ids(&self, limit: u32) -> Result<Vec<(u64, String)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                r#"
+                SELECT e.genre_id, COALESCE(m.genre_name, ''), COUNT(*) AS play_count
+                FROM reco_events e
+                LEFT JOIN reco_album_meta m ON e.album_id = m.album_id
+                WHERE e.genre_id IS NOT NULL AND e.genre_id > 0
+                GROUP BY e.genre_id
+                ORDER BY play_count DESC
+                LIMIT ?
+                "#,
+            )
+            .map_err(|e| format!("Failed to prepare top genres query: {}", e))?;
+
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("Failed to query top genres: {}", e))?;
+
+        let mut genres = Vec::new();
+        for row in rows {
+            genres.push(row.map_err(|e| format!("Failed to read genre row: {}", e))?);
+        }
+        Ok(genres)
     }
 
     pub fn get_favorite_track_ids(&self, limit: u32) -> Result<Vec<u64>, String> {
@@ -836,6 +920,101 @@ impl RecoStoreDb {
                 ],
             )
             .map_err(|e| format!("Failed to upsert artist meta: {}", e))?;
+        Ok(())
+    }
+
+    /// Get known artist names from the metadata cache.
+    /// Returns (qobuz_artist_id, name) pairs.
+    pub fn get_known_artist_names(&self, limit: u32) -> Result<Vec<(u64, String)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                r#"
+                SELECT artist_id, name
+                FROM reco_artist_meta
+                ORDER BY updated_at DESC
+                LIMIT ?
+                "#,
+            )
+            .map_err(|e| format!("Failed to prepare known artist names query: {}", e))?;
+
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("Failed to query known artist names: {}", e))?;
+
+        let mut artists = Vec::new();
+        for row in rows {
+            artists
+                .push(row.map_err(|e| format!("Failed to read known artist name row: {}", e))?);
+        }
+        Ok(artists)
+    }
+
+    // ============ Discovery Dismissals ============
+
+    /// Migration to add discovery_dismissals table
+    fn migrate_add_discovery_dismissals(&self) -> Result<(), String> {
+        self.conn
+            .execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS discovery_dismissals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tag TEXT NOT NULL,
+                    artist_name_normalized TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(tag, artist_name_normalized)
+                );
+                CREATE INDEX IF NOT EXISTS idx_discovery_dismissals_tag
+                    ON discovery_dismissals(tag);
+                "#,
+            )
+            .map_err(|e| format!("Failed to create discovery_dismissals table: {}", e))?;
+        Ok(())
+    }
+
+    /// Dismiss an artist for a specific tag (genre context)
+    pub fn dismiss_discovery_artist(&self, tag: &str, artist_name_normalized: &str) -> Result<(), String> {
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO discovery_dismissals (tag, artist_name_normalized, created_at) VALUES (?, ?, ?)",
+                params![tag, artist_name_normalized, created_at],
+            )
+            .map_err(|e| format!("Failed to dismiss discovery artist: {}", e))?;
+        Ok(())
+    }
+
+    /// Get all dismissed artist names for a specific tag
+    pub fn get_dismissed_artists_for_tag(&self, tag: &str) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT artist_name_normalized FROM discovery_dismissals WHERE tag = ?")
+            .map_err(|e| format!("Failed to prepare dismissed artists query: {}", e))?;
+
+        let rows = stmt
+            .query_map(params![tag], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Failed to query dismissed artists: {}", e))?;
+
+        let mut names = Vec::new();
+        for row in rows {
+            names.push(row.map_err(|e| format!("Failed to read dismissed artist row: {}", e))?);
+        }
+        Ok(names)
+    }
+
+    /// Clear all meta caches so entries re-resolve with fresh image URLs.
+    pub fn clear_meta_caches(&self) -> Result<(), String> {
+        self.conn
+            .execute_batch(
+                "DELETE FROM reco_album_meta; DELETE FROM reco_track_meta; DELETE FROM reco_artist_meta;",
+            )
+            .map_err(|e| format!("Failed to clear meta caches: {}", e))?;
         Ok(())
     }
 }

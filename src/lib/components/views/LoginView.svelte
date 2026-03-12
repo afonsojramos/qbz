@@ -3,7 +3,7 @@
   import TitleBar from '../TitleBar.svelte';
   import { t } from '$lib/i18n';
   import { setManualOffline } from '$lib/stores/offlineStore';
-  import { qobuzTosAccepted, loadTosAcceptance } from '$lib/stores/qobuzLegalStore';
+  import { qobuzTosAccepted, loadTosAcceptance, setTosAcceptance } from '$lib/stores/qobuzLegalStore';
   import { get } from 'svelte/store';
 
   interface UserInfo {
@@ -24,6 +24,7 @@
   let password = $state('');
   let rememberMe = $state(true);
   let isLoading = $state(false);
+  let isOAuthLoading = $state(false);
   let isInitializing = $state(true);
   let initStatus = $state('Connecting to Qobuz™...');
   let error = $state<string | null>(null);
@@ -105,7 +106,7 @@
       // NO legacy is_logged_in/get_user_info checks - that causes state divergence.
       initStatus = 'Initializing...';
       const status = await invoke<RuntimeStatus>('runtime_bootstrap');
-      console.log('[LoginView] runtime_bootstrap result:', status);
+      console.log('[LoginView] runtime_bootstrap: session_activated =', status.session_activated);
 
       // Check if session is fully active (authenticated + session activated)
       if (status.session_activated && status.user_id && status.user_id > 0) {
@@ -177,6 +178,16 @@
       return;
     }
 
+    // Persist ToS acceptance synchronously before login so the backend
+    // gate in require_tos_accepted() always sees the correct value.
+    // The subscribe-handler write is fire-and-forget and can lose the
+    // race if the user clicks Login immediately after checking the box.
+    try {
+      await setTosAcceptance(true);
+    } catch {
+      // If persistence fails the backend will reject login — error shown below
+    }
+
     if (!email || !password) {
       error = 'Please enter email and password';
       return;
@@ -184,6 +195,15 @@
 
     isLoading = true;
     error = null;
+
+    try {
+      // Persist ToS acceptance synchronously before backend login so the
+      // backend gate (require_tos_accepted) always sees the correct value.
+      // The subscribe-handler write is fire-and-forget and can lose the race.
+      await setTosAcceptance(true);
+    } catch {
+      // If persistence fails the backend will reject the login below
+    }
 
     try {
       // V2 manual login with blocking CoreBridge auth
@@ -197,7 +217,7 @@
         error_code?: string;
       }>('v2_manual_login', { email, password });
 
-      console.log('[LoginView] v2_manual_login response:', response);
+      console.log('[LoginView] v2_manual_login: success =', response.success);
 
       if (response.success) {
         // Validate that we have a valid user_id - NEVER allow 0
@@ -258,6 +278,65 @@
     } catch (err) {
       console.error('Failed to enable offline mode:', err);
       error = formatErrorMessage(err);
+    }
+  }
+
+  async function handleOAuthLogin() {
+    if (!get(qobuzTosAccepted)) {
+      error = $t('legal.tosRequiredToLogin');
+      return;
+    }
+
+    isOAuthLoading = true;
+    error = null;
+
+    try {
+      await setTosAcceptance(true);
+    } catch {
+      // Continue even if persistence fails
+    }
+
+    try {
+      const response = await invoke<{
+        success: boolean;
+        user_name?: string;
+        user_id?: number;
+        subscription?: string;
+        subscription_valid_until?: string | null;
+        error?: string;
+        error_code?: string;
+      }>('v2_start_oauth_login');
+
+      console.log('[LoginView] v2_start_oauth_login: success =', response.success);
+
+      if (response.success) {
+        if (!response.user_id || response.user_id === 0) {
+          console.error('[LoginView] OAuth login returned success but invalid user_id');
+          error = $t('auth.v2AuthFailed');
+          return;
+        }
+        onLoginSuccess({
+          userName: response.user_name || 'User',
+          userId: response.user_id,
+          subscription: response.subscription || 'Active',
+          subscriptionValidUntil: response.subscription_valid_until ?? null,
+        });
+      } else {
+        if (response.error_code === 'v2_auth_failed') {
+          error = $t('auth.v2AuthFailed');
+        } else if (response.error_code === 'v2_not_initialized') {
+          error = $t('auth.v2NotInitialized');
+        } else if (response.error_code === 'oauth_cancelled') {
+          error = null; // User closed the window, no error to show
+        } else {
+          error = response.error || 'Browser login failed';
+        }
+      }
+    } catch (err) {
+      console.error('OAuth login error:', err);
+      error = formatErrorMessage(err);
+    } finally {
+      isOAuthLoading = false;
     }
   }
 </script>
@@ -343,12 +422,28 @@
             <div class="error-message">{error}</div>
           {/if}
 
-          <button type="submit" class="login-btn" disabled={isLoading || !$qobuzTosAccepted}>
+          <button type="submit" class="login-btn" disabled={isLoading || isOAuthLoading || !$qobuzTosAccepted}>
             {#if isLoading}
               <div class="spinner small"></div>
-              <span>Signing in...</span>
+              <span>{$t('auth.loggingIn')}</span>
             {:else}
-              <span>Sign in with Qobuz™</span>
+              <span>{$t('auth.loginButton')}</span>
+            {/if}
+          </button>
+
+          <div class="divider"><span>or</span></div>
+
+          <button
+            type="button"
+            class="oauth-btn"
+            disabled={isLoading || isOAuthLoading || !$qobuzTosAccepted}
+            onclick={handleOAuthLogin}
+          >
+            {#if isOAuthLoading}
+              <div class="spinner small"></div>
+              <span>{$t('auth.oauthLoading')}</span>
+            {:else}
+              <span>{$t('auth.oauthButton')}</span>
             {/if}
           </button>
 
@@ -531,7 +626,7 @@
     cursor: pointer;
     font-size: 14px;
     font-weight: 500;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .offline-btn:hover {
@@ -631,6 +726,49 @@
   }
 
   .login-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
+  .divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+    margin: -4px 0;
+  }
+
+  .divider::before,
+  .divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background-color: var(--border-color, var(--bg-tertiary));
+  }
+
+  .oauth-btn {
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background-color: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--accent-primary);
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  .oauth-btn:hover:not(:disabled) {
+    background-color: var(--accent-primary);
+    color: white;
+  }
+
+  .oauth-btn:disabled {
     opacity: 0.7;
     cursor: not-allowed;
   }

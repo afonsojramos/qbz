@@ -979,6 +979,7 @@ async fn play_album(
                     artist_id: t.performer.as_ref().map(|p| p.id),
                     streamable: t.streamable,
                     source: Some("qobuz".to_string()),
+                    parental_warning: t.parental_warning,
                 }
             })
             .collect()

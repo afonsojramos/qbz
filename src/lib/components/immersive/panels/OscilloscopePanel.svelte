@@ -3,6 +3,7 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import QualityBadge from '$lib/components/QualityBadge.svelte';
+  import { getPanelFrameInterval } from '$lib/immersive/fpsConfig';
 
   interface Props {
     enabled?: boolean;
@@ -10,6 +11,7 @@
     trackTitle?: string;
     artist?: string;
     album?: string;
+    explicit?: boolean;
     quality?: string;
     bitDepth?: number;
     samplingRate?: number;
@@ -24,6 +26,7 @@
     trackTitle = '',
     artist = '',
     album = '',
+    explicit = false,
     quality,
     bitDepth,
     samplingRate,
@@ -47,7 +50,7 @@
   const SMOOTHING = 0.3;
 
   let lastRenderTime = 0;
-  const FRAME_INTERVAL = 1000 / 30;
+  const FRAME_INTERVAL = getPanelFrameInterval('oscilloscope');
 
   // Colors extracted from artwork
   let colorLeft = $state({ r: 0, g: 220, b: 160 });
@@ -269,6 +272,9 @@
   <div class="bottom-info">
     <div class="track-meta">
       <span class="track-title">{trackTitle}</span>
+      {#if explicit}
+        <span class="explicit-badge" title="Explicit"></span>
+      {/if}
       {#if album}
         <span class="track-album">{album}</span>
       {/if}
@@ -378,5 +384,16 @@
       width: 56px;
       height: 56px;
     }
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-primary, white);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 </style>

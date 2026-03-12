@@ -162,18 +162,20 @@ function applyColorAdjustments(
   const ctx = canvas.getContext('2d');
   if (!ctx) return sourceCanvas;
 
-  // First pass: strong saturation boost, moderate brightness
-  ctx.filter = 'saturate(2.5) brightness(0.85) contrast(1.1)';
+  // First pass: saturation boost, moderate brightness
+  ctx.filter = 'saturate(2.0) brightness(0.85) contrast(1.1)';
   ctx.drawImage(sourceCanvas, 0, 0);
 
-  // Second pass: normalize color range and lift shadows
+  // Second pass: brightness-aware normalization
+  // Dark artwork stays dark (preserves mood), colorful artwork gets full expansion
   const imageData = ctx.getImageData(0, 0, size, size);
   const data = imageData.data;
 
-  // Find actual min/max for each channel to normalize
+  // Measure source: per-channel range + average brightness
   let minR = 255, maxR = 0;
   let minG = 255, maxG = 0;
   let minB = 255, maxB = 0;
+  let totalBrightness = 0;
 
   for (let i = 0; i < data.length; i += 4) {
     minR = Math.min(minR, data[i]);
@@ -182,26 +184,46 @@ function applyColorAdjustments(
     maxG = Math.max(maxG, data[i + 1]);
     minB = Math.min(minB, data[i + 2]);
     maxB = Math.max(maxB, data[i + 2]);
+    totalBrightness += (data[i] + data[i + 1] + data[i + 2]) / 3;
   }
 
-  // Target range: 30-240 (preserve some headroom, lift shadows)
+  const pixelCount = size * size;
+  const avgBrightness = totalBrightness / pixelCount;
+
+  // Normalization strength scales with source brightness:
+  // Very dark (avg < 20): ~0.15 strength (mostly gentle lift, preserve darkness)
+  // Medium (avg ~80): ~1.0 strength (full normalization)
+  // Already bright: 1.0 (full normalization)
+  const normStrength = Math.min(1.0, avgBrightness / 80);
+
   const targetMin = 30;
   const targetMax = 240;
   const targetRange = targetMax - targetMin;
-
-  // Calculate normalization factors per channel
   const rangeR = maxR - minR || 1;
   const rangeG = maxG - minG || 1;
   const rangeB = maxB - minB || 1;
 
+  // Gentle lift factor for dark artwork (1.5x brightness)
+  const liftFactor = 1.5;
+
   for (let i = 0; i < data.length; i += 4) {
-    // Normalize each channel to target range
-    data[i] = targetMin + ((data[i] - minR) / rangeR) * targetRange;
-    data[i + 1] = targetMin + ((data[i + 1] - minG) / rangeG) * targetRange;
-    data[i + 2] = targetMin + ((data[i + 2] - minB) / rangeB) * targetRange;
+    // Full normalization target
+    const normR = targetMin + ((data[i] - minR) / rangeR) * targetRange;
+    const normG = targetMin + ((data[i + 1] - minG) / rangeG) * targetRange;
+    const normB = targetMin + ((data[i + 2] - minB) / rangeB) * targetRange;
+
+    // Gentle lift target (preserves relative color, just brighter)
+    const liftR = Math.min(255, data[i] * liftFactor);
+    const liftG = Math.min(255, data[i + 1] * liftFactor);
+    const liftB = Math.min(255, data[i + 2] * liftFactor);
+
+    // Blend: dark artwork → mostly lift, bright artwork → full normalization
+    data[i] = liftR + (normR - liftR) * normStrength;
+    data[i + 1] = liftG + (normG - liftG) * normStrength;
+    data[i + 2] = liftB + (normB - liftB) * normStrength;
 
     // Boost reds slightly for warmth
-    data[i] = Math.min(255, data[i] * 1.12);
+    data[i] = Math.min(255, data[i] * 1.08);
   }
 
   ctx.putImageData(imageData, 0, 0);
@@ -244,7 +266,7 @@ function applyVignette(
  * Generate an atmospheric color field from artwork.
  * The result must be COMPLETELY UNRECOGNIZABLE.
  */
-async function generateAtmosphere(
+export async function generateAtmosphere(
   imageUrl: string,
   signal?: AbortSignal
 ): Promise<string> {
@@ -278,18 +300,28 @@ async function generateAtmosphere(
 
       try {
         // === TRANSFORMATION PIPELINE ===
+        // Strategy: draw artwork at TINY resolution (8x8) to physically
+        // destroy ALL structure. No CSS filter:blur() dependency —
+        // the downscale itself is the blur. Then scale up with smoothing.
 
-        // Step 1: Extract random NON-CENTERED crop
-        // Use small initial size - we're destroying detail anyway
-        const INITIAL_SIZE = 64;
-        const croppedCanvas = extractRandomCrop(img, INITIAL_SIZE, imageUrl);
+        // Step 1: Capture color palette at 8x8 (64 pixels total)
+        // At this resolution, no artwork structure can survive
+        const TINY_SIZE = 8;
+        const tinyCanvas = document.createElement('canvas');
+        tinyCanvas.width = TINY_SIZE;
+        tinyCanvas.height = TINY_SIZE;
+        const tinyCtx = tinyCanvas.getContext('2d');
+        if (!tinyCtx) {
+          reject(new Error('Could not get canvas context'));
+          return;
+        }
+        tinyCtx.imageSmoothingEnabled = true;
+        tinyCtx.imageSmoothingQuality = 'high';
+        tinyCtx.drawImage(img, 0, 0, TINY_SIZE, TINY_SIZE);
 
-        // Step 2: First blur pass at small size (very efficient)
-        // High blur radius relative to size destroys all structure
-        const smallBlurred = applyExtremeBlur(croppedCanvas, 3, 12);
-
-        // Step 3: Scale up to final size
-        const FINAL_SIZE = 256;
+        // Step 2: Scale up to final size with high-quality smoothing
+        // Bilinear interpolation creates smooth gradients from the 8x8 grid
+        const FINAL_SIZE = 128;
         const scaledCanvas = document.createElement('canvas');
         scaledCanvas.width = FINAL_SIZE;
         scaledCanvas.height = FINAL_SIZE;
@@ -298,20 +330,18 @@ async function generateAtmosphere(
           reject(new Error('Could not get canvas context'));
           return;
         }
-
-        // Bilinear interpolation during scale-up adds more blur
         scaledCtx.imageSmoothingEnabled = true;
         scaledCtx.imageSmoothingQuality = 'high';
-        scaledCtx.drawImage(smallBlurred, 0, 0, FINAL_SIZE, FINAL_SIZE);
+        scaledCtx.drawImage(tinyCanvas, 0, 0, FINAL_SIZE, FINAL_SIZE);
 
-        // Step 4: Additional blur at final size for smoothness
-        const finalBlurred = applyExtremeBlur(scaledCanvas, 2, 20);
+        // Step 3: One blur pass for extra smoothness (optional polish)
+        const finalBlurred = applyExtremeBlur(scaledCanvas, 1, 16);
 
-        // Step 5: Apply color adjustments
+        // Step 4: Apply color adjustments
         const colorAdjusted = applyColorAdjustments(finalBlurred);
 
-        // Step 6: Apply subtle vignette
-        const final = applyVignette(colorAdjusted, 0.25);
+        // Step 5: Apply subtle vignette
+        const final = applyVignette(colorAdjusted, 0.20);
 
         // Convert to data URL
         const dataUrl = final.toDataURL('image/jpeg', 0.9);

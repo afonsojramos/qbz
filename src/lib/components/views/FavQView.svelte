@@ -1,9 +1,10 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount, onDestroy } from 'svelte';
-  import { ArrowLeft, Info, ListPlus, Play, RefreshCw, Search, Shuffle, X } from 'lucide-svelte';
+  import { ArrowLeft, Info, ListPlus, Play, RefreshCw, Search, Shuffle, X, CheckSquare } from 'lucide-svelte';
   import PlaylistModal from '$lib/components/PlaylistModal.svelte';
   import TrackRow from '$lib/components/TrackRow.svelte';
+  import BulkActionBar from '$lib/components/BulkActionBar.svelte';
   import { t } from '$lib/i18n';
   import { formatDuration, getQobuzImage } from '$lib/adapters/qobuzAdapters';
   import { showToast } from '$lib/stores/toastStore';
@@ -93,6 +94,46 @@
   let emptyFavorites = $state(false);
   let autoRunDone = false;
   let searchQuery = $state('');
+
+  // Multi-select
+  let multiSelectMode = $state(false);
+  let multiSelectedIds = $state(new Set<number>());
+
+  function toggleMultiSelectMode() {
+    multiSelectMode = !multiSelectMode;
+    if (!multiSelectMode) multiSelectedIds = new Set();
+  }
+
+  function toggleMultiSelect(id: number) {
+    const next = new Set(multiSelectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    multiSelectedIds = next;
+  }
+
+  async function handleBulkPlayNext() {
+    const selected = filteredTracks.filter(trk => multiSelectedIds.has(trk.id));
+    await invoke('v2_add_tracks_to_queue_next', { tracks: buildQueueTracks(selected) });
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkPlayLater() {
+    const selected = filteredTracks.filter(trk => multiSelectedIds.has(trk.id));
+    await invoke('v2_add_tracks_to_queue', { tracks: buildQueueTracks(selected) });
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkAddToPlaylist() {
+    const trackIds = filteredTracks.filter(trk => multiSelectedIds.has(trk.id)).map(trk => trk.id);
+    if (trackIds.length === 0) return;
+    try {
+      userPlaylists = await invoke<Playlist[]>('v2_get_user_playlists');
+      playlistModalTrackIds = trackIds;
+      showPlaylistModal = true;
+    } catch (err) {
+      error = err instanceof Error ? err.message : $t('yourMixes.errors.playlistsLoadFailed');
+    }
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
 
   function getLocalDateKey(date: Date = new Date()): string {
     const year = date.getFullYear();
@@ -249,14 +290,18 @@
 
     if (queueIndex < 0) return;
 
-    await setPlaybackContext(
-      'fav_q',
-      'favq',
-      'FavQ',
-      'qobuz',
-      queueTrackIds,
-      queueIndex
-    );
+    try {
+      await setPlaybackContext(
+        'fav_q',
+        'favq',
+        'FavQ',
+        'qobuz',
+        queueTrackIds,
+        queueIndex
+      );
+    } catch (err) {
+      console.error('Failed to set playback context:', err);
+    }
 
     try {
       await invoke('v2_set_queue', { tracks: queueTracks, startIndex: queueIndex });
@@ -384,6 +429,15 @@
         <button class="action-btn-circle" onclick={() => generateFavQ('none')} disabled={loading} title={$t('actions.refresh')}>
           <RefreshCw size={18} />
         </button>
+        <button
+          class="action-btn-circle"
+          class:is-active={multiSelectMode}
+          onclick={toggleMultiSelectMode}
+          disabled={loading || filteredTracks.length === 0}
+          title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+        >
+          <CheckSquare size={18} />
+        </button>
       </div>
     </div>
   </div>
@@ -444,7 +498,11 @@
             showArtwork={true}
             artworkUrl={getQobuzImage(track.album?.image)}
             isPlaying={isPlaybackActive && activeTrackId === track.id}
+            isActiveTrack={activeTrackId === track.id}
             isBlacklisted={trackBlacklisted}
+            selectable={multiSelectMode}
+            selected={multiSelectedIds.has(track.id)}
+            onToggleSelect={() => toggleMultiSelect(track.id)}
             hideDownload={trackBlacklisted}
             hideFavorite={trackBlacklisted}
             downloadStatus={cacheStatus.status}
@@ -473,6 +531,13 @@
             }}
           />
         {/each}
+        <BulkActionBar
+          count={multiSelectedIds.size}
+          onPlayNext={handleBulkPlayNext}
+          onPlayLater={handleBulkPlayLater}
+          onAddToPlaylist={handleBulkAddToPlaylist}
+          onClearSelection={() => { multiSelectedIds = new Set(); }}
+        />
       </div>
     {/if}
   {/if}
@@ -495,8 +560,7 @@
 
 <style>
   .favq-view {
-    padding: 24px;
-    padding-bottom: 100px;
+    padding: 8px 24px 100px 24px;
     color: var(--text-primary);
     height: 100%;
     overflow-y: auto;
@@ -512,12 +576,14 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 16px;
+    padding: 0;
     background: none;
     border: none;
-    color: var(--text-secondary);
+    color: var(--text-muted);
     cursor: pointer;
     font-size: 14px;
+    margin-top: 24px;
+    margin-bottom: 24px;
     transition: color 150ms ease;
   }
 

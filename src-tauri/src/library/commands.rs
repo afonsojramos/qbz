@@ -2626,7 +2626,16 @@ pub async fn library_backfill_downloads(
             continue;
         }
 
-        // Track doesn't exist - insert as new
+        // Track doesn't exist - extract track/disc number from file tags
+        let (track_num, disc_num) = match MetadataExtractor::extract(std::path::Path::new(&file_path)) {
+            Ok(meta) => (meta.track_number, meta.disc_number),
+            Err(e) => {
+                log::warn!("Could not extract metadata from {}: {}", file_path, e);
+                (None, None)
+            }
+        };
+
+        // Insert as new
         match library_db.insert_qobuz_cached_track_direct(
             track_id,
             &title,
@@ -2636,6 +2645,8 @@ pub async fn library_backfill_downloads(
             &file_path,
             bit_depth,
             sample_rate,
+            track_num,
+            disc_num,
         ) {
             Ok(_) => report.added_tracks += 1,
             Err(e) => {

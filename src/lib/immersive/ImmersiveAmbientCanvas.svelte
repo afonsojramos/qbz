@@ -34,6 +34,7 @@
     handleContextRestored,
     getConfig,
   } from './ImmersiveRenderer';
+  import { getPanelFps, getPanelFrameInterval } from './fpsConfig';
 
   // Props
   interface Props {
@@ -80,10 +81,9 @@
   let lastFrameTime = 0;
   let isVisible = true;
 
-  // Frame throttling for power efficiency
-  // 15fps is enough for slow ambient motion, saves significant CPU
-  const TARGET_FPS = 15;
-  const FRAME_INTERVAL = 1000 / TARGET_FPS;
+  // Frame throttling — read user preference (0 = disabled, default 60)
+  const ambientFps = getPanelFps('ambient');
+  const FRAME_INTERVAL = getPanelFrameInterval('ambient');
 
   /**
    * Initialize WebGL resources.
@@ -251,11 +251,19 @@
    */
   function startAnimation(): void {
     if (isAnimating || !isInitialized) return;
+
+    // Animation disabled — render a single static frame
+    if (ambientFps === 0) {
+      render();
+      console.log('[ImmersiveCanvas] Animation disabled, rendered static frame');
+      return;
+    }
+
     isAnimating = true;
     lastFrameTime = performance.now();
     startTime = performance.now(); // Reset time for animation
     animationFrameId = requestAnimationFrame(animationLoop);
-    console.log('[ImmersiveCanvas] Animation started, intensity:', intensity ?? getConfig().ambientIntensity);
+    console.log('[ImmersiveCanvas] Animation started at', ambientFps, 'fps, intensity:', intensity ?? getConfig().ambientIntensity);
   }
 
   /**

@@ -12,10 +12,12 @@ import { invoke } from '@tauri-apps/api/core';
 
 const STORAGE_KEY_HIDE = 'qbz-hide-titlebar';
 const STORAGE_KEY_SYSTEM = 'qbz-use-system-titlebar';
+const STORAGE_KEY_WINDOW_CONTROLS = 'qbz-show-window-controls';
 
 // State
 let hideTitleBar = false;
 let useSystemTitleBar = false;
+let showWindowControls = true;
 
 // Listeners
 const listeners = new Set<() => void>();
@@ -39,6 +41,11 @@ export function initTitleBarStore(): void {
     const savedSystem = localStorage.getItem(STORAGE_KEY_SYSTEM);
     if (savedSystem !== null) {
       useSystemTitleBar = savedSystem === 'true';
+    }
+
+    const savedControls = localStorage.getItem(STORAGE_KEY_WINDOW_CONTROLS);
+    if (savedControls !== null) {
+      showWindowControls = savedControls !== 'false';
     }
     // Sync localStorage value to Rust backend so it's available at next
     // startup (before window creation). Handles migration from the
@@ -85,10 +92,30 @@ export function shouldShowTitleBar(): boolean {
 
 /**
  * Get the title bar height for layout calculations
- * Returns 0 if title bar is hidden or system title bar is active, 32 otherwise
+ * Returns 0 if title bar is hidden or system title bar is active, 40 otherwise
  */
 export function getTitleBarHeight(): number {
-  return (hideTitleBar || useSystemTitleBar) ? 0 : 32;
+  return (hideTitleBar || useSystemTitleBar) ? 0 : 40;
+}
+
+/**
+ * Get whether to show window control buttons (minimize/maximize/close)
+ */
+export function getShowWindowControls(): boolean {
+  return showWindowControls;
+}
+
+/**
+ * Set whether to show window control buttons
+ */
+export function setShowWindowControls(value: boolean): void {
+  showWindowControls = value;
+  try {
+    localStorage.setItem(STORAGE_KEY_WINDOW_CONTROLS, String(value));
+  } catch (e) {
+    console.error('[TitleBarStore] Failed to save window controls setting:', e);
+  }
+  notifyListeners();
 }
 
 /**
@@ -129,6 +156,7 @@ export interface TitleBarState {
   hideTitleBar: boolean;
   useSystemTitleBar: boolean;
   showTitleBar: boolean;
+  showWindowControls: boolean;
   titleBarHeight: number;
 }
 
@@ -137,6 +165,7 @@ export function getTitleBarState(): TitleBarState {
     hideTitleBar,
     useSystemTitleBar,
     showTitleBar: shouldShowTitleBar(),
+    showWindowControls,
     titleBarHeight: getTitleBarHeight()
   };
 }

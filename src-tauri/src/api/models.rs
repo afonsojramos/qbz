@@ -625,6 +625,8 @@ pub struct PurchaseTrack {
     pub streamable: bool,
     #[serde(default)]
     pub downloaded: bool,
+    #[serde(default)]
+    pub downloaded_format_ids: Vec<u32>,
     #[serde(default, deserialize_with = "lenient_option")]
     pub purchased_at: Option<i64>,
 }
@@ -689,6 +691,13 @@ pub struct RadioResponse {
     pub track_count: Option<u32>,
     #[serde(default, deserialize_with = "lenient_page_flexible")]
     pub tracks: SearchResultsPage<Track>,
+}
+
+/// Album suggestion response from /album/suggest
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumSuggestResponse {
+    pub algorithm: Option<String>,
+    pub albums: Option<SearchResultsPage<Album>>,
 }
 
 /// Favorites container

@@ -1,5 +1,6 @@
 <script lang="ts">
   import QualityBadge from '$lib/components/QualityBadge.svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
 
   interface QueueTrack {
     id: string | number;
@@ -13,6 +14,7 @@
     trackTitle: string;
     artist: string;
     album?: string;
+    explicit?: boolean;
     isPlaying?: boolean;
     quality?: string;
     bitDepth?: number;
@@ -31,6 +33,7 @@
     trackTitle,
     artist,
     album,
+    explicit = false,
     isPlaying = false,
     quality,
     bitDepth,
@@ -76,18 +79,29 @@
   });
 
   // Track previous index for animation direction
-  let previousIndex = $state(queueCurrentIndex);
+  let previousIndex = $state(-1);
   let animationDirection = $state<'left' | 'right' | null>(null);
+  let animationTimeout: ReturnType<typeof setTimeout> | null = null;
 
   $effect(() => {
+    if (previousIndex === -1) {
+      // First run: initialize without animating
+      previousIndex = queueCurrentIndex;
+      return;
+    }
     if (queueCurrentIndex !== previousIndex) {
       animationDirection = queueCurrentIndex > previousIndex ? 'left' : 'right';
       previousIndex = queueCurrentIndex;
 
-      // Reset animation direction after animation completes
-      setTimeout(() => {
+      if (animationTimeout) clearTimeout(animationTimeout);
+      animationTimeout = setTimeout(() => {
         animationDirection = null;
+        animationTimeout = null;
       }, 500);
+
+      return () => {
+        if (animationTimeout) { clearTimeout(animationTimeout); animationTimeout = null; }
+      };
     }
   });
 
@@ -113,7 +127,7 @@
         title={item.position === 0 ? undefined : `${item.title} - ${item.artist}`}
       >
         <div class="cover-wrapper">
-          <img src={item.artwork} alt={item.title} class="cover-image" />
+          <img use:cachedSrc={item.artwork} alt={item.title} class="cover-image" />
           <div class="cover-reflection"></div>
         </div>
       </button>
@@ -132,7 +146,12 @@
         <span>Now Playing</span>
       </div>
     {/if}
-    <h1 class="track-title">{trackTitle}</h1>
+    <div class="track-title-row">
+      <h1 class="track-title">{trackTitle}</h1>
+      {#if explicit}
+        <span class="explicit-badge" title="Explicit"></span>
+      {/if}
+    </div>
     <p class="track-artist">{artist}</p>
     {#if album}
       <p class="track-album">{album}</p>
@@ -178,7 +197,7 @@
     border: none;
     padding: 0;
     cursor: pointer;
-    transition: all 500ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 500ms cubic-bezier(0.4, 0, 0.2, 1), opacity 500ms cubic-bezier(0.4, 0, 0.2, 1);
     transform-style: preserve-3d;
   }
 
@@ -339,12 +358,31 @@
     50% { transform: scaleY(1); }
   }
 
+  .track-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
   .track-title {
     font-size: clamp(20px, 3vw, 28px);
     font-weight: 700;
     color: var(--text-primary, white);
     margin: 0;
     text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    opacity: 0.45;
+    background-color: var(--text-primary, white);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
   }
 
   .track-artist {

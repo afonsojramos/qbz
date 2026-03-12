@@ -68,8 +68,8 @@
   const tickerSpeed = 40; // pixels per second
   const deviceNameDuration = $derived(deviceNameOverflow > 0 ? `${(deviceNameOverflow + 16) / tickerSpeed}s` : '0s');
 
-  // Derived state
-  const currentDevice = $derived(outputStatus?.device_name ?? null);
+  // Derived state: active stream device, or configured device from settings as fallback
+  const currentDevice = $derived(outputStatus?.device_name ?? settings?.output_device ?? null);
 
   // Get PipeWire description for current device
   const pipewireDescription = $derived.by(() => {
@@ -94,7 +94,7 @@
 
   // Use PipeWire/ALSA description if available, otherwise fall back to heuristic
   const prettyDeviceName = $derived(
-    pipewireDescription ?? alsaDescription ?? (currentDevice ? getDevicePrettyName(currentDevice) : 'No device')
+    pipewireDescription ?? alsaDescription ?? (currentDevice ? getDevicePrettyName(currentDevice) : 'System Default')
   );
 
   const isExternal = $derived(currentDevice ? isExternalDevice(currentDevice) : false);
@@ -182,15 +182,19 @@
       castProtocol = getConnectedProtocol();
     });
 
-    // Lightweight polling: ONLY update hardware status (no device enumeration)
-    // This reads /proc/asound which is very cheap, no CPAL/ALSA enumeration
+    // Lightweight polling: update hardware status + output device name
     const pollInterval = setInterval(async () => {
       // Only poll if using bit-perfect modes AND not casting
       if (!castConnected && (settings?.dac_passthrough || settings?.backend_type === 'Alsa')) {
         try {
-          hardwareStatus = await invoke<HardwareAudioStatus>('v2_get_hardware_audio_status').catch(() => null);
-        } catch (err) {
-          // Silently fail - don't spam console
+          const [hwStatus, status] = await Promise.all([
+            invoke<HardwareAudioStatus>('v2_get_hardware_audio_status').catch(() => null),
+            invoke<AudioOutputStatus>('get_audio_output_status').catch(() => null),
+          ]);
+          hardwareStatus = hwStatus;
+          if (status) outputStatus = status;
+        } catch {
+          // Silently fail
         }
       }
     }, 1000);
@@ -363,7 +367,7 @@
     background: transparent;
     color: var(--alpha-15);
     border: 1px solid var(--alpha-6);
-    transition: all 200ms ease;
+    transition: color 200ms ease, background-color 200ms ease, border-color 200ms ease, opacity 200ms ease;
     cursor: help;
   }
 
@@ -471,7 +475,7 @@
   .tooltip-raw {
     font-size: 9px;
     color: var(--alpha-30);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-sans);
     margin-top: 4px;
     white-space: nowrap;
     overflow: hidden;
@@ -558,6 +562,6 @@
   .setting-detail {
     font-size: 10px;
     color: var(--alpha-50);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-sans);
   }
 </style>

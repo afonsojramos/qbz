@@ -135,7 +135,7 @@ jobs:
           Terminal=false
           Type=Application
           Categories=AudioVideo;Audio;Music;Player;
-          Keywords=music;audio;qobuz;hifi;streaming;audiophile;
+          Keywords=music;audio;qobuz;hifi;streaming;audiophile;flac;
           StartupWMClass=com.blitzfc.qbz
           StartupNotify=true
           MimeType=x-scheme-handler/qbz;x-scheme-handler/qobuzapp;
@@ -156,3 +156,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          prerelease: ${{ contains(steps.release.outputs.version, '-rc') }}
+          make_latest: ${{ contains(steps.release.outputs.version, '-rc') && 'false' || 'true' }}
+
+      - name: Trigger APT repo update
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.APT_REPO_TOKEN }}
+          repository: vicrodh/qbz-apt
+          event-type: new-release
+          client-payload: '{"tag": "${{ github.ref_name }}"}'

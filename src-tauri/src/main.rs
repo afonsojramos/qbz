@@ -51,13 +51,42 @@ fn is_nvidia_gpu() -> bool {
         }
     }
 
-    // Method 3: Check for NVIDIA devices in lspci output (requires external command)
-    // Skip this for now to avoid external dependencies
+    false
+}
 
+#[cfg(target_os = "linux")]
+fn is_amd_gpu() -> bool {
+    if std::path::Path::new("/sys/module/amdgpu").exists() {
+        return true;
+    }
+    if let Ok(modules) = std::fs::read_to_string("/proc/modules") {
+        if modules.lines().any(|line| line.starts_with("amdgpu")) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn is_intel_gpu() -> bool {
+    if std::path::Path::new("/sys/module/i915").exists() {
+        return true;
+    }
+    if let Ok(modules) = std::fs::read_to_string("/proc/modules") {
+        if modules.lines().any(|line| line.starts_with("i915")) {
+            return true;
+        }
+    }
     false
 }
 
 fn main() {
+    // CLI flag: --autoconfig-graphics — detect environment and apply optimal settings
+    if std::env::args().any(|a| a == "--autoconfig-graphics") {
+        qbz_nix_lib::autoconfig_graphics::run();
+        return;
+    }
+
     // CLI flag: --reset-graphics — resets ALL graphics/composition settings to defaults
     if std::env::args().any(|a| a == "--reset-graphics") {
         eprintln!("[QBZ] Resetting all graphics settings to defaults...");
@@ -75,6 +104,12 @@ fn main() {
                 if let Err(e) = store.set_gdk_dpi_scale(None) {
                     errors.push(format!("gdk_dpi_scale: {}", e));
                 }
+                if let Err(e) = store.set_gsk_renderer(None) {
+                    errors.push(format!("gsk_renderer: {}", e));
+                }
+                if let Err(e) = store.set_hardware_acceleration(true) {
+                    errors.push(format!("hardware_acceleration: {}", e));
+                }
             }
             Err(e) => errors.push(format!("graphics settings store: {}", e)),
         }
@@ -91,11 +126,14 @@ fn main() {
 
         if errors.is_empty() {
             eprintln!("[QBZ] All graphics settings have been reset:");
+            eprintln!("[QBZ]   - hardware_acceleration: true");
             eprintln!("[QBZ]   - force_x11: false");
             eprintln!("[QBZ]   - gdk_scale: auto");
             eprintln!("[QBZ]   - gdk_dpi_scale: auto");
+            eprintln!("[QBZ]   - gsk_renderer: auto");
             eprintln!("[QBZ]   - force_dmabuf: false");
             eprintln!("[QBZ] You can now start QBZ normally.");
+            eprintln!("[QBZ] Tip: Run 'qbz --autoconfig-graphics' to auto-detect optimal settings.");
         } else {
             eprintln!("[QBZ] Some settings could not be reset:");
             for e in &errors {
@@ -170,8 +208,15 @@ fn main() {
         let is_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
             || std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland");
         let has_nvidia = is_nvidia_gpu();
+        let has_amd = is_amd_gpu();
+        let has_intel = is_intel_gpu();
         let is_vm = is_virtual_machine();
+        let is_flatpak = std::path::Path::new("/.flatpak-info").exists();
         let force_software = std::env::var("QBZ_SOFTWARE_RENDER").as_deref() == Ok("1");
+
+        if is_flatpak {
+            qbz_nix_lib::logging::log_startup("[QBZ] Running inside Flatpak sandbox");
+        }
 
         // Graphics settings from DB (force_x11, scaling)
         // Track if we're using fallback defaults (for UI visibility)
@@ -206,9 +251,10 @@ fn main() {
             }
         };
 
-        // Hardware acceleration override (env var only — not a DB setting anymore).
-        // Default: ON (v1.1.9 behavior). QBZ_HARDWARE_ACCEL=0 is the nuclear
-        // opt-out that disables all GPU compositing and DMA-BUF everywhere.
+        // Hardware acceleration: DB value is the default, env var overrides.
+        // QBZ_HARDWARE_ACCEL=0 is the nuclear opt-out that disables all GPU
+        // compositing and DMA-BUF everywhere.
+        let hw_accel_db = graphics_db.as_ref().map(|s| s.hardware_acceleration).unwrap_or(true);
         let hardware_accel = match std::env::var("QBZ_HARDWARE_ACCEL").as_deref() {
             Ok("0") => {
                 qbz_nix_lib::logging::log_startup(
@@ -216,14 +262,20 @@ fn main() {
                 );
                 false
             }
-            // "1" is the default behavior, log only if explicitly set
             Ok("1") => {
                 qbz_nix_lib::logging::log_startup(
                     "[QBZ] Env override: QBZ_HARDWARE_ACCEL=1 (full GPU, all safety bypassed)",
                 );
                 true
             }
-            _ => true, // Default: hardware acceleration ON (v1.1.9 behavior)
+            _ => {
+                if !hw_accel_db {
+                    qbz_nix_lib::logging::log_startup(
+                        "[QBZ] Hardware acceleration disabled via settings (DB)",
+                    );
+                }
+                hw_accel_db
+            }
         };
 
         // Developer settings: force_dmabuf override (from Settings > Developer Mode)
@@ -277,6 +329,12 @@ fn main() {
         if has_nvidia {
             qbz_nix_lib::logging::log_startup("[QBZ] NVIDIA GPU detected");
         }
+        if has_amd {
+            qbz_nix_lib::logging::log_startup("[QBZ] AMD GPU detected");
+        }
+        if has_intel {
+            qbz_nix_lib::logging::log_startup("[QBZ] Intel GPU detected");
+        }
         if is_vm {
             qbz_nix_lib::logging::log_startup("[QBZ] Virtual machine detected");
         }
@@ -289,8 +347,8 @@ fn main() {
             );
         }
         qbz_nix_lib::logging::log_startup(&format!(
-            "[QBZ] Graphics config: wayland={}, nvidia={}, force_x11={}, hw_accel={}, fallback={}",
-            is_wayland, has_nvidia, force_x11, hardware_accel, graphics_using_fallback
+            "[QBZ] Graphics config: wayland={}, nvidia={}, amd={}, intel={}, force_x11={}, hw_accel={}, fallback={}",
+            is_wayland, has_nvidia, has_amd, has_intel, force_x11, hardware_accel, graphics_using_fallback
         ));
 
         // Store startup state for frontend queries
@@ -298,6 +356,8 @@ fn main() {
             graphics_using_fallback,
             is_wayland,
             has_nvidia,
+            has_amd,
+            has_intel,
             is_vm,
             hardware_accel,
             force_x11,
@@ -321,18 +381,47 @@ fn main() {
             qbz_nix_lib::logging::log_startup("[QBZ] Forcing X11 backend on Wayland session");
             std::env::set_var("GDK_BACKEND", "x11");
 
-            // Apply XWayland display scaling overrides if configured
+            // GDK_SCALE is integer-only and only meaningful on X11/XWayland
             if let Some(ref gdk_scale) = graphics_db.as_ref().and_then(|s| s.gdk_scale.clone()) {
                 std::env::set_var("GDK_SCALE", gdk_scale);
                 qbz_nix_lib::logging::log_startup(&format!("[QBZ] GDK_SCALE={}", gdk_scale));
             }
-            if let Some(ref gdk_dpi) = graphics_db.as_ref().and_then(|s| s.gdk_dpi_scale.clone()) {
-                std::env::set_var("GDK_DPI_SCALE", gdk_dpi);
-                qbz_nix_lib::logging::log_startup(&format!("[QBZ] GDK_DPI_SCALE={}", gdk_dpi));
-            }
         } else if is_wayland && std::env::var_os("GDK_BACKEND").is_none() {
             std::env::set_var("GDK_BACKEND", "wayland");
             std::env::set_var("GTK_CSD", "1");
+
+            // In Flatpak on Wayland, unset DISPLAY to prevent WebKitGTK from
+            // internally falling back to XWayland for rendering. XWayland uses
+            // CPU-GPU texture round-trips that degrade CSS blur performance.
+            // See: https://github.com/vicrodh/qbz/issues/127
+            if is_flatpak && std::env::var_os("DISPLAY").is_some() {
+                qbz_nix_lib::logging::log_startup(
+                    "[QBZ] Flatpak+Wayland: unsetting DISPLAY to prevent XWayland fallback",
+                );
+                std::env::remove_var("DISPLAY");
+            }
+        }
+
+        // GDK_DPI_SCALE is a float multiplier that works on ALL backends
+        // (X11, XWayland, and native Wayland). Apply it unconditionally so
+        // users can compensate for their DE scale without switching backends.
+        if let Some(ref gdk_dpi) = graphics_db.as_ref().and_then(|s| s.gdk_dpi_scale.clone()) {
+            std::env::set_var("GDK_DPI_SCALE", gdk_dpi);
+            qbz_nix_lib::logging::log_startup(&format!("[QBZ] GDK_DPI_SCALE={}", gdk_dpi));
+        }
+
+        // GSK_RENDERER: controls GTK4's rendering backend (gl, ngl, vulkan, cairo)
+        // DB value is default; env var GSK_RENDERER overrides if already set.
+        if std::env::var_os("GSK_RENDERER").is_none() {
+            if let Some(ref renderer) = graphics_db.as_ref().and_then(|s| s.gsk_renderer.clone()) {
+                std::env::set_var("GSK_RENDERER", renderer);
+                qbz_nix_lib::logging::log_startup(&format!("[QBZ] GSK_RENDERER={}", renderer));
+            }
+        } else {
+            qbz_nix_lib::logging::log_startup(&format!(
+                "[QBZ] GSK_RENDERER={} (env var override)",
+                std::env::var("GSK_RENDERER").unwrap_or_default()
+            ));
         }
 
         // Log effective display server AFTER GDK backend selection
@@ -382,17 +471,22 @@ fn main() {
         } else {
             // Default path: v1.1.9 targeted mitigations
 
-            // Wayland compositing: disable to prevent protocol errors with
-            // transparent windows. This was in v1.1.9 and worked fine.
-            // Only applies to native Wayland (not force_x11/XWayland).
-            if is_wayland && !force_x11 {
+            // --- Compositing mode ---
+            // NVIDIA on Wayland has protocol errors with compositing.
+            // AMD/Intel on native Wayland can handle compositing fine.
+            // If user forced DMA-BUF on, they want full GPU — skip compositing disable too.
+            if is_wayland && !force_x11 && has_nvidia && !has_amd && !force_dmabuf {
                 std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
                 qbz_nix_lib::logging::log_startup(
-                    "[QBZ] Wayland: compositing mode disabled (prevents protocol errors)",
+                    "[QBZ] Wayland+NVIDIA: compositing mode disabled (prevents protocol errors)",
+                );
+            } else if is_wayland && !force_x11 {
+                qbz_nix_lib::logging::log_startup(
+                    "[QBZ] Wayland: compositing mode enabled",
                 );
             }
 
-            // DMA-BUF renderer control
+            // --- DMA-BUF renderer control ---
             if force_dmabuf {
                 qbz_nix_lib::logging::log_startup(
                     "[QBZ] User override: DMA-BUF renderer forced ON (QBZ_FORCE_DMABUF=1)",
@@ -402,20 +496,18 @@ fn main() {
                     "[QBZ] User override: DMA-BUF renderer forced OFF (QBZ_DISABLE_DMABUF=1)",
                 );
                 std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            } else if is_wayland && !force_x11 {
-                // Wayland: disable DMA-BUF for ALL GPUs. Prevents:
-                //   - NVIDIA Error 71 (protocol error)
-                //   - Intel Arc EGL crash (Could not create default EGL display)
-                // This is an improvement over v1.1.9 which only covered NVIDIA.
+            } else if is_wayland && !force_x11 && has_nvidia && !has_amd {
+                // NVIDIA on Wayland: disable DMA-BUF (Error 71 protocol error)
                 qbz_nix_lib::logging::log_startup(
-                    "[QBZ] Wayland: DMA-BUF renderer disabled (prevents EGL crashes)",
+                    "[QBZ] Wayland+NVIDIA: DMA-BUF renderer disabled (prevents Error 71)",
                 );
                 std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            } else if has_nvidia {
+            } else if has_nvidia && !is_wayland {
                 // X11 + NVIDIA: disable DMA-BUF only (keeps full compositing)
                 qbz_nix_lib::logging::log_startup("[QBZ] NVIDIA on X11: DMA-BUF renderer disabled");
                 std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
             } else {
+                // AMD/Intel on Wayland or X11: full GPU acceleration
                 qbz_nix_lib::logging::log_startup(
                     "[QBZ] Using default WebKit renderer (full hardware acceleration)",
                 );
@@ -441,5 +533,47 @@ fn main() {
         qbz_nix_lib::logging::log_startup(&format!("[QBZ] GPU rendering: {}", gpu_status));
     }
 
-    qbz_nix_lib::run()
+    // Catch GTK initialization panics and show a recovery message
+    let result = std::panic::catch_unwind(|| {
+        qbz_nix_lib::run()
+    });
+
+    if let Err(panic_info) = result {
+        let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            "Unknown panic".to_string()
+        };
+
+        let is_gtk_failure = msg.contains("Failed to initialize gtk")
+            || msg.contains("Failed to initialize GTK")
+            || msg.contains("GDK_BACKEND");
+
+        if is_gtk_failure {
+            eprintln!();
+            eprintln!("╔══════════════════════════════════════════════════════════════╗");
+            eprintln!("║  QBZ failed to start: GTK initialization error              ║");
+            eprintln!("╠══════════════════════════════════════════════════════════════╣");
+            eprintln!("║                                                              ║");
+            eprintln!("║  This is usually caused by incompatible graphics settings.   ║");
+            eprintln!("║  To fix it, run:                                             ║");
+            eprintln!("║                                                              ║");
+            eprintln!("║    qbz --reset-graphics                                      ║");
+            eprintln!("║                                                              ║");
+            eprintln!("║  Or for Flatpak:                                             ║");
+            eprintln!("║                                                              ║");
+            eprintln!("║    flatpak run com.blitzfc.qbz --reset-graphics              ║");
+            eprintln!("║                                                              ║");
+            eprintln!("╚══════════════════════════════════════════════════════════════╝");
+            eprintln!();
+            eprintln!("[QBZ] Error detail: {}", msg);
+        } else {
+            eprintln!("[QBZ] Fatal error: {}", msg);
+            eprintln!("[QBZ] If the app fails to start, try: qbz --reset-graphics");
+        }
+
+        std::process::exit(1);
+    }
 }

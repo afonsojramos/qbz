@@ -12,7 +12,7 @@
   let { size = 16, class: className = '', onClick }: Props = $props();
 
   let context = $state(getCurrentContext());
-  let displayInfo = $state(context ? getContextDisplayInfo() : null);
+  let displayInfo = $state(getCurrentContext() ? getContextDisplayInfo() : null);
   let showIcon = $state(getCachedPreferences().show_context_icon);
 
   // Check if the current context is radio
@@ -76,7 +76,7 @@
     justify-content: center;
     color: var(--text-secondary);
     opacity: 0.7;
-    transition: all 0.2s;
+    transition: color 200ms ease, background-color 200ms ease, border-color 200ms ease, opacity 200ms ease;
     flex-shrink: 0;
     background: none;
     border: none;

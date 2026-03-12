@@ -291,9 +291,12 @@
       <!-- List View -->
       <div class="playlist-list">
         {#each getFilteredPlaylists() as playlist (playlist.id)}
-          <button
+          <div
             class="list-row"
+            role="button"
+            tabindex="0"
             onclick={() => onPlaylistClick?.(playlist.id)}
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPlaylistClick?.(playlist.id); } }}
           >
             <div class="list-artwork">
               {#if playlist.image?.rectangle || playlist.image?.covers?.[0]}
@@ -344,7 +347,7 @@
                 </button>
               {/if}
             </div>
-          </button>
+          </div>
         {/each}
       </div>
     {/if}
@@ -363,9 +366,7 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    padding: 24px;
-    padding-left: 18px;
-    padding-right: 8px;
+    padding: 8px 8px 0 18px;
   }
 
   .top-bar {
@@ -472,7 +473,7 @@
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .toggle-btn.active {
@@ -533,11 +534,11 @@
   .playlist-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 24px 14px;
+    gap: 24px 22px;
   }
 
   .grid-item {
-    width: 180px;
+    width: 210px;
     position: relative;
   }
 
@@ -684,7 +685,7 @@
   .skeleton-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 24px 14px;
+    gap: 24px 22px;
   }
 
   .skeleton-grid.list-mode {
@@ -693,12 +694,12 @@
   }
 
   .skeleton-card {
-    width: 180px;
+    width: 210px;
   }
 
   .skeleton-art {
-    width: 180px;
-    height: 180px;
+    width: 210px;
+    height: 210px;
     border-radius: 8px;
     background: var(--bg-secondary);
     animation: pulse 1.5s ease-in-out infinite;

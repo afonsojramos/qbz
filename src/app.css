@@ -1,10 +1,22 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400&family=LINE+Seed+JP:wght@400;700&family=Oswald:wght@400;500;600;700&display=swap');
-
 /* Bundled fonts */
 @font-face {
   font-family: 'Montserrat';
   src: url('/fonts/Montserrat-VariableFont_wght.ttf') format('truetype');
   font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'LINE Seed JP';
+  src: url('/fonts/LINESeedJP-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Oswald';
+  src: url('/fonts/Oswald-VariableFont_wght.ttf') format('truetype');
+  font-weight: 400 700;
   font-display: swap;
 }
 
@@ -98,7 +110,7 @@
 
   /* Typography */
   --font-sans: 'LINE Seed JP', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-mono: 'Courier New', Courier, monospace;
 }
 
 /* Font overrides */
@@ -1272,7 +1284,7 @@ body {
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
-  background-color: var(--bg-primary);
+  background-color: transparent;
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -1413,7 +1425,7 @@ select {
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 150ms ease;
+  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   border: 1px solid transparent;
   white-space: nowrap;
 }

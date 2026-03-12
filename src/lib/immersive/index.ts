@@ -19,6 +19,7 @@ export type {
   UnavailableReason,
   ImmersiveMetrics,
   ImmersiveConfig,
+  BackgroundMode,
 } from './types';
 
 export { DEFAULT_IMMERSIVE_CONFIG } from './types';
@@ -30,6 +31,8 @@ export {
   getWebGL2Info,
   isRuntimeEnabled,
   setRuntimeEnabled,
+  getConfig,
+  setConfig,
   shouldImmersiveBeAvailable,
 } from './config';
 
@@ -47,10 +50,12 @@ export {
   init,
   destroy,
   getState,
-  getConfig,
   // Internal (for canvas component)
   updateMetrics,
   updateTextureCount,
   handleContextLost,
   handleContextRestored,
 } from './ImmersiveRenderer';
+
+// Re-export texture utilities (for Lite mode)
+export { generateAtmosphere } from './utils/texture-loader';

@@ -58,7 +58,7 @@ impl RemoteMetadataState {
 
 /// Convert MusicBrainz release search result to unified DTO
 pub fn musicbrainz_release_to_search_result(
-    release: &crate::musicbrainz::models::ReleaseResult,
+    release: &qbz_integrations::musicbrainz::ReleaseResult,
 ) -> RemoteAlbumSearchResult {
     // Extract artist from artist-credit
     let artist = release
@@ -249,7 +249,7 @@ pub fn discogs_extended_to_search_result(
 
 /// Convert MusicBrainz full release to unified metadata DTO
 pub fn musicbrainz_full_to_metadata(
-    release: &crate::musicbrainz::ReleaseFullResponse,
+    release: &qbz_integrations::musicbrainz::ReleaseFullResponse,
 ) -> RemoteAlbumMetadata {
     // Extract artist from artist-credit
     let artist = release
@@ -493,33 +493,17 @@ impl RemoteMetadataState {
         Ok(metadata)
     }
 
-    /// Search MusicBrainz for releases
+    /// Search MusicBrainz for releases (legacy — unused, kept for reference)
+    #[allow(dead_code)]
     async fn search_musicbrainz(
         &self,
-        query: &str,
-        artist: &str,
-        limit: usize,
+        _query: &str,
+        _artist: &str,
+        _limit: usize,
     ) -> Result<Vec<RemoteAlbumSearchResult>, RemoteMetadataError> {
-        let mb_state =
-            self.musicbrainz
-                .as_ref()
-                .ok_or(RemoteMetadataError::ProviderUnavailable(
-                    "MusicBrainz not initialized".to_string(),
-                ))?;
-
-        let response = mb_state
-            .client
-            .search_releases_extended(query, artist, None, limit)
-            .await
-            .map_err(|e| RemoteMetadataError::NetworkError(e))?;
-
-        let results = response
-            .releases
-            .iter()
-            .map(musicbrainz_release_to_search_result)
-            .collect();
-
-        Ok(results)
+        Err(RemoteMetadataError::ProviderUnavailable(
+            "Legacy MusicBrainz search removed — use v2_remote_metadata_search".to_string(),
+        ))
     }
 
     /// Search Discogs for releases
@@ -544,25 +528,15 @@ impl RemoteMetadataState {
         Ok(converted)
     }
 
-    /// Get full metadata from MusicBrainz
+    /// Get full metadata from MusicBrainz (legacy — unused, kept for reference)
+    #[allow(dead_code)]
     async fn get_musicbrainz_metadata(
         &self,
-        release_id: &str,
+        _release_id: &str,
     ) -> Result<RemoteAlbumMetadata, RemoteMetadataError> {
-        let mb_state =
-            self.musicbrainz
-                .as_ref()
-                .ok_or(RemoteMetadataError::ProviderUnavailable(
-                    "MusicBrainz not initialized".to_string(),
-                ))?;
-
-        let response = mb_state
-            .client
-            .get_release_with_tracks(release_id)
-            .await
-            .map_err(|e| RemoteMetadataError::NetworkError(e))?;
-
-        Ok(musicbrainz_full_to_metadata(&response))
+        Err(RemoteMetadataError::ProviderUnavailable(
+            "Legacy MusicBrainz metadata removed — use v2_remote_metadata_get_album".to_string(),
+        ))
     }
 
     /// Get full metadata from Discogs

@@ -272,7 +272,7 @@ impl MusicBrainzClient {
         self.rate_limiter.wait().await;
 
         let base_url = self.base_url().await;
-        let url = format!("{}/artist/{}?inc=artist-rels&fmt=json", base_url, mbid);
+        let url = format!("{}/artist/{}?inc=artist-rels+tags&fmt=json", base_url, mbid);
 
         log::debug!("MusicBrainz artist lookup with relations: {}", mbid);
 
@@ -291,6 +291,161 @@ impl MusicBrainzClient {
 
         response
             .json::<ArtistFullResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse MusicBrainz response: {}", e))
+    }
+
+    /// Fetch artist tags only (lightweight, no relations)
+    pub async fn get_artist_tags(
+        &self,
+        mbid: &str,
+    ) -> Result<Vec<String>, String> {
+        if !self.is_enabled().await {
+            return Err("MusicBrainz integration is disabled".to_string());
+        }
+
+        self.rate_limiter.wait().await;
+
+        let base_url = self.base_url().await;
+        let url = format!("{}/artist/{}?inc=tags&fmt=json", base_url, mbid);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("MusicBrainz request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            return Ok(Vec::new());
+        }
+
+        let artist: ArtistFullResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse MusicBrainz response: {}", e))?;
+
+        let mut tags: Vec<_> = artist
+            .tags
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|tag| tag.count.unwrap_or(0) > 0)
+            .collect();
+
+        // Sort by vote count descending — highest voted tag = primary genre
+        tags.sort_by(|a, b| b.count.unwrap_or(0).cmp(&a.count.unwrap_or(0)));
+
+        Ok(tags.into_iter().map(|tag| tag.name.to_lowercase()).collect())
+    }
+
+    /// Search artists by tag (genre)
+    ///
+    /// Returns artists tagged with the given genre on MusicBrainz,
+    /// sorted by search relevance. Used for "Listeners also enjoy" discovery.
+    pub async fn search_artists_by_tag(
+        &self,
+        tag: &str,
+        limit: usize,
+    ) -> Result<ArtistSearchResponse, String> {
+        if !self.is_enabled().await {
+            return Err("MusicBrainz integration is disabled".to_string());
+        }
+
+        self.rate_limiter.wait().await;
+
+        let base_url = self.base_url().await;
+        let limit = limit.min(100).max(1);
+        let query = format!("tag:\"{}\"", Self::escape_query(tag));
+        let url = format!(
+            "{}/artist?query={}&fmt=json&limit={}",
+            base_url,
+            urlencoding::encode(&query),
+            limit
+        );
+
+        log::debug!("MusicBrainz artist search by tag '{}' (limit {})", tag, limit);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("MusicBrainz request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("MusicBrainz API error {}: {}", status, text));
+        }
+
+        response
+            .json::<ArtistSearchResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse MusicBrainz response: {}", e))
+    }
+
+    /// Search artists by tag AND country.
+    ///
+    /// MB Lucene doesn't support hierarchical area search, so searching
+    /// by subdivision (e.g., "England") misses artists whose area is set
+    /// to "United Kingdom". We search by country directly:
+    ///   tag:"heavy metal" AND area:"United Kingdom"
+    /// The scoring layer handles regional relevance.
+    pub async fn search_artists_by_tag_and_area(
+        &self,
+        tag: &str,
+        area_name: &str,
+        country: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<ArtistSearchResponse, String> {
+        if !self.is_enabled().await {
+            return Err("MusicBrainz integration is disabled".to_string());
+        }
+
+        self.rate_limiter.wait().await;
+
+        let base_url = self.base_url().await;
+        let limit = limit.min(100).max(1);
+        let escaped_tag = Self::escape_query(tag);
+
+        // Use country for area search when available (most artists have area=country in MB)
+        // Fall back to area_name if no country provided
+        let search_area = country.unwrap_or(area_name);
+        let escaped_area = Self::escape_query(search_area);
+
+        let query = format!(
+            "tag:\"{}\" AND area:\"{}\"",
+            escaped_tag, escaped_area
+        );
+        let url = format!(
+            "{}/artist?query={}&fmt=json&limit={}&offset={}",
+            base_url,
+            urlencoding::encode(&query),
+            limit,
+            offset
+        );
+
+        log::debug!(
+            "MusicBrainz artist search: {}",
+            query
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("MusicBrainz request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("MusicBrainz API error {}: {}", status, text));
+        }
+
+        response
+            .json::<ArtistSearchResponse>()
             .await
             .map_err(|e| format!("Failed to parse MusicBrainz response: {}", e))
     }
@@ -451,6 +606,290 @@ impl MusicBrainzClient {
             .json::<ReleaseFullResponse>()
             .await
             .map_err(|e| format!("Failed to parse MusicBrainz response: {}", e))
+    }
+
+    /// Browse artists by area MBID
+    ///
+    /// Returns artists associated with the given area (city/country).
+    /// Uses the MB browse API which is more precise than Lucene area search.
+    pub async fn browse_artists_by_area(
+        &self,
+        area_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<ArtistBrowseResponse, String> {
+        if !self.is_enabled().await {
+            return Err("MusicBrainz integration is disabled".to_string());
+        }
+
+        self.rate_limiter.wait().await;
+
+        let base_url = self.base_url().await;
+        let limit = limit.min(100).max(1);
+        let url = format!(
+            "{}/artist?area={}&fmt=json&limit={}&offset={}&inc=tags",
+            base_url, area_id, limit, offset
+        );
+
+        log::debug!(
+            "MusicBrainz browse artists by area {} (limit {}, offset {})",
+            area_id, limit, offset
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("MusicBrainz request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("MusicBrainz API error {}: {}", status, text));
+        }
+
+        response
+            .json::<ArtistBrowseResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse MusicBrainz response: {}", e))
+    }
+
+    /// Search for an area by name (to resolve area MBID)
+    pub async fn search_area(
+        &self,
+        name: &str,
+        area_type: Option<&str>,
+    ) -> Result<AreaSearchResponse, String> {
+        if !self.is_enabled().await {
+            return Err("MusicBrainz integration is disabled".to_string());
+        }
+
+        self.rate_limiter.wait().await;
+
+        let base_url = self.base_url().await;
+        let query = if let Some(atype) = area_type {
+            format!(
+                "area:\"{}\" AND type:\"{}\"",
+                Self::escape_query(name),
+                Self::escape_query(atype)
+            )
+        } else {
+            format!("area:\"{}\"", Self::escape_query(name))
+        };
+
+        let url = format!(
+            "{}/area?query={}&fmt=json&limit=5",
+            base_url,
+            urlencoding::encode(&query)
+        );
+
+        log::debug!("MusicBrainz area search: {} (type: {:?})", name, area_type);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("MusicBrainz request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("MusicBrainz API error {}: {}", status, text));
+        }
+
+        response
+            .json::<AreaSearchResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse MusicBrainz response: {}", e))
+    }
+
+    /// Look up an area and its parent relationships.
+    ///
+    /// Used to resolve city → subdivision (e.g., Leyton → England).
+    /// Returns the area detail with `relations` that include "part of" links.
+    pub async fn get_area_with_relations(
+        &self,
+        area_id: &str,
+    ) -> Result<AreaDetailResponse, String> {
+        if !self.is_enabled().await {
+            return Err("MusicBrainz integration is disabled".to_string());
+        }
+
+        self.rate_limiter.wait().await;
+
+        let base_url = self.base_url().await;
+        let url = format!(
+            "{}/area/{}?inc=area-rels&fmt=json",
+            base_url, area_id
+        );
+
+        log::debug!("MusicBrainz area lookup with relations: {}", area_id);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("MusicBrainz request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("MusicBrainz API error {}: {}", status, text));
+        }
+
+        response
+            .json::<AreaDetailResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse MusicBrainz area response: {}", e))
+    }
+
+    /// Resolve a city area to its parent subdivision (state/region).
+    ///
+    /// Uses MB area-rels "part of" with direction "forward" to go UP:
+    ///   Los Angeles → "part of" (forward) → California (subdivision)
+    ///   Leyton → "part of" (forward) → Waltham Forest → (forward) → England
+    ///
+    /// If the direct parent is too granular (district/municipality), walks
+    /// Walk UP the area hierarchy to find the top-level subdivision
+    /// (the subdivision whose parent is the country).
+    /// e.g., Brixton → Lambeth → Greater London → England → [parent: UK] → returns "England"
+    /// e.g., Los Angeles → California → [parent: US] → returns "California"
+    /// Max 5 hops to avoid infinite loops.
+    pub async fn resolve_parent_subdivision(
+        &self,
+        area_id: &str,
+    ) -> Result<Option<(String, String)>, String> {
+        let mut current_id = area_id.to_string();
+        let mut path: Vec<String> = Vec::new();
+        let max_hops = 5;
+
+        for _hop in 0..max_hops {
+            let detail = self.get_area_with_relations(&current_id).await?;
+            path.push(format!("{}[{:?}]", detail.name, detail.area_type));
+
+            // Get parent relations (direction "backward" = "source is part of target")
+            let parents: Vec<_> = detail
+                .relations
+                .as_ref()
+                .map(|rels| {
+                    rels.iter()
+                        .filter(|rel| {
+                            rel.relation_type == "part of"
+                                && rel.direction.as_deref() == Some("backward")
+                        })
+                        .filter_map(|rel| rel.area.as_ref())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if parents.is_empty() {
+                log::info!(
+                    "Area resolution dead end at '{}', path: {}",
+                    detail.name,
+                    path.join(" → ")
+                );
+                return Ok(None);
+            }
+
+            // Check if ANY parent is a country
+            let has_country_parent = parents.iter().any(|p| {
+                p.area_type
+                    .as_deref()
+                    .map(|t| t.eq_ignore_ascii_case("country"))
+                    .unwrap_or(false)
+            });
+
+            if has_country_parent {
+                // Current area's parent is the country.
+                // If current area is a subdivision, this IS the top-level subdivision.
+                let own_type = detail.area_type.as_deref().unwrap_or("");
+                if own_type.eq_ignore_ascii_case("subdivision") {
+                    // If this is the original area, no resolution needed
+                    if current_id == area_id {
+                        log::info!(
+                            "'{}' is already a top-level subdivision, no resolution needed. Path: {}",
+                            detail.name,
+                            path.join(" → ")
+                        );
+                        return Ok(None);
+                    }
+                    log::info!(
+                        "Resolved to top-level subdivision '{}' ({}). Path: {}",
+                        detail.name,
+                        detail.id,
+                        path.join(" → ")
+                    );
+                    return Ok(Some((detail.name.clone(), detail.id.clone())));
+                }
+                // Current area is directly under country but NOT a subdivision
+                // (e.g., a city-state like Berlin). Use it as-is.
+                if current_id == area_id {
+                    log::info!(
+                        "'{}' is directly under country (type: {}), no resolution. Path: {}",
+                        detail.name,
+                        own_type,
+                        path.join(" → ")
+                    );
+                    return Ok(None);
+                }
+                log::info!(
+                    "Resolved to '{}' ({}, type: {}) directly under country. Path: {}",
+                    detail.name,
+                    detail.id,
+                    own_type,
+                    path.join(" → ")
+                );
+                return Ok(Some((detail.name.clone(), detail.id.clone())));
+            }
+
+            // No country parent yet — pick the first non-country parent and keep walking up
+            // Prefer subdivision parents, then any non-city parent
+            let next = parents
+                .iter()
+                .find(|p| {
+                    p.area_type
+                        .as_deref()
+                        .map(|t| t.eq_ignore_ascii_case("subdivision"))
+                        .unwrap_or(false)
+                })
+                .or_else(|| {
+                    parents.iter().find(|p| {
+                        let t = p.area_type.as_deref().unwrap_or("");
+                        !t.eq_ignore_ascii_case("city") && !t.eq_ignore_ascii_case("country")
+                    })
+                })
+                .or_else(|| parents.first());
+
+            match next {
+                Some(parent) => {
+                    log::info!(
+                        "  {} → {} [{:?}]",
+                        detail.name,
+                        parent.name,
+                        parent.area_type
+                    );
+                    current_id = parent.id.clone();
+                }
+                None => {
+                    log::info!(
+                        "No suitable parent found for '{}'. Path: {}",
+                        detail.name,
+                        path.join(" → ")
+                    );
+                    return Ok(None);
+                }
+            }
+        }
+
+        log::warn!(
+            "Area resolution exceeded {} hops. Path: {}",
+            max_hops,
+            path.join(" → ")
+        );
+        Ok(None)
     }
 
     /// Escape special characters in Lucene queries

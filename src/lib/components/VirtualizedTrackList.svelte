@@ -63,6 +63,13 @@
     // For getting artist/album IDs from non-local tracks
     getArtistId?: (track: Track) => number | undefined;
     getAlbumId?: (track: Track) => string | undefined;
+    // Album artwork column (same as Playlist view)
+    showArtwork?: boolean;
+    getArtworkUrl?: (track: Track) => string | undefined;
+    // Multi-select support
+    selectable?: boolean;
+    selectedIds?: Set<number>;
+    onToggleSelect?: (trackId: number) => void;
   }
 
   let {
@@ -107,6 +114,11 @@
     onCreateQobuzRadio,
     getArtistId,
     getAlbumId,
+    showArtwork = false,
+    getArtworkUrl,
+    selectable = false,
+    selectedIds,
+    onToggleSelect,
   }: Props = $props();
 
   // Constants
@@ -325,12 +337,19 @@
             trackId={trackId}
             number={getTrackNumber(item.track, item.index)}
             title={getTrackTitle(item.track)}
+            explicit={item.track.parental_warning === true}
             artist={trackArtist}
             album={albumName}
+            showArtwork={showArtwork}
+            artworkUrl={getArtworkUrl?.(item.track)}
             duration={formatDuration(getTrackDuration(item.track))}
             quality={getQualityBadge(item.track)}
             isPlaying={isPlaybackActive && activeTrackId === trackId}
+            isActiveTrack={activeTrackId === trackId}
             isBlacklisted={trackBlacklisted}
+            selectable={selectable}
+            selected={selectedIds?.has(trackId) ?? false}
+            onToggleSelect={onToggleSelect ? () => onToggleSelect(trackId) : undefined}
             {isLocal}
             hideDownload={hideDownload || trackBlacklisted}
             hideFavorite={hideFavorite || trackBlacklisted}
@@ -388,7 +407,6 @@
     position: absolute;
     left: 0;
     right: 0;
-    will-change: transform;
   }
 
   .track-group-header {

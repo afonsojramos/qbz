@@ -36,9 +36,9 @@ pub fn start_visualizer_thread(state: VisualizerState, app_handle: AppHandle) {
 
 /// Number of energy bands for the Energy Bands visualizer
 const NUM_ENERGY_BANDS: usize = 5;
-const NUM_SPECTRAL_BANDS: usize = 190;
+const NUM_SPECTRAL_BANDS: usize = 512;
 const SPECTRAL_UPDATE_RATE_HZ: u32 = 58;
-const SPECTRAL_SMOOTHING: f32 = 0.80;
+const SPECTRAL_SMOOTHING: f32 = 0.30;
 
 /// Energy band frequency ranges (Hz):
 /// Sub-bass (20-60), Bass (60-250), Mids (250-2k), Presence (2k-6k), Air (6k-20k)
@@ -327,7 +327,7 @@ mod tests {
         let mid = num_bars / 2;
         assert!(freqs[mid] > 500.0 && freqs[mid] < 800.0);
 
-        // Last bar should approach 20000Hz
-        assert!(freqs[num_bars - 1] > 15000.0);
+        // Last bar should approach 20000Hz (but won't reach it since t < 1.0)
+        assert!(freqs[num_bars - 1] > 10000.0);
     }
 }

@@ -87,7 +87,7 @@
     border: 1px solid var(--border-subtle);
     border-radius: 6px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .distro-option:hover {
@@ -114,6 +114,6 @@
     border-radius: 6px;
     font-size: 13px;
     color: var(--text-secondary);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-sans);
   }
 </style>

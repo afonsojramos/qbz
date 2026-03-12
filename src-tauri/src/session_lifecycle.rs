@@ -24,10 +24,7 @@ use crate::user_data::UserDataPaths;
 /// Note: This is the core logic extracted from `activate_user_session` command.
 /// It can be called from runtime_bootstrap, v2_login, or the command itself.
 pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<(), String> {
-    log::info!(
-        "[SessionLifecycle] Activating session for user_id={}",
-        user_id
-    );
+    log::info!("[SessionLifecycle] Activating session");
 
     // Get all required states from AppHandle
     let user_paths = app.state::<UserDataPaths>();
@@ -106,30 +103,24 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
     musicbrainz.init_at(&data_dir).await?;
     listenbrainz.init_at(&data_dir).await?;
 
-    // Sync V2 integration states with credentials from legacy persistence
-    // ListenBrainz V2: get token/user_name/enabled from legacy client
-    {
-        let legacy_client = listenbrainz.client.lock().await;
-        let token = legacy_client.get_token().await;
-        let user_name = legacy_client.get_user_name().await;
-        let enabled = legacy_client.is_enabled().await;
-        drop(legacy_client);
-        listenbrainz_v2
-            .init_with_credentials(token, user_name, enabled)
-            .await;
-        log::info!("[SessionLifecycle] ListenBrainz V2 state synced from legacy");
-    }
+    // Initialize V2 integration caches at user data directory
+    listenbrainz_v2.init_cache_at(&data_dir).await.map_err(|e| {
+        log::error!("[SessionLifecycle] LB V2 cache init failed: {}", e);
+        e
+    })?;
+    musicbrainz_v2.init_cache_at(&data_dir).await.map_err(|e| {
+        log::error!("[SessionLifecycle] MB V2 cache init failed: {}", e);
+        e
+    })?;
 
-    // MusicBrainz V2: sync enabled state (use_proxy defaults to true)
-    {
-        let legacy_client = &musicbrainz.client;
-        let enabled = legacy_client.is_enabled().await;
-        musicbrainz_v2.init_with_config(enabled, true).await;
-        log::info!("[SessionLifecycle] MusicBrainz V2 state synced from legacy");
-    }
+    // Load V2 integration states from their OWN caches (no legacy dependency)
+    listenbrainz_v2.init_from_cache().await;
+    log::info!("[SessionLifecycle] ListenBrainz V2 state loaded from V2 cache");
 
-    // LastFm V2: no legacy state, just reset to clean state
-    // Credentials are loaded separately via LastFm-specific commands
+    musicbrainz_v2.init_from_cache(true).await;
+    log::info!("[SessionLifecycle] MusicBrainz V2 state loaded from V2 cache");
+
+    // LastFm V2: no persistent cache yet, reset to clean state
     lastfm_v2.init_with_session(None).await;
     log::info!("[SessionLifecycle] LastFm V2 state initialized");
 
@@ -217,10 +208,7 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
         RuntimeEvent::UserSessionActivated { user_id },
     );
 
-    log::info!(
-        "[SessionLifecycle] Session activated for user_id={}",
-        user_id
-    );
+    log::info!("[SessionLifecycle] Session activated");
     Ok(())
 }
 
@@ -287,11 +275,13 @@ pub async fn deactivate_session(app: &tauri::AppHandle) -> Result<(), String> {
     musicbrainz.teardown().await;
     listenbrainz.teardown().await;
 
-    // Teardown V2 integration states (clear in-memory credentials)
+    // Teardown V2 integration states (clear in-memory + close caches)
     listenbrainz_v2.clear_credentials().await;
+    listenbrainz_v2.teardown().await;
     musicbrainz_v2.init_with_config(true, true).await; // Reset to defaults
+    musicbrainz_v2.teardown().await;
     lastfm_v2.init_with_session(None).await; // Clear session
-    log::info!("[SessionLifecycle] V2 integration states cleared");
+    log::info!("[SessionLifecycle] V2 integration states torn down");
 
     // Type-alias states (per-user settings)
     // NOTE: LegalSettingsState is GLOBAL (not per-user) - NOT torn down here

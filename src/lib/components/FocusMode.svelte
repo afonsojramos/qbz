@@ -1,5 +1,6 @@
 <script lang="ts">
   import { SkipBack, Play, Pause, SkipForward, ChevronDown } from 'lucide-svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import StackIcon from './StackIcon.svelte';
   import LyricsLines from './lyrics/LyricsLines.svelte';
   import { startActiveLineUpdates, stopActiveLineUpdates } from '$lib/stores/lyricsStore';
@@ -197,7 +198,7 @@
       <!-- Left: Large Artwork -->
       <div class="artwork-section">
         <div class="artwork-wrapper">
-          <img src={artwork} alt={trackTitle} class="artwork-image" />
+          <img use:cachedSrc={artwork} alt={trackTitle} class="artwork-image" />
         </div>
       </div>
 
@@ -372,7 +373,7 @@
     color: var(--alpha-70);
     cursor: pointer;
     opacity: 0;
-    transition: all 200ms ease;
+    transition: color 200ms ease, background-color 200ms ease, border-color 200ms ease, opacity 200ms ease;
   }
 
   .close-btn.visible {
@@ -507,7 +508,7 @@
     background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.4) 60%, transparent 100%);
     opacity: 0;
     transform: translateY(8px);
-    transition: all 250ms ease;
+    transition: color 250ms ease, background-color 250ms ease, border-color 250ms ease, opacity 250ms ease;
   }
 
   .bottom-bar.visible {
@@ -592,7 +593,7 @@
     border-radius: 50%;
     color: var(--alpha-85);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .control-btn:disabled {
@@ -632,7 +633,7 @@
 
   .time {
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
     color: var(--alpha-60);
     min-width: 40px;

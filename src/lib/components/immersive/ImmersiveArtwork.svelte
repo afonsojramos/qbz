@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { cachedSrc } from '$lib/actions/cachedImage';
+
   interface Props {
     artwork: string;
     trackTitle: string;
@@ -13,12 +15,12 @@
     <div class="vinyl-disc">
       <div class="vinyl-grooves"></div>
       <div class="vinyl-label">
-        <img src={artwork} alt={trackTitle} />
+        <img use:cachedSrc={artwork} alt={trackTitle} />
       </div>
     </div>
   {:else}
     <div class="artwork-wrapper">
-      <img src={artwork} alt={trackTitle} />
+      <img use:cachedSrc={artwork} alt={trackTitle} />
     </div>
   {/if}
 </div>

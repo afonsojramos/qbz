@@ -185,7 +185,8 @@ export async function playTrack(
         } else {
           const result = await invoke<PlayTrackResult>('v2_play_track', {
             trackId: track.id,
-            quality: getStreamingQuality()
+            quality: getStreamingQuality(),
+            durationSecs: track.duration ? Math.round(track.duration) : null
           });
 
           // Update track format based on actual stream format_id from Qobuz

@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, type Snippet } from 'svelte';
   import { t } from '$lib/i18n';
   import { Mic2 } from 'lucide-svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
 
   interface FavoriteArtist {
     id: number;
@@ -26,6 +27,9 @@
     selectedArtistId?: number | null;
     onArtistClick: (artistId: number) => void;
     scrollToGroupId?: string;
+    header?: Snippet;
+    footer?: Snippet;
+    onScrollPastHeader?: (isPast: boolean) => void;
   }
 
   let {
@@ -34,13 +38,16 @@
     selectedArtistId = null,
     onArtistClick,
     scrollToGroupId,
+    header,
+    footer,
+    onScrollPastHeader,
   }: Props = $props();
 
   // Constants
   const CARD_WIDTH = 160;
-  const CARD_HEIGHT = 200;
+  const CARD_HEIGHT = 250;
   const GAP = 24;
-  const ROW_GAP = 24;
+  const ROW_GAP = 11;
   const HEADER_HEIGHT = 44;
   const BUFFER_ITEMS = 5;
 
@@ -168,6 +175,8 @@
   }
 
   let resizeObserver: ResizeObserver | null = null;
+  let headerSentinelEl: HTMLDivElement | null = $state(null);
+  let headerObserver: IntersectionObserver | null = null;
 
   onMount(() => {
     if (containerEl) {
@@ -184,8 +193,28 @@
     }
   });
 
+  // Observe header sentinel for scroll-past detection
+  $effect(() => {
+    if (headerSentinelEl && containerEl && onScrollPastHeader) {
+      headerObserver?.disconnect();
+      headerObserver = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            onScrollPastHeader!(!entry.isIntersecting);
+          }
+        },
+        { root: containerEl, threshold: 0 }
+      );
+      headerObserver.observe(headerSentinelEl);
+    }
+    return () => {
+      headerObserver?.disconnect();
+    };
+  });
+
   onDestroy(() => {
     resizeObserver?.disconnect();
+    headerObserver?.disconnect();
   });
 
   // Scroll to group when requested
@@ -212,6 +241,12 @@
 </script>
 
 <div class="virtual-container" bind:this={containerEl} onscroll={handleScroll}>
+  {#if header}
+    <div class="virtual-header">
+      {@render header()}
+      <div class="header-sentinel" bind:this={headerSentinelEl}></div>
+    </div>
+  {/if}
   <div class="virtual-content" style="height: {totalHeight}px;">
     {#each visibleItems as item (getItemKey(item))}
       <div
@@ -232,15 +267,15 @@
                 onclick={() => onArtistClick(artist.id)}
               >
                 <div class="artist-image">
-                  {#if artist.image?.large || artist.image?.thumbnail}
-                    <img src={artist.image?.large || artist.image?.thumbnail} alt={artist.name} loading="lazy" decoding="async" />
+                  {#if artist.image?.small || artist.image?.thumbnail}
+                    <img use:cachedSrc={artist.image?.small || artist.image?.thumbnail} alt={artist.name} loading="lazy" decoding="async" />
                   {:else}
                     <div class="artist-placeholder">
                       <Mic2 size={32} />
                     </div>
                   {/if}
                 </div>
-                <div class="artist-name">{artist.name}</div>
+                <div class="artist-name" title={artist.name}>{artist.name}</div>
                 {#if artist.albums_count}
                   <div class="artist-albums">{$t('library.albumCount', { values: { count: artist.albums_count } })}</div>
                 {/if}
@@ -251,6 +286,11 @@
       </div>
     {/each}
   </div>
+  {#if footer}
+    <div class="virtual-footer">
+      {@render footer()}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -353,6 +393,7 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+    transition: opacity 0.15s ease-in;
   }
 
   .artist-placeholder {
@@ -370,9 +411,8 @@
     color: var(--text-primary);
     text-align: center;
     overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     width: 100%;
     line-height: 1.3;
   }
@@ -381,5 +421,20 @@
     font-size: 12px;
     color: var(--text-muted);
     margin-top: 4px;
+  }
+
+  .virtual-header {
+    position: relative;
+  }
+
+  .header-sentinel {
+    position: absolute;
+    bottom: 0;
+    height: 1px;
+    width: 100%;
+  }
+
+  .virtual-footer {
+    padding: 16px 0 8px;
   }
 </style>

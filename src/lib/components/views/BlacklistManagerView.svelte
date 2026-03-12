@@ -239,10 +239,12 @@
     onclick={() => confirmClearOpen = false}
     onkeydown={(e) => e.key === 'Escape' && (confirmClearOpen = false)}
   >
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="modal-content"
       role="dialog"
       aria-modal="true"
+      tabindex="-1"
       onclick={(e) => e.stopPropagation()}
     >
       <h2 class="modal-title">{$t('settings.blacklist.confirmClearTitle')}</h2>
@@ -263,10 +265,7 @@
 
 <style>
   .blacklist-manager {
-    padding: 24px;
-    padding-left: 18px;
-    padding-right: 8px;
-    padding-bottom: 100px;
+    padding: 8px 8px 100px 18px;
     height: 100%;
     overflow-y: auto;
   }
@@ -317,12 +316,14 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 16px;
+    padding: 0;
     background: none;
     border: none;
-    color: var(--text-secondary);
+    color: var(--text-muted);
     cursor: pointer;
     font-size: 14px;
+    margin-top: 8px;
+    margin-bottom: 24px;
     transition: color 150ms ease;
   }
 
@@ -355,7 +356,7 @@
     color: var(--text-muted);
     font-size: 13px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .toggle-btn:hover {
@@ -413,7 +414,7 @@
     align-items: center;
     justify-content: center;
     border-radius: 4px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .clear-search:hover {
@@ -432,7 +433,7 @@
     color: #ef4444;
     font-size: 13px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .clear-all-btn:hover {
@@ -581,7 +582,7 @@
     border-radius: 6px;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -637,7 +638,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .modal-btn.cancel {

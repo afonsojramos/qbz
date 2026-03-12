@@ -17,7 +17,6 @@
   import {
     subscribe as subscribeFolders,
     getFolders,
-    getVisibleFolders,
     loadFolders,
     createFolder,
     updateFolder,
@@ -128,6 +127,10 @@
   let folders = $state<PlaylistFolder[]>([]);
   let currentFolderId = $state<string | null>(null);
   let foldersCollapsed = $state(false);
+
+  function getSortedFolders(): PlaylistFolder[] {
+    return [...getFolders()].sort((a, b) => a.position - b.position);
+  }
 
   // Create/Edit folder modal state
   let showFolderModal = $state(false);
@@ -450,6 +453,7 @@
   onMount(() => {
     loadData();
     loadFolders();
+    folders = getSortedFolders();
 
     // Subscribe to offline state changes
     const unsubscribeOffline = subscribeOffline(() => {
@@ -459,7 +463,7 @@
 
     // Subscribe to folder changes
     const unsubscribeFolders = subscribeFolders(() => {
-      folders = getVisibleFolders();
+      folders = getSortedFolders();
     });
 
     return () => {
@@ -827,6 +831,7 @@
       iconPreset: string;
       iconColor: string;
       customImagePath?: string;
+      isHidden?: boolean;
     }
   ) {
     if (folder) {
@@ -836,19 +841,24 @@
         iconType: updates.iconType,
         iconPreset: updates.iconPreset,
         iconColor: updates.iconColor,
-        customImagePath: updates.customImagePath
+        customImagePath: updates.customImagePath,
+        isHidden: updates.isHidden
       });
     } else {
       // Create new folder
-      await createFolder(
+      const createdFolder = await createFolder(
         updates.name,
         updates.iconType,
         updates.iconPreset,
         updates.iconColor
       );
+
+      if (createdFolder && updates.isHidden) {
+        await updateFolder(createdFolder.id, { isHidden: true });
+      }
     }
 
-    folders = getVisibleFolders();
+    folders = getSortedFolders();
     closeFolderModal();
     onPlaylistsChanged?.();
   }
@@ -858,7 +868,7 @@
     if (!confirmed) return;
 
     await deleteFolder(folder.id);
-    folders = getVisibleFolders();
+    folders = getSortedFolders();
 
     // If we're inside the deleted folder, go back to root
     if (currentFolderId === folder.id) {
@@ -940,6 +950,8 @@
       {#if showFilterMenu}
         <div
           class="dropdown-menu"
+          role="menu"
+          tabindex="-1"
           onmouseenter={() => isHoveringFilterMenu = true}
           onmouseleave={() => isHoveringFilterMenu = false}
         >
@@ -988,6 +1000,8 @@
       {#if showSortMenu}
         <div
           class="dropdown-menu"
+          role="menu"
+          tabindex="-1"
           onmouseenter={() => isHoveringSortMenu = true}
           onmouseleave={() => isHoveringSortMenu = false}
         >
@@ -1094,6 +1108,7 @@
           {#if viewMode === 'grid'}
             <div class="folders-grid">
               {#each folders as folder (folder.id)}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
                   class="folder-card"
                   class:drag-over={dragOverFolderId === folder.id}
@@ -1209,6 +1224,7 @@
         {@const isFavorite = playlistSettings.get(playlist.id)?.is_favorite}
         {@const localStatus = getLocalContentStatus(playlist.id)}
         {@const isUnavailable = offlineStatus.isOffline && !isPlaylistAvailableOffline(playlist.id)}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="grid-item"
           class:hidden={isHidden}
@@ -1257,6 +1273,7 @@
             role="button"
             tabindex="0"
             onclick={() => onPlaylistSelect?.(playlist.id)}
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPlaylistSelect?.(playlist.id); } }}
             title={isUnavailable ? $t('offline.viewOnly') : undefined}
           >
             <div class="artwork">
@@ -1363,6 +1380,7 @@
                     role="button"
                     tabindex="0"
                     onclick={() => onPlaylistSelect?.(playlist.id)}
+                    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPlaylistSelect?.(playlist.id); } }}
                   >
                     <div class="tree-item-artwork">
                       <PlaylistCollage artworks={playlist.images ?? []} size={32} />
@@ -1423,6 +1441,7 @@
             role="button"
             tabindex="0"
             onclick={() => onPlaylistSelect?.(playlist.id)}
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPlaylistSelect?.(playlist.id); } }}
           >
             <div class="tree-item-artwork">
               <PlaylistCollage artworks={playlist.images ?? []} size={32} />
@@ -1491,6 +1510,7 @@
           role="button"
           tabindex="0"
           onclick={() => onPlaylistSelect?.(playlist.id)}
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPlaylistSelect?.(playlist.id); } }}
           title={isUnavailable ? $t('offline.viewOnly') : undefined}
         >
           {#if sort === 'custom' && !isUnavailable}
@@ -1613,10 +1633,7 @@
 
 <style>
   .playlist-manager {
-    padding: 24px;
-    padding-left: 18px;
-    padding-right: 8px;
-    padding-bottom: 100px;
+    padding: 8px 8px 100px 18px;
     height: 100%;
     overflow-y: auto;
   }
@@ -1657,12 +1674,14 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 16px;
+    padding: 0;
     background: none;
     border: none;
-    color: var(--text-secondary);
+    color: var(--text-muted);
     cursor: pointer;
     font-size: 14px;
+    margin-top: 24px;
+    margin-bottom: 24px;
     transition: color 150ms ease;
   }
 
@@ -1745,7 +1764,7 @@
     margin-left: auto;
     padding: 4px;
     border-radius: 4px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .info-icon:hover {
@@ -1874,7 +1893,7 @@
     background: var(--bg-tertiary);
     border-radius: 8px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .folder-list-item:hover {
@@ -1943,7 +1962,7 @@
     color: var(--text-muted);
     cursor: pointer;
     opacity: 0;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .folder-list-item:hover .folder-list-edit {
@@ -2106,7 +2125,7 @@
     align-items: center;
     justify-content: center;
     border-radius: 4px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .clear-search:hover {
@@ -2167,7 +2186,7 @@
     padding: 10px;
     background: var(--bg-secondary);
     border-radius: 8px;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .grid-item:hover {
@@ -2260,7 +2279,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .edit-btn:hover {
@@ -2278,7 +2297,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .visibility-btn:hover {
@@ -2306,7 +2325,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .favorite-btn:hover {
@@ -2443,7 +2462,7 @@
     background: var(--bg-secondary);
     border-radius: 6px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .list-item:hover {

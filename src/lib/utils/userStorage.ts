@@ -11,6 +11,7 @@
 let currentUserId: number | null = null;
 
 const MIGRATION_MARKER_PREFIX = 'qbz.__migrated_to_user.';
+const MIGRATION_V2_MARKER_PREFIX = 'qbz.__migrated_v2.';
 
 /**
  * Set the active user ID for localStorage scoping.
@@ -93,5 +94,44 @@ export function migrateLocalStorage(userId: number): void {
 
   if (migrated > 0) {
     console.log(`[userStorage] Migrated ${migrated} localStorage keys for user ${userId}`);
+  }
+}
+
+/**
+ * V2 migration: covers keys that v1 missed (underscore-prefixed keys like qbz_*).
+ * Runs once per user, independently from v1 migration.
+ */
+const V2_EXTRA_KEYS = [
+  'qbz_copied_playlists',
+  'qbz_keybindings',
+  'qbz_genre_cache',
+  'qbz_genre_filter_home',
+  'qbz_genre_filter_favorites',
+  'qbz_genre_filter_artist',
+  'qbz_genre_filter_label',
+];
+
+export function migrateLocalStorageV2(userId: number): void {
+  const marker = `${MIGRATION_V2_MARKER_PREFIX}${userId}`;
+  if (localStorage.getItem(marker)) {
+    return;
+  }
+
+  let migrated = 0;
+  for (const key of V2_EXTRA_KEYS) {
+    const value = localStorage.getItem(key);
+    if (value !== null) {
+      const scoped = `qbz.${userId}.${key}`;
+      if (localStorage.getItem(scoped) === null) {
+        localStorage.setItem(scoped, value);
+        migrated++;
+      }
+    }
+  }
+
+  localStorage.setItem(marker, String(Date.now()));
+
+  if (migrated > 0) {
+    console.log(`[userStorage] V2 migrated ${migrated} localStorage keys for user ${userId}`);
   }
 }

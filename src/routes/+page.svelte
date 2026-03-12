@@ -2,11 +2,12 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { ChevronUp } from 'lucide-svelte';
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { listen, emitTo, type UnlistenFn } from '@tauri-apps/api/event';
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 
   // Console log capture (must be early, before other imports log)
-  import { initConsoleCapture } from '$lib/stores/consoleLogStore';
+  import { initConsoleCapture, rehydrateVerboseCapture } from '$lib/stores/consoleLogStore';
   initConsoleCapture();
 
   // Offline cache state management
@@ -33,7 +34,14 @@
   } from '$lib/stores/toastStore';
 
   // Search state for performer search
-  import { setSearchState, triggerSearchFocus } from '$lib/stores/searchState';
+  import {
+    setSearchState,
+    triggerSearchFocus,
+    getSearchQuery,
+    setSearchQuery,
+    subscribeSearchQuery,
+    clearSearchState
+  } from '$lib/stores/searchState';
 
   // Playback context and preferences
   import {
@@ -50,6 +58,9 @@
     isAutoplayEnabled
   } from '$lib/stores/playbackPreferencesStore';
   import { initBlacklistStore, isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
+  import { initCustomArtistImageStore, clearCustomArtistImages } from '$lib/stores/customArtistImageStore';
+  import { initCustomAlbumCoverStore, clearCustomAlbumCovers, resolveAlbumCover } from '$lib/stores/customAlbumCoverStore';
+  import { getCachedImageUrl } from '$lib/services/imageCacheService';
 
   // UI state management
   import {
@@ -81,6 +92,7 @@
     subscribe as subscribeSidebar,
     initSidebarStore,
     getIsExpanded,
+    expandSidebar,
     toggleSidebar
   } from '$lib/stores/sidebarStore';
 
@@ -88,8 +100,37 @@
   import {
     subscribe as subscribeTitleBar,
     initTitleBarStore,
-    shouldShowTitleBar
+    shouldShowTitleBar,
+    getShowWindowControls
   } from '$lib/stores/titleBarStore';
+
+  // Search bar location store
+  import {
+    subscribe as subscribeSearchBarLocation,
+    initSearchBarLocation,
+    getSearchBarLocation
+  } from '$lib/stores/searchBarLocationStore';
+
+  // Window controls customization store
+  import {
+    subscribe as subscribeWindowControls,
+    initWindowControlsStore,
+    getWindowControls,
+    type WindowControlsConfig
+  } from '$lib/stores/windowControlsStore';
+
+  // Titlebar navigation store
+  import {
+    subscribe as subscribeTitlebarNav,
+    initTitlebarNavStore,
+    isTitlebarNavEnabled,
+    getResolvedPosition,
+    getTitlebarNavConfig,
+    isDiscoverInTitlebar,
+    isFavoritesInTitlebar,
+    isLibraryInTitlebar,
+    isPurchasesInTitlebar
+  } from '$lib/stores/titlebarNavStore';
 
   // Keybindings system
   import {
@@ -106,7 +147,7 @@
     getAuthState,
     type UserInfo
   } from '$lib/stores/authStore';
-  import { setStorageUserId, migrateLocalStorage, getUserItem, setUserItem } from '$lib/utils/userStorage';
+  import { setStorageUserId, migrateLocalStorage, migrateLocalStorageV2, getUserItem, setUserItem } from '$lib/utils/userStorage';
 
   // Favorites state management
   import { loadFavorites } from '$lib/stores/favoritesStore';
@@ -124,12 +165,16 @@
     goForward as navGoForward,
     selectPlaylist,
     getNavigationState,
+    getActiveItemId,
+    isBackForward,
     getFavoritesTabFromView,
     getSelectedLocalAlbumId,
     isFavoritesView,
     restoreView,
     setRestoredPlaylistId,
     setRestoredLocalAlbumId,
+    saveScrollPosition,
+    getSavedScrollPosition,
     type ViewType,
     type NavigationState,
     type FavoritesTab
@@ -325,11 +370,10 @@
     type PersistedSession
   } from '$lib/services/sessionService';
 
-  // MiniPlayer - DISABLED: incomplete feature, re-enable when ready
-  // import { enterMiniplayerMode } from '$lib/services/miniplayerService';
+  import { enterMiniplayerMode } from '$lib/services/miniplayerService';
 
   // Sidebar mutual exclusion
-  import { closeContentSidebar, subscribeContentSidebar, type ContentSidebarType } from '$lib/stores/sidebarStore';
+  import { closeContentSidebar, restoreContentSidebar, subscribeContentSidebar, type ContentSidebarType } from '$lib/stores/sidebarStore';
 
   // Lyrics state management
   import {
@@ -354,6 +398,7 @@
 
   // Components
   import TitleBar from '$lib/components/TitleBar.svelte';
+  import TitleBarNav from '$lib/components/TitleBarNav.svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import AboutModal from '$lib/components/AboutModal.svelte';
   import NowPlayingBar from '$lib/components/NowPlayingBar.svelte';
@@ -383,6 +428,7 @@
   import WeeklySuggestView from '$lib/components/views/WeeklySuggestView.svelte';
   import FavQView from '$lib/components/views/FavQView.svelte';
   import TopQView from '$lib/components/views/TopQView.svelte';
+  import ArtistsByLocationView from '$lib/components/views/ArtistsByLocationView.svelte';
 
   // Overlays
   import QueuePanel from '$lib/components/QueuePanel.svelte';
@@ -399,17 +445,19 @@
   import UpdateReminderModal from '$lib/components/updates/UpdateReminderModal.svelte';
   import WhatsNewModal from '$lib/components/updates/WhatsNewModal.svelte';
   import FlatpakWelcomeModal from '$lib/components/updates/FlatpakWelcomeModal.svelte';
+  import SnapWelcomeModal from '$lib/components/updates/SnapWelcomeModal.svelte';
   import KeyboardShortcutsModal from '$lib/components/KeyboardShortcutsModal.svelte';
   import KeybindingsSettings from '$lib/components/KeybindingsSettings.svelte';
   import LinkResolverModal from '$lib/components/LinkResolverModal.svelte';
   import type { ReleaseInfo } from '$lib/stores/updatesStore';
   import { refreshUpdatePreferences, resetUpdatesStore } from '$lib/stores/updatesStore';
-  import { getShowPurchases, setShowPurchases } from '$lib/stores/purchasesStore';
+  import { getShowPurchases, setShowPurchases, rehydratePurchasesStore } from '$lib/stores/purchasesStore';
   import {
     decideLaunchModals,
     disableUpdateChecks,
     ignoreReleaseVersion,
     markFlatpakWelcomeShown,
+    markSnapWelcomeShown,
     openReleasePageAndAcknowledge,
     resetLaunchFlow,
   } from '$lib/services/updatesService';
@@ -440,9 +488,29 @@
 
   // Title Bar State (from titleBarStore subscription)
   let showTitleBar = $state(shouldShowTitleBar());
+  let showWindowControls = $state(getShowWindowControls());
+
+  // Search Bar Location State
+  let searchBarLocationPref = $state(getSearchBarLocation());
+  let titlebarSearchQuery = $state(getSearchQuery());
+
+  // Window Controls State
+  let windowControlsConfig = $state<WindowControlsConfig>(getWindowControls());
+
+  // Titlebar Nav State
+  let titlebarNavEnabled = $state(isTitlebarNavEnabled());
+  let titlebarNavPosition = $state<'left' | 'right'>('left');
+  let tbNavDiscover = $state(isDiscoverInTitlebar());
+  let tbNavFavorites = $state(isFavoritesInTitlebar());
+  let tbNavLibrary = $state(isLibraryInTitlebar());
+  let tbNavPurchases = $state(isPurchasesInTitlebar());
+
+  // Window floating state (not maximized/tiled — for rounded corners + shadow)
+  let isWindowFloating = $state(false);
 
   // View State (from navigationStore subscription)
   let activeView = $state<ViewType>('home');
+  let homeTab = $state<'home' | 'editorPicks' | 'forYou' | undefined>(undefined);
   let selectedPlaylistId = $state<number | null>(null);
   let updatesCurrentVersion = $state('');
   let updateRelease = $state<ReleaseInfo | null>(null);
@@ -451,6 +519,7 @@
   let isReminderModalOpen = $state(false);
   let isWhatsNewModalOpen = $state(false);
   let isFlatpakWelcomeOpen = $state(false);
+  let isSnapWelcomeOpen = $state(false);
   let updatesLaunchTriggered = $state(false);
   let sessionReady = $state(false);
 
@@ -477,11 +546,19 @@
     return () => mainContentEl!.removeEventListener('scroll', handler, true);
   });
 
-  // Reset scroll state on view change
+  // Reset scroll state on view or item change (but not on back/forward — that restores saved position)
   $effect(() => {
     void activeView;
+    void currentNavItemId;
     globalScrollTop = 0;
-    activeScrollTarget = null;
+    // Scroll to top for forward navigation (not back/forward, which restores saved position)
+    if (!isBackForward()) {
+      tick().then(() => {
+        if (activeScrollTarget) {
+          activeScrollTarget.scrollTop = 0;
+        }
+      });
+    }
   });
 
   function globalScrollToTop() {
@@ -491,6 +568,7 @@
   // Album, Artist and Label data are fetched, so kept local
   let selectedAlbum = $state<AlbumDetail | null>(null);
   let selectedArtist = $state<ArtistDetail | null>(null);
+  let selectedArtistKnownMbid = $state<string | null>(null);
   let artistTopTracks = $state<PageArtistTrack[]>([]);
   let artistSimilarArtists = $state<PageArtistSimilarItem[]>([]);
   let selectedLabel = $state<{ id: number; name: string } | null>(null);
@@ -498,12 +576,157 @@
   let musicianModalData = $state<ResolvedMusician | null>(null);
   let isArtistAlbumsLoading = $state(false);
 
+  // Scene discovery state
+  interface ArtistsByLocationContext {
+    sourceArtistMbid: string;
+    sourceArtistName: string;
+    sourceArtistType: 'Person' | 'Group' | 'Other';
+    location: {
+      city?: string;
+      areaId?: string;
+      country?: string;
+      countryCode?: string;
+      displayName: string;
+      precision: 'city' | 'state' | 'country';
+    };
+    affinitySeeds: {
+      genres: string[];
+      tags: string[];
+      normalizedSeeds: string[];
+    };
+  }
+  let artistsByLocationContext = $state<ArtistsByLocationContext | null>(null);
+
+  function handleLocationClick(ctx: ArtistsByLocationContext) {
+    artistsByLocationContext = ctx;
+    navigateTo('artists-by-location');
+  }
+
+  // Track current itemId for scroll position save on navigation
+  let currentNavItemId = $state<string | number | undefined>(undefined);
+
   // Purchase downloads state
   let selectedPurchaseAlbumId = $state<string | null>(null);
 
   function handlePurchaseAlbumClick(albumId: string) {
     selectedPurchaseAlbumId = albumId;
-    navigateTo('purchase-album');
+    navigateTo('purchase-album', albumId);
+  }
+
+  function isSessionRestoreSafeView(view: ViewType): boolean {
+    switch (view) {
+      case 'search':
+      case 'library':
+      case 'settings':
+      case 'playlist-manager':
+      case 'blacklist-manager':
+      case 'favorites-tracks':
+      case 'favorites-albums':
+      case 'favorites-artists':
+      case 'favorites-playlists':
+      case 'discover-new-releases':
+      case 'discover-ideal-discography':
+      case 'discover-top-albums':
+      case 'discover-qobuzissimes':
+      case 'discover-albums-of-the-week':
+      case 'discover-press-accolades':
+      case 'discover-playlists':
+      case 'purchases':
+      case 'dailyq':
+      case 'weeklyq':
+      case 'favq':
+      case 'topq':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  function getSessionFallbackView(view: ViewType): ViewType {
+    switch (view) {
+      case 'library-album':
+        return 'library';
+      case 'purchase-album':
+        return 'purchases';
+      default:
+        return 'home';
+    }
+  }
+
+  function getPersistedSessionViewState(): {
+    view: ViewType;
+    viewContextId: string | null;
+    viewContextType: string | null;
+  } {
+    switch (activeView) {
+      case 'album':
+        if (selectedAlbum?.id) {
+          return {
+            view: 'album',
+            viewContextId: String(selectedAlbum.id),
+            viewContextType: 'album',
+          };
+        }
+        break;
+      case 'artist':
+        if (selectedArtist?.id) {
+          return {
+            view: 'artist',
+            viewContextId: String(selectedArtist.id),
+            viewContextType: 'artist',
+          };
+        }
+        break;
+      case 'playlist':
+        if (selectedPlaylistId) {
+          return {
+            view: 'playlist',
+            viewContextId: String(selectedPlaylistId),
+            viewContextType: 'playlist',
+          };
+        }
+        break;
+      case 'library-album': {
+        const localAlbumId = getSelectedLocalAlbumId();
+        if (localAlbumId) {
+          return {
+            view: 'library-album',
+            viewContextId: localAlbumId,
+            viewContextType: 'library-album',
+          };
+        }
+        break;
+      }
+      case 'purchase-album':
+        if (selectedPurchaseAlbumId) {
+          return {
+            view: 'purchase-album',
+            viewContextId: selectedPurchaseAlbumId,
+            viewContextType: 'purchase-album',
+          };
+        }
+        break;
+    }
+
+    if (isSessionRestoreSafeView(activeView)) {
+      return {
+        view: activeView,
+        viewContextId: null,
+        viewContextType: null,
+      };
+    }
+
+    const fallbackView = getSessionFallbackView(activeView);
+    console.warn('[Session] Persist fallback applied for unsupported or incomplete view:', {
+      activeView,
+      fallbackView,
+    });
+
+    return {
+      view: fallbackView,
+      viewContextId: null,
+      viewContextType: null,
+    };
   }
 
   function waitForHomePaint(): Promise<void> {
@@ -525,17 +748,21 @@
     updatesCurrentVersion = decision.currentVersion;
 
     // Store pending modals for sequential display
-    // Order: Flatpak → What's new → Update available
+    // Order: Flatpak/Snap → What's new → Update available
     pendingWhatsNewRelease = decision.whatsNewRelease;
     pendingUpdateRelease = decision.updateRelease;
 
-    // Show first modal in queue (Flatpak has highest priority)
+    // Show first modal in queue (sandbox welcome has highest priority)
     if (decision.showFlatpakWelcome) {
       isFlatpakWelcomeOpen = true;
       return;
     }
+    if (decision.showSnapWelcome) {
+      isSnapWelcomeOpen = true;
+      return;
+    }
 
-    // No Flatpak modal, try What's New
+    // No sandbox modal, try What's New
     showNextModalInQueue();
   }
 
@@ -595,6 +822,13 @@
     showNextModalInQueue();
   }
 
+  function handleSnapWelcomeClose(): void {
+    isSnapWelcomeOpen = false;
+    void markSnapWelcomeShown();
+    // Show next modal in queue
+    showNextModalInQueue();
+  }
+
   function handleWhatsNewClose(): void {
     isWhatsNewModalOpen = false;
     whatsNewRelease = null;
@@ -644,6 +878,9 @@
   let playlistModalMode = $state<'create' | 'edit' | 'addTrack'>('create');
   let playlistModalTrackIds = $state<number[]>([]);
   let playlistModalTracksAreLocal = $state(false);
+  let playlistModalEditPlaylist = $state<{ id: number; name: string; tracks_count: number } | undefined>(undefined);
+  let playlistModalEditIsHidden = $state(false);
+  let playlistModalEditCurrentFolderId = $state<string | null>(null);
   let isPlaylistImportOpen = $state(false);
   let isAboutModalOpen = $state(false);
   let isShortcutsModalOpen = $state(false);
@@ -669,6 +906,9 @@
     focusSearch: () => void;
   } | undefined>(undefined);
 
+  // TitleBar reference for focusing search
+  let titlebarRef = $state<{ focusSearch: () => void } | undefined>(undefined);
+
   // Playback State (from playerStore subscription)
   let currentTrack = $state<PlayingTrack | null>(null);
   let isPlaying = $state(false);
@@ -686,6 +926,8 @@
   let queueRemainingTracks = $state(0); // Actual remaining tracks (total - current_index - 1)
   let historyTracks = $state<QueueTrack[]>([]);
   let infinitePlayEnabled = $state(false);
+  let sessionPersistEnabled = $state(false);
+  let radioLoading = $state(false);
 
   // Toast State (from store subscription)
   let toast = $state<ToastData | null>(null);
@@ -848,8 +1090,8 @@
   }
 
   // Navigation wrapper (keeps debug logging)
-  async function navigateTo(view: string) {
-    console.log('navigateTo called with:', view, 'current activeView:', activeView);
+  async function navigateTo(view: string, itemId?: string | number) {
+    console.log('navigateTo called with:', view, 'itemId:', itemId, 'current activeView:', activeView);
     if (view === 'favorites') {
       await loadFavoritesDefaultTab();
       navigateToFavorites(favoritesDefaultTab);
@@ -860,7 +1102,74 @@
       triggerSearchFocus();
       return;
     }
-    navTo(view as ViewType);
+    // Set homeTab when navigating to a specific home tab (Discover menu)
+    if (view === 'home' && (itemId === 'home' || itemId === 'editorPicks' || itemId === 'forYou')) {
+      homeTab = itemId;
+    }
+    navTo(view as ViewType, itemId);
+  }
+
+  /**
+   * Restore item data when navigating back/forward.
+   * Re-fetches the specific album/artist/playlist/label so the correct page is shown.
+   */
+  async function restoreItemFromHistory(view: ViewType, itemId: string | number) {
+    try {
+      switch (view) {
+        case 'home':
+          if (itemId === 'home' || itemId === 'editorPicks' || itemId === 'forYou') {
+            homeTab = itemId;
+          }
+          break;
+        case 'album':
+          await handleAlbumClick(String(itemId));
+          break;
+        case 'artist':
+          await handleArtistClick(Number(itemId));
+          break;
+        case 'playlist':
+          selectedPlaylistId = Number(itemId);
+          selectPlaylist(Number(itemId));
+          break;
+        case 'label':
+        case 'label-releases':
+          selectedLabel = { id: Number(itemId), name: selectedLabel?.name || '' };
+          break;
+        case 'musician':
+          // Musician data is already in selectedMusician from the original navigation
+          break;
+        case 'purchase-album':
+          selectedPurchaseAlbumId = String(itemId);
+          break;
+        case 'library-album':
+          setRestoredLocalAlbumId(String(itemId));
+          break;
+      }
+    } catch (err) {
+      console.error('[Nav] Failed to restore item from history:', view, itemId, err);
+    }
+  }
+
+  // Effective search-in-titlebar: only when custom titlebar is shown AND user preference is 'titlebar'
+  function isSearchInTitlebar(): boolean {
+    return showTitleBar && searchBarLocationPref === 'titlebar';
+  }
+
+  // Titlebar search handlers (mirrors Sidebar search logic)
+  const TITLEBAR_SEARCH_NAV_THRESHOLD = 3;
+
+  function handleTitlebarSearchInput(query: string) {
+    titlebarSearchQuery = query;
+    setSearchQuery(query);
+    if (query.trim().length >= TITLEBAR_SEARCH_NAV_THRESHOLD && activeView !== 'search') {
+      navigateTo('search');
+    }
+  }
+
+  function handleTitlebarSearchClear() {
+    titlebarSearchQuery = '';
+    clearSearchState();
+    titlebarRef?.focusSearch();
   }
 
   async function handleAlbumClick(albumId: string) {
@@ -877,7 +1186,7 @@
       }
 
       selectedAlbum = converted;
-      navigateTo('album');
+      navTo('album', albumId);
       hideToast();
 
       // Fetch artist albums for "By the same artist" section (non-blocking)
@@ -931,25 +1240,22 @@
   /**
    * Navigate to artist view and scroll to Discography section
    */
-  function handleViewArtistDiscography() {
+  async function handleViewArtistDiscography() {
     if (selectedAlbum?.artistId) {
-      // Store scroll target for artist view
       const artistId = selectedAlbum.artistId;
-      handleArtistClick(artistId).then(() => {
-        // Use setTimeout to allow the view to render before scrolling
-        setTimeout(() => {
-          const discographySection = document.querySelector('.artist-section');
-          if (discographySection) {
-            discographySection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }
-        }, 100);
-      });
+      await handleArtistClick(artistId);
+      await tick();
+      const discographySection = document.querySelector('.artist-section');
+      if (discographySection) {
+        discographySection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     }
   }
 
 
-  async function handleArtistClick(artistId: number) {
+  async function handleArtistClick(artistId: number, mbid?: string) {
     try {
+      selectedArtistKnownMbid = mbid ?? null;
       showToast($t('toast.loadingArtist'), 'info');
       const response = await invoke<PageArtistResponse>('v2_get_artist_page', { artistId });
       console.log('Artist page:', response);
@@ -957,8 +1263,25 @@
       selectedArtist = convertPageArtist(response);
       artistTopTracks = response.top_tracks || [];
       artistSimilarArtists = response.similar_artists?.items || [];
-      navigateTo('artist');
+      navTo('artist', artistId);
       hideToast();
+
+      // The artist/page endpoint sometimes omits EPs & Singles from its
+      // releases array. If they're missing, fetch them explicitly.
+      // If the artist/page response didn't include EPs & Singles, fetch them
+      const hasEpGroup = (response.releases || []).some(
+        g => g.type === 'ep' || g.type === 'single' || g.type === 'epSingle'
+      );
+      if (!hasEpGroup && selectedArtist.epsSingles.length === 0) {
+        invoke<ReleasesGridResponse>('get_releases_grid', {
+          artistId, releaseType: 'epSingle', limit: 25, offset: 0
+        }).then(result => {
+          if (result.items.length > 0 && selectedArtist?.id === artistId) {
+            selectedArtist = appendPageReleases(selectedArtist, 'epSingle', result.items, result.has_more);
+            console.log(`[Artist] Backfilled ${result.items.length} EPs & Singles`);
+          }
+        }).catch(err => console.debug('[Artist] EP backfill failed:', err));
+      }
     } catch (err) {
       console.error('Failed to load artist:', err);
       showToast($t('toast.failedLoadArtist'), 'error');
@@ -1002,12 +1325,12 @@
 
   function handleLabelClick(labelId: number, labelName?: string) {
     selectedLabel = { id: labelId, name: labelName || '' };
-    navigateTo('label');
+    navigateTo('label', labelId);
   }
 
   function handleNavigateLabelReleases(labelId: number, labelName: string) {
     selectedLabel = { id: labelId, name: labelName };
-    navigateTo('label-releases');
+    navigateTo('label-releases', labelId);
   }
 
   /**
@@ -1037,7 +1360,7 @@
         case 'contextual':
           // Show full Musician Page
           selectedMusician = musician;
-          navigateTo('musician');
+          navigateTo('musician', musician.qobuz_artist_id ?? name);
           break;
 
         case 'weak':
@@ -1116,7 +1439,7 @@
           if (!isNaN(playlistId)) {
             requestFocus('playlist', context.id);
             selectedPlaylistId = playlistId;
-            navigateTo('playlist');
+            navigateTo('playlist', playlistId);
           }
           break;
 
@@ -1135,10 +1458,14 @@
           navigateToFavorites('tracks');
           break;
 
-        case 'home_list':
-          // Navigate to home page
-          navigateTo('home');
+        case 'home_list': {
+          // Navigate to home page with the correct tab
+          const tabFromId = context.id.split(':')[0];
+          const tab = (tabFromId === 'forYou' || tabFromId === 'editorPicks') ? tabFromId : 'home';
+          homeTab = tab;
+          navigateTo('home', tab);
           break;
+        }
 
         case 'search':
           // Navigate to search (could restore query if needed)
@@ -1178,11 +1505,14 @@
   async function loadMoreArtistReleases(releaseType: string) {
     if (!selectedArtist || isArtistAlbumsLoading) return;
 
+    // Map UI release type to API release type
+    const apiReleaseType = releaseType === 'ep' || releaseType === 'single' ? 'epSingle' : releaseType;
+
     // Count current items for this release type to use as offset
     let currentCount = 0;
     switch (releaseType) {
       case 'album': currentCount = selectedArtist.albums.length; break;
-      case 'ep': case 'single': currentCount = selectedArtist.epsSingles.length; break;
+      case 'ep': case 'single': case 'epSingle': currentCount = selectedArtist.epsSingles.length; break;
       case 'live': currentCount = selectedArtist.liveAlbums.length; break;
       case 'compilation': case 'other': currentCount = selectedArtist.others.length; break;
     }
@@ -1191,7 +1521,7 @@
     try {
       const result = await invoke<ReleasesGridResponse>('get_releases_grid', {
         artistId: selectedArtist.id,
-        releaseType,
+        releaseType: apiReleaseType,
         limit: 25,
         offset: currentCount
       });
@@ -1309,7 +1639,8 @@
         album_id: album.id,
         artist_id: trk.artistId ?? album.artistId,
         streamable: trk.streamable ?? true,
-        source: 'qobuz'
+        source: 'qobuz',
+        parental_warning: trk.parental_warning ?? false
       }, false, { silent: true });
       if (queued) {
         queuedCount += 1;
@@ -1441,6 +1772,7 @@
         hires_streamable?: boolean;
         maximum_bit_depth?: number;
         maximum_sampling_rate?: number;
+        parental_warning?: boolean;
       }>;
     };
   }
@@ -1537,7 +1869,8 @@
         album_id: trk.album?.id,
         artist_id: trk.performer?.id,
         streamable: true,
-        source: 'qobuz'
+        source: 'qobuz',
+        parental_warning: trk.parental_warning ?? false
       }, false, { silent: true });
       if (queued) {
         queuedCount += 1;
@@ -1621,7 +1954,7 @@
 
   // Playback Functions - QobuzTrack from search results
   async function handleTrackPlay(track: QobuzTrack) {
-    console.log('Playing track:', track);
+    console.log('Playing track:', track.id, track.title);
 
     const artwork = track.album?.image?.large || track.album?.image?.thumbnail || track.album?.image?.small || '';
     const quality = track.hires_streamable && track.maximum_bit_depth && track.maximum_sampling_rate
@@ -1647,7 +1980,7 @@
 
   // Handle track play from album detail view
   async function handleAlbumTrackPlay(track: Track) {
-    console.log('Playing album track:', track);
+    console.log('Playing album track:', track.id, track.title);
 
     // ALWAYS create context when playing from an album
     // The setting only affects menu options visibility, not implicit behavior
@@ -1923,7 +2256,8 @@
       isLocal,
       source,
       albumId: track.album_id ?? undefined,
-      artistId: track.artist_id ?? undefined
+      artistId: track.artist_id ?? undefined,
+      parental_warning: track.parental_warning ?? false
     }, { isLocal, source: source as 'qobuz' | 'local' | 'plex', showLoadingToast: false, gaplessTransition });
   }
 
@@ -1968,6 +2302,10 @@
     const success = await clearQueue();
     if (success) {
       showToast($t('toast.queueCleared'), 'info');
+      // Immediately persist the empty state so it survives app close
+      if (sessionPersistEnabled) {
+        saveSessionBeforeClose();
+      }
     } else {
       showToast($t('toast.failedClearQueue'), 'error');
     }
@@ -2136,6 +2474,8 @@
   // Create album radio via Qobuz /radio/album API
   async function handleCreateAlbumRadio() {
     if (!selectedAlbum) return;
+    radioLoading = true;
+    showToast($t('radio.creating'), 'info');
     try {
       const contextId = await invoke<string>('v2_create_album_radio', {
         albumId: String(selectedAlbum.id),
@@ -2165,11 +2505,15 @@
       }
     } catch (err) {
       console.error('Failed to create album radio:', err);
+    } finally {
+      radioLoading = false;
     }
   }
 
   // Create QBZ track radio (used by PlaylistDetailView, FavoritesView, etc.)
   async function handleCreateQbzTrackRadio(trackId: number, trackTitle: string, artistId?: number) {
+    radioLoading = true;
+    showToast($t('radio.creating'), 'info');
     try {
       await invoke<string>('v2_create_track_radio', {
         trackId,
@@ -2197,11 +2541,15 @@
       }
     } catch (err) {
       console.error('Failed to create QBZ track radio:', err);
+    } finally {
+      radioLoading = false;
     }
   }
 
   // Create Qobuz track radio (used by PlaylistDetailView, FavoritesView, etc.)
   async function handleCreateQobuzTrackRadio(trackId: number, trackTitle: string) {
+    radioLoading = true;
+    showToast($t('radio.creating'), 'info');
     try {
       await invoke<string>('v2_create_qobuz_track_radio', {
         trackId,
@@ -2228,6 +2576,8 @@
       }
     } catch (err) {
       console.error('Failed to create Qobuz track radio:', err);
+    } finally {
+      radioLoading = false;
     }
   }
 
@@ -2263,7 +2613,8 @@
         album_id: album.id,
         artist_id: trk.artistId ?? album.artistId,
         streamable: trk.streamable ?? true,
-        source: 'qobuz'
+        source: 'qobuz',
+        parental_warning: trk.parental_warning ?? false
       }, false, { silent: true });
       if (queued) {
         queuedCount += 1;
@@ -2610,7 +2961,7 @@
    * This is fire-and-forget to match view callback signatures
    */
   function handleDisplayTrackPlay(track: DisplayTrack): void {
-    console.log('Playing display track:', track);
+    console.log('Playing display track:', track.id, track.title);
 
     // Determine quality string:
     // - If we have exact bitDepth/samplingRate, show them
@@ -2666,7 +3017,7 @@
   }
 
   async function handleLocalTrackPlay(track: LocalLibraryTrack) {
-    console.log('Playing local track:', track);
+    console.log('Playing local track:', track.id, track.title);
     // DO NOT clear context - LocalLibraryView already sets it correctly
     // await clearPlaybackContext();
 
@@ -2715,12 +3066,43 @@
   }
 
   // Playlist Modal Functions
+  function clearPlaylistEditContext() {
+    playlistModalEditPlaylist = undefined;
+    playlistModalEditIsHidden = false;
+    playlistModalEditCurrentFolderId = null;
+  }
+
+  function handleSidebarPlaylistEdit(payload: {
+    id: number;
+    name: string;
+    tracks_count: number;
+    isHidden: boolean;
+    currentFolderId: string | null;
+  }) {
+    userPlaylists = sidebarRef?.getPlaylists() ?? [];
+    playlistModalEditPlaylist = {
+      id: payload.id,
+      name: payload.name,
+      tracks_count: payload.tracks_count
+    };
+    playlistModalEditIsHidden = payload.isHidden;
+    playlistModalEditCurrentFolderId = payload.currentFolderId;
+    openPlaylistModal('edit', []);
+  }
+
+  function handlePlaylistModalClose() {
+    clearPlaylistEditContext();
+    closePlaylistModal();
+  }
+
   function openCreatePlaylist() {
+    clearPlaylistEditContext();
     userPlaylists = sidebarRef?.getPlaylists() ?? [];
     openPlaylistModal('create', []);
   }
 
   function openAddToPlaylist(trackIds: number[], isLocal = false) {
+    clearPlaylistEditContext();
     userPlaylists = sidebarRef?.getPlaylists() ?? [];
     openPlaylistModal('addTrack', trackIds, isLocal);
   }
@@ -2731,6 +3113,8 @@
 
     if (playlistModalMode === 'addTrack') {
       showToast($t('toast.tracksAddedToPlaylist'), 'success');
+    } else if (playlistModalMode === 'edit') {
+      showToast($t('toast.playlistUpdated'), 'success');
     } else {
       showToast($t('toast.playlistCreated'), 'success');
     }
@@ -2748,6 +3132,8 @@
         sidebarRef?.updatePlaylistCounts(playlist.id, qobuzCount, localCount);
       }, 100);
     }
+
+    clearPlaylistEditContext();
   }
 
   function openImportPlaylist() {
@@ -2822,6 +3208,13 @@
     // Set up per-user localStorage scoping and migrate old keys
     setStorageUserId(info.userId);
     migrateLocalStorage(info.userId);
+    migrateLocalStorageV2(info.userId);
+
+    // Re-read stores that were initialised at module-load (before userId was set)
+    rehydratePurchasesStore();
+    rehydrateVerboseCapture();
+    showPurchases = getShowPurchases();
+
     loadSystemNotificationsPreference();
 
     // Re-sync volume from the now-correct user-scoped localStorage key
@@ -2836,38 +3229,23 @@
 
     showToast($t('toast.welcomeUser', { values: { name: info.userName } }), 'success');
 
-    // Initialize per-user stores now that the backend session is active
+    // Initialize playback preferences first — session restore depends on this
     initOfflineCacheStates(); // has internal try/catch
-    initPlaybackPreferences().catch(err => console.debug('[PlaybackPrefs] Init deferred:', err));
-    initBlacklistStore().catch(err => console.debug('[Blacklist] Init deferred:', err));
-    refreshUpdatePreferences().catch(err => console.debug('[Updates] Prefs refresh deferred:', err));
+    await initPlaybackPreferences().then(() => {
+      sessionPersistEnabled = getCachedPreferences().persist_session;
+      console.log('[Session] Persist session enabled:', sessionPersistEnabled);
+    }).catch(err => console.debug('[PlaybackPrefs] Init deferred:', err));
 
-    // Load audio settings (normalization state) now that session is active
-    invoke<{ normalization_enabled: boolean }>('v2_get_audio_settings').then((settings) => {
-      normalizationEnabled = settings.normalization_enabled;
-    }).catch((err) => {
-      console.error('[AudioSettings] Failed to load:', err);
-    });
-
-    // Load favorites now that login is confirmed (sync with Qobuz)
-    loadFavorites();        // Track favorites
-    loadAlbumFavorites();   // Album favorites
-    loadArtistFavorites();  // Artist favorites
-
-    // Refresh offline status now that we're logged in
-    await refreshOfflineStatus();
-
-    // Train recommendation scores in background (fire-and-forget)
-    trainScores().then(() => {
-      console.log('[Reco] Scores trained after login');
-    }).catch(err => {
-      console.debug('[Reco] Score training failed:', err);
-    });
-
-    // Restore previous local session only when Qobuz Connect remote mode is not active.
+    // Restore previous session EARLY (before network-heavy init) so the
+    // player bar shows the last track instantly instead of "No track playing"
+    if (!sessionPersistEnabled) {
+      console.log('[Session] Session persistence disabled, skipping restore');
+    }
     try {
       await refreshQobuzConnectStatus();
-      if (!isQconnectRemoteModeActive()) {
+      const qconnectRemoteModeActive = isQconnectRemoteModeActive();
+
+      if (sessionPersistEnabled && !qconnectRemoteModeActive) {
         const session = await loadSessionState();
 
         // Restore queue + track (visual only — paused at 0:00)
@@ -2924,7 +3302,7 @@
             });
 
             // First play will load a fresh stream instead of seeking
-            setPendingSessionRestore(track.id, 0);
+            setPendingSessionRestore(track.id);
             console.log(`[Session] Track ${track.id} restored visually (paused at 0:00)`);
           }
 
@@ -2935,12 +3313,40 @@
         if (session) {
           restoreLastView(session);
         }
-      } else {
+      } else if (qconnectRemoteModeActive) {
         console.log('[Session] Skipping local session restore while Qobuz Connect remote mode is active');
       }
     } catch (err) {
       console.error('[Session] Failed to restore session:', err);
     }
+
+    // Continue with remaining store initialization (non-blocking for session)
+    initBlacklistStore().catch(err => console.debug('[Blacklist] Init deferred:', err));
+    initCustomArtistImageStore().catch(err => console.debug('[CustomArtistImages] Init deferred:', err));
+    initCustomAlbumCoverStore().catch(err => console.debug('[CustomAlbumCovers] Init deferred:', err));
+    refreshUpdatePreferences().catch(err => console.debug('[Updates] Prefs refresh deferred:', err));
+
+    // Load audio settings (normalization state) now that session is active
+    invoke<{ normalization_enabled: boolean }>('v2_get_audio_settings').then((settings) => {
+      normalizationEnabled = settings.normalization_enabled;
+    }).catch((err) => {
+      console.error('[AudioSettings] Failed to load:', err);
+    });
+
+    // Load favorites now that login is confirmed (sync with Qobuz)
+    loadFavorites();        // Track favorites
+    loadAlbumFavorites();   // Album favorites
+    loadArtistFavorites();  // Artist favorites
+
+    // Refresh offline status now that we're logged in
+    refreshOfflineStatus().catch(err => console.debug('[Offline] Status refresh deferred:', err));
+
+    // Train recommendation scores in background (fire-and-forget)
+    trainScores().then(() => {
+      console.log('[Reco] Scores trained after login');
+    }).catch(err => {
+      console.debug('[Reco] Score training failed:', err);
+    });
   }
 
   async function handleLogout() {
@@ -2960,6 +3366,8 @@
       setStorageUserId(null);
       // Clear session state
       await clearSession();
+      clearCustomArtistImages();
+      clearCustomAlbumCovers();
       setLoggedOut();
       sessionReady = false;
       updatesLaunchTriggered = false;
@@ -3007,13 +3415,32 @@
         if (contextId) {
           setRestoredLocalAlbumId(contextId);
           restoreView('library-album');
+          return;
         }
-        return;
+        break;
+      case 'purchase-album':
+        if (contextId) {
+          selectedPurchaseAlbumId = contextId;
+          restoreView('purchase-album');
+          return;
+        }
+        break;
       default:
-        // Simple views (search, library, settings, favorites-*, etc.)
-        restoreView(view);
-        return;
+        if (isSessionRestoreSafeView(view)) {
+          restoreView(view);
+          return;
+        }
+        break;
     }
+
+    const fallbackView = getSessionFallbackView(view);
+    console.warn('[Session] Skipping invalid last-view restore and falling back:', {
+      view,
+      contextId,
+      contextType,
+      fallbackView,
+    });
+    restoreView(fallbackView);
   }
 
   // Save session state before window closes
@@ -3022,39 +3449,11 @@
     if (!shouldPersistLocalSession()) return;
 
     try {
-      // Build view context from current navigation state
-      const currentView = activeView;
-      let viewContextId: string | null = null;
-      let viewContextType: string | null = null;
-
-      switch (currentView) {
-        case 'album':
-          if (selectedAlbum?.id) {
-            viewContextId = String(selectedAlbum.id);
-            viewContextType = 'album';
-          }
-          break;
-        case 'artist':
-          if (selectedArtist?.id) {
-            viewContextId = String(selectedArtist.id);
-            viewContextType = 'artist';
-          }
-          break;
-        case 'playlist':
-          if (selectedPlaylistId) {
-            viewContextId = String(selectedPlaylistId);
-            viewContextType = 'playlist';
-          }
-          break;
-        case 'library-album': {
-          const localAlbumId = getSelectedLocalAlbumId();
-          if (localAlbumId) {
-            viewContextId = localAlbumId;
-            viewContextType = 'library-album';
-          }
-          break;
-        }
-      }
+      const {
+        view: viewToPersist,
+        viewContextId,
+        viewContextType,
+      } = getPersistedSessionViewState();
 
       // Get ALL queue tracks from backend (uncapped, for full persistence)
       const snapshot = await invoke<{ tracks: BackendQueueTrack[]; current_index: number | null }>('v2_get_all_queue_tracks');
@@ -3084,7 +3483,7 @@
         isShuffle,
         repeatMode,
         isPlaying,
-        currentView,
+        viewToPersist,
         viewContextId,
         viewContextType
       );
@@ -3212,14 +3611,30 @@
     // Keyboard navigation
     document.addEventListener('keydown', handleKeydown);
 
+    // Suppress WebKit default context menu globally
+    // Custom menus (TrackRow, sidebar, etc.) call e.stopPropagation() so they are unaffected
+    const handleGlobalContextMenu = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener('contextmenu', handleGlobalContextMenu);
+
     // Register keybinding actions
     registerAction('playback.toggle', togglePlay);
     registerAction('playback.next', handleSkipForward);
     registerAction('playback.prev', handleSkipBack);
     registerAction('nav.back', navGoBack);
     registerAction('nav.forward', navGoForward);
-    registerAction('nav.search', () => sidebarRef?.focusSearch());
+    registerAction('nav.search', () => {
+      if (isSearchInTitlebar()) {
+        titlebarRef?.focusSearch();
+      } else {
+        if (!getIsExpanded()) {
+          expandSidebar();
+        }
+        sidebarRef?.focusSearch();
+      }
+    });
+    registerAction('ui.sidebar', toggleSidebar);
     registerAction('ui.focusMode', toggleFocusMode);
+    registerAction('ui.miniPlayer', () => { void enterMiniplayerMode(); });
     registerAction('ui.queue', toggleQueue);
     registerAction('ui.escape', handleUIEscape);
     registerAction('ui.showShortcuts', () => { isShortcutsModalOpen = true; });
@@ -3305,10 +3720,13 @@
     // Subscribe to UI state changes
     const unsubscribeUI = subscribeUI(() => {
       const uiState = getUIState();
-      // Close network sidebar and lyrics when queue opens
+      const wasPlaylistModalOpen = isPlaylistModalOpen;
+      // Close network sidebar and lyrics when queue opens; restore when it closes
       if (uiState.isQueueOpen && !isQueueOpen) {
         closeContentSidebar('network');
         hideLyricsSidebar();
+      } else if (!uiState.isQueueOpen && isQueueOpen) {
+        restoreContentSidebar();
       }
       isQueueOpen = uiState.isQueueOpen;
       isFullScreenOpen = uiState.isFullScreenOpen;
@@ -3319,6 +3737,9 @@
       playlistModalMode = uiState.playlistModalMode;
       playlistModalTrackIds = uiState.playlistModalTrackIds;
       playlistModalTracksAreLocal = uiState.playlistModalTracksAreLocal;
+      if (wasPlaylistModalOpen && !uiState.isPlaylistModalOpen) {
+        clearPlaylistEditContext();
+      }
       isPlaylistImportOpen = uiState.isPlaylistImportOpen;
     });
 
@@ -3339,6 +3760,47 @@
     initTitleBarStore();
     const unsubscribeTitleBar = subscribeTitleBar(() => {
       showTitleBar = shouldShowTitleBar();
+      showWindowControls = getShowWindowControls();
+    });
+
+    // Initialize and subscribe to search bar location
+    initSearchBarLocation();
+    const unsubscribeSearchBarLocation = subscribeSearchBarLocation(() => {
+      searchBarLocationPref = getSearchBarLocation();
+    });
+
+    // Initialize and subscribe to window controls customization
+    initWindowControlsStore();
+    const unsubscribeWindowControls = subscribeWindowControls(() => {
+      windowControlsConfig = getWindowControls();
+      // Recompute titlebar nav position when controls change
+      titlebarNavPosition = getResolvedPosition(windowControlsConfig.position);
+    });
+
+    // Initialize and subscribe to titlebar nav store
+    initTitlebarNavStore();
+    const unsubscribeTitlebarNav = subscribeTitlebarNav(() => {
+      titlebarNavEnabled = isTitlebarNavEnabled();
+      titlebarNavPosition = getResolvedPosition(windowControlsConfig.position);
+      tbNavDiscover = isDiscoverInTitlebar();
+      tbNavFavorites = isFavoritesInTitlebar();
+      tbNavLibrary = isLibraryInTitlebar();
+      tbNavPurchases = isPurchasesInTitlebar();
+    });
+
+    // Detect floating window state (not maximized) for rounded corners + shadow
+    let unlistenResize: (() => void) | undefined;
+    (async () => {
+      const appWindow = getCurrentWindow();
+      isWindowFloating = !(await appWindow.isMaximized());
+      unlistenResize = await appWindow.onResized(async () => {
+        isWindowFloating = !(await appWindow.isMaximized());
+      });
+    })();
+
+    // Sync titlebar search query with search state store
+    const unsubscribeTitlebarSearch = subscribeSearchQuery((query) => {
+      titlebarSearchQuery = query;
     });
 
     // Subscribe to offline state changes
@@ -3351,8 +3813,33 @@
     // Subscribe to navigation state changes
     const unsubscribeNav = subscribeNav(() => {
       const navState = getNavigationState();
+      const prevView = activeView;
+      const prevItemId = currentNavItemId;
+
+      // Save scroll position of the view we're leaving
+      if (prevView !== navState.activeView || prevItemId !== navState.activeItemId) {
+        saveScrollPosition(prevView, globalScrollTop, prevItemId);
+      }
+
       activeView = navState.activeView;
       selectedPlaylistId = navState.selectedPlaylistId;
+      currentNavItemId = navState.activeItemId;
+
+      // On back/forward navigation, reload the specific item from history
+      if (navState.isBackForward && navState.activeItemId != null) {
+        restoreItemFromHistory(navState.activeView, navState.activeItemId);
+      }
+
+      // Restore scroll position on back/forward
+      if (navState.isBackForward) {
+        const savedScroll = getSavedScrollPosition(navState.activeView, navState.activeItemId);
+        tick().then(() => {
+          if (activeScrollTarget) {
+            activeScrollTarget.scrollTop = savedScroll;
+            globalScrollTop = savedScroll;
+          }
+        });
+      }
     });
 
     // Subscribe to player state changes
@@ -3449,10 +3936,12 @@
       lyricsIsSynced = state.isSynced;
       lyricsActiveIndex = state.activeIndex;
       lyricsActiveProgress = state.activeProgress;
-      // Close network sidebar and queue when lyrics opens
+      // Close network sidebar and queue when lyrics opens; restore when it closes
       if (state.sidebarVisible && !lyricsSidebarVisible) {
         closeContentSidebar('network');
         closeQueue();
+      } else if (!state.sidebarVisible && lyricsSidebarVisible) {
+        restoreContentSidebar();
       }
       lyricsSidebarVisible = state.sidebarVisible;
     });
@@ -3809,6 +4298,7 @@
       saveSessionBeforeClose();
       cleanupBootstrap();
       document.removeEventListener('keydown', handleKeydown);
+      document.removeEventListener('contextmenu', handleGlobalContextMenu);
       unregisterAll(); // Cleanup keybinding actions
       clearInterval(qobuzConnectStatusInterval);
       clearInterval(qconnectPositionReportInterval);
@@ -3821,6 +4311,11 @@
       unsubscribeAuth();
       unsubscribeSidebar();
       unsubscribeTitleBar();
+      unsubscribeSearchBarLocation();
+      unsubscribeWindowControls();
+      unsubscribeTitlebarNav();
+      unlistenResize?.();
+      unsubscribeTitlebarSearch();
       unsubscribeOffline();
       unsubscribeNav();
       unsubscribePlayer();
@@ -3903,6 +4398,27 @@
     };
   });
 
+  // Resolved artwork URL — proxied through backend cache so it works even when
+  // WebKitGTK TLS is broken (AppImage on some distros). See GitHub #163.
+  let resolvedArtwork = $state<string>('');
+  $effect(() => {
+    const raw = currentTrack
+      ? (currentTrack.albumId ? resolveAlbumCover(currentTrack.albumId, currentTrack.artwork) : currentTrack.artwork)
+      : '';
+    if (!raw) { resolvedArtwork = ''; return; }
+    // If already a local/asset URL, use directly
+    if (raw.startsWith('asset://') || raw.startsWith('file://') || raw.startsWith('/')) {
+      resolvedArtwork = raw;
+      return;
+    }
+    // Proxy HTTPS URLs through backend cache
+    getCachedImageUrl(raw).then(resolved => {
+      resolvedArtwork = resolved;
+    }).catch(() => {
+      resolvedArtwork = raw;
+    });
+  });
+
   // Derived values for NowPlayingBar
   const currentQueueTrack = $derived<QueueTrack | null>(currentTrack ? {
     id: String(currentTrack.id),
@@ -3914,13 +4430,43 @@
   } : null);
 </script>
 
+{#snippet titlebarNavSnippet()}
+  <TitleBarNav
+    {activeView}
+    activeItemId={activeView === 'home' ? homeTab : undefined}
+    onNavigate={navigateTo}
+    position={titlebarNavPosition}
+    showDiscover={tbNavDiscover}
+    showFavorites={tbNavFavorites}
+    showLibrary={tbNavLibrary}
+    showPurchases={tbNavPurchases && showPurchases}
+  />
+{/snippet}
+
 {#if !isLoggedIn}
   <LoginView onLoginSuccess={handleLoginSuccess} onStartOffline={handleStartOffline} />
 {:else}
-  <div class="app" class:no-titlebar={!showTitleBar}>
+  <div class="app" class:no-titlebar={!showTitleBar} class:floating={isWindowFloating}>
     <!-- Custom Title Bar (CSD) -->
     {#if showTitleBar}
-      <TitleBar />
+      <TitleBar
+        bind:this={titlebarRef}
+        searchInTitlebar={isSearchInTitlebar()}
+        searchQuery={titlebarSearchQuery}
+        onSearchInput={handleTitlebarSearchInput}
+        onSearchClear={handleTitlebarSearchClear}
+        controlsPosition={windowControlsConfig.position}
+        controlsShape={windowControlsConfig.shape}
+        controlsSize={windowControlsConfig.size}
+        controlsColors={{
+          minimize: windowControlsConfig.minimizeColors,
+          maximize: windowControlsConfig.maximizeColors,
+          close: windowControlsConfig.closeColors,
+        }}
+        navSnippet={titlebarNavEnabled && showTitleBar ? titlebarNavSnippet : undefined}
+        navPosition={titlebarNavPosition}
+        {showWindowControls}
+      />
     {/if}
 
     <div class="app-body">
@@ -3934,6 +4480,7 @@
       onCreatePlaylist={openCreatePlaylist}
       onImportPlaylist={openImportPlaylist}
       onPlaylistManagerClick={() => navigateTo('playlist-manager')}
+      onEditPlaylist={handleSidebarPlaylistEdit}
       onSettingsClick={() => navigateTo('settings')}
       onKeybindingsClick={() => isKeybindingsSettingsOpen = true}
       onAboutClick={() => isAboutModalOpen = true}
@@ -3944,6 +4491,11 @@
       onToggle={toggleSidebar}
       showTitleBar={showTitleBar}
       {showPurchases}
+      searchInTitlebar={isSearchInTitlebar()}
+      discoverInTitlebar={tbNavDiscover && showTitleBar}
+      favoritesInTitlebar={tbNavFavorites && showTitleBar}
+      libraryInTitlebar={tbNavLibrary && showTitleBar}
+      purchasesInTitlebar={tbNavPurchases && showTitleBar}
     />
 
     <!-- Content Area (main + lyrics sidebar) -->
@@ -4005,6 +4557,8 @@
             onNavigateWeeklyQ={() => navigateTo('weeklyq')}
             onNavigateFavQ={() => navigateTo('favq')}
             onNavigateTopQ={() => navigateTo('topq')}
+            {homeTab}
+            onTabChange={(tab) => { homeTab = tab; navigateTo('home', tab); }}
           />
         {/if}
       {:else if activeView === 'search'}
@@ -4050,6 +4604,7 @@
             onPlaylistShareQobuz={sharePlaylistQobuzLinkById}
             activeTrackId={currentTrack?.id ?? null}
             isPlaybackActive={isPlaying}
+            searchInTitlebar={isSearchInTitlebar()}
           />
         {/if}
       {:else if activeView === 'settings'}
@@ -4091,6 +4646,7 @@
           onPlayAllNext={handleAddAlbumToQueueNext}
           onPlayAllLater={handleAddAlbumToQueueLater}
           onAddTrackToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+          onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
           onAddAlbumToPlaylist={() => addAlbumToPlaylist(selectedAlbum)}
           onTrackDownload={handleTrackDownload}
           onTrackRemoveDownload={handleTrackRemoveDownload}
@@ -4114,10 +4670,18 @@
           checkRelatedAlbumDownloaded={checkAlbumFullyDownloaded}
           onShowAlbumCredits={() => selectedAlbum && showAlbumCredits(selectedAlbum.id)}
           onCreateAlbumRadio={handleCreateAlbumRadio}
+          {radioLoading}
         />
+      {:else if activeView === 'artist' && !selectedArtist}
+        <!-- Defensive fallback: artist view active but no data loaded yet -->
+        <div class="view-error">
+          <p>{$t('toast.failedLoadArtist')}</p>
+          <button class="view-error-back" onclick={navGoBack}>{$t('actions.back')}</button>
+        </div>
       {:else if activeView === 'artist' && selectedArtist}
         <ArtistDetailView
           artist={selectedArtist}
+          knownMbid={selectedArtistKnownMbid}
           initialTopTracks={artistTopTracks}
           initialSimilarArtists={artistSimilarArtists}
           onBack={navGoBack}
@@ -4139,6 +4703,7 @@
           onTrackPlayLater={queueQobuzTrackLater}
           onTrackAddFavorite={handleAddToFavorites}
           onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+          onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
           onAddAlbumToPlaylist={addAlbumToPlaylistById}
           onTrackShareQobuz={shareQobuzTrackLink}
           onTrackShareSonglink={(track) => shareSonglinkTrack(track.id, track.isrc)}
@@ -4147,6 +4712,7 @@
           onPlaylistClick={selectPlaylist}
           onLabelClick={handleLabelClick}
           onMusicianClick={handleMusicianClick}
+          onLocationClick={handleLocationClick}
           activeTrackId={currentTrack?.id ?? null}
           isPlaybackActive={isPlaying}
         />
@@ -4187,6 +4753,7 @@
           onTrackPlayNext={queueQobuzTrackNext}
           onTrackPlayLater={queueQobuzTrackLater}
           onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+          onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
           onTrackAddFavorite={handleAddToFavorites}
           onTrackGoToAlbum={handleAlbumClick}
           activeTrackId={currentTrack?.id ?? null}
@@ -4222,6 +4789,12 @@
           activeTrackId={currentTrack?.id ?? null}
           isPlaybackActive={isPlaying}
         />
+      {:else if activeView === 'playlist' && !selectedPlaylistId}
+        <!-- Defensive fallback: playlist view active but no data loaded yet -->
+        <div class="view-error">
+          <p>{$t('toast.failedLoadPlaylist')}</p>
+          <button class="view-error-back" onclick={navGoBack}>{$t('actions.back')}</button>
+        </div>
       {:else if activeView === 'playlist' && selectedPlaylistId}
         <PlaylistDetailView
           playlistId={selectedPlaylistId}
@@ -4233,6 +4806,7 @@
           onTrackPlayLater={queuePlaylistTrackLater}
           onTrackAddFavorite={handleAddToFavorites}
           onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+          onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
           onTrackShareQobuz={shareQobuzTrackLink}
           onTrackShareSonglink={(track) => shareSonglinkTrack(track.id, track.isrc)}
           onTrackGoToAlbum={handleAlbumClick}
@@ -4289,6 +4863,7 @@
             onTrackPlayLater={queuePlaylistTrackLater}
             onTrackAddFavorite={handleAddToFavorites}
             onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+            onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
             onTrackShareQobuz={shareQobuzTrackLink}
             onTrackShareSonglink={(track) => shareSonglinkTrack(track.id, track.isrc)}
             onTrackGoToAlbum={handleAlbumClick}
@@ -4306,6 +4881,7 @@
             onPlaylistPlayLater={queuePlaylistLaterById}
             onPlaylistRemoveFavorite={removePlaylistFavoriteById}
             onPlaylistShareQobuz={sharePlaylistQobuzLinkById}
+            onRandomArtist={(artistId) => handleArtistClick(artistId)}
             selectedTab={getFavoritesTabFromView(activeView) ?? favoritesDefaultTab}
             onTabNavigate={(tab) => navigateToFavorites(tab)}
             activeTrackId={currentTrack?.id ?? null}
@@ -4478,6 +5054,7 @@
           onTrackPlayNext={queueDisplayTrackNext}
           onTrackPlayLater={queueDisplayTrackLater}
           onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId])}
+          onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds)}
           onTrackShareQobuz={shareQobuzTrackLink}
           onTrackShareSonglink={(track) => shareSonglinkTrack(track.id, track.isrc)}
           onTrackGoToAlbum={handleAlbumClick}
@@ -4547,6 +5124,20 @@
           activeTrackId={currentTrack?.id}
           isPlaybackActive={isPlaying}
         />
+      {:else if activeView === 'artists-by-location' && artistsByLocationContext}
+        <ArtistsByLocationView
+          context={artistsByLocationContext}
+          onBack={navGoBack}
+          onArtistClick={handleArtistClick}
+          onAlbumClick={handleAlbumClick}
+          onAlbumPlay={playAlbumById}
+        />
+      {:else}
+        <!-- Catch-all fallback: view has no matching data, show loading/error -->
+        <div class="view-error">
+          <p>{$t('actions.loading')}</p>
+          <button class="view-error-back" onclick={() => navigateTo('home')}>{$t('actions.backToHome')}</button>
+        </div>
       {/if}
     </main>
 
@@ -4598,7 +5189,7 @@
     <!-- Now Playing Bar -->
     {#if currentTrack}
       <NowPlayingBar
-        artwork={currentTrack.artwork}
+        artwork={resolvedArtwork}
         trackTitle={currentTrack.title}
         artist={currentTrack.artist}
         album={currentTrack.album}
@@ -4625,6 +5216,9 @@
         onToggleFavorite={toggleFavorite}
         onAddToPlaylist={openAddToPlaylistModal}
         onOpenQueue={toggleQueue}
+        onOpenMiniPlayer={() => {
+          void enterMiniplayerMode();
+        }}
         onOpenFullScreen={openFullScreen}
         onCast={openCastPicker}
         {isCastConnected}
@@ -4657,11 +5251,15 @@
             isTrackInfoOpen = true;
           }
         }}
+        explicit={currentTrack?.parental_warning === true}
       />
     {:else}
       <NowPlayingBar
         onTogglePlay={togglePlay}
         onOpenQueue={toggleQueue}
+        onOpenMiniPlayer={() => {
+          void enterMiniplayerMode();
+        }}
         onOpenFullScreen={openFullScreen}
         onCast={openCastPicker}
         {isCastConnected}
@@ -4670,6 +5268,7 @@
         queueOpen={isQueueOpen}
         {volume}
         onVolumeChange={handleVolumeChange}
+        controlsDisabled={queue.length === 0}
       />
     {/if}
 
@@ -4681,7 +5280,7 @@
           if (isFullScreenOpen) closeFullScreen();
           if (isFocusModeOpen) closeFocusMode();
         }}
-        artwork={currentTrack.artwork}
+        artwork={resolvedArtwork}
         trackTitle={currentTrack.title}
         artist={currentTrack.artist}
         album={currentTrack.album}
@@ -4739,6 +5338,7 @@
         onPlayHistoryTrack={handlePlayHistoryTrack}
         isInfinitePlay={infinitePlayEnabled}
         onToggleInfinitePlay={handleToggleInfinitePlay}
+        explicit={currentTrack?.parental_warning === true}
       />
     {/if}
 
@@ -4756,10 +5356,13 @@
     <PlaylistModal
       isOpen={isPlaylistModalOpen}
       mode={playlistModalMode}
+      playlist={playlistModalMode === 'edit' ? playlistModalEditPlaylist : undefined}
       trackIds={playlistModalTrackIds}
       isLocalTracks={playlistModalTracksAreLocal}
+      isHidden={playlistModalMode === 'edit' ? playlistModalEditIsHidden : false}
+      currentFolderId={playlistModalMode === 'edit' ? playlistModalEditCurrentFolderId : null}
       {userPlaylists}
-      onClose={closePlaylistModal}
+      onClose={handlePlaylistModalClose}
       onSuccess={handlePlaylistCreated}
     />
 
@@ -4830,6 +5433,11 @@
     <FlatpakWelcomeModal
       isOpen={isFlatpakWelcomeOpen}
       onClose={handleFlatpakWelcomeClose}
+    />
+
+    <SnapWelcomeModal
+      isOpen={isSnapWelcomeOpen}
+      onClose={handleSnapWelcomeClose}
     />
 
     <!-- Track Info Modal -->
@@ -4908,6 +5516,12 @@
     background-color: var(--bg-primary);
   }
 
+  .app.floating {
+    border-radius: 0;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4), 0 0 1px rgba(0, 0, 0, 0.3);
+    overflow: hidden;
+  }
+
   .app-body {
     display: flex;
     flex: 1;
@@ -4919,7 +5533,7 @@
     display: flex;
     flex: 1;
     min-width: 0;
-    height: calc(100vh - 136px); /* 104px NowPlayingBar + 32px TitleBar */
+    height: calc(100vh - 148px); /* 104px NowPlayingBar + 44px TitleBar */
     overflow: hidden;
     position: relative;
   }
@@ -4927,7 +5541,7 @@
   .main-content {
     flex: 1;
     min-width: 0;
-    height: calc(100vh - 136px); /* 104px NowPlayingBar + 32px TitleBar */
+    height: calc(100vh - 148px); /* 104px NowPlayingBar + 44px TitleBar */
     overflow: hidden; /* Views handle their own scrolling */
     padding-right: 8px; /* Gap between scrollbar and window edge */
     background-color: var(--bg-primary, #0f0f0f);

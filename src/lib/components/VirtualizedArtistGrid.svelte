@@ -281,7 +281,6 @@
     position: absolute;
     left: 0;
     right: 0;
-    will-change: transform;
   }
 
   .group-header {

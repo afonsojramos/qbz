@@ -17,7 +17,7 @@
   let { isOpen, release, showTitleBar, onClose }: Props = $props();
 
   const PLAYER_HEIGHT = 104;
-  const TITLEBAR_HEIGHT = $derived(showTitleBar ? 32 : 0);
+  const TITLEBAR_HEIGHT = $derived(showTitleBar ? 36 : 0);
   const INNER_MARGIN = 20;
   const EXTRA_PAD_TOP = 40;
   const EXTRA_PAD_BOTTOM = 130;
@@ -140,7 +140,7 @@
     font-size: 11px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .toc-item:hover {

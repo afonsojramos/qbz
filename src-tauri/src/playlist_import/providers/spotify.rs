@@ -1,13 +1,13 @@
 //! Spotify playlist import
+//!
+//! As of 2026-03-06, Spotify API access via client_credentials is no longer available.
+//! All playlist imports now use the embed page scraping fallback.
+//! Embed is limited to ~50 tracks and provides no ISRC or album data.
 
 use serde_json::Value;
 
 use crate::playlist_import::errors::PlaylistImportError;
 use crate::playlist_import::models::{ImportPlaylist, ImportProvider, ImportTrack};
-
-// Cloudflare Workers proxy URL - handles credentials
-const SPOTIFY_PROXY_URL: &str = "https://qbz-api-proxy.blitzkriegfc.workers.dev/spotify";
-const SPOTIFY_API_BASE: &str = "https://api.spotify.com/v1";
 
 /// Detect if a URL is a Spotify track, album, or playlist.
 pub fn detect_resource(url: &str) -> Option<super::MusicResource> {
@@ -68,197 +68,53 @@ pub fn parse_playlist_id(url: &str) -> Option<String> {
     None
 }
 
-pub async fn fetch_playlist(playlist_id: &str) -> Result<ImportPlaylist, PlaylistImportError> {
-    // Try API with token, retry once with fresh token on failure
-    for attempt in 1..=2 {
-        match get_app_token().await {
-            Ok(token) => {
-                log::info!("Spotify: API attempt {}/2, token obtained", attempt);
-                match fetch_playlist_with_token(playlist_id, &token).await {
-                    Ok(playlist) => {
-                        log::info!("Spotify: API returned {} tracks", playlist.tracks.len());
-                        return Ok(playlist);
-                    }
-                    Err(e) => {
-                        log::warn!("Spotify: API attempt {}/2 failed: {}", attempt, e);
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("Spotify: token attempt {}/2 failed: {}", attempt, e);
-            }
-        }
+/// Fetch track or album metadata from Spotify embed page.
+/// Returns (title, artist) if successful.
+pub async fn fetch_embed_metadata(entity_type: &str, entity_id: &str) -> Option<(String, String)> {
+    let url = format!("https://open.spotify.com/embed/{}/{}", entity_type, entity_id);
+    let html = reqwest::get(&url).await.ok()?.text().await.ok()?;
+    let json_text = extract_script(&html, "__NEXT_DATA__")?;
+    let data: Value = serde_json::from_str(&json_text).ok()?;
+
+    let entity = data
+        .get("props")?
+        .get("pageProps")?
+        .get("state")?
+        .get("data")?
+        .get("entity")?;
+
+    let title = entity
+        .get("title")
+        .or_else(|| entity.get("name"))
+        .and_then(|v| v.as_str())?
+        .to_string();
+
+    // Tracks have "artists" array, albums have "subtitle" string
+    let artist = entity
+        .get("artists")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a.get("name").and_then(|v| v.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .or_else(|| entity.get("subtitle").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    if title.is_empty() {
+        return None;
     }
 
-    log::warn!(
-        "Spotify: API failed after 2 attempts, falling back to embed (limited to ~100 tracks)"
-    );
-    fetch_playlist_from_embed(playlist_id).await
+    Some((title, artist))
 }
 
-async fn fetch_playlist_with_token(
-    playlist_id: &str,
-    access_token: &str,
-) -> Result<ImportPlaylist, PlaylistImportError> {
-    let client = reqwest::Client::new();
-
-    let meta_url = format!("{}/playlists/{}", SPOTIFY_API_BASE, playlist_id);
-    let meta: Value = client
-        .get(&meta_url)
-        .header("Authorization", format!("Bearer {}", access_token))
-        .query(&[("fields", "name,description,tracks.total")])
-        .send()
-        .await
-        .map_err(|e| PlaylistImportError::Http(e.to_string()))?
-        .error_for_status()
-        .map_err(|e| PlaylistImportError::Http(format!("Spotify metadata: {}", e)))?
-        .json()
-        .await
-        .map_err(|e| PlaylistImportError::Parse(e.to_string()))?;
-
-    let name = meta
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("Spotify Playlist")
-        .to_string();
-    let description = meta
-        .get("description")
-        .and_then(|v| v.as_str())
-        .map(|v| v.to_string())
-        .filter(|v| !v.is_empty());
-    let expected_total = meta
-        .get("tracks")
-        .and_then(|v| v.get("total"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize;
-
+pub async fn fetch_playlist(playlist_id: &str) -> Result<ImportPlaylist, PlaylistImportError> {
     log::info!(
-        "Spotify: playlist '{}' reports {} tracks",
-        name,
-        expected_total
+        "Spotify: fetching playlist {} via embed (API no longer available)",
+        playlist_id
     );
-
-    let mut tracks = Vec::new();
-    let mut offset = 0u32;
-    let limit = 100u32;
-
-    loop {
-        let tracks_url = format!("{}/playlists/{}/tracks", SPOTIFY_API_BASE, playlist_id);
-        let response: Value = client
-            .get(&tracks_url)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .query(&[
-                ("limit", limit.to_string()),
-                ("offset", offset.to_string()),
-                ("fields", "items(track(name,artists(name),album(name),duration_ms,external_ids,id,external_urls)),next,total".to_string()),
-            ])
-            .send()
-            .await
-            .map_err(|e| PlaylistImportError::Http(e.to_string()))?
-            .error_for_status()
-            .map_err(|e| PlaylistImportError::Http(format!("Spotify tracks page offset={}: {}", offset, e)))?
-            .json()
-            .await
-            .map_err(|e| PlaylistImportError::Parse(e.to_string()))?;
-
-        let items = response
-            .get("items")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                PlaylistImportError::Parse("Spotify tracks missing items".to_string())
-            })?;
-
-        for item in items {
-            let track = match item.get("track") {
-                Some(v) if !v.is_null() => v,
-                _ => continue,
-            };
-
-            let title = track
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown")
-                .to_string();
-            let artist = join_artists(track.get("artists"));
-            let album = track
-                .get("album")
-                .and_then(|v| v.get("name"))
-                .and_then(|v| v.as_str())
-                .map(|v| v.to_string());
-            let duration_ms = track.get("duration_ms").and_then(|v| v.as_u64());
-            let isrc = track
-                .get("external_ids")
-                .and_then(|v| v.get("isrc"))
-                .and_then(|v| v.as_str())
-                .map(|v| v.to_string());
-            let provider_id = track
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|v| v.to_string());
-            let provider_url = track
-                .get("external_urls")
-                .and_then(|v| v.get("spotify"))
-                .and_then(|v| v.as_str())
-                .map(|v| v.to_string());
-
-            tracks.push(ImportTrack {
-                title,
-                artist,
-                album,
-                duration_ms,
-                isrc,
-                provider_id,
-                provider_url,
-            });
-        }
-
-        // Use both "next" field and total count to decide pagination
-        let has_next = response.get("next").map(|v| !v.is_null()).unwrap_or(false);
-
-        let response_total = response.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-
-        log::debug!(
-            "Spotify: page offset={}, got {} items, total so far={}, response.total={}, has_next={}",
-            offset, items.len(), tracks.len(), response_total, has_next
-        );
-
-        // Stop if: no next page AND we have all tracks (or response says no more)
-        if !has_next && tracks.len() >= response_total {
-            break;
-        }
-
-        // Safety: also stop if the page returned 0 items to prevent infinite loop
-        if items.is_empty() {
-            log::warn!(
-                "Spotify: empty page at offset {}, stopping pagination",
-                offset
-            );
-            break;
-        }
-
-        // Extra safety: if we already have enough tracks per the total, stop
-        if response_total > 0 && tracks.len() >= response_total {
-            break;
-        }
-
-        offset += limit;
-    }
-
-    if expected_total > 0 && tracks.len() < expected_total {
-        log::warn!(
-            "Spotify: expected {} tracks but only fetched {} — possible pagination issue",
-            expected_total,
-            tracks.len()
-        );
-    }
-
-    Ok(ImportPlaylist {
-        provider: ImportProvider::Spotify,
-        provider_id: playlist_id.to_string(),
-        name,
-        description,
-        tracks,
-    })
+    fetch_playlist_from_embed(playlist_id).await
 }
 
 async fn fetch_playlist_from_embed(
@@ -333,6 +189,12 @@ async fn fetch_playlist_from_embed(
         });
     }
 
+    log::info!(
+        "Spotify: embed returned {} tracks for '{}' (embed limit is ~50, no ISRC/album data)",
+        tracks.len(),
+        name
+    );
+
     Ok(ImportPlaylist {
         provider: ImportProvider::Spotify,
         provider_id: playlist_id.to_string(),
@@ -340,55 +202,6 @@ async fn fetch_playlist_from_embed(
         description: None,
         tracks,
     })
-}
-
-async fn get_app_token() -> Result<String, PlaylistImportError> {
-    // Proxy handles credentials
-    let url = format!("{}/token", SPOTIFY_PROXY_URL);
-
-    let response: Value = reqwest::Client::builder()
-        .default_headers({
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert(
-                reqwest::header::USER_AGENT,
-                reqwest::header::HeaderValue::from_static("QBZ/1.0.0"),
-            );
-            headers
-        })
-        .build()
-        .map_err(|e| PlaylistImportError::Http(e.to_string()))?
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| PlaylistImportError::Http(format!("Spotify proxy: {}", e)))?
-        .error_for_status()
-        .map_err(|e| PlaylistImportError::Http(format!("Spotify proxy: {}", e)))?
-        .json()
-        .await
-        .map_err(|e| PlaylistImportError::Parse(format!("Spotify proxy response: {}", e)))?;
-
-    response
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .map(|v| v.to_string())
-        .ok_or_else(|| PlaylistImportError::Parse("Spotify proxy missing access_token".to_string()))
-}
-
-fn join_artists(value: Option<&Value>) -> String {
-    let artists = value
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|a| a.get("name").and_then(|v| v.as_str()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    if artists.is_empty() {
-        "Unknown".to_string()
-    } else {
-        artists.join(", ")
-    }
 }
 
 fn extract_script(html: &str, id: &str) -> Option<String> {

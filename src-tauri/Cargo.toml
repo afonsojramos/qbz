@@ -1,6 +1,6 @@
 [package]
 name = "qbz-nix"
-version = "1.1.15-rc-2"
+version = "1.1.20"
 description = "Native high-fidelity client for Qobuz™ subscribers on Linux with Hi-Fi audio support (uses the Qobuz API; not certified by Qobuz)"
 authors = ["blitzkriegfc"]
 edition = "2021"
@@ -40,7 +40,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # HTTP Client
-reqwest = { version = "0.12", features = ["json", "cookies", "rustls-tls", "stream", "blocking", "multipart"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "cookies", "rustls-tls", "native-tls", "stream", "blocking", "multipart"], default-features = false }
 
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
@@ -80,7 +80,7 @@ env_logger = "0.11"
 rand = "0.8"
 
 # Audio playback
-rodio = { version = "0.19", features = ["symphonia-all"] }
+rodio = { version = "0.22", features = ["symphonia-all"] }
 symphonia = { version = "0.5", features = ["all"] }
 
 # Audio visualization (FFT)
@@ -92,11 +92,22 @@ ebur128 = "0.1"
 # Media controls (MPRIS on Linux)
 souvlaki = "0.7"
 
-# Desktop notifications
-notify-rust = "4"
+# Desktop notifications → ashpd in [target.linux] deps below
 
 # Image processing (tray icon + thumbnails)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+# PDF rendering with MuPDF engine (high-quality rasterization for booklet viewer)
+# NOTE: Use sys-lib-* for zlib/harfbuzz/freetype to avoid symbol conflicts with
+# GTK/GdkPixbuf. But NOT libjpeg — Ubuntu ships libjpeg8 (libjpeg.so.8) while
+# Debian/Fedora ship libjpeg62-turbo (libjpeg.so.62). Let mupdf vendor its own
+# libjpeg to avoid cross-distro breakage (GitHub #161, #162).
+mupdf = { version = "0.5", default-features = false, features = [
+  "system-fonts",
+  "sys-lib-zlib",
+  "sys-lib-harfbuzz",
+  "sys-lib-freetype",
+] }
 
 # URL opening
 open = "5"
@@ -132,8 +143,8 @@ futures-util = "0.3"
 
 # Platform-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
-# Note: xdg-portal feature disabled due to ashpd/zbus version incompatibility
 tauri-plugin-dialog = { version = "2.6.0" }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "notification"] }
 
 # Direct ALSA access for bit-perfect playback (bypasses CPAL limitations)
 alsa = "0.9"
@@ -147,6 +158,3 @@ tauri-plugin-dialog = { version = "2.6.0" }
 [dev-dependencies]
 tempfile = "3"
 
-[patch.crates-io]
-cpal = { path = "vendor/cpal" }
-rodio = { path = "vendor/rodio" }

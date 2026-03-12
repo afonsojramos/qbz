@@ -1,6 +1,11 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
-  import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, MoreHorizontal, Info, Disc, Settings } from 'lucide-svelte';
+  import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+  import { open, save } from '@tauri-apps/plugin-dialog';
+  import { openUrl } from '@tauri-apps/plugin-opener';
+  import { setCustomImage, removeCustomImage as removeCustomImageFromStore } from '$lib/stores/customArtistImageStore';
+  import { t } from 'svelte-i18n';
+  import { cachedSrc } from '$lib/actions/cachedImage';
+  import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, MoreHorizontal, Info, Disc, Settings, CheckSquare, PanelRightClose, ThumbsDown } from 'lucide-svelte';
   import {
     isBlacklisted,
     isEnabled as isFilteringEnabled,
@@ -12,12 +17,13 @@
   import type { ArtistDetail, QobuzArtist, PageArtistTrack, PageArtistSimilarItem } from '$lib/types';
   import AlbumCard from '../AlbumCard.svelte';
   import TrackMenu from '../TrackMenu.svelte';
+  import BulkActionBar from '../BulkActionBar.svelte';
   import QualityBadge from '../QualityBadge.svelte';
   import { consumeContextTrackFocus, setPlaybackContext, getPlaybackContext } from '$lib/stores/playbackContextStore';
   import { saveScrollPosition, getSavedScrollPosition } from '$lib/stores/navigationStore';
   import { togglePlay } from '$lib/stores/playerStore';
   import { getQueue, syncQueueState, playQueueIndex } from '$lib/stores/queueStore';
-  import { subscribeContentSidebar, toggleContentSidebar, type ContentSidebarType } from '$lib/stores/sidebarStore';
+  import { subscribeContentSidebar, toggleContentSidebar, openContentSidebar, closeContentSidebar, getNetworkSidebarPreference, setNetworkSidebarPreference, clearPreviousContentSidebar, type ContentSidebarType } from '$lib/stores/sidebarStore';
   import {
     subscribe as subscribeFavorites,
     isTrackFavorite,
@@ -25,6 +31,8 @@
     toggleTrackFavorite
   } from '$lib/stores/favoritesStore';
   import { tick, onMount, onDestroy } from 'svelte';
+  import { getUserItem, setUserItem } from '$lib/utils/userStorage';
+  import ImageLightbox from '../ImageLightbox.svelte';
 
   interface Track {
     id: number;
@@ -87,6 +95,7 @@
     onTrackPlayLater?: (track: Track) => void;
     onTrackAddFavorite?: (trackId: number) => void;
     onTrackAddToPlaylist?: (trackId: number) => void;
+    onBulkAddToPlaylist?: (trackIds: number[]) => void;
     onAddAlbumToPlaylist?: (albumId: string) => void;
     onTrackShareQobuz?: (trackId: number) => void;
     onTrackShareSonglink?: (track: Track) => void;
@@ -94,8 +103,49 @@
     onTrackGoToArtist?: (artistId: number) => void;
     onLabelClick?: (labelId: number, labelName?: string) => void;
     onMusicianClick?: (name: string, role: string) => void;
+    onLocationClick?: (context: ArtistsByLocationContext) => void;
+    knownMbid?: string | null;
     activeTrackId?: number | null;
     isPlaybackActive?: boolean;
+  }
+
+  interface ArtistsByLocationContext {
+    sourceArtistMbid: string;
+    sourceArtistName: string;
+    sourceArtistType: 'Person' | 'Group' | 'Other';
+    location: {
+      city?: string;
+      areaId?: string;
+      country?: string;
+      countryCode?: string;
+      displayName: string;
+      precision: 'city' | 'state' | 'country';
+    };
+    affinitySeeds: {
+      genres: string[];
+      tags: string[];
+      normalizedSeeds: string[];
+    };
+  }
+
+  interface ArtistMbMetadata {
+    mbid: string;
+    name: string;
+    artist_type: string;
+    life_span?: { begin?: string; end?: string; ended?: boolean };
+    location?: {
+      city?: string;
+      area_id?: string;
+      country?: string;
+      country_code?: string;
+      display_name: string;
+      precision: 'city' | 'state' | 'country';
+    };
+    affinity_seeds: {
+      genres: string[];
+      tags: string[];
+      normalized_seeds: string[];
+    };
   }
 
   let {
@@ -122,6 +172,7 @@
     onTrackPlayLater,
     onTrackAddFavorite,
     onTrackAddToPlaylist,
+    onBulkAddToPlaylist,
     onAddAlbumToPlaylist,
     onTrackShareQobuz,
     onTrackShareSonglink,
@@ -129,12 +180,20 @@
     onTrackGoToArtist,
     onLabelClick,
     onMusicianClick,
+    onLocationClick,
+    knownMbid = null,
     activeTrackId = null,
     isPlaybackActive = false
   }: Props = $props();
 
   let bioExpanded = $state(false);
   let imageError = $state(false);
+  let lightboxOpen = $state(false);
+  let showImageMenu = $state(false);
+  let imageMenuPos = $state({ x: 0, y: 0 });
+  let hasCustomImage = $state(false);
+  let imageOverride = $state<string | null>(null);
+  let customFullImage = $state<string | null>(null);
   let topTracks = $state<Track[]>([]);
   let tracksLoading = $state(false);
   let isFavorite = $state(false);
@@ -168,10 +227,22 @@
     contentFilteringEnabled = isFilteringEnabled();
   }
 
+  function handleToggleNetworkSidebar() {
+    toggleContentSidebar('network');
+    // Persist preference: if toggling off, user explicitly closed it
+    setNetworkSidebarPreference(!showNetworkSidebar);
+    clearPreviousContentSidebar();
+  }
+
   onMount(() => {
     unsubscribeSidebar = subscribeContentSidebar((active: ContentSidebarType) => {
       showNetworkSidebar = active === 'network';
     });
+
+    // Auto-open network sidebar if user preference says so
+    if (getNetworkSidebarPreference()) {
+      openContentSidebar('network');
+    }
 
     // Initialize blacklist state and subscribe to changes
     updateBlacklistState();
@@ -184,9 +255,12 @@
       trackFavoritesVersion++;
     });
 
+    // Load custom image status
+    loadCustomImageStatus();
+
     // Restore scroll position
     requestAnimationFrame(() => {
-      const saved = getSavedScrollPosition('artist');
+      const saved = getSavedScrollPosition('artist', artist.id);
       if (artistDetailEl && saved > 0) {
         artistDetailEl.scrollTop = saved;
       }
@@ -197,6 +271,9 @@
     unsubscribeSidebar?.();
     unsubscribeBlacklist?.();
     unsubscribeTrackFavorites?.();
+    // Close the network sidebar when leaving artist view
+    closeContentSidebar('network');
+    clearPreviousContentSidebar();
   });
   let similarArtists = $state<QobuzArtist[]>([]);
   let similarArtistsLoading = $state(false);
@@ -227,6 +304,27 @@
   let mbRelationshipsLoading = $state(false);
   let mbArtistMbid = $state<string | null>(null);
   let mbAvailable = $state(true); // Assume available until proven otherwise
+  let mbMetadata = $state<ArtistMbMetadata | null>(null);
+  let mbMetadataLoading = $state(false);
+
+  // Discovery: "You may also like" (MusicBrainz tag-based)
+  interface DiscoveryArtist {
+    mbid: string;
+    name: string;
+    normalizedName: string;
+    affinityScore: number;
+    similarityPercent: number;
+    qobuzId?: number;
+  }
+  interface DiscoveryResponse {
+    artists: DiscoveryArtist[];
+    primaryTag: string;
+  }
+  const DISCOVERY_VISIBLE_COUNT = 6;
+  let discoveryArtists = $state<DiscoveryArtist[]>([]);
+  let discoveryReserves = $state<DiscoveryArtist[]>([]);
+  let discoveryTag = $state('');
+  let discoveryLoading = $state(false);
   let artistDetailEl = $state<HTMLDivElement | null>(null);
   let aboutSection = $state<HTMLDivElement | null>(null);
   let topTracksSection = $state<HTMLDivElement | null>(null);
@@ -279,7 +377,7 @@
 
   function loadAlbumSortMode(key: string, fallback: AlbumSortMode = 'default'): AlbumSortMode {
     try {
-      const value = localStorage.getItem(key);
+      const value = getUserItem(key);
       if (value && sortOptions.includes(value as AlbumSortMode)) {
         return value as AlbumSortMode;
       }
@@ -292,6 +390,62 @@
   // Computed visible tracks
   let visibleTracks = $derived(topTracks.slice(0, visibleTracksCount));
   let canLoadMoreTracks = $derived(visibleTracksCount < 50 && topTracks.length > visibleTracksCount);
+
+  // Multi-select (popular tracks)
+  let multiSelectMode = $state(false);
+  let multiSelectedIds = $state(new Set<number>());
+
+  function toggleMultiSelectMode() {
+    multiSelectMode = !multiSelectMode;
+    if (!multiSelectMode) multiSelectedIds = new Set();
+  }
+
+  function toggleMultiSelect(id: number) {
+    const next = new Set(multiSelectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    multiSelectedIds = next;
+  }
+
+  function buildArtistQueueTracks(tracks: typeof topTracks) {
+    return tracks
+      .filter(trk => !trk.performer?.id || !isBlacklisted(trk.performer.id))
+      .map(trk => ({
+        id: trk.id,
+        title: trk.title,
+        artist: trk.performer?.name || artist?.name || 'Unknown',
+        album: trk.album?.title || '',
+        duration_secs: trk.duration,
+        artwork_url: trk.album?.image?.small || trk.album?.image?.thumbnail || null,
+        hires: trk.hires_streamable ?? false,
+        bit_depth: trk.maximum_bit_depth ?? null,
+        sample_rate: trk.maximum_sampling_rate ?? null,
+        is_local: false,
+        album_id: trk.album?.id || null,
+        artist_id: trk.performer?.id ?? null,
+      }));
+  }
+
+  async function handleBulkPlayNext() {
+    const selected = visibleTracks.filter(trk => multiSelectedIds.has(trk.id));
+    await invoke('v2_add_tracks_to_queue_next', { tracks: buildArtistQueueTracks(selected) });
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkPlayLater() {
+    const selected = visibleTracks.filter(trk => multiSelectedIds.has(trk.id));
+    await invoke('v2_add_tracks_to_queue', { tracks: buildArtistQueueTracks(selected) });
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkAddToPlaylist() {
+    onBulkAddToPlaylist?.([...multiSelectedIds]);
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
+
+  async function handleBulkAddFavorites() {
+    for (const id of multiSelectedIds) { await toggleTrackFavorite(id); }
+    multiSelectMode = false; multiSelectedIds = new Set();
+  }
 
   function loadMoreTracks() {
     if (visibleTracksCount === 5) {
@@ -401,6 +555,17 @@
     tributesExpanded = false;
     tributesVisibleCount = 20;
 
+    // Clear sidebar data immediately to avoid stale content from previous artist
+    mbRelationships = null;
+    mbRelationshipsLoading = true;
+    mbArtistMbid = null;
+    mbMetadata = null;
+    mbMetadataLoading = false;
+    discoveryArtists = [];
+    discoveryReserves = [];
+    discoveryTag = '';
+    discoveryLoading = true;
+
     // Use pre-loaded data from /artist/page if available
     if (initialTopTracks && initialTopTracks.length > 0) {
       topTracks = convertPageTopTracks(initialTopTracks);
@@ -421,17 +586,17 @@
     loadArtistAlbumDownloadStatuses();
   });
 
-  // Persist sort mode changes to localStorage
+  // Persist sort mode changes to user-scoped storage
   $effect(() => {
     try {
-      localStorage.setItem(STORAGE_SORT_KEYS.ALBUMS, albumSortMode);
-      localStorage.setItem(STORAGE_SORT_KEYS.EPS_SINGLES, epsSinglesSortMode);
-      localStorage.setItem(STORAGE_SORT_KEYS.LIVE_ALBUMS, liveAlbumsSortMode);
-      localStorage.setItem(STORAGE_SORT_KEYS.COMPILATIONS, compilationsSortMode);
-      localStorage.setItem(STORAGE_SORT_KEYS.TRIBUTES, tributesSortMode);
-      localStorage.setItem(STORAGE_SORT_KEYS.OTHERS, othersSortMode);
+      setUserItem(STORAGE_SORT_KEYS.ALBUMS, albumSortMode);
+      setUserItem(STORAGE_SORT_KEYS.EPS_SINGLES, epsSinglesSortMode);
+      setUserItem(STORAGE_SORT_KEYS.LIVE_ALBUMS, liveAlbumsSortMode);
+      setUserItem(STORAGE_SORT_KEYS.COMPILATIONS, compilationsSortMode);
+      setUserItem(STORAGE_SORT_KEYS.TRIBUTES, tributesSortMode);
+      setUserItem(STORAGE_SORT_KEYS.OTHERS, othersSortMode);
     } catch {
-      // localStorage not available
+      // storage not available
     }
   });
 
@@ -746,6 +911,24 @@
     }
   }
 
+  // Format MB life_span into a short human-readable date
+  function formatMbDate(lifeSpan: { begin?: string; end?: string; ended?: boolean }): string {
+    if (!lifeSpan.begin) return '';
+    const formatPart = (date: string): string => {
+      const parts = date.split('-');
+      if (parts.length === 1) return parts[0];
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      const month = months[monthIdx] ?? parts[1];
+      return `${month} ${parts[0]}`;
+    };
+    const begin = formatPart(lifeSpan.begin);
+    if (lifeSpan.ended && lifeSpan.end) {
+      return `${begin}–${formatPart(lifeSpan.end)}`;
+    }
+    return begin;
+  }
+
   // Load MusicBrainz relationships for artist enrichment
   async function loadMusicBrainzRelationships() {
     // First, resolve the artist to get MBID
@@ -763,19 +946,37 @@
         return;
       }
 
-      // Resolve artist name to MBID
-      const resolved = await invoke<{
-        mbid?: string;
-        name?: string;
-        confidence: string;
-      }>('v2_musicbrainz_resolve_artist', { name: artist.name });
+      // Use known MBID if provided (e.g. from scene discovery), otherwise resolve by name
+      let resolvedMbid: string | null = knownMbid ?? null;
+      if (!resolvedMbid) {
+        const resolved = await invoke<{
+          mbid?: string;
+          name?: string;
+          confidence: string;
+        }>('v2_musicbrainz_resolve_artist', { name: artist.name });
 
-      if (!resolved?.mbid || resolved.confidence === 'none') {
-        mbRelationshipsLoading = false;
-        return;
+        if (!resolved?.mbid || resolved.confidence === 'none') {
+          mbRelationshipsLoading = false;
+          return;
+        }
+        resolvedMbid = resolved.mbid;
       }
 
-      mbArtistMbid = resolved.mbid;
+      mbArtistMbid = resolvedMbid;
+
+      // Fetch metadata (location, genres) in parallel with relationships
+      mbMetadataLoading = true;
+      invoke<ArtistMbMetadata>('v2_musicbrainz_get_artist_metadata', { mbid: resolvedMbid })
+        .then(metadata => {
+          mbMetadata = metadata;
+        })
+        .catch(err => {
+          console.error('Failed to load MusicBrainz metadata:', err);
+          mbMetadata = null;
+        })
+        .finally(() => {
+          mbMetadataLoading = false;
+        });
 
       // Fetch relationships
       const relationships = await invoke<{
@@ -783,7 +984,7 @@
         past_members: RelatedArtist[];
         groups: RelatedArtist[];
         collaborators: RelatedArtist[];
-      }>('v2_musicbrainz_get_artist_relationships', { mbid: resolved.mbid });
+      }>('v2_musicbrainz_get_artist_relationships', { mbid: resolvedMbid });
 
       mbRelationships = {
         members: relationships.members || [],
@@ -791,12 +992,67 @@
         groups: relationships.groups || [],
         collaborators: relationships.collaborators || []
       };
+      // Trigger discovery loading now that we have the MBID
+      void loadDiscoveryArtists();
     } catch (err) {
       console.error('Failed to load MusicBrainz relationships:', err);
       mbAvailable = false;
       mbRelationships = null;
     } finally {
       mbRelationshipsLoading = false;
+    }
+  }
+
+  // Load "Listeners also enjoy" discovery artists from ListenBrainz + MB genre filter
+  async function loadDiscoveryArtists() {
+    if (!mbArtistMbid) return;
+
+    discoveryLoading = true;
+    discoveryArtists = [];
+    discoveryReserves = [];
+    discoveryTag = '';
+
+    try {
+      const similarNames = similarArtists.map(sa => sa.name);
+      const response = await invoke<DiscoveryResponse>('v2_get_discovery_artists', {
+        seedMbid: mbArtistMbid,
+        seedArtistName: artist.name,
+        similarArtistNames: similarNames
+      });
+      const all = response?.artists || [];
+      discoveryTag = response?.primaryTag || '';
+      discoveryArtists = all.slice(0, DISCOVERY_VISIBLE_COUNT);
+      discoveryReserves = all.slice(DISCOVERY_VISIBLE_COUNT);
+    } catch (err) {
+      console.error('Failed to load discovery artists:', err);
+      discoveryArtists = [];
+      discoveryReserves = [];
+    } finally {
+      discoveryLoading = false;
+    }
+  }
+
+  async function dismissDiscoveryArtist(disc: DiscoveryArtist) {
+    if (!discoveryTag) return;
+
+    // Remove from visible list immediately
+    discoveryArtists = discoveryArtists.filter(a => a.mbid !== disc.mbid);
+
+    // Pull a reserve if available
+    if (discoveryReserves.length > 0) {
+      const replacement = discoveryReserves[0];
+      discoveryArtists = [...discoveryArtists, replacement];
+      discoveryReserves = discoveryReserves.slice(1);
+    }
+
+    // Persist the dismissal
+    try {
+      await invoke('v2_dismiss_discovery_artist', {
+        tag: discoveryTag,
+        artistName: disc.name
+      });
+    } catch (err) {
+      console.error('Failed to dismiss discovery artist:', err);
     }
   }
 
@@ -901,7 +1157,7 @@
       artist: track.performer?.name || artist.name,
       album: track.album?.title || '',
       duration_secs: track.duration,
-      artwork_url: track.album?.image?.large || track.album?.image?.thumbnail || '',
+      artwork_url: track.album?.image?.small || track.album?.image?.thumbnail || '',
       hires: track.hires_streamable ?? false,
       bit_depth: track.maximum_bit_depth ?? null,
       sample_rate: track.maximum_sampling_rate ?? null,
@@ -1002,6 +1258,89 @@
 
   function handleImageError() {
     imageError = true;
+  }
+
+  // Check if artist has a custom image on mount
+  async function loadCustomImageStatus() {
+    try {
+      const info = await invoke<{ custom_image_path?: string | null } | null>('v2_library_get_artist_image', { artistName: artist.name });
+      if (info?.custom_image_path) {
+        hasCustomImage = true;
+        customFullImage = convertFileSrc(info.custom_image_path);
+        imageOverride = customFullImage;
+      }
+    } catch {
+      // No custom image, use default
+    }
+  }
+
+  async function handleAddCustomImage() {
+    showImageMenu = false;
+    const selected = await open({
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      multiple: false
+    });
+    if (!selected) return;
+
+    try {
+      const result = await invoke<{ image_path: string; thumbnail_path: string }>('v2_library_set_custom_artist_image', {
+        artistName: artist.name,
+        customImagePath: selected
+      });
+      imageOverride = convertFileSrc(result.thumbnail_path);
+      customFullImage = convertFileSrc(result.image_path);
+      hasCustomImage = true;
+      imageError = false;
+      setCustomImage(artist.name, convertFileSrc(result.image_path));
+      showToast($t('artist.customImageSet'), 'success');
+    } catch (err) {
+      showToast(`${$t('artist.customImageError')}: ${err}`, 'error');
+    }
+  }
+
+  async function handleRemoveCustomImage() {
+    showImageMenu = false;
+    try {
+      await invoke('v2_library_remove_custom_artist_image', { artistName: artist.name });
+      imageOverride = null;
+      customFullImage = null;
+      hasCustomImage = false;
+      removeCustomImageFromStore(artist.name);
+      showToast($t('artist.customImageRemoved'), 'success');
+    } catch (err) {
+      showToast(`${$t('artist.customImageError')}: ${err}`, 'error');
+    }
+  }
+
+  async function handleOpenImageInBrowser() {
+    showImageMenu = false;
+    const url = imageOverride ?? artist.image;
+    if (url && !url.startsWith('asset://')) {
+      await openUrl(url).catch(err => console.error('Failed to open URL:', err));
+    }
+  }
+
+  async function handleSaveImageAs() {
+    showImageMenu = false;
+    const imageUrl = imageOverride ?? artist.image;
+    if (!imageUrl) return;
+
+    const dest = await save({
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }],
+      defaultPath: `${artist.name}.jpg`
+    });
+    if (!dest) return;
+
+    try {
+      if (imageUrl.startsWith('asset://') || imageUrl.startsWith('http://asset.localhost')) {
+        showToast($t('artist.customImageError'), 'error');
+        return;
+      }
+      await invoke('v2_save_image_url_to_file', { url: imageUrl, destPath: dest });
+      showToast($t('artist.imageSaved'), 'success');
+    } catch (err) {
+      showToast(`${$t('artist.customImageError')}: ${err}`, 'error');
+    }
   }
 
   // Get biography text (prefer content for full text, fall back to summary)
@@ -1287,7 +1626,7 @@
   });
 </script>
 
-<div class="artist-detail" bind:this={artistDetailEl} onscroll={(e) => saveScrollPosition('artist', (e.target as HTMLElement).scrollTop)}>
+<div class="artist-detail" bind:this={artistDetailEl} onscroll={(e) => saveScrollPosition('artist', (e.target as HTMLElement).scrollTop, artist.id)}>
   <!-- Back Navigation -->
   <button class="back-btn" onclick={onBack}>
     <ArrowLeft size={16} />
@@ -1298,14 +1637,21 @@
   <div class="artist-header section-anchor" bind:this={aboutSection}>
     <!-- Artist Image -->
     <div class="artist-image-column">
-      <div class="artist-image-container">
-        {#if imageError || !artist.image}
+      <div
+        class="artist-image-container"
+        onclick={() => { if (!imageError && (imageOverride || artist.image)) lightboxOpen = true; }}
+        onkeydown={(e) => { if (e.key === 'Enter' && !imageError && (imageOverride || artist.image)) lightboxOpen = true; }}
+        oncontextmenu={(e) => { e.preventDefault(); imageMenuPos = { x: e.clientX, y: e.clientY }; showImageMenu = true; }}
+        role="button"
+        tabindex="0"
+      >
+        {#if imageError || (!imageOverride && !artist.image)}
           <div class="artist-image-placeholder">
             <User size={60} />
           </div>
         {:else}
           <img
-            src={artist.image}
+            use:cachedSrc={imageOverride ?? artist.image}
             alt={artist.name}
             class="artist-image"
             loading="lazy"
@@ -1469,7 +1815,7 @@
                 Qobuz Radio
               </button>
             </div>
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
             <div class="radio-dropdown-backdrop" onclick={() => radioDropdownOpen = false}></div>
           {/if}
           {#if isRadioLoading && radioLoadingMessage}
@@ -1481,7 +1827,7 @@
         <button
           class="network-btn"
           class:active={showNetworkSidebar}
-          onclick={() => toggleContentSidebar('network')}
+          onclick={handleToggleNetworkSidebar}
           title="Artist Network"
         >
           <img src="/element-connect.svg" alt="Network" class="network-icon" />
@@ -1529,7 +1875,7 @@
                   </p>
                 </button>
               </div>
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
               <div class="hide-dropdown-backdrop" onclick={() => showHideDropdown = false}></div>
             {/if}
           </div>
@@ -1623,6 +1969,10 @@
     </div>
   {/if}
 
+  <!-- Body: content sections + optional network sidebar in flex row -->
+  <div class="artist-body">
+  <div class="artist-sections">
+
   <!-- Top Tracks Section -->
   {#if topTracks.length > 0 || tracksLoading}
     <div class="top-tracks-section section-anchor" bind:this={topTracksSection}>
@@ -1634,6 +1984,14 @@
           <div class="section-header-actions">
             <button class="action-btn-circle primary" onclick={handlePlayAllTracks} title="Play All">
               <Play size={20} fill="currentColor" color="currentColor" />
+            </button>
+            <button
+              class="action-btn-circle"
+              class:is-active={multiSelectMode}
+              onclick={toggleMultiSelectMode}
+              title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+            >
+              <CheckSquare size={18} />
             </button>
             <div class="context-menu-wrapper">
               <button
@@ -1674,16 +2032,30 @@
             <div
               class="track-row"
               class:playing={isActiveTrack}
+              class:multi-selected={multiSelectMode && multiSelectedIds.has(track.id)}
               role="button"
               tabindex="0"
               data-track-id={track.id}
-              onclick={() => handleTrackPlay(track, index)}
-              onkeydown={(e) => e.key === 'Enter' && handleTrackPlay(track, index)}
+              onclick={() => multiSelectMode ? toggleMultiSelect(track.id) : handleTrackPlay(track, index)}
+              onkeydown={(e) => e.key === 'Enter' && (multiSelectMode ? toggleMultiSelect(track.id) : handleTrackPlay(track, index))}
               oncontextmenu={(e) => {
+                if (multiSelectMode) return;
                 e.preventDefault();
                 trackContextMenu = { trackId: track.id, x: e.clientX, y: e.clientY };
               }}
             >
+              {#if multiSelectMode}
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+                <label class="track-checkbox-wrap" onclick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={multiSelectedIds.has(track.id)}
+                    onchange={() => toggleMultiSelect(track.id)}
+                    aria-label={$t('actions.select')}
+                    style="width:15px;height:15px;cursor:pointer;accent-color:var(--accent-primary);"
+                  />
+                </label>
+              {/if}
               <div class="track-number">{index + 1}</div>
               <div class="track-artwork">
                 <!-- Placeholder always visible as background -->
@@ -1792,6 +2164,14 @@
             Load More
           </button>
         {/if}
+        <BulkActionBar
+          count={multiSelectedIds.size}
+          onPlayNext={handleBulkPlayNext}
+          onPlayLater={handleBulkPlayLater}
+          onAddToPlaylist={handleBulkAddToPlaylist}
+          onAddFavorites={handleBulkAddFavorites}
+          onClearSelection={() => { multiSelectedIds = new Set(); }}
+        />
       {/if}
     </div>
   {/if}
@@ -2303,23 +2683,81 @@
     </div>
   {/if}
 
-  <!-- Artist Network Sidebar -->
+  </div><!-- end artist-sections -->
+
+  <!-- Artist Network Sidebar (sticky, pushes content) -->
   {#if showNetworkSidebar}
+    <div class="network-sidebar-column">
     <aside class="network-sidebar">
       <div class="sidebar-header">
-        <div class="sidebar-header-icon">
-          <img src="/element-connect.svg" alt="" />
-        </div>
-        <div class="sidebar-header-text">
-          <h3 class="sidebar-title">Network</h3>
-          <div class="sidebar-subtitle">{artist.name}</div>
-        </div>
-        <button class="sidebar-close" onclick={() => toggleContentSidebar('network')} title="Close">
-          <X size={18} />
+        <h3 class="sidebar-title">Artist Network</h3>
+        <button class="sidebar-close" onclick={handleToggleNetworkSidebar} title="Close sidebar">
+          <PanelRightClose size={18} />
         </button>
       </div>
 
       <div class="sidebar-content">
+        <!-- Origin Section (MusicBrainz) -->
+        {#if mbAvailable && (mbMetadataLoading || mbMetadata)}
+          <section class="sidebar-section sidebar-origin">
+            {#if mbMetadataLoading}
+              <div class="origin-loading">
+                <span class="placeholder-text">{$t('artist.loadingOrigin')}</span>
+              </div>
+            {:else if mbMetadata}
+              {#if mbMetadata.life_span?.begin}
+                <div class="origin-row">
+                  <span class="origin-label">
+                    {mbMetadata.artist_type === 'person' ? $t('artist.born') : $t('artist.founded')}
+                  </span>
+                  <span class="origin-value">{formatMbDate(mbMetadata.life_span)}</span>
+                </div>
+              {/if}
+              {#if mbMetadata.location}
+                <div class="origin-row">
+                  <span class="origin-label">
+                    {mbMetadata.artist_type === 'person' ? $t('artist.bornIn') : $t('artist.foundedIn')}
+                  </span>
+                  {#if onLocationClick && mbMetadata.location.precision !== 'country' || (mbMetadata.location.city)}
+                    <button
+                      class="origin-location-link"
+                      onclick={() => {
+                        if (!mbMetadata?.location || !mbArtistMbid) return;
+                        const loc = mbMetadata.location;
+                        const artistTypeMap: Record<string, 'Person' | 'Group' | 'Other'> = {
+                          'person': 'Person', 'group': 'Group'
+                        };
+                        onLocationClick?.({
+                          sourceArtistMbid: mbArtistMbid,
+                          sourceArtistName: mbMetadata.name,
+                          sourceArtistType: artistTypeMap[mbMetadata.artist_type] ?? 'Other',
+                          location: {
+                            city: loc.city ?? undefined,
+                            areaId: loc.area_id ?? undefined,
+                            country: loc.country ?? undefined,
+                            countryCode: loc.country_code ?? undefined,
+                            displayName: loc.display_name,
+                            precision: loc.precision,
+                          },
+                          affinitySeeds: {
+                            genres: mbMetadata.affinity_seeds.genres,
+                            tags: mbMetadata.affinity_seeds.tags,
+                            normalizedSeeds: mbMetadata.affinity_seeds.normalized_seeds,
+                          }
+                        });
+                      }}
+                    >
+                      {mbMetadata.location.display_name}
+                    </button>
+                  {:else}
+                    <span class="origin-value">{mbMetadata.location.display_name}</span>
+                  {/if}
+                </div>
+              {/if}
+            {/if}
+          </section>
+        {/if}
+
         <!-- Labels Section -->
         <section class="sidebar-section">
           <h4 class="section-label">LABELS</h4>
@@ -2364,13 +2802,13 @@
           </div>
         </section>
 
-        <!-- MusicBrainz Relationships (only shown if MB is enabled and available) -->
-        {#if mbAvailable}
+        <!-- MusicBrainz Relationships (only shown if MB is enabled and has data) -->
+        {#if mbAvailable && (mbRelationshipsLoading || hasRelationships)}
           <section class="sidebar-section">
             <h4 class="section-label">RELATIONSHIPS</h4>
             <div class="section-items">
               {#if mbRelationshipsLoading}
-                <span class="placeholder-text">Loading...</span>
+                <span class="placeholder-text">{$t('actions.loading')}</span>
               {:else if hasRelationships}
                 {#if groupedMembers.length > 0}
                   <div class="relationship-group">
@@ -2426,16 +2864,89 @@
                     {/each}
                   </div>
                 {/if}
+              {/if}
+            </div>
+          </section>
+        {/if}
+
+        <!-- Discovery: "You may also like" (MusicBrainz tag-based) -->
+        {#if mbAvailable && (discoveryLoading || discoveryArtists.length > 0)}
+          <section class="sidebar-section">
+            <h4 class="section-label">{$t('artist.youMayAlsoLike')}</h4>
+            <div class="section-items">
+              {#if discoveryLoading}
+                <span class="placeholder-text">{$t('actions.loading')}</span>
               {:else}
-                <span class="placeholder-text">No relationships found</span>
+                {#each discoveryArtists as disc (disc.mbid)}
+                  <div class="discovery-artist-row">
+                    <button
+                      class="sidebar-artist-link"
+                      onclick={() => disc.qobuzId && onTrackGoToArtist?.(disc.qobuzId)}
+                      title={disc.name}
+                    >
+                      <User size={12} />
+                      {disc.name}
+                    </button>
+                    <button
+                      class="discovery-dismiss-btn"
+                      onclick={() => dismissDiscoveryArtist(disc)}
+                      title={$t('artist.dismissRecommendation')}
+                    >
+                      <ThumbsDown size={12} />
+                    </button>
+                  </div>
+                {/each}
               {/if}
             </div>
           </section>
         {/if}
       </div>
     </aside>
+    </div><!-- end network-sidebar-column -->
   {/if}
-</div>
+  </div><!-- end artist-body -->
+</div><!-- end artist-detail -->
+
+<ImageLightbox
+  isOpen={lightboxOpen}
+  onClose={() => lightboxOpen = false}
+  src={customFullImage ?? imageOverride ?? artist.image ?? ''}
+  alt={artist.name}
+/>
+
+{#if showImageMenu}
+  <div
+    class="image-context-backdrop"
+    onclick={() => showImageMenu = false}
+    onkeydown={(e) => { if (e.key === 'Escape') showImageMenu = false; }}
+    role="button"
+    tabindex="-1"
+  ></div>
+  <div
+    class="image-context-menu"
+    style="left: {imageMenuPos.x}px; top: {imageMenuPos.y}px;"
+  >
+    {#if hasCustomImage}
+      <button class="image-context-item" onclick={handleAddCustomImage}>
+        {$t('artist.changeImage')}
+      </button>
+      <button class="image-context-item danger" onclick={handleRemoveCustomImage}>
+        {$t('artist.removeImage')}
+      </button>
+    {:else}
+      <button class="image-context-item" onclick={handleAddCustomImage}>
+        {$t('artist.addImage')}
+      </button>
+    {/if}
+    <div class="image-context-divider"></div>
+    <button class="image-context-item" onclick={handleOpenImageInBrowser}>
+      {$t('album.openInBrowser')}
+    </button>
+    <button class="image-context-item" onclick={handleSaveImageAs}>
+      {$t('album.saveAs')}
+    </button>
+  </div>
+{/if}
 
 <style>
   .artist-detail {
@@ -2445,29 +2956,45 @@
     padding-top: 0;
     padding-left: 18px;
     padding-right: 8px;
-    padding-bottom: 100px;
+    padding-bottom: 0;
     overflow-y: auto;
     position: relative;
   }
 
-  /* Network Sidebar - matches LyricsSidebar dimensions */
-  .network-sidebar {
-    position: fixed;
-    top: 32px;
-    bottom: 104px;
-    right: 0;
-    width: 340px;
+  .artist-body {
+    display: flex;
+    align-items: stretch;
+  }
+
+  .artist-sections {
+    flex: 1;
+    min-width: 0;
+    padding-bottom: 100px; /* bottom margin lives here so sidebar column covers it */
+  }
+
+  /* Network Sidebar column - stretches full height, holds background */
+  .network-sidebar-column {
+    width: 300px;
+    min-width: 300px;
     background: var(--bg-secondary);
     border-left: 1px solid var(--bg-tertiary);
-    z-index: 100;
-    display: flex;
-    flex-direction: column;
+    margin-top: -24px; /* pull up flush against jump-nav (covers its margin-bottom) */
+    margin-left: 16px;
+    margin-right: -8px; /* compensate for artist-detail padding-right */
     animation: slideIn 200ms ease-out;
   }
 
-  /* Adjust sidebar when title bar is hidden */
+  /* Network Sidebar - sticky inside column, respects jump-nav */
+  .network-sidebar {
+    position: sticky;
+    top: 44px; /* below the sticky jump-nav */
+    height: calc(100vh - 180px); /* viewport - titlebar(32) - nowplaying(104) - jump-nav(44) */
+    display: flex;
+    flex-direction: column;
+  }
+
   :global(.app.no-titlebar) .network-sidebar {
-    top: 0;
+    height: calc(100vh - 148px); /* no titlebar: viewport - nowplaying(104) - jump-nav(44) */
   }
 
   @keyframes slideIn {
@@ -2484,50 +3011,21 @@
   .sidebar-header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 16px;
+    gap: 8px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--bg-tertiary);
     background: var(--bg-primary);
     flex-shrink: 0;
   }
 
-  .sidebar-header-icon {
-    width: 36px;
-    height: 36px;
-    display: grid;
-    place-items: center;
-    background: var(--bg-tertiary);
-    border-radius: 8px;
-    color: var(--accent-primary);
-  }
-
-  .sidebar-header-icon img {
-    width: 18px;
-    height: 18px;
-    filter: brightness(0) saturate(100%) invert(56%) sepia(63%) saturate(4848%) hue-rotate(230deg) brightness(102%) contrast(101%);
-  }
-
-  .sidebar-header-text {
-    flex: 1;
-    min-width: 0;
-  }
-
   .sidebar-title {
+    flex: 1;
     font-size: 12px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--text-muted);
     margin: 0;
-  }
-
-  .sidebar-subtitle {
-    font-size: 13px;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-top: 2px;
   }
 
   .sidebar-close {
@@ -2557,10 +3055,58 @@
 
   .sidebar-section {
     margin-bottom: 24px;
+    animation: sidebarFadeIn 200ms ease-out;
+  }
+
+  @keyframes sidebarFadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   .sidebar-section:last-child {
     margin-bottom: 0;
+  }
+
+  .sidebar-origin {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .origin-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .origin-label {
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .origin-value {
+    color: var(--text-primary);
+  }
+
+  .origin-location-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 13px;
+    color: var(--accent-primary);
+    cursor: pointer;
+    text-align: left;
+    text-decoration: none;
+  }
+
+  .origin-location-link:hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .origin-loading {
+    padding: 4px 0;
   }
 
   .section-label {
@@ -2603,6 +3149,44 @@
     color: var(--text-primary);
   }
 
+  .discovery-artist-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .discovery-artist-row .sidebar-artist-link {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .discovery-dismiss-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+  }
+
+  .discovery-artist-row:hover .discovery-dismiss-btn {
+    opacity: 1;
+  }
+
+  .discovery-dismiss-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
 
   .relationship-group {
     display: flex;
@@ -2675,6 +3259,7 @@
 
   .artist-image-container {
     flex-shrink: 0;
+    cursor: pointer;
   }
 
   .artist-image {
@@ -2683,6 +3268,7 @@
     border-radius: 50%;
     object-fit: cover;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    transition: opacity 0.15s ease-in;
   }
 
   .artist-image-placeholder {
@@ -2730,7 +3316,7 @@
     border-radius: 50%;
     cursor: pointer;
     color: var(--text-muted);
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -2917,7 +3503,7 @@
     border: none;
     border-radius: 6px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
   }
 
@@ -2926,7 +3512,7 @@
     height: 18px;
     opacity: 0.5;
     filter: brightness(0) saturate(100%) invert(70%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(90%) contrast(90%);
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .hide-artist-btn:hover {
@@ -3050,7 +3636,7 @@
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .unblock-btn:hover:not(:disabled) {
@@ -3226,7 +3812,7 @@
     font-size: 12px;
     color: var(--text-secondary);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .sort-btn:hover {
@@ -3257,7 +3843,7 @@
     cursor: pointer;
     border-radius: 4px;
     font-size: 12px;
-    transition: all 100ms ease;
+    transition: color 100ms ease, background-color 100ms ease, border-color 100ms ease, opacity 100ms ease;
   }
 
   .sort-item:hover,
@@ -3352,7 +3938,7 @@
     color: var(--text-muted);
     border-radius: 4px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .search-nav-btn:hover:not(:disabled) {
@@ -3376,7 +3962,7 @@
     color: var(--text-muted);
     border-radius: 4px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     margin-left: 2px;
   }
 
@@ -3489,7 +4075,7 @@
   .albums-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 24px 14px;
+    gap: 24px 22px;
   }
 
   .playlists-grid {
@@ -3585,7 +4171,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .load-more-btn:hover:not(:disabled) {
@@ -3682,7 +4268,7 @@
     color: var(--text-secondary);
     font-size: 13px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .load-more-btn:hover:not(:disabled) {
@@ -3722,6 +4308,19 @@
 
   .track-row:hover {
     background-color: var(--bg-tertiary);
+  }
+
+  .track-row.multi-selected {
+    background-color: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  }
+
+  .track-checkbox-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    flex-shrink: 0;
+    cursor: pointer;
   }
 
   .track-number {
@@ -3888,7 +4487,7 @@
   .track-duration {
     font-size: 13px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
   }
 
   .track-actions {
@@ -3951,5 +4550,60 @@
     .biography {
       max-width: 100%;
     }
+  }
+
+  .image-context-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2999;
+  }
+
+  .image-context-menu {
+    position: fixed;
+    z-index: 3000;
+    background: var(--bg-secondary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 8px;
+    padding: 4px;
+    min-width: 180px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    animation: lightbox-fade-in 100ms ease;
+  }
+
+  @keyframes lightbox-fade-in {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .image-context-item {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: none;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 100ms ease;
+  }
+
+  .image-context-item:hover {
+    background: var(--bg-hover);
+  }
+
+  .image-context-item.danger {
+    color: var(--color-error, #ef4444);
+  }
+
+  .image-context-item.danger:hover {
+    background: rgba(239, 68, 68, 0.1);
+  }
+
+  .image-context-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 4px 8px;
   }
 </style>

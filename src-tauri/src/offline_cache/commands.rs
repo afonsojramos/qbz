@@ -11,6 +11,7 @@ use crate::offline_cache::metadata::{
     embed_artwork, fetch_complete_metadata, organize_cached_file, save_album_artwork,
     write_flac_tags,
 };
+use crate::library::MetadataExtractor;
 use crate::offline_cache::OfflineCacheState;
 
 /// Post-process a cached track: fetch metadata, tag FLAC, embed artwork, organize files
@@ -313,17 +314,72 @@ pub async fn cache_track_for_offline(
                 }
             }
             Err(e) => {
-                log::error!("Caching failed for track {}: {}", track_id, e);
-                if let Some(db_guard) = db.lock().await.as_ref() {
-                    let _ = db_guard.update_status(track_id, OfflineCacheStatus::Failed, Some(&e));
+                log::warn!("Caching failed for track {} (attempt 1): {}. Retrying with fresh URL...", track_id, e);
+
+                // Retry with a fresh stream URL — CDN edge may have returned premature EOF
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let retry_url = {
+                    let client_guard = client.read().await;
+                    client_guard
+                        .get_stream_url_with_fallback(track_id, Quality::UltraHiRes)
+                        .await
+                };
+
+                let retry_result = match retry_url {
+                    Ok(s) => {
+                        fetcher
+                            .fetch_to_file(&s.url, &file_path, track_id, Some(&app))
+                            .await
+                    }
+                    Err(e2) => Err(format!("Failed to get retry URL: {}", e2)),
+                };
+
+                match retry_result {
+                    Ok(size) => {
+                        log::info!("Caching complete for track {} (retry succeeded): {} bytes", track_id, size);
+                        if let Some(db_guard) = db.lock().await.as_ref() {
+                            let _ = db_guard.mark_complete(track_id, size);
+                        }
+                        let _ = app.emit(
+                            "offline:caching_completed",
+                            serde_json::json!({
+                                "trackId": track_id,
+                                "size": size
+                            }),
+                        );
+
+                        let file_path_str = file_path.to_string_lossy().to_string();
+                        let qobuz_client = client.read().await;
+                        if let Ok(new_path) = post_process_cached_track(
+                            track_id, &file_path_str, &offline_root,
+                            &*qobuz_client, library_db.clone(),
+                        ).await {
+                            if let Some(db_guard) = db.lock().await.as_ref() {
+                                let _ = db_guard.update_file_path(track_id, &new_path);
+                            }
+                            let _ = app.emit(
+                                "offline:caching_processed",
+                                serde_json::json!({
+                                    "trackId": track_id,
+                                    "path": new_path
+                                }),
+                            );
+                        }
+                    }
+                    Err(e2) => {
+                        log::error!("Caching failed for track {} (attempt 2): {}", track_id, e2);
+                        if let Some(db_guard) = db.lock().await.as_ref() {
+                            let _ = db_guard.update_status(track_id, OfflineCacheStatus::Failed, Some(&e2));
+                        }
+                        let _ = app.emit(
+                            "offline:caching_failed",
+                            serde_json::json!({
+                                "trackId": track_id,
+                                "error": e2
+                            }),
+                        );
+                    }
                 }
-                let _ = app.emit(
-                    "offline:caching_failed",
-                    serde_json::json!({
-                        "trackId": track_id,
-                        "error": e
-                    }),
-                );
             }
         }
     });
@@ -876,7 +932,16 @@ pub async fn sync_offline_cache_to_library(
                     already_present += 1;
                 }
                 Ok(false) => {
-                    // Insert into library with basic metadata
+                    // Extract track/disc number from file tags
+                    let (track_num, disc_num) = match MetadataExtractor::extract(std::path::Path::new(&track.file_path)) {
+                        Ok(meta) => (meta.track_number, meta.disc_number),
+                        Err(e) => {
+                            log::warn!("Could not extract metadata from {}: {}", track.file_path, e);
+                            (None, None)
+                        }
+                    };
+
+                    // Insert into library with metadata from file tags
                     match library_db.insert_qobuz_cached_track_direct(
                         track.track_id,
                         &track.title,
@@ -886,6 +951,8 @@ pub async fn sync_offline_cache_to_library(
                         &track.file_path,
                         track.bit_depth,
                         track.sample_rate,
+                        track_num,
+                        disc_num,
                     ) {
                         Ok(_) => {
                             log::info!(

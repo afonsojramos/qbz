@@ -80,11 +80,13 @@
 
 {#if isOpen}
   <div class="modal-backdrop" onclick={handleBackdropClick} role="presentation">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="modal"
       role="dialog"
       aria-modal="true"
       aria-labelledby="keybindings-settings-title"
+      tabindex="-1"
       onclick={(e) => e.stopPropagation()}
     >
       <header class="modal-header">
@@ -168,7 +170,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
+    z-index: 3000;
     backdrop-filter: blur(4px);
     animation: fadeIn 150ms ease-out;
   }
@@ -182,7 +184,7 @@
     background: var(--bg-secondary);
     border-radius: 12px;
     width: 90%;
-    max-width: 550px;
+    max-width: 820px;
     max-height: 85vh;
     display: flex;
     flex-direction: column;
@@ -242,7 +244,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .close-btn:hover {
@@ -254,10 +256,13 @@
     flex: 1;
     overflow-y: auto;
     padding: 20px;
+    columns: 3;
+    column-gap: 20px;
   }
 
   .category-section {
-    margin-bottom: 28px;
+    margin-bottom: 20px;
+    break-inside: avoid;
   }
 
   .category-section:last-child {
@@ -293,7 +298,7 @@
     color: var(--color-error, #ef4444);
     font-size: 14px;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .reset-all-btn:hover:not(:disabled) {
@@ -313,7 +318,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1001;
+    z-index: 3001;
   }
 
   .confirm-dialog {
@@ -349,7 +354,7 @@
     border-radius: 6px;
     color: var(--text-secondary);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .cancel-btn:hover {
@@ -364,7 +369,7 @@
     border-radius: 6px;
     color: white;
     cursor: pointer;
-    transition: all 150ms ease;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
   }
 
   .confirm-btn:hover {
@@ -372,6 +377,12 @@
   }
 
   /* Responsive */
+  @media (max-width: 800px) {
+    .modal-content {
+      columns: 2;
+    }
+  }
+
   @media (max-width: 600px) {
     .modal {
       width: 95%;
@@ -384,6 +395,7 @@
 
     .modal-content {
       padding: 16px;
+      columns: 1;
     }
   }
 </style>

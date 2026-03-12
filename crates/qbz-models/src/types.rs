@@ -54,6 +54,17 @@ impl Quality {
             Quality::Mp3,
         ]
     }
+
+    /// Returns the next lower quality level, or None if already at the lowest (Mp3).
+    /// Used for CDN fallback when a quality level consistently fails.
+    pub fn lower(&self) -> Option<Quality> {
+        match self {
+            Quality::UltraHiRes => Some(Quality::HiRes),
+            Quality::HiRes => Some(Quality::Lossless),
+            Quality::Lossless => Some(Quality::Mp3),
+            Quality::Mp3 => None,
+        }
+    }
 }
 
 impl Default for Quality {
@@ -206,6 +217,28 @@ pub struct Album {
     /// Universal Product Code for the album
     pub upc: Option<String>,
     /// Editorial description/review of the album
+    pub description: Option<String>,
+    /// Album goodies (booklets, liner notes PDFs)
+    #[serde(default)]
+    pub goodies: Option<Vec<Goody>>,
+}
+
+/// A downloadable extra bundled with an album (e.g. PDF booklet)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Goody {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub url: String,
+    /// Original (full-size) URL
+    #[serde(default)]
+    pub original_url: String,
+    /// File format id (e.g. 21 for PDF)
+    #[serde(default)]
+    pub file_format_id: Option<u32>,
+    #[serde(default)]
     pub description: Option<String>,
 }
 

@@ -9,6 +9,8 @@
     loadAlbumFavorites,
     toggleAlbumFavorite
   } from '$lib/stores/albumFavoritesStore';
+  import { resolveAlbumCover } from '$lib/stores/customAlbumCoverStore';
+  import { cachedSrc } from '$lib/actions/cachedImage';
 
   interface Props {
     albumId?: string;
@@ -35,8 +37,8 @@
     onOpenContainingFolder?: () => void;
     onReDownloadAlbum?: () => void;
     downloadStateVersion?: number;
-    /** Source badge for local library: 'user' | 'qobuz_download' | 'plex' */
-    sourceBadge?: 'user' | 'qobuz_download' | 'plex';
+    /** Source badge for local library: 'user' | 'qobuz_download' | 'qobuz_purchase' | 'plex' */
+    sourceBadge?: 'user' | 'qobuz_download' | 'qobuz_purchase' | 'plex';
     artistId?: number;
     onArtistClick?: (artistId: number) => void;
   }
@@ -77,7 +79,7 @@
   });
 
   let imageError = $state(false);
-  const cardSize = $derived(size === 'large' ? 180 : 162);
+  const cardSize = $derived(size === 'large' ? 210 : 190);
   let titleRef: HTMLDivElement | null = $state(null);
   let titleTextRef: HTMLSpanElement | null = $state(null);
   let titleOverflow = $state(0);
@@ -98,6 +100,8 @@
   const favoriteAvailable = $derived(favoriteEnabled ?? !!albumId);
   const hasOverlay = $derived(!!(showFavoriteButton || onPlay || hasMenu));
   let menuOpen = $state(false);
+  let contextMenuOpen = $state(false);
+  let contextMenuPos = $state<{ x: number; y: number } | null>(null);
 
   function handleImageError() {
     imageError = true;
@@ -198,6 +202,7 @@
   style="width: {cardSize}px"
   data-search-id={searchId}
   onclick={handleCardClick}
+  oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); menuOpen = true; contextMenuOpen = true; contextMenuPos = { x: e.clientX, y: e.clientY }; }}
   onmouseenter={measureOverflowOnce}
   onfocus={measureOverflowOnce}
   role="button"
@@ -216,7 +221,7 @@
 
     <!-- Image overlays placeholder when loaded -->
     {#if !imageError && artwork}
-      <img class="artwork-image" src={artwork} alt={title} loading="lazy" decoding="async" onerror={handleImageError} />
+      <img class="artwork-image" use:cachedSrc={albumId ? resolveAlbumCover(albumId, artwork) : artwork} alt={title} loading="lazy" decoding="async" onerror={handleImageError} />
     {/if}
 
     <!-- Action Overlay -->
@@ -266,7 +271,9 @@
                 isAlbumFullyDownloaded={isDownloaded}
                 onOpenContainingFolder={onOpenContainingFolder}
                 onReDownloadAlbum={onReDownloadAlbum}
-                onOpenChange={(open) => (menuOpen = open)}
+                externalOpen={contextMenuOpen}
+                contextMenuPosition={contextMenuPos}
+                onOpenChange={(open) => { menuOpen = open; if (!open) { contextMenuOpen = false; contextMenuPos = null; } }}
               />
             </div>
           {/if}
@@ -279,12 +286,15 @@
       <div
         class="source-badge"
         class:local-badge={sourceBadge === 'user'}
-        title={sourceBadge === 'user' ? 'Local file' : sourceBadge === 'plex' ? 'Plex library' : 'Qobuz offline'}
+        class:purchase-badge={sourceBadge === 'qobuz_purchase'}
+        title={sourceBadge === 'user' ? 'Local file' : sourceBadge === 'plex' ? 'Plex library' : sourceBadge === 'qobuz_purchase' ? 'Qobuz purchase' : 'Qobuz offline'}
       >
         {#if sourceBadge === 'user'}
           <HardDrive size={14} />
         {:else if sourceBadge === 'plex'}
           <img src="/plex-logo.svg" alt="Plex" class="qobuz-badge-icon plex-logo-icon" />
+        {:else if sourceBadge === 'qobuz_purchase'}
+          <img src="/qobuz-logo-filled.svg" alt="Qobuz purchase" class="qobuz-badge-icon" />
         {:else}
           <img src="/qobuz-logo-filled.svg" alt="Qobuz" class="qobuz-badge-icon" />
         {/if}
@@ -351,6 +361,7 @@
     object-fit: cover;
     border-radius: inherit;
     z-index: 1;
+    transition: opacity 0.15s ease-in;
   }
 
   .artwork-placeholder {
@@ -405,6 +416,17 @@
     background: rgba(0, 0, 0, 0.7);
     border-radius: 4px;
     backdrop-filter: blur(4px);
+  }
+
+  .source-badge.purchase-badge {
+    background: rgba(30, 20, 0, 0.85);
+    border-radius: 4px;
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(234, 179, 8, 0.5);
+  }
+
+  .source-badge.purchase-badge .qobuz-badge-icon {
+    filter: brightness(0) saturate(100%) invert(75%) sepia(80%) saturate(500%) hue-rotate(10deg) brightness(105%) contrast(90%);
   }
 
   .source-badge .qobuz-badge-icon {

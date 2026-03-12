@@ -81,9 +81,9 @@
   }: Props = $props();
 
   // Constants
-  const GRID_CARD_WIDTH = 180;
-  const GRID_CARD_HEIGHT = 290;
-  const GRID_GAP_X = 14;
+  const GRID_CARD_WIDTH = 210;
+  const GRID_CARD_HEIGHT = 320;
+  const GRID_GAP_X = 22;
   const GRID_GAP_Y = 24;
   const LIST_ROW_HEIGHT = 76; // 52px art + padding
   const LIST_ROW_GAP = 8;
@@ -312,7 +312,7 @@
                 {/if}
                 <AlbumCard
                   albumId={album.id}
-                  artwork={album.image?.large || album.image?.thumbnail || ''}
+                  artwork={album.image?.small || album.image?.thumbnail || ''}
                   title={album.title}
                   artist={album.artist.name}
                   genre={getGenreLabel?.(album) ?? album.genre?.name ?? ''}
@@ -337,7 +337,7 @@
           </div>
         {:else if item.type === 'list-row'}
           {@const album = item.album}
-          <div class="album-row" class:has-rank={showRanking} role="button" tabindex="0" onclick={() => handleAlbumClickEvent(album.id)}>
+          <div class="album-row" class:has-rank={showRanking} role="button" tabindex="0" onclick={() => handleAlbumClickEvent(album.id)} onkeydown={(e) => e.key === 'Enter' && handleAlbumClickEvent(album.id)}>
             {#if showRanking}
               <div class="rank-number">#{item.globalIndex + 1}</div>
             {/if}
@@ -436,8 +436,7 @@
 
   .album-grid-row {
     display: flex;
-    flex-wrap: wrap;
-    gap: 24px 14px;
+    gap: 22px;
   }
 
   /* List mode styles */
