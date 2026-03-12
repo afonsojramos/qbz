@@ -3,7 +3,8 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import QualityBadge from '$lib/components/QualityBadge.svelte';
-  import { getPanelFrameInterval } from '$lib/immersive/fpsConfig';
+  // Linebed runs at full requestAnimationFrame rate (~60fps) — no throttle.
+  // Dense terrain with 200 lines needs every frame for the 3D mountain effect.
 
   interface Props {
     enabled?: boolean;
@@ -43,7 +44,7 @@
 
   // Linebed parameters
   const NUM_BANDS = 512; // Backend sends 512 log-scaled bands (4096-point FFT)
-  const NUM_LINES = 120; // Dense terrain (musicvid.org uses 200 with WebGL, 120 is Canvas 2D safe)
+  const NUM_LINES = 200; // Match musicvid.org (200 lines) — dense terrain for 3D mountain effect
   const SMOOTHING = 0.03; // Temporal smoothing (musicvid: smoothingTimeConstant 0.03)
 
   // Spectrum processing params — scaled for 512 bins
@@ -69,13 +70,11 @@
     history.push(new Float32Array(NUM_BANDS));
   }
   let historyIndex = 0;
-  let frameCounter = 0;
 
   // Current smoothed spectrum
   const smoothedData = new Float32Array(NUM_BANDS);
 
-  let lastRenderTime = 0;
-  const FRAME_INTERVAL = getPanelFrameInterval('linebed');
+  // No frame throttle — requestAnimationFrame caps at display refresh rate
 
   // Multi-pass moving average smoothing (from musicvid.org AnalyseFunctions.js)
   function smoothSpectrum(data: Float32Array): Float32Array {
@@ -236,7 +235,7 @@
       }
     });
 
-    render(0);
+    render();
   }
 
   // Build a smooth curve path through spectrum points
@@ -276,15 +275,8 @@
     ctx.lineTo(lastX, lastY);
   }
 
-  function render(timestamp: number = 0) {
+  function render() {
     if (!ctx || !canvasRef) return;
-
-    const delta = timestamp - lastRenderTime;
-    if (delta < FRAME_INTERVAL) {
-      animationFrame = requestAnimationFrame(render);
-      return;
-    }
-    lastRenderTime = timestamp;
 
     const rect = canvasRef.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -303,17 +295,17 @@
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, width, height);
 
-    // Centered symmetric perspective — steeper "standing on a chair" angle.
-    // Camera: musicvid posY=1738, rotX=-0.6543 (looking down ~37.5°).
-    // Simulated via less aggressive depth compression + larger vertical spread.
+    // Perspective: musicvid camera at (1173, 1738, 868), rotX=-0.6543 (~37.5° down).
+    // 200 lines with spacing=20 → back lines pack tightly (2-3px apart) creating
+    // solid "3D mountain ridges"; front lines spread out showing individual curves.
 
     // Back line (far, top of canvas): narrow, centered
-    const backY = height * 0.12;
-    const backLineWidth = width * 0.18;
+    const backY = height * 0.25;
+    const backLineWidth = width * 0.20;
 
     // Front line (close, bottom of canvas): wide, centered
-    const frontY = height * 0.92;
-    const frontLineWidth = width * 1.1;
+    const frontY = height * 0.98;
+    const frontLineWidth = width * 1.05;
 
     // Draw lines from back to front (painter's algorithm).
     // Data direction: NEWEST at back, scrolls toward front/viewer.
@@ -322,21 +314,22 @@
       const bufIdx = (historyIndex - 1 - lineIdx + NUM_LINES * 2) % NUM_LINES;
       const spectrum = history[bufIdx];
 
-      // Less aggressive depth compression = more uniform spacing = steeper viewing angle
+      // Depth compression: back lines tightly packed, front lines spread.
+      // Power 1.8 → back 50% of lines use only ~28% of vertical space.
       const rawFactor = lineIdx / (NUM_LINES - 1);
-      const depthFactor = Math.pow(rawFactor, 1.35);
+      const depthFactor = Math.pow(rawFactor, 1.8);
 
       // Interpolate Y and width from back to front
       const baseY = backY + (frontY - backY) * depthFactor;
       const currentLineWidth = backLineWidth + (frontLineWidth - backLineWidth) * depthFactor;
       const lineLeft = (width - currentLineWidth) / 2; // Centered
 
-      // Amplitude: tall peaks like musicvid (spectrumHeight: 770, spacing: 20 = 38.5x ratio)
-      const amplitudeScale = 0.06 + depthFactor * 0.94;
+      // Amplitude: tall peaks (musicvid spectrumHeight: 770, spacing: 20 = 38.5x ratio)
+      const amplitudeScale = 0.05 + depthFactor * 0.95;
       const maxAmplitude = height * 0.55 * amplitudeScale;
 
       // Opacity: fades at back, bright at front
-      const opacity = 0.08 + depthFactor * 0.92;
+      const opacity = 0.06 + depthFactor * 0.94;
 
       // Occlusion pass: fill below the spectrum line with black
       ctx.beginPath();
