@@ -9,6 +9,7 @@
   import ViewTransition from '../ViewTransition.svelte';
   import TrackMenu from '../TrackMenu.svelte';
   import QualityBadge from '../QualityBadge.svelte';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
   import { getSearchState, setSearchState, subscribeSearchFocus, subscribeSearchQuery, setSearchQuery, type SearchResults, type SearchAllResults, type SearchTab, type SearchFilterType, type Playlist } from '$lib/stores/searchState';
   import { setPlaybackContext } from '$lib/stores/playbackContextStore';
   import { togglePlay } from '$lib/stores/playerStore';
@@ -731,7 +732,9 @@
     if (trackResults && trackResults.items.length > 0) {
       try {
         const queueTracks = buildSearchQueueTracks(trackResults.items);
-        await invoke('v2_set_queue', { tracks: queueTracks, startIndex: trackIndex });
+        await replacePlaybackQueue(queueTracks, trackIndex, {
+          debugLabel: 'search:results'
+        });
       } catch (err) {
         console.error('Failed to set queue:', err);
       }

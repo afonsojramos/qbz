@@ -38,6 +38,7 @@
     hasActiveFilter as hasGenreFilter
   } from '$lib/stores/genreFilterStore';
   import { setPlaybackContext } from '$lib/stores/playbackContextStore';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
   import {
     getCachedArtist,
     setCachedArtist,
@@ -666,7 +667,13 @@
     if (continueTracks.length > 0) {
       try {
         const queueTracks = buildContinueQueueTracks(continueTracks);
-        await invoke('v2_set_queue', { tracks: queueTracks, startIndex: trackIndex });
+        const localTrackIds = continueTracks
+          .filter((track) => track.isLocal)
+          .map((track) => track.id);
+        await replacePlaybackQueue(queueTracks, trackIndex, {
+          localTrackIds,
+          debugLabel: 'home:continue-listening'
+        });
       } catch (err) {
         console.error('Failed to set queue:', err);
       }

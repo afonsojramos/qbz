@@ -10,6 +10,7 @@
   import QobuzPlaylistCard from '../QobuzPlaylistCard.svelte';
   import TrackMenu from '../TrackMenu.svelte';
   import QualityBadge from '../QualityBadge.svelte';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
   import { setPlaybackContext } from '$lib/stores/playbackContextStore';
   import { togglePlay } from '$lib/stores/playerStore';
   import {
@@ -459,7 +460,9 @@
           console.log(`[LabelView] Context set: "${pageData?.name}" top tracks, ${trackIds.length} tracks, index ${index}`);
 
           const queueTracks = buildTopTracksQueue(topTracks);
-          await invoke('v2_set_queue', { tracks: queueTracks, startIndex: index });
+          await replacePlaybackQueue(queueTracks, index, {
+            debugLabel: 'label-view:top-tracks'
+          });
           console.log('[LabelView] Queue set successfully');
         }
       }

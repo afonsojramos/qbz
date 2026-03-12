@@ -301,6 +301,7 @@
     shareSonglinkTrack,
     loadQconnectQueue
   } from '$lib/services/trackActions';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
   import type {
     QconnectDiagnosticsPayload,
     QconnectQueueSnapshot,
@@ -1559,14 +1560,9 @@
       artist_id: trk.artistId ?? album.artistId
     }));
 
-    await setQueue(queueTracks, 0, true);
-
-    // Sync the full queue to QConnect remote so controllers see the album
-    const trackIds = album.tracks.map(trk => trk.id);
-    loadQconnectQueue(trackIds, 0).then(ok => {
-      if (ok) console.log('[QConnect] Album queue synced to remote (%d tracks)', trackIds.length);
-      else console.warn('[QConnect] Album queue NOT synced to remote (not connected or rejected)');
-    }).catch(err => console.error('[QConnect] Album queue sync error:', err));
+    await replacePlaybackQueue(queueTracks, 0, {
+      debugLabel: 'page:play-album'
+    });
 
     const firstTrack = album.tracks[0];
     const quality = firstTrack.hires && firstTrack.bitDepth && firstTrack.samplingRate
@@ -1784,14 +1780,9 @@
       artist_id: trk.performer?.id
     }));
 
-    await setQueue(queueTracks, 0);
-
-    // Sync the full queue to QConnect remote so controllers see the playlist
-    const trackIds = tracks.map(trk => trk.id);
-    loadQconnectQueue(trackIds, 0).then(ok => {
-      if (ok) console.log('[QConnect] Playlist queue synced to remote (%d tracks)', trackIds.length);
-      else console.warn('[QConnect] Playlist queue NOT synced to remote (not connected or rejected)');
-    }).catch(err => console.error('[QConnect] Playlist queue sync error:', err));
+    await replacePlaybackQueue(queueTracks, 0, {
+      debugLabel: 'page:play-playlist'
+    });
 
     const firstTrack = tracks[0];
     const artwork = firstTrack.album?.image?.large || firstTrack.album?.image?.thumbnail || firstTrack.album?.image?.small || '';
@@ -2013,7 +2004,9 @@
       console.log('[Album Queue] Track IDs:', queueTracks.map(trk => trk.id));
 
       // Set the queue starting at the clicked track
-      await setQueue(queueTracks, trackIndex >= 0 ? trackIndex : 0, true);
+      await replacePlaybackQueue(queueTracks, trackIndex >= 0 ? trackIndex : 0, {
+        debugLabel: 'page:album-track-play'
+      });
 
       console.log('[Album Queue] Queue set successfully');
     }

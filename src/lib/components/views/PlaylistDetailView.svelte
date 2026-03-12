@@ -27,6 +27,7 @@
   import { t } from '$lib/i18n';
   import { onMount, tick } from 'svelte';
   import { getUserItem, setUserItem } from '$lib/utils/userStorage';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
 
   interface PlaylistTrack {
     id: number;
@@ -1556,10 +1557,10 @@
     const allTracks = displayTracks;
     if (allTracks.length === 0) return;
     const { queueTracks, localIds } = buildQueueTracks(allTracks);
-    await invoke('v2_set_queue', { tracks: queueTracks, startIndex });
-    if (localIds.length > 0) {
-      onSetLocalQueue?.(localIds);
-    }
+    await replacePlaybackQueue(queueTracks, startIndex, {
+      localTrackIds: localIds,
+      debugLabel: 'playlist-detail:set-queue'
+    });
   }
 
   async function handleTrackClick(track: DisplayTrack, trackIndex: number) {

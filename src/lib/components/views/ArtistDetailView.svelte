@@ -19,6 +19,7 @@
   import TrackMenu from '../TrackMenu.svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
   import QualityBadge from '../QualityBadge.svelte';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
   import { consumeContextTrackFocus, setPlaybackContext, getPlaybackContext } from '$lib/stores/playbackContextStore';
   import { saveScrollPosition, getSavedScrollPosition } from '$lib/stores/navigationStore';
   import { togglePlay } from '$lib/stores/playerStore';
@@ -1185,7 +1186,9 @@
         console.log(`[Artist] Context created: "${artist.name}" top tracks, ${trackIds.length} tracks, starting at ${index}`);
         try {
           const queueTracks = buildTopTracksQueue(topTracks);
-          await invoke('v2_set_queue', { tracks: queueTracks, startIndex: index });
+          await replacePlaybackQueue(queueTracks, index, {
+            debugLabel: 'artist-detail:top-tracks'
+          });
         } catch (err) {
           console.error('Failed to set queue:', err);
         }

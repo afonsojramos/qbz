@@ -22,6 +22,7 @@
   import { syncCache as syncAlbumCache } from '$lib/stores/albumFavoritesStore';
   import { syncCache as syncArtistCache } from '$lib/stores/artistFavoritesStore';
   import { categorizeAlbum, getQobuzImage, formatQuality } from '$lib/adapters/qobuzAdapters';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
   import { getUserItem, setUserItem } from '$lib/utils/userStorage';
   import GenreFilterButton from '../GenreFilterButton.svelte';
   import {
@@ -1179,7 +1180,9 @@
   async function setFavoritesQueue(startIndex: number) {
     if (filteredTracks.length === 0) return;
     const queueTracks = buildFavoritesQueueTracks(filteredTracks);
-    await invoke('v2_set_queue', { tracks: queueTracks, startIndex });
+    await replacePlaybackQueue(queueTracks, startIndex, {
+      debugLabel: 'favorites:tracks'
+    });
   }
 
   async function handleTrackClick(track: FavoriteTrack, index: number) {
@@ -1216,7 +1219,9 @@
       // Shuffle the tracks
       const shuffled = [...filteredTracks].sort(() => Math.random() - 0.5);
       const queueTracks = buildFavoritesQueueTracks(shuffled);
-      await invoke('v2_set_queue', { tracks: queueTracks, startIndex: 0 });
+      await replacePlaybackQueue(queueTracks, 0, {
+        debugLabel: 'favorites:shuffle'
+      });
       await setFavoritesContext(shuffled.map(trk => trk.id), 0);
       onTrackPlay(buildDisplayTrack(shuffled[0], 0));
     } catch (err) {

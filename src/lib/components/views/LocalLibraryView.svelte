@@ -45,6 +45,7 @@
   import {
     setPlaybackContext
   } from '$lib/stores/playbackContextStore';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
 
   // Backend types matching Rust models
   interface LocalTrack {
@@ -2182,8 +2183,10 @@
     console.log('[LocalLibrary Queue] Mapped to', queueTracks.length, 'queue tracks');
     console.log('[LocalLibrary Queue] Track IDs:', queueTracks.map(track => track.id));
 
-    await invoke('v2_set_queue', { tracks: queueTracks, startIndex });
-    onSetLocalQueue?.(tracks.filter(track => track.source !== 'plex').map(track => track.id));
+    await replacePlaybackQueue(queueTracks, startIndex, {
+      localTrackIds: tracks.filter(track => track.source !== 'plex').map(track => track.id),
+      debugLabel: 'local-library:set-queue'
+    });
 
     console.log('[LocalLibrary Queue] Queue set successfully');
   }

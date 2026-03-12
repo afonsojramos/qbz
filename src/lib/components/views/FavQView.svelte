@@ -7,6 +7,7 @@
   import BulkActionBar from '$lib/components/BulkActionBar.svelte';
   import { t } from '$lib/i18n';
   import { formatDuration, getQobuzImage } from '$lib/adapters/qobuzAdapters';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
   import { showToast } from '$lib/stores/toastStore';
   import { setPlaybackContext } from '$lib/stores/playbackContextStore';
   import { isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
@@ -304,7 +305,9 @@
     }
 
     try {
-      await invoke('v2_set_queue', { tracks: queueTracks, startIndex: queueIndex });
+      await replacePlaybackQueue(queueTracks, queueIndex, {
+        debugLabel: 'fav-q'
+      });
     } catch (err) {
       console.error('Failed to set queue:', err);
     }

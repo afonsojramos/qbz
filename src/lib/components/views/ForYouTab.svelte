@@ -8,6 +8,7 @@
   import AlbumCard from '../AlbumCard.svelte';
   import TrackRow from '../TrackRow.svelte';
   import { formatQuality, getQobuzImageForSize } from '$lib/adapters/qobuzAdapters';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
   import { playTrack } from '$lib/services/playbackService';
   import { playQueueIndex } from '$lib/stores/queueStore';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
@@ -629,7 +630,9 @@
         album_id: track.album?.id || null,
         artist_id: track.artist?.id || spotlightData!.artistId,
       }));
-      await invoke('v2_set_queue', { tracks: queueTracks, startIndex: 0 });
+      await replacePlaybackQueue(queueTracks, 0, {
+        debugLabel: 'for-you:spotlight-top-tracks'
+      });
       await startRadioPlayback();
     } catch (err) {
       console.error('Failed to play spotlight top tracks:', err);
@@ -769,7 +772,13 @@
 
       try {
         const queueTracks = buildContinueQueueTracks(continueTracks);
-        await invoke('v2_set_queue', { tracks: queueTracks, startIndex: trackIndex });
+        const localTrackIds = continueTracks
+          .filter((trk) => trk.isLocal)
+          .map((trk) => trk.id);
+        await replacePlaybackQueue(queueTracks, trackIndex, {
+          localTrackIds,
+          debugLabel: 'for-you:continue-listening'
+        });
       } catch (err) {
         console.error('Failed to set queue:', err);
       }

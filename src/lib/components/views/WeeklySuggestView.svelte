@@ -9,6 +9,7 @@
   import { formatDuration, getQobuzImage } from '$lib/adapters/qobuzAdapters';
   import { getDynamicSuggest } from '$lib/services/dynamicSuggest';
   import { getHomeSeeds, getHomeSeedsML } from '$lib/services/recoService';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
   import { showToast } from '$lib/stores/toastStore';
   import { setPlaybackContext } from '$lib/stores/playbackContextStore';
   import { isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
@@ -360,7 +361,9 @@
     );
 
     try {
-      await invoke('v2_set_queue', { tracks: queueTracks, startIndex: queueIndex });
+      await replacePlaybackQueue(queueTracks, queueIndex, {
+        debugLabel: 'weekly-q'
+      });
     } catch (err) {
       console.error('Failed to set queue:', err);
     }
