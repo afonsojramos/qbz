@@ -17,6 +17,7 @@ impl StreamFetcher {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(300)) // 5 minute timeout for large files
             .connect_timeout(Duration::from_secs(15))
+            .use_native_tls()
             .build()
             .expect("Failed to create HTTP client");
 
@@ -74,7 +75,17 @@ impl StreamFetcher {
         use futures_util::StreamExt;
 
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| format!("Fetch error: {}", e))?;
+            let chunk = chunk_result.map_err(|e| {
+                use std::error::Error as _;
+                let mut msg = format!("Fetch error: {}", e);
+                let mut source = e.source();
+                while let Some(cause) = source {
+                    msg.push_str(&format!(" | caused by: {}", cause));
+                    source = cause.source();
+                }
+                log::error!("[Offline] Download error for track {} after {} bytes: {}", track_id, cached, msg);
+                msg
+            })?;
 
             file.write_all(&chunk)
                 .map_err(|e| format!("Failed to write chunk: {}", e))?;
