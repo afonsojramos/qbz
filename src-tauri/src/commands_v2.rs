@@ -1883,32 +1883,33 @@ fn spawn_v2_prefetch_with_hw_check(
                 }
             };
 
-            let result = async {
-                let bridge_guard = bridge_clone.read().await;
-                let bridge = bridge_guard.as_ref().ok_or("CoreBridge not initialized")?;
-                let mut effective_quality = quality;
-
-                // Smart quality downgrade: check if hardware supports the track's sample rate
+            // Determine effective quality (may be downgraded for hardware compatibility)
+            let effective_quality = {
+                let mut eq = quality;
                 #[cfg(target_os = "linux")]
                 if let Some(ref device_id) = hw_device_clone {
                     if quality == Quality::UltraHiRes {
-                        let stream_url = bridge.get_stream_url(track_id, quality).await?;
-                        let track_rate = (stream_url.sampling_rate * 1000.0) as u32;
-                        if qbz_audio::device_supports_sample_rate(device_id, track_rate) == Some(false) {
-                            log::info!(
-                                "[V2/PREFETCH] Track {} at {}Hz incompatible with hardware, prefetching at Hi-Res",
-                                track_id, track_rate
-                            );
-                            effective_quality = Quality::HiRes;
-                        } else {
-                            // Rate is supported, use the URL we already got
-                            drop(bridge_guard);
-                            let data = download_audio(&stream_url.url).await?;
-                            return Ok::<Vec<u8>, String>(data);
+                        let bridge_guard = bridge_clone.read().await;
+                        if let Some(bridge) = bridge_guard.as_ref() {
+                            if let Ok(stream_url) = bridge.get_stream_url(track_id, quality).await {
+                                let track_rate = (stream_url.sampling_rate * 1000.0) as u32;
+                                if qbz_audio::device_supports_sample_rate(device_id, track_rate) == Some(false) {
+                                    log::info!(
+                                        "[V2/PREFETCH] Track {} at {}Hz incompatible with hardware, prefetching at Hi-Res",
+                                        track_id, track_rate
+                                    );
+                                    eq = Quality::HiRes;
+                                }
+                            }
                         }
                     }
                 }
+                eq
+            };
 
+            let result = async {
+                let bridge_guard = bridge_clone.read().await;
+                let bridge = bridge_guard.as_ref().ok_or("CoreBridge not initialized")?;
                 let stream_url = bridge.get_stream_url(track_id, effective_quality).await?;
                 drop(bridge_guard);
 
@@ -1932,7 +1933,7 @@ fn spawn_v2_prefetch_with_hw_check(
                     let retry_result = async {
                         let bridge_guard = bridge_clone.read().await;
                         let bridge = bridge_guard.as_ref().ok_or("CoreBridge not initialized")?;
-                        let stream_url = bridge.get_stream_url(track_id, quality).await?;
+                        let stream_url = bridge.get_stream_url(track_id, effective_quality).await?;
                         drop(bridge_guard);
                         download_audio(&stream_url.url).await
                     }.await;
@@ -1942,7 +1943,36 @@ fn spawn_v2_prefetch_with_hw_check(
                             log::info!("[V2/PREFETCH] Complete for track {} (retry succeeded)", track_id);
                         }
                         Err(e2) => {
-                            log::warn!("[V2/PREFETCH] Failed for track {} (attempt 2): {}", track_id, e2);
+                            // Both attempts at current quality failed — try lower quality
+                            if let Some(fallback_q) = effective_quality.lower() {
+                                log::warn!(
+                                    "[V2/PREFETCH] Retry also failed for track {}: {}. Trying quality fallback to {}",
+                                    track_id, e2, fallback_q.label()
+                                );
+                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                let fallback_result = async {
+                                    let bridge_guard = bridge_clone.read().await;
+                                    let bridge = bridge_guard.as_ref().ok_or("CoreBridge not initialized")?;
+                                    let stream_url = bridge.get_stream_url(track_id, fallback_q).await?;
+                                    log::info!(
+                                        "[V2/PREFETCH] Quality fallback: {} → {} (format_id={})",
+                                        effective_quality.label(), fallback_q.label(), stream_url.format_id
+                                    );
+                                    drop(bridge_guard);
+                                    download_audio(&stream_url.url).await
+                                }.await;
+                                match fallback_result {
+                                    Ok(data) => {
+                                        cache_clone.insert(track_id, data);
+                                        log::info!("[V2/PREFETCH] Complete for track {} (quality fallback succeeded)", track_id);
+                                    }
+                                    Err(e3) => {
+                                        log::warn!("[V2/PREFETCH] Quality fallback also failed for track {}: {}", track_id, e3);
+                                    }
+                                }
+                            } else {
+                                log::warn!("[V2/PREFETCH] Failed for track {} (attempt 2, no lower quality): {}", track_id, e2);
+                            }
                         }
                     }
                 }
@@ -7364,15 +7394,40 @@ pub async fn v2_play_track(
                     .await
                     .map_err(RuntimeError::Internal)?;
                 stream_url = retry_url;
-                // Set stream_first_enabled to false to skip the streaming block
-                // and fall through to the standard download path
                 let audio_data = match download_audio(&stream_url.url).await {
                     Ok(data) => data,
                     Err(e2) => {
-                        log::warn!("[V2/DOWNLOAD] Retry also failed for track {}: {}", track_id, e2);
-                        return Err(RuntimeError::Internal(format!(
-                            "Download failed after retry: {}", e2
-                        )));
+                        // Fresh URL at same quality also failed — try lower quality
+                        if let Some(fallback_q) = final_quality.lower() {
+                            log::warn!(
+                                "[V2/DOWNLOAD] Streaming fallback also failed for track {}: {}. Trying quality fallback to {}",
+                                track_id, e2, fallback_q.label()
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            let fallback_url = bridge_guard
+                                .get_stream_url(track_id, fallback_q)
+                                .await
+                                .map_err(RuntimeError::Internal)?;
+                            log::info!(
+                                "[V2/DOWNLOAD] Streaming quality fallback: {} → {} (format_id={})",
+                                final_quality.label(), fallback_q.label(), fallback_url.format_id
+                            );
+                            stream_url = fallback_url;
+                            match download_audio(&stream_url.url).await {
+                                Ok(data) => data,
+                                Err(e3) => {
+                                    log::warn!("[V2/DOWNLOAD] Quality fallback also failed for track {}: {}", track_id, e3);
+                                    return Err(RuntimeError::Internal(format!(
+                                        "Download failed after quality fallback: {}", e3
+                                    )));
+                                }
+                            }
+                        } else {
+                            log::warn!("[V2/DOWNLOAD] Retry also failed for track {}: {}", track_id, e2);
+                            return Err(RuntimeError::Internal(format!(
+                                "Download failed after retry: {}", e2
+                            )));
+                        }
                     }
                 };
                 let data_size = audio_data.len();
@@ -7482,9 +7537,34 @@ pub async fn v2_play_track(
                 .get_stream_url(track_id, final_quality)
                 .await
                 .map_err(RuntimeError::Internal)?;
-            download_audio(&retry_url.url)
-                .await
-                .map_err(RuntimeError::Internal)?
+            match download_audio(&retry_url.url).await {
+                Ok(data) => data,
+                Err(e2) => {
+                    // Both attempts at current quality failed — try lower quality
+                    if let Some(fallback_q) = final_quality.lower() {
+                        log::warn!(
+                            "[V2/DOWNLOAD] Retry also failed for track {}: {}. Trying quality fallback to {}",
+                            track_id, e2, fallback_q.label()
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        let fallback_url = bridge_guard
+                            .get_stream_url(track_id, fallback_q)
+                            .await
+                            .map_err(RuntimeError::Internal)?;
+                        log::info!(
+                            "[V2/DOWNLOAD] Quality fallback: {} → {} (format_id={})",
+                            final_quality.label(), fallback_q.label(), fallback_url.format_id
+                        );
+                        download_audio(&fallback_url.url)
+                            .await
+                            .map_err(RuntimeError::Internal)?
+                    } else {
+                        return Err(RuntimeError::Internal(format!(
+                            "Download failed after retry (no lower quality available): {}", e2
+                        )));
+                    }
+                }
+            }
         }
     };
     let data_size = audio_data.len();

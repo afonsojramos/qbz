@@ -54,6 +54,17 @@ impl Quality {
             Quality::Mp3,
         ]
     }
+
+    /// Returns the next lower quality level, or None if already at the lowest (Mp3).
+    /// Used for CDN fallback when a quality level consistently fails.
+    pub fn lower(&self) -> Option<Quality> {
+        match self {
+            Quality::UltraHiRes => Some(Quality::HiRes),
+            Quality::HiRes => Some(Quality::Lossless),
+            Quality::Lossless => Some(Quality::Mp3),
+            Quality::Mp3 => None,
+        }
+    }
 }
 
 impl Default for Quality {
