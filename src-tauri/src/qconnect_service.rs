@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -50,6 +50,8 @@ const DEFAULT_QCONNECT_CHANNEL_COUNT: i32 = 2;
 const VOLUME_REMOTE_CONTROL_ALLOWED: i32 = 2;
 // JoinSessionReason: 0=unknown, 1=controller_request, 2=reconnection
 const JOIN_SESSION_REASON_CONTROLLER_REQUEST: i32 = 1;
+const QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS: u64 = 1_500;
+const QCONNECT_PLAY_TRACK_HANDOFF_POLL_MS: u64 = 50;
 static QCONNECT_DEVICE_UUID: OnceLock<String> = OnceLock::new();
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1244,6 +1246,139 @@ impl QconnectServiceState {
 
         Ok(true)
     }
+
+    async fn play_remote_renderer_track_if_active(
+        &self,
+        track_id: u64,
+        app_handle: &AppHandle,
+    ) -> Result<bool, String> {
+        let (app, session) = {
+            let guard = self.inner.lock().await;
+            let Some(runtime) = guard.runtime.as_ref() else {
+                return Ok(false);
+            };
+            let session = runtime.sync_state.lock().await.session.clone();
+            (Arc::clone(&runtime.app), session)
+        };
+
+        let active_renderer_id = session.active_renderer_id;
+        let local_renderer_id = session.local_renderer_id;
+        let early_return_reason = if active_renderer_id.is_none() {
+            Some("missing_active_renderer_id")
+        } else if local_renderer_id.is_none() {
+            Some("missing_local_renderer_id")
+        } else if active_renderer_id == local_renderer_id {
+            Some("active_renderer_is_local")
+        } else {
+            None
+        };
+
+        if let Some(reason) = early_return_reason {
+            emit_qconnect_diagnostic(
+                app_handle,
+                "qconnect:play_track_handoff",
+                "info",
+                json!({
+                    "reason": reason,
+                    "track_id": track_id,
+                    "active_renderer_id": active_renderer_id,
+                    "local_renderer_id": local_renderer_id,
+                    "renderer_count": session.renderers.len(),
+                }),
+            );
+            return Ok(false);
+        }
+
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS);
+        let poll_interval = Duration::from_millis(QCONNECT_PLAY_TRACK_HANDOFF_POLL_MS);
+        let mut attempts: u32 = 0;
+        let (last_queue_version, last_queue_track_count) = loop {
+            attempts += 1;
+            let queue = app.queue_state_snapshot().await;
+            let queue_version = (queue.version.major, queue.version.minor);
+            let queue_track_count = queue.queue_items.len() + queue.autoplay_items.len();
+
+            let (resolved_queue_item_id, _, _) =
+                resolve_queue_item_ids_from_queue_state(&queue, track_id);
+
+            if let Some(target_queue_item_id) = resolved_queue_item_id {
+                let target_queue_item_id_i32 = i32::try_from(target_queue_item_id)
+                    .map_err(|_| format!("target queue item id out of range: {target_queue_item_id}"))?;
+
+                let payload = serde_json::to_value(QconnectSetPlayerStateRequest {
+                    playing_state: Some(PLAYING_STATE_PLAYING),
+                    current_position: Some(0),
+                    current_queue_item: Some(QconnectSetPlayerStateQueueItemPayload {
+                        queue_version: Some(QconnectQueueVersionPayload {
+                            major: queue.version.major,
+                            minor: queue.version.minor,
+                        }),
+                        id: Some(target_queue_item_id_i32),
+                    }),
+                })
+                .map_err(|err| format!("serialize play_track handoff payload: {err}"))?;
+
+                self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
+                    .await?;
+
+                emit_qconnect_diagnostic(
+                    app_handle,
+                    "qconnect:play_track_handoff",
+                    "info",
+                    json!({
+                        "track_id": track_id,
+                        "active_renderer_id": active_renderer_id,
+                        "local_renderer_id": local_renderer_id,
+                        "target_queue_item_id": target_queue_item_id,
+                        "queue_version": {
+                            "major": queue.version.major,
+                            "minor": queue.version.minor,
+                        },
+                        "queue_track_count": queue_track_count,
+                        "attempts": attempts,
+                        "waited_ms": (attempts.saturating_sub(1) as u64) * QCONNECT_PLAY_TRACK_HANDOFF_POLL_MS,
+                    }),
+                );
+
+                return Ok(true);
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                break (Some(queue_version), queue_track_count);
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        };
+
+        let renderer = app.renderer_state_snapshot().await;
+        emit_qconnect_diagnostic(
+            app_handle,
+            "qconnect:play_track_handoff",
+            "warn",
+            json!({
+                "reason": "track_not_present_in_remote_queue",
+                "track_id": track_id,
+                "active_renderer_id": active_renderer_id,
+                "local_renderer_id": local_renderer_id,
+                "attempts": attempts,
+                "wait_timeout_ms": QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS,
+                "last_queue_version": last_queue_version.map(|(major, minor)| json!({
+                    "major": major,
+                    "minor": minor,
+                })),
+                "queue_track_count": last_queue_track_count,
+                "renderer_current_track_id": renderer.current_track.as_ref().map(|item| item.track_id),
+                "renderer_current_queue_item_id": renderer.current_track.as_ref().map(|item| item.queue_item_id),
+                "renderer_next_track_id": renderer.next_track.as_ref().map(|item| item.track_id),
+                "renderer_next_queue_item_id": renderer.next_track.as_ref().map(|item| item.queue_item_id),
+            }),
+        );
+
+        Err(format!(
+            "remote renderer active but track {track_id} was not present in qconnect queue after {}ms",
+            QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS
+        ))
+    }
 }
 
 fn resolve_queue_item_ids_from_queue_state(
@@ -2422,6 +2557,21 @@ pub async fn v2_qconnect_toggle_play_if_remote(
 ) -> Result<bool, RuntimeError> {
     service
         .toggle_remote_renderer_playback_if_active(&app_handle)
+        .await
+        .map_err(RuntimeError::Internal)
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_qconnect_play_track_if_remote(
+    trackId: i64,
+    app_handle: AppHandle,
+    service: State<'_, QconnectServiceState>,
+) -> Result<bool, RuntimeError> {
+    let track_id = u64::try_from(trackId)
+        .map_err(|_| RuntimeError::Internal(format!("invalid track id for remote handoff: {trackId}")))?;
+    service
+        .play_remote_renderer_track_if_active(track_id, &app_handle)
         .await
         .map_err(RuntimeError::Internal)
 }

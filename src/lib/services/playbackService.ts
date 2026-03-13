@@ -110,6 +110,10 @@ function showToast(message: string, type: ToastType): void {
   storeShowToast(message, type);
 }
 
+async function handoffPlayTrackToRemoteRenderer(trackId: number): Promise<boolean> {
+  return invoke<boolean>('v2_qconnect_play_track_if_remote', { trackId });
+}
+
 // ============ Core Playback ============
 
 /**
@@ -131,9 +135,25 @@ export async function playTrack(
   setCurrentTrack(track);
 
   try {
+    let handledRemotely = false;
+
+    if (!gaplessTransition && !isLocal && source !== 'plex') {
+      handledRemotely = await handoffPlayTrackToRemoteRenderer(track.id);
+    }
+
     // Gapless transition: backend already has audio playing, just update metadata
     if (gaplessTransition) {
       console.log('[Gapless] Transition mode — skipping stop/play, updating metadata only');
+      setIsPlaying(true);
+    } else if (handledRemotely) {
+      // Stop any leftover local playback so the active remote renderer owns the session.
+      if (!isCasting()) {
+        try {
+          await invoke('v2_stop_playback');
+        } catch {
+          // Ignore errors - player might not be playing locally
+        }
+      }
       setIsPlaying(true);
     } else {
       // Always stop local playback engine before starting a new local track.
