@@ -187,8 +187,7 @@ fn map_queue_command(command: &QueueCommand) -> Result<QConnectMessage, Protocol
             let shuffle_mode = optional_bool(&command.payload, "shuffle_mode", false);
             let context_uuid = optional_uuid_bytes(&command.payload, &["context_uuid"])?;
             let autoplay_reset = optional_bool(&command.payload, "autoplay_reset", false);
-            let autoplay_loading =
-                optional_bool(&command.payload, "autoplay_loading", autoplay_reset);
+            let autoplay_loading = optional_bool(&command.payload, "autoplay_loading", false);
 
             Ok(QConnectMessage {
                 message_type: Some(QConnectMessageType::MessageTypeCtrlSrvrQueueLoadTracks as i32),
@@ -1084,7 +1083,7 @@ mod tests {
         assert_eq!(load.shuffle_seed, Some(3344));
         assert_eq!(load.shuffle_pivot_index, Some(1));
         assert_eq!(load.autoplay_reset, Some(true));
-        assert_eq!(load.autoplay_loading, Some(true));
+        assert_eq!(load.autoplay_loading, Some(false));
         assert_eq!(
             load.queue_version_ref
                 .as_ref()
@@ -1097,6 +1096,37 @@ mod tests {
                 .and_then(|version| version.minor),
             Some(4)
         );
+        assert_eq!(load.context_uuid.as_ref().map(|uuid| uuid.len()), Some(16));
+    }
+
+    #[test]
+    fn defaults_queue_load_tracks_autoplay_loading_to_false_when_omitted() {
+        let command = QueueCommand::new(
+            QueueCommandType::CtrlSrvrQueueLoadTracks,
+            "f997cd72-d2ce-4121-a89b-75bf2be251ec",
+            QueueVersion::new(3, 9),
+            json!({
+                "track_ids": [2001, 2002, 2003],
+                "queue_position": 2,
+                "shuffle_mode": false,
+                "shuffle_pivot_index": 2,
+                "context_uuid": "a3f7be0f-3854-44c6-9194-c93cedec322a",
+                "autoplay_reset": true
+            }),
+        );
+
+        let payload = encode_queue_command_batch(&command).expect("batch payload");
+        let decoded = QConnectMessages::decode(payload.as_slice()).expect("decode batch");
+        let load = decoded.messages[0]
+            .ctrl_srvr_queue_load_tracks
+            .as_ref()
+            .expect("queue load payload");
+
+        assert_eq!(load.queue_position, Some(2));
+        assert_eq!(load.shuffle_mode, Some(false));
+        assert_eq!(load.shuffle_pivot_index, Some(2));
+        assert_eq!(load.autoplay_reset, Some(true));
+        assert_eq!(load.autoplay_loading, Some(false));
         assert_eq!(load.context_uuid.as_ref().map(|uuid| uuid.len()), Some(16));
     }
 

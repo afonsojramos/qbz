@@ -530,17 +530,23 @@ export async function loadQconnectQueue(
   }
 
   try {
+    const normalizedStartIndex = Math.max(0, Math.min(startIndex, Math.max(trackIds.length - 1, 0)));
+    const shuffleSeed = shuffleMode
+      ? Math.floor(Math.random() * 0x1_0000_0000)
+      : undefined;
     const payload = {
       track_ids: trackIds,
-      queue_position: startIndex,
+      queue_position: shuffleMode ? 0 : normalizedStartIndex,
+      shuffle_seed: shuffleSeed,
+      shuffle_pivot_index: normalizedStartIndex,
       shuffle_mode: shuffleMode,
       context_uuid: crypto.randomUUID(),
       autoplay_reset: true,
-      autoplay_loading: true
+      autoplay_loading: false
     };
     await emitQconnectDiagnostic('qconnect:queue_load_tracks', 'info', {
       track_count: trackIds.length,
-      start_index: startIndex,
+      start_index: normalizedStartIndex,
       shuffle_mode: shuffleMode,
       preview_track_ids: trackIds.slice(0, 8),
       payload
@@ -550,7 +556,7 @@ export async function loadQconnectQueue(
     console.log('[QConnect/LoadQueue] SUCCESS');
     await emitQconnectDiagnostic('qconnect:queue_load_sent', 'info', {
       track_count: trackIds.length,
-      start_index: startIndex,
+      start_index: normalizedStartIndex,
       shuffle_mode: shuffleMode,
       preview_track_ids: trackIds.slice(0, 8)
     });

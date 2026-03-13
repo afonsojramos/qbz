@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -12,7 +13,7 @@ use qconnect_app::{
 };
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::{Mutex, RwLock};
@@ -308,6 +309,38 @@ struct QconnectRemoteSyncState {
     session: QconnectSessionState,
 }
 
+fn queue_payload_track_preview(payload: &Value, key: &str) -> Vec<i64> {
+    payload
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|tracks| {
+            tracks
+                .iter()
+                .filter_map(|track| track.get("track_id").and_then(Value::as_i64))
+                .take(8)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn emit_qconnect_diagnostic(app_handle: &AppHandle, channel: &str, level: &str, payload: Value) {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    if let Err(err) = app_handle.emit(
+        "qconnect:diagnostic",
+        json!({
+            "ts": ts,
+            "channel": channel,
+            "level": level,
+            "payload": payload,
+        }),
+    ) {
+        log::warn!("[QConnect] Failed to emit diagnostic {channel}: {err}");
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QconnectSessionState {
     pub session_uuid: Option<String>,
@@ -587,6 +620,20 @@ impl QconnectServiceState {
                             }
                             qconnect_transport_ws::TransportEvent::InboundQueueServerEvent(evt) => {
                                 log::info!("[QConnect] <-- Inbound queue event: {} payload={}", evt.message_type(), evt.payload);
+                                emit_qconnect_diagnostic(
+                                    &app_for_errors,
+                                    "qconnect:inbound_queue_event",
+                                    "info",
+                                    json!({
+                                        "message_type": evt.message_type(),
+                                        "action_uuid": evt.action_uuid.clone(),
+                                        "queue_version": evt.queue_version,
+                                        "track_count": evt.payload.get("tracks").and_then(|value| value.as_array()).map(|tracks| tracks.len()).unwrap_or(0),
+                                        "autoplay_track_count": evt.payload.get("autoplay_tracks").and_then(|value| value.as_array()).map(|tracks| tracks.len()).unwrap_or(0),
+                                        "preview_track_ids": queue_payload_track_preview(&evt.payload, "tracks"),
+                                        "preview_autoplay_track_ids": queue_payload_track_preview(&evt.payload, "autoplay_tracks"),
+                                    }),
+                                );
                             }
                             qconnect_transport_ws::TransportEvent::InboundRendererServerCommand(cmd) => {
                                 log::info!("[QConnect] <-- Inbound renderer command: {} payload={}", cmd.message_type(), cmd.payload);
