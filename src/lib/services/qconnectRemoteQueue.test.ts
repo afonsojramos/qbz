@@ -38,6 +38,23 @@ describe('resolveQconnectPlayNextInsertAfter', () => {
     });
   });
 
+  it('accepts queue_item_id zero as a valid remote anchor', () => {
+    const queueSnapshot = buildQueueSnapshot([126886862, 25584418, 25120807], [0, 1, 2]);
+    const rendererSnapshot: QconnectRendererSnapshot = {
+      current_track: { track_id: 126886862, queue_item_id: 0 },
+      next_track: { track_id: 25584418, queue_item_id: 1 }
+    };
+
+    expect(resolveQconnectPlayNextInsertAfter(queueSnapshot, rendererSnapshot)).toEqual({
+      insertAfter: 0,
+      strategy: 'renderer_current_queue_item_id_verified',
+      queueIndex: 0,
+      nextQueueIndex: 1,
+      matchedTrackId: 126886862,
+      matchedQueueItemId: 0
+    });
+  });
+
   it('prefers the authoritative current track when renderer current is stale but still present in queue', () => {
     const queueSnapshot = buildQueueSnapshot([123452387, 123452388, 123452389], [123452387, 1, 2]);
     const rendererSnapshot: QconnectRendererSnapshot = {

@@ -185,9 +185,7 @@ fn decode_queue_server_event(
             };
             map_ctrl_max_audio_quality_changed(payload)?
         }
-        code if code
-            == QConnectMessageType::MessageTypeSrvrCtrlFileAudioQualityChanged as i32 =>
-        {
+        code if code == QConnectMessageType::MessageTypeSrvrCtrlFileAudioQualityChanged as i32 => {
             let Some(payload) = message.srvr_ctrl_file_audio_quality_changed else {
                 return Ok(None);
             };
@@ -285,9 +283,7 @@ fn resolve_queue_message_type(message: &QConnectMessage) -> Option<i32> {
             return Some(QConnectMessageType::MessageTypeSrvrCtrlFileAudioQualityChanged as i32);
         }
         if message.srvr_ctrl_device_audio_quality_changed.is_some() {
-            return Some(
-                QConnectMessageType::MessageTypeSrvrCtrlDeviceAudioQualityChanged as i32,
-            );
+            return Some(QConnectMessageType::MessageTypeSrvrCtrlDeviceAudioQualityChanged as i32);
         }
         None
     })
@@ -768,7 +764,8 @@ fn map_tracks_added_from_autoplay(
 // --- Session management event mappers ---
 
 fn map_session_state(payload: CtrlSessionStateMessage) -> Result<QueueServerEvent, ProtocolError> {
-    let session_uuid = uuid_bytes_to_string_opt(payload.session_uuid, "session_state.session_uuid")?;
+    let session_uuid =
+        uuid_bytes_to_string_opt(payload.session_uuid, "session_state.session_uuid")?;
     Ok(QueueServerEvent {
         event_type: QueueEventType::SrvrCtrlSessionState,
         action_uuid: None,
@@ -974,8 +971,7 @@ fn queue_track_to_json(
         ProtocolError::InvalidPayload("missing required field 'queue_track.track_id'".to_string())
     })?;
     let queue_item_id =
-        optional_i32_to_u64_named(track.queue_item_id, "queue_track.queue_item_id")?
-            .unwrap_or(track_id);
+        optional_i32_to_u64_named(track.queue_item_id, "queue_track.queue_item_id")?.unwrap_or(0);
 
     Ok(json!({
         "track_context_uuid": context_uuid.unwrap_or_default(),
@@ -994,7 +990,7 @@ fn queue_track_with_context_to_json(track: QueueTrackWithContext) -> Result<Valu
         track.queue_item_id,
         "queue_track_with_context.queue_item_id",
     )?
-    .unwrap_or(track_id);
+    .unwrap_or(0);
     let context_uuid =
         uuid_bytes_to_string_opt(track.context_uuid, "queue_track_with_context.context_uuid")?
             .unwrap_or_default();
@@ -1073,8 +1069,8 @@ mod tests {
 
     use crate::queue_command_proto::{
         QConnectMessage, QConnectMessageType, QConnectMessages, QueueTrack, QueueTrackWithContext,
-        QueueTracksAddedMessage, QueueVersionRef, RendererMuteVolumeMessage,
-        RendererSetStateMessage,
+        QueueTracksAddedMessage, QueueTracksLoadedMessage, QueueVersionRef,
+        RendererMuteVolumeMessage, RendererSetStateMessage,
     };
 
     use super::{decode_queue_server_events, decode_renderer_server_commands};
@@ -1168,6 +1164,107 @@ mod tests {
         );
         assert_eq!(commands[0].payload["playing_state"], 2);
         assert_eq!(commands[0].payload["current_position"], 42_000);
+    }
+
+    #[test]
+    fn decodes_missing_queue_item_id_as_zero_in_queue_events() {
+        let message = QConnectMessage {
+            message_type: Some(QConnectMessageType::MessageTypeSrvrCtrlQueueTracksLoaded as i32),
+            srvr_ctrl_queue_tracks_loaded: Some(QueueTracksLoadedMessage {
+                queue_version: Some(QueueVersionRef {
+                    major: Some(7),
+                    minor: Some(1),
+                }),
+                action_uuid: Some(
+                    uuid::Uuid::parse_str("f2b1f0a4-3d0a-4a67-b234-4d1df4d58c8f")
+                        .expect("uuid")
+                        .as_bytes()
+                        .to_vec(),
+                ),
+                tracks: vec![QueueTrack {
+                    queue_item_id: None,
+                    track_id: Some(126_886_862),
+                }],
+                queue_position: Some(0),
+                shuffle_mode: Some(false),
+                shuffle_seed: None,
+                shuffle_pivot_queue_item_id: None,
+                context_uuid: Some(
+                    uuid::Uuid::parse_str("4c321d71-aef2-4c98-8cd3-8d2ad4bfe0f4")
+                        .expect("context uuid")
+                        .as_bytes()
+                        .to_vec(),
+                ),
+                autoplay_reset: Some(true),
+                autoplay_loading: Some(false),
+                queue_hash: None,
+            }),
+            ..Default::default()
+        };
+
+        let batch = QConnectMessages {
+            messages_time: Some(1),
+            messages_id: Some(4),
+            messages: vec![message],
+        };
+        let encoded = batch.encode_to_vec();
+
+        let events = decode_queue_server_events(&encoded).expect("decode queue events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["tracks"][0]["queue_item_id"], 0);
+        assert_eq!(events[0].payload["tracks"][0]["track_id"], 126_886_862);
+    }
+
+    #[test]
+    fn decodes_missing_queue_item_id_as_zero_in_renderer_state() {
+        let message = QConnectMessage {
+            message_type: Some(QConnectMessageType::MessageTypeSrvrRndrSetState as i32),
+            srvr_rndr_set_state: Some(RendererSetStateMessage {
+                playing_state: Some(2),
+                current_position: Some(8_000),
+                queue_version: Some(QueueVersionRef {
+                    major: Some(7),
+                    minor: Some(1),
+                }),
+                current_track: Some(QueueTrackWithContext {
+                    queue_item_id: None,
+                    track_id: Some(126_886_862),
+                    context_uuid: Some(
+                        uuid::Uuid::parse_str("4c321d71-aef2-4c98-8cd3-8d2ad4bfe0f4")
+                            .expect("context uuid")
+                            .as_bytes()
+                            .to_vec(),
+                    ),
+                }),
+                next_track: Some(QueueTrackWithContext {
+                    queue_item_id: Some(1),
+                    track_id: Some(25_584_418),
+                    context_uuid: Some(
+                        uuid::Uuid::parse_str("4c321d71-aef2-4c98-8cd3-8d2ad4bfe0f4")
+                            .expect("context uuid")
+                            .as_bytes()
+                            .to_vec(),
+                    ),
+                }),
+            }),
+            ..Default::default()
+        };
+
+        let batch = QConnectMessages {
+            messages_time: Some(1),
+            messages_id: Some(5),
+            messages: vec![message],
+        };
+        let encoded = batch.encode_to_vec();
+
+        let commands = decode_renderer_server_commands(&encoded).expect("decode renderer commands");
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].payload["current_track"]["queue_item_id"], 0);
+        assert_eq!(
+            commands[0].payload["current_track"]["track_id"],
+            126_886_862
+        );
+        assert_eq!(commands[0].payload["next_track"]["queue_item_id"], 1);
     }
 
     #[test]

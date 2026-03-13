@@ -423,8 +423,14 @@ fn map_renderer_report(report: &RendererReport) -> Result<QConnectMessage, Proto
                 .unwrap_or(report.queue_version_ref);
             let current_position = optional_i32(&report.payload, "current_position")?;
             let duration = optional_i32(&report.payload, "duration")?;
-            let current_qid = optional_i32(&report.payload, "current_queue_item_id")?;
-            let next_qid = optional_i32(&report.payload, "next_queue_item_id")?;
+            let current_qid = normalize_renderer_state_queue_item_id(optional_i32(
+                &report.payload,
+                "current_queue_item_id",
+            )?);
+            let next_qid = normalize_renderer_state_queue_item_id(optional_i32(
+                &report.payload,
+                "next_queue_item_id",
+            )?);
             let playing_state = optional_i32(&report.payload, "playing_state")?;
             let playback_position = current_position.map(|value| PlaybackPositionMessage {
                 timestamp: Some(now_ms()),
@@ -490,6 +496,13 @@ fn map_renderer_report(report: &RendererReport) -> Result<QConnectMessage, Proto
             }),
             ..Default::default()
         }),
+    }
+}
+
+fn normalize_renderer_state_queue_item_id(queue_item_id: Option<i32>) -> Option<i32> {
+    match queue_item_id {
+        Some(0) | None => None,
+        other => other,
     }
 }
 
@@ -1170,6 +1183,35 @@ mod tests {
         assert_eq!(state.queue_version.as_ref().and_then(|v| v.minor), Some(4));
         assert_eq!(state.current_queue_item_id, Some(9002));
         assert_eq!(state.next_queue_item_id, Some(9003));
+    }
+
+    #[test]
+    fn encodes_renderer_state_updated_omitting_zero_queue_item_ids() {
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrStateUpdated,
+            "9b7db27a-efac-4fc4-9f22-6034b4444697",
+            QueueVersion::new(7, 2),
+            json!({
+                "playing_state": 2,
+                "buffer_state": 2,
+                "current_position": 8000,
+                "duration": 679000,
+                "current_queue_item_id": 0,
+                "next_queue_item_id": 18
+            }),
+        );
+
+        let payload = encode_renderer_report_batch(&report).expect("renderer report batch");
+        let decoded = QConnectMessages::decode(payload.as_slice()).expect("decode batch");
+        let message = &decoded.messages[0];
+        let state = message
+            .rndr_srvr_state_updated
+            .as_ref()
+            .and_then(|payload| payload.state.as_ref())
+            .expect("state payload");
+
+        assert_eq!(state.current_queue_item_id, None);
+        assert_eq!(state.next_queue_item_id, Some(18));
     }
 
     #[test]

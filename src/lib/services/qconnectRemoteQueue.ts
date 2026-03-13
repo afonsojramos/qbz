@@ -72,11 +72,15 @@ function isPositiveNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
 function findQueueIndexByQueueItemId(
   queueItems: QconnectQueueItemSnapshot[],
   queueItemId: number | null | undefined
 ): number | null {
-  if (!isPositiveNumber(queueItemId)) return null;
+  if (!isNonNegativeNumber(queueItemId)) return null;
   const index = queueItems.findIndex((item) => item.queue_item_id === queueItemId);
   return index >= 0 ? index : null;
 }
