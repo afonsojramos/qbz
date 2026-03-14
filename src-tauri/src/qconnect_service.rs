@@ -312,6 +312,8 @@ struct QconnectRemoteSyncState {
     last_renderer_track_id: Option<u64>,
     last_renderer_next_track_id: Option<u64>,
     last_renderer_playing_state: Option<i32>,
+    last_materialized_start_index: Option<usize>,
+    last_materialized_core_shuffle_order: Option<Vec<usize>>,
     last_reported_file_audio_quality: Option<QconnectFileAudioQualitySnapshot>,
     last_applied_queue_state: Option<QConnectQueueState>,
     last_remote_queue_state: Option<QConnectQueueState>,
@@ -401,9 +403,9 @@ fn qconnect_now_ms() -> u64 {
 
 fn qconnect_repeat_mode_from_loop_mode(loop_mode: i32) -> Option<RepeatMode> {
     match loop_mode {
-        0 => Some(RepeatMode::Off),
-        1 => Some(RepeatMode::All),
-        2 => Some(RepeatMode::One),
+        0 | 1 => Some(RepeatMode::Off),
+        2 => Some(RepeatMode::All),
+        3 => Some(RepeatMode::One),
         _ => None,
     }
 }
@@ -667,22 +669,6 @@ fn build_effective_renderer_snapshot(
         renderer_snapshot.loop_mode = Some(loop_mode);
     }
 
-    // Treat the remote queue order as authoritative for current/next projection.
-    // Renderer snapshots can keep a stale next_track after shuffle/reorder events
-    // until the peer sends another explicit renderer update.
-    let cursors = ordered_queue_cursors(queue);
-    let (current_index, _) =
-        resolve_current_cursor_index_from_snapshots(queue, &renderer_snapshot, &cursors);
-    if let Some(current_index) = current_index {
-        if let Some(current_track) = queue_item_snapshot_for_cursor(queue, cursors[current_index]) {
-            renderer_snapshot.current_track = Some(current_track);
-        }
-        renderer_snapshot.next_track = cursors
-            .get(current_index + 1)
-            .copied()
-            .and_then(|cursor| queue_item_snapshot_for_cursor(queue, cursor));
-    }
-
     renderer_snapshot
 }
 
@@ -754,8 +740,13 @@ impl QconnectEventSink for TauriQconnectEventSink {
             }
             QconnectAppEvent::RendererCommandApplied { command, state } => {
                 log::info!("[QConnect] Renderer command applied: {:?}", command);
-                if let Err(err) =
-                    apply_renderer_command_to_corebridge(&self.core_bridge, command, state).await
+                if let Err(err) = apply_renderer_command_to_corebridge(
+                    &self.core_bridge,
+                    &self.sync_state,
+                    command,
+                    state,
+                )
+                .await
                 {
                     log::warn!("[QConnect] Failed to apply renderer command to CoreBridge: {err}");
                 }
@@ -1442,6 +1433,16 @@ impl QconnectServiceState {
 
         let state = sync_state.lock().await;
         Ok(state.session.clone())
+    }
+
+    pub async fn skip_next_if_remote(&self, app_handle: &AppHandle) -> Result<bool, String> {
+        self.skip_remote_renderer_if_active(QconnectRemoteSkipDirection::Next, app_handle)
+            .await
+    }
+
+    pub async fn skip_previous_if_remote(&self, app_handle: &AppHandle) -> Result<bool, String> {
+        self.skip_remote_renderer_if_active(QconnectRemoteSkipDirection::Previous, app_handle)
+            .await
     }
 
     async fn effective_active_renderer_snapshot(
@@ -2442,6 +2443,7 @@ impl Default for QconnectServiceState {
 
 async fn apply_renderer_command_to_corebridge(
     core_bridge: &Arc<RwLock<Option<CoreBridge>>>,
+    sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
     command: &RendererCommand,
     renderer_state: &QConnectRendererState,
 ) -> Result<(), String> {
@@ -2455,18 +2457,41 @@ async fn apply_renderer_command_to_corebridge(
             playing_state,
             current_position_ms,
             current_track,
+            next_track,
             ..
         } => {
             let resolved_playing_state = renderer_state.playing_state.or(*playing_state);
-            let resolved_current_track = renderer_state
-                .current_track
-                .as_ref()
-                .or(current_track.as_ref());
+            let mut projection_renderer_state = renderer_state.clone();
+            if projection_renderer_state.current_track.is_none() {
+                projection_renderer_state.current_track = current_track.clone();
+            }
+            if projection_renderer_state.next_track.is_none() {
+                projection_renderer_state.next_track = next_track.clone();
+            }
+            let resolved_current_track = projection_renderer_state.current_track.as_ref();
             if let Some(current_track) = resolved_current_track {
-                if let Err(err) =
-                    align_corebridge_queue_cursor(bridge, current_track.track_id).await
-                {
-                    log::warn!("[QConnect] Failed to align CoreBridge queue cursor: {err}");
+                let queue_state = {
+                    let state = sync_state.lock().await;
+                    state.last_remote_queue_state.clone()
+                };
+                let projection_applied = if let Some(queue_state) = queue_state.as_ref() {
+                    sync_corebridge_remote_shuffle_projection(
+                        bridge,
+                        sync_state,
+                        queue_state,
+                        &projection_renderer_state,
+                    )
+                    .await?
+                } else {
+                    false
+                };
+
+                if !projection_applied {
+                    if let Err(err) =
+                        align_corebridge_queue_cursor(bridge, current_track.track_id).await
+                    {
+                        log::warn!("[QConnect] Failed to align CoreBridge queue cursor: {err}");
+                    }
                 }
 
                 if matches!(
@@ -2547,6 +2572,77 @@ async fn apply_renderer_command_to_corebridge(
     Ok(())
 }
 
+async fn sync_corebridge_remote_shuffle_projection(
+    bridge: &CoreBridge,
+    sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
+    queue_state: &QConnectQueueState,
+    renderer_state: &QConnectRendererState,
+) -> Result<bool, String> {
+    if !queue_state.shuffle_mode || queue_state.queue_items.is_empty() {
+        return Ok(false);
+    }
+
+    let start_index = resolve_remote_start_index(
+        queue_state,
+        renderer_state
+            .current_track
+            .as_ref()
+            .map(|item| item.queue_item_id),
+        renderer_state
+            .current_track
+            .as_ref()
+            .map(|item| item.track_id),
+    );
+    let Some(start_index) = start_index else {
+        return Ok(false);
+    };
+
+    let core_shuffle_order = resolve_core_shuffle_order(
+        queue_state,
+        renderer_state
+            .current_track
+            .as_ref()
+            .map(|item| item.queue_item_id),
+        renderer_state
+            .current_track
+            .as_ref()
+            .map(|item| item.track_id),
+        renderer_state
+            .next_track
+            .as_ref()
+            .map(|item| item.queue_item_id),
+        renderer_state.next_track.as_ref().map(|item| item.track_id),
+    );
+
+    let should_apply = {
+        let state = sync_state.lock().await;
+        state.last_materialized_start_index != Some(start_index)
+            || state.last_materialized_core_shuffle_order != core_shuffle_order
+    };
+    if !should_apply {
+        return Ok(false);
+    }
+
+    let (tracks, _) = bridge.get_all_queue_tracks().await;
+    if tracks.len() != queue_state.queue_items.len() || tracks.is_empty() {
+        return Ok(false);
+    }
+
+    bridge
+        .set_queue_with_order(
+            tracks,
+            Some(start_index),
+            queue_state.shuffle_mode,
+            core_shuffle_order.clone(),
+        )
+        .await;
+
+    let mut state = sync_state.lock().await;
+    state.last_materialized_start_index = Some(start_index);
+    state.last_materialized_core_shuffle_order = core_shuffle_order;
+    Ok(true)
+}
+
 async fn materialize_remote_queue_to_corebridge(
     core_bridge: &Arc<RwLock<Option<CoreBridge>>>,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
@@ -2613,6 +2709,9 @@ async fn materialize_remote_queue_to_corebridge(
     if queue_state.queue_items.is_empty() {
         bridge.clear_queue().await;
         bridge.set_shuffle(false).await;
+        let mut state = sync_state.lock().await;
+        state.last_materialized_start_index = None;
+        state.last_materialized_core_shuffle_order = None;
         return Ok(());
     }
 
@@ -2681,6 +2780,13 @@ async fn materialize_remote_queue_to_corebridge(
     if start_index.is_none() && !queue_tracks.is_empty() {
         start_index = Some(0);
     }
+    let core_shuffle_order = resolve_core_shuffle_order(
+        queue_state,
+        renderer_queue_item_id,
+        renderer_track_id,
+        renderer_next_queue_item_id,
+        renderer_next_track_id,
+    );
     log::info!(
         "[QConnect] materialize_remote_queue: setting queue with {} tracks, start_index={:?}, local_track_id={:?}",
         queue_tracks.len(),
@@ -2692,9 +2798,15 @@ async fn materialize_remote_queue_to_corebridge(
             queue_tracks,
             start_index,
             queue_state.shuffle_mode,
-            queue_state.shuffle_order.clone(),
+            core_shuffle_order.clone(),
         )
         .await;
+
+    {
+        let mut state = sync_state.lock().await;
+        state.last_materialized_start_index = start_index;
+        state.last_materialized_core_shuffle_order = core_shuffle_order;
+    }
 
     let local_track_missing_from_remote = current_playback_track_id
         .map(|track_id| {
@@ -2769,6 +2881,52 @@ fn resolve_remote_start_index(
     }
 
     None
+}
+
+fn resolve_core_shuffle_order(
+    queue_state: &QConnectQueueState,
+    renderer_queue_item_id: Option<u64>,
+    renderer_track_id: Option<u64>,
+    renderer_next_queue_item_id: Option<u64>,
+    renderer_next_track_id: Option<u64>,
+) -> Option<Vec<usize>> {
+    if !queue_state.shuffle_mode {
+        return None;
+    }
+
+    let raw_order = queue_state.shuffle_order.as_ref().filter(|order| {
+        is_valid_ordered_queue_shuffle_order(order, queue_state.queue_items.len())
+    })?;
+
+    let current_index =
+        resolve_remote_start_index(queue_state, renderer_queue_item_id, renderer_track_id);
+    let next_index = resolve_remote_start_index(
+        queue_state,
+        renderer_next_queue_item_id,
+        renderer_next_track_id,
+    );
+
+    let mut ordered = Vec::with_capacity(queue_state.queue_items.len());
+    if let Some(index) = current_index {
+        ordered.push(index);
+    }
+    if let Some(index) = next_index {
+        if !ordered.contains(&index) {
+            ordered.push(index);
+        }
+    }
+    for &index in raw_order {
+        if !ordered.contains(&index) {
+            ordered.push(index);
+        }
+    }
+    for index in 0..queue_state.queue_items.len() {
+        if !ordered.contains(&index) {
+            ordered.push(index);
+        }
+    }
+
+    Some(ordered)
 }
 
 async fn align_corebridge_queue_cursor(bridge: &CoreBridge, track_id: u64) -> Result<(), String> {
@@ -3614,7 +3772,7 @@ pub async fn v2_qconnect_skip_next_if_remote(
     service: State<'_, QconnectServiceState>,
 ) -> Result<bool, RuntimeError> {
     service
-        .skip_remote_renderer_if_active(QconnectRemoteSkipDirection::Next, &app_handle)
+        .skip_next_if_remote(&app_handle)
         .await
         .map_err(RuntimeError::Internal)
 }
@@ -3625,7 +3783,7 @@ pub async fn v2_qconnect_skip_previous_if_remote(
     service: State<'_, QconnectServiceState>,
 ) -> Result<bool, RuntimeError> {
     service
-        .skip_remote_renderer_if_active(QconnectRemoteSkipDirection::Previous, &app_handle)
+        .skip_previous_if_remote(&app_handle)
         .await
         .map_err(RuntimeError::Internal)
 }
@@ -4556,10 +4714,14 @@ mod tests {
         );
         assert_eq!(
             super::qconnect_repeat_mode_from_loop_mode(1),
-            Some(RepeatMode::All)
+            Some(RepeatMode::Off)
         );
         assert_eq!(
             super::qconnect_repeat_mode_from_loop_mode(2),
+            Some(RepeatMode::All)
+        );
+        assert_eq!(
+            super::qconnect_repeat_mode_from_loop_mode(3),
             Some(RepeatMode::One)
         );
         assert_eq!(super::qconnect_repeat_mode_from_loop_mode(99), None);
@@ -4755,7 +4917,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_renderer_snapshot_reprojects_stale_next_track_after_shuffle_queue_update() {
+    fn effective_renderer_snapshot_preserves_authoritative_renderer_next_track() {
         let queue: QConnectQueueState = serde_json::from_value(json!({
             "version": { "major": 22, "minor": 4 },
             "queue_items": [
@@ -4809,7 +4971,80 @@ mod tests {
                 .next_track
                 .as_ref()
                 .map(|item| (item.track_id, item.queue_item_id)),
-            Some((43013247, 3)),
+            Some((43013251, 7)),
+        );
+    }
+
+    #[test]
+    fn resolves_core_shuffle_order_with_current_and_renderer_next_anchor() {
+        let queue: QConnectQueueState = serde_json::from_value(json!({
+            "version": { "major": 31, "minor": 2 },
+            "queue_items": [
+                { "track_context_uuid": "ctx", "track_id": 72930174, "queue_item_id": 0 },
+                { "track_context_uuid": "ctx", "track_id": 72930175, "queue_item_id": 1 },
+                { "track_context_uuid": "ctx", "track_id": 72930176, "queue_item_id": 2 },
+                { "track_context_uuid": "ctx", "track_id": 72930177, "queue_item_id": 3 },
+                { "track_context_uuid": "ctx", "track_id": 72930178, "queue_item_id": 4 },
+                { "track_context_uuid": "ctx", "track_id": 72930179, "queue_item_id": 5 },
+                { "track_context_uuid": "ctx", "track_id": 72930180, "queue_item_id": 6 },
+                { "track_context_uuid": "ctx", "track_id": 72930181, "queue_item_id": 7 },
+                { "track_context_uuid": "ctx", "track_id": 72930182, "queue_item_id": 8 },
+                { "track_context_uuid": "ctx", "track_id": 72930183, "queue_item_id": 9 }
+            ],
+            "shuffle_mode": true,
+            "shuffle_order": [8, 5, 1, 9, 3, 4, 0, 6, 2, 7],
+            "autoplay_mode": false,
+            "autoplay_loading": false,
+            "autoplay_items": [],
+            "updated_at_ms": 0
+        }))
+        .expect("queue state");
+
+        assert_eq!(
+            super::resolve_core_shuffle_order(
+                &queue,
+                Some(0),
+                Some(72930174),
+                Some(8),
+                Some(72930182)
+            ),
+            Some(vec![0, 8, 5, 1, 9, 3, 4, 6, 2, 7]),
+        );
+    }
+
+    #[test]
+    fn resolves_core_shuffle_order_keeps_current_first_for_resumed_remote_shuffle() {
+        let queue: QConnectQueueState = serde_json::from_value(json!({
+            "version": { "major": 30, "minor": 2 },
+            "queue_items": [
+                { "track_context_uuid": "ctx", "track_id": 43013244, "queue_item_id": 0 },
+                { "track_context_uuid": "ctx", "track_id": 43013245, "queue_item_id": 1 },
+                { "track_context_uuid": "ctx", "track_id": 43013246, "queue_item_id": 2 },
+                { "track_context_uuid": "ctx", "track_id": 43013247, "queue_item_id": 3 },
+                { "track_context_uuid": "ctx", "track_id": 43013248, "queue_item_id": 4 },
+                { "track_context_uuid": "ctx", "track_id": 43013249, "queue_item_id": 5 },
+                { "track_context_uuid": "ctx", "track_id": 43013250, "queue_item_id": 6 },
+                { "track_context_uuid": "ctx", "track_id": 43013251, "queue_item_id": 7 },
+                { "track_context_uuid": "ctx", "track_id": 43013252, "queue_item_id": 8 }
+            ],
+            "shuffle_mode": true,
+            "shuffle_order": [0, 3, 6, 4, 5, 1, 7, 8, 2],
+            "autoplay_mode": false,
+            "autoplay_loading": false,
+            "autoplay_items": [],
+            "updated_at_ms": 0
+        }))
+        .expect("queue state");
+
+        assert_eq!(
+            super::resolve_core_shuffle_order(
+                &queue,
+                Some(8),
+                Some(43013252),
+                Some(2),
+                Some(43013246)
+            ),
+            Some(vec![8, 2, 0, 3, 6, 4, 5, 1, 7]),
         );
     }
 

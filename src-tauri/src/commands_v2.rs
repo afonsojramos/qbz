@@ -6169,9 +6169,9 @@ async fn apply_qconnect_shuffle_mode(
 
 fn qconnect_loop_mode_from_repeat_mode(mode: RepeatMode) -> i32 {
     match mode {
-        RepeatMode::Off => 0,
-        RepeatMode::All => 1,
-        RepeatMode::One => 2,
+        RepeatMode::Off => 1,
+        RepeatMode::All => 2,
+        RepeatMode::One => 3,
     }
 }
 
@@ -6221,9 +6221,9 @@ mod tests {
 
     #[test]
     fn maps_repeat_mode_to_qconnect_loop_mode() {
-        assert_eq!(qconnect_loop_mode_from_repeat_mode(RepeatMode::Off), 0);
-        assert_eq!(qconnect_loop_mode_from_repeat_mode(RepeatMode::All), 1);
-        assert_eq!(qconnect_loop_mode_from_repeat_mode(RepeatMode::One), 2);
+        assert_eq!(qconnect_loop_mode_from_repeat_mode(RepeatMode::Off), 1);
+        assert_eq!(qconnect_loop_mode_from_repeat_mode(RepeatMode::All), 2);
+        assert_eq!(qconnect_loop_mode_from_repeat_mode(RepeatMode::One), 3);
     }
 
     #[test]
@@ -6518,6 +6518,8 @@ pub async fn v2_remove_upcoming_track(
 #[tauri::command]
 pub async fn v2_next_track(
     bridge: State<'_, CoreBridgeState>,
+    qconnect: State<'_, QconnectServiceState>,
+    app_handle: tauri::AppHandle,
     runtime: State<'_, RuntimeManagerState>,
 ) -> Result<Option<V2QueueTrack>, RuntimeError> {
     runtime
@@ -6525,6 +6527,13 @@ pub async fn v2_next_track(
         .check_requirements(CommandRequirement::RequiresUserSession)
         .await?;
     log::info!("[V2] next_track");
+    if qconnect
+        .skip_next_if_remote(&app_handle)
+        .await
+        .map_err(RuntimeError::Internal)?
+    {
+        return Ok(None);
+    }
     let bridge = bridge.get().await;
     let track = bridge.next_track().await;
     Ok(track.map(Into::into))
@@ -6534,6 +6543,8 @@ pub async fn v2_next_track(
 #[tauri::command]
 pub async fn v2_previous_track(
     bridge: State<'_, CoreBridgeState>,
+    qconnect: State<'_, QconnectServiceState>,
+    app_handle: tauri::AppHandle,
     runtime: State<'_, RuntimeManagerState>,
 ) -> Result<Option<V2QueueTrack>, RuntimeError> {
     runtime
@@ -6541,6 +6552,13 @@ pub async fn v2_previous_track(
         .check_requirements(CommandRequirement::RequiresUserSession)
         .await?;
     log::info!("[V2] previous_track");
+    if qconnect
+        .skip_previous_if_remote(&app_handle)
+        .await
+        .map_err(RuntimeError::Internal)?
+    {
+        return Ok(None);
+    }
     let bridge = bridge.get().await;
     let track = bridge.previous_track().await;
     Ok(track.map(Into::into))
