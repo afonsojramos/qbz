@@ -187,16 +187,7 @@ impl QueueManager {
             return;
         }
 
-        Self::regenerate_shuffle_order_internal(&mut state);
-
-        if let Some(curr_idx) = state.current_index {
-            if let Some(pos) = state.shuffle_order.iter().position(|&idx| idx == curr_idx) {
-                if pos != 0 {
-                    state.shuffle_order.swap(0, pos);
-                }
-                state.shuffle_position = 0;
-            }
-        }
+        Self::set_identity_shuffle_order_internal(&mut state);
     }
 
     /// Clear the queue
@@ -669,16 +660,7 @@ impl QueueManager {
             return;
         }
 
-        Self::regenerate_shuffle_order_internal(&mut state);
-
-        if let Some(curr_idx) = state.current_index {
-            if let Some(pos) = state.shuffle_order.iter().position(|&idx| idx == curr_idx) {
-                if pos != 0 {
-                    state.shuffle_order.swap(0, pos);
-                }
-                state.shuffle_position = 0;
-            }
-        }
+        Self::set_identity_shuffle_order_internal(&mut state);
     }
 
     /// Get shuffle status
@@ -781,6 +763,18 @@ impl QueueManager {
             } else {
                 state.shuffle_position = 0;
             }
+        } else {
+            state.shuffle_position = 0;
+        }
+    }
+
+    /// Preserve the existing queue order when shuffle is remote-controlled but
+    /// no authoritative remote order has arrived yet.
+    fn set_identity_shuffle_order_internal(state: &mut InternalState) {
+        state.shuffle_order = (0..state.tracks.len()).collect();
+
+        if let Some(curr_idx) = state.current_index {
+            state.shuffle_position = curr_idx.min(state.shuffle_order.len().saturating_sub(1));
         } else {
             state.shuffle_position = 0;
         }
@@ -1132,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn test_set_shuffle_with_order_falls_back_when_order_is_invalid() {
+    fn test_set_shuffle_with_order_preserves_current_order_when_invalid() {
         let queue = QueueManager::new();
         for i in 1..=4 {
             queue.add_track(create_test_track(i));
@@ -1141,10 +1135,16 @@ mod tests {
         queue.play_index(1);
         queue.set_shuffle_with_order(true, Some(vec![1, 1, 2, 3]));
 
-        let state = queue.state.lock().unwrap();
+        let state = queue.get_state();
         assert!(state.shuffle);
-        assert_eq!(state.shuffle_order.len(), 4);
-        assert_eq!(state.shuffle_order[0], 1);
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![3, 4]
+        );
     }
 
     #[test]
@@ -1163,6 +1163,25 @@ mod tests {
                 .map(|track| track.id)
                 .collect::<Vec<_>>(),
             vec![4, 2, 5, 3]
+        );
+    }
+
+    #[test]
+    fn test_set_queue_with_order_preserves_queue_order_when_authoritative_order_missing() {
+        let queue = QueueManager::new();
+        let tracks = (1..=5).map(create_test_track).collect::<Vec<_>>();
+
+        queue.set_queue_with_order(tracks, Some(1), true, None);
+
+        let state = queue.get_state();
+        assert!(state.shuffle);
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5]
         );
     }
 }

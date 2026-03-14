@@ -41,7 +41,6 @@ pub fn apply_event(
         QueueEvent::TracksAdded {
             version,
             tracks,
-            shuffle_seed,
             autoplay_reset,
             autoplay_loading,
             ..
@@ -50,10 +49,7 @@ pub fn apply_event(
             state.queue_items.extend(tracks.iter().cloned());
 
             if state.shuffle_mode {
-                if let Some(seed) = shuffle_seed {
-                    state.shuffle_order =
-                        Some(build_shuffle_order(state.queue_items.len(), *seed, None));
-                } else if let Some(order) = state.shuffle_order.as_mut() {
+                if let Some(order) = state.shuffle_order.as_mut() {
                     for idx in start_idx..state.queue_items.len() {
                         order.push(idx);
                     }
@@ -73,10 +69,7 @@ pub fn apply_event(
         QueueEvent::TracksLoaded {
             version,
             tracks,
-            queue_position,
             shuffle_mode,
-            shuffle_seed,
-            shuffle_pivot_queue_item_id,
             autoplay_reset,
             autoplay_loading,
             ..
@@ -88,20 +81,7 @@ pub fn apply_event(
             }
 
             if state.shuffle_mode {
-                let seed = shuffle_seed.unwrap_or(0);
-                let pivot_index = shuffle_pivot_queue_item_id
-                    .and_then(|pivot_id| {
-                        state
-                            .queue_items
-                            .iter()
-                            .position(|item| item.queue_item_id == pivot_id)
-                    })
-                    .or_else(|| queue_position.and_then(|value| usize::try_from(value).ok()));
-                state.shuffle_order = Some(build_shuffle_order(
-                    state.queue_items.len(),
-                    seed,
-                    pivot_index,
-                ));
+                state.shuffle_order = None;
             } else {
                 state.shuffle_order = None;
             }
@@ -120,7 +100,6 @@ pub fn apply_event(
             version,
             tracks,
             insert_after,
-            shuffle_seed,
             autoplay_reset,
             autoplay_loading,
             ..
@@ -135,10 +114,7 @@ pub fn apply_event(
             state.queue_items = next_queue;
 
             if state.shuffle_mode {
-                if let Some(seed) = shuffle_seed {
-                    state.shuffle_order =
-                        Some(build_shuffle_order(state.queue_items.len(), *seed, None));
-                } else if let Some(order) = state.shuffle_order.as_mut() {
+                if let Some(order) = state.shuffle_order.as_mut() {
                     for idx in order.iter_mut() {
                         if *idx >= insert_index {
                             *idx += insert_count;
@@ -290,27 +266,12 @@ pub fn apply_event(
         QueueEvent::ShuffleModeSet {
             version,
             shuffle_mode,
-            shuffle_seed,
-            shuffle_pivot_queue_item_id,
             autoplay_reset,
             autoplay_loading,
             ..
         } => {
             state.shuffle_mode = *shuffle_mode;
-            if *shuffle_mode {
-                let seed = shuffle_seed.unwrap_or(0);
-                let pivot_index = shuffle_pivot_queue_item_id.and_then(|pivot_id| {
-                    state
-                        .queue_items
-                        .iter()
-                        .position(|item| item.queue_item_id == pivot_id)
-                });
-                state.shuffle_order = Some(build_shuffle_order(
-                    state.queue_items.len(),
-                    seed,
-                    pivot_index,
-                ));
-            } else {
+            if !*shuffle_mode {
                 state.shuffle_order = None;
             }
 
@@ -441,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn tracks_loaded_replaces_queue_and_builds_shuffle() {
+    fn tracks_loaded_replaces_queue_without_deriving_shuffle_order() {
         let mut state = QConnectQueueState::default();
         let event = QueueEvent::TracksLoaded {
             action_uuid: None,
@@ -459,8 +420,33 @@ mod tests {
         assert!(outcome.queue_changed);
         assert_eq!(state.queue_items.len(), 3);
         assert!(state.shuffle_mode);
-        assert!(state.shuffle_order.is_some());
+        assert_eq!(state.shuffle_order, None);
         assert!(state.autoplay_loading);
+    }
+
+    #[test]
+    fn shuffle_mode_set_keeps_existing_order_until_authoritative_queue_arrives() {
+        let mut state = QConnectQueueState {
+            queue_items: vec![item(1), item(2), item(3)],
+            shuffle_mode: false,
+            shuffle_order: Some(vec![0, 2, 1]),
+            ..Default::default()
+        };
+
+        let event = QueueEvent::ShuffleModeSet {
+            action_uuid: None,
+            version: QueueVersion::new(1, 2),
+            shuffle_mode: true,
+            shuffle_seed: Some(42),
+            shuffle_pivot_queue_item_id: Some(1),
+            autoplay_reset: false,
+            autoplay_loading: false,
+        };
+
+        let outcome = apply_event(&mut state, &event, 2345);
+        assert!(outcome.queue_changed);
+        assert!(state.shuffle_mode);
+        assert_eq!(state.shuffle_order, Some(vec![0, 2, 1]));
     }
 
     #[test]
