@@ -114,6 +114,10 @@ where
         command: QueueCommand,
     ) -> Result<String, QconnectAppError> {
         let action_uuid = command.action_uuid.clone();
+        let is_set_active_renderer_action = matches!(
+            command.command_type,
+            QueueCommandType::CtrlSrvrSetActiveRenderer
+        );
         let pending = PendingQueueAction {
             uuid: action_uuid.clone(),
             queue_version_ref: command.queue_version_ref,
@@ -126,6 +130,12 @@ where
                 command.command_type,
                 QueueCommandType::CtrlSrvrSetPlayerState
             ),
+            is_set_active_renderer_action,
+            expected_active_renderer_id: if is_set_active_renderer_action {
+                pending_active_renderer_id_from_payload(&command.payload)
+            } else {
+                None
+            },
             concurrency_error: false,
             sent_at_ms: now_ms(),
         };
@@ -226,24 +236,22 @@ where
         if event.event_type.is_session_management() {
             let completed_uuid = {
                 let mut state = self.state.lock().await;
-                if matches!(
+                let matched_by_uuid = matches!(
                     state.pending.correlate(event.action_uuid.as_deref()),
                     PendingCorrelation::Matched
-                ) {
-                    state.pending.clear().map(|pending| pending.uuid)
-                } else if matches!(
-                    event.event_type,
-                    QueueEventType::SrvrCtrlRendererStateUpdated
-                ) && state
+                );
+                let matched_by_session_effect = state
                     .pending
                     .current()
-                    .map(|pending| pending.is_transport_control_action)
-                    .unwrap_or(false)
-                {
-                    // Transport control SET_PLAYER_STATE commands do not get a
-                    // dedicated action_uuid ack. The first renderer state update is
-                    // the practical completion signal; otherwise rapid next/previous
-                    // presses stay blocked behind a stale pending slot.
+                    .map(|pending| {
+                        session_management_event_completes_pending_action(
+                            pending,
+                            &event.event_type,
+                            &event.payload,
+                        )
+                    })
+                    .unwrap_or(false);
+                if matched_by_uuid || matched_by_session_effect {
                     state.pending.clear().map(|pending| pending.uuid)
                 } else {
                     None
@@ -847,6 +855,49 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn pending_active_renderer_id_from_payload(payload: &Value) -> Option<i32> {
+    payload
+        .get("renderer_id")
+        .or_else(|| payload.get("active_renderer_id"))
+        .and_then(Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok())
+}
+
+fn session_management_event_completes_pending_action(
+    pending: &PendingQueueAction,
+    event_type: &QueueEventType,
+    payload: &Value,
+) -> bool {
+    if pending.is_transport_control_action
+        && matches!(event_type, QueueEventType::SrvrCtrlRendererStateUpdated)
+    {
+        // Transport control SET_PLAYER_STATE commands do not get a dedicated
+        // action_uuid ack. The first renderer state update is the practical
+        // completion signal; otherwise rapid next/previous presses stay
+        // blocked behind a stale pending slot.
+        return true;
+    }
+
+    if !pending.is_set_active_renderer_action {
+        return false;
+    }
+
+    let Some(expected_renderer_id) = pending.expected_active_renderer_id else {
+        return false;
+    };
+
+    match event_type {
+        QueueEventType::SrvrCtrlActiveRendererChanged | QueueEventType::SrvrCtrlSessionState => {
+            payload
+                .get("active_renderer_id")
+                .and_then(Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok())
+                == Some(expected_renderer_id)
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1072,6 +1123,49 @@ mod tests {
                 event,
                 QconnectAppEvent::SessionManagementEvent { message_type, .. }
                 if message_type == "MESSAGE_TYPE_SRVR_CTRL_ACTIVE_RENDERER_CHANGED"
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn active_renderer_changed_without_action_uuid_completes_matching_pending_action() {
+        let (app, sink, _transport, _events_rx) = build_connected_app().await;
+        let command = app
+            .build_queue_command(
+                QueueCommandType::CtrlSrvrSetActiveRenderer,
+                json!({ "renderer_id": 16 }),
+            )
+            .await;
+        let pending_uuid = app
+            .send_queue_command(command)
+            .await
+            .expect("send set-active-renderer command");
+
+        app.apply_server_event(QueueServerEvent {
+            event_type: QueueEventType::SrvrCtrlActiveRendererChanged,
+            action_uuid: None,
+            queue_version: Some(QueueVersion::new(1, 1)),
+            payload: json!({ "active_renderer_id": 16 }),
+        })
+        .await
+        .expect("apply active-renderer-changed event without action uuid");
+
+        let second_command = app
+            .build_queue_command(
+                QueueCommandType::CtrlSrvrQueueLoadTracks,
+                json!({ "track_ids": [201, 202] }),
+            )
+            .await;
+
+        app.send_queue_command(second_command)
+            .await
+            .expect("matching active-renderer change should clear pending action");
+
+        let events = sink.snapshot().await;
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                QconnectAppEvent::PendingActionCompleted { uuid } if uuid == &pending_uuid
             )
         }));
     }
