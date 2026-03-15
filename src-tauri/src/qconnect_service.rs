@@ -1220,6 +1220,7 @@ impl QconnectServiceState {
         let event_loop = tauri::async_runtime::spawn(async move {
             log::info!("[QConnect/EventLoop] Started listening for transport events");
             let mut renderer_joined = false;
+            let mut has_disconnected = false;
             loop {
                 match transport_rx.recv().await {
                     Ok(event) => {
@@ -1246,13 +1247,23 @@ impl QconnectServiceState {
                                 log::info!("[QConnect/Transport] WebSocket connected");
                             }
                             qconnect_transport_ws::TransportEvent::Disconnected => {
-                                log::warn!("[QConnect/Transport] WebSocket disconnected");
+                                log::warn!("[QConnect/Transport] WebSocket disconnected — resetting renderer_joined flag");
+                                renderer_joined = false;
+                                has_disconnected = true;
                             }
                             qconnect_transport_ws::TransportEvent::Authenticated => {
                                 log::info!("[QConnect/Transport] Authenticated with JWT");
                             }
                             qconnect_transport_ws::TransportEvent::Subscribed => {
                                 log::info!("[QConnect/Transport] Subscribed to channels");
+                                // Re-bootstrap only after a reconnection (not on initial connect,
+                                // where connect() already calls bootstrap_remote_presence).
+                                if has_disconnected {
+                                    log::info!("[QConnect] Re-bootstrapping after reconnect...");
+                                    if let Err(err) = bootstrap_remote_presence(&app_for_loop).await {
+                                        log::error!("[QConnect] Re-bootstrap after reconnect failed: {err}");
+                                    }
+                                }
                             }
                             qconnect_transport_ws::TransportEvent::KeepalivePingSent => {
                                 log::debug!("[QConnect/Transport] Keepalive ping sent");
