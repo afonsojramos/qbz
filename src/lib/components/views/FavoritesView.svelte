@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { getUserInfo } from '$lib/stores/authStore';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { onMount, tick } from 'svelte';
   import { t } from '$lib/i18n';
@@ -805,7 +806,6 @@
       const favoriteIds = await invoke<number[]>('v2_playlist_get_favorites');
       if (favoriteIds.length === 0) {
         favoritePlaylists = [];
-        return;
       }
       // Fetch full playlist data for each favorited playlist
       const playlists: FavoritePlaylist[] = [];
@@ -839,12 +839,11 @@
     loadingFollowing = true;
     try {
       const allPlaylists = await invoke<FavoritePlaylist[]>('v2_get_user_playlists');
-      // Get current user ID from bootstrap state
-      const bootstrapState = await invoke<{ user_id?: number }>('v2_get_runtime_status');
-      const userId = bootstrapState?.user_id;
+      const userId = getUserInfo()?.userId;
       if (userId) {
         followingPlaylists = allPlaylists.filter(p => p.owner.id !== userId);
       } else {
+        // No user ID available — show all non-owned as best effort
         followingPlaylists = [];
       }
     } catch (err) {
@@ -884,8 +883,10 @@
       loadFavorites(tab);
     } else if (tab === 'artists' && favoriteArtists.length === 0) {
       loadFavorites(tab);
-    } else if (tab === 'playlists' && favoritePlaylists.length === 0) {
-      loadFavoritePlaylists();
+    } else if (tab === 'playlists') {
+      if (favoritePlaylists.length === 0 && followingPlaylists.length === 0) {
+        loadFavoritePlaylists();
+      }
     }
   }
 
