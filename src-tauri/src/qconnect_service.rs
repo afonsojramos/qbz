@@ -1365,7 +1365,7 @@ impl QconnectServiceState {
                                     message
                                 );
                             }
-                            qconnect_transport_ws::TransportEvent::InboundReceived(envelope) => {
+                            qconnect_transport_ws::TransportEvent::InboundReceived(_envelope) => {
                                 log::info!(
                                     "[QConnect/Transport] <-- InboundReceived (JSON envelope)"
                                 );

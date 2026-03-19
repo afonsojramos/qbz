@@ -16,7 +16,7 @@ use axum::{
 use axum_server::{tls_rustls::RustlsConfig, Handle as AxumHandle};
 use base64::Engine;
 use futures_util::stream::Stream;
-use rcgen::{CertificateParams, DistinguishedName, DnType, SanType};
+use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::PathBuf;
@@ -1245,30 +1245,32 @@ fn ensure_certificate() -> Result<(PathBuf, PathBuf), String> {
         return Ok((cert_path, key_path));
     }
 
-    let mut params = CertificateParams::new(Vec::new());
+    let mut san_names: Vec<String> = vec!["localhost".to_string()];
+    if let Ok(hostname) = std::env::var("HOSTNAME") {
+        if !hostname.is_empty() {
+            san_names.push(hostname);
+        }
+    }
+
+    let mut params = CertificateParams::new(san_names)
+        .map_err(|e| format!("Failed to create certificate params: {}", e))?;
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, "QBZ Remote Control");
     params.distinguished_name = dn;
 
-    let mut sans = Vec::new();
-    sans.push(SanType::DnsName("localhost".into()));
-    sans.push(SanType::IpAddress(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+    // Add IP SANs
+    params.subject_alt_names.push(SanType::IpAddress(IpAddr::V4(Ipv4Addr::LOCALHOST)));
     if let Some(ip) = local_ip() {
-        sans.push(SanType::IpAddress(ip));
+        params.subject_alt_names.push(SanType::IpAddress(ip));
     }
-    if let Ok(hostname) = std::env::var("HOSTNAME") {
-        if !hostname.is_empty() {
-            sans.push(SanType::DnsName(hostname));
-        }
-    }
-    params.subject_alt_names = sans;
 
-    let cert = rcgen::Certificate::from_params(params)
+    let key_pair = KeyPair::generate()
+        .map_err(|e| format!("Failed to generate key pair: {}", e))?;
+    let cert = params
+        .self_signed(&key_pair)
         .map_err(|e| format!("Failed to generate certificate: {}", e))?;
-    let cert_pem = cert
-        .serialize_pem()
-        .map_err(|e| format!("Failed to serialize certificate: {}", e))?;
-    let key_pem = cert.serialize_private_key_pem();
+    let cert_pem = cert.pem();
+    let key_pem = key_pair.serialize_pem();
 
     std::fs::write(&cert_path, cert_pem)
         .map_err(|e| format!("Failed to write certificate: {}", e))?;
