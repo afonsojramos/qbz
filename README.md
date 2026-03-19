@@ -58,6 +58,8 @@ sudo snap connect qbz-player:alsa
 sudo snap connect qbz-player:pipewire
 ```
 
+> **Note:** MPRIS media controls (media keys, desktop integration) are currently unavailable in the Snap build due to a pending [auto-connect review from Canonical](https://forum.snapcraft.io/t/autoconnect-and-mpris-slots-request-for-qbz-player/50654/3). If you have a Snapcraft forum account, please consider supporting the request. All other installation methods have full MPRIS support.
+
 ### APT Repository (Debian/Ubuntu/Mint)
 
 ```bash
