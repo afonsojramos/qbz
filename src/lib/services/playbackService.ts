@@ -336,7 +336,10 @@ export async function playTrack(
       return false;
     }
 
-    showToast(`Playback error: ${err}`, 'error');
+    const errorMsg = typeof err === 'object' && err !== null
+      ? (err as Record<string, unknown>).message ?? (err as Record<string, unknown>).details ?? JSON.stringify(err)
+      : String(err);
+    showToast(`Playback error: ${errorMsg}`, 'error');
     setIsPlaying(false);
     return false;
   }
