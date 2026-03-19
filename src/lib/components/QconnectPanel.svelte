@@ -148,11 +148,13 @@
   }
 
   async function sendSetActiveRenderer(rendererId: number): Promise<void> {
+    console.log('[QconnectPanel] SET_ACTIVE_RENDERER clicked for renderer_id:', rendererId);
     controllerBusy = true;
     try {
       await invoke('v2_qconnect_set_active_renderer', {
         request: { renderer_id: rendererId }
       });
+      console.log('[QconnectPanel] SET_ACTIVE_RENDERER success for renderer_id:', rendererId);
     } catch (err) {
       console.warn('[QconnectPanel] set_active_renderer failed:', err);
     } finally {
@@ -767,6 +769,12 @@
     padding: 5px 8px;
     font-size: 12px;
     cursor: pointer;
+  }
+
+  .mini-btn:active {
+    transform: scale(0.95);
+    background: var(--accent-primary);
+    color: white;
   }
 
   .mini-btn.danger {
