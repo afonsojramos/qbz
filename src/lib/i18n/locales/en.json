@@ -1133,7 +1133,9 @@
       "plexTrackMeta": "{artist} - {album} - {rate} Hz / {bits}-bit",
       "qobuzLinkHandler": "Qobuz Link Handler",
       "qobuzLinkHandlerDesc": "Register QBZ as the default app for qobuzapp:// links from your browser.",
-      "qobuzLinkHandlerError": "Failed to update link handler registration."
+      "qobuzLinkHandlerError": "Failed to update link handler registration.",
+      "qconnectDeviceName": "Device Name",
+      "qconnectDeviceNameDesc": "Name displayed in Qobuz Connect"
     },
     "storage": {
       "title": "Storage",
@@ -1178,7 +1180,10 @@
       "verboseLogCapture": "Verbose Log Capture",
       "verboseLogCaptureDesc": "Capture all console logs (log/info), not just errors. Uses more memory.",
       "verboseLogEnabled": "Verbose log capture enabled",
-      "verboseLogDisabled": "Verbose log capture disabled"
+      "verboseLogDisabled": "Verbose log capture disabled",
+      "qconnectDevTools": "Qobuz Connect Dev Tools",
+      "qconnectDevToolsShow": "Show Dev Panel Button",
+      "qconnectDevToolsDesc": "Show the advanced connection screen button in the player bar"
     },
     "blacklist": {
       "title": "Artist Blacklist",

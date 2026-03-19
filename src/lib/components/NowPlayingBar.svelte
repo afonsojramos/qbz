@@ -83,6 +83,7 @@
     qconnectSessionSnapshot?: QconnectSessionSnapshot | null;
     onToggleQconnectConnection?: () => void | Promise<void>;
     qconnectBusy?: boolean;
+    showQconnectDevButton?: boolean;
   }
 
   let {
@@ -135,6 +136,7 @@
     qconnectSessionSnapshot = null,
     onToggleQconnectConnection,
     qconnectBusy = false,
+    showQconnectDevButton = false,
   }: Props = $props();
 
   let progressRef: HTMLDivElement;
@@ -435,6 +437,7 @@
         <Cast size={16} />
       </button>
 
+      {#if showQconnectDevButton}
       <button
         class="control-btn"
         class:qconnect-active={isQobuzConnectConnected}
@@ -443,6 +446,7 @@
       >
         <span class="qconnect-icon" aria-hidden="true"></span>
       </button>
+      {/if}
 
       <button
         class="control-btn"

@@ -154,6 +154,7 @@
     subscription?: string;
     subscriptionValidUntil?: string | null;
     showTitleBar?: boolean;
+    onQconnectDevButtonChange?: (enabled: boolean) => void;
   }
 
   interface CacheStats {
@@ -237,7 +238,8 @@
     userEmail = '',
     subscription = 'Qobuz™',
     subscriptionValidUntil = null,
-    showTitleBar = true
+    showTitleBar = true,
+    onQconnectDevButtonChange,
   }: Props = $props();
 
   // Purchases toggle
@@ -335,6 +337,13 @@
   let graphicsHasNvidia = $state(false);
   let graphicsHwAccelEnabled = $state(true);
   let showLogsModal = $state(false);
+  let qconnectDevButtonEnabled = $state(localStorage.getItem('qbz-qconnect-dev-button') === 'true');
+
+  function handleQconnectDevButtonToggle(enabled: boolean): void {
+    qconnectDevButtonEnabled = enabled;
+    localStorage.setItem('qbz-qconnect-dev-button', enabled ? 'true' : 'false');
+    onQconnectDevButtonChange?.(enabled);
+  }
 
   type CompositionProfileId = 'nativeWayland' | 'x11Balanced' | 'x11Performance' | 'maxPerformance';
 
@@ -1261,6 +1270,33 @@
   let qobuzLinkHandlerEnabled = $state(false);
   let qobuzLinkHandlerBusy = $state(false);
 
+  // QConnect device name
+  let qconnectDeviceName = $state('');
+  let qconnectDeviceNameDefault = $state('');
+
+  async function loadQconnectDeviceName() {
+    try {
+      const [name, hostname] = await Promise.all([
+        invoke<string>('v2_qconnect_get_device_name'),
+        invoke<string>('v2_get_hostname'),
+      ]);
+      qconnectDeviceName = name;
+      qconnectDeviceNameDefault = `Qbz - ${hostname}`;
+    } catch (err) {
+      console.warn('Failed to load QConnect device name:', err);
+    }
+  }
+
+  async function handleQconnectDeviceNameChange(value: string) {
+    const trimmed = value.trim();
+    qconnectDeviceName = trimmed || qconnectDeviceNameDefault;
+    try {
+      await invoke('v2_qconnect_set_device_name', { name: trimmed || qconnectDeviceNameDefault });
+    } catch (err) {
+      console.warn('Failed to set QConnect device name:', err);
+    }
+  }
+
   async function handleQobuzLinkHandlerToggle(enabled: boolean) {
     qobuzLinkHandlerBusy = true;
     try {
@@ -1390,6 +1426,9 @@
     invoke<boolean>('v2_check_qobuzapp_handler')
       .then((registered) => { qobuzLinkHandlerEnabled = registered; })
       .catch((err) => { console.warn('Could not check qobuzapp handler:', err); });
+
+    // Load QConnect device name
+    loadQconnectDeviceName();
 
     // Warm-start Plex panel from local cache and refresh in background
     hydratePlexAddressFieldsFromBaseUrl();
@@ -4800,6 +4839,21 @@
       <Toggle enabled={qobuzLinkHandlerEnabled} onchange={handleQobuzLinkHandlerToggle} disabled={qobuzLinkHandlerBusy} />
     </div>
 
+    <!-- Qobuz Connect Device Name -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.integrations.qconnectDeviceName')}</span>
+        <small class="setting-note">{$t('settings.integrations.qconnectDeviceNameDesc')}</small>
+      </div>
+      <input
+        type="text"
+        class="text-input"
+        value={qconnectDeviceName}
+        placeholder={qconnectDeviceNameDefault}
+        onchange={(e) => handleQconnectDeviceNameChange(e.currentTarget.value)}
+      />
+    </div>
+
     {#if lastfmConnected}
       <div class="setting-row">
         <div class="lastfm-connected">
@@ -5582,6 +5636,16 @@
         </div>
       </div>
     {/if}
+
+    <!-- Qobuz Connect Dev Tools -->
+    <h4 class="subsection-title">{$t('settings.developer.qconnectDevTools')}</h4>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.developer.qconnectDevToolsShow')}</span>
+        <small class="setting-note">{$t('settings.developer.qconnectDevToolsDesc')}</small>
+      </div>
+      <Toggle enabled={qconnectDevButtonEnabled} onchange={handleQconnectDevButtonToggle} />
+    </div>
   </section>
   {/if}
 
@@ -7173,6 +7237,22 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
   .status-disabled {
     color: #fbbf24;
     font-size: 12px;
+  }
+
+  .text-input {
+    width: 180px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--bg-tertiary);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+    text-align: right;
+  }
+
+  .text-input::placeholder {
+    color: var(--text-muted);
+    opacity: 0.6;
   }
 
   .remote-control-input {

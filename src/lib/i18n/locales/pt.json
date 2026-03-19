@@ -1131,7 +1131,9 @@
       "plexTrackMeta": "{artist} - {album} - {rate} Hz / {bits}-bit",
       "qobuzLinkHandler": "Manipulador de Links Qobuz",
       "qobuzLinkHandlerDesc": "Registrar o QBZ como o aplicativo padrão para links qobuzapp:// do seu navegador.",
-      "qobuzLinkHandlerError": "Falha ao atualizar o registro do manipulador de links."
+      "qobuzLinkHandlerError": "Falha ao atualizar o registro do manipulador de links.",
+      "qconnectDeviceName": "Nome do dispositivo",
+      "qconnectDeviceNameDesc": "Nome exibido no Qobuz Connect"
     },
     "storage": {
       "title": "Armazenamento",
@@ -1176,7 +1178,10 @@
       "verboseLogCapture": "Captura Detalhada de Logs",
       "verboseLogCaptureDesc": "Capturar todos os logs do console (log/info), não apenas erros. Usa mais memória.",
       "verboseLogEnabled": "Captura detalhada de logs ativada",
-      "verboseLogDisabled": "Captura detalhada de logs desativada"
+      "verboseLogDisabled": "Captura detalhada de logs desativada",
+      "qconnectDevTools": "Ferramentas dev Qobuz Connect",
+      "qconnectDevToolsShow": "Mostrar botão do painel",
+      "qconnectDevToolsDesc": "Mostra o botão da tela avançada de conexão na barra do reprodutor"
     },
     "blacklist": {
       "title": "Lista de Bloqueio de Artistas",

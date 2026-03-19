@@ -1195,12 +1195,14 @@ impl TauriQconnectEventSink {
 
 pub struct QconnectServiceState {
     inner: Arc<Mutex<QconnectServiceInner>>,
+    custom_device_name: Arc<tokio::sync::RwLock<Option<String>>>,
 }
 
 impl QconnectServiceState {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(QconnectServiceInner::default())),
+            custom_device_name: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 
@@ -1279,7 +1281,7 @@ impl QconnectServiceState {
                                 // where connect() already calls bootstrap_remote_presence).
                                 if has_disconnected {
                                     log::info!("[QConnect] Re-bootstrapping after reconnect...");
-                                    if let Err(err) = bootstrap_remote_presence(&app_for_loop).await {
+                                    if let Err(err) = bootstrap_remote_presence(&app_for_loop, None).await {
                                         log::error!("[QConnect] Re-bootstrap after reconnect failed: {err}");
                                     }
                                 }
@@ -1398,7 +1400,8 @@ impl QconnectServiceState {
         guard.runtime = Some(runtime);
 
         drop(guard);
-        if let Err(err) = bootstrap_remote_presence(&runtime_app).await {
+        let custom_name = self.custom_device_name.read().await.clone();
+        if let Err(err) = bootstrap_remote_presence(&runtime_app, custom_name).await {
             let _ = self.disconnect().await;
             let mut guard = self.inner.lock().await;
             guard.last_error = Some(format!("qconnect bootstrap failed: {err}"));
@@ -3796,8 +3799,9 @@ async fn resolve_active_playback_audio_quality(
 
 async fn bootstrap_remote_presence(
     app: &Arc<QconnectApp<NativeWsTransport, TauriQconnectEventSink>>,
+    custom_device_name: Option<String>,
 ) -> Result<(), String> {
-    let device_info = default_qconnect_device_info();
+    let device_info = default_qconnect_device_info_with_name(custom_device_name.as_deref());
 
     // 1. Controller JoinSession first (works without session_uuid).
     //    The server will respond with session topology (AddRenderer, QueueState, etc.).
@@ -3943,10 +3947,19 @@ async fn clear_pending_if_matches(
 }
 
 fn default_qconnect_device_info() -> QconnectDeviceInfoPayload {
-    let friendly_name = std::env::var("QBZ_QCONNECT_DEVICE_NAME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_QCONNECT_DEVICE_NAME.to_string());
+    default_qconnect_device_info_with_name(None)
+}
+
+fn default_qconnect_device_info_with_name(custom_name: Option<&str>) -> QconnectDeviceInfoPayload {
+    let friendly_name = custom_name
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            std::env::var("QBZ_QCONNECT_DEVICE_NAME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(resolve_default_qconnect_device_name);
     let brand = std::env::var("QBZ_QCONNECT_DEVICE_BRAND")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -4717,6 +4730,67 @@ pub async fn v2_qconnect_report_volume(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn v2_qconnect_get_device_name(
+    service: State<'_, QconnectServiceState>,
+) -> Result<String, RuntimeError> {
+    let custom = service.custom_device_name.read().await;
+    if let Some(ref name) = *custom {
+        if !name.trim().is_empty() {
+            return Ok(name.clone());
+        }
+    }
+    // Fall back to env var → default
+    Ok(std::env::var("QBZ_QCONNECT_DEVICE_NAME")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(resolve_default_qconnect_device_name))
+}
+
+#[tauri::command]
+pub async fn v2_qconnect_set_device_name(
+    name: String,
+    service: State<'_, QconnectServiceState>,
+) -> Result<(), RuntimeError> {
+    let trimmed = name.trim().to_string();
+    let mut guard = service.custom_device_name.write().await;
+    if trimmed.is_empty() {
+        *guard = None;
+    } else {
+        *guard = Some(trimmed);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn v2_get_hostname() -> Result<String, RuntimeError> {
+    Ok(resolve_system_hostname())
+}
+
+fn resolve_system_hostname() -> String {
+    // Try HOSTNAME env var first
+    if let Ok(h) = std::env::var("HOSTNAME") {
+        if !h.trim().is_empty() {
+            return h.trim().to_string();
+        }
+    }
+    // Try /etc/hostname
+    if let Ok(h) = std::fs::read_to_string("/etc/hostname") {
+        let trimmed = h.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    // Fallback
+    "Desktop".to_string()
+}
+
+/// Returns "Qbz - {hostname}" as the default device name.
+fn resolve_default_qconnect_device_name() -> String {
+    let hostname = resolve_system_hostname();
+    format!("Qbz - {hostname}")
 }
 
 async fn resolve_transport_config(

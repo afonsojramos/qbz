@@ -1062,7 +1062,9 @@
       "plexStatusCacheLoaded": "{count} pistes en cache chargées. Actualisation depuis Plex en arrière-plan.",
       "qobuzLinkHandler": "Gestionnaire de liens Qobuz",
       "qobuzLinkHandlerDesc": "Enregistrer QBZ comme application par defaut pour les liens qobuzapp:// depuis le navigateur.",
-      "qobuzLinkHandlerError": "Erreur lors de la mise a jour de l'enregistrement du gestionnaire de liens."
+      "qobuzLinkHandlerError": "Erreur lors de la mise a jour de l'enregistrement du gestionnaire de liens.",
+      "qconnectDeviceName": "Nom de l'appareil",
+      "qconnectDeviceNameDesc": "Nom affiché dans Qobuz Connect"
     },
     "storage": {
       "title": "Stockage",
@@ -1107,7 +1109,10 @@
       "verboseLogCapture": "Capture de logs detaillee",
       "verboseLogCaptureDesc": "Capturer tous les logs de console (log/info), pas seulement les erreurs. Utilise plus de memoire.",
       "verboseLogEnabled": "Capture de logs detaillee activee",
-      "verboseLogDisabled": "Capture de logs detaillee desactivee"
+      "verboseLogDisabled": "Capture de logs detaillee desactivee",
+      "qconnectDevTools": "Outils dev Qobuz Connect",
+      "qconnectDevToolsShow": "Afficher le bouton du panneau",
+      "qconnectDevToolsDesc": "Affiche le bouton de connexion avancée dans la barre du lecteur"
     },
     "blacklist": {
       "title": "Liste noire des artistes",

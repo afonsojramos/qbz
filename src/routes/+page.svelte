@@ -843,6 +843,7 @@
   // Cast State
   let isCastConnected = $state(false);
   let isQconnectPanelOpen = $state(false);
+  let showQconnectDevButton = $state(localStorage.getItem('qbz-qconnect-dev-button') === 'true');
   let isQobuzConnectConnected = $state(false);
   let qobuzConnectBusy = $state(false);
   let qobuzConnectRefreshBusy = $state(false);
@@ -4914,6 +4915,7 @@
           subscription={userInfo?.subscription}
           subscriptionValidUntil={userInfo?.subscriptionValidUntil}
           showTitleBar={showTitleBar}
+          onQconnectDevButtonChange={(v) => { showQconnectDevButton = v; }}
         />
       {:else if activeView === 'album' && !selectedAlbum}
         <!-- Defensive fallback: album view active but no data loaded (#43) -->
@@ -5552,6 +5554,7 @@
         qconnectSessionSnapshot={qobuzConnectSessionSnapshot}
         onToggleQconnectConnection={handleQobuzConnectButton}
         qconnectBusy={qobuzConnectBusy}
+        {showQconnectDevButton}
       />
     {:else}
       <NowPlayingBar
@@ -5572,6 +5575,7 @@
         qconnectSessionSnapshot={qobuzConnectSessionSnapshot}
         onToggleQconnectConnection={handleQobuzConnectButton}
         qconnectBusy={qobuzConnectBusy}
+        {showQconnectDevButton}
       />
     {/if}
 

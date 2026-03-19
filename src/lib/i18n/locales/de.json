@@ -1062,7 +1062,9 @@
       "plexStatusCacheLoaded": "{count} zwischengespeicherte Titel geladen. Aktualisierung von Plex im Hintergrund.",
       "qobuzLinkHandler": "Qobuz-Link-Handler",
       "qobuzLinkHandlerDesc": "QBZ als Standard-App fuer qobuzapp://-Links aus dem Browser registrieren.",
-      "qobuzLinkHandlerError": "Fehler beim Aktualisieren der Link-Handler-Registrierung."
+      "qobuzLinkHandlerError": "Fehler beim Aktualisieren der Link-Handler-Registrierung.",
+      "qconnectDeviceName": "Gerätename",
+      "qconnectDeviceNameDesc": "Angezeigter Name in Qobuz Connect"
     },
     "storage": {
       "title": "Speicher",
@@ -1107,7 +1109,10 @@
       "verboseLogCapture": "Ausführliche Log-Erfassung",
       "verboseLogCaptureDesc": "Alle Konsolen-Logs erfassen (log/info), nicht nur Fehler. Verwendet mehr Speicher.",
       "verboseLogEnabled": "Ausführliche Log-Erfassung aktiviert",
-      "verboseLogDisabled": "Ausführliche Log-Erfassung deaktiviert"
+      "verboseLogDisabled": "Ausführliche Log-Erfassung deaktiviert",
+      "qconnectDevTools": "Qobuz Connect Entwicklertools",
+      "qconnectDevToolsShow": "Entwickler-Panel anzeigen",
+      "qconnectDevToolsDesc": "Zeigt die erweiterte Verbindungsschaltfläche in der Playerleiste an"
     },
     "blacklist": {
       "title": "Künstler-Blacklist",
