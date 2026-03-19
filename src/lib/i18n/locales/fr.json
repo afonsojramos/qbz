@@ -985,7 +985,7 @@
       "connecting": "Connexion...",
       "listenbrainzTokenHint": "Obtenez votre jeton personnel depuis",
       "musicbrainz": "MusicBrainz",
-      "musicbrainzDesc": "Activer les relations d'artistes et les métadonnées améliorées depuis MusicBrainz.",
+      "musicbrainzDesc": "Activer les relations d'artistes et les métadonnées améliorées depuis MusicBrainz. QBZ n'a pas de télémétrie — les données sont uniquement récupérées depuis MusicBrainz, jamais envoyées.",
       "musicbrainzCache": "Cache MusicBrainz",
       "listenbrainz": "ListenBrainz",
       "plexActionEasyConnect": "Se connecter avec Plex",
@@ -1196,7 +1196,7 @@
     "metadata": {
       "title": "Métadonnées",
       "musicbrainz": "MusicBrainz",
-      "musicbrainzDesc": "Activer les relations d'artistes et les métadonnées améliorées depuis MusicBrainz.",
+      "musicbrainzDesc": "Activer les relations d'artistes et les métadonnées améliorées depuis MusicBrainz. QBZ n'a pas de télémétrie — les données sont uniquement récupérées depuis MusicBrainz, jamais envoyées.",
       "cacheStats": "{artists} artistes, {relations} relations, {recordings} enregistrements",
       "noArtworkCached": "Aucune illustration mise en cache",
       "artistVectors": "Vecteurs d'artiste (suggestions)",

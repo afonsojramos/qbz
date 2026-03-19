@@ -1031,7 +1031,7 @@
       "connecting": "Conectando...",
       "listenbrainzTokenHint": "Obtenha seu token pessoal em",
       "musicbrainz": "MusicBrainz",
-      "musicbrainzDesc": "Ativar relacionamentos de artistas e metadados aprimorados do MusicBrainz.",
+      "musicbrainzDesc": "Ativar relacionamentos de artistas e metadados aprimorados do MusicBrainz. QBZ não tem telemetria — os dados são apenas obtidos do MusicBrainz, nunca enviados.",
       "musicbrainzCache": "Cache do MusicBrainz",
       "listenbrainz": "ListenBrainz",
       "remoteControl": "Remoto",
@@ -1267,7 +1267,7 @@
     "metadata": {
       "title": "Metadados",
       "musicbrainz": "MusicBrainz",
-      "musicbrainzDesc": "Ativar relacionamentos de artistas e metadados aprimorados do MusicBrainz.",
+      "musicbrainzDesc": "Ativar relacionamentos de artistas e metadados aprimorados do MusicBrainz. QBZ não tem telemetria — os dados são apenas obtidos do MusicBrainz, nunca enviados.",
       "cacheStats": "{artists} artistas, {relations} relações, {recordings} gravações",
       "noArtworkCached": "Nenhuma capa em cache",
       "artistVectors": "Vetores de Artistas (Sugestões)",

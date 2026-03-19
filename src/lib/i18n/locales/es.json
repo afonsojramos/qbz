@@ -1033,7 +1033,7 @@
       "connecting": "Conectando...",
       "listenbrainzTokenHint": "Obtén tu token personal desde",
       "musicbrainz": "MusicBrainz",
-      "musicbrainzDesc": "Habilita relaciones de artistas y metadatos mejorados de MusicBrainz.",
+      "musicbrainzDesc": "Habilita relaciones de artistas y metadatos mejorados de MusicBrainz. QBZ no tiene telemetría — los datos solo se obtienen de MusicBrainz, nunca se envían.",
       "musicbrainzCache": "Caché de MusicBrainz",
       "listenbrainz": "ListenBrainz",
       "remoteControl": "Remoto",
