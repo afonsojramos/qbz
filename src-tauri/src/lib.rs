@@ -594,30 +594,26 @@ pub fn run() {
     let mut saved_win_height = window_settings.window_height;
     let saved_win_maximized = window_settings.is_maximized;
 
-    // Safety: clamp window size to screen resolution.
-    // Prevents the window from opening larger than the display (issue #139).
-    // This also handles corrupt DB values that pass the 200..32767 validation
-    // but exceed the actual monitor dimensions.
+    // Safety: clamp obviously corrupt window sizes.
+    // Only catches absurd values (>8K) — the window manager handles the rest.
+    // Previous approach used xdpyinfo which returns combined multi-monitor
+    // resolution (e.g. 6000x1600 for dual monitors), causing false positives.
     #[cfg(target_os = "linux")]
     {
-        // Read current screen resolution from xdpyinfo or Wayland
-        if let Some((screen_w, screen_h)) = get_screen_resolution() {
-            // Leave room for taskbar/panels (90% of screen)
-            let max_w = screen_w * 0.95;
-            let max_h = screen_h * 0.95;
-            if saved_win_width > max_w || saved_win_height > max_h {
-                log::warn!(
-                    "Window size {}x{} exceeds screen {}x{}, clamping to {}x{}",
-                    saved_win_width as u32,
-                    saved_win_height as u32,
-                    screen_w as u32,
-                    screen_h as u32,
-                    max_w as u32,
-                    max_h as u32
-                );
-                saved_win_width = saved_win_width.min(max_w);
-                saved_win_height = saved_win_height.min(max_h);
-            }
+        const MAX_SANE_WIDTH: f64 = 7680.0;  // 8K
+        const MAX_SANE_HEIGHT: f64 = 4320.0; // 8K
+        const FALLBACK_WIDTH: f64 = 1920.0;
+        const FALLBACK_HEIGHT: f64 = 1080.0;
+        if saved_win_width > MAX_SANE_WIDTH || saved_win_height > MAX_SANE_HEIGHT {
+            log::warn!(
+                "Window size {}x{} looks corrupt, falling back to {}x{}",
+                saved_win_width as u32,
+                saved_win_height as u32,
+                FALLBACK_WIDTH as u32,
+                FALLBACK_HEIGHT as u32
+            );
+            saved_win_width = FALLBACK_WIDTH;
+            saved_win_height = FALLBACK_HEIGHT;
         }
     }
 
