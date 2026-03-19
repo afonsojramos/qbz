@@ -263,9 +263,8 @@
               >
                 <span class="artist-name-text" class:animating={isHovered && hasOverflow}>{artist.name}</span>
               </div>
-              {#if artist.albums_count}
-                <div class="artist-list-meta">{$t('library.albumCount', { values: { count: artist.albums_count } })}</div>
-              {/if}
+              <!-- albums_count from Qobuz API includes compilations, tributes, etc.
+                   — misleadingly high. Removed per #169. -->
             </div>
           </button>
         {/if}

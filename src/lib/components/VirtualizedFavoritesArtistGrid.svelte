@@ -276,9 +276,6 @@
                   {/if}
                 </div>
                 <div class="artist-name" title={artist.name}>{artist.name}</div>
-                {#if artist.albums_count}
-                  <div class="artist-albums">{$t('library.albumCount', { values: { count: artist.albums_count } })}</div>
-                {/if}
               </button>
             {/each}
           </div>

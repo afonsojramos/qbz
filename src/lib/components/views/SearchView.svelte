@@ -1283,9 +1283,6 @@
                     {/if}
                   </div>
                   <div class="artist-name">{artist.name}</div>
-                  {#if artist.albums_count}
-                    <div class="artist-albums">{$t('library.albumCount', { values: { count: artist.albums_count } })}</div>
-                  {/if}
                 </button>
               {:else if allResults.most_popular?.type === 'albums'}
                 {@const album = allResults.most_popular.content}
@@ -1562,10 +1559,7 @@
                         {/if}
                       </div>
                       <div class="artist-name">{artist.name}</div>
-                      {#if artist.albums_count}
-                        <div class="artist-albums">{$t('library.albumCount', { values: { count: artist.albums_count } })}</div>
-                      {/if}
-                    </button>
+                                          </button>
                   {/if}
                 {/each}
               </div>
@@ -1986,9 +1980,6 @@
                           {/if}
                         </div>
                         <div class="artist-name">{artist.name}</div>
-                        {#if artist.albums_count}
-                          <div class="artist-albums">{$t('library.albumCount', { values: { count: artist.albums_count } })}</div>
-                        {/if}
                       </button>
                     {/each}
                   </div>
