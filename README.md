@@ -26,7 +26,8 @@ No API keys needed. No telemetry. No tracking. Just music.
 
 - This application uses the Qobuz API but is not certified by Qobuz.
 - Qobuz is a trademark of Qobuz. QBZ is not affiliated with, endorsed by, or certified by Qobuz.
-- The offline library is a temporary playback cache for listening without an internet connection while you have a valid subscription. If your subscription becomes invalid, QBZ will remove all cached content after 3 days.
+- **Offline cache** is a temporary playback store for listening without an internet connection while you have a valid subscription. If your subscription becomes invalid, QBZ will remove all cached content after 3 days.
+- **Local library** is a "bring your own music" feature — play your own files with bit-perfect audio and the full QBZ interface, no streaming subscription required.
 - Qobuz Terms of Service: https://www.qobuz.com/us-en/legal/terms
 
 ## Why QBZ
