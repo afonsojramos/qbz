@@ -90,6 +90,30 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
     playback_prefs.init_at(&data_dir)?;
     favorites_prefs.init_at(&data_dir)?;
     audio_settings.init_at(&data_dir)?;
+
+    // Sync per-user audio settings to CoreBridge player immediately.
+    // CoreBridge was created at startup with flat-path defaults; now that
+    // per-user settings are loaded, push them into the V2 Player so
+    // backend_type, exclusive_mode, etc. are correct from the start.
+    {
+        let core_bridge = app.state::<crate::core_bridge::CoreBridgeState>();
+        let fresh = {
+            let guard = audio_settings.store.lock().ok();
+            guard.and_then(|g| g.as_ref().and_then(|s| s.get_settings().ok()))
+        };
+        if let Some(settings) = fresh {
+            if let Some(b) = core_bridge.try_get().await {
+                let converted = crate::commands_v2::convert_to_qbz_audio_settings(&settings);
+                let _ = b.player().reload_settings(converted);
+                log::info!(
+                    "[SessionLifecycle] Synced audio settings to CoreBridge player: backend={:?}, exclusive={}",
+                    settings.backend_type,
+                    settings.exclusive_mode
+                );
+            }
+        }
+    }
+
     tray_settings.init_at(&data_dir)?;
     remote_control_settings.init_at(&data_dir)?;
     allowed_origins.init_at(&data_dir)?;
@@ -349,6 +373,26 @@ pub async fn activate_offline_session(app: &tauri::AppHandle) -> Result<(), Stri
     offline_cache.init_at(&cache_dir).await?;
     offline_cache.init_library_connection(&data_dir).await?;
     audio_settings.init_at(&data_dir)?;
+
+    // Sync audio settings to CoreBridge player (same as normal session)
+    {
+        let core_bridge = app.state::<crate::core_bridge::CoreBridgeState>();
+        let fresh = {
+            let guard = audio_settings.store.lock().ok();
+            guard.and_then(|g| g.as_ref().and_then(|s| s.get_settings().ok()))
+        };
+        if let Some(settings) = fresh {
+            if let Some(b) = core_bridge.try_get().await {
+                let converted = crate::commands_v2::convert_to_qbz_audio_settings(&settings);
+                let _ = b.player().reload_settings(converted);
+                log::info!(
+                    "[SessionLifecycle/Offline] Synced audio settings to CoreBridge player: backend={:?}",
+                    settings.backend_type
+                );
+            }
+        }
+    }
+
     playback_prefs.init_at(&data_dir)?;
 
     // Mark session as activated for offline use

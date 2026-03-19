@@ -144,7 +144,7 @@ pub struct V2SearchAllResults {
 /// Convert config AudioSettings to qbz_audio::AudioSettings.
 /// Used by runtime_bootstrap (once at startup) and v2_reinit_audio_device
 /// to ensure the Player has fresh settings from the database.
-fn convert_to_qbz_audio_settings(settings: &AudioSettings) -> qbz_audio::AudioSettings {
+pub(crate) fn convert_to_qbz_audio_settings(settings: &AudioSettings) -> qbz_audio::AudioSettings {
     qbz_audio::AudioSettings {
         output_device: settings.output_device.clone(),
         exclusive_mode: settings.exclusive_mode,
@@ -163,6 +163,36 @@ fn convert_to_qbz_audio_settings(settings: &AudioSettings) -> qbz_audio::AudioSe
         normalization_target_lufs: settings.normalization_target_lufs,
         gapless_enabled: settings.gapless_enabled,
         pw_force_bitperfect: settings.pw_force_bitperfect,
+    }
+}
+
+/// Reload audio settings from the per-user store into the CoreBridge player.
+/// This ensures the V2 Player uses the latest settings (backend_type, exclusive_mode, etc.)
+/// after any audio setting change that affects routing or stream creation.
+async fn sync_audio_settings_to_player(
+    state: &AudioSettingsState,
+    bridge: &CoreBridgeState,
+) {
+    let fresh = {
+        let guard = match state.store.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        match guard.as_ref().and_then(|s| s.get_settings().ok()) {
+            Some(s) => s,
+            None => return,
+        }
+    };
+    if let Some(b) = bridge.try_get().await {
+        let _ = b
+            .player()
+            .reload_settings(convert_to_qbz_audio_settings(&fresh));
+        log::info!(
+            "[V2] Synced audio settings to CoreBridge player: backend={:?}, exclusive={}, dac_passthrough={}",
+            fresh.backend_type,
+            fresh.exclusive_mode,
+            fresh.dac_passthrough
+        );
     }
 }
 
@@ -8416,9 +8446,10 @@ pub fn v2_get_audio_settings(
 
 /// Set audio output device (V2)
 #[tauri::command]
-pub fn v2_set_audio_output_device(
+pub async fn v2_set_audio_output_device(
     device: Option<String>,
     state: State<'_, AudioSettingsState>,
+    bridge: State<'_, CoreBridgeState>,
 ) -> Result<(), RuntimeError> {
     let normalized_device = device
         .as_ref()
@@ -8428,73 +8459,92 @@ pub fn v2_set_audio_output_device(
         device,
         normalized_device
     );
-    let guard = state
-        .store
-        .lock()
-        .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
-    let store = guard
-        .as_ref()
-        .ok_or(RuntimeError::UserSessionNotActivated)?;
-    store
-        .set_output_device(normalized_device.as_deref())
-        .map_err(RuntimeError::Internal)
+    {
+        let guard = state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+        let store = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        store
+            .set_output_device(normalized_device.as_deref())
+            .map_err(RuntimeError::Internal)?;
+    }
+    sync_audio_settings_to_player(&state, &bridge).await;
+    Ok(())
 }
 
 /// Set audio exclusive mode (V2)
 #[tauri::command]
-pub fn v2_set_audio_exclusive_mode(
+pub async fn v2_set_audio_exclusive_mode(
     enabled: bool,
     state: State<'_, AudioSettingsState>,
+    bridge: State<'_, CoreBridgeState>,
 ) -> Result<(), RuntimeError> {
     log::info!("[V2] set_audio_exclusive_mode: {}", enabled);
-    let guard = state
-        .store
-        .lock()
-        .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
-    let store = guard
-        .as_ref()
-        .ok_or(RuntimeError::UserSessionNotActivated)?;
-    store
-        .set_exclusive_mode(enabled)
-        .map_err(RuntimeError::Internal)
+    {
+        let guard = state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+        let store = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        store
+            .set_exclusive_mode(enabled)
+            .map_err(RuntimeError::Internal)?;
+    }
+    sync_audio_settings_to_player(&state, &bridge).await;
+    Ok(())
 }
 
 /// Set DAC passthrough mode (V2)
 #[tauri::command]
-pub fn v2_set_audio_dac_passthrough(
+pub async fn v2_set_audio_dac_passthrough(
     enabled: bool,
     state: State<'_, AudioSettingsState>,
+    bridge: State<'_, CoreBridgeState>,
 ) -> Result<(), RuntimeError> {
     log::info!("[V2] set_audio_dac_passthrough: {}", enabled);
-    let guard = state
-        .store
-        .lock()
-        .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
-    let store = guard
-        .as_ref()
-        .ok_or(RuntimeError::UserSessionNotActivated)?;
-    store
-        .set_dac_passthrough(enabled)
-        .map_err(RuntimeError::Internal)
+    {
+        let guard = state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+        let store = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        store
+            .set_dac_passthrough(enabled)
+            .map_err(RuntimeError::Internal)?;
+    }
+    sync_audio_settings_to_player(&state, &bridge).await;
+    Ok(())
 }
 
 /// Set PipeWire force bit-perfect mode (V2)
 #[tauri::command]
-pub fn v2_set_audio_pw_force_bitperfect(
+pub async fn v2_set_audio_pw_force_bitperfect(
     enabled: bool,
     state: State<'_, AudioSettingsState>,
+    bridge: State<'_, CoreBridgeState>,
 ) -> Result<(), RuntimeError> {
     log::info!("[V2] set_audio_pw_force_bitperfect: {}", enabled);
-    let guard = state
-        .store
-        .lock()
-        .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
-    let store = guard
-        .as_ref()
-        .ok_or(RuntimeError::UserSessionNotActivated)?;
-    store
-        .set_pw_force_bitperfect(enabled)
-        .map_err(RuntimeError::Internal)
+    {
+        let guard = state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+        let store = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        store
+            .set_pw_force_bitperfect(enabled)
+            .map_err(RuntimeError::Internal)?;
+    }
+    sync_audio_settings_to_player(&state, &bridge).await;
+    Ok(())
 }
 
 /// Set sync audio settings on startup (V2)
@@ -8518,58 +8568,73 @@ pub fn v2_set_sync_audio_on_startup(
 
 /// Set preferred sample rate (V2)
 #[tauri::command]
-pub fn v2_set_audio_sample_rate(
+pub async fn v2_set_audio_sample_rate(
     rate: Option<u32>,
     state: State<'_, AudioSettingsState>,
+    bridge: State<'_, CoreBridgeState>,
 ) -> Result<(), RuntimeError> {
     log::info!("[V2] set_audio_sample_rate: {:?}", rate);
-    let guard = state
-        .store
-        .lock()
-        .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
-    let store = guard
-        .as_ref()
-        .ok_or(RuntimeError::UserSessionNotActivated)?;
-    store.set_sample_rate(rate).map_err(RuntimeError::Internal)
+    {
+        let guard = state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+        let store = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        store.set_sample_rate(rate).map_err(RuntimeError::Internal)?;
+    }
+    sync_audio_settings_to_player(&state, &bridge).await;
+    Ok(())
 }
 
 /// Set audio backend type (V2)
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn v2_set_audio_backend_type(
+pub async fn v2_set_audio_backend_type(
     backendType: Option<AudioBackendType>,
     state: State<'_, AudioSettingsState>,
+    bridge: State<'_, CoreBridgeState>,
 ) -> Result<(), RuntimeError> {
     log::info!("[V2] set_audio_backend_type: {:?}", backendType);
-    let guard = state
-        .store
-        .lock()
-        .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
-    let store = guard
-        .as_ref()
-        .ok_or(RuntimeError::UserSessionNotActivated)?;
-    store
-        .set_backend_type(backendType)
-        .map_err(RuntimeError::Internal)
+    {
+        let guard = state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+        let store = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        store
+            .set_backend_type(backendType)
+            .map_err(RuntimeError::Internal)?;
+    }
+    sync_audio_settings_to_player(&state, &bridge).await;
+    Ok(())
 }
 
 /// Set ALSA plugin (V2)
 #[tauri::command]
-pub fn v2_set_audio_alsa_plugin(
+pub async fn v2_set_audio_alsa_plugin(
     plugin: Option<AlsaPlugin>,
     state: State<'_, AudioSettingsState>,
+    bridge: State<'_, CoreBridgeState>,
 ) -> Result<(), RuntimeError> {
     log::info!("[V2] set_audio_alsa_plugin: {:?}", plugin);
-    let guard = state
-        .store
-        .lock()
-        .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
-    let store = guard
-        .as_ref()
-        .ok_or(RuntimeError::UserSessionNotActivated)?;
-    store
-        .set_alsa_plugin(plugin)
-        .map_err(RuntimeError::Internal)
+    {
+        let guard = state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+        let store = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        store
+            .set_alsa_plugin(plugin)
+            .map_err(RuntimeError::Internal)?;
+    }
+    sync_audio_settings_to_player(&state, &bridge).await;
+    Ok(())
 }
 
 /// Set gapless playback enabled (V2)
@@ -8783,21 +8848,26 @@ pub fn v2_set_audio_stream_buffer_seconds(
 
 /// Set ALSA hardware volume control (V2)
 #[tauri::command]
-pub fn v2_set_audio_alsa_hardware_volume(
+pub async fn v2_set_audio_alsa_hardware_volume(
     enabled: bool,
     state: State<'_, AudioSettingsState>,
+    bridge: State<'_, CoreBridgeState>,
 ) -> Result<(), RuntimeError> {
     log::info!("[V2] set_audio_alsa_hardware_volume: {}", enabled);
-    let guard = state
-        .store
-        .lock()
-        .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
-    let store = guard
-        .as_ref()
-        .ok_or(RuntimeError::UserSessionNotActivated)?;
-    store
-        .set_alsa_hardware_volume(enabled)
-        .map_err(RuntimeError::Internal)
+    {
+        let guard = state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+        let store = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        store
+            .set_alsa_hardware_volume(enabled)
+            .map_err(RuntimeError::Internal)?;
+    }
+    sync_audio_settings_to_player(&state, &bridge).await;
+    Ok(())
 }
 
 // ==================== Extended Playlist Commands (V2) ====================
