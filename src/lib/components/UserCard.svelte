@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Settings, SlidersHorizontal, Keyboard, Bug, HelpCircle } from 'lucide-svelte';
+  import { Settings, SlidersHorizontal, Keyboard, Bug, BookOpen, HelpCircle } from 'lucide-svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { t } from '$lib/i18n';
 
@@ -43,7 +43,13 @@
 
   function handleReportBug() {
     closeMenu();
-    openUrl('https://github.com/vicrodh/qbz/issues/new?template=bug_report.md')
+    openUrl('https://github.com/vicrodh/qbz/issues/new?template=bug_report.yml')
+      .catch(err => console.error('Failed to open URL:', err));
+  }
+
+  function handleDocumentation() {
+    closeMenu();
+    openUrl('https://github.com/vicrodh/qbz/wiki')
       .catch(err => console.error('Failed to open URL:', err));
   }
 
@@ -109,6 +115,10 @@
           <span>{$t('keybindings.title')}</span>
         </button>
         <div class="menu-divider"></div>
+        <button class="menu-item" onclick={handleDocumentation}>
+          <BookOpen size={16} />
+          <span>{$t('settings.about.documentation')}</span>
+        </button>
         <button class="menu-item" onclick={handleReportBug}>
           <Bug size={16} />
           <span>{$t('settings.about.reportIssue')}</span>

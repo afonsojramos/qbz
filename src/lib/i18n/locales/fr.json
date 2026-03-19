@@ -1185,6 +1185,7 @@
       "version": "Version",
       "currentVersion": "Version actuelle",
       "sourceCode": "Code source",
+      "documentation": "Documentation",
       "reportIssue": "Signaler un problème",
       "checkUpdates": "Vérifier les mises à jour",
       "checkUpdatesNow": "Vérifier les mises à jour maintenant",

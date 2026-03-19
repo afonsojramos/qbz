@@ -1256,6 +1256,7 @@
       "version": "Versão",
       "currentVersion": "Versão atual",
       "sourceCode": "Código Fonte",
+      "documentation": "Documentação",
       "reportIssue": "Reportar Problema",
       "checkUpdates": "Verificar Atualizações",
       "checkUpdatesNow": "Verificar atualizações agora",
