@@ -53,10 +53,9 @@ fn booklet_temp_dir() -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// Real MuPDF implementation (feature = "booklet")
+// MuPDF implementation
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "booklet")]
 mod real_impl {
     use super::*;
     use base64::Engine;
@@ -264,52 +263,10 @@ mod real_impl {
 }
 
 // ---------------------------------------------------------------------------
-// Stub implementation (no MuPDF)
+// Public Tauri commands — delegate to MuPDF implementation
 // ---------------------------------------------------------------------------
 
-#[cfg(not(feature = "booklet"))]
-mod stub_impl {
-    use super::*;
-
-    const UNAVAILABLE: &str =
-        "Booklet viewer unavailable: built without MuPDF (enable the 'booklet' feature)";
-
-    pub async fn open(
-        _url: String,
-        _state: &tauri::State<'_, BookletState>,
-    ) -> Result<BookletInfo, String> {
-        Err(UNAVAILABLE.to_string())
-    }
-
-    pub async fn render_page(
-        _page: u32,
-        _dpi: u32,
-        _rotation: Option<u32>,
-        _state: &tauri::State<'_, BookletState>,
-    ) -> Result<RenderedPage, String> {
-        Err(UNAVAILABLE.to_string())
-    }
-
-    pub async fn save(
-        _dest: String,
-        _state: &tauri::State<'_, BookletState>,
-    ) -> Result<(), String> {
-        Err(UNAVAILABLE.to_string())
-    }
-
-    pub async fn close(_state: &tauri::State<'_, BookletState>) -> Result<(), String> {
-        Err(UNAVAILABLE.to_string())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Public Tauri commands — delegate to the active implementation
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "booklet")]
 use real_impl as impl_;
-#[cfg(not(feature = "booklet"))]
-use stub_impl as impl_;
 
 /// Download a PDF from a URL, save to temp, and return page info.
 #[tauri::command]
