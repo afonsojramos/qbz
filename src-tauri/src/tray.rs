@@ -117,9 +117,18 @@ pub fn init_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .tooltip("QBZ - Music Player")
         .show_menu_on_left_click(false); // Left click toggles window, right click shows menu
 
-    // Set temp dir for icon file so libayatana-appindicator can find it
-    // Using XDG_RUNTIME_DIR ensures the host panel can access it in Flatpak
-    if let Some(runtime_dir) = dirs::runtime_dir() {
+    // Set temp dir for the icon file that libayatana-appindicator writes.
+    // In Flatpak, the default temp dir is inside the sandbox and invisible
+    // to the host's KDE StatusNotifierWatcher. Use ~/.local/share/icons
+    // which is exported to the host via Flatpak's filesystem permissions.
+    if is_flatpak() {
+        if let Some(data_dir) = dirs::data_dir() {
+            let tray_dir = data_dir.join("icons/hicolor/32x32/apps");
+            if std::fs::create_dir_all(&tray_dir).is_ok() {
+                builder = builder.temp_dir_path(&tray_dir);
+            }
+        }
+    } else if let Some(runtime_dir) = dirs::runtime_dir() {
         let tray_dir = runtime_dir.join("qbz-tray");
         if std::fs::create_dir_all(&tray_dir).is_ok() {
             builder = builder.temp_dir_path(&tray_dir);
