@@ -31,12 +31,20 @@ pub enum AudioBackendType {
     /// - Similar to PipeWire but older
     /// - Fallback for systems without PipeWire
     Pulse,
+
+    /// System default backend (non-Linux platforms)
+    /// - Uses CPAL default host (CoreAudio on macOS, WASAPI on Windows)
+    /// - Automatic device selection via OS audio system
+    SystemDefault,
 }
 
 impl Default for AudioBackendType {
     fn default() -> Self {
-        // PipeWire is the modern default on Linux
-        AudioBackendType::PipeWire
+        if cfg!(target_os = "linux") {
+            AudioBackendType::PipeWire
+        } else {
+            AudioBackendType::SystemDefault
+        }
     }
 }
 
@@ -260,8 +268,7 @@ impl BackendManager {
 
         #[cfg(not(target_os = "linux"))]
         {
-            // On non-Linux, only PipeWire backend (which uses CPAL default)
-            backends.push(AudioBackendType::PipeWire);
+            backends.push(AudioBackendType::SystemDefault);
         }
 
         backends
@@ -278,7 +285,18 @@ impl BackendManager {
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
+                    log::info!("PipeWire not available on this platform, using system default audio");
                     Ok(Box::new(CpalDefaultBackend::new()?))
+                }
+            }
+            AudioBackendType::SystemDefault => {
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Ok(Box::new(CpalDefaultBackend::new()?))
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    Err("SystemDefault backend is not available on Linux; use PipeWire, ALSA, or Pulse".to_string())
                 }
             }
             AudioBackendType::Alsa => {
@@ -348,7 +366,7 @@ impl CpalDefaultBackend {
 #[cfg(not(target_os = "linux"))]
 impl AudioBackend for CpalDefaultBackend {
     fn backend_type(&self) -> AudioBackendType {
-        AudioBackendType::PipeWire // Reuse the enum variant for non-Linux default
+        AudioBackendType::SystemDefault
     }
 
     fn enumerate_devices(&self) -> BackendResult<Vec<AudioDevice>> {
