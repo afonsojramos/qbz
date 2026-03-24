@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { Music, User, Loader2, ArrowRight, Home } from 'lucide-svelte';
@@ -299,29 +299,30 @@
 
   let failedArtistImages = $state<Set<number>>(new Set());
 
-  // Download status tracking
+  // Download status tracking — single batch call via backend
   let albumDownloadStatuses = $state<Map<string, boolean>>(new Map());
   let downloadStatusTick = $state(0);
 
   async function loadAlbumDownloadStatus(albumId: string) {
-    if (!checkAlbumFullyDownloaded) return false;
+    if (!checkAlbumFullyDownloaded) return;
     try {
       const isDownloaded = await checkAlbumFullyDownloaded(albumId);
       albumDownloadStatuses.set(albumId, isDownloaded);
       downloadStatusTick++;
-      return isDownloaded;
-    } catch {
-      return false;
-    }
+    } catch { /* ignore */ }
   }
 
-  async function loadAllAlbumDownloadStatuses(albums: AlbumCardData[]) {
-    if (!checkAlbumFullyDownloaded || albums.length === 0) return;
-    
-    const BATCH_SIZE = 6;
-    for (let i = 0; i < albums.length; i += BATCH_SIZE) {
-      const batch = albums.slice(i, i + BATCH_SIZE);
-      await Promise.all(batch.map(album => loadAlbumDownloadStatus(album.id)));
+  async function loadAllAlbumDownloadStatusesBatch(albums: AlbumCardData[]) {
+    if (albums.length === 0) return;
+    const albumIds = albums.map(a => a.id);
+    try {
+      const result = await invoke<Record<string, boolean>>('v2_check_albums_fully_cached_batch', { albumIds });
+      for (const [id, downloaded] of Object.entries(result)) {
+        albumDownloadStatuses.set(id, downloaded);
+      }
+      downloadStatusTick++;
+    } catch {
+      // Offline cache not available — ignore
     }
   }
 
@@ -342,7 +343,7 @@
         ...recentAlbums,
         ...favoriteAlbums
       ];
-      loadAllAlbumDownloadStatuses(allAlbums);
+      loadAllAlbumDownloadStatusesBatch(allAlbums);
     }
   });
 
@@ -400,7 +401,7 @@
       ...cached.qobuzissimes, ...cached.editorPicks,
       ...cached.recentAlbums, ...cached.favoriteAlbums
     ];
-    loadAllAlbumDownloadStatuses(allAlbums);
+    loadAllAlbumDownloadStatusesBatch(allAlbums);
   }
 
   onMount(() => {
@@ -747,8 +748,6 @@
       if (c.new_releases?.data?.items) {
         newReleases = c.new_releases.data.items.slice(0, homeLimits.featuredAlbums).map(discoverAlbumToCardData);
         loadingNewReleases = false;
-        await tick();
-        loadAllAlbumDownloadStatuses(newReleases).catch(() => {});
       } else {
         loadingNewReleases = false;
       }
@@ -756,8 +755,6 @@
       if (c.press_awards?.data?.items) {
         pressAwards = c.press_awards.data.items.slice(0, homeLimits.featuredAlbums).map(discoverAlbumToCardData);
         loadingPressAwards = false;
-        await tick();
-        loadAllAlbumDownloadStatuses(pressAwards).catch(() => {});
       } else {
         loadingPressAwards = false;
       }
@@ -765,8 +762,6 @@
       if (c.most_streamed?.data?.items) {
         mostStreamed = c.most_streamed.data.items.slice(0, homeLimits.featuredAlbums).map(discoverAlbumToCardData);
         loadingMostStreamed = false;
-        await tick();
-        loadAllAlbumDownloadStatuses(mostStreamed).catch(() => {});
       } else {
         loadingMostStreamed = false;
       }
@@ -774,8 +769,6 @@
       if (c.qobuzissims?.data?.items) {
         qobuzissimes = c.qobuzissims.data.items.slice(0, homeLimits.featuredAlbums).map(discoverAlbumToCardData);
         loadingQobuzissimes = false;
-        await tick();
-        loadAllAlbumDownloadStatuses(qobuzissimes).catch(() => {});
       } else {
         loadingQobuzissimes = false;
       }
@@ -783,8 +776,6 @@
       if (c.album_of_the_week?.data?.items) {
         editorPicks = c.album_of_the_week.data.items.slice(0, homeLimits.featuredAlbums).map(discoverAlbumToCardData);
         loadingEditorPicks = false;
-        await tick();
-        loadAllAlbumDownloadStatuses(editorPicks).catch(() => {});
       } else {
         loadingEditorPicks = false;
       }
@@ -856,11 +847,8 @@
       const resolved = await mlPromise;
 
       // Recently Played Albums (always fetch, visibility applied in template)
-      const filteredRecent = filterAlbumsByGenre(resolved.recentlyPlayedAlbums).slice(0, homeLimits.recentAlbums);
-      recentAlbums = filteredRecent;
+      recentAlbums = filterAlbumsByGenre(resolved.recentlyPlayedAlbums).slice(0, homeLimits.recentAlbums);
       loadingRecentAlbums = false;
-      await tick();
-      loadAllAlbumDownloadStatuses(filteredRecent).catch(() => {});
 
       // Continue Listening Tracks
       continueTracks = resolved.continueListeningTracks;
@@ -871,11 +859,8 @@
       loadingTopArtists = false;
 
       // Favorite Albums
-      const filteredFavs = filterAlbumsByGenre(resolved.favoriteAlbums).slice(0, homeLimits.favoriteAlbums);
-      favoriteAlbums = filteredFavs;
+      favoriteAlbums = filterAlbumsByGenre(resolved.favoriteAlbums).slice(0, homeLimits.favoriteAlbums);
       loadingFavoriteAlbums = false;
-      await tick();
-      loadAllAlbumDownloadStatuses(filteredFavs).catch(() => {});
 
     } catch (err) {
       console.error('Home resolved failed:', err);
@@ -888,6 +873,14 @@
 
     // Ensure discover promise completes (errors already handled internally)
     await discoverPromise;
+
+    // Single batch download status check for ALL albums at once
+    const allAlbums = [
+      ...newReleases, ...pressAwards, ...mostStreamed,
+      ...qobuzissimes, ...editorPicks,
+      ...recentAlbums, ...favoriteAlbums
+    ];
+    loadAllAlbumDownloadStatusesBatch(allAlbums).catch(() => {});
   }
 </script>
 

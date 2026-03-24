@@ -1564,6 +1564,7 @@ pub fn run() {
             commands_v2::v2_discogs_search_artwork,
             commands_v2::v2_discogs_download_artwork,
             commands_v2::v2_check_album_fully_cached,
+            commands_v2::v2_check_albums_fully_cached_batch,
             commands_v2::v2_purchases_get_all,
             commands_v2::v2_purchases_get_ids,
             commands_v2::v2_purchases_get_by_type,

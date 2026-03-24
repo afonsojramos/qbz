@@ -11594,6 +11594,17 @@ pub async fn v2_check_album_fully_cached(
         .map_err(RuntimeError::Internal)
 }
 
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_check_albums_fully_cached_batch(
+    albumIds: Vec<String>,
+    cache_state: State<'_, crate::offline_cache::OfflineCacheState>,
+) -> Result<std::collections::HashMap<String, bool>, RuntimeError> {
+    crate::offline_cache::commands::check_albums_fully_cached_batch(albumIds, cache_state)
+        .await
+        .map_err(RuntimeError::Internal)
+}
+
 /// Shared helper: spawn the download task for a single track.
 /// Used by both v2_cache_track_for_offline (single) and v2_cache_tracks_batch_for_offline (batch).
 fn spawn_track_cache_download(

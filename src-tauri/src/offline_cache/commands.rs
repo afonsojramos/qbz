@@ -771,6 +771,52 @@ pub async fn check_album_fully_cached(
     Ok(true)
 }
 
+/// Batch check which albums are fully cached (all tracks ready).
+/// Single DB read instead of N individual calls.
+#[tauri::command]
+pub async fn check_albums_fully_cached_batch(
+    album_ids: Vec<String>,
+    cache_state: State<'_, OfflineCacheState>,
+) -> Result<std::collections::HashMap<String, bool>, String> {
+    use std::collections::HashMap;
+
+    if album_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let guard__ = cache_state.db.lock().await;
+    let db = guard__
+        .as_ref()
+        .ok_or("No active session - please log in")?;
+
+    let tracks = db.get_all_tracks()?;
+
+    // Group tracks by album_id
+    let mut album_tracks: HashMap<&str, (usize, usize)> = HashMap::new(); // (total, ready)
+    for track in &tracks {
+        if let Some(ref aid) = track.album_id {
+            let entry = album_tracks.entry(aid.as_str()).or_insert((0, 0));
+            entry.0 += 1;
+            if track.status == crate::offline_cache::OfflineCacheStatus::Ready {
+                entry.1 += 1;
+            }
+        }
+    }
+
+    let result: HashMap<String, bool> = album_ids
+        .into_iter()
+        .map(|id| {
+            let fully_cached = album_tracks
+                .get(id.as_str())
+                .map(|(total, ready)| *total > 0 && *total == *ready)
+                .unwrap_or(false);
+            (id, fully_cached)
+        })
+        .collect();
+
+    Ok(result)
+}
+
 /// Evict tracks if cache exceeds limit (LRU policy)
 async fn evict_if_needed(cache_state: &OfflineCacheState, limit_bytes: u64) -> Result<(), String> {
     let guard__ = cache_state.db.lock().await;
