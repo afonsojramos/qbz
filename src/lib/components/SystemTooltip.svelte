@@ -130,8 +130,8 @@
     padding: 6px 10px;
     font-size: 12px;
     color: var(--text-secondary);
-    white-space: nowrap;
-    max-width: 280px;
+    white-space: normal;
+    max-width: 360px;
     pointer-events: none;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     opacity: 0;
