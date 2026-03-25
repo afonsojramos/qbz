@@ -344,6 +344,12 @@ export async function playTrack(
 
     // Check if all quality retries were exhausted (QualityExhausted error)
     if (errorStr.includes('QualityExhausted:')) {
+      // Report degraded state when server errors caused the exhaustion
+      if (errorStr.includes('server_error=true')) {
+        const { reportServerError } = await import('$lib/stores/degradedStore');
+        reportServerError();
+      }
+
       let behavior = 'ask';
       try {
         behavior = await invoke<string>('v2_get_quality_fallback_behavior');

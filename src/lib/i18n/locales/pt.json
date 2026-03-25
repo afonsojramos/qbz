@@ -1570,6 +1570,10 @@
     "showNetworkFoldersDesc": "Exibir conteúdo de pastas montadas em rede (NAS, Samba, etc.) no modo offline manual",
     "checkNow": "Verificar agora"
   },
+  "degraded": {
+    "title": "Servico degradado",
+    "description": "Os servidores do Qobuz estao com problemas. A reproducao pode precisar de mais tentativas ou qualidade inferior."
+  },
   "download": {
     "makeAvailable": "Disponibilizar offline",
     "queued": "Na fila para offline",

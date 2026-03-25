@@ -1496,6 +1496,10 @@
     "showNetworkFoldersDesc": "Afficher le contenu des dossiers montés en réseau (NAS, Samba, etc.) en mode hors ligne manuel",
     "checkNow": "Verifier maintenant"
   },
+  "degraded": {
+    "title": "Service degrade",
+    "description": "Les serveurs Qobuz rencontrent des problemes. La lecture peut necessiter plus de tentatives ou une qualite inferieure."
+  },
   "download": {
     "makeAvailable": "Rendre disponible hors ligne",
     "queued": "En file d'attente pour hors ligne",

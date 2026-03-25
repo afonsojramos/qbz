@@ -1475,6 +1475,10 @@
     "showNetworkFoldersDesc": "Inhalte aus eingebundenen Netzwerkordnern (NAS, Samba usw.) im manuellen Offline-Modus anzeigen",
     "checkNow": "Jetzt pruefen"
   },
+  "degraded": {
+    "title": "Dienst beeintraechtigt",
+    "description": "Die Qobuz-Server haben Probleme. Die Wiedergabe erfordert moeglicherweise mehr Versuche oder niedrigere Qualitaet."
+  },
   "download": {
     "makeAvailable": "Offline verfügbar machen",
     "queued": "Warteschlange für Offline",

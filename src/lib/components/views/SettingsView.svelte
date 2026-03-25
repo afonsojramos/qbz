@@ -67,6 +67,10 @@
     type OfflineStatus,
     type OfflineSettings
   } from '$lib/stores/offlineStore';
+  import {
+    subscribe as subscribeDegraded,
+    isDegraded
+  } from '$lib/stores/degradedStore';
   import { showToast } from '$lib/stores/toastStore';
   import {
     enableVerboseCapture,
@@ -300,6 +304,9 @@
   // Offline mode state
   let offlineStatus = $state<OfflineStatus>(getOfflineStatus());
   let offlineSettings = $state<OfflineSettings>(getOfflineSettings());
+
+  // Degraded service state
+  let isDegradedState = $state(isDegraded());
 
   // Flatpak detection state
   let isFlatpak = $state(false);
@@ -1499,6 +1506,11 @@
       offlineSettings = getOfflineSettings();
     });
 
+    // Subscribe to degraded service state changes
+    const unsubscribeDegraded = subscribeDegraded(() => {
+      isDegradedState = isDegraded();
+    });
+
     // Subscribe to title bar state changes
     const unsubscribeTitleBar = subscribeTitleBar(() => {
       hideTitleBar = getHideTitleBar();
@@ -1534,6 +1546,7 @@
         clearInterval(plexAuthPollTimer);
       }
       unsubscribeOffline();
+      unsubscribeDegraded();
       unsubscribeZoom();
       unsubscribeTitleBar();
       unsubscribeSearchBarLoc();
@@ -4754,6 +4767,14 @@
         {$t('offline.checkNow')}
       </button>
     </div>
+    {#if isDegradedState && !offlineStatus.isOffline}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label degraded-label">{$t('degraded.title')}</span>
+          <span class="setting-desc">{$t('degraded.description')}</span>
+        </div>
+      </div>
+    {/if}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('offline.enableManual')}</span>
@@ -6601,6 +6622,10 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
   .check-now-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+
+  .degraded-label {
+    color: #fb923c;
   }
 
   .reset-btn {

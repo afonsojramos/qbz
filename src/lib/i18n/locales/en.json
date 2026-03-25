@@ -1583,6 +1583,10 @@
     "showNetworkFoldersDesc": "Display content from network-mounted folders (NAS, Samba, etc.) while in manual offline mode",
     "checkNow": "Check now"
   },
+  "degraded": {
+    "title": "Service degraded",
+    "description": "Qobuz servers are experiencing issues. Playback may require more retries or lower quality."
+  },
   "download": {
     "makeAvailable": "Make available offline",
     "queued": "Queued for offline",

@@ -16,7 +16,8 @@
     Cast,
     Mic2,
     Maximize2,
-    PictureInPicture2
+    PictureInPicture2,
+    AlertTriangle
   } from 'lucide-svelte';
   import QualityBadge from './QualityBadge.svelte';
   import AudioOutputBadges from './AudioOutputBadges.svelte';
@@ -32,6 +33,10 @@
     type OfflineReason
   } from '$lib/stores/offlineStore';
   import { toggleMute } from '$lib/stores/playerStore';
+  import {
+    subscribe as subscribeDegraded,
+    isDegraded
+  } from '$lib/stores/degradedStore';
   import type { QconnectSessionSnapshot } from '$lib/services/qconnectRuntime';
 
   interface Props {
@@ -159,6 +164,16 @@
       offlineReason = getOfflineReason();
     });
     return unsubscribe;
+  });
+
+  // Degraded service state
+  let isDegradedState = $state(isDegraded());
+
+  $effect(() => {
+    const unsubDegraded = subscribeDegraded(() => {
+      isDegradedState = isDegraded();
+    });
+    return unsubDegraded;
   });
 
   // Get human-readable offline reason
@@ -434,6 +449,16 @@
         >
           <img src="/offline-small.svg" alt="" class="offline-icon" aria-hidden="true" />
         </button>
+      {/if}
+
+      {#if !isOffline && isDegradedState}
+        <div
+          class="degraded-indicator"
+          title={$translateStore('degraded.title')}
+          role="status"
+        >
+          <AlertTriangle size={16} />
+        </div>
       {/if}
 
       <button
@@ -818,6 +843,19 @@
 
   .offline-indicator:hover {
     background: rgba(234, 179, 8, 0.3);
+  }
+
+  /* Degraded Service Indicator */
+  .degraded-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    background: rgba(251, 146, 60, 0.15);
+    color: #fb923c;
+    cursor: help;
   }
 
   .offline-icon {
