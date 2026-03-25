@@ -63,6 +63,7 @@
     setAllowAccumulatedScrobbling,
     setShowNetworkFoldersInManualOffline,
     checkNetwork,
+    refreshStatus,
     type OfflineStatus,
     type OfflineSettings
   } from '$lib/stores/offlineStore';
@@ -2371,6 +2372,13 @@
         console.error('Failed to clear cache after quality change:', err);
       }
     }
+  }
+
+  // Force an immediate network check from the settings view
+  async function handleCheckNow() {
+    await refreshStatus();
+    offlineStatus = getOfflineStatus();
+    offlineSettings = getOfflineSettings();
   }
 
   // Offline mode handlers
@@ -4742,6 +4750,9 @@
           {/if}
         </span>
       </div>
+      <button class="check-now-btn" onclick={handleCheckNow}>
+        {$t('offline.checkNow')}
+      </button>
     </div>
     <div class="setting-row">
       <div class="setting-info">
@@ -6573,6 +6584,23 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
   .clear-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .check-now-btn {
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  .check-now-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
   }
 
   .reset-btn {

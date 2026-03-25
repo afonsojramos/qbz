@@ -1580,7 +1580,8 @@
     "allowAccumulatedScrobblingDesc": "Queue scrobbles for later when back online",
     "scrobbleTimeLimit": "Last.fm accepts scrobbles up to 2 weeks old",
     "showNetworkFolders": "Show Network Folder Content",
-    "showNetworkFoldersDesc": "Display content from network-mounted folders (NAS, Samba, etc.) while in manual offline mode"
+    "showNetworkFoldersDesc": "Display content from network-mounted folders (NAS, Samba, etc.) while in manual offline mode",
+    "checkNow": "Check now"
   },
   "download": {
     "makeAvailable": "Make available offline",

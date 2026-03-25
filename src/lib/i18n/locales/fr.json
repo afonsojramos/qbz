@@ -1493,7 +1493,8 @@
     "allowAccumulatedScrobblingDesc": "Mettre les scrobbles en file d'attente pour plus tard lorsque vous serez de nouveau en ligne",
     "scrobbleTimeLimit": "Last.fm accepte les scrobbles jusqu'à 2 semaines",
     "showNetworkFolders": "Afficher le contenu du dossier réseau",
-    "showNetworkFoldersDesc": "Afficher le contenu des dossiers montés en réseau (NAS, Samba, etc.) en mode hors ligne manuel"
+    "showNetworkFoldersDesc": "Afficher le contenu des dossiers montés en réseau (NAS, Samba, etc.) en mode hors ligne manuel",
+    "checkNow": "Verifier maintenant"
   },
   "download": {
     "makeAvailable": "Rendre disponible hors ligne",

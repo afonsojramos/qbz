@@ -1472,7 +1472,8 @@
     "allowAccumulatedScrobblingDesc": "Scrobbles in Warteschlange stellen und später synchronisieren, wenn wieder online",
     "scrobbleTimeLimit": "Last.fm akzeptiert Scrobbles bis zu 2 Wochen alt",
     "showNetworkFolders": "Netzwerkordner-Inhalt anzeigen",
-    "showNetworkFoldersDesc": "Inhalte aus eingebundenen Netzwerkordnern (NAS, Samba usw.) im manuellen Offline-Modus anzeigen"
+    "showNetworkFoldersDesc": "Inhalte aus eingebundenen Netzwerkordnern (NAS, Samba usw.) im manuellen Offline-Modus anzeigen",
+    "checkNow": "Jetzt pruefen"
   },
   "download": {
     "makeAvailable": "Offline verfügbar machen",

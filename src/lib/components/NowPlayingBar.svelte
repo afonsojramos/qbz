@@ -28,6 +28,7 @@
     subscribe as subscribeOffline,
     isOffline as checkIsOffline,
     getOfflineReason,
+    refreshStatus,
     type OfflineReason
   } from '$lib/stores/offlineStore';
   import { toggleMute } from '$lib/stores/playerStore';
@@ -172,6 +173,11 @@
       default:
         return $translateStore('offline.indicator');
     }
+  }
+
+  // Force an immediate network check when the offline indicator is clicked
+  async function handleCheckNetwork() {
+    await refreshStatus();
   }
 
   const effectiveTime = $derived(dragPreviewTime ?? currentTime);
@@ -420,14 +426,14 @@
     <!-- Right: Actions & Volume -->
     <div class="right-section">
       {#if isOffline}
-        <div
+        <button
           class="offline-indicator"
-          title={getOfflineReasonText(offlineReason)}
-          role="status"
-          aria-label={getOfflineReasonText(offlineReason)}
+          title={$translateStore('offline.checkNow')}
+          onclick={handleCheckNetwork}
+          aria-label={$translateStore('offline.checkNow')}
         >
           <img src="/offline-small.svg" alt="" class="offline-icon" aria-hidden="true" />
-        </div>
+        </button>
       {/if}
 
       <button
@@ -804,7 +810,14 @@
     height: 30px;
     border-radius: 6px;
     background: rgba(234, 179, 8, 0.15);
-    cursor: help;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    transition: background-color 150ms ease;
+  }
+
+  .offline-indicator:hover {
+    background: rgba(234, 179, 8, 0.3);
   }
 
   .offline-icon {

@@ -1581,7 +1581,8 @@
     "allowAccumulatedScrobblingDesc": "Almacenar scrobbles para enviar cuando vuelvas a estar en linea",
     "scrobbleTimeLimit": "Last.fm acepta scrobbles de hasta 2 semanas de antiguedad",
     "showNetworkFolders": "Mostrar Contenido de Carpetas de Red",
-    "showNetworkFoldersDesc": "Mostrar contenido de carpetas montadas en red (NAS, Samba, etc.) mientras estas en modo offline manual"
+    "showNetworkFoldersDesc": "Mostrar contenido de carpetas montadas en red (NAS, Samba, etc.) mientras estas en modo offline manual",
+    "checkNow": "Verificar ahora"
   },
   "download": {
     "makeAvailable": "Hacer disponible offline",

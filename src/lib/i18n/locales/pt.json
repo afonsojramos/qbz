@@ -1567,7 +1567,8 @@
     "allowAccumulatedScrobblingDesc": "Enfileirar scrobbles para enviar depois quando voltar online",
     "scrobbleTimeLimit": "O Last.fm aceita scrobbles de até 2 semanas atrás",
     "showNetworkFolders": "Mostrar Conteúdo de Pastas de Rede",
-    "showNetworkFoldersDesc": "Exibir conteúdo de pastas montadas em rede (NAS, Samba, etc.) no modo offline manual"
+    "showNetworkFoldersDesc": "Exibir conteúdo de pastas montadas em rede (NAS, Samba, etc.) no modo offline manual",
+    "checkNow": "Verificar agora"
   },
   "download": {
     "makeAvailable": "Disponibilizar offline",
