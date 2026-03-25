@@ -100,10 +100,18 @@
     "recentSearches": "Recherches récentes",
     "clearHistory": "Effacer l'historique",
     "startTyping": "Commencez à taper pour rechercher sur Qobuz™",
+    "composer": "Compositeur",
+    "label": "Label",
+    "mainArtist": "Artiste principal",
+    "mostPopular": "Plus populaire",
     "noAlbumsFor": "Aucun album trouvé pour « {query} »",
     "noTracksFor": "Aucun titre trouvé pour « {query} »",
     "noArtistsFor": "Aucun artiste trouvé pour « {query} »",
     "noPlaylistsFor": "Aucune playlist trouvée pour « {query} »",
+    "performer": "Interprète",
+    "playlists": "Playlists",
+    "releaseName": "Nom / Titre",
+    "viewAll": "Voir tout",
     "viewMore": "Voir plus"
   },
   "label": {
@@ -324,17 +332,23 @@
     "sceneStep4": "Préparation des résultats..."
   },
   "sort": {
-    "nameAZ": "Nom (A-Z)",
-    "recent": "Récent",
-    "trackCount": "Nombre de titres",
-    "playCount": "Nombre de lectures",
+    "sort": "Tri",
+    "addedRecently": "Ajouté récemment",
+    "album": "Album",
+    "artist": "Artiste",
     "custom": "Personnalisé",
     "default": "Par défaut",
+    "duration": "Durée",
+    "label": "Label",
+    "nameAZ": "Nom (A-Z)",
     "newest": "Plus récent d'abord",
     "oldest": "Plus ancien d'abord",
+    "playCount": "Nombre de lectures",
+    "recent": "Récent",
+    "title": "Titre",
     "titleAZ": "Titre (A-Z)",
     "titleZA": "Titre (Z-A)",
-    "artist": "Artiste"
+    "trackCount": "Nombre de titres"
   },
   "playlist": {
     "tracks": "titres",
@@ -401,7 +415,19 @@
       "addAll": "Ajouter tous les titres",
       "addNew": "Ajouter uniquement les nouveaux",
       "adding": "Ajout en cours..."
-    }
+    },
+    "suggestSongs": "Suggérer des titres pour cette playlist",
+    "suggestionsLargePlaylist": "Cette playlist contient de nombreux titres. Appuyer sur le bouton pour générer des suggestions.",
+    "trackTitle": "Titre",
+    "trackAlbum": "Album",
+    "trackDuration": "Durée",
+    "trackQuality": "Qualité",
+    "removeCustomArtwork": "Supprimer l'illustration personnalisée",
+    "setCustomArtwork": "Définir une illustration personnalisée",
+    "label": "Playlist",
+    "playCount": "Nombre de lectures",
+    "copyToLibrary": "Copier dans la bibliothèque",
+    "customArtwork": "Illustration personnalisée"
   },
   "favorites": {
     "title": "Favoris",
@@ -518,7 +544,7 @@
     "mute": "Muet",
     "unmute": "Réactiver le son",
     "volumeUp": "Augmenter le volume",
-    "volumeDown": "Baisser le volume",
+    "volumeDown": "Diminuer le volume",
     "volumeLockedHw": "Volume verrouillé à 100% — ALSA Direct hw: (réglez au niveau DAC/matériel)",
     "clearQueue": "Vider la file d'attente",
     "queueEmpty": "La file d'attente est vide",
@@ -1872,7 +1898,7 @@
   "topMixes": {
     "title": "TopQ",
     "subtitle": "Depuis vos playlists les plus écoutées",
-    "cardDesc": "Découvrez de la musique à partir de vos playlists <strong>les plus ecoutées</strong>.",
+    "cardDesc": "Découvrez de la musique à partir de vos playlists <strong>les plus écoutées</strong>.",
     "algorithmInfo": "Propulsé par l'algorithme de suggestion Qobuz, alimenté par vos playlists les plus écoutées.",
     "emptyPlaylists": "Pas encore de playlists ecoutées. Ecoutez des playlists pour créer votre mix !"
   },

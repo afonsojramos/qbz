@@ -100,10 +100,18 @@
     "recentSearches": "Búsquedas Recientes",
     "clearHistory": "Limpiar Historial",
     "startTyping": "Escribe para buscar en Qobuz™",
+    "composer": "Compositor",
+    "label": "Sello",
+    "mainArtist": "Artista Principal",
+    "mostPopular": "Lo más escuchado",
     "noAlbumsFor": "No se encontraron álbumes para \"{query}\"",
     "noTracksFor": "No se encontraron pistas para \"{query}\"",
     "noArtistsFor": "No se encontraron artistas para \"{query}\"",
     "noPlaylistsFor": "No se encontraron listas para \"{query}\"",
+    "performer": "Intérprete",
+    "playlists": "Playlists",
+    "releaseName": "Nombre Publicación",
+    "viewAll": "Ver todo",
     "viewMore": "Ver más"
   },
   "label": {
@@ -333,17 +341,23 @@
     "sceneStep4": "Preparando resultados..."
   },
   "sort": {
-    "nameAZ": "Nombre (A-Z)",
-    "recent": "Reciente",
-    "trackCount": "# de Pistas",
-    "playCount": "Reproducciones",
+    "sort": "Ordenar",
+    "addedRecently": "Fecha de incorporación",
+    "album": "Álbum",
+    "artist": "Artista",
     "custom": "Personalizado",
     "default": "Por defecto",
+    "duration": "Duración",
+    "label": "Sello",
+    "nameAZ": "Nombre (A-Z)",
     "newest": "Más Nuevos",
     "oldest": "Más Antiguos",
+    "playCount": "Reproducciones",
+    "recent": "Reciente",
+    "title": "Título",
     "titleAZ": "Título (A-Z)",
     "titleZA": "Título (Z-A)",
-    "artist": "Artista"
+    "trackCount": "# de Pistas"
   },
   "playlist": {
     "tracks": "pistas",
@@ -422,7 +436,13 @@
       "adding": "Agregando..."
     },
     "suggestSongs": "Sugerir canciones para esta lista",
-    "suggestionsLargePlaylist": "Esta lista tiene muchas pistas. Presiona el botón para generar sugerencias."
+    "suggestionsLargePlaylist": "Esta lista tiene muchas pistas. Presiona el botón para generar sugerencias.",
+    "trackTitle": "Título",
+    "trackAlbum": "Álbum",
+    "trackDuration": "Duración",
+    "trackQuality": "Calidad",
+    "label": "Lista",
+    "playCount": "Reproducciones"
   },
   "favorites": {
     "title": "Favoritos",

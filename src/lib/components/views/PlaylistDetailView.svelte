@@ -1500,14 +1500,14 @@
   }
 
   const sortOptions: { field: SortField; label: string }[] = [
-    { field: 'default', label: 'Default' },
-    { field: 'title', label: 'Title' },
-    { field: 'artist', label: 'Artist' },
-    { field: 'album', label: 'Album' },
-    { field: 'duration', label: 'Duration' },
-    { field: 'added', label: 'Added Recently' },
-    { field: 'label', label: 'Label' },
-    { field: 'custom', label: 'Custom Order' },
+    { field: 'default', label: $t('sort.default') },
+    { field: 'title', label: $t('sort.title') },
+    { field: 'artist', label: $t('sort.artist') },
+    { field: 'album', label: $t('sort.album') },
+    { field: 'duration', label: $t('sort.duration') },
+    { field: 'added', label: $t('sort.addedRecently') },
+    { field: 'label', label: $t('sort.label') },
+    { field: 'custom', label: $t('sort.custom') },
   ];
 
   function formatDuration(seconds: number): string {
@@ -2068,10 +2068,10 @@
   <div class="nav-row">
     <button class="back-btn" onclick={onBack}>
       <ArrowLeft size={16} />
-      <span>Back</span>
+      <span>{$t('actions.back')}</span>
     </button>
     {#if playlist}
-      <button class="edit-btn" onclick={() => editModalOpen = true} title="Edit playlist">
+      <button class="edit-btn" onclick={() => editModalOpen = true} title={$t('playlist.editPlaylist')}>
         <Edit3 size={16} />
       </button>
     {/if}
@@ -2080,13 +2080,13 @@
   {#if loading}
     <div class="loading" class:fading={spinnerFading}>
       <div class="spinner"></div>
-      <p>Loading playlist...</p>
+      <p>{$t('toast.loadingPlaylist')}</p>
     </div>
   {:else if error}
     <div class="error">
-      <p>Failed to load playlist</p>
+      <p>{$t('toast.failedLoadPlaylist')}</p>
       <p class="error-detail">{error}</p>
-      <button class="retry-btn" onclick={loadPlaylist}>Retry</button>
+      <button class="retry-btn" onclick={loadPlaylist}>{$t('actions.retry')}</button>
     </div>
   {:else if playlist}
     <ViewTransition duration={200} distance={12} direction="up">
@@ -2098,7 +2098,7 @@
           <div class="artwork custom-artwork">
             <img src={resolveArtworkPath(customArtworkPath)} alt={playlist.name} />
             <div class="artwork-overlay">
-              <button class="artwork-btn artwork-clear" onclick={clearCustomArtwork} title="Remove custom artwork">
+              <button class="artwork-btn artwork-clear" onclick={clearCustomArtwork} title={$t('playlist.removeCustomArtwork')}>
                 <X size={20} />
               </button>
             </div>
@@ -2110,7 +2110,7 @@
               size={200}
             />
             <div class="artwork-overlay">
-              <button class="artwork-btn" onclick={selectCustomArtwork} title="Set custom artwork">
+              <button class="artwork-btn" onclick={selectCustomArtwork} title={$t('playlist.setCustomArtwork')}>
                 <ImagePlus size={24} />
               </button>
             </div>
@@ -2120,7 +2120,7 @@
 
       <!-- Playlist Metadata -->
       <div class="metadata">
-        <span class="playlist-label">Playlist</span>
+        <span class="playlist-label">{$t('playlist.label')}</span>
         <h1 class="playlist-title">{playlist.name}</h1>
         {#if playlist.description}
           <p class="playlist-description">{@html sanitizeHtml(playlist.description)}</p>
@@ -2128,12 +2128,12 @@
         <div class="playlist-info">
           <span class="owner">{playlist.owner.name}</span>
           <span class="separator">•</span>
-          <span>{totalTrackCount} tracks{#if hasLocalTracks} <span class="local-count">({localTracks.length} local)</span>{/if}</span>
+          <span>{totalTrackCount} {$t('playlist.tracks')}{#if hasLocalTracks} <span class="local-count">({localTracks.length} local)</span>{/if}</span>
           <span class="separator">•</span>
           <span>{formatTotalDuration(totalDuration)}</span>
           {#if playlistStats && playlistStats.play_count > 0}
             <span class="separator">•</span>
-            <span class="play-count" title="Times played">
+            <span class="play-count" title={$t('playlist.playCount')}>
               <BarChart2 size={12} />
               {playlistStats.play_count}
             </span>
@@ -2145,14 +2145,14 @@
           <button
             class="action-btn-circle primary"
             onclick={handlePlayAll}
-            title="Play"
+            title={$t('actions.play')}
           >
             <Play size={20} fill="currentColor" color="currentColor" />
           </button>
           <button
             class="action-btn-circle"
             onclick={handleShuffle}
-            title="Shuffle"
+            title={$t('actions.shuffle')}
           >
             <Shuffle size={18} />
           </button>
@@ -2160,7 +2160,7 @@
             class="action-btn-circle"
             class:is-active={isFavorite}
             onclick={toggleFavorite}
-            title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+            title={isFavorite ? $t('actions.removeFromFavorites') : $t('actions.addToFavorites')}
           >
             <Heart
               size={18}
@@ -2211,7 +2211,7 @@
         <Search size={16} class="search-icon" />
         <input
           type="text"
-          placeholder="Search in playlist..."
+          placeholder={$t('placeholders.searchInPlaylist')}
           bind:value={searchQuery}
           class="search-input"
         />
@@ -2225,7 +2225,7 @@
       <!-- Sort dropdown -->
       <div class="sort-container">
         <button class="sort-btn" onclick={() => showSortMenu = !showSortMenu}>
-          <span>Sort: {sortOptions.find(o => o.field === sortBy)?.label}</span>
+          <span>{$t('sort.sort')}: {sortOptions.find(o => o.field === sortBy)?.label}</span>
           <span class="chevron" class:rotated={showSortMenu}><ChevronDown size={14} /></span>
         </button>
         {#if showSortMenu}
@@ -2287,10 +2287,10 @@
         {/if}
         <div class="col-number">#</div>
         <div class="col-artwork"></div>
-        <div class="col-title">Title</div>
-        <div class="col-album">Album</div>
-        <div class="col-duration">Duration</div>
-        <div class="col-quality">Quality</div>
+        <div class="col-title">{$t('playlist.trackTitle')}</div>
+        <div class="col-album">{$t('playlist.trackAlbum')}</div>
+        <div class="col-duration">{$t('playlist.trackDuration')}</div>
+        <div class="col-quality">{$t('playlist.trackQuality')}</div>
         <div class="col-icon"><Heart size={14} /></div>
         <div class="col-icon"><CloudDownload size={14} /></div>
         <div class="col-spacer"></div>
