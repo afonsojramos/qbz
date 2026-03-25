@@ -279,7 +279,8 @@
     loadSystemNotificationsPreference,
     showTrackNotification,
     updateLastfmNowPlaying,
-    cleanup as cleanupPlayback
+    cleanup as cleanupPlayback,
+    type PlayTrackOptions
   } from '$lib/services/playbackService';
   import {
     isPlaybackSourceLocal,
@@ -388,6 +389,7 @@
   import TitleBarNav from '$lib/components/TitleBarNav.svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import AboutModal from '$lib/components/AboutModal.svelte';
+  import QualityFallbackModal from '$lib/components/QualityFallbackModal.svelte';
   import NowPlayingBar from '$lib/components/NowPlayingBar.svelte';
   import QconnectPanel from '$lib/components/QconnectPanel.svelte';
   import Toast from '$lib/components/Toast.svelte';
@@ -870,6 +872,12 @@
   let isShortcutsModalOpen = $state(false);
   let isKeybindingsSettingsOpen = $state(false);
   let isLinkResolverOpen = $state(false);
+
+  // Quality Fallback Modal State
+  let isQualityFallbackOpen = $state(false);
+  let qualityFallbackTrackTitle = $state('');
+  let qualityFallbackTrack = $state<PlayingTrack | null>(null);
+  let qualityFallbackOptions = $state<PlayTrackOptions>({});
 
   // Track Info Modal State
   let isTrackInfoOpen = $state(false);
@@ -3834,9 +3842,64 @@
     return albumDownloadCache.get(albumId) || false;
   }
 
+  // Quality Fallback Modal handlers
+  async function handleQualityFallbackTryLower() {
+    isQualityFallbackOpen = false;
+    if (qualityFallbackTrack) {
+      await playTrack(qualityFallbackTrack, { ...qualityFallbackOptions, forceLowestQuality: true });
+    }
+  }
+
+  async function handleQualityFallbackSkip() {
+    isQualityFallbackOpen = false;
+    const next = await nextTrack();
+    if (next) {
+      const nextSource = resolvePlaybackSource(next);
+      const nextIsLocal = isPlaybackSourceLocal(nextSource, next.is_local ?? false);
+      const nextSamplingRate = next.sample_rate == null
+        ? undefined
+        : nextIsLocal
+          ? next.sample_rate / 1000
+          : next.sample_rate;
+      await playTrack({
+        id: next.id,
+        title: next.title,
+        artist: next.artist,
+        album: next.album,
+        duration: next.duration_secs,
+        artwork: next.artwork_url || '',
+        quality: next.hires ? 'Hi-Res' : 'CD Quality',
+        albumId: next.album_id || undefined,
+        artistId: next.artist_id || undefined,
+        bitDepth: next.bit_depth || undefined,
+        samplingRate: nextSamplingRate,
+        source: nextSource,
+        isLocal: nextIsLocal
+      }, {
+        isLocal: nextIsLocal,
+        source: nextSource,
+        showLoadingToast: true,
+        showSuccessToast: true
+      });
+    } else {
+      setIsPlaying(false);
+    }
+  }
+
   onMount(() => {
     // Bootstrap app (theme, mouse nav, Last.fm restore)
     const { cleanup: cleanupBootstrap } = bootstrapApp();
+
+    // Quality fallback modal listener
+    function handleQualityFallbackPrompt(e: Event) {
+      const detail = (e as CustomEvent).detail;
+      qualityFallbackTrackTitle = detail.trackTitle;
+      qualityFallbackTrack = detail.track;
+      qualityFallbackOptions = detail.options;
+      isQualityFallbackOpen = true;
+    }
+    window.addEventListener('quality-fallback-prompt', handleQualityFallbackPrompt);
+
     void refreshQobuzConnectRuntimeState();
     const qobuzConnectStatusInterval = setInterval(() => {
       if (isQconnectPanelOpen || isQobuzConnectConnected) {
@@ -4625,6 +4688,7 @@
       unregisterAll(); // Cleanup keybinding actions
       clearInterval(qobuzConnectStatusInterval);
       clearInterval(qconnectPositionReportInterval);
+      window.removeEventListener('quality-fallback-prompt', handleQualityFallbackPrompt);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       stopOfflineCacheEventListeners();
@@ -5725,6 +5789,15 @@
     <AboutModal
       isOpen={isAboutModalOpen}
       onClose={() => isAboutModalOpen = false}
+    />
+
+    <!-- Quality Fallback Modal -->
+    <QualityFallbackModal
+      isOpen={isQualityFallbackOpen}
+      trackTitle={qualityFallbackTrackTitle}
+      onTryLower={handleQualityFallbackTryLower}
+      onSkip={handleQualityFallbackSkip}
+      onClose={() => isQualityFallbackOpen = false}
     />
 
     <!-- Keyboard Shortcuts Modal -->
