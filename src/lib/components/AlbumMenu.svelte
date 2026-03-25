@@ -345,13 +345,13 @@
             {#if onPlayNext}
               <button class="menu-item" onclick={() => handleAction(onPlayNext)}>
                 <ListPlus size={14} />
-                <span>Play next</span>
+                <span>{$t('actions.playNext')}</span>
               </button>
             {/if}
             {#if onPlayLater}
               <button class="menu-item" onclick={() => handleAction(onPlayLater)}>
                 <ListEnd size={14} />
-                <span>Add to queue</span>
+                <span>{$t('actions.addToQueue')}</span>
               </button>
             {/if}
           {/if}
@@ -363,7 +363,7 @@
           {#if hasLibrary}
             <button class="menu-item" onclick={() => handleAction(onAddToPlaylist)}>
               <ListMusic size={14} />
-              <span>Add to playlist</span>
+              <span>{$t('actions.addToPlaylist')}</span>
             </button>
           {/if}
 
@@ -390,7 +390,7 @@
               }}
             >
               <Share2 size={14} />
-              <span>Share</span>
+              <span>{$t('actions.share')}</span>
               <ChevronRight size={14} class="chevron" />
               {#if shareOpen}
                 <div class="submenu" bind:this={submenuEl} style={submenuStyle}>
