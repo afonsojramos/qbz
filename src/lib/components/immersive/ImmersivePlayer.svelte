@@ -282,7 +282,7 @@
 
     switch (e.key) {
       case 'Escape':
-        onClose();
+        handleExitImmersive();
         break;
       case 'F11':
         e.preventDefault();
