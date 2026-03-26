@@ -124,8 +124,8 @@
     "playlists": "Playlists",
     "artists": "Artistes",
     "moreLabels": "Plus de labels",
-    "readMore": "LIRE PLUS",
-    "readLess": "LIRE MOINS",
+    "readMore": "Lire plus",
+    "readLess": "Lire moins",
     "seeAll": "Voir tout",
     "showMore": "Voir plus",
     "showLess": "Voir moins"
@@ -239,6 +239,7 @@
     "noAlbumsInLibrary": "Aucun album dans la bibliothèque",
     "addFoldersHint": "Ajoutez des dossiers et analysez-les pour construire votre bibliothèque",
     "clearAllFilters": "Tout effacer",
+    "source": "Source",
     "offlineCache": "Cache hors ligne",
     "noAlbumsMatch": "Aucun album ne correspond à votre recherche",
     "tryDifferentSearch": "Essayez un autre nom d'artiste ou d'album",
@@ -292,8 +293,8 @@
   "artist": {
     "albums": "Albums",
     "discography": "Discographie",
-    "eps": "EP et singles",
-    "epsSingles": "EP et singles",
+    "eps": "EPs et singles",
+    "epsSingles": "EPs et singles",
     "live": "Albums live",
     "liveAlbums": "Albums live",
     "compilations": "Compilations",
@@ -320,9 +321,9 @@
     "youMayAlsoLike": "VOUS AIMEREZ AUSSI",
     "dismissRecommendation": "Pas une bonne recommandation",
     "founded": "Fondé :",
-    "born": "Né :",
-    "foundedIn": "Fondé à :",
-    "bornIn": "Né à :",
+    "born": "Naissance :",
+    "foundedIn": "À :",
+    "bornIn": "À :",
     "from": "De :",
     "loadingOrigin": "Chargement de l'origine...",
     "sceneFrom": "Scène de {location}",
@@ -331,7 +332,9 @@
     "sceneStep1": "Recherche d'artistes {genre} sur MusicBrainz...",
     "sceneStep2": "Analyse de l'affinité de genre de {count} candidats...",
     "sceneStep3": "Vérification de la disponibilité sur Qobuz...",
-    "sceneStep4": "Préparation des résultats..."
+    "sceneStep4": "Préparation des résultats...",
+    "jumpTo": "Aller à",
+    "about": "À propos"
   },
   "sort": {
     "sort": "Tri",
@@ -489,7 +492,7 @@
     "searchFolders": "Rechercher des dossiers...",
     "searchPlaylists": "Rechercher des playlists...",
     "searchAlbums": "Rechercher des albums...",
-    "searchInPage": "Rechercher dans cette page...",
+    "searchInPage": "Rechercher dans la page...",
     "searchInPlaylist": "Rechercher dans la playlist...",
     "filterFolders": "Filtrer les dossiers...",
     "myPlaylist": "Ma playlist",
@@ -656,7 +659,10 @@
     "expand": "Développer la barre latérale",
     "moreOptions": "Plus d'options",
     "shareQobuz": "Partager (Qobuz)",
-    "albumCredits": "Crédits de l'album"
+    "albumCredits": "Crédits de l'album",
+    "radio": {
+      "startArtistRadio" : "Lancer la radio de l'artiste"
+    }
   },
   "settings": {
     "title": "Paramètres",
@@ -1354,6 +1360,7 @@
     "loadingAlbum": "Chargement de l'album...",
     "loadingArtist": "Chargement de l'artiste...",
     "loadingPlaylist": "Chargement de la playlist...",
+    "loadingTracks": "Chargement des titres...",
     "lookingUp": "Recherche de {name}...",
     "failedLoadAlbum": "Échec du chargement de l'album",
     "failedLoadArtist": "Échec du chargement de l'artiste",

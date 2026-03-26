@@ -340,7 +340,9 @@
     "sceneStep1": "Searching MusicBrainz for {genre} artists...",
     "sceneStep2": "Analyzing genre affinity across {count} candidates...",
     "sceneStep3": "Verifying availability on Qobuz...",
-    "sceneStep4": "Preparing results..."
+    "sceneStep4": "Preparing results...",
+    "jumpTo": "Jump to",
+    "about": "About"
   },
   "sort": {
     "sort": "Sort",
@@ -683,7 +685,11 @@
     "expand": "Expand sidebar",
     "moreOptions": "More options",
     "shareQobuz": "Share (Qobuz)",
-    "albumCredits": "Album credits"
+    "albumCredits": "Album credits",
+    "startArtistRadio" : "Start Artist Radio",
+    "radio": {
+      "startArtistRadio" : "Lancer la radio de l'artiste"
+    }
   },
   "settings": {
     "title": "Settings",
@@ -1438,6 +1444,7 @@
     "loadingAlbum": "Loading album...",
     "loadingArtist": "Loading artist...",
     "loadingPlaylist": "Loading playlist...",
+    "loadingTracks": "Loading tracks...",
     "lookingUp": "Looking up {name}...",
     "failedLoadAlbum": "Failed to load album",
     "failedLoadArtist": "Failed to load artist",
