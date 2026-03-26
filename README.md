@@ -10,6 +10,7 @@
   <a href="https://flathub.org/apps/com.blitzfc.qbz"><img src="https://img.shields.io/flathub/v/com.blitzfc.qbz?style=flat-square&logo=flathub" alt="Flathub" /></a>
   <a href="https://github.com/vicrodh/qbz"><img src="https://img.shields.io/github/license/vicrodh/qbz?style=flat-square" alt="License" /></a>
   <a href="https://github.com/vicrodh/qbz"><img src="https://img.shields.io/badge/platform-Linux-0b0b0b?style=flat-square&logo=linux" alt="Platform" /></a>
+  <a href="https://github.com/vicrodh/qbz"><img src="https://img.shields.io/badge/macOS-experimental-0b0b0b?style=flat-square&logo=apple" alt="macOS (experimental)" /></a>
 </p>
 
 <p align="center">
@@ -18,7 +19,7 @@
 
 # QBZ
 
-QBZ is a free and open source high-fidelity streaming client for Linux with native playback. It is a real desktop application — not a web wrapper — with DAC passthrough, per-track sample rate switching, exclusive mode, and bit-perfect audio delivery.
+QBZ is a free and open source high-fidelity streaming client for Linux (with experimental macOS support) with native playback. It is a real desktop application — not a web wrapper — with DAC passthrough, per-track sample rate switching, exclusive mode, and bit-perfect audio delivery.
 
 No API keys needed. No telemetry. No tracking. Just music.
 
@@ -89,6 +90,14 @@ emerge media-sound/qbz        # build from source
 ### AppImage
 
 Download from [Releases](https://github.com/vicrodh/qbz/releases): `chmod +x QBZ.AppImage && ./QBZ.AppImage`
+
+### macOS (Experimental)
+
+> **QBZ is a Linux-first application.** macOS support is experimental and limited. Features like PipeWire, ALSA Direct, casting, and device control are unavailable. Thanks to [@afonsojramos](https://github.com/afonsojramos) for maintaining the macOS port.
+
+Download the unsigned DMG from [Releases](https://github.com/vicrodh/qbz/releases) (Apple Silicon only).
+
+Since the DMG is unsigned, you may need to allow it in System Settings > Privacy & Security after first launch.
 
 ## Features
 
@@ -197,7 +206,7 @@ crates/
 
 ### Prerequisites
 
-- Rust (latest stable), Node.js 20+, Linux with audio support
+- Rust (latest stable), Node.js 20+, Linux or macOS with audio support
 
 ### System Dependencies
 
@@ -222,7 +231,7 @@ sudo pacman -S webkit2gtk-4.1 gtk3 alsa-lib libappindicator-gtk3 \
 **Gentoo:**
 ```bash
 sudo emerge net-libs/webkit-gtk:4.1 x11-libs/gtk+:3 media-libs/alsa-lib \
-  dev-libs/libappindicator:3 gnome-base/librsvg dev-libs/openssl virtual/pkgconfig
+  dev-libs/libayatana-appindicator gnome-base/librsvg dev-libs/openssl virtual/pkgconfig
 ```
 
 ### Build
@@ -283,7 +292,7 @@ User guides, audio configuration, integrations, and troubleshooting: **[QBZ Wiki
 
 ## Open Source
 
-QBZ is MIT-licensed. No telemetry, no tracking, no hidden services. Built for Linux audio enthusiasts.
+QBZ is MIT-licensed. No telemetry, no tracking, no hidden services. Built for Linux audio enthusiasts, with experimental macOS support.
 
 ## Contributing
 
