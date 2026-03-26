@@ -913,7 +913,7 @@
     if (item.hires && item.maximum_bit_depth && item.maximum_sampling_rate) {
       return `${item.maximum_bit_depth}bit/${item.maximum_sampling_rate}kHz`;
     }
-    return item.hires ? 'Hi-Res' : 'CD Quality';
+    return item.hires ? 'Hi-Res' : $t('quality.cdQuality');
   }
 
   const alphaIndexLetters = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];

@@ -685,7 +685,7 @@
     if (track.hires_streamable && track.maximum_bit_depth && track.maximum_sampling_rate) {
       return `${track.maximum_bit_depth}bit/${track.maximum_sampling_rate}kHz`;
     }
-    return 'CD Quality';
+    return $t('quality.cdQuality');
   }
 
   function getAlbumArtwork(album: Album): string {

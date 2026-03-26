@@ -3811,7 +3811,7 @@
       </div>
       <Dropdown
         value={streamingQuality}
-        options={['MP3', 'CD Quality', 'Hi-Res', 'Hi-Res+']}
+        options={['MP3', $t('quality.cdQuality'), 'Hi-Res', 'Hi-Res+']}
         onchange={handleQualityChange}
       />
     </div>
