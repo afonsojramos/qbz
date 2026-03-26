@@ -1,6 +1,6 @@
 # 1.2.1 — Resilience
 
-This release focuses on **resilience against Qobuz server issues**, the **macOS port foundation**, and a wave of fixes across offline mode, graphics compositing, and QConnect.
+A stability release focused on **resilience against Qobuz server issues**, with a completely rewritten retry system, and a wave of fixes across offline mode, graphics compositing, and QConnect.
 
 ---
 
@@ -25,17 +25,6 @@ Completely rewritten retry logic for audio downloads. When Qobuz CDN returns err
 
   - **Clickable offline indicator** — the yellow offline icon in the player bar is now a button that forces an immediate network check
   - **Check Now button** in Settings > Offline section
-
-## macOS Port (Foundation)
-
-Initial support for building and running QBZ on macOS. Not yet feature-complete, but the foundation is in place.
-
-  - Gate Linux-only audio backends, commands, and network modules with `cfg(target_os)`
-  - Native title bar adaptation for macOS
-  - SystemDefault audio backend variant
-  - macOS CI workflow (unsigned DMG, aarch64)
-  - notify-rust for desktop notifications on macOS
-  - 16-bit PNG to 8-bit conversion for Tauri icon compatibility
 
 ## Offline Mode Improvements
 
@@ -70,6 +59,17 @@ Initial support for building and running QBZ on macOS. Not yet feature-complete,
   - Platform dropdown in GitHub issue templates (Linux/macOS) with auto-triage
   - Contributors: added afonsojramos (macOS) and GwendalBeaumont (i18n)
   - i18n: hardcoded strings replaced in SearchView, PlaylistDetailView, AlbumMenu
+
+## macOS Port (Foundation)
+
+QBZ is a Linux-first application. Initial macOS support is experimental and limited. Thanks to [@afonsojramos](https://github.com/afonsojramos) for driving this effort.
+
+  - Gate Linux-only audio backends, commands, and network modules with `cfg(target_os)`
+  - Native title bar adaptation for macOS
+  - SystemDefault audio backend variant
+  - macOS CI workflow (unsigned DMG, aarch64)
+  - notify-rust for desktop notifications on macOS
+  - 16-bit PNG to 8-bit conversion for Tauri icon compatibility
 
 ## Distribution
 
