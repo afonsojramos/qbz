@@ -326,7 +326,8 @@
     "customImageRemoved": "Custom artist image removed",
     "customImageError": "Failed to update artist image",
     "imageSaved": "Artist image saved",
-    "youMayAlsoLike": "YOU MAY ALSO LIKE",
+    "labels": "Labels",
+    "youMayAlsoLike": "You may also like",
     "dismissRecommendation": "Not a good recommendation",
     "founded": "Founded:",
     "born": "Born:",
@@ -342,7 +343,17 @@
     "sceneStep3": "Verifying availability on Qobuz...",
     "sceneStep4": "Preparing results...",
     "jumpTo": "Jump to",
-    "about": "About"
+    "about": "About",
+    "artistIsBlacklisted": "Show this artist in searches, playlists, discover, etc.",
+    "artistIsNotBlacklisted": "Don't show this artist in searches, playlists, discover, etc.",
+    "manageBlacklistFromSettings": "Blacklist can be managed from settings.",
+    "blacklistBanner": "This artist is hidden. Their music won't appear in search, radio, or suggestions.",
+    "search": {
+      "previousResult": "Previous result",
+      "nextResult": "Next result",
+      "close": "Close search",
+      "searchInPage": "Search in this page"
+    }
   },
   "sort": {
     "sort": "Sort",
@@ -496,7 +507,11 @@
     "moveDown": "Move down",
     "save": "Save",
     "saving": "Saving...",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "footer": {
+      "viewCompilationsAndContent": "PTo view compilations and other content",
+      "goToArtistPage": "go to {artist}'s page"
+    }
   },
   "placeholders": {
     "search": "Search...",
@@ -689,6 +704,15 @@
     "startArtistRadio" : "Start Artist Radio",
     "radio": {
       "startArtistRadio" : "Lancer la radio de l'artiste"
+    },
+    "previousAlbums": "Previous albums",
+    "nextAlbums": "Next albums",
+    "artistNetwork": "Artist network",
+    "hide": {
+      "hideArtist": "Hide artist",
+      "hideArtistOptions": "Hide artist options",
+      "hiddenArtist": "Hidden artist",
+      "showArtist": "Show artist"
     }
   },
   "settings": {
@@ -1616,6 +1640,10 @@
     "collapse": "Collapse",
     "expand": "Expand",
     "clearFilter": "Clear filter"
+  },
+  "keys": {
+    "enter": "Enter",
+    "shift": "Shift"
   },
   "keybindings": {
     "title": "Keyboard Shortcuts",
