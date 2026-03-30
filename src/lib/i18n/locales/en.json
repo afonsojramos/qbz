@@ -1405,6 +1405,7 @@
     "APIUse": "This application uses the Qobuz API but is not certified by Qobuz."
   },
   "legal": {
+    "brandingLine": "This application uses the Qobuz API but is not certified by Qobuz™.",
     "brandingLineSuffix": "",
     "tosAgreementPrefix": "I have read the",
     "tosLinkText": "Qobuz™ Terms of Service",
@@ -2253,5 +2254,33 @@
     "rememberChoice": "Remember my choice",
     "autoRetrying": "Retrying at lower quality...",
     "autoSkipping": "Skipping track (server issue)..."
+  },
+  "about": {
+    "description": "A native music streaming client for Linux, designed for audiophiles who need bit-perfect Hi-Fi playback without browser sample rate limitations.",
+    "release": "Release",
+    "website": "Website",
+    "buildInfo": {
+      "heading": "Build Info",
+      "version": "Version",
+      "codename": "Codename",
+      "license": "License",
+      "platform": "Platform",
+      "build": "Build"
+    },
+    "attributions": {
+      "heading": "Acknowledgments",
+      "qobuzDesc": "Music streaming service and API",
+      "tauriDesc": "Application framework",
+      "svelteDesc": "UI framework",
+      "rodioSymphoniaDesc": "Audio playback engine",
+      "lucideDesc": "Icon library",
+      "musicBrainzDesc": "Music metadata database",
+      "songLinkOdesliDesc": "Music link aggregation API",
+      "lrclibDesc": "Synced lyrics provider",
+      "lyricsOVHDesc": "Lyrics API"
+    },
+    "author": "Author",
+    "contributors": "Contributors",
+    "signatureDetail": "Hatred towards all those companies that discriminate against the Linux community and don't provide us with a decent client for their product."
   }
 }

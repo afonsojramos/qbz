@@ -1,5 +1,6 @@
 <script lang="ts">
   import { X, Github, Globe, ExternalLink } from 'lucide-svelte';
+  import { t } from 'svelte-i18n';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { getName, getVersion } from '@tauri-apps/api/app';
   import { onMount } from 'svelte';
@@ -67,8 +68,7 @@
       <div class="modal-content">
         <!-- Description -->
         <p class="description">
-          A native music streaming client for Linux, designed for audiophiles who need
-          bit-perfect Hi-Fi playback without browser sample rate limitations.
+          {$t('about.description')}
         </p>
 
         <QobuzLegalNotice showCheckbox={false} />
@@ -82,70 +82,70 @@
           </button>
           <button class="link-btn" onclick={() => handleOpenUrl(releaseUrl)}>
             <ExternalLink size={16} />
-            <span>Release</span>
+            <span>{$t('about.release')}</span>
             <ExternalLink size={12} />
           </button>
           <button class="link-btn" onclick={() => handleOpenUrl('https://qbz.lol')}>
             <Globe size={16} />
-            <span>Website</span>
+            <span>{$t('about.website')}</span>
             <ExternalLink size={12} />
           </button>
         </div>
 
         <!-- Build Info -->
         <div class="info-section">
-          <h3>Build Info</h3>
+          <h3>{$t('about.buildInfo.heading')}</h3>
           <div class="info-grid">
-            <span class="label">Version</span>
+            <span class="label">{$t('about.buildInfo.version')}</span>
             <span class="value">{appVersion}</span>
-            <span class="label">Codename</span>
+            <span class="label">{$t('about.buildInfo.codename')}</span>
             <span class="value codename">Limpiando la casa</span>
-            <span class="label">License</span>
+            <span class="label">{$t('about.buildInfo.license')}</span>
             <span class="value">MIT</span>
-            <span class="label">Platform</span>
+            <span class="label">{$t('about.buildInfo.license')}</span>
             <span class="value">{platformLabel}</span>
-            <span class="label">Build</span>
-            <span class="value">{BUILD_DATE}{#if BUILD_COMMIT} <span class="commit">({BUILD_COMMIT})</span>{/if}</span>
+            <span class="label">{$t('about.buildInfo.build')}</span>
+            <span class="value">{BUILD_DATE} {#if BUILD_COMMIT}<span class="commit">({BUILD_COMMIT})</span>{/if}</span>
           </div>
         </div>
 
         <!-- Attributions -->
         <div class="info-section">
-          <h3>Acknowledgments</h3>
+          <h3>{$t('about.attributions.heading')}</h3>
           <div class="attributions">
             <div class="attribution">
-              <strong>Qobuz™</strong> — Music streaming service and API
+              <strong>Qobuz™</strong> — {$t('about.attributions.qobuzDesc')}
             </div>
             <div class="attribution">
-              <strong>Tauri</strong> — Application framework (MIT/Apache-2.0)
+              <strong>Tauri</strong> — {$t('about.attributions.tauriDesc')} (MIT/Apache-2.0)
             </div>
             <div class="attribution">
-              <strong>Svelte</strong> — UI framework (MIT)
+              <strong>Svelte</strong> — {$t('about.attributions.svelteDesc')} (MIT)
             </div>
             <div class="attribution">
-              <strong>Rodio + Symphonia</strong> — Audio playback engine
+              <strong>Rodio + Symphonia</strong> — {$t('about.attributions.rodioSymphoniaDesc')}
             </div>
             <div class="attribution">
-              <strong>Lucide</strong> — Icon library (ISC)
+              <strong>Lucide</strong> — {$t('about.attributions.lucideDesc')} (ISC)
             </div>
             <div class="attribution">
-              <strong>MusicBrainz</strong> — Music metadata database
+              <strong>MusicBrainz</strong> — {$t('about.attributions.musicBrainzDesc')}
             </div>
             <div class="attribution">
-              <strong>Song.link/Odesli</strong> — Music link aggregation API
+              <strong>Song.link/Odesli</strong> — {$t('about.attributions.songLinkOdesliDesc')}
             </div>
             <div class="attribution">
-              <strong>LRCLIB</strong> — Synced lyrics provider
+              <strong>LRCLIB</strong> — {$t('about.attributions.lrclibDesc')}
             </div>
             <div class="attribution">
-              <strong>lyrics.ovh</strong> — Lyrics API
+              <strong>lyrics.ovh</strong> — {$t('about.attributions.lyricsOVHDesc')}
             </div>
           </div>
         </div>
 
         <!-- Author -->
         <div class="info-section author-section">
-          <h3>Author</h3>
+          <h3>{$t('about.author')}</h3>
           <button class="author-pill" onclick={() => handleOpenUrl('https://github.com/vicrodh')}>
             <img src="https://github.com/vicrodh.png?size=32" alt="vicrodh" class="author-avatar" />
             vicrodh
@@ -155,7 +155,7 @@
 
         <!-- Contributors -->
         <div class="info-section">
-          <h3>Contributors</h3>
+          <h3>{$t('about.contributors')}</h3>
           <div class="contributors">
             <button class="contributor-link" onclick={() => handleOpenUrl('https://github.com/vorce')}>
               <img src="https://github.com/vorce.png?size=28" alt="vorce" class="contributor-avatar" />
@@ -192,9 +192,7 @@
             <img src="/mexico-flag.svg" alt="México" class="inline-icon flag" />
           </p>
           <p class="signature-detail">
-            Hatred towards all those companies that discriminate against the Linux community
-            and don't provide us with a decent client for their product.
-            <img src="/Tux.svg" alt="Tux" class="inline-icon tux" class:mac-tux={isMac} />
+            {$t('about.signatureDetail')} <img src="/Tux.svg" alt="Tux" class="inline-icon tux" class:mac-tux={isMac} />
           </p>
         </div>
       </div>

@@ -1335,11 +1335,12 @@
     "APIUse": "Cette application utilise l'API Qobuz™ mais n'est pas certifiée par Qobuz™."
   },
   "legal": {
+    "brandingLine": "Cette application utilise l'API Qobuz, mais n'est pas certifiée par Qobuz™.",
     "brandingLineSuffix": "",
     "tosAgreementPrefix": "J'ai lu les",
     "tosLinkText": "Conditions d'utilisation de Qobuz™",
     "tosRequiredToLogin": "Veuillez confirmer que vous avez lu les Conditions d'utilisation de Qobuz™ pour continuer.",
-    "trademarkNotice": "Qobuz™ est une marque de Qobuz. QBZ n'est pas affilié, approuvé ou certifié par Qobuz."
+    "trademarkNotice": "Qobuz™ est une marque de Qobuz. QBZ n'est pas affilié, approuvé ou certifié par Qobuz™."
   },
   "notifications": {
     "trackAdded": "Titre ajouté à la file d'attente",
@@ -2080,5 +2081,33 @@
     "rememberChoice": "Se souvenir de mon choix",
     "autoRetrying": "Nouvel essai avec une qualité inférieure...",
     "autoSkipping": "Titre passé (problème serveur)..."
+  },
+  "about": {
+    "description": "Un client de streaming musical natif pour Linux, conçu pour les audiophiles qui recherchent une lecture Hi-Fi sans perte et sans les limitations de fréquence d'échantillonnage des navigateurs.",
+    "release": "Release",
+    "website": "Site web",
+    "buildInfo": {
+      "heading": "Informations de compilation",
+      "version": "Version",
+      "codename": "Nom de code",
+      "license": "Licence",
+      "platform": "Platforme",
+      "build": "Compilation"
+    },
+    "attributions": {
+      "heading": "Remerciements",
+      "qobuzDesc": "Service de streaming musical et API",
+      "tauriDesc": "Framework d'application",
+      "svelteDesc": "Framework d'UI",
+      "rodioSymphoniaDesc": "Moteur de lecture audio",
+      "lucideDesc": "Bibliothèque d'icônes",
+      "musicBrainzDesc": "Base de donnée de données musicales",
+      "songLinkOdesliDesc": "API d'aggrégation musicale",
+      "lrclibDesc": "Fournisseur de paroles synchronisées",
+      "lyricsOVHDesc": "API de paroles"
+    },
+    "author": "Auteur",
+    "contributors": "Contributeurs",
+    "signatureDetail": "Haine envers toutes ces entreprises qui font preuve de discrimination envers la communauté Linux et qui ne fournissent pas de client digne de ce nom pour leur produit."
   }
 }
