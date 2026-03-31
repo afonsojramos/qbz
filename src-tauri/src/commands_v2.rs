@@ -11902,7 +11902,7 @@ fn spawn_track_cache_download(
                 let (bit_depth_detected, sample_rate_detected) =
                     match lofty::read_from_path(&new_path) {
                         Ok(tagged_file) => {
-                            use lofty::AudioFile;
+                            use lofty::prelude::*;
                             let properties = tagged_file.properties();
                             (
                                 properties.bit_depth().map(|bd| bd as u32),

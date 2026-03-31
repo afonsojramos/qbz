@@ -64,7 +64,7 @@ async fn post_process_cached_track(
     };
 
     // 6. Extract audio properties from FLAC file
-    use lofty::AudioFile;
+    use lofty::prelude::*;
     let (bit_depth, sample_rate) = match lofty::read_from_path(&new_path) {
         Ok(tagged_file) => {
             let properties = tagged_file.properties();
