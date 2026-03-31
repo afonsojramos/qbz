@@ -465,8 +465,16 @@ fn try_init_stream_with_backend(
     sample_rate: u32,
     channels: u16,
 ) -> Option<Result<StreamType, String>> {
-    // Check if backend system is configured
-    let backend_type = audio_settings.backend_type?;
+    // Check if backend system is configured.
+    // On non-Linux, default to SystemDefault when not explicitly set,
+    // so macOS gets CoreAudio device probing and sample rate switching.
+    let backend_type = audio_settings.backend_type.or_else(|| {
+        if cfg!(not(target_os = "linux")) {
+            Some(qbz_audio::AudioBackendType::SystemDefault)
+        } else {
+            None
+        }
+    })?;
 
     log::info!(
         "Using backend system: {:?} (device: {:?}, plugin: {:?})",
