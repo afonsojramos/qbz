@@ -81,6 +81,7 @@ interface PlaybackEvent {
   normalization_gain: number | null;  // Active normalization gain factor (null = not applied)
   gapless_ready: boolean;       // Backend wants next track queued for gapless
   gapless_next_track_id: number; // Track ID queued for gapless (0 = none)
+  buffer_progress?: number | null; // Streaming buffer progress (0-1, null = fully cached)
 }
 
 // Queue track from backend (for external track sync)

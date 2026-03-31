@@ -280,6 +280,7 @@
     showTrackNotification,
     updateLastfmNowPlaying,
     cleanup as cleanupPlayback,
+    updateMediaMetadata,
     type PlayTrackOptions
   } from '$lib/services/playbackService';
   import {
@@ -3560,6 +3561,27 @@
               samplingRate: track.sample_rate ?? undefined,
             });
 
+            // Update MPRIS metadata so playerctl shows track info
+            updateMediaMetadata({
+              title: track.title,
+              artist: track.artist,
+              album: track.album,
+              durationSecs: track.duration_secs,
+              coverUrl: track.artwork_url || null
+            });
+
+            // Restore playback context (album, playlist, etc.)
+            try {
+              const savedCtx = localStorage.getItem('qbz-playback-context');
+              if (savedCtx) {
+                const ctx = JSON.parse(savedCtx);
+                await setPlaybackContext(ctx.type, ctx.id, ctx.label, ctx.source, ctx.track_ids, ctx.current_position);
+                console.log(`[Session] Playback context restored: ${ctx.type} · ${ctx.label}`);
+              }
+            } catch {
+              console.debug('[Session] Could not restore playback context');
+            }
+
             // First play will load a fresh stream instead of seeking
             setPendingSessionRestore(track.id);
             console.log(`[Session] Track ${track.id} restored visually (paused at 0:00)`);
@@ -3752,6 +3774,14 @@
         viewContextId,
         viewContextType
       );
+
+      // Persist playback context for session restore
+      const ctx = getCurrentContext();
+      if (ctx) {
+        localStorage.setItem('qbz-playback-context', JSON.stringify(ctx));
+      } else {
+        localStorage.removeItem('qbz-playback-context');
+      }
       console.log('[Session] Session saved on close');
     } catch (err) {
       console.error('[Session] Failed to save session on close:', err);
