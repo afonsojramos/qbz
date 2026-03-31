@@ -910,6 +910,7 @@
   let isFavorite = $state(false);
   let normalizationEnabled = $state(false);
   let normalizationGain = $state<number | null>(null);
+  let bufferProgress = $state<number | null>(null);
   let isAlsaDirectHw = $state(false); // ALSA Direct hw: locks volume to 100%
   // Queue/Shuffle State (from queueStore subscription)
   let isShuffle = $state(false);
@@ -4189,6 +4190,7 @@
       const wasPlaying = isPlaying;
       volume = playerState.volume;
       normalizationGain = playerState.normalizationGain;
+      bufferProgress = playerState.bufferProgress;
       if (remotePeerActive) {
         return;
       }
@@ -5667,6 +5669,7 @@
         qconnectBusy={qobuzConnectBusy}
         {showQconnectDevButton}
         volumeLocked={isAlsaDirectHw && !qconnectPeerRendererActive}
+        {bufferProgress}
       />
     {:else}
       <NowPlayingBar

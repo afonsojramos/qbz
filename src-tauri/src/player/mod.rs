@@ -580,6 +580,9 @@ pub struct PlaybackEvent {
     /// Track ID of the gapless-queued next track (0 = none queued)
     #[serde(default)]
     pub gapless_next_track_id: u64,
+    /// Streaming buffer progress (0.0-1.0), None when fully cached
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buffer_progress: Option<f32>,
 }
 
 /// Shared state between main thread and audio thread
@@ -2776,6 +2779,7 @@ impl Player {
             normalization_gain: self.state.get_normalization_gain(),
             gapless_ready: self.state.is_gapless_ready(),
             gapless_next_track_id: self.state.get_gapless_next_track_id(),
+            buffer_progress: None, // Legacy player doesn't track streaming buffer
         }
     }
 }

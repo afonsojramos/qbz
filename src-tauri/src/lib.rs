@@ -911,6 +911,7 @@ pub fn run() {
                         normalization_gain,
                         gapless_ready,
                         gapless_next_track_id,
+                        buffer_progress,
                     ) = if let Some(ref v2_state) = v2_state_opt {
                         let v2_track_id = v2_state.current_track_id();
                         if v2_track_id != 0 {
@@ -926,6 +927,7 @@ pub fn run() {
                                 v2_state.get_normalization_gain(),
                                 v2_state.is_gapless_ready(),
                                 v2_state.get_gapless_next_track_id(),
+                                v2_state.get_buffer_progress(),
                             )
                         } else {
                             // Fallback to legacy player
@@ -940,6 +942,7 @@ pub fn run() {
                                 legacy_player_state.get_normalization_gain(),
                                 legacy_player_state.is_gapless_ready(),
                                 legacy_player_state.get_gapless_next_track_id(),
+                                None,
                             )
                         }
                     } else {
@@ -955,6 +958,7 @@ pub fn run() {
                             legacy_player_state.get_normalization_gain(),
                             legacy_player_state.is_gapless_ready(),
                             legacy_player_state.get_gapless_next_track_id(),
+                            None,
                         )
                     };
 
@@ -999,6 +1003,7 @@ pub fn run() {
                             normalization_gain,
                             gapless_ready,
                             gapless_next_track_id,
+                            buffer_progress,
                         };
                         let _ = app_handle.emit("playback:state", &event);
                         api_server::broadcast_playback_event(&app_handle, &event);
