@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import {
     ChevronRight,
-    MoreHorizontal,
+    Ellipsis,
     Play,
     ListPlus,
     ListEnd,
@@ -477,7 +477,7 @@
       }}
       aria-label="Track actions"
     >
-      <MoreHorizontal size={18} />
+      <Ellipsis size={18} />
     </button>
 
     {#if isOpen}

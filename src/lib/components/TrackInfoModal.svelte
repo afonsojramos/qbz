@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { X, Loader2 } from 'lucide-svelte';
+  import { X, LoaderCircle } from 'lucide-svelte';
   import type { TrackInfo, Performer } from '$lib/types';
 
   interface Props {
@@ -166,7 +166,7 @@
     <div class="track-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
       {#if loading}
         <div class="loading-state">
-          <Loader2 size={32} class="spinner" />
+          <LoaderCircle size={32} class="spinner" />
           <span>Loading track info...</span>
         </div>
       {:else if error}

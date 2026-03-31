@@ -9,7 +9,7 @@
     Heart,
     Volume2,
     VolumeX,
-    MoreHorizontal,
+    Ellipsis,
     Infinity,
     Maximize,
     Minimize2,
@@ -311,7 +311,7 @@
             onclick={toggleMenu}
             title={$t('actions.moreOptions')}
           >
-            <MoreHorizontal size={12} />
+            <Ellipsis size={12} />
           </button>
           {#if menuOpen}
             <div class="window-menu" bind:this={menuRef}>

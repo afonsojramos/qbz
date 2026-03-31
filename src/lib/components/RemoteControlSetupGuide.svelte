@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X, CheckCircle, Smartphone, Shield, Key, QrCode, Wifi } from 'lucide-svelte';
+  import { X, CircleCheckBig, Smartphone, Shield, Key, QrCode, Wifi } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import WizardStepper, { type Step } from './wizard/WizardStepper.svelte';
 
@@ -139,19 +139,19 @@
 
               <div class="feature-list">
                 <div class="feature-item">
-                  <CheckCircle size={16} class="feature-check" />
+                  <CircleCheckBig size={16} class="feature-check" />
                   <span>{$t('remoteControlWizard.welcome.feature1')}</span>
                 </div>
                 <div class="feature-item">
-                  <CheckCircle size={16} class="feature-check" />
+                  <CircleCheckBig size={16} class="feature-check" />
                   <span>{$t('remoteControlWizard.welcome.feature2')}</span>
                 </div>
                 <div class="feature-item">
-                  <CheckCircle size={16} class="feature-check" />
+                  <CircleCheckBig size={16} class="feature-check" />
                   <span>{$t('remoteControlWizard.welcome.feature3')}</span>
                 </div>
                 <div class="feature-item">
-                  <CheckCircle size={16} class="feature-check" />
+                  <CircleCheckBig size={16} class="feature-check" />
                   <span>{$t('remoteControlWizard.welcome.feature4')}</span>
                 </div>
               </div>
@@ -342,7 +342,7 @@
 
           {:else if currentStep === 'done'}
             <div class="done-content">
-              <CheckCircle size={64} class="done-icon" />
+              <CircleCheckBig size={64} class="done-icon" />
 
               <p class="body-text pwa-hint">{$t('remoteControlWizard.done.pwaHint')}</p>
 

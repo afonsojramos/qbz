@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, MoreHorizontal, ArrowUpDown, ChevronRight, ChevronLeft, Folder, FolderPlus, X, User, Disc, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
+  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, Folder, FolderPlus, X, User, Disc, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
   import type { FavoritesPreferences } from '$lib/types';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
@@ -1611,7 +1611,7 @@
               onclick={(e) => { e.stopPropagation(); toggleMenu(); }}
               title={$t('actions.more')}
             >
-              <MoreHorizontal size={14} />
+              <Ellipsis size={14} />
             </button>
             <button class="icon-btn" onclick={() => { playlistsCollapsed = !playlistsCollapsed; saveSidebarCollapseState(); }} title={playlistsCollapsed ? $t('actions.open') : $t('actions.close')}>
               {#if playlistsCollapsed}

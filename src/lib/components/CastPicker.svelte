@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount, onDestroy } from 'svelte';
-  import { X, Cast, Loader2, Monitor, Wifi, Tv, Speaker, Power } from 'lucide-svelte';
+  import { X, Cast, LoaderCircle, Monitor, Wifi, Tv, Speaker, Power } from 'lucide-svelte';
   import {
     subscribe as subscribeCast,
     getCastState,
@@ -229,12 +229,12 @@
         <div class="content">
           {#if connecting}
             <div class="loading">
-              <Loader2 size={32} class="spin" />
+              <LoaderCircle size={32} class="spin" />
               <p>Connecting...</p>
             </div>
           {:else if loading && devices().length === 0}
             <div class="loading">
-              <Loader2 size={32} class="spin" />
+              <LoaderCircle size={32} class="spin" />
               <p>Searching for devices...</p>
             </div>
           {:else if error}

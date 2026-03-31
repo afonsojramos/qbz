@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { locale } from 'svelte-i18n';
-  import { Play, ChevronDown, ChevronUp, Loader2, X } from 'lucide-svelte';
+  import { Play, ChevronDown, ChevronUp, LoaderCircle, X } from 'lucide-svelte';
   import type { AlbumCredits, QobuzAlbum, Performer, TrackCredits } from '$lib/types';
 
   interface Props {
@@ -175,7 +175,7 @@
     <div class="credits-modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
       {#if loading}
         <div class="loading-state">
-          <Loader2 size={32} class="spinner" />
+          <LoaderCircle size={32} class="spinner" />
           <span>Loading credits...</span>
         </div>
       {:else if error}

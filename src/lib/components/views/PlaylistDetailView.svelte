@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft, Play, Shuffle, ListMusic, Search, X, ChevronDown, ChevronRight, ChevronUp, ImagePlus, Edit3, BarChart2, Heart, CloudDownload, ListPlus, GripVertical, CheckSquare, Bookmark } from 'lucide-svelte';
+  import { ArrowLeft, Play, Shuffle, ListMusic, Search, X, ChevronDown, ChevronRight, ChevronUp, ImagePlus, PenLine, ChartNoAxesColumn, Heart, CloudDownload, ListPlus, GripVertical, SquareCheckBig, Bookmark } from 'lucide-svelte';
   import AlbumMenu from '../AlbumMenu.svelte';
   import PlaylistCollage from '../PlaylistCollage.svelte';
   import PlaylistModal from '../PlaylistModal.svelte';
@@ -2072,7 +2072,7 @@
     </button>
     {#if playlist}
       <button class="edit-btn" onclick={() => editModalOpen = true} title={$t('playlist.editPlaylist')}>
-        <Edit3 size={16} />
+        <PenLine size={16} />
       </button>
     {/if}
   </div>
@@ -2134,7 +2134,7 @@
           {#if playlistStats && playlistStats.play_count > 0}
             <span class="separator">•</span>
             <span class="play-count" title={$t('playlist.playCount')}>
-              <BarChart2 size={12} />
+              <ChartNoAxesColumn size={12} />
               {playlistStats.play_count}
             </span>
           {/if}
@@ -2253,7 +2253,7 @@
         onclick={toggleMultiSelectMode}
         title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
       >
-        <CheckSquare size={16} />
+        <SquareCheckBig size={16} />
       </button>
     </div>
 

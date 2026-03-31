@@ -5,8 +5,8 @@
   import { open, ask } from '@tauri-apps/plugin-dialog';
   import { onMount, onDestroy, tick } from 'svelte';
   import {
-    HardDrive, Music, Disc3, Mic2, FolderPlus, Trash2, RefreshCw,
-    Settings, ArrowLeft, X, Play, AlertCircle, ImageDown, Upload, Search, LayoutGrid, List, Edit3,
+    HardDrive, Music, Disc3, MicVocal, FolderPlus, Trash2, RefreshCw,
+    Settings, ArrowLeft, X, Play, CircleAlert, ImageDown, Upload, Search, LayoutGrid, List, PenLine,
     Network, Power, PowerOff, ChevronLeft, ChevronRight, Shuffle, SlidersHorizontal, ArrowUpDown, ChevronDown, Check
   } from 'lucide-svelte';
   import FolderSettingsModal from '../FolderSettingsModal.svelte';
@@ -3210,7 +3210,7 @@
               : $t('actions.edit')}
             disabled={selectedAlbum?.source === 'plex' && getUserItem(PLEX_METADATA_WRITE_KEY) !== 'true'}
           >
-            <Edit3 size={16} />
+            <PenLine size={16} />
           </button>
         </div>
       </div>
@@ -3253,7 +3253,7 @@
           {/if}
           {#if selectedAlbum.likely_single_file_album}
             <div class="single-file-notice">
-              <AlertCircle size={14} />
+              <CircleAlert size={14} />
               <span>{$t('library.singleFileAlbumNotice')}</span>
             </div>
           {/if}
@@ -3352,7 +3352,7 @@
     <!-- Offline Notice Banner -->
     {#if isOffline && !offlineNoticeDismissed}
       <div class="offline-notice">
-        <AlertCircle size={16} />
+        <CircleAlert size={16} />
         <span>{$t('library.playlistOfflineMode')}</span>
         <button class="dismiss-btn" onclick={() => offlineNoticeDismissed = true} title="Dismiss">
           <X size={14} />
@@ -3407,7 +3407,7 @@
               disabled={selectedFolders.size !== 1}
               title={selectedFolders.size === 1 ? $t('library.editFolder') : $t('library.editFolderHint')}
             >
-              <Edit3 size={16} />
+              <PenLine size={16} />
             </button>
             <button
               class="icon-btn"
@@ -3592,7 +3592,7 @@
         </div>
       {:else if error}
         <div class="error">
-          <AlertCircle size={48} />
+          <CircleAlert size={48} />
           <p>{$t('library.failedLoadLibrary')}</p>
           <p class="error-detail">{error}</p>
           <button class="retry-btn" onclick={() => loadLibraryData()}>{$t('actions.retry')}</button>
@@ -3915,7 +3915,7 @@
         <ViewTransition duration={200} distance={12} direction="up">
         {#if artists.length === 0}
           <div class="empty">
-            <Mic2 size={48} />
+            <MicVocal size={48} />
             <p>{$t('library.noArtistsInLibrary')}</p>
           </div>
         {:else}
@@ -3947,7 +3947,7 @@
               </div>
               {#if filteredArtists.length === 0}
                 <div class="empty-small">
-                  <Mic2 size={32} />
+                  <MicVocal size={32} />
                   <p>{$t('library.noArtistsMatch')}</p>
                 </div>
               {:else}
@@ -3972,7 +3972,7 @@
                             <img src={artistImage} alt={displayName} />
                           {:else}
                             <div class="artist-placeholder">
-                              <Mic2 size={24} />
+                              <MicVocal size={24} />
                             </div>
                           {/if}
                         </div>
@@ -4021,7 +4021,7 @@
                 {/if}
               {:else}
                 <div class="empty-small centered">
-                  <Mic2 size={48} />
+                  <MicVocal size={48} />
                   <p>{$t('library.selectArtist')}</p>
                 </div>
               {/if}
@@ -4170,7 +4170,7 @@
               onclick={openTagEditorFromAlbumSettings}
               title={$t('library.editAlbumMetadataTitle')}
             >
-              <Edit3 size={18} />
+              <PenLine size={18} />
               <span>{$t('library.editAlbumInfo')}</span>
             </button>
             <button

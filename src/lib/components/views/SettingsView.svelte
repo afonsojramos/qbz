@@ -5,7 +5,7 @@
   import { getCurrentWebview } from '@tauri-apps/api/webview';
   import { writeText as copyToClipboard } from '@tauri-apps/plugin-clipboard-manager';
   import { ask, open as openFileDialog } from '@tauri-apps/plugin-dialog';
-  import { ArrowLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Sun, Moon, SunMoon, Ban, AlertTriangle, RefreshCw } from 'lucide-svelte';
+  import { ArrowLeft, ChevronRight, ChevronDown, ChevronUp, LoaderCircle, Sun, Moon, SunMoon, Ban, TriangleAlert, RefreshCw } from 'lucide-svelte';
   import Toggle from '../Toggle.svelte';
   import Dropdown from '../Dropdown.svelte';
   import DeviceDropdown from '../DeviceDropdown.svelte';
@@ -3756,7 +3756,7 @@
   {#if isLoadingDevices}
     <div class="loading-overlay">
       <div class="loading-content">
-        <Loader2 size={48} class="spinner" />
+        <LoaderCircle size={48} class="spinner" />
         <p>{$t('settings.audio.loadingAudioDevices')}</p>
         <p class="loading-subtitle">{$t('settings.audio.parsingHardware')}</p>
       </div>
@@ -4182,7 +4182,7 @@
     {#if autoThemeGenerating}
       <div class="auto-theme-overlay">
         <div class="auto-theme-overlay-content">
-          <Loader2 size={32} class="spinner" />
+          <LoaderCircle size={32} class="spinner" />
           <span>{$t('settings.appearance.autoThemeGenerating')}</span>
         </div>
       </div>
@@ -4563,7 +4563,7 @@
 
         {#if graphicsUsingFallback}
           <div class="composition-warning fallback-warning">
-            <AlertTriangle size={14} />
+            <TriangleAlert size={14} />
             <div>
               <span class="fallback-title">{$t('settings.appearance.composition.fallbackWarning')}</span>
               <span class="fallback-desc">{$t('settings.appearance.composition.fallbackDesc')}</span>
@@ -4573,7 +4573,7 @@
         {/if}
 
         <div class="composition-warning">
-          <AlertTriangle size={14} />
+          <TriangleAlert size={14} />
           <div>
             <span>{$t('settings.appearance.composition.recoveryNote')}</span>
             <code class="recovery-cmd">{$t('settings.appearance.composition.recoveryCmd')}</code>
@@ -5325,7 +5325,7 @@
         type="button"
       >
         {#if isCheckingUpdates}
-          <Loader2 size={14} class="spin" />
+          <LoaderCircle size={14} class="spin" />
           <span>{$t('settings.updates.checking')}</span>
         {:else}
           <span>{$t('settings.updates.check')}</span>

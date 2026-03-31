@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Play, Pause, Heart, HardDrive, AlertCircle, Ban, Music } from 'lucide-svelte';
+  import { Play, Pause, Heart, HardDrive, CircleAlert, Ban, Music } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import TrackMenu from './TrackMenu.svelte';
@@ -197,7 +197,7 @@
       </span>
     {:else if isUnavailable}
       <span class="unavailable-icon" title={unavailableTooltip}>
-        <AlertCircle size={16} />
+        <CircleAlert size={16} />
       </span>
     {:else if isActiveTrack || isPlaying}
       {#if isHovered}

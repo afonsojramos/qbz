@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
-  import { Disc3, Loader2 } from 'lucide-svelte';
+  import { Disc3, LoaderCircle } from 'lucide-svelte';
   import AlbumCard from './AlbumCard.svelte';
   import QualityBadge from './QualityBadge.svelte';
   import { restoreScrollOnBackForward } from '$lib/utils/scrollRestore';
@@ -374,7 +374,7 @@
   </div>
   {#if isLoadingMore}
     <div class="loading-more">
-      <Loader2 size={20} class="spin" />
+      <LoaderCircle size={20} class="spin" />
       <span>{$t('discover.loadingMore')}</span>
     </div>
   {/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Mic2, Upload } from 'lucide-svelte';
+  import { MicVocal, Upload } from 'lucide-svelte';
   import { restoreScrollOnBackForward } from '$lib/utils/scrollRestore';
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -242,7 +242,7 @@
                   {#if artistImage}
                     <img src={artistImage} alt={displayName} class="artist-image" loading="lazy" />
                   {:else}
-                    <Mic2 size={32} />
+                    <MicVocal size={32} />
                   {/if}
                 </div>
                 {#if showSettings}

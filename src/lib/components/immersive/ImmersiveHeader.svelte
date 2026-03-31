@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Disc3, Disc, Mic2, ListMusic, Music2, Info, Radio, Maximize, Minimize, ChevronDown, X, Square, Copy, Minus, Image, Activity, AudioWaveform, CircleDot, Crosshair, Zap, HeartPulse, Move } from 'lucide-svelte';
+  import { Disc3, Disc, MicVocal, ListMusic, Music2, Info, Radio, Maximize, Minimize, ChevronDown, X, Square, Copy, Minus, Image, Activity, AudioWaveform, CircleDot, Crosshair, Zap, HeartPulse, Move } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { getCurrentWindow } from '@tauri-apps/api/window';
 
@@ -127,7 +127,7 @@
   ];
 
   const focusTabsBottom: { id: FocusTab; labelKey: string; icon: typeof Disc3 }[] = [
-    { id: 'lyrics-focus', labelKey: 'settings.appearance.immersiveViews.lyrics-focus', icon: Mic2 },
+    { id: 'lyrics-focus', labelKey: 'settings.appearance.immersiveViews.lyrics-focus', icon: MicVocal },
     { id: 'queue-focus', labelKey: 'settings.appearance.immersiveViews.queue-focus', icon: ListMusic },
   ];
 

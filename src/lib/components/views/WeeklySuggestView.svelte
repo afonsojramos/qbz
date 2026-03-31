@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount, onDestroy } from 'svelte';
-  import { ArrowLeft, CloudDownload, Heart, Info, ListPlus, Play, Search, Shuffle, X, CheckSquare } from 'lucide-svelte';
+  import { ArrowLeft, CloudDownload, Heart, Info, ListPlus, Play, Search, Shuffle, X, SquareCheckBig } from 'lucide-svelte';
   import PlaylistModal from '$lib/components/PlaylistModal.svelte';
   import TrackRow from '$lib/components/TrackRow.svelte';
   import BulkActionBar from '$lib/components/BulkActionBar.svelte';
@@ -492,7 +492,7 @@
           disabled={loading || filteredTracks.length === 0}
           title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
         >
-          <CheckSquare size={18} />
+          <SquareCheckBig size={18} />
         </button>
       </div>
     </div>

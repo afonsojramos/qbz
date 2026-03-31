@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ArrowLeft, Search, X, Trash2, Ban, ToggleLeft, ToggleRight, AlertCircle } from 'lucide-svelte';
+  import { ArrowLeft, Search, X, Trash2, Ban, ToggleLeft, ToggleRight, CircleAlert } from 'lucide-svelte';
   import ViewTransition from '../ViewTransition.svelte';
   import { t, locale } from '$lib/i18n';
   import { showToast } from '$lib/stores/toastStore';
@@ -174,7 +174,7 @@
   <!-- Disabled Warning -->
   {#if !enabled}
     <div class="warning-banner">
-      <AlertCircle size={16} />
+      <CircleAlert size={16} />
       <span>{$t('settings.blacklist.disabledWarning')}</span>
     </div>
   {/if}

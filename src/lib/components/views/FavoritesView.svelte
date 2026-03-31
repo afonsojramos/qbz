@@ -4,7 +4,7 @@
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { onMount, tick } from 'svelte';
   import { t } from '$lib/i18n';
-  import { Play, Disc3, Mic2, Music, Search, X, LayoutGrid, List, ChevronDown, ListMusic, Edit3, CloudDownload, Shuffle, MoreHorizontal, PanelLeftClose, Loader2, ArrowLeft, CheckSquare } from 'lucide-svelte';
+  import { Play, Disc3, MicVocal, Music, Search, X, LayoutGrid, List, ChevronDown, ListMusic, PenLine, CloudDownload, Shuffle, Ellipsis, PanelLeftClose, LoaderCircle, ArrowLeft, SquareCheckBig } from 'lucide-svelte';
   import AlbumCard from '../AlbumCard.svelte';
   import TrackRow from '../TrackRow.svelte';
   import QualityBadge from '../QualityBadge.svelte';
@@ -593,7 +593,7 @@
     switch (tab) {
       case 'tracks': return Music;
       case 'albums': return Disc3;
-      case 'artists': return Mic2;
+      case 'artists': return MicVocal;
       case 'playlists': return ListMusic;
     }
   }
@@ -1304,7 +1304,7 @@
       </button>
     {/if}
     <button class="edit-btn" onclick={() => editModalOpen = true} title={$t('favorites.editSettings')}>
-      <Edit3 size={16} />
+      <PenLine size={16} />
     </button>
   </div>
   <!-- Header -->
@@ -1324,7 +1324,7 @@
             onclick={() => showTracksContextMenu = !showTracksContextMenu}
             title={$t('actions.more')}
           >
-            <MoreHorizontal size={18} />
+            <Ellipsis size={18} />
           </button>
           {#if showTracksContextMenu}
             <div class="context-menu-backdrop" onclick={() => showTracksContextMenu = false} role="presentation"></div>
@@ -1485,7 +1485,7 @@
           onclick={toggleTrackSelectMode}
           title={trackSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
         >
-          <CheckSquare size={16} />
+          <SquareCheckBig size={16} />
         </button>
         <GenreFilterButton context={GENRE_CONTEXT_TRACKS} variant="control" align="right" onFilterChange={handleGenreFilterChange} />
         <div class="dropdown-container">
@@ -1795,7 +1795,7 @@
       <ViewTransition duration={200} distance={12} direction="up">
       {#if favoriteArtists.length === 0}
         <div class="empty">
-          <Mic2 size={48} />
+          <MicVocal size={48} />
           <p>{$t('favorites.noFavoriteArtists')}</p>
           <p class="empty-hint">{$t('favorites.likeArtistsHint')}</p>
         </div>
@@ -1823,12 +1823,12 @@
           <div class="artist-albums-column">
             {#if !selectedFavoriteArtist}
               <div class="artist-albums-empty">
-                <Mic2 size={48} />
+                <MicVocal size={48} />
                 <p>{$t('favorites.selectArtistHint')}</p>
               </div>
             {:else if loadingArtistAlbums}
               <div class="artist-albums-loading">
-                <Loader2 size={32} class="spinner-icon" />
+                <LoaderCircle size={32} class="spinner-icon" />
                 <p>{$t('favorites.loadingAlbums')}</p>
               </div>
             {:else if artistAlbumsError}

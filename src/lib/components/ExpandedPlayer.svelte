@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { X, Shuffle, SkipBack, Play, Pause, SkipForward, Repeat, Heart, List, Maximize2, MoreHorizontal, Cast } from 'lucide-svelte';
+  import { X, Shuffle, SkipBack, Play, Pause, SkipForward, Repeat, Heart, List, Maximize2, Ellipsis, Cast } from 'lucide-svelte';
   import QualityBadge from './QualityBadge.svelte';
   import StackIcon from './StackIcon.svelte';
   import LyricsLines from './lyrics/LyricsLines.svelte';
@@ -365,7 +365,7 @@
             <Heart size={22} fill={isFavorite ? 'var(--accent-primary)' : 'none'} color={isFavorite ? 'var(--accent-primary)' : 'currentColor'} />
           </button>
           <button class="action-btn" title="More options">
-            <MoreHorizontal size={22} />
+            <Ellipsis size={22} />
           </button>
         </div>
       </div>

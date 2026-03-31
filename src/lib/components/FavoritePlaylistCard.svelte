@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, onMount } from 'svelte';
-  import { Play, Heart, MoreHorizontal, ListPlus, Share2, ListMusic, Trash2 } from 'lucide-svelte';
+  import { Play, Heart, Ellipsis, ListPlus, Share2, ListMusic, Trash2 } from 'lucide-svelte';
   import PlaylistCollage from './PlaylistCollage.svelte';
   import {
     openMenu as openGlobalMenu,
@@ -196,7 +196,7 @@
           onclick={toggleMenu}
           title="More options"
         >
-          <MoreHorizontal size={18} />
+          <Ellipsis size={18} />
         </button>
       </div>
     </div>

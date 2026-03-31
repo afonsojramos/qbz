@@ -3,7 +3,7 @@
   import Portal from './Portal.svelte';
   import {
     ChevronRight,
-    MoreHorizontal,
+    Ellipsis,
     ListPlus,
     ListEnd,
     ListMusic,
@@ -325,7 +325,7 @@
       }}
       aria-label="Album actions"
     >
-      <MoreHorizontal size={20} color="currentColor" />
+      <Ellipsis size={20} color="currentColor" />
     </button>
 
     {#if isOpen && portalTarget}

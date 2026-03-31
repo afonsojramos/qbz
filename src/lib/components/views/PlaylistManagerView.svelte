@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { ArrowLeft, Filter, ArrowUpDown, LayoutGrid, List, GripVertical, EyeOff, Eye, BarChart2, Play, Pencil, Search, X, Cloud, CloudOff, Wifi, Heart, Folder, FolderPlus, FolderOpen, ChevronRight, ChevronDown, ChevronUp, Trash2, Star, Music, Disc, Library, Info, Rows3, Network } from 'lucide-svelte';
+  import { ArrowLeft, Funnel, ArrowUpDown, LayoutGrid, List, GripVertical, EyeOff, Eye, ChartNoAxesColumn, Play, Pencil, Search, X, Cloud, CloudOff, Wifi, Heart, Folder, FolderPlus, FolderOpen, ChevronRight, ChevronDown, ChevronUp, Trash2, Star, Music, Disc, Library, Info, Rows3, Network } from 'lucide-svelte';
   import PlaylistCollage from '../PlaylistCollage.svelte';
   import PlaylistModal from '../PlaylistModal.svelte';
   import ViewTransition from '../ViewTransition.svelte';
@@ -937,7 +937,7 @@
         {:else if filter === 'offline_unavailable'}
           <CloudOff size={16} />
         {:else}
-          <Filter size={16} />
+          <Funnel size={16} />
         {/if}
         <span>
           {#if offlineStatus.isOffline}
@@ -1565,7 +1565,7 @@
           {/if}
           {#if stats && stats.play_count > 0}
             <span class="play-count-badge" title="Play count">
-              <BarChart2 size={12} />
+              <ChartNoAxesColumn size={12} />
               {stats.play_count}
             </span>
           {/if}

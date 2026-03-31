@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, type Snippet } from 'svelte';
   import { t } from '$lib/i18n';
-  import { Mic2 } from 'lucide-svelte';
+  import { MicVocal } from 'lucide-svelte';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import { restoreScrollOnBackForward } from '$lib/utils/scrollRestore';
 
@@ -274,7 +274,7 @@
                     <img use:cachedSrc={artist.image?.small || artist.image?.thumbnail} alt={artist.name} loading="lazy" decoding="async" />
                   {:else}
                     <div class="artist-placeholder">
-                      <Mic2 size={32} />
+                      <MicVocal size={32} />
                     </div>
                   {/if}
                 </div>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Info, ExternalLink } from 'lucide-svelte';
+  import { TriangleAlert, Info, ExternalLink } from 'lucide-svelte';
   import type { Snippet } from 'svelte';
 
   interface Props {
@@ -18,7 +18,7 @@
     {#if variant === 'info'}
       <Info size={18} />
     {:else}
-      <AlertTriangle size={18} />
+      <TriangleAlert size={18} />
     {/if}
   </div>
   <div class="banner-content">

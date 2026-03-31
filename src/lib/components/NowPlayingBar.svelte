@@ -14,10 +14,10 @@
     VolumeX,
     Volume1,
     Cast,
-    Mic2,
+    MicVocal,
     Maximize2,
     PictureInPicture2,
-    AlertTriangle
+    TriangleAlert
   } from 'lucide-svelte';
   import QualityBadge from './QualityBadge.svelte';
   import AudioOutputBadges from './AudioOutputBadges.svelte';
@@ -457,7 +457,7 @@
           title={$translateStore('degraded.title')}
           role="status"
         >
-          <AlertTriangle size={16} />
+          <TriangleAlert size={16} />
         </div>
       {/if}
 
@@ -490,7 +490,7 @@
         title={isOffline ? $translateStore('offline.featureDisabled') : $translateStore('player.lyrics')}
         aria-label={isOffline ? $translateStore('offline.featureDisabled') : $translateStore('player.lyrics')}
       >
-        <Mic2 size={16} aria-hidden="true" />
+        <MicVocal size={16} aria-hidden="true" />
       </button>
 
       {#if onOpenMiniPlayer}

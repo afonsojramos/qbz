@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Minus, Disc3, Image, ListMusic, AlignLeft, Maximize2, Pin, Move, X, Square } from 'lucide-svelte';
+  import { Minus, Disc3, Image, ListMusic, AlignStartVertical, Maximize2, Pin, Move, X, Square } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import type { MiniPlayerSurface } from './types';
 
@@ -28,7 +28,7 @@
     { id: 'compact', icon: Disc3, labelKey: 'player.miniSurfaceCompact' },
     { id: 'artwork', icon: Image, labelKey: 'player.miniSurfaceArtwork' },
     { id: 'queue', icon: ListMusic, labelKey: 'player.miniSurfaceQueue' },
-    { id: 'lyrics', icon: AlignLeft, labelKey: 'player.miniSurfaceLyrics' }
+    { id: 'lyrics', icon: AlignStartVertical, labelKey: 'player.miniSurfaceLyrics' }
   ];
 
   function handleMouseEnter(): void {

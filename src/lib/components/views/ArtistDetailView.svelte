@@ -5,7 +5,7 @@
   import { setCustomImage, removeCustomImage as removeCustomImageFromStore } from '$lib/stores/customArtistImageStore';
   import { t, locale } from 'svelte-i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
-  import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, MoreHorizontal, Info, Disc, Settings, CheckSquare, PanelRightClose, ThumbsDown } from 'lucide-svelte';
+  import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, Ellipsis, Info, Disc, Settings, SquareCheckBig, PanelRightClose, ThumbsDown } from 'lucide-svelte';
   import {
     isBlacklisted,
     isEnabled as isFilteringEnabled,
@@ -2006,7 +2006,7 @@
               onclick={toggleMultiSelectMode}
               title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
             >
-              <CheckSquare size={18} />
+              <SquareCheckBig size={18} />
             </button>
             <div class="context-menu-wrapper">
               <button
@@ -2014,7 +2014,7 @@
                 onclick={() => showTracksContextMenu = !showTracksContextMenu}
                 title="More options"
               >
-                <MoreHorizontal size={18} />
+                <Ellipsis size={18} />
               </button>
               {#if showTracksContextMenu}
                 <div class="context-menu-backdrop" onclick={() => showTracksContextMenu = false} role="presentation"></div>

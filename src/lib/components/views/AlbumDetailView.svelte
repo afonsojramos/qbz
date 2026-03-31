@@ -10,7 +10,7 @@
     setCustomAlbumCover,
     removeCustomAlbumCover as removeCustomCoverFromStore
   } from '$lib/stores/customAlbumCoverStore';
-  import { ArrowLeft, Play, Shuffle, Heart, Radio, CloudDownload, ChevronLeft, ChevronRight, Loader2, CheckSquare, BookOpen } from 'lucide-svelte';
+  import { ArrowLeft, Play, Shuffle, Heart, Radio, CloudDownload, ChevronLeft, ChevronRight, LoaderCircle, SquareCheckBig, BookOpen } from 'lucide-svelte';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import AlbumCard from '../AlbumCard.svelte';
   import TrackRow from '../TrackRow.svelte';
@@ -557,7 +557,7 @@
             disabled={radioLoading}
           >
             {#if radioLoading}
-              <Loader2 size={18} class="spin" />
+              <LoaderCircle size={18} class="spin" />
             {:else}
               <Radio size={18} />
             {/if}
@@ -601,7 +601,7 @@
           onclick={toggleMultiSelectMode}
           title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
         >
-          <CheckSquare size={18} />
+          <SquareCheckBig size={18} />
         </button>
       </div>
     </div>

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
-  import { Music, User, Loader2, ArrowRight, Home } from 'lucide-svelte';
+  import { Music, User, LoaderCircle, ArrowRight, House } from 'lucide-svelte';
   import ForYouTab from './ForYouTab.svelte';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import { type OfflineCacheStatus } from '$lib/stores/offlineCacheState';
@@ -900,7 +900,7 @@
           class:active={activeTab === 'home'}
           onclick={() => switchTab('home')}
         >
-          <Home size={13} />
+          <House size={13} />
         </button>
         <button
           class="home-tab compact"
@@ -948,7 +948,7 @@
         class:active={activeTab === 'home'}
         onclick={() => switchTab('home')}
       >
-        <Home size={14} />
+        <House size={14} />
       </button>
       <button
         class="home-tab"
@@ -1280,7 +1280,7 @@
           {#snippet children()}
             {#if loadingQobuzPlaylists}
               <div class="loading-playlists">
-                <Loader2 size={24} class="spinner" />
+                <LoaderCircle size={24} class="spinner" />
               </div>
             {:else}
               {#each qobuzPlaylists as playlist (playlist.id)}
@@ -1938,7 +1938,7 @@
         {#snippet children()}
           {#if loadingQobuzPlaylists}
             <div class="loading-playlists">
-              <Loader2 size={24} class="spinner" />
+              <LoaderCircle size={24} class="spinner" />
             </div>
           {:else}
             {#each qobuzPlaylists as playlist (playlist.id)}

@@ -3,7 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { cachedSrc } from '$lib/actions/cachedImage';
-  import { Search, Disc3, Music, Mic2, User, X, ChevronLeft, ChevronRight, Crown, Heart, Play, MoreHorizontal, ListPlus } from 'lucide-svelte';
+  import { Search, Disc3, Music, MicVocal, User, X, ChevronLeft, ChevronRight, Crown, Heart, Play, Ellipsis, ListPlus } from 'lucide-svelte';
   import AlbumCard from '../AlbumCard.svelte';
   import SearchPlaylistCard from '../SearchPlaylistCard.svelte';
   import ViewTransition from '../ViewTransition.svelte';
@@ -1339,7 +1339,7 @@
                           onclick={(e) => { e.stopPropagation(); mostPopularMenuOpen ? mostPopularMenuOpen = false : openPopularMenu(); }}
                           title={$t('actions.moreOptions')}
                         >
-                          <MoreHorizontal size={16} />
+                          <Ellipsis size={16} />
                         </button>
                         {#if mostPopularMenuOpen}
                           <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -1441,7 +1441,7 @@
                           onclick={(e) => { e.stopPropagation(); mostPopularMenuOpen ? mostPopularMenuOpen = false : openPopularMenu(); }}
                           title={$t('actions.moreOptions')}
                         >
-                          <MoreHorizontal size={16} />
+                          <Ellipsis size={16} />
                         </button>
                         {#if mostPopularMenuOpen}
                           <!-- svelte-ignore a11y_click_events_have_key_events -->

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { Loader2, Play, Radio, ListPlus, ListEnd, Info } from 'lucide-svelte';
+  import { LoaderCircle, Play, Radio, ListPlus, ListEnd, Info } from 'lucide-svelte';
   import { t } from '$lib/i18n';
 
   interface Playlist {
@@ -248,7 +248,7 @@
 <div class="suggestions-panel" class:centered-layout={centeredLayout}>
   {#if isLoading}
     <div class="loading-state">
-      <Loader2 size={28} class="spinner" />
+      <LoaderCircle size={28} class="spinner" />
     </div>
   {:else if !artistId}
     <div class="empty-state">
@@ -334,7 +334,7 @@
               <div class="radio-collage">
                 {#if loadingRadio}
                   <div class="collage-loading">
-                    <Loader2 size={32} class="spinner" />
+                    <LoaderCircle size={32} class="spinner" />
                   </div>
                 {:else if radioCollageImages.length >= 4}
                   <div class="collage-diamond">

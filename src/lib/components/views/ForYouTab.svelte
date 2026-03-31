@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { Music, User, Loader2, ArrowRight, Heart, Play, Share2, UserPlus } from 'lucide-svelte';
+  import { Music, User, LoaderCircle, ArrowRight, Heart, Play, Share2, UserPlus } from 'lucide-svelte';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import { t } from '$lib/i18n';
   import HorizontalScrollRow from '../HorizontalScrollRow.svelte';
@@ -1281,7 +1281,7 @@
             disabled={artist.isFavoriting}
           >
             {#if artist.isFavoriting}
-              <Loader2 size={14} class="spinner" />
+              <LoaderCircle size={14} class="spinner" />
             {:else}
               <UserPlus size={14} />
             {/if}
@@ -1339,7 +1339,7 @@
         <div class="spotlight-actions">
           <button class="action-btn-circle primary" onclick={() => handleSpotlightTopTracks()} disabled={spotlightTopTracksLoading}>
             {#if spotlightTopTracksLoading}
-              <Loader2 size={20} class="spinner" />
+              <LoaderCircle size={20} class="spinner" />
             {:else}
               <Play size={20} fill="currentColor" color="currentColor" />
             {/if}

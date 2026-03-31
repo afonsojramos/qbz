@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Play, MoreHorizontal } from 'lucide-svelte';
+  import { Play, Ellipsis } from 'lucide-svelte';
 
   interface Props {
     artwork: string;
@@ -32,7 +32,7 @@
         <span>Play</span>
       </button>
       <button class="more-btn">
-        <MoreHorizontal size={16} color="white" />
+        <Ellipsis size={16} color="white" />
         <span>More</span>
       </button>
     </div>

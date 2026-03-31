@@ -13,7 +13,7 @@
     VolumeX,
     Volume1,
     Cast,
-    Mic2
+    MicVocal
   } from 'lucide-svelte';
   import QualityBadge from './QualityBadge.svelte';
   import GlassSurface from './glass/GlassSurface.svelte';
@@ -251,7 +251,7 @@
       onclick={onToggleLyrics}
       title="Lyrics"
     >
-      <Mic2 size={20} />
+      <MicVocal size={20} />
     </button>
 
     <!-- Volume Control -->

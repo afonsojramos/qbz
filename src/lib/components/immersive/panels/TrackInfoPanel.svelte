@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { Loader2, Disc3, Clock, Music2, Tag, Building2 } from 'lucide-svelte';
+  import { LoaderCircle, Disc3, Clock, Music2, Tag, Building2 } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import type { TrackInfo, Performer } from '$lib/types';
 
@@ -139,7 +139,7 @@
 <div class="track-info-panel" class:centered-layout={centeredLayout}>
   {#if loading}
     <div class="loading-state">
-      <Loader2 size={28} class="spinner" />
+      <LoaderCircle size={28} class="spinner" />
     </div>
   {:else if error}
     <div class="error-state">
