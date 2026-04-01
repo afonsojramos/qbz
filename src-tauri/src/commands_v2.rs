@@ -7614,6 +7614,7 @@ pub async fn v2_play_next_gapless(
     bridge: State<'_, CoreBridgeState>,
     offline_cache: State<'_, OfflineCacheState>,
     app_state: State<'_, AppState>,
+    library_state: State<'_, LibraryState>,
 ) -> Result<bool, RuntimeError> {
     log::info!("[V2] Command: play_next_gapless for track {}", track_id);
 
@@ -7683,6 +7684,30 @@ pub async fn v2_play_next_gapless(
                 audio_data.len()
             );
             player
+                .play_next(audio_data, track_id)
+                .map_err(RuntimeError::Internal)?;
+            return Ok(true);
+        }
+    }
+
+    // Check local library
+    // Convert u64 to i64 for library query
+    let track_id_i64 = track_id
+        .try_into()
+        .map_err(|_| RuntimeError::Internal("Track ID too large for i64".to_string()))?;
+
+    // Query V2 multi-track API with a single ID
+    let tracks = v2_library_get_tracks_by_ids(vec![track_id_i64], library_state.clone())
+        .await
+        .map_err(|e| RuntimeError::Internal(format!("Failed to get local track: {}", e)))?;
+
+    if let Some(local_track) = tracks.into_iter().next() {
+        let path = std::path::Path::new(&local_track.file_path);
+        if path.exists() {
+            log::info!("[V2/GAPLESS] Track {} from LOCAL library", track_id);
+            let audio_data = std::fs::read(path)
+                .map_err(|e| RuntimeError::Internal(format!("Failed to read local file: {}", e)))?;
+            bridge.get().await.player()
                 .play_next(audio_data, track_id)
                 .map_err(RuntimeError::Internal)?;
             return Ok(true);
