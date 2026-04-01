@@ -77,11 +77,11 @@
           <div class="queue-dropdown">
             <button class="dropdown-item" onclick={handlePlayNext}>
               <ListPlus size={14} />
-              <span>Play next</span>
+              <span>{$t('actions.playNext')}</span>
             </button>
             <button class="dropdown-item" onclick={handlePlayLater}>
               <ListEnd size={14} />
-              <span>Add to queue</span>
+              <span>{$t('actions.addToQueue')}</span>
             </button>
           </div>
         {/if}
