@@ -266,7 +266,7 @@
           {@const fallbackImage = playlist.images?.[Math.min(1, (playlist.images?.length || 1) - 1)]}
           <div class="card playlist-card">
             <div class="card-badge qobuz">
-              <img src="/qobuz-logo-filled.svg" alt="Qobuz" class="badge-icon badge-qobuz" />
+              <img src="/qobuz-logo-filled.svg" alt="{ $t('platforms.qobuz') }" class="badge-icon badge-qobuz" />
             </div>
             <div class="card-image-wrapper">
               {#if hasCovers}
