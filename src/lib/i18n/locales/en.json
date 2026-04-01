@@ -273,6 +273,8 @@
     "by": "by",
     "released": "Released",
     "releaseDate": "Release Date",
+    "releasedBy": "Released by",
+    "releasedOn": "on",
     "label": "Label",
     "genre": "Genre",
     "duration": "Duration",
@@ -553,6 +555,8 @@
     "recentlyPlayed": "Recently Played",
     "noHistoryYet": "No tracks played yet",
     "historyEmpty": "No tracks played yet",
+    "enableInfinitePlay": "Enable Infinite Play",
+    "disableInfinitePlay": "Disable Infinite Play",
     "infinitePlay": "Infinite Play",
     "infinitePlayEnabled": "Infinite play enabled",
     "infinitePlayDisabled": "Infinite play disabled",
@@ -597,6 +601,7 @@
     "noTracksMatch": "No tracks match \"{query}\"",
     "noTrackPlaying": "No track playing",
     "castToDevice": "Cast to device",
+    "connectedTo": "Connected To",
     "castingManage": "Casting - Click to manage",
     "qobuzConnect": "Qobuz Connect",
     "qobuzConnectManage": "Qobuz Connect - Click to manage",
@@ -604,9 +609,12 @@
     "fullScreen": "Immersive Mode",
     "exitFullScreen": "Exit Immersive Mode",
     "maximize": "Maximize",
+    "maximizeWindow": "Maximize Window",
     "restore": "Restore",
+    "restoreWindow": "Restore Window",
     "minimize": "Minimize",
     "exitImmersive": "Exit Immersive",
+    "exitImmersiveWithKey": "Exit Immersive ({key})",
     "dragWindow": "Move Window",
     "normalizationOff": "Volume Normalization: Off",
     "normalizationOn": "Volume Normalization: On",
@@ -621,7 +629,10 @@
     "miniWindowControls": "Mini Player Controls",
     "miniAlwaysOnTopEnable": "Always on Top",
     "miniAlwaysOnTopDisable": "Disable Always on Top",
-    "miniAlwaysOnTopLimited": "Always-on-top is limited by your window manager"
+    "miniAlwaysOnTopLimited": "Always-on-top is limited by your window manager",
+    "fullscreenWithKey": "Fullscreen ({key})",
+    "exitFullscreenWithKey": "Exit Fullscreen ({key})",
+    "closeApp": "Close App"
   },
   "audioBadges": {
     "castingTo": "Casting to",
@@ -664,6 +675,7 @@
     "play": "Play",
     "playAll": "Play All",
     "playNow": "Play Now",
+    "playRadio": "Play Radio",
     "shuffle": "Shuffle",
     "shuffleAll": "Shuffle All",
     "playNext": "Play Next",
@@ -729,7 +741,14 @@
     },
     "newFolder": "New folder",
     "previousArtists": "Previous artists",
-    "nextArtists": "Next artists"
+    "nextArtists": "Next artists",
+    "qobuzLink": "Qobuz™ link",
+    "switchToSplitView": "Switch to Split View (V)",
+    "switchToImmersiveView": "Switch to Immersive View (V)",
+    "gotIt": "Got it",
+    "copyCommand": "Copy command",
+    "downloadOnGitHub": "Download on GitHub",
+    "visitReleasePage": "Visit release page"
   },
   "settings": {
     "title": "Settings",
@@ -1217,7 +1236,9 @@
       "qobuzLinkHandlerDesc": "Register QBZ as the default app for qobuzapp:// links from your browser.",
       "qobuzLinkHandlerError": "Failed to update link handler registration.",
       "qconnectDeviceName": "Device Name",
-      "qconnectDeviceNameDesc": "Name displayed in Qobuz Connect"
+      "qconnectDeviceNameDesc": "Name displayed in Qobuz Connect",
+      "noProtocolDeviceFound": "No {protocol} devices found",
+      "noProtocolDeviceFoundHint": "Make sure devices are on the same network"
     },
     "storage": {
       "title": "Storage",
@@ -1495,6 +1516,7 @@
     "loadingPlaylist": "Loading playlist...",
     "loadingPlaylists": "Loading playlists...",
     "loadingTracks": "Loading tracks...",
+    "laodingDevices": "Loading devices...",
     "lookingUp": "Looking up {name}...",
     "failedLoadAlbum": "Failed to load album",
     "failedLoadArtist": "Failed to load artist",
@@ -1676,6 +1698,7 @@
   },
   "keys": {
     "enter": "Enter",
+    "esc": "Esc",
     "shift": "Shift"
   },
   "keybindings": {
@@ -1837,7 +1860,8 @@
         "custom": "Custom..."
       },
       "customPlaceholder": "Binary name (e.g., my-player)",
-      "warning": "Best results: use app-scoped bit-perfect only. Global Pulse bit-perfect can break browsers and apps that output fixed 48kHz."
+      "warning": "Best results: use app-scoped bit-perfect only. Global Pulse bit-perfect can break browsers and apps that output fixed 48kHz.",
+      "customApps": "Custom apps:"
     },
     "wireplumberConfig": {
       "title": "Target Your DAC Only",
@@ -2282,5 +2306,41 @@
     "author": "Author",
     "contributors": "Contributors",
     "signatureDetail": "Hatred towards all those companies that discriminate against the Linux community and don't provide us with a decent client for their product."
+  },
+  "updates": {
+    "runningIn": "Running in {env}",
+    "runningInsideSandbox": "QBZ detected it's running inside a <strong>{env} sandbox</strong>.",
+    "flatpak": {
+      "intro": "There are some considerations to ensure the best experience.",
+      "whatYouShouldKnow": {
+        "heading": "What you should know:",
+        "externalMusicFolderAccess": "Access to external music folders (NAS, network mounts) requires manual permission grants",
+        "audioFeatures": "ome audio features may behave differently due to sandbox restrictions",
+        "settingsPage": "The <strong>Settings</strong> page includes Flatpak-specific commands you can copy and run"
+      },
+      "note": "Check the <strong>Flatpak Sandbox</strong> section in Settings for detailed instructions and copy-paste commands."
+    },
+    "snap": {
+      "intro": "Some audio plugs need to be connected manually for the best experience.",
+      "requiredPlugConnections": "Required plug connections:",
+      "optional": "Optional (for external drives / NAS):",
+      "note": "Run these commands in a terminal, then restart QBZ. This only needs to be done once."
+    },
+    "newVersionReleased": "A new version of QBZ has been released",
+    "newVersionAvailable": "New version available: v{version}",
+    "noUpdatesFound": "No updates found.",
+    "updateReminder": {
+      "newVersionReminder": "New version reminder",
+      "remindMeLater": "Remind me later",
+      "doNotNotifyAgain": "Do not notify me again about this release",
+      "doNotNotifyAboutReleases": "Do not notify me about new releases",
+      "hint": "Can be re-enabled from Settings"
+    },
+    "whatsNew": {
+      "whatsNew": "What's new",
+      "whatsNewIn": "What's new in v${version}",
+      "releaseNotesNotAvailable": "Release notes are not available.",
+      "releaseNotesNotAvailableForVersion": "Release notes are not available for this version."
+    }
   }
 }
