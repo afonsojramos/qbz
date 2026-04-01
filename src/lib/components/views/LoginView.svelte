@@ -367,8 +367,8 @@
           Unable to connect to Qobuz™ after 60 seconds. This could be a network issue or Qobuz™ may be temporarily unavailable.
         </p>
         <div class="timeout-actions">
-          <button class="retry-btn" onclick={handleRetryLogin}>Try Again</button>
-          <button class="offline-btn" onclick={handleStartOffline}>Start Offline</button>
+          <button class="retry-btn" onclick={handleRetryLogin}>{ $t('actions.tryAgain') }</button>
+          <button class="offline-btn" onclick={handleStartOffline}>{ $t('actions.startOffline') }</button>
         </div>
       </div>
     {:else if isInitializing}
@@ -406,7 +406,7 @@
               id="password"
               type="password"
               bind:value={password}
-              placeholder="Password"
+              placeholder={ $t('auth.password') }
               disabled={isLoading}
               autocomplete="current-password"
             />

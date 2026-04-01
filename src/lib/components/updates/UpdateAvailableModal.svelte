@@ -17,7 +17,7 @@
   }
 </script>
 
-<Modal {isOpen} onClose={onClose} title="New release available" maxWidth="560px">
+<Modal {isOpen} onClose={onClose} title={ $t('updates.newReleaseAvailable') } maxWidth="560px">
   <div class="update-modal">
     <p class="lead">{$t('updates.newVersionReleased')}</p>
 

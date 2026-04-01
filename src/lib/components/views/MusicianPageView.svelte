@@ -151,7 +151,7 @@
       {:else if appearances.length === 0}
         <div class="empty-state">
           <Disc size={32} />
-          <span>No album appearances found</span>
+          <span>{ $t('artist.noAlbumAppearancesFound') }</span>
         </div>
       {:else}
         <div class="albums-grid">
