@@ -969,8 +969,11 @@
       "forceX11Desc": "X11 (XWayland) statt nativem Wayland verwenden. Hilft bei Abstürzen mit bestimmten NVIDIA/Wayland-Konfigurationen. Neustart erforderlich. Override: QBZ_FORCE_X11=0 qbz",
       "tray": {
         "title": "Systemtray",
+        "titleMacos": "Menüleiste",
         "enableTray": "Tray-Symbol aktivieren",
+        "enableTrayMacos": "Menüleisten-Symbol aktivieren",
         "enableTrayDesc": "Symbol im Systemtray anzeigen (Neustart erforderlich)",
+        "enableTrayDescMacos": "Symbol in der Menüleiste anzeigen (Neustart erforderlich)",
         "minimizeToTray": "In den Tray minimieren",
         "minimizeToTrayDesc": "Fenster beim Minimieren in den Tray verschieben",
         "closeToTray": "In den Systemtray schließen",

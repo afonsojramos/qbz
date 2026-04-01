@@ -1011,8 +1011,11 @@
       "forceX11Desc": "Usar X11 (XWayland) em vez do Wayland nativo. Ajuda com travamentos em algumas configurações NVIDIA/Wayland. Requer reinicialização. Substituir: QBZ_FORCE_X11=0 qbz",
       "tray": {
         "title": "Bandeja do Sistema",
+        "titleMacos": "Barra de Menus",
         "enableTray": "Ativar ícone na bandeja",
+        "enableTrayMacos": "Ativar ícone na barra de menus",
         "enableTrayDesc": "Mostrar ícone na bandeja do sistema (requer reinicialização)",
+        "enableTrayDescMacos": "Mostrar ícone na barra de menus (requer reinicialização)",
         "minimizeToTray": "Minimizar para a bandeja",
         "minimizeToTrayDesc": "Ocultar janela na bandeja ao minimizar",
         "closeToTray": "Fechar para a bandeja",

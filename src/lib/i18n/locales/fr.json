@@ -993,8 +993,11 @@
       "forceX11Desc": "Utiliser X11 (XWayland) au lieu de Wayland natif. Aide avec les plantages sur certaines configurations NVIDIA/Wayland. Redémarrage requis. Override : QBZ_FORCE_X11=0 qbz",
       "tray": {
         "title": "Barre d'état système",
+        "titleMacos": "Barre des menus",
         "enableTray": "Activer l'icône dans la barre système",
+        "enableTrayMacos": "Activer l'icône dans la barre des menus",
         "enableTrayDesc": "Afficher l'icône dans la barre système (nécessite un redémarrage)",
+        "enableTrayDescMacos": "Afficher l'icône dans la barre des menus (nécessite un redémarrage)",
         "minimizeToTray": "Réduire à la barre d'état",
         "minimizeToTrayDesc": "Masquer la fenêtre dans la barre d'état lors de la minimisation",
         "closeToTray": "Réduire dans la barre d'état système",
