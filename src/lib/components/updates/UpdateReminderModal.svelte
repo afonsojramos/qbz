@@ -28,29 +28,29 @@
   }
 </script>
 
-<Modal {isOpen} onClose={onClose} title={$t('udpates.updateReminder.newVersionReminder')} maxWidth="600px">
+<Modal {isOpen} onClose={onClose} title={$t('updates.updateReminder.newVersionReminder')} maxWidth="600px">
   <div class="reminder-modal">
     <label class="option">
       <input type="radio" name="reminder" bind:group={choice} value="later" />
-      <span>{$t('udpates.updateReminder.remindMeLater')}</span>
+      <span>{$t('updates.updateReminder.remindMeLater')}</span>
     </label>
 
     <label class="option">
       <input type="radio" name="reminder" bind:group={choice} value="ignore_release" />
-      <span>{$t('udpates.updateReminder.doNotNotifyAgain')}</span>
+      <span>{$t('updates.updateReminder.doNotNotifyAgain')}</span>
     </label>
 
     <label class="option">
       <input type="radio" name="reminder" bind:group={choice} value="disable_all" />
-      <span>{$t('udpates.updateReminder.doNotNotifyAboutReleases')}</span>
+      <span>{$t('updates.updateReminder.doNotNotifyAboutReleases')}</span>
     </label>
 
-    <p class="hint">{$t('udpates.updateReminder.hint')}</p>
+    <p class="hint">{$t('updates.updateReminder.hint')}</p>
   </div>
 
   {#snippet footer()}
     <div class="footer-actions">
-      <button class="btn btn-primary" type="button" onclick={handleSubmit}>OK, {$t('actions.close')}</button>
+      <button class="btn btn-primary" type="button" onclick={handleSubmit}>{ $t('actions.okClose') }</button>
     </div>
   {/snippet}
 </Modal>

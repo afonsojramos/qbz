@@ -14,12 +14,12 @@
   let { isOpen, status, newVersion, onClose, onVisitReleasePage }: Props = $props();
 </script>
 
-<Modal {isOpen} onClose={onClose} title="Check for updates" maxWidth="460px">
+<Modal {isOpen} onClose={onClose} title={ $t('updates.checkForUpdates') } maxWidth="460px">
   <div class="result-body">
     {#if status === 'update_available'}
-      <p class="message">{$t('udpates.newVersionAvailable', { values: { version: newVersion } })}</p>
+      <p class="message">{$t('updates.newVersionAvailable', { values: { version: newVersion } })}</p>
     {:else}
-      <p class="message">{$t('udpates.noUpdatesFound')}</p>
+      <p class="message">{$t('updates.noUpdatesFound')}</p>
     {/if}²
   </div>
 
