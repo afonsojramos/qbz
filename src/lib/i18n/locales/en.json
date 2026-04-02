@@ -154,6 +154,7 @@
     "albums": "Albums",
     "artists": "Artists",
     "tracks": "Tracks",
+    "explicit": "Explicit",
     "folders": "Library Folders",
     "noAlbums": "No albums in library",
     "noArtists": "No artists in library",
@@ -260,12 +261,14 @@
     "hideAlbum": "Hide this album from library",
     "hideAlbumHint": "Hidden albums can be viewed from Settings",
     "localTrackIndicator": "Local track - only available on this device",
-    "singleFileAlbumNotice": "This album appears to be a single file containing the full disc. Individual track navigation requires the Plex server to split the file (e.g. via cue sheet scanner).",
+    "singleFileAlbumNotice": "This album appears to be a single file containing the full disc. Individual track navigation requires the Plex server to split the file (e.g., via cue sheet scanner).",
     "plexTrackIndicator": "Plex track - served from your local Plex library",
     "refreshMetadata": "Refresh metadata",
     "albumSettings": "Album settings",
     "albumArtwork": "Album Artwork",
-    "uploadCover": "Upload cover"
+    "uploadCover": "Upload cover",
+    "folderName": "Name",
+    "background": "Background"
   },
   "album": {
     "tracks": "tracks",
@@ -362,7 +365,10 @@
       "nextResult": "Next result",
       "close": "Close search",
       "searchInPage": "Search in this page"
-    }
+    },
+    "noAlbumsFound": "No albums found",
+    "bandProjects": "Bands & Projects",
+    "noAlbumAppearancesFound": "No album appearances found"
   },
   "sort": {
     "sort": "Sort",
@@ -380,7 +386,8 @@
     "title": "Title",
     "titleAZ": "Title (A-Z)",
     "titleZA": "Title (Z-A)",
-    "trackCount": "# of Tracks"
+    "trackCount": "# of Tracks",
+    "duration": "Duration"
   },
   "playlist": {
     "tracks": "tracks",
@@ -465,7 +472,9 @@
     "playCount": "Play count",
     "playlists": "playlists",
     "dragPlaylists": "Drag playlists to reorder them",
-    "dropOntoFolder": "or drop onto a folder to move."
+    "dropOntoFolder": "or drop onto a folder to move.",
+    "newFolder": "New folder",
+    "folderNamePlaceholder": "Enter folder name"
   },
   "favorites": {
     "title": "Favorites",
@@ -542,8 +551,8 @@
     "enterApiKey": "Enter your API key",
     "enterSharedSecret": "Enter your shared secret",
     "pasteToken": "Paste your ListenBrainz token",
-    "yearExample": "e.g. 1999",
-    "genreExample": "e.g. ROCK, POP, etc"
+    "yearExample": "e.g., 1999",
+    "genreExample": "e.g., ROCK, POP"
   },
   "player": {
     "nowPlaying": "Now Playing",
@@ -632,7 +641,8 @@
     "miniAlwaysOnTopLimited": "Always-on-top is limited by your window manager",
     "fullscreenWithKey": "Fullscreen ({key})",
     "exitFullscreenWithKey": "Exit Fullscreen ({key})",
-    "closeApp": "Close App"
+    "closeApp": "Close App",
+    "windowControls": "Window Controls"
   },
   "audioBadges": {
     "castingTo": "Casting to",
@@ -726,9 +736,9 @@
     "moreOptions": "More options",
     "shareQobuz": "Share (Qobuz)",
     "albumCredits": "Album credits",
-    "startArtistRadio" : "Start Artist Radio",
+    "startArtistRadio": "Start Artist Radio",
     "radio": {
-      "startArtistRadio" : "Start Artist Radio"
+      "startArtistRadio": "Start Artist Radio"
     },
     "previousAlbums": "Previous albums",
     "nextAlbums": "Next albums",
@@ -748,7 +758,15 @@
     "gotIt": "Got it",
     "copyCommand": "Copy command",
     "downloadOnGitHub": "Download on GitHub",
-    "visitReleasePage": "Visit release page"
+    "visitReleasePage": "Visit release page",
+    "okClose": "OK, close",
+    "tryAgain": "Try Again",
+    "startOffline": "Start Offline",
+    "selectAll": "Select All",
+    "clearSelection": "Clear selection",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "backToHome": "Back to home"
   },
   "settings": {
     "title": "Settings",
@@ -798,6 +816,7 @@
       "maxSampleRate": "Maximum Sample Rate",
       "maxSampleRateDesc": "Select your DAC's maximum supported sample rate. Tracks above this rate will be requested at a lower quality from Qobuz.",
       "refreshDevices": "Refresh device list",
+      "noDevicesFound": "No devices found",
       "alsaPlugin": "ALSA Plugin",
       "alsaPluginDesc": "hw: Bit-perfect, exclusive. plughw: Auto-convert. pcm: Most compatible.",
       "hardwareVolume": "Enable Hardware Volume Control",
@@ -1010,11 +1029,11 @@
         }
       },
       "fpsOptions": {
-        "disabled": "Disabled",
         "15": "15 FPS (Low)",
         "30": "30 FPS (Medium)",
         "60": "60 FPS (Smooth)",
-        "120": "120 FPS (Ultra)"
+        "120": "120 FPS (Ultra)",
+        "disabled": "Disabled"
       },
       "miniplayerDefaultView": "Mini player default view",
       "miniplayerViews": {
@@ -1382,6 +1401,12 @@
       "clearAllCaches": "Clear All Caches",
       "clearAllCachesDesc": "Clears all cached data above",
       "cachesDesc": "Queue, lyrics, artwork and metadata caches"
+    },
+    "noMatchesFound": "No matches found",
+    "immersive": {
+      "title": "Degraded performance",
+      "perfDegraded": "Degraded performance",
+      "perfDontShowAgain": "Don't show again"
     }
   },
   "metadata": {
@@ -1427,7 +1452,7 @@
   },
   "legal": {
     "brandingLine": "This application uses the Qobuz API but is not certified by Qobuz™.",
-    "brandingLineSuffix": "",
+    "brandingLineSuffix": "This application uses the Qobuz™ API but is not certified by Qobuz™.",
     "tosAgreementPrefix": "I have read the",
     "tosLinkText": "Qobuz™ Terms of Service",
     "tosRequiredToLogin": "Please confirm that you have read the Qobuz™ Terms of Service to continue.",
@@ -1460,7 +1485,8 @@
     "loadFailed": "Failed to load",
     "playbackFailed": "Playback failed",
     "cachingFailed": "Failed to prepare for offline",
-    "saveFailed": "Failed to save"
+    "saveFailed": "Failed to save",
+    "failedToLoad": "Failed to load"
   },
   "time": {
     "hours": "h",
@@ -1508,7 +1534,8 @@
     "sectionsDesc": "Reorder with arrows. Toggle visibility with switch.",
     "moveUp": "Move up",
     "moveDown": "Move down",
-    "resetToDefaults": "Reset to defaults"
+    "resetToDefaults": "Reset to defaults",
+    "itemsToShow": "Items to show"
   },
   "toast": {
     "loadingAlbum": "Loading album...",
@@ -1623,7 +1650,11 @@
       "newState": "Blacklist {status}",
       "enabled": "enabled",
       "disabled": "disabled"
-    } 
+    },
+    "loadingCredits": "Loading credits...",
+    "loadingDevices": "Loading devices...",
+    "addedToPlaylist": "Added to playlist",
+    "copied": "Copied!"
   },
   "offline": {
     "title": "Offline Mode",
@@ -1920,7 +1951,8 @@
       "restart": "Restart",
       "verify": "Verify",
       "done": "Done"
-    }
+    },
+    "title": "DAC Wizard"
   },
   "remoteControlWizard": {
     "steps": {
@@ -2315,7 +2347,7 @@
       "whatYouShouldKnow": {
         "heading": "What you should know:",
         "externalMusicFolderAccess": "Access to external music folders (NAS, network mounts) requires manual permission grants",
-        "audioFeatures": "ome audio features may behave differently due to sandbox restrictions",
+        "audioFeatures": "Some audio features may behave differently due to sandbox restrictions",
         "settingsPage": "The <strong>Settings</strong> page includes Flatpak-specific commands you can copy and run"
       },
       "note": "Check the <strong>Flatpak Sandbox</strong> section in Settings for detailed instructions and copy-paste commands."
@@ -2341,6 +2373,81 @@
       "whatsNewIn": "What's new in v${version}",
       "releaseNotesNotAvailable": "Release notes are not available.",
       "releaseNotesNotAvailableForVersion": "Release notes are not available for this version."
-    }
+    },
+    "newReleaseAvailable": "New release available",
+    "checkForUpdates": "Check for updates"
+  },
+  "performerRoles": {
+    "a&R": "A&R",
+    "acousticGuitar": "Acoustic Guitar",
+    "additionalEngineer": "Additional Engineer",
+    "additionalKeyboard": "Additional Keyboard",
+    "additionalVocalist": "Additional Vocalist",
+    "arranger": "Arranger",
+    "assistantEngineer": "Assistant Engineer",
+    "assistantMixer": "Assistant Mixer",
+    "associatedPerformer": "Associated Performer",
+    "backgroundVocalist": "Background Vocalist",
+    "bass": "Bass",
+    "bassGuitar": "Bass Guitar",
+    "choir": "Choir",
+    "composer": "Composer",
+    "composerLyricist": "Composer Lyricist",
+    "coProducer": "Co-Producer",
+    "digitalEditingEngineer": "Digital Editing Engineer",
+    "drum": "Drum",
+    "drums": "Drums",
+    "drumKit": "Drum Kit",
+    "electricGuitar": "Electric Guitar",
+    "engineer": "Engineer",
+    "featuredArtist": "Featured Artist",
+    "guitar": "Guitar",
+    "keyboard": "Keyboard",
+    "keyboards": "Keyboards",
+    "lyricist": "Lyricist",
+    "mainArtist": "Main Artist",
+    "masteringEngineer": "Mastering Engineer",
+    "mixer": "Mixer",
+    "mixingEngineer": "Mixing Engineer",
+    "musicPublisher": "Music Publisher",
+    "organ": "Organ",
+    "percussion": "Percussion",
+    "performance": "Performance",
+    "piano": "Piano",
+    "producer": "Producer",
+    "programmer": "Programmer",
+    "recordingEngineer": "Recording Engineer",
+    "recordingSecondEngineer": "Recording Second Engineer",
+    "remixer": "Remixer",
+    "secondEngineer": "Second Engineer",
+    "stringArranger": "String Arranger",
+    "strings": "Strings",
+    "studioPersonnel": "Studio Personnel",
+    "ukulele": "Ukulele",
+    "vocal": "Vocal",
+    "vocals": "Vocals",
+    "vocalEditingEngineer": "Vocal Editing Engineer",
+    "vocalist": "Vocalist",
+    "writer": "Writer"
+  },
+  "platforms": {
+    "appleMusic": "Apple Music",
+    "qobuz": "Qobuz",
+    "spotify": "Spotify",
+    "tidal": "Tidal",
+    "deezer": "Deezer"
+  },
+  "fileFormat": {
+    "flac": "FLAC",
+    "mp3": "MP3",
+    "aac": "AAC",
+    "opus": "Opus",
+    "alac": "ALAC"
+  },
+  "integrations": {
+    "connecting": "Connecting..."
+  },
+  "common": {
+    "name": "Name"
   }
 }
