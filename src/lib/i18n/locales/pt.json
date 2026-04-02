@@ -304,7 +304,9 @@
     "bookletRotate": "Girar",
     "bookletDownload": "Salvar encarte",
     "sameArtist": "Do mesmo artista",
-    "seeFullDiscography": "Ver discografia completa"
+    "seeFullDiscography": "Ver discografia completa",
+    "releasedOn": "em",
+    "releasedBy": "Lançado pela"
   },
   "artist": {
     "albums": "Álbuns",
@@ -365,7 +367,8 @@
       "searchInPage": "Buscar nesta página"
     },
     "noAlbumAppearancesFound": "Nenhuma aparição em álbum encontrada",
-    "noAlbumsFound": "Nenhum álbum encontrado"
+    "noAlbumsFound": "Nenhum álbum encontrado",
+    "bandProjects": "Bandas"
   },
   "sort": {
     "nameAZ": "Nome (A-Z)",
@@ -378,7 +381,13 @@
     "oldest": "Mais Antigos",
     "titleAZ": "Título (A-Z)",
     "titleZA": "Título (Z-A)",
-    "artist": "Artista"
+    "artist": "Artista",
+    "album": "Álbum",
+    "addedRecently": "Adicionado recentemente",
+    "duration": "Duração",
+    "sort": "Organizar",
+    "title": "Título",
+    "label": "Selo"
   },
   "playlist": {
     "tracks": "faixas",
@@ -631,7 +640,9 @@
     "restoreWindow": "Janela Restaurar",
     "qobuzConnectManage": "Qobuz Connect - Clique para gerenciar",
     "maximizeWindow": "Maximizar janela",
-    "windowControls": "Controles de janela"
+    "windowControls": "Controles de janela",
+    "closeApp": "Fechar aplicativo",
+    "connectedTo": "Conectado a"
   },
   "audioBadges": {
     "castingTo": "Transmitindo para",
@@ -745,7 +756,21 @@
     "visitReleasePage": "Visite a página de lançamento",
     "moveUp": "Subir",
     "moveDown": "Mover para baixo",
-    "backToHome": "De volta para casa"
+    "backToHome": "De volta para casa",
+    "clearSelection": "Limpar seleção",
+    "copyCommand": "Comando copiar",
+    "downloadOnGitHub": "Baixe no GitHub",
+    "findAvailableVersion": "Encontre a versão disponível",
+    "gotIt": "Entendi",
+    "okClose": "OK, feche",
+    "playFromHere": "Jogue daqui",
+    "playRadio": "Tocar rádio",
+    "playTrackOnly": "Reproduzir apenas a faixa",
+    "qobuzLink": "Link Qobuz™",
+    "removeOfflineCopy": "Remover cópia off-line",
+    "selectAll": "Selecionar tudo",
+    "startOffline": "Comece off-line",
+    "tryAgain": "Tente novamente"
   },
   "settings": {
     "title": "Configurações",
@@ -1234,7 +1259,9 @@
       "qobuzLinkHandlerDesc": "Registrar o QBZ como o aplicativo padrão para links qobuzapp:// do seu navegador.",
       "qobuzLinkHandlerError": "Falha ao atualizar o registro do manipulador de links.",
       "qconnectDeviceName": "Nome do dispositivo",
-      "qconnectDeviceNameDesc": "Nome exibido no Qobuz Connect"
+      "qconnectDeviceNameDesc": "Nome exibido no Qobuz Connect",
+      "noProtocolDeviceFound": "Nenhum dispositivo {protocol} encontrado",
+      "noProtocolDeviceFoundHint": "Certifique-se de que os dispositivos estejam na mesma rede"
     },
     "storage": {
       "title": "Armazenamento",
@@ -1511,7 +1538,8 @@
     "sectionsDesc": "Reordene com as setas. Alterne a visibilidade com o interruptor.",
     "moveUp": "Mover para cima",
     "moveDown": "Mover para baixo",
-    "resetToDefaults": "Restaurar padrões"
+    "resetToDefaults": "Restaurar padrões",
+    "itemsToShow": "Itens para mostrar"
   },
   "toast": {
     "loadingAlbum": "Carregando álbum...",
@@ -1624,7 +1652,13 @@
     "loadingDevices": "Carregando dispositivos...",
     "addedToPlaylist": "Adicionado à lista de reprodução",
     "copied": "Copiado!",
-    "loadingCredits": "Carregando créditos..."
+    "loadingCredits": "Carregando créditos...",
+    "blacklist": {
+      "disabled": "desabilitado",
+      "enabled": "habilitado",
+      "newState": "Lista negra {status}"
+    },
+    "laodingDevices": "Carregando dispositivos..."
   },
   "offline": {
     "title": "Modo Offline",
@@ -1680,7 +1714,9 @@
     "failed": "Falha ao armazenar para offline (clique para tentar novamente)"
   },
   "filter": {
-    "all": "Todos"
+    "all": "Todos",
+    "hidden": "Escondido",
+    "visible": "Visível"
   },
   "genreFilter": {
     "title": "Filtrar por gênero",
@@ -2185,7 +2221,8 @@
   "playlistManager": {
     "switchToFlat": "Visualização plana",
     "switchToFolders": "Visualização por pastas",
-    "emptyFolder": "Pasta vazia"
+    "emptyFolder": "Pasta vazia",
+    "heading": "Gerenciador de lista"
   },
   "linkResolver": {
     "title": "Abrir Link de Música",
@@ -2275,7 +2312,9 @@
     "opus": "Opus"
   },
   "keys": {
-    "esc": "Esc"
+    "esc": "Esc",
+    "enter": "Enter",
+    "shift": "Shift"
   },
   "platforms": {
     "appleMusic": "Apple Music",
@@ -2327,5 +2366,39 @@
   },
   "integrations": {
     "connecting": "Conectando..."
+  },
+  "about": {
+    "attributions": {
+      "lrclibDesc": "Provedor de letras sincronizadas",
+      "lucideDesc": "Biblioteca de ícones",
+      "lyricsOVHDesc": "API de letras",
+      "musicBrainzDesc": "Banco de dados de metadados musicais",
+      "rodioSymphoniaDesc": "Mecanismo de reprodução de áudio",
+      "qobuzDesc": "Serviço de streaming de música e API",
+      "songLinkOdesliDesc": "API de agregação de links de música",
+      "svelteDesc": "Estrutura de IU",
+      "tauriDesc": "Estrutura do aplicativo",
+      "heading": "Agradecimentos"
+    },
+    "author": "Autor",
+    "buildInfo": {
+      "build": "Construir",
+      "codename": "Codinome",
+      "heading": "Informações de construção",
+      "license": "Licença",
+      "platform": "Plataforma",
+      "version": "Versão"
+    },
+    "contributors": "Colaboradores",
+    "release": "Liberar",
+    "description": "Um cliente nativo de streaming de música para Linux, projetado para audiófilos que precisam de reprodução Hi-Fi perfeita, sem limitações de taxa de amostragem do navegador.",
+    "signatureDetail": "Ódio contra todas aquelas empresas que discriminam a comunidade Linux e não nos fornecem um cliente decente para seus produtos.",
+    "website": "Site"
+  },
+  "tracklist": {
+    "album": "Álbum",
+    "duration": "Duração",
+    "quality": "Qualidade",
+    "title": "Título"
   }
 }
