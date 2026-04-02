@@ -67,7 +67,10 @@
     "topTracksLabel": "TOP TRACKS",
     "topTracksBy": "Von {artist}",
     "andMore": "und mehr",
-    "playlistLabel": "PLAYLIST"
+    "playlistLabel": "PLAYLIST",
+    "allTags": "Alle",
+    "essentialDiscography": "Wesentliche Diskographie",
+    "qobuzPlaylists": "Die Playlists von Qobuz"
   },
   "discover": {
     "newReleases": "Neuerscheinungen",
@@ -263,7 +266,9 @@
     "plexSyncFailed": "Die Plex-Bibliothek konnte nicht synchronisiert werden",
     "syncPlexLibrary": "Plex-Bibliothek synchronisieren",
     "syncingPlexLibrary": "Plex wird synchronisiert...",
-    "singleFileAlbumNotice": "Dieses Album scheint eine einzelne Datei zu sein, die die gesamte CD enthält. Für die individuelle Titelnavigation muss der Plex-Server die Datei aufteilen (z. B. über einen Cue-Sheet-Scanner)."
+    "singleFileAlbumNotice": "Dieses Album scheint eine einzelne Datei zu sein, die die gesamte CD enthält. Für die individuelle Titelnavigation muss der Plex-Server die Datei aufteilen (z. B. über einen Cue-Sheet-Scanner).",
+    "plexSyncDone": "Plex-Bibliothek synchronisiert",
+    "source": "Quelle"
   },
   "album": {
     "tracks": "Titel",
@@ -299,7 +304,9 @@
     "bookletDownload": "Booklet speichern",
     "sameArtist": "Vom selben Künstler",
     "seeFullDiscography": "Vollständige Diskografie ansehen",
-    "loadError": "Albumtitel konnten nicht geladen werden. Bitte versuchen Sie es erneut."
+    "loadError": "Albumtitel konnten nicht geladen werden. Bitte versuchen Sie es erneut.",
+    "releasedOn": "am",
+    "releasedBy": "Erschienen bei"
   },
   "artist": {
     "albums": "Alben",
@@ -360,7 +367,8 @@
       "searchInPage": "Auf dieser Seite suchen"
     },
     "noAlbumAppearancesFound": "Keine Albumauftritte gefunden",
-    "noAlbumsFound": "Keine Alben gefunden"
+    "noAlbumsFound": "Keine Alben gefunden",
+    "bandProjects": "Bands"
   },
   "sort": {
     "nameAZ": "Name (A-Z)",
@@ -373,7 +381,13 @@
     "oldest": "Älteste zuerst",
     "titleAZ": "Titel (A-Z)",
     "titleZA": "Titel (Z-A)",
-    "artist": "Künstler"
+    "artist": "Künstler",
+    "album": "Album",
+    "addedRecently": "Kürzlich hinzugefügt",
+    "duration": "Laufzeit",
+    "sort": "Sortieren",
+    "title": "Titel",
+    "label": "Label"
   },
   "playlist": {
     "tracks": "Titel",
@@ -454,7 +468,13 @@
     "moveToFolder": "In Ordner verschieben",
     "moveToRoot": "Zum Root wechseln",
     "noFoldersYet": "Noch keine Ordner",
-    "noFoldersMatch": "Es stimmen keine Ordner überein"
+    "noFoldersMatch": "Es stimmen keine Ordner überein",
+    "copyToLibrary": "In die Bibliothek kopieren",
+    "customArtwork": "Individuelles Kunstwerk",
+    "visibility": "Sichtweite",
+    "removeCustomArtwork": "Entfernen Sie benutzerdefinierte Grafiken",
+    "setCustomArtwork": "Legen Sie benutzerdefinierte Grafiken fest",
+    "showInSidebar": "In der Seitenleiste anzeigen"
   },
   "favorites": {
     "title": "Favoriten",
@@ -617,7 +637,12 @@
     "miniWindowControls": "Mini-Player-Steuerung",
     "windowControls": "Fenstersteuerung",
     "miniAlwaysOnTopDisable": "Deaktivieren Sie „Immer im Vordergrund“.",
-    "miniSurfaceArtwork": "Kunstwerk"
+    "miniSurfaceArtwork": "Kunstwerk",
+    "closeApp": "App schließen",
+    "connectedTo": "Verbunden mit",
+    "miniAlwaysOnTopLimited": "Always-on-Top wird durch Ihren Fenstermanager eingeschränkt",
+    "miniSurfaceCompact": "Kompakt",
+    "miniSurfaceQueue": "Warteschlange"
   },
   "audioBadges": {
     "castingTo": "Übertragung an",
@@ -731,7 +756,21 @@
     "visitReleasePage": "Besuchen Sie die Release-Seite",
     "moveUp": "Bewegen Sie sich nach oben",
     "moveDown": "Bewegen Sie sich nach unten",
-    "backToHome": "Zurück nach Hause"
+    "backToHome": "Zurück nach Hause",
+    "clearSelection": "Klare Auswahl",
+    "copyCommand": "Befehl kopieren",
+    "downloadOnGitHub": "Auf GitHub herunterladen",
+    "findAvailableVersion": "Finden Sie die verfügbare Version",
+    "gotIt": "Habe es",
+    "okClose": "OK, schließen",
+    "playFromHere": "Spielen Sie von hier aus",
+    "playRadio": "Spielen Sie Radio",
+    "playTrackOnly": "Nur Titel abspielen",
+    "qobuzLink": "Qobuz™-Link",
+    "removeOfflineCopy": "Offline-Kopie entfernen",
+    "selectAll": "Wählen Sie „Alle“ aus",
+    "startOffline": "Offline starten",
+    "tryAgain": "Versuchen Sie es erneut"
   },
   "settings": {
     "title": "Einstellungen",
@@ -1062,6 +1101,15 @@
           "maxPerformanceDesc": "Software-Rendering (Cairo) mit deaktiviertem Blur. Maximale Kompatibilitaet, niedrigste GPU-Nutzung. Verwenden bei Ruckeln oder Abstuerzen.",
           "applied": "Profil angewendet: {profile}. QBZ neu starten, damit es wirksam wird."
         }
+      },
+      "miniplayerDefaultView": "Standardansicht des Miniplayers",
+      "miniplayerViews": {
+        "artwork": "Kunstwerk",
+        "compact": "Kompakt",
+        "lyrics": "Songtext",
+        "micro": "Mikro",
+        "remember": "Merken Sie sich die letzte Verwendung",
+        "queue": "Warteschlange"
       }
     },
     "library": {
@@ -1204,7 +1252,16 @@
       "plexSelectSection": "Wählen Sie einen Abschnitt aus",
       "plexStatusConnected": "Verbunden mit {server} (v{version}).",
       "plexStatusError": "Plex-Fehler: {error}",
-      "plexStatusPlaying": "Spielt: {title}"
+      "plexStatusPlaying": "Spielt: {title}",
+      "noProtocolDeviceFound": "Keine {Protokoll}-Geräte gefunden",
+      "noProtocolDeviceFoundHint": "Stellen Sie sicher, dass sich die Geräte im selben Netzwerk befinden",
+      "plexStatusPlayingDirect": "Direkte Wiedergabe von Plex: {title} ({rate} Hz / {bits}-bit, {contentType}).",
+      "plexStatusPlayingFallback": "{title} wird abgespielt, aber die direkte Wiedergabe ist nicht bestätigt (Teil: {partKey}).",
+      "plexStatusSectionsLoaded": "{count} Musikabschnitte geladen.",
+      "plexStatusTracksLoaded": "{count} Titel geladen.",
+      "plexToken": "Plex-Token",
+      "plexTokenPlaceholder": "Fügen Sie Ihr X-Plex-Token ein",
+      "remoteControlExperimental": "Experimental"
     },
     "storage": {
       "title": "Speicher",
@@ -1300,7 +1357,9 @@
       "manageCacheDesc": "Öffne den Cache-Ordner in deinem Dateimanager",
       "openFolderDesc": "Öffne den Cache-Ordner in deinem Dateimanager",
       "sectionSummary": "Zwischengespeicherte Titel für die Offline-Wiedergabe",
-      "repairing": "Reparieren..."
+      "repairing": "Reparieren...",
+      "showInLibrary": "In der lokalen Bibliothek anzeigen",
+      "showInLibraryDesc": "Zeigen Sie offline zwischengespeicherte Titel in der Ansicht „Lokale Bibliothek“ an"
     },
     "updates": {
       "title": "Updates",
@@ -1456,7 +1515,8 @@
     "sectionsDesc": "Mit Pfeilen neu anordnen. Sichtbarkeit mit Schalter umschalten.",
     "moveUp": "Nach oben verschieben",
     "moveDown": "Nach unten verschieben",
-    "resetToDefaults": "Auf Standardwerte zurücksetzen"
+    "resetToDefaults": "Auf Standardwerte zurücksetzen",
+    "itemsToShow": "Zu zeigende Elemente"
   },
   "toast": {
     "loadingAlbum": "Album wird geladen...",
@@ -1569,7 +1629,13 @@
     "addedToPlaylist": "Zur Playlist hinzugefügt",
     "copied": "Kopiert!",
     "loadingCredits": "Credits werden geladen...",
-    "playlistUpdated": "Playlist aktualisiert"
+    "playlistUpdated": "Playlist aktualisiert",
+    "blacklist": {
+      "disabled": "deaktiviert",
+      "enabled": "ermöglicht",
+      "newState": "Blacklist {status}"
+    },
+    "laodingDevices": "Geräte werden geladen..."
   },
   "offline": {
     "title": "Offline-Modus",
@@ -1625,7 +1691,9 @@
     "failed": "Caching fehlgeschlagen (zum erneuten Versuch klicken)"
   },
   "filter": {
-    "all": "Alle"
+    "all": "Alle",
+    "hidden": "Versteckt",
+    "visible": "Sichtbar"
   },
   "metadata": {
     "editMetadata": "Metadaten bearbeiten",
@@ -1989,7 +2057,8 @@
   "playlistManager": {
     "switchToFlat": "Flache Ansicht",
     "switchToFolders": "Ordneransicht",
-    "emptyFolder": "Leerer Ordner"
+    "emptyFolder": "Leerer Ordner",
+    "heading": "Playlist-Manager"
   },
   "linkResolver": {
     "title": "Musik-Link oeffnen",
@@ -2026,7 +2095,14 @@
       "tracksToAnalysePlaceholder": "123,45,78,90"
     },
     "result": {
-      "emptyHint": "Versuchte Fallback-Payload-Strategien. \nDieses Konto/Seed-Set gibt derzeit möglicherweise keine Mix-Kandidaten zurück."
+      "emptyHint": "Versuchte Fallback-Payload-Strategien. \nDieses Konto/Seed-Set gibt derzeit möglicherweise keine Mix-Kandidaten zurück.",
+      "algorithm": "Algorithmus",
+      "count": "{count} Titel",
+      "empty": "Es wurden keine vorgeschlagenen Titel zurückgegeben.",
+      "unknownArtist": "Unbekannter Künstler"
+    },
+    "actions": {
+      "saveAsPlaylist": "Als Playlist speichern"
     }
   },
   "weeklyMixes": {
@@ -2126,7 +2202,9 @@
     "opus": "Opus"
   },
   "keys": {
-    "esc": "Esc"
+    "esc": "Esc",
+    "enter": "Eingabetaste",
+    "shift": "Shift"
   },
   "platforms": {
     "appleMusic": "Apple Music",
@@ -2191,7 +2269,8 @@
       "screenshot": "[Screenshot: Einstellungen > Fernbedienung umschalten]",
       "step1": "Gehen Sie zu Einstellungen → Fernbedienung",
       "step3": "Notieren Sie sich die Portnummer (Standard: 8182)",
-      "title": "Aktivieren Sie die Fernbedienung"
+      "title": "Aktivieren Sie die Fernbedienung",
+      "portNote": "Der Standardport ist 8182. Sie können ihn bei Bedarf ändern, müssen ihn jedoch während des Pairings aktualisieren."
     },
     "https": {
       "step2": "QBZ generiert ein selbstsigniertes Zertifikat",
@@ -2247,7 +2326,8 @@
       "pwaStep1": "Öffnen Sie die Kontroll-URL auf Ihrem Gerät",
       "pwaStep2": "Verwenden Sie „Zum Startbildschirm hinzufügen“ oder „App installieren“.",
       "pwaStep3": "Starten Sie von Ihrem Startbildschirm aus für ein Vollbilderlebnis",
-      "subtitle": "Sie können QBZ jetzt fernsteuern"
+      "subtitle": "Sie können QBZ jetzt fernsteuern",
+      "title": "Einrichtung abgeschlossen!"
     },
     "pair": {
       "intro": "Verbinden Sie nun Ihr Steuergerät über den QR-Code oder die manuelle Eingabe mit QBZ.",
@@ -2286,5 +2366,39 @@
       "subtitle": "Steuern Sie QBZ von einem anderen Gerät aus",
       "title": "Einrichtung der Fernbedienung"
     }
+  },
+  "about": {
+    "attributions": {
+      "lrclibDesc": "Anbieter synchronisierter Liedtexte",
+      "lucideDesc": "Symbolbibliothek",
+      "lyricsOVHDesc": "Songtext-API",
+      "musicBrainzDesc": "Musik-Metadaten-Datenbank",
+      "rodioSymphoniaDesc": "Audio-Wiedergabe-Engine",
+      "qobuzDesc": "Musik-Streaming-Dienst und API",
+      "songLinkOdesliDesc": "API zur Aggregation von Musiklinks",
+      "svelteDesc": "UI-Framework",
+      "tauriDesc": "Anwendungsrahmen",
+      "heading": "Danksagungen"
+    },
+    "author": "Autor",
+    "buildInfo": {
+      "build": "Bauen",
+      "codename": "Codename",
+      "heading": "Build-Info",
+      "license": "Lizenz",
+      "platform": "Plattform",
+      "version": "Version"
+    },
+    "contributors": "Mitwirkende",
+    "release": "Freigeben",
+    "description": "Ein nativer Musik-Streaming-Client für Linux, der für Audiophile entwickelt wurde, die eine bitgenaue Hi-Fi-Wiedergabe ohne Einschränkungen der Browser-Samplerate benötigen.",
+    "signatureDetail": "Hass gegenüber all den Unternehmen, die die Linux-Community diskriminieren und uns keinen anständigen Kunden für ihr Produkt bieten.",
+    "website": "Webseite"
+  },
+  "tracklist": {
+    "album": "Album",
+    "duration": "Laufzeit",
+    "quality": "Qualität",
+    "title": "Titel"
   }
 }
