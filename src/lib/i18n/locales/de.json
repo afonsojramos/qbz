@@ -254,7 +254,16 @@
     "refreshMetadata": "Metadaten aktualisieren",
     "albumSettings": "Albumeinstellungen",
     "albumArtwork": "Album-Artwork",
-    "uploadCover": "Cover hochladen"
+    "uploadCover": "Cover hochladen",
+    "background": "Hintergrund",
+    "explicit": "Explizit",
+    "folderName": "Name",
+    "localFiles": "Lokale Dateien",
+    "plexLibrary": "Plex-Bibliothek",
+    "plexSyncFailed": "Die Plex-Bibliothek konnte nicht synchronisiert werden",
+    "syncPlexLibrary": "Plex-Bibliothek synchronisieren",
+    "syncingPlexLibrary": "Plex wird synchronisiert...",
+    "singleFileAlbumNotice": "Dieses Album scheint eine einzelne Datei zu sein, die die gesamte CD enthält. Für die individuelle Titelnavigation muss der Plex-Server die Datei aufteilen (z. B. über einen Cue-Sheet-Scanner)."
   },
   "album": {
     "tracks": "Titel",
@@ -289,7 +298,8 @@
     "bookletRotate": "Drehen",
     "bookletDownload": "Booklet speichern",
     "sameArtist": "Vom selben Künstler",
-    "seeFullDiscography": "Vollständige Diskografie ansehen"
+    "seeFullDiscography": "Vollständige Diskografie ansehen",
+    "loadError": "Albumtitel konnten nicht geladen werden. Bitte versuchen Sie es erneut."
   },
   "artist": {
     "albums": "Alben",
@@ -348,7 +358,9 @@
       "nextResult": "Nächstes Ergebnis",
       "close": "Suche schließen",
       "searchInPage": "Auf dieser Seite suchen"
-    }
+    },
+    "noAlbumAppearancesFound": "Keine Albumauftritte gefunden",
+    "noAlbumsFound": "Keine Alben gefunden"
   },
   "sort": {
     "nameAZ": "Name (A-Z)",
@@ -436,7 +448,13 @@
     "playlists": "Playlists",
     "folders": "Ordner",
     "dragPlaylists": "Playlists zum Neuordnen ziehen",
-    "dropOntoFolder": "oder auf einen Ordner ablegen, um sie zu verschieben."
+    "dropOntoFolder": "oder auf einen Ordner ablegen, um sie zu verschieben.",
+    "newFolder": "Neuer Ordner",
+    "folderNamePlaceholder": "Geben Sie den Ordnernamen ein",
+    "moveToFolder": "In Ordner verschieben",
+    "moveToRoot": "Zum Root wechseln",
+    "noFoldersYet": "Noch keine Ordner",
+    "noFoldersMatch": "Es stimmen keine Ordner überein"
   },
   "favorites": {
     "title": "Favoriten",
@@ -581,7 +599,25 @@
     "dragWindow": "Fenster verschieben",
     "normalizationOff": "Lautstärkenormalisierung: Aus",
     "normalizationOn": "Lautstärkenormalisierung: Ein",
-    "normalizationApplied": "Lautstärkenormalisierung: Aktiv"
+    "normalizationApplied": "Lautstärkenormalisierung: Aktiv",
+    "disableInfinitePlay": "Deaktivieren Sie die Infinite Play",
+    "enableInfinitePlay": "Aktivieren Sie „Infinite Play“.",
+    "exitFullscreenWithKey": "Vollbild beenden ({key})",
+    "miniClose": "Schließen Sie den Miniplayer",
+    "miniExpand": "Erweitern Sie es zur vollständigen App",
+    "exitImmersiveWithKey": "Immersive beenden ({key})",
+    "fullscreenWithKey": "Vollbild ({key})",
+    "miniSurfaceLyrics": "Songtext",
+    "qobuzConnect": "Qobuz Connect",
+    "restoreWindow": "Fenster wiederherstellen",
+    "miniAlwaysOnTopEnable": "Immer an der Spitze",
+    "qobuzConnectManage": "Qobuz Connect – Zum Verwalten klicken",
+    "maximizeWindow": "Fenster maximieren",
+    "miniSurfaceMicro": "Mikro",
+    "miniWindowControls": "Mini-Player-Steuerung",
+    "windowControls": "Fenstersteuerung",
+    "miniAlwaysOnTopDisable": "Deaktivieren Sie „Immer im Vordergrund“.",
+    "miniSurfaceArtwork": "Kunstwerk"
   },
   "audioBadges": {
     "castingTo": "Übertragung an",
@@ -689,7 +725,13 @@
     },
     "newFolder": "Neuer Ordner",
     "previousArtists": "Vorherige Künstler",
-    "nextArtists": "Nächste Künstler"
+    "nextArtists": "Nächste Künstler",
+    "switchToImmersiveView": "Zur immersiven Ansicht wechseln (V)",
+    "switchToSplitView": "Zur geteilten Ansicht wechseln (V)",
+    "visitReleasePage": "Besuchen Sie die Release-Seite",
+    "moveUp": "Bewegen Sie sich nach oben",
+    "moveDown": "Bewegen Sie sich nach unten",
+    "backToHome": "Zurück nach Hause"
   },
   "settings": {
     "title": "Einstellungen",
@@ -762,7 +804,8 @@
       "resetConfirmTitle": "Audio- & Wiedergabeeinstellungen zurücksetzen?",
       "resetConfirmDesc": "Dies setzt alle Audioausgabe-, Backend- und Wiedergabeeinstellungen auf die Standardwerte zurück. Die Wiedergabe wird gestoppt.",
       "resetSuccess": "Audio- und Wiedergabeeinstellungen wurden auf die Standardwerte zurückgesetzt.",
-      "resetError": "Fehler beim Zurücksetzen der Audioeinstellungen: {error}"
+      "resetError": "Fehler beim Zurücksetzen der Audioeinstellungen: {error}",
+      "noDevicesFound": "Keine Geräte gefunden"
     },
     "playback": {
       "title": "Wiedergabe",
@@ -951,11 +994,11 @@
         }
       },
       "fpsOptions": {
-        "disabled": "Deaktiviert",
         "15": "15 FPS (Niedrig)",
         "30": "30 FPS (Mittel)",
         "60": "60 FPS (Flüssig)",
-        "120": "120 FPS (Ultra)"
+        "120": "120 FPS (Ultra)",
+        "disabled": "Deaktiviert"
       },
       "startupPage": "Startseite",
       "startupPageDesc": "Wähle welche Seite beim App-Start angezeigt wird",
@@ -1145,7 +1188,23 @@
       "qobuzLinkHandlerDesc": "QBZ als Standard-App fuer qobuzapp://-Links aus dem Browser registrieren.",
       "qobuzLinkHandlerError": "Fehler beim Aktualisieren der Link-Handler-Registrierung.",
       "qconnectDeviceName": "Gerätename",
-      "qconnectDeviceNameDesc": "Angezeigter Name in Qobuz Connect"
+      "qconnectDeviceNameDesc": "Angezeigter Name in Qobuz Connect",
+      "plexActionLoadTracks": "Titel laden",
+      "remoteControlSetupGuide": "Setup-Anleitung",
+      "plexBaseUrl": "Plex-Basis-URL",
+      "plexTrackMeta": "{artist} - {album} - {rate} Hz / {bits}-bit",
+      "plexActionPing": "Ping-Plex",
+      "plexActionPlay": "Spielen",
+      "plexActionPlaying": "Spielen...",
+      "plexMusicSection": "Musikabteilung",
+      "plexBaseUrlPlaceholder": "http://127.0.0.1:32400",
+      "plexNoTracksLoaded": "Es sind noch keine Titel geladen.",
+      "plexPoc": "Plex LAN POC",
+      "plexPocDesc": "Experimentelle Nur-lokale Integration. Verwendet direkte Medienteile von Plex, ohne die QBZ-Wiedergabe zu ersetzen.",
+      "plexSelectSection": "Wählen Sie einen Abschnitt aus",
+      "plexStatusConnected": "Verbunden mit {server} (v{version}).",
+      "plexStatusError": "Plex-Fehler: {error}",
+      "plexStatusPlaying": "Spielt: {title}"
     },
     "storage": {
       "title": "Speicher",
@@ -1287,7 +1346,13 @@
       "clearAllCaches": "Alle Caches löschen",
       "clearAllCachesDesc": "Löscht alle oben aufgeführten zwischengespeicherten Daten",
       "cachesDesc": "Cache für Warteschlange, Songtexte, Artwork und Metadaten"
-    }
+    },
+    "immersive": {
+      "title": "Leistungseinbußen",
+      "perfDegraded": "Leistungseinbußen",
+      "perfDontShowAgain": "Nicht mehr anzeigen"
+    },
+    "noMatchesFound": "Keine Übereinstimmungen gefunden"
   },
   "auth": {
     "login": "Anmelden",
@@ -1309,7 +1374,7 @@
   },
   "legal": {
     "brandingLine": "Diese Anwendung verwendet die Qobuz-API, ist jedoch nicht von Qobuz™ zertifiziert.",
-    "brandingLineSuffix": "",
+    "brandingLineSuffix": "Diese Anwendung verwendet die Qobuz™-API, ist jedoch nicht von Qobuz™ zertifiziert.",
     "tosAgreementPrefix": "Ich habe die",
     "tosLinkText": "Qobuz™-Nutzungsbedingungen",
     "tosRequiredToLogin": "Bitte bestätigen Sie, dass Sie die Qobuz™-Nutzungsbedingungen gelesen haben, um fortzufahren.",
@@ -1342,7 +1407,8 @@
     "loadFailed": "Laden fehlgeschlagen",
     "playbackFailed": "Wiedergabe fehlgeschlagen",
     "cachingFailed": "Vorbereitung für Offline fehlgeschlagen",
-    "saveFailed": "Speichern fehlgeschlagen"
+    "saveFailed": "Speichern fehlgeschlagen",
+    "failedToLoad": "Laden fehlgeschlagen"
   },
   "time": {
     "hours": "h",
@@ -1498,7 +1564,12 @@
     "failedSaveAutoplay": "Speichern der Autoplay-Voreinstellung fehlgeschlagen",
     "failedSaveIconVisibility": "Speichern der Icon-Sichtbarkeit fehlgeschlagen",
     "failedRepairOffline": "Reparatur der Offline-Bibliothek fehlgeschlagen: {error}",
-    "failedOpenCacheFolder": "Öffnen des Cache-Ordners fehlgeschlagen"
+    "failedOpenCacheFolder": "Öffnen des Cache-Ordners fehlgeschlagen",
+    "loadingDevices": "Geräte werden geladen...",
+    "addedToPlaylist": "Zur Playlist hinzugefügt",
+    "copied": "Kopiert!",
+    "loadingCredits": "Credits werden geladen...",
+    "playlistUpdated": "Playlist aktualisiert"
   },
   "offline": {
     "title": "Offline-Modus",
@@ -1752,7 +1823,8 @@
         "custom": "Benutzerdefiniert..."
       },
       "customPlaceholder": "Binärname (z.B. mein-player)",
-      "warning": "Beste Ergebnisse: Verwenden Sie Bit-Perfect nur pro App. Globales Pulse-Bit-Perfect kann Browser und Apps beschädigen, die festes 48kHz ausgeben."
+      "warning": "Beste Ergebnisse: Verwenden Sie Bit-Perfect nur pro App. Globales Pulse-Bit-Perfect kann Browser und Apps beschädigen, die festes 48kHz ausgeben.",
+      "customApps": "Benutzerdefinierte Apps:"
     },
     "wireplumberConfig": {
       "title": "Nur Ihren DAC ansteuern",
@@ -1936,7 +2008,25 @@
     "algorithmInfo": "Basierend auf dem Qobuz™-Vorschlagsalgorithmus, kuratiert aus deinem lokalen Hoerverlauf.",
     "errors": {
       "fetchFailed": "Dynamische Vorschlaege konnten nicht geladen werden.",
-      "insufficientHistory": "Nicht genuegend Hoerverlauf fuer Vorschlaege. Hoere etwas Musik und versuche es spaeter erneut."
+      "insufficientHistory": "Nicht genuegend Hoerverlauf fuer Vorschlaege. Hoere etwas Musik und versuche es spaeter erneut.",
+      "emptyPlaylist": "Keine Titel zum Speichern als Playlist verfügbar.",
+      "playlistsLoadFailed": "Deine Playlists konnten nicht geladen werden.",
+      "prefillFailed": "Aktuelle Daten aus QBZ-Protokollen konnten nicht geladen werden.",
+      "rawProbeFailed": "Die rohe Endpunktantwort konnte nicht abgerufen werden."
+    },
+    "form": {
+      "limit": "Limit",
+      "run": "Vorschläge abrufen",
+      "listenedTrackIdsPlaceholder": "123,456,789",
+      "listenedTrackIds": "IDs der gehörten Titel (durch Kommas getrennt)",
+      "prefillFromRecents": "Verwenden Sie das aktuelle QBZ-Protokoll",
+      "rawResponse": "Rohe Antwort",
+      "probeRaw": "Rohantwort prüfen",
+      "tracksToAnalyse": "Zu analysierende Titel (eine Zeile: Titel-ID, Künstler-ID, Genre-ID, Label-ID)",
+      "tracksToAnalysePlaceholder": "123,45,78,90"
+    },
+    "result": {
+      "emptyHint": "Versuchte Fallback-Payload-Strategien. \nDieses Konto/Seed-Set gibt derzeit möglicherweise keine Mix-Kandidaten zurück."
     }
   },
   "weeklyMixes": {
@@ -2027,5 +2117,174 @@
     "rememberChoice": "Meine Wahl merken",
     "autoRetrying": "Erneuter Versuch mit niedrigerer Qualitaet...",
     "autoSkipping": "Titel wird uebersprungen (Serverproblem)..."
+  },
+  "fileFormat": {
+    "aac": "AAC",
+    "alac": "ALAC",
+    "flac": "FLAC",
+    "mp3": "MP3",
+    "opus": "Opus"
+  },
+  "keys": {
+    "esc": "Esc"
+  },
+  "platforms": {
+    "appleMusic": "Apple Music",
+    "deezer": "Deezer",
+    "qobuz": "Qobuz",
+    "spotify": "Spotify",
+    "tidal": "Tidal"
+  },
+  "updates": {
+    "snap": {
+      "intro": "Für ein optimales Erlebnis müssen einige Audiostecker manuell angeschlossen werden.",
+      "note": "Führen Sie diese Befehle in einem Terminal aus und starten Sie dann QBZ neu. Dies muss nur einmal durchgeführt werden.",
+      "optional": "Optional (für externe Laufwerke / NAS):",
+      "requiredPlugConnections": "Erforderliche Steckverbindungen:"
+    },
+    "checkForUpdates": "Suchen Sie nach Updates",
+    "flatpak": {
+      "intro": "Es gibt einige Überlegungen, um das beste Erlebnis zu gewährleisten.",
+      "note": "Detaillierte Anweisungen und Befehle zum Kopieren und Einfügen finden Sie im Abschnitt <strong>Flatpak Sandbox</strong> in den Einstellungen.",
+      "whatYouShouldKnow": {
+        "audioFeatures": "Einige Audiofunktionen verhalten sich aufgrund von Sandbox-Einschränkungen möglicherweise anders",
+        "settingsPage": "Die Seite <strong>Einstellungen</strong> enthält Flatpak-spezifische Befehle, die Sie kopieren und ausführen können",
+        "externalMusicFolderAccess": "Der Zugriff auf externe Musikordner (NAS, Netzwerk-Mounts) erfordert manuelle Berechtigungserteilungen",
+        "heading": "Was Sie wissen sollten:"
+      }
+    },
+    "whatsNew": {
+      "whatsNew": "Was ist neu",
+      "whatsNewIn": "Was ist neu in v${version}?",
+      "releaseNotesNotAvailable": "Versionshinweise sind nicht verfügbar.",
+      "releaseNotesNotAvailableForVersion": "Für diese Version sind keine Versionshinweise verfügbar."
+    },
+    "newVersionAvailable": "Neue Version verfügbar: v{version}",
+    "runningIn": "Läuft in {env}",
+    "noUpdatesFound": "Keine Updates gefunden.",
+    "updateReminder": {
+      "hint": "Kann über die Einstellungen wieder aktiviert werden",
+      "doNotNotifyAboutReleases": "Benachrichtigen Sie mich nicht über Neuerscheinungen",
+      "doNotNotifyAgain": "Benachrichtigen Sie mich nicht noch einmal über diese Veröffentlichung",
+      "newVersionReminder": "Erinnerung an neue Version",
+      "remindMeLater": "Erinnere mich später daran"
+    },
+    "runningInsideSandbox": "QBZ hat erkannt, dass es in einer <strong>{env}-Sandbox</strong> ausgeführt wird.",
+    "newReleaseAvailable": "Neue Version verfügbar",
+    "newVersionReleased": "Eine neue Version von QBZ wurde veröffentlicht"
+  },
+  "common": {
+    "name": "Name"
+  },
+  "integrations": {
+    "connecting": "Verbinden..."
+  },
+  "remoteControlWizard": {
+    "buttons": {
+      "back": "Zurück",
+      "close": "Schließen",
+      "next": "Nächste"
+    },
+    "enable": {
+      "step2": "Schalten Sie „Fernbedienung aktivieren“ ein",
+      "subtitle": "Schalten Sie den lokalen API-Server ein",
+      "screenshot": "[Screenshot: Einstellungen > Fernbedienung umschalten]",
+      "step1": "Gehen Sie zu Einstellungen → Fernbedienung",
+      "step3": "Notieren Sie sich die Portnummer (Standard: 8182)",
+      "title": "Aktivieren Sie die Fernbedienung"
+    },
+    "https": {
+      "step2": "QBZ generiert ein selbstsigniertes Zertifikat",
+      "intro": "Um die Fernbedienung als Progressive Web App (PWA) auf Ihrem Telefon oder Tablet zu installieren, ist HTTPS erforderlich.",
+      "screenshot": "[Screenshot: HTTPS-Umschaltung aktiviert]",
+      "subtitle": "Erforderlich für die PWA-Installation",
+      "step1": "Aktivieren Sie „Sichere Verbindung (HTTPS)“",
+      "step3": "Eine Zertifikats-URL wird angezeigt",
+      "title": "Aktivieren Sie die sichere Verbindung",
+      "whyReason1": "Moderne Browser erfordern HTTPS für die PWA-Installation",
+      "whyReason2": "Eine sichere Verbindung schützt Ihr Pairing-Token",
+      "whyReason3": "Erforderlich für Servicemitarbeiter und Offlinefunktionen",
+      "whyRequired": "Warum HTTPS?"
+    },
+    "certificate": {
+      "androidStep1": "Öffnen Sie die Zertifikats-URL in Chrome",
+      "androidStep2": "Öffnen Sie die heruntergeladene .crt-Datei",
+      "androidStep3": "Geben Sie einen Namen ein (z. B. „QBZ“)",
+      "intro": "Da QBZ ein selbstsigniertes Zertifikat verwendet, müssen Sie es auf Ihrem steuernden Gerät installieren und als vertrauenswürdig einstufen.",
+      "iosStep1": "Öffnen Sie die Zertifikats-URL in Safari",
+      "iosStep2": "Tippen Sie auf „Zulassen“, um das Profil herunterzuladen",
+      "iosStep3": "Gehen Sie zu Einstellungen → Profil heruntergeladen → Installieren",
+      "macosStep1": "Öffnen Sie die Zertifikats-URL in Safari",
+      "androidStep4": "Wählen Sie als Nutzungsart „VPN und Apps“ oder „WLAN“.",
+      "androidStep5": "Tippen Sie zum Installieren auf OK",
+      "androidTitle": "Android",
+      "iosStep4": "Gehen Sie zu Einstellungen → Allgemein → Info → Zertifikatsvertrauenseinstellungen",
+      "iosStep5": "Aktivieren Sie volle Vertrauenswürdigkeit für das QBZ-Zertifikat",
+      "iosTitle": "iOS (iPhone/iPad)",
+      "macosStep2": "Öffnen Sie die heruntergeladene .crt-Datei",
+      "macosStep3": "Der Schlüsselbundzugriff wird geöffnet – zum Anmeldeschlüsselbund hinzufügen",
+      "macosStep4": "Doppelklicken Sie auf das Zertifikat und erweitern Sie „Vertrauen“.",
+      "macosStep5": "Stellen Sie „Bei Verwendung dieses Zertifikats“ auf „Immer vertrauen“ ein.",
+      "macosTitle": "macOS",
+      "step1": "Kopieren Sie die Zertifikats-URL aus den QBZ-Einstellungen",
+      "screenshot": "[Screenshot: Zertifikat-URL in den QBZ-Einstellungen]",
+      "step2": "Öffnen Sie die URL im Browser Ihres steuernden Geräts",
+      "step3": "Laden Sie das Zertifikat herunter und installieren Sie es",
+      "step4": "Vertrauen Sie dem Zertifikat beim Surfen im Internet",
+      "subtitle": "Vertrauen Sie dem QBZ-Zertifikat auf Ihrem Gerät",
+      "title": "Zertifikat installieren",
+      "windowsStep1": "Öffnen Sie die Zertifikats-URL in einem beliebigen Browser",
+      "windowsStep2": "Öffnen Sie die heruntergeladene .crt-Datei",
+      "windowsStep3": "Klicken Sie auf „Zertifikat installieren…“",
+      "windowsStep4": "Wählen Sie „Lokaler Computer“ und dann „Weiter“.",
+      "windowsStep5": "Wählen Sie „Alle Zertifikate platzieren in: Vertrauenswürdige Stammzertifizierungsstellen“",
+      "windowsStep6": "Beenden Sie den Assistenten und bestätigen Sie",
+      "windowsTitle": "Windows"
+    },
+    "done": {
+      "close": "Schließen",
+      "pwaHint": "Für das beste Erlebnis installieren Sie QBZ Control als PWA:",
+      "pwaStep1": "Öffnen Sie die Kontroll-URL auf Ihrem Gerät",
+      "pwaStep2": "Verwenden Sie „Zum Startbildschirm hinzufügen“ oder „App installieren“.",
+      "pwaStep3": "Starten Sie von Ihrem Startbildschirm aus für ein Vollbilderlebnis",
+      "subtitle": "Sie können QBZ jetzt fernsteuern"
+    },
+    "pair": {
+      "intro": "Verbinden Sie nun Ihr Steuergerät über den QR-Code oder die manuelle Eingabe mit QBZ.",
+      "manualMethod": "Manuelle Eingabe",
+      "manualStep1": "Beachten Sie die in QBZ angezeigte lokale URL",
+      "manualStep2": "Öffnen Sie diese URL auf Ihrem steuernden Gerät",
+      "manualStep3": "Geben Sie die URL und das Token manuell ein",
+      "qrMethod": "QR-Code (empfohlen)",
+      "qrStep1": "Klicken Sie in den QBZ-Einstellungen auf „QR anzeigen“.",
+      "qrStep2": "Öffnen Sie die QBZ-Kontroll-URL auf Ihrem Gerät",
+      "qrStep3": "Scannen Sie den QR-Code, um die Verbindungsdetails automatisch auszufüllen",
+      "screenshot": "[Screenshot: QR-Code-Kopplungsbildschirm]",
+      "subtitle": "Verbinden Sie sich mit QBZ",
+      "title": "Koppeln Sie Ihr Gerät",
+      "trouble1": "Stellen Sie sicher, dass sich beide Geräte im selben Netzwerk befinden",
+      "trouble2": "Überprüfen Sie, ob die Firewall Port 8182 zulässt",
+      "troubleshooting": "Wenn die Verbindung fehlschlägt:",
+      "trouble3": "Stellen Sie sicher, dass HTTPS aktiviert ist und das Zertifikat vertrauenswürdig ist"
+    },
+    "steps": {
+      "certificate": "Zertifikat",
+      "done": "Erledigt",
+      "enable": "Aktivieren",
+      "https": "HTTPS",
+      "pair": "Koppeln",
+      "welcome": "Willkommen"
+    },
+    "welcome": {
+      "feature1": "Steuern Sie die Wiedergabe (Wiedergabe, Pause, Überspringen)",
+      "feature2": "Verwalten Sie Ihre Warteschlange",
+      "feature3": "Titel suchen und hinzufügen",
+      "feature4": "Als PWA auf Ihrem Gerät installieren",
+      "intro": "Diese Anleitung hilft Ihnen bei der Einrichtung der Fernbedienung, damit Sie QBZ von Ihrem Telefon, Tablet oder einem anderen Gerät im selben Netzwerk aus steuern können.",
+      "screenshot": "[Screenshot: Fernbedienung der PWA auf Mobilgeräten]",
+      "start": "Legen Sie los",
+      "subtitle": "Steuern Sie QBZ von einem anderen Gerät aus",
+      "title": "Einrichtung der Fernbedienung"
+    }
   }
 }
