@@ -479,7 +479,8 @@
     "dragPlaylists": "Drag playlists to reorder them",
     "dropOntoFolder": "or drop onto a folder to move.",
     "newFolder": "New folder",
-    "folderNamePlaceholder": "Enter folder name"
+    "folderNamePlaceholder": "Enter folder name",
+    "suggestedSongs": "Suggested songs"
   },
   "favorites": {
     "title": "Favorites",
@@ -1663,7 +1664,8 @@
     "loadingCredits": "Loading credits...",
     "loadingDevices": "Loading devices...",
     "addedToPlaylist": "Added to playlist",
-    "copied": "Copied!"
+    "copied": "Copied!",
+    "findingSimilarArtists": "Finding similar artists..."
   },
   "offline": {
     "title": "Offline Mode",
@@ -2387,7 +2389,7 @@
     "checkForUpdates": "Check for updates"
   },
   "performerRoles": {
-    "a&R": "A&R",
+    "a&R": "Artists and Repertoire",
     "acousticGuitar": "Acoustic Guitar",
     "additionalEngineer": "Additional Engineer",
     "additionalKeyboard": "Additional Keyboard",
@@ -2458,5 +2460,9 @@
   },
   "common": {
     "name": "Name"
+  },
+  "musician": {
+    "knownFor": "Known for",
+    "viewArtistPage": "View Artist Page"
   }
 }

@@ -479,7 +479,8 @@
     "dragPlaylists": "Arrastra las listas para cambiarlas de orden",
     "dropOntoFolder": "o arrástralo a una carpeta para moverlo.",
     "newFolder": "Nueva carpeta",
-    "folderNamePlaceholder": "Introduzca el nombre de la carpeta"
+    "folderNamePlaceholder": "Introduzca el nombre de la carpeta",
+    "suggestedSongs": "Canciones sugeridas"
   },
   "favorites": {
     "title": "Favoritos",
@@ -1663,7 +1664,8 @@
     "addedToPlaylist": "Agregado a la lista",
     "copied": "¡Copiado!",
     "loadingCredits": "Cargando créditos...",
-    "laodingDevices": "Cargando dispositivos..."
+    "laodingDevices": "Cargando dispositivos...",
+    "findingSimilarArtists": "Encontrar artistas similares..."
   },
   "offline": {
     "title": "Modo Offline",
@@ -2405,5 +2407,62 @@
   },
   "integrations": {
     "connecting": "Conectando..."
+  },
+  "musician": {
+    "knownFor": "conocido por",
+    "viewArtistPage": "Ver página del artista"
+  },
+  "performerRoles": {
+    "a&R": "Artistas y repertorio",
+    "acousticGuitar": "guitarra acustica",
+    "additionalEngineer": "Ingeniero adicional",
+    "additionalKeyboard": "Teclado adicional",
+    "additionalVocalist": "Vocalista adicional",
+    "arranger": "Arreglista",
+    "assistantEngineer": "Ingeniero asistente",
+    "assistantMixer": "Asistente de mezclador",
+    "associatedPerformer": "Intérprete asociado",
+    "backgroundVocalist": "Vocalista de fondo",
+    "bass": "Bajo",
+    "bassGuitar": "Bajo",
+    "choir": "Coro",
+    "coProducer": "Coproductor",
+    "composer": "Compositor",
+    "composerLyricist": "Compositor letrista",
+    "digitalEditingEngineer": "Ingeniero de edición digital",
+    "drum": "Tambor",
+    "drumKit": "Batería",
+    "drums": "Batería",
+    "electricGuitar": "Guitarra eléctrica",
+    "engineer": "Ingeniero",
+    "featuredArtist": "Artista destacado",
+    "guitar": "Guitarra",
+    "keyboard": "Teclado",
+    "keyboards": "Teclados",
+    "lyricist": "Letrista",
+    "mainArtist": "Artista principal",
+    "masteringEngineer": "Ingeniero de masterización",
+    "mixer": "Mezclador",
+    "mixingEngineer": "Ingeniero de Mezcla",
+    "musicPublisher": "Editor de música",
+    "organ": "Órgano",
+    "percussion": "Percusión",
+    "performance": "Actuación",
+    "piano": "Piano",
+    "producer": "Productor",
+    "recordingEngineer": "Ingeniero de grabación",
+    "programmer": "Programador",
+    "recordingSecondEngineer": "Segundo ingeniero de grabación",
+    "remixer": "Remezclador",
+    "secondEngineer": "Segundo ingeniero",
+    "stringArranger": "Arreglista de cuerdas",
+    "strings": "Instrumentos de cuerda",
+    "studioPersonnel": "Personal del estudio",
+    "ukulele": "ukelele",
+    "vocal": "Vocal",
+    "vocalEditingEngineer": "Ingeniero de edición vocal",
+    "vocalist": "Vocalista",
+    "vocals": "Voz",
+    "writer": "Escritor"
   }
 }

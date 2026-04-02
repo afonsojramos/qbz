@@ -479,7 +479,8 @@
     "visibility": "Sichtweite",
     "removeCustomArtwork": "Entfernen Sie benutzerdefinierte Grafiken",
     "setCustomArtwork": "Legen Sie benutzerdefinierte Grafiken fest",
-    "showInSidebar": "In der Seitenleiste anzeigen"
+    "showInSidebar": "In der Seitenleiste anzeigen",
+    "suggestedSongs": "Vorgeschlagene Lieder"
   },
   "favorites": {
     "title": "Favoriten",
@@ -1640,7 +1641,8 @@
       "enabled": "ermöglicht",
       "newState": "Blacklist {status}"
     },
-    "laodingDevices": "Geräte werden geladen..."
+    "laodingDevices": "Geräte werden geladen...",
+    "findingSimilarArtists": "Suche nach ähnlichen Künstlern..."
   },
   "offline": {
     "title": "Offline-Modus",
@@ -2405,5 +2407,62 @@
     "duration": "Laufzeit",
     "quality": "Qualität",
     "title": "Titel"
+  },
+  "musician": {
+    "knownFor": "Bekannt für",
+    "viewArtistPage": "Künstlerseite anzeigen"
+  },
+  "performerRoles": {
+    "a&R": "Künstler und Repertoire",
+    "acousticGuitar": "Akustikgitarre",
+    "additionalEngineer": "Zusätzlicher Ingenieur",
+    "additionalKeyboard": "Zusätzliche Tastatur",
+    "additionalVocalist": "Zusätzlicher Sänger",
+    "arranger": "Arrangeur",
+    "assistantEngineer": "Stellvertretender Ingenieur",
+    "assistantMixer": "Assistenzmischer",
+    "associatedPerformer": "Assoziierter Darsteller",
+    "backgroundVocalist": "Backgroundsänger",
+    "bass": "Bass",
+    "bassGuitar": "Bassgitarre",
+    "choir": "Chor",
+    "coProducer": "Co-Produzent",
+    "composer": "Komponist",
+    "composerLyricist": "Komponist und Texter",
+    "digitalEditingEngineer": "Ingenieur für digitale Bearbeitung",
+    "drum": "Trommel",
+    "drumKit": "Schlagzeug",
+    "drums": "Schlagzeug",
+    "electricGuitar": "Elektrische Gitarre",
+    "engineer": "Ingenieur",
+    "featuredArtist": "Ausgewählter Künstler",
+    "guitar": "Gitarre",
+    "keyboard": "Tastatur",
+    "keyboards": "Tastaturen",
+    "lyricist": "Texter",
+    "mainArtist": "Hauptkünstler",
+    "masteringEngineer": "Mastering-Ingenieur",
+    "mixer": "Mischer",
+    "mixingEngineer": "Mischingenieur",
+    "musicPublisher": "Musikverlag",
+    "organ": "Orgel",
+    "percussion": "Schlagzeug",
+    "performance": "Leistung",
+    "piano": "Klavier",
+    "producer": "Produzent",
+    "recordingEngineer": "Aufnahmeingenieur",
+    "programmer": "Programmierer",
+    "recordingSecondEngineer": "Aufnahme des zweiten Ingenieurs",
+    "remixer": "Remixer",
+    "secondEngineer": "Zweiter Ingenieur",
+    "stringArranger": "String-Arrangeur",
+    "strings": "Saiten",
+    "studioPersonnel": "Studiopersonal",
+    "ukulele": "Ukulele",
+    "vocal": "Gesang",
+    "vocalEditingEngineer": "Gesangsbearbeitungsingenieur",
+    "vocalist": "Sänger",
+    "vocals": "Gesang",
+    "writer": "Schriftsteller"
   }
 }

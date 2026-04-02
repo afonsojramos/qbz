@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { t } from 'svelte-i18n';
   import { X, LoaderCircle } from 'lucide-svelte';
   import type { TrackInfo, Performer } from '$lib/types';
 
@@ -46,14 +47,14 @@
       parts.push(`${track.maximum_sampling_rate}kHz`);
     }
     if (parts.length === 0) {
-      return track.hires_streamable ? 'Hi-Res' : 'Lossless';
+      return track.hires_streamable ? $t('quality.hiRes') : $t('quality.lossless');
     }
     return parts.join(' / ');
   }
 
   // Convert CamelCase role to display format
   function formatRole(role: string): string {
-    return role.replace(/([A-Z])/g, ' $1').trim().toUpperCase();
+    return role[0].toLowerCase() + role.slice(1).replaceAll(' ','');
   }
 
   // Group performers by role and return ordered entries
@@ -199,7 +200,7 @@
               {/if}
             {/if}
           </div>
-          <button class="close-btn" onclick={onClose} aria-label="Close">
+          <button class="close-btn" onclick={onClose} aria-label={ $t('actions.close') }>
             <X size={18} />
           </button>
         </div>
@@ -209,11 +210,11 @@
           <!-- Metadata Grid (3 columns) -->
           <div class="metadata-grid">
             <div class="metadata-item">
-              <span class="metadata-label">DURATION</span>
+              <span class="metadata-label">{$t('tracklist.duration')}</span>
               <span class="metadata-value">{formatDuration(trackInfo.track.duration)}</span>
             </div>
             <div class="metadata-item">
-              <span class="metadata-label">QUALITY</span>
+              <span class="metadata-label">{$t('tracklist.quality')}</span>
               <span class="metadata-value">{formatQuality(trackInfo.track)}</span>
             </div>
             {#if trackInfo.track.isrc}
@@ -224,7 +225,7 @@
             {/if}
             {#if trackInfo.track.album?.label}
               <div class="metadata-item">
-                <span class="metadata-label">LABEL</span>
+                <span class="metadata-label">{$t('search.label')}</span>
                 {#if onLabelClick}
                   <button
                     class="label-link"
@@ -248,7 +249,7 @@
             <div class="credits-grid">
               {#each groupedCredits as { role, names }}
                 <div class="credit-item">
-                  <span class="credit-label">{formatRole(role)}</span>
+                  <span class="credit-label">{$t(`performerRoles.${formatRole(role)}`)}</span>
                   <span class="credit-value">
                     {#each names as name, i}
                       {#if onMusicianClick || onPerformerSearch}
