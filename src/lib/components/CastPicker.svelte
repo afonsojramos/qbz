@@ -195,7 +195,7 @@
           </div>
           <button class="disconnect-btn" onclick={handleDisconnect}>
             <Power size={16} />
-            <span>{$t('integrations.disconnect')}</span>
+            <span>{ $t('settings.integrations.disconnect') }</span>
           </button>
         </div>
       {:else}
