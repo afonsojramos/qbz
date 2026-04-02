@@ -265,7 +265,10 @@
     "refreshMetadata": "Actualizar metadatos",
     "albumSettings": "Configuración del Álbum",
     "albumArtwork": "Portada del Álbum",
-    "uploadCover": "Subir Portada"
+    "uploadCover": "Subir Portada",
+    "background": "Fondo",
+    "explicit": "Explícito",
+    "folderName": "Nombre"
   },
   "album": {
     "tracks": "pistas",
@@ -360,7 +363,9 @@
       "nextResult": "Siguiente resultado",
       "close": "Cerrar búsqueda",
       "searchInPage": "Buscar en esta página"
-    }
+    },
+    "noAlbumAppearancesFound": "No se encontraron apariciones en álbumes",
+    "noAlbumsFound": "No se encontraron álbumes"
   },
   "sort": {
     "sort": "Ordenar",
@@ -464,7 +469,9 @@
     "playCount": "Reproducciones",
     "playlists": "listas",
     "dragPlaylists": "Arrastra las listas para cambiarlas de orden",
-    "dropOntoFolder": "o arrástralo a una carpeta para moverlo."
+    "dropOntoFolder": "o arrástralo a una carpeta para moverlo.",
+    "newFolder": "Nueva carpeta",
+    "folderNamePlaceholder": "Introduzca el nombre de la carpeta"
   },
   "favorites": {
     "title": "Favoritos",
@@ -622,7 +629,15 @@
     "miniWindowControls": "Controles de mini reproductor",
     "miniAlwaysOnTopEnable": "Siempre encima",
     "miniAlwaysOnTopDisable": "Desactivar siempre encima",
-    "miniAlwaysOnTopLimited": "Siempre encima está limitado por tu gestor de ventanas"
+    "miniAlwaysOnTopLimited": "Siempre encima está limitado por tu gestor de ventanas",
+    "disableInfinitePlay": "Desactivar Infinite Play",
+    "enableInfinitePlay": "Habilitar Infinite Play",
+    "exitFullscreenWithKey": "Salir de pantalla completa ({key})",
+    "exitImmersiveWithKey": "Salir de Inmersivo ({key})",
+    "fullscreenWithKey": "Pantalla completa ({key})",
+    "restoreWindow": "Restaurar ventana",
+    "maximizeWindow": "Maximizar ventana",
+    "windowControls": "Controles de ventana"
   },
   "audioBadges": {
     "castingTo": "Transmitiendo a",
@@ -716,7 +731,7 @@
     "shareQobuz": "Compartir (Qobuz)",
     "albumCredits": "Créditos del álbum",
     "radio": {
-      "startArtistRadio" : "Iniciar Artist Radio"
+      "startArtistRadio": "Iniciar Artist Radio"
     },
     "previousAlbums": "Álbumes anteriores",
     "nextAlbums": "Próximos álbumes",
@@ -729,7 +744,13 @@
     },
     "newFolder": "Nueva carpeta",
     "previousArtists": "Artistas anteriores",
-    "nextArtists": "Próximos artistas"
+    "nextArtists": "Próximos artistas",
+    "switchToImmersiveView": "Cambiar a vista inmersiva (V)",
+    "switchToSplitView": "Cambiar a vista dividida (V)",
+    "visitReleasePage": "Visitar la página de lanzamiento",
+    "moveUp": "Subir",
+    "moveDown": "Bajar",
+    "backToHome": "De vuelta a la página principal"
   },
   "settings": {
     "title": "Ajustes",
@@ -802,7 +823,8 @@
       "resetConfirmTitle": "¿Restablecer Configuración de Audio y Reproducción?",
       "resetConfirmDesc": "Esto restablecerá toda la configuración de salida de audio, backend y reproducción a los valores predeterminados. La reproducción se detendrá.",
       "resetSuccess": "La configuración de audio y reproducción se ha restablecido a los valores predeterminados.",
-      "resetError": "Error al restablecer la configuración de audio: {error}"
+      "resetError": "Error al restablecer la configuración de audio: {error}",
+      "noDevicesFound": "No se encontraron dispositivos"
     },
     "playback": {
       "title": "Reproducción",
@@ -991,11 +1013,11 @@
         }
       },
       "fpsOptions": {
-        "disabled": "Desactivado",
         "15": "15 FPS (Bajo)",
         "30": "30 FPS (Medio)",
         "60": "60 FPS (Fluido)",
-        "120": "120 FPS (Ultra)"
+        "120": "120 FPS (Ultra)",
+        "disabled": "Desactivado"
       },
       "miniplayerDefaultView": "Vista predeterminada del mini reproductor",
       "miniplayerViews": {
@@ -1361,7 +1383,13 @@
       "clearAllCaches": "Limpiar Todos los Cachés",
       "clearAllCachesDesc": "Limpia todos los datos en caché anteriores",
       "cachesDesc": "Cachés de cola, letras, portadas y metadatos"
-    }
+    },
+    "immersive": {
+      "title": "Rendimiento degradado",
+      "perfDegraded": "Rendimiento degradado",
+      "perfDontShowAgain": "No volver a mostrar"
+    },
+    "noMatchesFound": "No se encontraron coincidencias"
   },
   "metadata": {
     "editMetadata": "Editar metadatos",
@@ -1439,7 +1467,8 @@
     "loadFailed": "Error al cargar",
     "playbackFailed": "Error de reproducción",
     "cachingFailed": "Error al preparar para offline",
-    "saveFailed": "Error al guardar"
+    "saveFailed": "Error al guardar",
+    "failedToLoad": "No se pudo cargar"
   },
   "time": {
     "hours": "h",
@@ -1601,7 +1630,11 @@
       "newState": "Lista negra {status}",
       "enabled": "activada",
       "disabled": "desactivada"
-    } 
+    },
+    "loadingDevices": "Cargando dispositivos...",
+    "addedToPlaylist": "Agregado a la lista",
+    "copied": "¡Copiado!",
+    "loadingCredits": "Cargando créditos..."
   },
   "offline": {
     "title": "Modo Offline",
@@ -1676,7 +1709,8 @@
   },
   "keys": {
     "enter": "Enter",
-    "shift": "Shift"
+    "shift": "Shift",
+    "esc": "Esc"
   },
   "keybindings": {
     "title": "Atajos de Teclado",
@@ -1837,7 +1871,8 @@
         "custom": "Personalizado..."
       },
       "customPlaceholder": "Nombre del binario (ej. mi-player)",
-      "warning": "Mejor resultado: usa bit-perfect por app. El bit-perfect global en Pulse puede romper navegadores y apps que usan 48kHz fijo."
+      "warning": "Mejor resultado: usa bit-perfect por app. El bit-perfect global en Pulse puede romper navegadores y apps que usan 48kHz fijo.",
+      "customApps": "Aplicaciones personalizadas:"
     },
     "wireplumberConfig": {
       "title": "Apuntar Solo a tu DAC",
@@ -1896,7 +1931,8 @@
       "restart": "Reiniciar",
       "verify": "Verificar",
       "done": "Completado"
-    }
+    },
+    "title": "Asistente DAC"
   },
   "remoteControlWizard": {
     "steps": {
@@ -2282,5 +2318,63 @@
     "author": "Autor",
     "contributors": "Contribuidores",
     "signatureDetail": "Odio hacia todas aquellas empresas que discriminan a la comunidad Linux y no nos ofrecen un cliente decente para su producto."
+  },
+  "fileFormat": {
+    "aac": "AAC",
+    "alac": "ALAC",
+    "flac": "FLAC",
+    "mp3": "MP3",
+    "opus": "Opus"
+  },
+  "platforms": {
+    "appleMusic": "Apple Music",
+    "deezer": "Deezer",
+    "qobuz": "Qobuz",
+    "spotify": "Spotify",
+    "tidal": "Tidal"
+  },
+  "updates": {
+    "snap": {
+      "intro": "Algunos enchufes de audio deben conectarse manualmente para obtener la mejor experiencia.",
+      "note": "Ejecute estos comandos en una terminal, luego reinicie QBZ. Esto sólo debe hacerse una vez.",
+      "optional": "Opcional (para unidades externas/NAS):",
+      "requiredPlugConnections": "Conexiones de enchufe necesarias:"
+    },
+    "checkForUpdates": "Buscar actualizaciones",
+    "flatpak": {
+      "intro": "Hay algunas consideraciones para garantizar la mejor experiencia.",
+      "note": "Consulte la sección <strong>Flatpak Sandbox</strong> en Configuración para obtener instrucciones detalladas y comandos de copiar y pegar.",
+      "whatYouShouldKnow": {
+        "audioFeatures": "Algunas funciones de audio pueden comportarse de manera diferente debido a restricciones de la zona de pruebas",
+        "settingsPage": "La página <strong>Configuración</strong> incluye comandos específicos de Flatpak que puedes copiar y ejecutar",
+        "externalMusicFolderAccess": "El acceso a carpetas de música externas (NAS, soportes de red) requiere concesión de permisos manuales",
+        "heading": "Lo que debes saber:"
+      }
+    },
+    "whatsNew": {
+      "whatsNew": "Qué hay de nuevo",
+      "whatsNewIn": "Novedades de v${version}",
+      "releaseNotesNotAvailable": "Las notas de la versión no están disponibles.",
+      "releaseNotesNotAvailableForVersion": "Las notas de la versión no están disponibles para esta versión."
+    },
+    "newVersionAvailable": "Nueva versión disponible: v{version}",
+    "runningIn": "Ejecutando en {env}",
+    "noUpdatesFound": "No se encontraron actualizaciones.",
+    "updateReminder": {
+      "hint": "Se puede volver a habilitar desde Configuración",
+      "doNotNotifyAboutReleases": "No avisarme sobre nuevos lanzamientos",
+      "doNotNotifyAgain": "No volver a notificarme sobre este lanzamiento.",
+      "newVersionReminder": "Recordatorio de nueva versión",
+      "remindMeLater": "Recuérdamelo más tarde"
+    },
+    "runningInsideSandbox": "QBZ detectó que se está ejecutando dentro de un <strong>{env} sandbox</strong>.",
+    "newReleaseAvailable": "Nueva versión disponible",
+    "newVersionReleased": "Se ha lanzado una nueva versión de QBZ."
+  },
+  "common": {
+    "name": "Nombre"
+  },
+  "integrations": {
+    "connecting": "Conectando..."
   }
 }
