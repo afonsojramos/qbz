@@ -132,7 +132,7 @@
               </div>
 
               <span class="section-label">
-                {section.label}
+                { $t(`home.${section.id}`) }
                 {#if section.source === 'qobuz'}
                   <span class="source-badge qobuz">Qobuz™</span>
                 {:else if section.source === 'ml'}
