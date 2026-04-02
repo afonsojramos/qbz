@@ -57,6 +57,10 @@
     return role[0].toLowerCase() + role.slice(1).replaceAll(' ','');
   }
 
+  function formatUnknownRole(role: string): string {
+    return role.replace(/([A-Z])/g, ' $1').trim().toUpperCase();
+  }
+
   // Group performers by role and return ordered entries
   function getGroupedCredits(performers: Performer[]): { role: string; names: string[] }[] {
     const grouped: Record<string, string[]> = {};
@@ -249,7 +253,7 @@
             <div class="credits-grid">
               {#each groupedCredits as { role, names }}
                 <div class="credit-item">
-                  <span class="credit-label">{$t(`performerRoles.${formatRole(role)}`)}</span>
+                  <span class="credit-label">{ $t(`performerRoles.${formatRole(role)}`, { default: formatUnknownRole(role) }) }</span>
                   <span class="credit-value">
                     {#each names as name, i}
                       {#if onMusicianClick || onPerformerSearch}
