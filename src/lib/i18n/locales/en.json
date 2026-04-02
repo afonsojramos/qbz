@@ -766,7 +766,11 @@
     "clearSelection": "Clear selection",
     "moveUp": "Move up",
     "moveDown": "Move down",
-    "backToHome": "Back to home"
+    "backToHome": "Back to home",
+    "playTrackOnly": "Play track only",
+    "playFromHere": "Play from here",
+    "findAvailableVersion": "Find available version",
+    "removeOfflineCopy": "Remove offline copy"
   },
   "settings": {
     "title": "Settings",
