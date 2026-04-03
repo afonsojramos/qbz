@@ -1469,8 +1469,8 @@
       updatesCurrentVersion = getUpdatesCurrentVersion();
     });
 
-    // Detect sandbox environments (Linux-only, skip on macOS)
-    if (platform !== 'macos') {
+    // Detect sandbox environments (Linux-only)
+    if (platform === 'linux') {
       loadFlatpakStatus();
       loadSnapStatus();
     }
@@ -3848,7 +3848,7 @@
       />
     </div>
     {/if}
-    {#if platform !== 'macos'}
+    {#if platform === 'linux'}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.audio.audioBackend')}</span>
@@ -3951,7 +3951,7 @@
         </div>
       {/if}
     </div>
-    {#if platform !== 'macos'}
+    {#if platform === 'linux'}
     {#if showAlsaPluginSelector}
     <div class="setting-row">
       <div class="setting-info">
@@ -4561,7 +4561,7 @@
     </div>
 
     <!-- Composition subsection (collapsible, Linux-only: GDK/GSK/X11/Wayland/DMA-BUF) -->
-    {#if platform !== 'macos'}
+    {#if platform === 'linux'}
     <div class="collapsible-section composition-subsection">
       <button class="section-title-btn" onclick={() => compositionCollapsed = !compositionCollapsed}>
         <div class="section-title-row">
@@ -4932,8 +4932,8 @@
   <section class="section">
     <h3 class="section-title">{$t('settings.integrations.title')}</h3>
 
-    <!-- Qobuz Link Handler (Linux only — macOS registers via Info.plist at build time) -->
-    {#if platform !== 'macos'}
+    <!-- Qobuz Link Handler (Linux only — macOS registers via Info.plist, Windows via registry) -->
+    {#if platform === 'linux'}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.integrations.qobuzLinkHandler')}</span>
