@@ -10,7 +10,7 @@
 
 import { platform as tauriPlatform } from '@tauri-apps/plugin-os';
 
-type Platform = 'macos' | 'linux';
+type Platform = 'macos' | 'linux' | 'windows';
 
 let detectedPlatform: Platform;
 try {
