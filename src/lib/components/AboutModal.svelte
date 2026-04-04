@@ -38,7 +38,7 @@
     }
   });
 
-  const platformLabel = platform === 'macos' ? 'macOS (Tauri 2.0)' : 'Linux (Tauri 2.0)';
+  const platformLabel = platform === 'macos' ? 'macOS (Tauri 2.0)' : platform === 'windows' ? 'Windows (Tauri 2.0)' : 'Linux (Tauri 2.0)';
 
   function handleOpenUrl(url: string) {
     openUrl(url).catch(err => console.error('Failed to open URL:', err));
