@@ -749,6 +749,7 @@
   let dacPassthrough = $state(false);
   let pwForceBitperfect = $state(false);
   let skipSinkSwitch = $state(false);
+  let allowQualityFallback = $state(false);
   let syncAudioOnStartup = $state(false);
   let selectedBackend = $state<string>('Auto');
   let selectedAlsaPlugin = $state<string>('hw (Direct Hardware)');
@@ -2518,6 +2519,7 @@
     gapless_enabled: boolean;
     pw_force_bitperfect: boolean;
     skip_sink_switch: boolean;
+    allow_quality_fallback: boolean;
     sync_audio_on_startup: boolean;
   }
 
@@ -2673,6 +2675,7 @@
       dacPassthrough = settings.dac_passthrough;
       pwForceBitperfect = settings.pw_force_bitperfect;
       skipSinkSwitch = settings.skip_sink_switch;
+      allowQualityFallback = settings.allow_quality_fallback;
       syncAudioOnStartup = settings.sync_audio_on_startup;
 
       // Load backend and plugin settings
@@ -2834,6 +2837,17 @@
       console.log('[Audio] PW force bit-perfect changed:', enabled);
     } catch (err) {
       console.error('[Audio] Failed to change PW force bit-perfect:', err);
+    }
+  }
+
+  async function handleAllowQualityFallbackChange(enabled: boolean) {
+    allowQualityFallback = enabled;
+    try {
+      await invoke('v2_set_audio_allow_quality_fallback', { enabled });
+      console.log('[Audio] Allow quality fallback changed:', enabled);
+    } catch (err) {
+      console.error('[Audio] Failed to change quality fallback:', err);
+      allowQualityFallback = !enabled;
     }
   }
 
@@ -3501,6 +3515,7 @@
       dacPassthrough = false;
       pwForceBitperfect = false;
       skipSinkSwitch = false;
+      allowQualityFallback = false;
       selectedBackend = 'Auto';
       selectedAlsaPlugin = 'hw (Direct Hardware)';
       alsaHardwareVolume = false;
@@ -4032,6 +4047,13 @@
     <small class="setting-note">{$t('settings.audio.pwForceBitperfectNote')}</small>
     {/if}
     {/if}
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.audio.allowQualityFallback')} <span class="help-tip" title={$t('settings.audio.allowQualityFallbackHelp')}>(?)</span></span>
+        <span class="setting-desc">{$t('settings.audio.allowQualityFallbackDesc')}</span>
+      </div>
+      <Toggle enabled={allowQualityFallback} onchange={handleAllowQualityFallbackChange} />
+    </div>
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.audio.syncAudioOnStartup')}</span>
