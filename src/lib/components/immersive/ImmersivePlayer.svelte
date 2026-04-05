@@ -880,12 +880,12 @@
     }
   }
 
-  /* Quality badge dark backdrop — legible on any blurred background */
+  /* Quality badge — subtle dark tint for legibility, keep glassy feel */
   .immersive-player :global(.quality-badge) {
-    background: rgba(0, 0, 0, 0.55);
-    border-color: rgba(255, 255, 255, 0.12);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    background: rgba(0, 0, 0, 0.25);
+    border-color: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
   }
 
   /* Split mode layout */
