@@ -230,38 +230,38 @@
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   }
 
-  /* Left items — offset must clear the center cover's edge + perspective projection */
+  /* Left items — z-index < center so they render behind it */
   .coverflow-item.left-1 {
     z-index: 4;
-    transform: translateX(-420px) rotateY(25deg) scale(0.7);
-    --hover-x: -410px;
-    --hover-rotate: 20deg;
-    opacity: 0.8;
+    transform: translateX(-200px) rotateY(45deg) scale(0.82);
+    --hover-x: -190px;
+    --hover-rotate: 40deg;
+    opacity: 0.85;
   }
 
   .coverflow-item.left-2 {
     z-index: 3;
-    transform: translateX(-640px) rotateY(32deg) scale(0.52);
-    --hover-x: -630px;
-    --hover-rotate: 28deg;
-    opacity: 0.45;
+    transform: translateX(-340px) rotateY(55deg) scale(0.65);
+    --hover-x: -330px;
+    --hover-rotate: 50deg;
+    opacity: 0.55;
   }
 
   /* Right items — mirror of left */
   .coverflow-item.right-1 {
     z-index: 4;
-    transform: translateX(420px) rotateY(-25deg) scale(0.7);
-    --hover-x: 410px;
-    --hover-rotate: -20deg;
-    opacity: 0.8;
+    transform: translateX(200px) rotateY(-45deg) scale(0.82);
+    --hover-x: 190px;
+    --hover-rotate: -40deg;
+    opacity: 0.85;
   }
 
   .coverflow-item.right-2 {
     z-index: 3;
-    transform: translateX(640px) rotateY(-32deg) scale(0.52);
-    --hover-x: 630px;
-    --hover-rotate: -28deg;
-    opacity: 0.45;
+    transform: translateX(340px) rotateY(-55deg) scale(0.65);
+    --hover-x: 330px;
+    --hover-rotate: -50deg;
+    opacity: 0.55;
   }
 
   /* Track info */
@@ -358,23 +358,23 @@
   /* Responsive */
   @media (max-width: 1100px) {
     .coverflow-item.left-1 {
-      transform: translateX(-340px) rotateY(25deg) scale(0.65);
-      --hover-x: -330px;
+      transform: translateX(-160px) rotateY(45deg) scale(0.78);
+      --hover-x: -150px;
     }
 
     .coverflow-item.left-2 {
-      transform: translateX(-520px) rotateY(32deg) scale(0.48);
-      --hover-x: -510px;
+      transform: translateX(-270px) rotateY(55deg) scale(0.6);
+      --hover-x: -260px;
     }
 
     .coverflow-item.right-1 {
-      transform: translateX(340px) rotateY(-25deg) scale(0.65);
-      --hover-x: 330px;
+      transform: translateX(160px) rotateY(-45deg) scale(0.78);
+      --hover-x: 150px;
     }
 
     .coverflow-item.right-2 {
-      transform: translateX(520px) rotateY(-32deg) scale(0.48);
-      --hover-x: 510px;
+      transform: translateX(270px) rotateY(-55deg) scale(0.6);
+      --hover-x: 260px;
     }
   }
 
@@ -395,7 +395,7 @@
     }
 
     .coverflow-item.left-1 {
-      transform: translateX(-240px) rotateY(22deg) scale(0.6);
+      transform: translateX(-120px) rotateY(45deg) scale(0.72);
     }
 
     .coverflow-item.left-2 {
@@ -403,7 +403,7 @@
     }
 
     .coverflow-item.right-1 {
-      transform: translateX(240px) rotateY(-22deg) scale(0.6);
+      transform: translateX(120px) rotateY(-45deg) scale(0.72);
     }
 
     .coverflow-item.right-2 {
