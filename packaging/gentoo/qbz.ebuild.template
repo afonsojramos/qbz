@@ -47,15 +47,8 @@ PDEPEND="
 S="${WORKDIR}/qbz-${MY_PV}"
 
 src_compile() {
-	# Install npm dependencies (network required)
 	npm ci || die "npm ci failed"
-
-	# Build the SvelteKit frontend
-	npm run build || die "frontend build failed"
-
-	# Build the Tauri/Rust backend
-	cd src-tauri || die
-	cargo build --release --bin qbz || die "cargo build failed"
+	npx tauri build --no-bundle || die "tauri build failed"
 }
 
 src_install() {
