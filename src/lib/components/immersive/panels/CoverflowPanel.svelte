@@ -233,38 +233,38 @@
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   }
 
-  /* Left items — offset enough to clear center cover */
+  /* Left items — push far enough so 3D projection doesn't overlap center */
   .coverflow-item.left-1 {
     z-index: 4;
-    transform: translateX(-280px) rotateY(45deg) scale(0.8);
-    --hover-x: -270px;
-    --hover-rotate: 40deg;
-    opacity: 0.85;
+    transform: translateX(-400px) translateZ(-120px) rotateY(30deg) scale(0.72);
+    --hover-x: -390px;
+    --hover-rotate: 25deg;
+    opacity: 0.8;
   }
 
   .coverflow-item.left-2 {
     z-index: 3;
-    transform: translateX(-460px) rotateY(55deg) scale(0.65);
-    --hover-x: -450px;
-    --hover-rotate: 50deg;
-    opacity: 0.5;
+    transform: translateX(-620px) translateZ(-200px) rotateY(38deg) scale(0.55);
+    --hover-x: -610px;
+    --hover-rotate: 34deg;
+    opacity: 0.45;
   }
 
-  /* Right items — offset enough to clear center cover */
+  /* Right items — mirror of left */
   .coverflow-item.right-1 {
     z-index: 4;
-    transform: translateX(280px) rotateY(-45deg) scale(0.8);
-    --hover-x: 270px;
-    --hover-rotate: -40deg;
-    opacity: 0.85;
+    transform: translateX(400px) translateZ(-120px) rotateY(-30deg) scale(0.72);
+    --hover-x: 390px;
+    --hover-rotate: -25deg;
+    opacity: 0.8;
   }
 
   .coverflow-item.right-2 {
     z-index: 3;
-    transform: translateX(460px) rotateY(-55deg) scale(0.65);
-    --hover-x: 450px;
-    --hover-rotate: -50deg;
-    opacity: 0.5;
+    transform: translateX(620px) translateZ(-200px) rotateY(-38deg) scale(0.55);
+    --hover-x: 610px;
+    --hover-rotate: -34deg;
+    opacity: 0.45;
   }
 
   /* Track info */
@@ -361,23 +361,23 @@
   /* Responsive */
   @media (max-width: 1100px) {
     .coverflow-item.left-1 {
-      transform: translateX(-220px) rotateY(45deg) scale(0.75);
-      --hover-x: -210px;
+      transform: translateX(-320px) translateZ(-120px) rotateY(30deg) scale(0.68);
+      --hover-x: -310px;
     }
 
     .coverflow-item.left-2 {
-      transform: translateX(-380px) rotateY(55deg) scale(0.6);
-      --hover-x: -370px;
+      transform: translateX(-500px) translateZ(-200px) rotateY(38deg) scale(0.5);
+      --hover-x: -490px;
     }
 
     .coverflow-item.right-1 {
-      transform: translateX(220px) rotateY(-45deg) scale(0.75);
-      --hover-x: 210px;
+      transform: translateX(320px) translateZ(-120px) rotateY(-30deg) scale(0.68);
+      --hover-x: 310px;
     }
 
     .coverflow-item.right-2 {
-      transform: translateX(380px) rotateY(-55deg) scale(0.6);
-      --hover-x: 370px;
+      transform: translateX(500px) translateZ(-200px) rotateY(-38deg) scale(0.5);
+      --hover-x: 490px;
     }
   }
 
@@ -398,7 +398,7 @@
     }
 
     .coverflow-item.left-1 {
-      transform: translateX(-160px) rotateY(45deg) scale(0.7);
+      transform: translateX(-220px) translateZ(-100px) rotateY(28deg) scale(0.65);
     }
 
     .coverflow-item.left-2 {
@@ -406,7 +406,7 @@
     }
 
     .coverflow-item.right-1 {
-      transform: translateX(160px) rotateY(-45deg) scale(0.7);
+      transform: translateX(220px) translateZ(-100px) rotateY(-28deg) scale(0.65);
     }
 
     .coverflow-item.right-2 {
