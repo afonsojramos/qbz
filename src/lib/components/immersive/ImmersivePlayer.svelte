@@ -892,7 +892,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 64px 40px 100px;
+    padding: 52px 40px 88px;
     gap: 40px;
     z-index: 1;
   }
@@ -956,7 +956,7 @@
   .split-track-album {
     font-size: clamp(12px, 1.5vw, 14px);
     color: var(--alpha-50, rgba(255, 255, 255, 0.5));
-    margin: 0 0 12px 0;
+    margin: 0 0 6px 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -965,7 +965,7 @@
   .split-quality-badge {
     display: flex;
     justify-content: center;
-    margin-top: 8px;
+    margin-top: 4px;
   }
 
   .panel-section {
