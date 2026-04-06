@@ -58,7 +58,6 @@ use crate::offline_cache::OfflineCacheState;
 use crate::playback_context::{ContentSource, ContextType, PlaybackContext};
 use crate::plex::{PlexMusicSection, PlexPlayResult, PlexServerInfo, PlexTrack};
 use crate::qconnect_service::{QconnectServiceState, QconnectVisibleQueueProjection};
-use crate::queue::{RepeatMode as QueueRepeatMode};
 use crate::reco_store::{HomeResolved, HomeSeeds, RecoEventInput, RecoState};
 use crate::runtime::{
     CommandRequirement, DegradedReason, RuntimeError, RuntimeEvent, RuntimeManagerState,
@@ -6058,7 +6057,6 @@ pub async fn v2_set_repeat_mode(
     bridge: State<'_, CoreBridgeState>,
     qconnect: State<'_, QconnectServiceState>,
     runtime: State<'_, RuntimeManagerState>,
-    app_state: State<'_, AppState>,
 ) -> Result<(), RuntimeError> {
     runtime
         .manager()
@@ -6080,9 +6078,6 @@ pub async fn v2_set_repeat_mode(
 
     let bridge = bridge.get().await;
     bridge.set_repeat_mode(mode).await;
-
-    let queue_repeat_mode = repeat_mode_to_queue_repeat_mode(mode);
-    app_state.queue.set_repeat(queue_repeat_mode);
     Ok(())
 }
 
@@ -6163,14 +6158,6 @@ pub async fn v2_clear_queue(
     let bridge = bridge.get().await;
     bridge.clear_queue().await;
     Ok(())
-}
-
-fn repeat_mode_to_queue_repeat_mode (mode: RepeatMode) -> QueueRepeatMode {
-    match mode {
-        RepeatMode::Off => QueueRepeatMode::Off,
-        RepeatMode::All => QueueRepeatMode::All,
-        RepeatMode::One => QueueRepeatMode::One,
-    }
 }
 
 async fn apply_qconnect_shuffle_mode(
@@ -7441,11 +7428,11 @@ pub async fn v2_play_next_gapless(
     let bridge_guard = bridge.get().await;
     let player = bridge_guard.player();
     let current_track_id = player.state.current_track_id();
-    let repeat_mode = app_state.queue.get_repeat();
+    let repeat_mode = bridge_guard.get_queue_state().await.repeat;
 
     // Defensive guard: never queue the currently playing track as "next".
     // This avoids infinite one-track loops when frontend queue state is stale.
-    if current_track_id != 0 && repeat_mode != QueueRepeatMode::One && current_track_id == track_id {
+    if current_track_id != 0 && repeat_mode != RepeatMode::One && current_track_id == track_id {
         log::warn!(
             "[V2/GAPLESS] Ignoring play_next_gapless for current track {}",
             track_id
