@@ -26,7 +26,7 @@
 <div class={`qobuz-legal ${className}`}>
   {#if showBrandingLine}
     <p class="branding-line">
-      This application uses the Qobuz API but is not certified by Qobuz.
+      {$t('legal.brandingLine')}
     </p>
   {/if}
 

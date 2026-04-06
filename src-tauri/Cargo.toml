@@ -1,6 +1,6 @@
 [package]
 name = "qbz-nix"
-version = "1.2.1"
+version = "1.2.2"
 description = "Native high-fidelity client for Qobuz™ subscribers on Linux with Hi-Fi audio support (uses the Qobuz API; not certified by Qobuz)"
 authors = ["blitzkriegfc"]
 edition = "2021"
@@ -34,7 +34,9 @@ qconnect-transport-ws = { path = "../crates/qconnect-transport-ws" }
 # Tauri
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
-tauri-plugin-single-instance = "2"
+tauri-plugin-os = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-deep-link = "2"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -49,7 +51,7 @@ async-trait = "0.1"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Local API server
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 tower-http = { version = "0.5", features = ["cors"] }
@@ -78,7 +80,7 @@ log = "0.4"
 env_logger = "0.11"
 
 # Random number generation (for shuffle)
-rand = "0.8"
+rand = "0.10"
 
 # Audio playback
 rodio = { version = "0.22", features = ["symphonia-all"] }
@@ -91,7 +93,7 @@ spectrum-analyzer = "1.5"
 ebur128 = "0.1"
 
 # Media controls (MPRIS on Linux)
-souvlaki = "0.7"
+souvlaki = "0.8"
 
 # Desktop notifications → ashpd in [target.linux] deps below
 
@@ -99,23 +101,20 @@ souvlaki = "0.7"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 # PDF rendering with MuPDF engine (high-quality rasterization for booklet viewer)
-# NOTE: Use sys-lib-* for zlib/harfbuzz/freetype to avoid symbol conflicts with
-# GTK/GdkPixbuf. But NOT libjpeg — Ubuntu ships libjpeg8 (libjpeg.so.8) while
-# Debian/Fedora ship libjpeg62-turbo (libjpeg.so.62). Let mupdf vendor its own
-# libjpeg to avoid cross-distro breakage (GitHub #161, #162).
-mupdf = { version = "0.6", default-features = false, features = [
-  "system-fonts",
-  "sys-lib-zlib",
-  "sys-lib-harfbuzz",
-  "sys-lib-freetype",
-] }
+# NOTE: On Linux, use sys-lib-* for zlib/harfbuzz/freetype to avoid symbol
+# conflicts with GTK/GdkPixbuf. But NOT libjpeg — Ubuntu ships libjpeg8 while
+# Debian/Fedora ship libjpeg62-turbo. Let mupdf vendor its own libjpeg to avoid
+# cross-distro breakage (GitHub #161, #162).
+# On macOS, let mupdf vendor everything (no GTK conflicts, and system libs
+# don't support x86_64 cross-compilation from Apple Silicon).
+mupdf = { version = "0.6", default-features = false, features = ["system-fonts"] }
 
 # URL opening
 open = "5"
 
 # Local library
 walkdir = "2"
-lofty = "0.18"
+lofty = "0.23"
 rusqlite = { version = "0.31", features = ["bundled"] }
 dirs = "5"
 filetime = "0.2"
@@ -145,14 +144,15 @@ futures-util = "0.3"
 # Platform-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
 tauri-plugin-dialog = { version = "2.6.0" }
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "notification"] }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "notification", "inhibit"] }
+mupdf = { version = "0.6", features = ["sys-lib-zlib", "sys-lib-harfbuzz", "sys-lib-freetype"] }
 
 # Direct ALSA access for bit-perfect playback (bypasses CPAL limitations)
 alsa = "0.9"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-dialog = { version = "2.6.0" }
-notify-rust = "4"
+notify-rust = "4.13.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-dialog = { version = "2.6.0" }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { SlidersHorizontal, X, Minus, Check, ChevronRight, ChevronDown, Search, Loader2 } from 'lucide-svelte';
+  import { SlidersHorizontal, X, Minus, Check, ChevronRight, ChevronDown, Search, LoaderCircle } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import {
     getChildGenres,
@@ -299,7 +299,7 @@
                 {#if hasLoadedChildren || !areChildrenLoaded(parentNode.genre.id)}
                   <button class="expand-btn" onclick={(e) => { e.stopPropagation(); toggleExpanded(parentNode.genre.id); }} type="button" title={isExpanded ? $t('genreFilter.collapse') : $t('genreFilter.expand')}>
                     {#if isLoading}
-                      <Loader2 size={14} class="animate-spin" />
+                      <LoaderCircle size={14} class="animate-spin" />
                     {:else if isExpanded}
                       <ChevronDown size={14} />
                     {:else}
@@ -339,7 +339,7 @@
                         {#if hasGrandchildren}
                           <button class="expand-btn" onclick={(e) => { e.stopPropagation(); toggleExpanded(childNode.genre.id); }} type="button" title={childExpanded ? $t('genreFilter.collapse') : $t('genreFilter.expand')}>
                             {#if childLoading}
-                              <Loader2 size={12} class="animate-spin" />
+                              <LoaderCircle size={12} class="animate-spin" />
                             {:else if childExpanded}
                               <ChevronDown size={12} />
                             {:else}

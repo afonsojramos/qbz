@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { t } from '$lib/i18n';
+  import { t, locale } from '$lib/i18n';
   import {
-    Search, X, Download, Check, Loader2, Music, Disc3, ShoppingBag,
+    Search, X, Download, Check, LoaderCircle, Music, Disc3, ShoppingBag,
     ChevronDown, LayoutGrid, List
   } from 'lucide-svelte';
   import AlbumCard from '../AlbumCard.svelte';
@@ -149,7 +149,7 @@
   function formatPurchaseDate(ts?: number): string {
     if (!ts) return '';
     try {
-      return new Date(ts * 1000).toLocaleDateString(undefined, {
+      return new Date(ts * 1000).toLocaleDateString($locale ? $locale : 'en-us', {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -980,7 +980,7 @@
                     <span class="redownload-icon"><Download size={14} /></span>
                   </button>
                 {:else if dlStatus === 'downloading'}
-                  <span class="download-active"><Loader2 size={14} class="spin" /></span>
+                  <span class="download-active"><LoaderCircle size={14} class="spin" /></span>
                 {:else if dlStatus === 'failed'}
                   <button class="download-btn failed" onclick={(e) => handleTrackDownload(e, track)} title={$t('purchases.failed')}>
                     <Download size={14} />

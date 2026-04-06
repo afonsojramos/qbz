@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount, onDestroy } from 'svelte';
-  import { ArrowLeft, Info, ListPlus, Play, RefreshCw, Search, Shuffle, X, CheckSquare } from 'lucide-svelte';
+  import { ArrowLeft, Info, ListPlus, Play, RefreshCw, Search, Shuffle, X, SquareCheckBig } from 'lucide-svelte';
   import PlaylistModal from '$lib/components/PlaylistModal.svelte';
   import TrackRow from '$lib/components/TrackRow.svelte';
   import BulkActionBar from '$lib/components/BulkActionBar.svelte';
@@ -527,7 +527,7 @@
       <div class="playlist-info">
         <span>{$t('yourMixes.result.count', { values: { count: filteredTracks.length } })}</span>
         {#if filteredTracks.length > 0}
-          <span class="separator">•</span>
+          <span class="separator">&middot;</span>
           <span>{totalDurationFormatted}</span>
         {/if}
       </div>
@@ -552,7 +552,7 @@
           disabled={loading || filteredTracks.length === 0}
           title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
         >
-          <CheckSquare size={18} />
+          <SquareCheckBig size={18} />
         </button>
       </div>
     </div>
@@ -591,10 +591,10 @@
         <div class="track-list-header">
           <div class="col-number">#</div>
           <div class="col-artwork"></div>
-          <div class="col-title">{$t('common.title')}</div>
-          <div class="col-album">{$t('purchases.sort.album')}</div>
-          <div class="col-duration">{$t('album.duration')}</div>
-          <div class="col-quality">{$t('album.quality')}</div>
+          <div class="col-title">{ $t('tracklist.title') }</div>
+          <div class="col-album">{ $t('tracklist.album') }</div>
+          <div class="col-duration">{ $t('tracklist.duration') }</div>
+          <div class="col-quality">{ $t('tracklist.quality') }</div>
           <div class="col-spacer"></div>
         </div>
 

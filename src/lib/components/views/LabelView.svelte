@@ -2,7 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { onMount, onDestroy } from 'svelte';
-  import { ArrowLeft, Disc3, Play, Music, MoreHorizontal, Heart, User, ChevronDown, ChevronUp, CheckSquare } from 'lucide-svelte';
+  import { ArrowLeft, Disc3, Play, Music, Ellipsis, Heart, User, ChevronDown, ChevronUp, SquareCheckBig } from 'lucide-svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
   import { t } from '$lib/i18n';
   import AlbumCard from '../AlbumCard.svelte';
@@ -799,7 +799,7 @@
     {#if showJumpNav}
       <div class="jump-nav">
         <div class="jump-nav-left">
-          <div class="jump-label">Jump to</div>
+          <div class="jump-label">{$t('artist.jumpTo')}</div>
           <div class="jump-links">
             {#each jumpSections as section}
               <button
@@ -823,7 +823,7 @@
             <h2 class="section-title">{$t('label.popularTracks')}</h2>
           </div>
           <div class="section-header-actions">
-            <button class="action-btn-circle primary" onclick={handlePlayAllTracks} title="Play All">
+            <button class="action-btn-circle primary" onclick={handlePlayAllTracks} title={ $t('actions.playAll') }>
               <Play size={20} fill="currentColor" color="currentColor" />
             </button>
             <button
@@ -833,7 +833,7 @@
               disabled={topTracks.length === 0}
               title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
             >
-              <CheckSquare size={18} />
+              <SquareCheckBig size={18} />
             </button>
             <div class="context-menu-wrapper">
               <button
@@ -841,7 +841,7 @@
                 onclick={() => showTracksContextMenu = !showTracksContextMenu}
                 title="More options"
               >
-                <MoreHorizontal size={18} />
+                <Ellipsis size={18} />
               </button>
               {#if showTracksContextMenu}
                 <div class="context-menu-backdrop" onclick={() => showTracksContextMenu = false} role="presentation"></div>

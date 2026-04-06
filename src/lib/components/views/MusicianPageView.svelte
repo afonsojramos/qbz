@@ -14,6 +14,7 @@
    */
   import { invoke } from '@tauri-apps/api/core';
   import { ArrowLeft, User, Music, Disc } from 'lucide-svelte';
+  import { t } from '$lib/i18n';
   import type { ResolvedMusician, AlbumAppearance, MusicianAppearances } from '$lib/types';
   import { onMount } from 'svelte';
 
@@ -91,7 +92,7 @@
 <div class="musician-page">
   <!-- Header -->
   <header class="page-header">
-    <button class="back-btn" onclick={onBack} title="Go back">
+    <button class="back-btn" onclick={onBack} title={ $t('actions.back') }>
       <ArrowLeft size={20} />
     </button>
 
@@ -110,7 +111,7 @@
     <!-- Bands & Projects Section -->
     {#if musician.bands.length > 0}
       <section class="section">
-        <h2 class="section-title">Bands & Projects</h2>
+        <h2 class="section-title">{$t('artist.bandProjects')}</h2>
         <div class="bands-grid">
           {#each musician.bands as band}
             <button
@@ -133,7 +134,7 @@
     <!-- Appears On Section -->
     <section class="section">
       <h2 class="section-title">
-        Appears On
+        {$t('artist.appearsOn')}
         {#if totalAppearances > 0}
           <span class="count">({totalAppearances})</span>
         {/if}
@@ -141,7 +142,7 @@
 
       {#if isLoading}
         <div class="loading-state">
-          <span>Loading appearances...</span>
+          <span>{$t('actions.loading')}</span>
         </div>
       {:else if error}
         <div class="error-state">
@@ -150,7 +151,7 @@
       {:else if appearances.length === 0}
         <div class="empty-state">
           <Disc size={32} />
-          <span>No album appearances found</span>
+          <span>{ $t('artist.noAlbumAppearancesFound') }</span>
         </div>
       {:else}
         <div class="albums-grid">
@@ -196,7 +197,7 @@
               onclick={loadMore}
               disabled={isLoadingMore}
             >
-              {isLoadingMore ? 'Loading...' : 'Load More'}
+              {isLoadingMore ? $t('actions.loading') : $t('actions.loadMore')}
             </button>
           </div>
         {/if}

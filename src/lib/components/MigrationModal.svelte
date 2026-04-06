@@ -3,7 +3,7 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { onMount, onDestroy } from 'svelte';
   import Modal from './Modal.svelte';
-  import { AlertCircle, CheckCircle, Loader, XCircle } from 'lucide-svelte';
+  import { CircleAlert, CircleCheckBig, Loader, CircleX } from 'lucide-svelte';
 
   interface Props {
     isOpen: boolean;
@@ -72,7 +72,7 @@
       {#if !migrating && !progress?.completed}
         <div class="info-section">
           <div class="info-icon">
-            <AlertCircle size={48} color="var(--accent-primary)" />
+            <CircleAlert size={48} color="var(--accent-primary)" />
           </div>
           <h3>Legacy Downloads Detected</h3>
           <p>
@@ -116,17 +116,17 @@
       {:else if progress?.completed}
         <div class="complete-section">
           <div class="complete-icon">
-            <CheckCircle size={48} color="var(--success)" />
+            <CircleCheckBig size={48} color="var(--success)" />
           </div>
           <h3>Migration Complete</h3>
           <div class="stats">
             <div class="stat">
-              <CheckCircle size={20} color="var(--success)" />
+              <CircleCheckBig size={20} color="var(--success)" />
               <span>{progress.successful} successful</span>
             </div>
             {#if progress.failed > 0}
               <div class="stat error">
-                <XCircle size={20} color="var(--error)" />
+                <CircleX size={20} color="var(--error)" />
                 <span>{progress.failed} failed</span>
               </div>
             {/if}

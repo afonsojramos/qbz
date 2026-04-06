@@ -4,7 +4,7 @@
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { onMount, tick } from 'svelte';
   import { t } from '$lib/i18n';
-  import { Play, Disc3, Mic2, Music, Search, X, LayoutGrid, List, ChevronDown, ListMusic, Edit3, CloudDownload, Shuffle, MoreHorizontal, PanelLeftClose, Loader2, ArrowLeft, CheckSquare } from 'lucide-svelte';
+  import { Play, Disc3, MicVocal, Music, Search, X, LayoutGrid, List, ChevronDown, ListMusic, PenLine, CloudDownload, Shuffle, Ellipsis, PanelLeftClose, LoaderCircle, ArrowLeft, SquareCheckBig } from 'lucide-svelte';
   import AlbumCard from '../AlbumCard.svelte';
   import TrackRow from '../TrackRow.svelte';
   import QualityBadge from '../QualityBadge.svelte';
@@ -16,7 +16,7 @@
   import FavoritesEditModal from '../FavoritesEditModal.svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
   import ViewTransition from '../ViewTransition.svelte';
-  import { type OfflineCacheStatus } from '$lib/stores/offlineCacheState';
+  import { type OfflineCacheStatus, cacheTracksForOfflineBatch } from '$lib/stores/offlineCacheState';
   import { consumeContextTrackFocus, setPlaybackContext } from '$lib/stores/playbackContextStore';
   import { normalizeFavoritesTabOrder } from '$lib/utils/favorites';
   import { syncCache as syncTrackCache, subscribe as subscribeFavorites, isTrackFavorite } from '$lib/stores/favoritesStore';
@@ -301,6 +301,29 @@
     selectedTrackIds = new Set();
   }
 
+  async function handleBulkMakeOffline() {
+    const tracksToCache = favoriteTracks
+      .filter(track => selectedTrackIds.has(track.id))
+      .map(track => ({
+        id: track.id,
+        title: track.title,
+        artist: track.performer?.name || 'Unknown',
+        album: track.album?.title,
+        albumId: track.album?.id,
+        durationSecs: track.duration,
+        quality: track.hires ? 'Hi-Res' : '-',
+        bitDepth: track.maximum_bit_depth,
+        sampleRate: track.maximum_sampling_rate,
+      }));
+    trackSelectMode = false;
+    selectedTrackIds = new Set();
+    if (tracksToCache.length > 0) {
+      await cacheTracksForOfflineBatch(tracksToCache).catch(err => {
+        console.error('Failed to batch cache tracks for offline:', err);
+      });
+    }
+  }
+
   let albumViewMode = $state<'grid' | 'list'>('grid');
   type AlbumGroupMode = 'alpha' | 'artist';
   let albumGroupMode = $state<AlbumGroupMode>('alpha');
@@ -315,10 +338,10 @@
   let showAlbumSortMenu = $state(false);
 
   const albumSortOptions: { value: AlbumSortBy; label: string }[] = [
-    { value: 'default', label: 'Default' },
-    { value: 'date', label: 'Recently Added' },
-    { value: 'title', label: 'Title' },
-    { value: 'artist', label: 'Artist' }
+    { value: 'default', label: $t('sort.default') },
+    { value: 'date', label: $t('sort.addedRecently') },
+    { value: 'title', label: $t('sort.title') },
+    { value: 'artist', label: $t('sort.artist') }
   ];
 
   function selectAlbumSort(value: AlbumSortBy) {
@@ -426,8 +449,8 @@
       case 'default': return $t('sort.default');
       case 'newest': return $t('sort.newest');
       case 'oldest': return $t('sort.oldest');
-      case 'title-asc': return $t('sort.titleAsc');
-      case 'title-desc': return $t('sort.titleDesc');
+      case 'title-asc': return $t('sort.titleAZ');
+      case 'title-desc': return $t('sort.titleZA');
     }
   }
 
@@ -593,7 +616,7 @@
     switch (tab) {
       case 'tracks': return Music;
       case 'albums': return Disc3;
-      case 'artists': return Mic2;
+      case 'artists': return MicVocal;
       case 'playlists': return ListMusic;
     }
   }
@@ -913,7 +936,7 @@
     if (item.hires && item.maximum_bit_depth && item.maximum_sampling_rate) {
       return `${item.maximum_bit_depth}bit/${item.maximum_sampling_rate}kHz`;
     }
-    return item.hires ? 'Hi-Res' : 'CD Quality';
+    return item.hires ? 'Hi-Res' : $t('quality.cdQuality');
   }
 
   const alphaIndexLetters = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
@@ -1304,7 +1327,7 @@
       </button>
     {/if}
     <button class="edit-btn" onclick={() => editModalOpen = true} title={$t('favorites.editSettings')}>
-      <Edit3 size={16} />
+      <PenLine size={16} />
     </button>
   </div>
   <!-- Header -->
@@ -1324,7 +1347,7 @@
             onclick={() => showTracksContextMenu = !showTracksContextMenu}
             title={$t('actions.more')}
           >
-            <MoreHorizontal size={18} />
+            <Ellipsis size={18} />
           </button>
           {#if showTracksContextMenu}
             <div class="context-menu-backdrop" onclick={() => showTracksContextMenu = false} role="presentation"></div>
@@ -1397,13 +1420,13 @@
     <div class="nav-right">
       <span class="results-count">
         {#if activeTab === 'tracks'}
-          {filteredTracks.length}{trackSearch ? ` / ${favoriteTracks.length}` : ''} tracks
+          {filteredTracks.length}{trackSearch ? ` / ${favoriteTracks.length}` : ''} {$t('favorites.tracks').toLowerCase()}
         {:else if activeTab === 'albums'}
-          {filteredAlbums.length}{albumSearch ? ` / ${favoriteAlbums.length}` : ''} albums
+          {filteredAlbums.length}{albumSearch ? ` / ${favoriteAlbums.length}` : ''} {$t('favorites.albums').toLowerCase()}
         {:else if activeTab === 'artists'}
-          {filteredArtists.length}{artistSearch ? ` / ${favoriteArtists.length}` : ''} artists
+          {filteredArtists.length}{artistSearch ? ` / ${favoriteArtists.length}` : ''} {$t('favorites.artists').toLowerCase()}
         {:else}
-          {filteredPlaylists.length}{playlistSearch ? ` / ${favoritePlaylists.length}` : ''} playlists
+          {filteredPlaylists.length}{playlistSearch ? ` / ${favoritePlaylists.length}` : ''} {$t('favorites.playlists').toLowerCase()}
         {/if}
       </span>
       {#if activeTab === 'albums'}
@@ -1413,9 +1436,9 @@
             <span>
               {albumGroupingEnabled
                 ? albumGroupMode === 'alpha'
-                  ? 'Group: A-Z'
-                  : 'Group: Artist'
-                : 'Group: Off'}
+                  ? $t('purchases.group.alpha')
+                  : $t('purchases.group.artist')
+                : $t('purchases.group.off')}
             </span>
             <ChevronDown size={14} />
           </button>
@@ -1426,28 +1449,28 @@
                 class:selected={!albumGroupingEnabled}
                 onclick={() => { albumGroupingEnabled = false; showAlbumGroupMenu = false; }}
               >
-                Off
+                {$t('purchases.group.optionOff')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={albumGroupingEnabled && albumGroupMode === 'alpha'}
                 onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; showAlbumGroupMenu = false; }}
               >
-                Alphabetical (A-Z)
+                {$t('purchases.group.optionAlpha')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={albumGroupingEnabled && albumGroupMode === 'artist'}
                 onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; showAlbumGroupMenu = false; }}
               >
-                Artist
+                {$t('purchases.group.optionArtist')}
               </button>
             </div>
           {/if}
         </div>
         <div class="dropdown-container">
           <button class="control-btn" onclick={() => (showAlbumSortMenu = !showAlbumSortMenu)}>
-            <span>Sort: {albumSortOptions.find(o => o.value === albumSortBy)?.label}</span>
+            <span>{$t('sort.sort')}: {albumSortOptions.find(o => o.value === albumSortBy)?.label}</span>
             <ChevronDown size={14} />
           </button>
           {#if showAlbumSortMenu}
@@ -1470,7 +1493,7 @@
         <button
           class="icon-btn"
           onclick={() => (albumViewMode = albumViewMode === 'grid' ? 'list' : 'grid')}
-          title={albumViewMode === 'grid' ? 'List view' : 'Grid view'}
+          title={albumViewMode === 'grid' ? $t('purchases.view.list') : $t('purchases.view.grid')}
         >
           {#if albumViewMode === 'grid'}
             <List size={16} />
@@ -1485,7 +1508,7 @@
           onclick={toggleTrackSelectMode}
           title={trackSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
         >
-          <CheckSquare size={16} />
+          <SquareCheckBig size={16} />
         </button>
         <GenreFilterButton context={GENRE_CONTEXT_TRACKS} variant="control" align="right" onFilterChange={handleGenreFilterChange} />
         <div class="dropdown-container">
@@ -1493,11 +1516,11 @@
             <span>
               {trackGroupingEnabled
                 ? trackGroupMode === 'album'
-                  ? 'Group: Album'
+                  ? $t('purchases.group.album')
                   : trackGroupMode === 'artist'
-                    ? 'Group: Artist'
-                    : 'Group: Name'
-                : 'Group: Off'}
+                    ? $t('purchases.group.artist')
+                    : $t('purchases.group.name')
+                : $t('purchases.group.off')}
             </span>
             <ChevronDown size={14} />
           </button>
@@ -1508,28 +1531,28 @@
                 class:selected={!trackGroupingEnabled}
                 onclick={() => { trackGroupingEnabled = false; showTrackGroupMenu = false; }}
               >
-                Off
+                {$t('purchases.group.optionOff')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={trackGroupingEnabled && trackGroupMode === 'album'}
                 onclick={() => { trackGroupMode = 'album'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
               >
-                Album
+              {$t('purchases.group.optionAlbum')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={trackGroupingEnabled && trackGroupMode === 'artist'}
                 onclick={() => { trackGroupMode = 'artist'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
               >
-                Artist
+                {$t('purchases.group.optionArtist')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={trackGroupingEnabled && trackGroupMode === 'name'}
                 onclick={() => { trackGroupMode = 'name'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
               >
-                Name (A-Z)
+                {$t('purchases.group.optionAlpha')}
               </button>
             </div>
           {/if}
@@ -1545,7 +1568,7 @@
               selectedFavoriteArtist = null;
             }
           }}
-          title={artistViewMode === 'grid' ? 'Browse view' : 'Grid view'}
+          title={artistViewMode === 'grid' ? $t('purchases.view.list') : $t('purchases.view.grid')}
         >
           {#if artistViewMode === 'grid'}
             <PanelLeftClose size={16} />
@@ -1556,7 +1579,7 @@
         {#if artistViewMode === 'grid'}
           <div class="dropdown-container">
             <button class="control-btn" onclick={() => (showArtistGroupMenu = !showArtistGroupMenu)}>
-              <span>{artistGroupingEnabled ? 'Group: A-Z' : 'Group: Off'}</span>
+              <span>{artistGroupingEnabled ? $t('purchases.group.alpha') : $t('purchases.group.off')}</span>
               <ChevronDown size={14} />
             </button>
             {#if showArtistGroupMenu}
@@ -1566,14 +1589,14 @@
                   class:selected={!artistGroupingEnabled}
                   onclick={() => { artistGroupingEnabled = false; showArtistGroupMenu = false; }}
                 >
-                  Off
+                  {$t('purchases.group.optionOff')}
                 </button>
                 <button
                   class="dropdown-item"
                   class:selected={artistGroupingEnabled}
                   onclick={() => { artistGroupingEnabled = true; showArtistGroupMenu = false; }}
                 >
-                  Alphabetical (A-Z)
+                  {$t('purchases.group.optionAlpha')}
                 </button>
               </div>
             {/if}
@@ -1724,6 +1747,7 @@
           onPlayNext={handleBulkPlayNext}
           onPlayLater={handleBulkPlayLater}
           onAddToPlaylist={handleBulkAddToPlaylist}
+          onMakeOffline={handleBulkMakeOffline}
           onRemoveFavorites={handleBulkRemoveFavorites}
           onClearSelection={() => { selectedTrackIds = new Set(); }}
         />
@@ -1795,7 +1819,7 @@
       <ViewTransition duration={200} distance={12} direction="up">
       {#if favoriteArtists.length === 0}
         <div class="empty">
-          <Mic2 size={48} />
+          <MicVocal size={48} />
           <p>{$t('favorites.noFavoriteArtists')}</p>
           <p class="empty-hint">{$t('favorites.likeArtistsHint')}</p>
         </div>
@@ -1823,12 +1847,12 @@
           <div class="artist-albums-column">
             {#if !selectedFavoriteArtist}
               <div class="artist-albums-empty">
-                <Mic2 size={48} />
+                <MicVocal size={48} />
                 <p>{$t('favorites.selectArtistHint')}</p>
               </div>
             {:else if loadingArtistAlbums}
               <div class="artist-albums-loading">
-                <Loader2 size={32} class="spinner-icon" />
+                <LoaderCircle size={32} class="spinner-icon" />
                 <p>{$t('favorites.loadingAlbums')}</p>
               </div>
             {:else if artistAlbumsError}
@@ -2008,9 +2032,9 @@
                 <!-- Footer -->
                 <div class="artist-albums-footer">
                   <p class="footer-hint">
-                    To view compilations and other content,
+                    {$t('favorites.footer.viewCompilationsAndContent')},
                     <button class="link-btn" onclick={() => onArtistClick?.(selectedFavoriteArtist!.id)}>
-                      go to {selectedFavoriteArtist.name}'s page
+                      {$t('favorites.footer.goToArtistPage', { values: {"artist": selectedFavoriteArtist.name} })}
                     </button>
                   </p>
                 </div>

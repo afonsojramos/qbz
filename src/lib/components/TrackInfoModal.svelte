@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { X, Loader2 } from 'lucide-svelte';
+  import { t } from 'svelte-i18n';
+  import { X, LoaderCircle } from 'lucide-svelte';
   import type { TrackInfo, Performer } from '$lib/types';
 
   interface Props {
@@ -46,13 +47,17 @@
       parts.push(`${track.maximum_sampling_rate}kHz`);
     }
     if (parts.length === 0) {
-      return track.hires_streamable ? 'Hi-Res' : 'Lossless';
+      return track.hires_streamable ? $t('quality.hiRes') : $t('quality.lossless');
     }
     return parts.join(' / ');
   }
 
   // Convert CamelCase role to display format
   function formatRole(role: string): string {
+    return role[0].toLowerCase() + role.slice(1).replaceAll(' ','');
+  }
+
+  function formatUnknownRole(role: string): string {
     return role.replace(/([A-Z])/g, ' $1').trim().toUpperCase();
   }
 
@@ -166,7 +171,7 @@
     <div class="track-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
       {#if loading}
         <div class="loading-state">
-          <Loader2 size={32} class="spinner" />
+          <LoaderCircle size={32} class="spinner" />
           <span>Loading track info...</span>
         </div>
       {:else if error}
@@ -199,7 +204,7 @@
               {/if}
             {/if}
           </div>
-          <button class="close-btn" onclick={onClose} aria-label="Close">
+          <button class="close-btn" onclick={onClose} aria-label={ $t('actions.close') }>
             <X size={18} />
           </button>
         </div>
@@ -209,11 +214,11 @@
           <!-- Metadata Grid (3 columns) -->
           <div class="metadata-grid">
             <div class="metadata-item">
-              <span class="metadata-label">DURATION</span>
+              <span class="metadata-label">{$t('tracklist.duration')}</span>
               <span class="metadata-value">{formatDuration(trackInfo.track.duration)}</span>
             </div>
             <div class="metadata-item">
-              <span class="metadata-label">QUALITY</span>
+              <span class="metadata-label">{$t('tracklist.quality')}</span>
               <span class="metadata-value">{formatQuality(trackInfo.track)}</span>
             </div>
             {#if trackInfo.track.isrc}
@@ -224,7 +229,7 @@
             {/if}
             {#if trackInfo.track.album?.label}
               <div class="metadata-item">
-                <span class="metadata-label">LABEL</span>
+                <span class="metadata-label">{$t('search.label')}</span>
                 {#if onLabelClick}
                   <button
                     class="label-link"
@@ -248,7 +253,7 @@
             <div class="credits-grid">
               {#each groupedCredits as { role, names }}
                 <div class="credit-item">
-                  <span class="credit-label">{formatRole(role)}</span>
+                  <span class="credit-label">{ $t(`performerRoles.${formatRole(role)}`, { default: formatUnknownRole(role) }) }</span>
                   <span class="credit-value">
                     {#each names as name, i}
                       {#if onMusicianClick || onPerformerSearch}

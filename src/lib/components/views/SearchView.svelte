@@ -3,7 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { cachedSrc } from '$lib/actions/cachedImage';
-  import { Search, Disc3, Music, Mic2, User, X, ChevronLeft, ChevronRight, Crown, Heart, Play, MoreHorizontal, ListPlus } from 'lucide-svelte';
+  import { Search, Disc3, Music, MicVocal, User, X, ChevronLeft, ChevronRight, Crown, Heart, Play, Ellipsis, ListPlus } from 'lucide-svelte';
   import AlbumCard from '../AlbumCard.svelte';
   import SearchPlaylistCard from '../SearchPlaylistCard.svelte';
   import ViewTransition from '../ViewTransition.svelte';
@@ -685,7 +685,7 @@
     if (track.hires_streamable && track.maximum_bit_depth && track.maximum_sampling_rate) {
       return `${track.maximum_bit_depth}bit/${track.maximum_sampling_rate}kHz`;
     }
-    return 'CD Quality';
+    return $t('quality.cdQuality');
   }
 
   function getAlbumArtwork(album: Album): string {
@@ -1227,7 +1227,7 @@
           class="clear-filter-btn"
           class:visible={filterType !== null}
           onclick={clearFilter}
-          title="Clear filter"
+          title={$t('genreFilter.clearFilter')}
           disabled={!filterType}
         >
           <X size={14} />
@@ -1320,7 +1320,7 @@
                           class="popular-overlay-btn"
                           type="button"
                           onclick={(e) => { e.stopPropagation(); /* TODO: Add favorite */ }}
-                          title="Add to favorites"
+                          title={$t('actions.addToFavorites')}
                         >
                           <Heart size={16} />
                         </button>
@@ -1328,7 +1328,7 @@
                           class="popular-overlay-btn popular-overlay-btn--play"
                           type="button"
                           onclick={(e) => { e.stopPropagation(); onAlbumPlay?.(album.id); }}
-                          title="Play"
+                          title={$t('actions.play')}
                         >
                           <Play size={18} fill="white" />
                         </button>
@@ -1337,9 +1337,9 @@
                           type="button"
                           bind:this={popularMenuTriggerRef}
                           onclick={(e) => { e.stopPropagation(); mostPopularMenuOpen ? mostPopularMenuOpen = false : openPopularMenu(); }}
-                          title="More options"
+                          title={$t('actions.moreOptions')}
                         >
-                          <MoreHorizontal size={16} />
+                          <Ellipsis size={16} />
                         </button>
                         {#if mostPopularMenuOpen}
                           <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -1422,7 +1422,7 @@
                           class="popular-overlay-btn"
                           type="button"
                           onclick={(e) => { e.stopPropagation(); onTrackAddFavorite?.(track.id); }}
-                          title="Add to favorites"
+                          title={$t('actions.addToFavorites')}
                         >
                           <Heart size={16} />
                         </button>
@@ -1430,7 +1430,7 @@
                           class="popular-overlay-btn popular-overlay-btn--play"
                           type="button"
                           onclick={(e) => { e.stopPropagation(); handleSearchTrackPlay(track, 0); }}
-                          title="Play"
+                          title={$t('actions.play')}
                         >
                           <Play size={18} fill="white" />
                         </button>
@@ -1439,9 +1439,9 @@
                           type="button"
                           bind:this={popularMenuTriggerRef}
                           onclick={(e) => { e.stopPropagation(); mostPopularMenuOpen ? mostPopularMenuOpen = false : openPopularMenu(); }}
-                          title="More options"
+                          title={$t('actions.moreOptions')}
                         >
-                          <MoreHorizontal size={16} />
+                          <Ellipsis size={16} />
                         </button>
                         {#if mostPopularMenuOpen}
                           <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -1514,7 +1514,7 @@
                   class="carousel-btn" 
                   onclick={() => scrollArtistsCarousel('left')} 
                   disabled={!canScrollArtistsLeft}
-                  aria-label="Previous artists"
+                  aria-label={$t('actions.previousArtists')}
                 >
                   <ChevronLeft size={20} />
                 </button>
@@ -1522,7 +1522,7 @@
                   class="carousel-btn" 
                   onclick={() => scrollArtistsCarousel('right')} 
                   disabled={!canScrollArtistsRight}
-                  aria-label="Next artists"
+                  aria-label={$t('actions.nextArtists')}
                 >
                   <ChevronRight size={20} />
                 </button>
@@ -1542,9 +1542,6 @@
                           <ChevronRight size={20} />
                         </div>
                       </button>
-                      <div class="view-more-info">
-                        <span class="view-more-text">{allResults.artists.total - 12} more artists to discover</span>
-                      </div>
                     </div>
                   {:else}
                     <button class="artist-card" onclick={() => onArtistClick?.(artist.id)}>
@@ -1559,7 +1556,7 @@
                         {/if}
                       </div>
                       <div class="artist-name">{artist.name}</div>
-                                          </button>
+                    </button>
                   {/if}
                 {/each}
               </div>
@@ -1608,9 +1605,6 @@
                               <ChevronRight size={20} />
                             </div>
                           </button>
-                          <div class="view-more-info">
-                            <span class="view-more-text">{allResults.albums.total - 30} more albums to discover</span>
-                          </div>
                         </div>
                       </div>
                     {:else}
@@ -1694,7 +1688,7 @@
                             handleSearchTrackPlay(track, index);
                           }
                         }}
-                        aria-label={isActiveTrack ? 'Pause track' : 'Play track'}
+                        aria-label={isActiveTrack ? $t('player.pause') : $t('player.play')}
                       >
                         <span class="play-icon" aria-hidden="true">
                           <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
@@ -3018,20 +3012,6 @@
 
   .view-more-cover:hover .view-more-label {
     color: var(--accent-primary);
-  }
-
-  .view-more-info {
-    width: 160px;
-    padding: 0 4px;
-    text-align: center;
-  }
-
-  .view-more-text {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-muted);
-    line-height: 1.3;
-    display: block;
   }
 
   .tracks-section {

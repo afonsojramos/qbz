@@ -24,7 +24,7 @@ walkdir = "2"
 dirs = "5"
 
 # Audio metadata
-lofty = "0.18"
+lofty = "0.23"
 
 # Image processing (thumbnails)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

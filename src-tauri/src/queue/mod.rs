@@ -724,7 +724,7 @@ impl QueueManager {
             return;
         }
 
-        use rand::{Rng, SeedableRng};
+        use rand::{RngExt, SeedableRng};
         use std::time::{SystemTime, UNIX_EPOCH};
 
         // Create seeded RNG from current timestamp
@@ -736,7 +736,7 @@ impl QueueManager {
 
         // Proper Fisher-Yates shuffle - each iteration gets a NEW random number
         for i in (1..order.len()).rev() {
-            let j = rng.gen_range(0..=i);
+            let j = rng.random_range(0..=i);
             order.swap(i, j);
         }
     }

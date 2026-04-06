@@ -2,7 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { ArrowLeft, Search, X, Disc3, Loader2, ArrowUpDown, Filter, ChevronDown, Users } from 'lucide-svelte';
+  import { ArrowLeft, Search, X, Disc3, LoaderCircle, ArrowUpDown, Funnel, ChevronDown, Users } from 'lucide-svelte';
   import AlbumCard from '../AlbumCard.svelte';
   import type { QobuzAlbum, LabelDetail, LabelPageData } from '$lib/types';
   import type { OfflineCacheStatus } from '$lib/stores/offlineCacheState';
@@ -420,7 +420,7 @@
         onclick={toggleHiResFilter}
         title={$t('labelReleases.filterHiRes')}
       >
-        <Filter size={16} />
+        <Funnel size={16} />
         <span class="toolbar-label">Hi-Res</span>
       </button>
 
@@ -543,7 +543,7 @@
 
     {#if loadingMore}
       <div class="loading-more">
-        <Loader2 size={20} class="spinner-icon" />
+        <LoaderCircle size={20} class="spinner-icon" />
         <span>{$t('labelReleases.loadingMore')}</span>
       </div>
     {/if}

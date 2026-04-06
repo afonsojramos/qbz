@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ListPlus, ListEnd, ListMusic, Heart, HeartOff, Trash2, X, ChevronDown } from 'lucide-svelte';
+  import { ListPlus, ListEnd, ListMusic, Heart, HeartOff, Trash2, X, ChevronDown, CloudDownload } from 'lucide-svelte';
   import { t } from 'svelte-i18n';
 
   interface Props {
@@ -10,6 +10,7 @@
     onAddFavorites?: () => void;
     onRemoveFavorites?: () => void;
     onRemoveFromPlaylist?: () => void;
+    onMakeOffline?: () => void;
     onClearSelection: () => void;
     placement?: 'top' | 'bottom';
   }
@@ -22,6 +23,7 @@
     onAddFavorites,
     onRemoveFavorites,
     onRemoveFromPlaylist,
+    onMakeOffline,
     onClearSelection,
     placement = 'bottom',
   }: Props = $props();
@@ -77,11 +79,11 @@
           <div class="queue-dropdown">
             <button class="dropdown-item" onclick={handlePlayNext}>
               <ListPlus size={14} />
-              <span>Play next</span>
+              <span>{$t('actions.playNext')}</span>
             </button>
             <button class="dropdown-item" onclick={handlePlayLater}>
               <ListEnd size={14} />
-              <span>Add to queue</span>
+              <span>{$t('actions.addToQueue')}</span>
             </button>
           </div>
         {/if}
@@ -91,6 +93,13 @@
         <ListMusic size={15} />
         <span>{$t('actions.addToPlaylist')}</span>
       </button>
+
+      {#if onMakeOffline}
+        <button class="action-btn" onclick={onMakeOffline} title={$t('actions.makeAvailableOffline')}>
+          <CloudDownload size={15} />
+          <span>{$t('actions.makeAvailableOffline')}</span>
+        </button>
+      {/if}
 
       {#if onAddFavorites}
         <button class="action-btn" onclick={onAddFavorites} title={$t('actions.addToFavorites')}>
@@ -113,7 +122,7 @@
         </button>
       {/if}
 
-      <button class="clear-btn" onclick={onClearSelection} title="Clear selection">
+      <button class="clear-btn" onclick={onClearSelection} title={ $t('actions.clearSelection') }>
         <X size={16} />
       </button>
     </div>

@@ -505,8 +505,8 @@ fn build_router(ctx: ApiContext, allowed_origins: Vec<String>) -> Router {
         .route("/api/favorites/add", post(add_favorite))
         .route("/api/favorites/remove", post(remove_favorite))
         .route("/api/album/play", post(play_album))
-        .route("/api/album/:id", get(get_album))
-        .route("/api/artist/:id", get(get_artist))
+        .route("/api/album/{id}", get(get_album))
+        .route("/api/artist/{id}", get(get_artist))
         .route("/api/playback/preferences", get(get_playback_preferences))
         .route("/api/playback/autoplay", post(set_autoplay))
         .route("/api/ws", get(ws_handler))
@@ -1061,7 +1061,7 @@ async fn handle_ws(mut socket: WebSocket, mut rx: broadcast::Receiver<PlaybackEv
                     Ok(p) => p,
                     Err(_) => continue,
                 };
-                if socket.send(Message::Text(payload)).await.is_err() {
+                if socket.send(Message::Text(payload.into())).await.is_err() {
                     break;
                 }
             }

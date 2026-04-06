@@ -3,7 +3,7 @@
   import Portal from './Portal.svelte';
   import {
     ChevronRight,
-    MoreHorizontal,
+    Ellipsis,
     ListPlus,
     ListEnd,
     ListMusic,
@@ -325,7 +325,7 @@
       }}
       aria-label="Album actions"
     >
-      <MoreHorizontal size={20} color="currentColor" />
+      <Ellipsis size={20} color="currentColor" />
     </button>
 
     {#if isOpen && portalTarget}
@@ -397,7 +397,7 @@
                   {#if onShareQobuz}
                     <button class="menu-item" onclick={() => handleAction(onShareQobuz)}>
                       <Link size={14} />
-                      <span>Qobuz™ link</span>
+                      <span>{$t('actions.qobuzLink')}</span>
                     </button>
                   {/if}
                   {#if onShareSonglink}
@@ -435,14 +435,14 @@
                 }}
               >
                 <CloudDownload size={14} />
-                <span>Make album available offline</span>
+                <span>{$t('actions.makeAvailableOffline')}</span>
                 <ChevronRight size={14} class="chevron" />
                 {#if downloadOpen}
                   <div class="submenu" bind:this={downloadSubmenuEl} style={downloadSubmenuStyle}>
                     {#if onReDownloadAlbum}
                       <button class="menu-item" onclick={() => handleAction(onReDownloadAlbum)}>
                         <RefreshCw size={14} />
-                        <span>Refresh album offline copy</span>
+                        <span>{$t('actions.refreshOfflineCopy')}</span>
                       </button>
                     {/if}
                   </div>
@@ -451,7 +451,7 @@
             {:else}
               <button class="menu-item" onclick={() => handleAction(onDownload)}>
                 <CloudDownload size={14} />
-                <span>Make album available offline</span>
+                <span>{$t('actions.makeAvailableOffline')}</span>
               </button>
             {/if}
           {/if}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Mic2 } from 'lucide-svelte';
+  import { MicVocal } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import LyricsLines from '$lib/components/lyrics/LyricsLines.svelte';
   import type { LyricsLine } from '$lib/stores/lyricsStore';
@@ -18,7 +18,7 @@
 <div class="lyrics-surface">
   {#if !hasLines}
     <div class="lyrics-empty">
-      <Mic2 size={30} strokeWidth={1.6} />
+      <MicVocal size={30} strokeWidth={1.6} />
       <span>{$t('player.noLyrics')}</span>
     </div>
   {:else}

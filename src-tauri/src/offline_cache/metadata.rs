@@ -2,7 +2,10 @@
 //!
 //! Handles complete metadata retrieval from Qobuz API and writing to FLAC tags.
 
-use lofty::{Accessor, AudioFile, ItemKey, Picture, PictureType, Tag, TagExt, TaggedFileExt};
+use lofty::config::WriteOptions;
+use lofty::picture::{MimeType, Picture, PictureType};
+use lofty::prelude::*;
+use lofty::tag::{ItemKey, Tag};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -139,7 +142,10 @@ pub fn write_flac_tags(file_path: &str, metadata: &CompleteTrackMetadata) -> Res
     }
 
     if let Some(year) = metadata.year {
-        tag.set_year(year);
+        tag.set_date(lofty::tag::items::Timestamp {
+            year: year as u16,
+            ..Default::default()
+        });
     }
 
     if let Some(genre) = &metadata.genre {
@@ -147,7 +153,7 @@ pub fn write_flac_tags(file_path: &str, metadata: &CompleteTrackMetadata) -> Res
     }
 
     if let Some(isrc) = &metadata.isrc {
-        tag.insert_text(ItemKey::Unknown("ISRC".to_string()), isrc.clone());
+        tag.insert_text(ItemKey::Isrc, isrc.clone());
     }
 
     if let Some(label) = &metadata.label {
@@ -164,7 +170,7 @@ pub fn write_flac_tags(file_path: &str, metadata: &CompleteTrackMetadata) -> Res
 
     // Save tags
     tagged_file
-        .save_to_path(path)
+        .save_to_path(path, WriteOptions::default())
         .map_err(|e| format!("Failed to save tags: {}", e))?;
 
     Ok(())
@@ -186,20 +192,18 @@ pub async fn embed_artwork(file_path: &str, artwork_url: &str) -> Result<(), Str
 
     // Determine MIME type from URL
     let mime_type = if artwork_url.contains(".jpg") || artwork_url.contains(".jpeg") {
-        lofty::MimeType::Jpeg
+        MimeType::Jpeg
     } else if artwork_url.contains(".png") {
-        lofty::MimeType::Png
+        MimeType::Png
     } else {
-        lofty::MimeType::Jpeg // Default to JPEG
+        MimeType::Jpeg // Default to JPEG
     };
 
     // Create picture
-    let picture = Picture::new_unchecked(
-        PictureType::CoverFront,
-        Some(mime_type),
-        None,
-        artwork_bytes.to_vec(),
-    );
+    let picture = Picture::unchecked(artwork_bytes.to_vec())
+        .pic_type(PictureType::CoverFront)
+        .mime_type(mime_type)
+        .build();
 
     // Read file
     let path = Path::new(file_path);
@@ -218,7 +222,7 @@ pub async fn embed_artwork(file_path: &str, artwork_url: &str) -> Result<(), Str
 
     // Save
     tagged_file
-        .save_to_path(path)
+        .save_to_path(path, WriteOptions::default())
         .map_err(|e| format!("Failed to save artwork: {}", e))?;
 
     Ok(())

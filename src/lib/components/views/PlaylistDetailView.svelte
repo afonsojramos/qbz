@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft, Play, Shuffle, ListMusic, Search, X, ChevronDown, ChevronRight, ChevronUp, ImagePlus, Edit3, BarChart2, Heart, CloudDownload, ListPlus, GripVertical, CheckSquare, Bookmark } from 'lucide-svelte';
+  import { ArrowLeft, Play, Shuffle, ListMusic, Search, X, ChevronDown, ChevronRight, ChevronUp, ImagePlus, PenLine, ChartNoAxesColumn, Heart, CloudDownload, ListPlus, GripVertical, SquareCheckBig, Bookmark } from 'lucide-svelte';
   import AlbumMenu from '../AlbumMenu.svelte';
   import PlaylistCollage from '../PlaylistCollage.svelte';
   import PlaylistModal from '../PlaylistModal.svelte';
@@ -1520,9 +1520,9 @@
     const hours = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
     if (hours > 0) {
-      return `${hours} hr ${mins} min`;
+      return `${hours} ` + $t('time.hours') + ` ${mins} ` + $t('time.minutes');
     }
-    return `${mins} min`;
+    return `${mins} ` + $t('time.minutes');
   }
 
   function resolveArtworkPath(path: string): string {
@@ -2072,7 +2072,7 @@
     </button>
     {#if playlist}
       <button class="edit-btn" onclick={() => editModalOpen = true} title={$t('playlist.editPlaylist')}>
-        <Edit3 size={16} />
+        <PenLine size={16} />
       </button>
     {/if}
   </div>
@@ -2134,7 +2134,7 @@
           {#if playlistStats && playlistStats.play_count > 0}
             <span class="separator">•</span>
             <span class="play-count" title={$t('playlist.playCount')}>
-              <BarChart2 size={12} />
+              <ChartNoAxesColumn size={12} />
               {playlistStats.play_count}
             </span>
           {/if}
@@ -2253,7 +2253,7 @@
         onclick={toggleMultiSelectMode}
         title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
       >
-        <CheckSquare size={16} />
+        <SquareCheckBig size={16} />
       </button>
     </div>
 
@@ -2264,18 +2264,18 @@
           <div class="batch-left">
             {#if selectedTrackKeys.size > 0}
               <span class="selection-count">{selectedTrackKeys.size} selected</span>
-              <button class="batch-btn" onclick={clearSelection}>Clear</button>
+              <button class="batch-btn" onclick={clearSelection}>{ $t('actions.clear') }</button>
             {:else}
-              <button class="batch-btn" onclick={selectAllTracks}>Select All</button>
+              <button class="batch-btn" onclick={selectAllTracks}>{ $t('actions.selectAll') }</button>
             {/if}
           </div>
           {#if selectedTrackKeys.size > 0}
             <div class="batch-right">
               <button class="batch-btn" onclick={moveSelectedUp} title="Move selected up">
-                <ChevronUp size={14} /> Move Up
+                <ChevronUp size={14} /> { $t('favorites.moveUp') }
               </button>
               <button class="batch-btn" onclick={moveSelectedDown} title="Move selected down">
-                <ChevronDown size={14} /> Move Down
+                <ChevronDown size={14} /> { $t('favorites.moveDown') }
               </button>
             </div>
           {/if}
@@ -2287,10 +2287,10 @@
         {/if}
         <div class="col-number">#</div>
         <div class="col-artwork"></div>
-        <div class="col-title">{$t('playlist.trackTitle')}</div>
-        <div class="col-album">{$t('playlist.trackAlbum')}</div>
-        <div class="col-duration">{$t('playlist.trackDuration')}</div>
-        <div class="col-quality">{$t('playlist.trackQuality')}</div>
+        <div class="col-title">{$t('tracklist.title')}</div>
+        <div class="col-album">{$t('tracklist.album')}</div>
+        <div class="col-duration">{$t('tracklist.duration')}</div>
+        <div class="col-quality">{$t('tracklist.quality')}</div>
         <div class="col-icon"><Heart size={14} /></div>
         <div class="col-icon"><CloudDownload size={14} /></div>
         <div class="col-spacer"></div>
@@ -2356,7 +2356,7 @@
                   class="reorder-btn"
                   onclick={() => moveTrackUp(track, idx)}
                   disabled={idx === 0}
-                  title="Move up"
+                  title={ $t('favorites.moveUp') }
                 >
                   <ChevronUp size={16} />
                 </button>
@@ -2367,7 +2367,7 @@
                   class="reorder-btn"
                   onclick={() => moveTrackDown(track, idx)}
                   disabled={idx === displayTracks.length - 1}
-                  title="Move down"
+                  title={ $t('favorites.moveDown') }
                 >
                   <ChevronDown size={16} />
                 </button>

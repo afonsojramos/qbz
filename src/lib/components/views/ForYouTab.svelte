@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { Music, User, Loader2, ArrowRight, Heart, Play, Share2, UserPlus } from 'lucide-svelte';
+  import { Music, User, LoaderCircle, ArrowRight, Heart, Play, Share2, UserPlus } from 'lucide-svelte';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import { t } from '$lib/i18n';
   import HorizontalScrollRow from '../HorizontalScrollRow.svelte';
   import AlbumCard from '../AlbumCard.svelte';
   import TrackRow from '../TrackRow.svelte';
-  import { formatQuality, getQobuzImageForSize } from '$lib/adapters/qobuzAdapters';
+  import { getQobuzImageForSize } from '$lib/adapters/qobuzAdapters';
   import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
   import { playTrack } from '$lib/services/playbackService';
   import { playQueueIndex } from '$lib/stores/queueStore';
@@ -737,6 +737,13 @@
     failedArtistImages = new Set([...failedArtistImages, artistId]);
   }
 
+  function formatQuality(hires?: boolean, maximum_bit_depth?: number, maximum_sampling_rate?: number): string {
+    if (!hires) return $t('quality.cdQuality');
+    const depth = maximum_bit_depth ?? 16;
+    const rate = maximum_sampling_rate ?? 44.1;
+    return `${depth}/${rate}kHz`;
+  }
+
   function getTrackQuality(track: DisplayTrack): string {
     return formatQuality(track.hires, track.bitDepth, track.samplingRate);
   }
@@ -1274,7 +1281,7 @@
             disabled={artist.isFavoriting}
           >
             {#if artist.isFavoriting}
-              <Loader2 size={14} class="spinner" />
+              <LoaderCircle size={14} class="spinner" />
             {:else}
               <UserPlus size={14} />
             {/if}
@@ -1332,7 +1339,7 @@
         <div class="spotlight-actions">
           <button class="action-btn-circle primary" onclick={() => handleSpotlightTopTracks()} disabled={spotlightTopTracksLoading}>
             {#if spotlightTopTracksLoading}
-              <Loader2 size={20} class="spinner" />
+              <LoaderCircle size={20} class="spinner" />
             {:else}
               <Play size={20} fill="currentColor" color="currentColor" />
             {/if}

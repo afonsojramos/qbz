@@ -5,7 +5,7 @@
   import Modal from './Modal.svelte';
   import { getConsoleLogsAsText } from '$lib/stores/consoleLogStore';
   import { showToast } from '$lib/stores/toastStore';
-  import { Loader2, Copy, Check } from 'lucide-svelte';
+  import { LoaderCircle, Copy, Check } from 'lucide-svelte';
 
   interface Props {
     isOpen: boolean;
@@ -95,7 +95,7 @@
     <div class="log-container">
       {#if isLoading}
         <div class="loading">
-          <Loader2 size={20} class="spin" />
+          <LoaderCircle size={20} class="spin" />
         </div>
       {:else}
         <pre class="log-output">{activeTab === 'terminal' ? terminalLogs : consoleLogs}</pre>
@@ -112,7 +112,7 @@
           disabled={activeTab === 'terminal' ? isUploadingTerminal : isUploadingConsole}
         >
           {#if (activeTab === 'terminal' ? isUploadingTerminal : isUploadingConsole)}
-            <Loader2 size={14} class="spin" />
+            <LoaderCircle size={14} class="spin" />
             {$t('settings.developer.uploading')}
           {:else}
             {$t('settings.developer.uploadTab', { values: { tab: activeTab === 'terminal' ? $t('settings.developer.tabTerminal') : $t('settings.developer.tabConsole') } })}

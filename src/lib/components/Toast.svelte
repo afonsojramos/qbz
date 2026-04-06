@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { CheckCircle, AlertCircle, AlertTriangle, Info, Loader2, X } from 'lucide-svelte';
+  import { CircleCheckBig, CircleAlert, TriangleAlert, Info, LoaderCircle, X } from 'lucide-svelte';
 
   interface Props {
     message: string;
@@ -23,13 +23,13 @@
 <div class="toast" class:success={type === 'success'} class:error={type === 'error'} class:info={type === 'info'} class:warning={type === 'warning'} class:buffering={type === 'buffering'}>
   <div class="icon">
     {#if type === 'success'}
-      <CheckCircle size={20} />
+      <CircleCheckBig size={20} />
     {:else if type === 'error'}
-      <AlertCircle size={20} />
+      <CircleAlert size={20} />
     {:else if type === 'warning'}
-      <AlertTriangle size={20} />
+      <TriangleAlert size={20} />
     {:else if type === 'buffering'}
-      <Loader2 size={20} class="spinning" />
+      <LoaderCircle size={20} class="spinning" />
     {:else}
       <Info size={20} />
     {/if}

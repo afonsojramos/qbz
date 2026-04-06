@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
-  import { Music, User, Loader2, ArrowRight, Home } from 'lucide-svelte';
+  import { Music, User, LoaderCircle, ArrowRight, House } from 'lucide-svelte';
   import ForYouTab from './ForYouTab.svelte';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import { type OfflineCacheStatus } from '$lib/stores/offlineCacheState';
@@ -22,7 +22,7 @@
   import HomeSettingsModal from '../HomeSettingsModal.svelte';
   import GenreFilterButton from '../GenreFilterButton.svelte';
   import PlaylistTagFilter from '../PlaylistTagFilter.svelte';
-  import { formatDuration, formatQuality, getQobuzImage, getQobuzImageForSize } from '$lib/adapters/qobuzAdapters';
+  import { formatDuration, getQobuzImage, getQobuzImageForSize } from '$lib/adapters/qobuzAdapters';
   import { isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
   import {
     subscribe as subscribeHomeSettings,
@@ -629,6 +629,13 @@
     };
   }
 
+  function formatQuality(hires?: boolean, maximum_bit_depth?: number, maximum_sampling_rate?: number): string {
+    if (!hires) return $t('quality.cdQuality');
+    const depth = maximum_bit_depth ?? 16;
+    const rate = maximum_sampling_rate ?? 44.1;
+    return `${depth}/${rate}kHz`;
+  }
+
   function getTrackQuality(track: DisplayTrack): string {
     return formatQuality(track.hires, track.bitDepth, track.samplingRate);
   }
@@ -893,7 +900,7 @@
           class:active={activeTab === 'home'}
           onclick={() => switchTab('home')}
         >
-          <Home size={13} />
+          <House size={13} />
         </button>
         <button
           class="home-tab compact"
@@ -941,7 +948,7 @@
         class:active={activeTab === 'home'}
         onclick={() => switchTab('home')}
       >
-        <Home size={14} />
+        <House size={14} />
       </button>
       <button
         class="home-tab"
@@ -1273,7 +1280,7 @@
           {#snippet children()}
             {#if loadingQobuzPlaylists}
               <div class="loading-playlists">
-                <Loader2 size={24} class="spinner" />
+                <LoaderCircle size={24} class="spinner" />
               </div>
             {:else}
               {#each qobuzPlaylists as playlist (playlist.id)}
@@ -1931,7 +1938,7 @@
         {#snippet children()}
           {#if loadingQobuzPlaylists}
             <div class="loading-playlists">
-              <Loader2 size={24} class="spinner" />
+              <LoaderCircle size={24} class="spinner" />
             </div>
           {:else}
             {#each qobuzPlaylists as playlist (playlist.id)}

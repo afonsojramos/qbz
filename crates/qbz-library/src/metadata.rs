@@ -1,6 +1,8 @@
 //! Metadata extraction for audio files
 
-use lofty::{Accessor, AudioFile, ItemKey, Probe, TaggedFileExt};
+use lofty::prelude::*;
+use lofty::probe::Probe;
+use lofty::tag::ItemKey;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -452,7 +454,7 @@ impl MetadataExtractor {
                     .or_else(|| fallback_artist.clone())
                     .unwrap_or_else(|| "Unknown Artist".to_string()),
                 album: album_title,
-                album_artist: tag.get_string(&ItemKey::AlbumArtist).map(|s| s.to_string()),
+                album_artist: tag.get_string(ItemKey::AlbumArtist).map(|s| s.to_string()),
                 album_group_key,
                 album_group_title,
                 track_number: tag
@@ -463,10 +465,10 @@ impl MetadataExtractor {
                     .disk()
                     .and_then(|d| if d > 0 { Some(d as u32) } else { None })
                     .or(inferred_disc),
-                year: tag.year().map(|y| y as u32),
+                year: tag.date().map(|ts| ts.year as u32),
                 genre: tag.genre().map(|s| s.to_string()),
                 catalog_number: tag
-                    .get_string(&ItemKey::CatalogNumber)
+                    .get_string(ItemKey::CatalogNumber)
                     .map(|s| s.to_string()),
                 duration_secs,
                 format,

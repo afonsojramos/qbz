@@ -12,7 +12,7 @@ use aes_gcm::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use keyring::Entry;
-use rand::RngCore;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -89,7 +89,7 @@ fn load_or_create_installation_salt() -> Result<Vec<u8>, String> {
     }
 
     let mut salt = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut salt);
+    rand::rng().fill(&mut salt);
     fs::write(&path, BASE64.encode(salt))
         .map_err(|e| format!("Failed to write installation salt: {}", e))?;
 
@@ -119,7 +119,7 @@ fn load_or_create_machine_id_fallback() -> Result<Vec<u8>, String> {
     }
 
     let mut machine_fallback = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut machine_fallback);
+    rand::rng().fill(&mut machine_fallback);
     fs::write(&path, BASE64.encode(machine_fallback))
         .map_err(|e| format!("Failed to write machine fallback id: {}", e))?;
 
@@ -178,7 +178,7 @@ fn encrypt_credentials(credentials: &QobuzCredentials) -> Result<String, String>
 
     // Generate random nonce
     let mut nonce_raw = [0u8; 12];
-    rand::rngs::OsRng.fill_bytes(&mut nonce_raw);
+    rand::rng().fill(&mut nonce_raw);
     let nonce_bytes: [u8; 12] = aes_gcm::aead::generic_array::GenericArray::from(nonce_raw).into();
     let nonce = Nonce::from_slice(&nonce_bytes);
 

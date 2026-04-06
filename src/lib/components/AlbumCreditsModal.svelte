@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { Play, ChevronDown, ChevronUp, Loader2, X } from 'lucide-svelte';
+  import { t, locale } from 'svelte-i18n';
+  import { Play, ChevronDown, ChevronUp, LoaderCircle, X } from 'lucide-svelte';
   import type { AlbumCredits, QobuzAlbum, Performer, TrackCredits } from '$lib/types';
 
   interface Props {
@@ -174,8 +175,8 @@
     <div class="credits-modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
       {#if loading}
         <div class="loading-state">
-          <Loader2 size={32} class="spinner" />
-          <span>Loading credits...</span>
+          <LoaderCircle size={32} class="spinner" />
+          <span>{ $t('toast.loadingCredits') }</span>
         </div>
       {:else if error}
         <div class="error-state">
@@ -189,7 +190,7 @@
             <h2 class="album-title">{credits.album.title}</h2>
             <span class="album-artist">{credits.album.artist}</span>
           </div>
-          <button class="close-btn" onclick={onClose} aria-label="Close">
+          <button class="close-btn" onclick={onClose} aria-label={ $t('actions.close') }>
             <X size={18} />
           </button>
         </div>
@@ -208,7 +209,7 @@
               <div class="album-meta">
                 {#if credits.album.label}
                   <p class="meta-row">
-                    <span class="meta-label">Released by</span>
+                    <span class="meta-label">{$t('album.releasedBy')}</span>
                     {#if credits.album.label_id && onLabelClick}
                       <button
                         class="label-link"
@@ -223,7 +224,7 @@
                       <span class="meta-value label-name">{credits.album.label}</span>
                     {/if}
                     {#if credits.album.release_date}
-                      <span class="meta-date">on {new Date(credits.album.release_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span>
+                      <span class="meta-date">{$t('album.releasedOn')} {new Date(credits.album.release_date).toLocaleDateString($locale ? $locale : 'en-us', { month: 'long', day: 'numeric', year: 'numeric' })}</span>
                     {/if}
                   </p>
                 {/if}
@@ -231,9 +232,9 @@
                 {#if credits.album.genre}
                   <p class="meta-row">
                     <span class="meta-value">{credits.album.genre}</span>
-                    <span class="meta-separator">-</span>
-                    <span class="meta-value">{credits.album.track_count} Tracks</span>
-                    <span class="meta-separator">-</span>
+                    <span class="meta-separator">&middot;</span>
+                    <span class="meta-value">{credits.album.track_count} {$t('album.tracks')}</span>
+                    <span class="meta-separator">&middot;</span>
                     <span class="meta-value">{credits.album.duration}</span>
                   </p>
                 {/if}
@@ -263,7 +264,7 @@
                   class:active={activeTab === 'credits'}
                   onclick={() => activeTab = 'credits'}
                 >
-                  Credits
+                  { $t('player.credits') }
                 </button>
                 <button
                   class="tab-btn"

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-dialog';
-  import { X, HardDrive, Network, RefreshCw, Power, PowerOff, AlertTriangle, FolderOpen } from 'lucide-svelte';
+  import { X, HardDrive, Network, RefreshCw, Power, PowerOff, TriangleAlert, FolderOpen } from 'lucide-svelte';
   import { t } from '$lib/i18n';
 
   // LibraryFolder type matching Rust backend
@@ -311,19 +311,19 @@
             {#if isNetwork && !detectedIsNetwork}
               <!-- User marked as network, but not detected -->
               <span class="form-hint override-hint warning">
-                <AlertTriangle size={12} />
+                <TriangleAlert size={12} />
                 {$t('library.networkOverrideMarkedNetwork')}
               </span>
             {:else}
               <!-- User marked as local, but detected as network -->
               <span class="form-hint override-hint danger">
-                <AlertTriangle size={12} />
+                <TriangleAlert size={12} />
                 {$t('library.networkOverrideMarkedLocal')}
               </span>
             {/if}
           {:else if userOverrideNetwork}
             <span class="form-hint override-hint">
-              <AlertTriangle size={12} />
+              <TriangleAlert size={12} />
               {$t('library.networkOverrideHint')}
             </span>
           {:else}

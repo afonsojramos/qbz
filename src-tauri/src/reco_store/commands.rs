@@ -901,7 +901,7 @@ pub async fn reco_get_home_resolved(
         // Shuffle artists so every favorite gets a fair chance
         let shuffled_artists = {
             let mut ids = favorite_artist_ids.clone();
-            ids.shuffle(&mut rand::thread_rng());
+            ids.shuffle(&mut rand::rng());
             ids
         };
 
@@ -958,7 +958,7 @@ pub async fn reco_get_home_resolved(
             let mut seen = std::collections::HashSet::new();
             all_albums.retain(|a| seen.insert(a.id.clone()));
         }
-        all_albums.shuffle(&mut rand::thread_rng());
+        all_albums.shuffle(&mut rand::rng());
         all_albums.truncate(limit_favorites as usize);
         all_albums
     };

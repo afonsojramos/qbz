@@ -447,7 +447,7 @@ impl SuggestionsEngine {
 
         // 6. Shuffle tracks for variety (so same artist doesn't dominate)
         use rand::seq::SliceRandom;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         all_tracks.shuffle(&mut rng);
 
         // 7. Limit pool size

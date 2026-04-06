@@ -70,7 +70,12 @@
     "topTracksLabel": "TOP TRACKS",
     "topTracksBy": "By {artist}",
     "andMore": "and more",
-    "playlistLabel": "PLAYLIST"
+    "playlistLabel": "PLAYLIST",
+    "mostStreamed": "Popular albums",
+    "recentAlbums": "Recently Played",
+    "continueTracks": "Continue Listening",
+    "topArtists": "Your Top Artists",
+    "favoriteAlbums": "More From Favorites"
   },
   "discover": {
     "newReleases": "New Releases",
@@ -154,6 +159,7 @@
     "albums": "Albums",
     "artists": "Artists",
     "tracks": "Tracks",
+    "explicit": "Explicit",
     "folders": "Library Folders",
     "noAlbums": "No albums in library",
     "noArtists": "No artists in library",
@@ -216,6 +222,7 @@
     "stats": "{albums} albums • {tracks} tracks • {duration} • {size}",
     "scanLibrary": "Scan Library",
     "viewHiddenAlbums": "View Hidden Albums",
+    "showActiveAlbums": "Show Active Albums",
     "fetchMissingArtwork": "Fetch Missing Artwork",
     "maintenance": "MAINTENANCE",
     "dangerZone": "DANGER ZONE",
@@ -259,8 +266,14 @@
     "hideAlbum": "Hide this album from library",
     "hideAlbumHint": "Hidden albums can be viewed from Settings",
     "localTrackIndicator": "Local track - only available on this device",
-    "singleFileAlbumNotice": "This album appears to be a single file containing the full disc. Individual track navigation requires the Plex server to split the file (e.g. via cue sheet scanner).",
-    "plexTrackIndicator": "Plex track - served from your local Plex library"
+    "singleFileAlbumNotice": "This album appears to be a single file containing the full disc. Individual track navigation requires the Plex server to split the file (e.g., via cue sheet scanner).",
+    "plexTrackIndicator": "Plex track - served from your local Plex library",
+    "refreshMetadata": "Refresh metadata",
+    "albumSettings": "Album settings",
+    "albumArtwork": "Album Artwork",
+    "uploadCover": "Upload cover",
+    "folderName": "Name",
+    "background": "Background"
   },
   "album": {
     "tracks": "tracks",
@@ -268,6 +281,8 @@
     "by": "by",
     "released": "Released",
     "releaseDate": "Release Date",
+    "releasedBy": "Released by",
+    "releasedOn": "on",
     "label": "Label",
     "genre": "Genre",
     "duration": "Duration",
@@ -294,7 +309,9 @@
     "bookletError": "Could not load booklet",
     "bookletFitWidth": "Fit to width",
     "bookletRotate": "Rotate",
-    "bookletDownload": "Save booklet"
+    "bookletDownload": "Save booklet",
+    "sameArtist": "By the same artist",
+    "seeFullDiscography": "See full discography"
   },
   "artist": {
     "albums": "Albums",
@@ -324,10 +341,13 @@
     "customImageRemoved": "Custom artist image removed",
     "customImageError": "Failed to update artist image",
     "imageSaved": "Artist image saved",
-    "youMayAlsoLike": "YOU MAY ALSO LIKE",
+    "labels": "Labels",
+    "youMayAlsoLike": "You may also like",
     "dismissRecommendation": "Not a good recommendation",
     "founded": "Founded:",
+    "disbanded": "Disbanded:",
     "born": "Born:",
+    "died": "Died:",
     "foundedIn": "Founded in:",
     "bornIn": "Born in:",
     "from": "From:",
@@ -338,7 +358,22 @@
     "sceneStep1": "Searching MusicBrainz for {genre} artists...",
     "sceneStep2": "Analyzing genre affinity across {count} candidates...",
     "sceneStep3": "Verifying availability on Qobuz...",
-    "sceneStep4": "Preparing results..."
+    "sceneStep4": "Preparing results...",
+    "jumpTo": "Jump to",
+    "about": "About",
+    "artistIsBlacklisted": "Show this artist in searches, playlists, discover, etc.",
+    "artistIsNotBlacklisted": "Don't show this artist in searches, playlists, discover, etc.",
+    "manageBlacklistFromSettings": "Blacklist can be managed from settings.",
+    "blacklistBanner": "This artist is hidden. Their music won't appear in search, radio, or suggestions.",
+    "search": {
+      "previousResult": "Previous result",
+      "nextResult": "Next result",
+      "close": "Close search",
+      "searchInPage": "Search in this page"
+    },
+    "noAlbumsFound": "No albums found",
+    "bandProjects": "Bands & Projects",
+    "noAlbumAppearancesFound": "No album appearances found"
   },
   "sort": {
     "sort": "Sort",
@@ -356,7 +391,8 @@
     "title": "Title",
     "titleAZ": "Title (A-Z)",
     "titleZA": "Title (Z-A)",
-    "trackCount": "# of Tracks"
+    "trackCount": "# of Tracks",
+    "duration": "Duration"
   },
   "playlist": {
     "tracks": "tracks",
@@ -405,6 +441,7 @@
     "noPlaylistsFound": "No playlists found",
     "morePlaylists": "{count} more playlist(s)...",
     "folder": "Folder",
+    "folders": "Folders",
     "noFolder": "No folder",
     "makePublic": "Make playlist public",
     "hideFromSidebar": "Hide from sidebar",
@@ -436,12 +473,14 @@
     },
     "suggestSongs": "Suggest songs for this playlist",
     "suggestionsLargePlaylist": "This playlist has many tracks. Tap the button to generate suggestions.",
-    "trackTitle": "Title",
-    "trackAlbum": "Album",
-    "trackDuration": "Duration",
-    "trackQuality": "Quality",
     "label": "Playlist",
-    "playCount": "Play count"
+    "playCount": "Play count",
+    "playlists": "playlists",
+    "dragPlaylists": "Drag playlists to reorder them",
+    "dropOntoFolder": "or drop onto a folder to move.",
+    "newFolder": "New folder",
+    "folderNamePlaceholder": "Enter folder name",
+    "suggestedSongs": "Suggested songs"
   },
   "favorites": {
     "title": "Favorites",
@@ -496,7 +535,11 @@
     "moveDown": "Move down",
     "save": "Save",
     "saving": "Saving...",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "footer": {
+      "viewCompilationsAndContent": "To view compilations and other content",
+      "goToArtistPage": "go to {artist}'s page"
+    }
   },
   "placeholders": {
     "search": "Search...",
@@ -514,8 +557,8 @@
     "enterApiKey": "Enter your API key",
     "enterSharedSecret": "Enter your shared secret",
     "pasteToken": "Paste your ListenBrainz token",
-    "yearExample": "e.g. 1999",
-    "genreExample": "e.g. ROCK, POP, etc"
+    "yearExample": "e.g., 1999",
+    "genreExample": "e.g., ROCK, POP"
   },
   "player": {
     "nowPlaying": "Now Playing",
@@ -527,6 +570,8 @@
     "recentlyPlayed": "Recently Played",
     "noHistoryYet": "No tracks played yet",
     "historyEmpty": "No tracks played yet",
+    "enableInfinitePlay": "Enable Infinite Play",
+    "disableInfinitePlay": "Disable Infinite Play",
     "infinitePlay": "Infinite Play",
     "infinitePlayEnabled": "Infinite play enabled",
     "infinitePlayDisabled": "Infinite play disabled",
@@ -571,6 +616,7 @@
     "noTracksMatch": "No tracks match \"{query}\"",
     "noTrackPlaying": "No track playing",
     "castToDevice": "Cast to device",
+    "connectedTo": "Connected To",
     "castingManage": "Casting - Click to manage",
     "qobuzConnect": "Qobuz Connect",
     "qobuzConnectManage": "Qobuz Connect - Click to manage",
@@ -578,9 +624,12 @@
     "fullScreen": "Immersive Mode",
     "exitFullScreen": "Exit Immersive Mode",
     "maximize": "Maximize",
+    "maximizeWindow": "Maximize Window",
     "restore": "Restore",
+    "restoreWindow": "Restore Window",
     "minimize": "Minimize",
     "exitImmersive": "Exit Immersive",
+    "exitImmersiveWithKey": "Exit Immersive ({key})",
     "dragWindow": "Move Window",
     "normalizationOff": "Volume Normalization: Off",
     "normalizationOn": "Volume Normalization: On",
@@ -595,7 +644,11 @@
     "miniWindowControls": "Mini Player Controls",
     "miniAlwaysOnTopEnable": "Always on Top",
     "miniAlwaysOnTopDisable": "Disable Always on Top",
-    "miniAlwaysOnTopLimited": "Always-on-top is limited by your window manager"
+    "miniAlwaysOnTopLimited": "Always-on-top is limited by your window manager",
+    "fullscreenWithKey": "Fullscreen ({key})",
+    "exitFullscreenWithKey": "Exit Fullscreen ({key})",
+    "closeApp": "Close App",
+    "windowControls": "Window Controls"
   },
   "audioBadges": {
     "castingTo": "Casting to",
@@ -630,12 +683,15 @@
       "resampled": "Resampled by system",
       "qualityAdjusted": "Quality adjusted for device compatibility — bit-perfect, no resampling",
       "fix": "Enable DAC Passthrough or Exclusive Mode in Settings"
-    }
+    },
+    "stereo": "Stereo",
+    "mono": "Mono"
   },
   "actions": {
     "play": "Play",
     "playAll": "Play All",
     "playNow": "Play Now",
+    "playRadio": "Play Radio",
     "shuffle": "Shuffle",
     "shuffleAll": "Shuffle All",
     "playNext": "Play Next",
@@ -648,6 +704,7 @@
     "select": "Select",
     "cancelSelection": "Cancel Selection",
     "makeAvailableOffline": "Make available offline",
+    "refreshOfflineCopy": "Refresh offline copy",
     "share": "Share",
     "viewAlbum": "View Album",
     "viewArtist": "View Artist",
@@ -683,7 +740,43 @@
     "collapse": "Collapse sidebar",
     "expand": "Expand sidebar",
     "moreOptions": "More options",
-    "shareQobuz": "Share (Qobuz)"
+    "shareQobuz": "Share (Qobuz)",
+    "albumCredits": "Album credits",
+    "startArtistRadio": "Start Artist Radio",
+    "radio": {
+      "startArtistRadio": "Start Artist Radio"
+    },
+    "previousAlbums": "Previous albums",
+    "nextAlbums": "Next albums",
+    "artistNetwork": "Artist network",
+    "hide": {
+      "hideArtist": "Hide artist",
+      "hideArtistOptions": "Hide artist options",
+      "hiddenArtist": "Hidden artist",
+      "showArtist": "Show artist"
+    },
+    "newFolder": "New folder",
+    "previousArtists": "Previous artists",
+    "nextArtists": "Next artists",
+    "qobuzLink": "Qobuz™ link",
+    "switchToSplitView": "Switch to Split View (V)",
+    "switchToImmersiveView": "Switch to Immersive View (V)",
+    "gotIt": "Got it",
+    "copyCommand": "Copy command",
+    "downloadOnGitHub": "Download on GitHub",
+    "visitReleasePage": "Visit release page",
+    "okClose": "OK, close",
+    "tryAgain": "Try Again",
+    "startOffline": "Start Offline",
+    "selectAll": "Select All",
+    "clearSelection": "Clear selection",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "backToHome": "Back to home",
+    "playTrackOnly": "Play track only",
+    "playFromHere": "Play from here",
+    "findAvailableVersion": "Find available version",
+    "removeOfflineCopy": "Remove offline copy"
   },
   "settings": {
     "title": "Settings",
@@ -719,6 +812,13 @@
       "pwForceBitperfectHelp": "Requires DAC Passthrough. In addition to forcing the sample rate, this also forces PipeWire's quantum (buffer size) to match the track. This provides the most bit-perfect playback possible through PipeWire, but may cause audio glitches on some systems. The rate and quantum are reset when playback stops so other apps aren't affected.",
       "pwForceBitperfectDesc": "Forces PipeWire quantum and sample rate to match the track, resetting on stop. Requires DAC Passthrough.",
       "pwForceBitperfectNote": "Experimental. May cause audio glitches on some systems. Only affects PipeWire backend.",
+      "allowQualityFallback": "Allow Quality Fallback",
+      "allowQualityFallbackDesc": "When enabled, automatically tries a lower quality tier if the requested one is unavailable. When disabled, playback or downloads fail instead of silently downgrading.",
+      "allowQualityFallbackHelp": "Off by default. If Qobuz can't serve Hi-Res for a track, QBZ will report an error instead of quietly falling back to CD quality. Enable this if you prefer uninterrupted playback over strict quality guarantees.",
+      "skipSinkSwitch": "Lock Output Device",
+      "skipSinkSwitchDesc": "Prevents QBZ from changing the system default sink between tracks. Use this if you route audio through JACK, qjackctl, or a DAW.",
+      "skipSinkSwitchHelp": "When enabled, QBZ will not call pactl set-default-sink on stream creation. This preserves any external audio routing you have configured (e.g., JACK, qjackctl, Reaper). Incompatible with DAC Passthrough.",
+      "skipSinkSwitchNote": "External routing mode. QBZ will not change the system audio output device. Make sure your routing is configured before playback.",
       "syncAudioOnStartup": "Sync audio settings on startup",
       "syncAudioOnStartupDesc": "Reload audio configuration from database when the app starts. Enable if your audio device or settings appear incorrect after launching.",
       "audioBackend": "Audio Backend",
@@ -733,6 +833,7 @@
       "maxSampleRate": "Maximum Sample Rate",
       "maxSampleRateDesc": "Select your DAC's maximum supported sample rate. Tracks above this rate will be requested at a lower quality from Qobuz.",
       "refreshDevices": "Refresh device list",
+      "noDevicesFound": "No devices found",
       "alsaPlugin": "ALSA Plugin",
       "alsaPluginDesc": "hw: Bit-perfect, exclusive. plughw: Auto-convert. pcm: Most compatible.",
       "hardwareVolume": "Enable Hardware Volume Control",
@@ -945,11 +1046,11 @@
         }
       },
       "fpsOptions": {
-        "disabled": "Disabled",
         "15": "15 FPS (Low)",
         "30": "30 FPS (Medium)",
         "60": "60 FPS (Smooth)",
-        "120": "120 FPS (Ultra)"
+        "120": "120 FPS (Ultra)",
+        "disabled": "Disabled"
       },
       "miniplayerDefaultView": "Mini player default view",
       "miniplayerViews": {
@@ -972,8 +1073,11 @@
       "forceX11Desc": "Use X11 (XWayland) instead of native Wayland. Helps with crashes on some NVIDIA/Wayland setups. Requires restart. Override: QBZ_FORCE_X11=0 qbz",
       "tray": {
         "title": "System Tray",
+        "titleMacos": "Menu Bar",
         "enableTray": "Enable tray icon",
+        "enableTrayMacos": "Enable menu bar icon",
         "enableTrayDesc": "Show icon in system tray (requires restart)",
+        "enableTrayDescMacos": "Show icon in menu bar (requires restart)",
         "minimizeToTray": "Minimize to tray",
         "minimizeToTrayDesc": "Hide window to tray when minimizing",
         "closeToTray": "Close to tray",
@@ -1032,7 +1136,7 @@
     "contentFiltering": {
       "title": "Blacklist",
       "artistBlacklist": "Artist Blacklist",
-      "artistsBlocked": "{count} artists blocked",
+      "artistsBlocked": "{count} artist(s) blocked",
       "manage": "Manage",
       "disabled": "disabled"
     },
@@ -1171,7 +1275,9 @@
       "qobuzLinkHandlerDesc": "Register QBZ as the default app for qobuzapp:// links from your browser.",
       "qobuzLinkHandlerError": "Failed to update link handler registration.",
       "qconnectDeviceName": "Device Name",
-      "qconnectDeviceNameDesc": "Name displayed in Qobuz Connect"
+      "qconnectDeviceNameDesc": "Name displayed in Qobuz Connect",
+      "noProtocolDeviceFound": "No {protocol} devices found",
+      "noProtocolDeviceFoundHint": "Make sure devices are on the same network"
     },
     "storage": {
       "title": "Storage",
@@ -1207,7 +1313,7 @@
       "logsTitle": "Application Logs",
       "tabTerminal": "Terminal",
       "tabConsole": "Console",
-      "uploadLogs": "Upload to 0x0.st",
+      "uploadLogs": "Upload to paste.rs",
       "uploadTab": "Upload {tab}",
       "uploadSuccess": "Log URL copied to clipboard",
       "uploadError": "Failed to upload logs",
@@ -1315,6 +1421,12 @@
       "clearAllCaches": "Clear All Caches",
       "clearAllCachesDesc": "Clears all cached data above",
       "cachesDesc": "Queue, lyrics, artwork and metadata caches"
+    },
+    "noMatchesFound": "No matches found",
+    "immersive": {
+      "title": "Degraded performance",
+      "perfDegraded": "Degraded performance",
+      "perfDontShowAgain": "Don't show again"
     }
   },
   "metadata": {
@@ -1354,10 +1466,15 @@
     "v2NotInitialized": "Could not connect to Qobuz. Please restart the app.",
     "connectionFailed": "Failed to connect to Qobuz™. Check your network and try again.",
     "oauthButton": "Sign in via Browser",
-    "oauthLoading": "Opening browser..."
+    "oauthLoading": "Opening browser...",
+    "systemBrowserButton": "Use your system browser instead",
+    "systemBrowserLoading": "Waiting for login...",
+    "activeSubscriptionRequired": "QBZ requires an active Qobuz™ subscription. Your credentials are sent directly to Qobuz™.",
+    "APIUse": "This application uses the Qobuz API but is not certified by Qobuz."
   },
   "legal": {
-    "brandingLineSuffix": "",
+    "brandingLine": "This application uses the Qobuz API but is not certified by Qobuz™.",
+    "brandingLineSuffix": "This application uses the Qobuz™ API but is not certified by Qobuz™.",
     "tosAgreementPrefix": "I have read the",
     "tosLinkText": "Qobuz™ Terms of Service",
     "tosRequiredToLogin": "Please confirm that you have read the Qobuz™ Terms of Service to continue.",
@@ -1390,7 +1507,8 @@
     "loadFailed": "Failed to load",
     "playbackFailed": "Playback failed",
     "cachingFailed": "Failed to prepare for offline",
-    "saveFailed": "Failed to save"
+    "saveFailed": "Failed to save",
+    "failedToLoad": "Failed to load"
   },
   "time": {
     "hours": "h",
@@ -1400,6 +1518,12 @@
     "minutesAgo": "{count} min ago",
     "hoursAgo": "{count}h ago",
     "daysAgo": "{count}d ago"
+  },
+  "storage": {
+    "B": "B",
+    "KB": "KB",
+    "MB": "MB",
+    "GB": "GB"
   },
   "empty": {
     "noAlbums": "No albums yet",
@@ -1432,12 +1556,16 @@
     "sectionsDesc": "Reorder with arrows. Toggle visibility with switch.",
     "moveUp": "Move up",
     "moveDown": "Move down",
-    "resetToDefaults": "Reset to defaults"
+    "resetToDefaults": "Reset to defaults",
+    "itemsToShow": "Items to show"
   },
   "toast": {
     "loadingAlbum": "Loading album...",
     "loadingArtist": "Loading artist...",
     "loadingPlaylist": "Loading playlist...",
+    "loadingPlaylists": "Loading playlists...",
+    "loadingTracks": "Loading tracks...",
+    "laodingDevices": "Loading devices...",
     "lookingUp": "Looking up {name}...",
     "failedLoadAlbum": "Failed to load album",
     "failedLoadArtist": "Failed to load artist",
@@ -1539,7 +1667,17 @@
     "failedSaveAutoplay": "Failed to save autoplay preference",
     "failedSaveIconVisibility": "Failed to save icon visibility preference",
     "failedRepairOffline": "Failed to repair offline library: {error}",
-    "failedOpenCacheFolder": "Failed to open cache folder"
+    "failedOpenCacheFolder": "Failed to open cache folder",
+    "blacklist": {
+      "newState": "Blacklist {status}",
+      "enabled": "enabled",
+      "disabled": "disabled"
+    },
+    "loadingCredits": "Loading credits...",
+    "loadingDevices": "Loading devices...",
+    "addedToPlaylist": "Added to playlist",
+    "copied": "Copied!",
+    "findingSimilarArtists": "Finding similar artists..."
   },
   "offline": {
     "title": "Offline Mode",
@@ -1595,7 +1733,9 @@
     "failed": "Failed to cache for offline (click to retry)"
   },
   "filter": {
-    "all": "All"
+    "all": "All",
+    "hidden": "Hidden",
+    "visible": "Visible"
   },
   "genreFilter": {
     "title": "Filter by genre",
@@ -1609,6 +1749,11 @@
     "collapse": "Collapse",
     "expand": "Expand",
     "clearFilter": "Clear filter"
+  },
+  "keys": {
+    "enter": "Enter",
+    "esc": "Esc",
+    "shift": "Shift"
   },
   "keybindings": {
     "title": "Keyboard Shortcuts",
@@ -1769,7 +1914,8 @@
         "custom": "Custom..."
       },
       "customPlaceholder": "Binary name (e.g., my-player)",
-      "warning": "Best results: use app-scoped bit-perfect only. Global Pulse bit-perfect can break browsers and apps that output fixed 48kHz."
+      "warning": "Best results: use app-scoped bit-perfect only. Global Pulse bit-perfect can break browsers and apps that output fixed 48kHz.",
+      "customApps": "Custom apps:"
     },
     "wireplumberConfig": {
       "title": "Target Your DAC Only",
@@ -1828,7 +1974,8 @@
       "restart": "Restart",
       "verify": "Verify",
       "done": "Done"
-    }
+    },
+    "title": "DAC Wizard"
   },
   "remoteControlWizard": {
     "steps": {
@@ -2096,6 +2243,7 @@
     "emptyPlaylists": "No played playlists yet. Play some playlists to build your mix!"
   },
   "playlistManager": {
+    "heading": "Playlist manager",
     "switchToFlat": "Flat view",
     "switchToFolders": "Folder view",
     "emptyFolder": "Empty folder"
@@ -2171,6 +2319,12 @@
     "qobuzRadio": "Qobuz Radio",
     "creating": "Creating radio..."
   },
+  "tracklist": {
+    "title": "Title",
+    "album": "Album",
+    "duration": "Duration",
+    "quality": "Quality"
+  },
   "qualityFallback": {
     "title": "Streaming issue",
     "body": "Qobuz is having trouble serving \"{track}\". All quality levels failed. Try at the lowest available quality?",
@@ -2179,5 +2333,244 @@
     "rememberChoice": "Remember my choice",
     "autoRetrying": "Retrying at lower quality...",
     "autoSkipping": "Skipping track (server issue)..."
+  },
+  "about": {
+    "description": "A native music streaming client for Linux, designed for audiophiles who need bit-perfect Hi-Fi playback without browser sample rate limitations.",
+    "release": "Release",
+    "website": "Website",
+    "buildInfo": {
+      "heading": "Build Info",
+      "version": "Version",
+      "codename": "Codename",
+      "license": "License",
+      "platform": "Platform",
+      "build": "Build"
+    },
+    "attributions": {
+      "heading": "Acknowledgments",
+      "qobuzDesc": "Music streaming service and API",
+      "tauriDesc": "Application framework",
+      "svelteDesc": "UI framework",
+      "rodioSymphoniaDesc": "Audio playback engine",
+      "lucideDesc": "Icon library",
+      "musicBrainzDesc": "Music metadata database",
+      "songLinkOdesliDesc": "Music link aggregation API",
+      "lrclibDesc": "Synced lyrics provider",
+      "lyricsOVHDesc": "Lyrics API"
+    },
+    "author": "Author",
+    "contributors": "Contributors",
+    "signatureDetail": "Hatred towards all those companies that discriminate against the Linux community and don't provide us with a decent client for their product."
+  },
+  "updates": {
+    "runningIn": "Running in {env}",
+    "runningInsideSandbox": "QBZ detected it's running inside a <strong>{env} sandbox</strong>.",
+    "flatpak": {
+      "intro": "There are some considerations to ensure the best experience.",
+      "whatYouShouldKnow": {
+        "heading": "What you should know:",
+        "externalMusicFolderAccess": "Access to external music folders (NAS, network mounts) requires manual permission grants",
+        "audioFeatures": "Some audio features may behave differently due to sandbox restrictions",
+        "settingsPage": "The <strong>Settings</strong> page includes Flatpak-specific commands you can copy and run"
+      },
+      "note": "Check the <strong>Flatpak Sandbox</strong> section in Settings for detailed instructions and copy-paste commands."
+    },
+    "snap": {
+      "intro": "Some audio plugs need to be connected manually for the best experience.",
+      "requiredPlugConnections": "Required plug connections:",
+      "optional": "Optional (for external drives / NAS):",
+      "note": "Run these commands in a terminal, then restart QBZ. This only needs to be done once."
+    },
+    "newVersionReleased": "A new version of QBZ has been released",
+    "newVersionAvailable": "New version available: v{version}",
+    "noUpdatesFound": "No updates found.",
+    "updateReminder": {
+      "newVersionReminder": "New version reminder",
+      "remindMeLater": "Remind me later",
+      "doNotNotifyAgain": "Do not notify me again about this release",
+      "doNotNotifyAboutReleases": "Do not notify me about new releases",
+      "hint": "Can be re-enabled from Settings"
+    },
+    "whatsNew": {
+      "whatsNew": "What's new",
+      "whatsNewIn": "What's new in v{version}",
+      "releaseNotesNotAvailable": "Release notes are not available.",
+      "releaseNotesNotAvailableForVersion": "Release notes are not available for this version."
+    },
+    "newReleaseAvailable": "New release available",
+    "checkForUpdates": "Check for updates"
+  },
+  "performerRoles": {
+    "a&R": "Artists and Repertoire",
+    "a&RDirector": "Artists and Repertoire Director",
+    "aAndRCoordinator": "A&R Coordinator",
+    "accordion": "Accordion",
+    "acousticGuitar": "Acoustic Guitar",
+    "additionalEngineer": "Additional Engineer",
+    "additionalKeyboard": "Additional Keyboard",
+    "additionalMusic": "Additional Music",
+    "additionalProduction": "Additional Production",
+    "additionalProgrammer": "Additional Programmer",
+    "additionalStudioProducer": "Additional Studio Producer",
+    "additionalVocalist": "Additional Vocalist",
+    "additionalVocals": "Additional Vocals",
+    "arranger": "Arranger",
+    "artDirector": "Art Director",
+    "artist": "Artist",
+    "assistant": "Assistant",
+    "assistantEngineer": "Assistant Engineer",
+    "assistantMixer": "Assistant Mixer",
+    "assistantMixingEngineer": "Assistant Mixing Engineer",
+    "associatedPerformer": "Associated Performer",
+    "associatedProducer": "Associated Producer",
+    "author": "Author",
+    "backingVocals": "Backing Vocals",
+    "backgroundVocal": "Background Vocal",
+    "backgroundVocalist": "Background Vocalist",
+    "backgroundVocals": "Background Vocals",
+    "baritoneSaxophone": "Baritone Saxophone",
+    "bass": "Bass",
+    "bassGuitar": "Bass Guitar",
+    "celesta": "Celesta",
+    "cello": "Cello",
+    "chamberOrchestra": "Chamber Orchestra",
+    "choir": "Choir",
+    "choirArranger": "Choir Arranger",
+    "choirConductor": "Choir Conductor",
+    "coachVocals": "Coach Vocals",
+    "composer": "Composer",
+    "composerLyricist": "Composer Lyricist",
+    "conductor": "Conductor",
+    "consultant": "Consultant",
+    "contractor": "Contractor",
+    "coProducer": "Co-Producer",
+    "designer": "Designer",
+    "digitalEditingEngineer": "Digital Editing Engineer",
+    "doubleBass": "Double Bass",
+    "drum": "Drum",
+    "drumMachine": "Drum Machine",
+    "drumProgrammer": "Drum Programmer",
+    "drumProgramming": "Drum Programming",
+    "drumKit": "Drum Kit",
+    "drums": "Drums",
+    "editingEngineer": "Editing Engineer",
+    "electricBassGuitar": "Electric Bass Guitar",
+    "electricGuitar": "Electric Guitar",
+    "engineer": "Engineer",
+    "executiveProducer": "Executive Producer",
+    "featuredArtist": "Featured Artist",
+    "fiddle": "Fiddle",
+    "frenchHorn": "French Horn",
+    "glockenspiel": "Glockenspiel",
+    "guitar": "Guitar",
+    "hammondOrgan": "Hammond Organ",
+    "harp": "Harp",
+    "horn": "Horn",
+    "horns": "Horns",
+    "instrumentation": "Instrumentation",
+    "keyboard": "Keyboard",
+    "keyboards": "Keyboards",
+    "leadGuitar": "Lead Guitar",
+    "leadViolin": "Lead Violin",
+    "leadVocals": "Lead Vocals",
+    "lyricist": "Lyricist",
+    "mainArtist": "Main Artist",
+    "manager": "Manager",
+    "masterer": "Masterer",
+    "masteringEngineer": "Mastering Engineer",
+    "mixer": "Mixer",
+    "mixEngineer": "Mix Engineer",
+    "mixingEngineer": "Mixing Engineer",
+    "mixingSecondEngineer": "Mixing Second Engineer",
+    "music": "Music",
+    "musicDirector": "Music Director",
+    "musicEditor": "Music Editor",
+    "musicPublisher": "Music Publisher",
+    "musicSupervisor": "Music Supervisor",
+    "nylonStringGuitar": "Nylon String Guitar",
+    "orchestra": "Orchestra",
+    "orchestralContractor": "Orchestral Contractor",
+    "orchestration": "Orchestration",
+    "organ": "Organ",
+    "other": "Other",
+    "oud": "Oud",
+    "percussion": "Percussion",
+    "performance": "Performance",
+    "performer": "Performer",
+    "piano": "Piano",
+    "producer": "Producer",
+    "production": "Production",
+    "programmer": "Programmer",
+    "programming": "Programming",
+    "programmingEngineer": "Programming Engineer",
+    "rapVocalist": "Rap Vocalist",
+    "recordedby": "Recorded By",
+    "recordingArranger": "Recording Arranger",
+    "recordingEngineer": "Recording Engineer",
+    "recordingProducer": "Recording Producer",
+    "recordingSecondEngineer": "Recording Second Engineer",
+    "remasteringEngineer": "Remastering Engineer",
+    "remixer": "Remixer",
+    "remixingSecondEngineer": "Remixing Second Engineer",
+    "rhythmGuitar": "rhythmGuitar",
+    "samples": "Samples",
+    "saxophone": "Saxophone",
+    "secondEngineer": "Second Engineer",
+    "singer": "Singer",
+    "slideguitar&Pad": "Slide Guitar & Pad",
+    "songwriter": "Songwriter",
+    "stringArranger": "String Arranger",
+    "strings": "Strings",
+    "studioAssistant": "Studio Assistant",
+    "studioPersonnel": "Studio Personnel",
+    "synthesizer": "Synthesizer",
+    "synthesizerProgrammer": "Synthesizer Programmer",
+    "synthesizerProgramming": "Synthesizer Programming",
+    "technicalAssistant": "Technical Assistant",
+    "technicalEngineer": "Technical Engineer",
+    "technician": "Technician",
+    "trombone": "Trombone",
+    "trumpet": "Trumpet",
+    "tuba": "Tuba",
+    "ukulele": "Ukulele",
+    "unknown": "Unknown",
+    "vibraphone": "Vibraphone",
+    "viola": "Viola",
+    "violin": "Violin",
+    "vocal": "Vocal",
+    "vocalArranger": "Vocal Arranger",
+    "vocalEditingEngineer": "Vocal Editing Engineer",
+    "vocalEngineer": "Vocal Engineer",
+    "vocalProducer": "Vocal Producer",
+    "vocalist": "Vocalist",
+    "vocals": "Vocals",
+    "vocals&Guitar": "Vocals & Guitar",
+    "voice": "Voice",
+    "workArranger": "Work Arranger",
+    "writer": "Writer"
+  },
+  "platforms": {
+    "appleMusic": "Apple Music",
+    "qobuz": "Qobuz",
+    "spotify": "Spotify",
+    "tidal": "Tidal",
+    "deezer": "Deezer"
+  },
+  "fileFormat": {
+    "flac": "FLAC",
+    "mp3": "MP3",
+    "aac": "AAC",
+    "opus": "Opus",
+    "alac": "ALAC"
+  },
+  "integrations": {
+    "connecting": "Connecting..."
+  },
+  "common": {
+    "name": "Name"
+  },
+  "musician": {
+    "knownFor": "Known for",
+    "viewArtistPage": "View Artist Page"
   }
 }

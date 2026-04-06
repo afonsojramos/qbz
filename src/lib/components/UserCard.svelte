@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Settings, SlidersHorizontal, Keyboard, Bug, BookOpen, HelpCircle } from 'lucide-svelte';
+  import { Settings, SlidersHorizontal, Keyboard, Bug, BookOpen, CircleHelp } from 'lucide-svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { t } from '$lib/i18n';
 
@@ -124,7 +124,7 @@
           <span>{$t('settings.about.reportIssue')}</span>
         </button>
         <button class="menu-item" onclick={handleAboutClick}>
-          <HelpCircle size={16} />
+          <CircleHelp size={16} />
           <span>{$t('settings.about.title')}</span>
         </button>
       </div>

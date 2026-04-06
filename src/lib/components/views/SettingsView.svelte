@@ -5,7 +5,7 @@
   import { getCurrentWebview } from '@tauri-apps/api/webview';
   import { writeText as copyToClipboard } from '@tauri-apps/plugin-clipboard-manager';
   import { ask, open as openFileDialog } from '@tauri-apps/plugin-dialog';
-  import { ArrowLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, Sun, Moon, SunMoon, Ban, AlertTriangle, RefreshCw } from 'lucide-svelte';
+  import { ArrowLeft, ChevronRight, ChevronDown, ChevronUp, LoaderCircle, Sun, Moon, SunMoon, Ban, TriangleAlert, RefreshCw } from 'lucide-svelte';
   import Toggle from '../Toggle.svelte';
   import Dropdown from '../Dropdown.svelte';
   import DeviceDropdown from '../DeviceDropdown.svelte';
@@ -13,6 +13,7 @@
   import RemoteControlSetupGuide from '../RemoteControlSetupGuide.svelte';
   import LogsModal from '../LogsModal.svelte';
   import DiagnosticsPanel from '../DiagnosticsPanel.svelte';
+  import { platform } from '$lib/utils/platform';
   import VolumeSlider from '../VolumeSlider.svelte';
   import UpdateCheckResultModal from '../updates/UpdateCheckResultModal.svelte';
   import WhatsNewModal from '../updates/WhatsNewModal.svelte';
@@ -748,6 +749,8 @@
   let exclusiveMode = $state(false);
   let dacPassthrough = $state(false);
   let pwForceBitperfect = $state(false);
+  let skipSinkSwitch = $state(false);
+  let allowQualityFallback = $state(false);
   let syncAudioOnStartup = $state(false);
   let selectedBackend = $state<string>('Auto');
   let selectedAlsaPlugin = $state<string>('hw (Direct Hardware)');
@@ -1468,9 +1471,11 @@
       updatesCurrentVersion = getUpdatesCurrentVersion();
     });
 
-    // Detect sandbox environments
-    loadFlatpakStatus();
-    loadSnapStatus();
+    // Detect sandbox environments (Linux-only)
+    if (platform === 'linux') {
+      loadFlatpakStatus();
+      loadSnapStatus();
+    }
 
     // Check for legacy cached files
     checkLegacyCachedFiles();
@@ -2516,6 +2521,8 @@
     device_max_sample_rate: number | null;
     gapless_enabled: boolean;
     pw_force_bitperfect: boolean;
+    skip_sink_switch: boolean;
+    allow_quality_fallback: boolean;
     sync_audio_on_startup: boolean;
   }
 
@@ -2670,6 +2677,8 @@
       exclusiveMode = settings.exclusive_mode;
       dacPassthrough = settings.dac_passthrough;
       pwForceBitperfect = settings.pw_force_bitperfect;
+      skipSinkSwitch = settings.skip_sink_switch;
+      allowQualityFallback = settings.allow_quality_fallback;
       syncAudioOnStartup = settings.sync_audio_on_startup;
 
       // Load backend and plugin settings
@@ -2789,6 +2798,13 @@
   async function handleDacPassthroughChange(enabled: boolean) {
     dacPassthrough = enabled;
 
+    // Enabling DAC Passthrough disables skip sink switch (mutually exclusive)
+    if (enabled && skipSinkSwitch) {
+      skipSinkSwitch = false;
+      await invoke('v2_set_audio_skip_sink_switch', { enabled: false });
+      console.log('[Audio] Disabled skip sink switch (incompatible with DAC Passthrough)');
+    }
+
     // Disabling DAC Passthrough also disables PW force bit-perfect
     if (!enabled && pwForceBitperfect) {
       pwForceBitperfect = false;
@@ -2824,6 +2840,28 @@
       console.log('[Audio] PW force bit-perfect changed:', enabled);
     } catch (err) {
       console.error('[Audio] Failed to change PW force bit-perfect:', err);
+    }
+  }
+
+  async function handleAllowQualityFallbackChange(enabled: boolean) {
+    allowQualityFallback = enabled;
+    try {
+      await invoke('v2_set_audio_allow_quality_fallback', { enabled });
+      console.log('[Audio] Allow quality fallback changed:', enabled);
+    } catch (err) {
+      console.error('[Audio] Failed to change quality fallback:', err);
+      allowQualityFallback = !enabled;
+    }
+  }
+
+  async function handleSkipSinkSwitchChange(enabled: boolean) {
+    skipSinkSwitch = enabled;
+    try {
+      await invoke('v2_set_audio_skip_sink_switch', { enabled });
+      console.log('[Audio] Skip sink switch changed:', enabled);
+    } catch (err) {
+      console.error('[Audio] Failed to change skip sink switch:', err);
+      skipSinkSwitch = !enabled; // Revert on failure
     }
   }
 
@@ -3479,6 +3517,8 @@
       exclusiveMode = false;
       dacPassthrough = false;
       pwForceBitperfect = false;
+      skipSinkSwitch = false;
+      allowQualityFallback = false;
       selectedBackend = 'Auto';
       selectedAlsaPlugin = 'hw (Direct Hardware)';
       alsaHardwareVolume = false;
@@ -3684,9 +3724,9 @@
   }
 
   function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
+    if (bytes === 0) return '0 ' + $t('storage.B');
     const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const sizes = [$t('storage.B'), $t('storage.KB'), $t('storage.MB'), $t('storage.GB')];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
   }
@@ -3756,7 +3796,7 @@
   {#if isLoadingDevices}
     <div class="loading-overlay">
       <div class="loading-content">
-        <Loader2 size={48} class="spinner" />
+        <LoaderCircle size={48} class="spinner" />
         <p>{$t('settings.audio.loadingAudioDevices')}</p>
         <p class="loading-subtitle">{$t('settings.audio.parsingHardware')}</p>
       </div>
@@ -3811,7 +3851,7 @@
       </div>
       <Dropdown
         value={streamingQuality}
-        options={['MP3', 'CD Quality', 'Hi-Res', 'Hi-Res+']}
+        options={['MP3', $t('quality.cdQuality'), 'Hi-Res', 'Hi-Res+']}
         onchange={handleQualityChange}
       />
     </div>
@@ -3845,6 +3885,7 @@
       />
     </div>
     {/if}
+    {#if platform === 'linux'}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.audio.audioBackend')}</span>
@@ -3878,6 +3919,7 @@
         {/if}
       </div>
     </div>
+    {/if}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.audio.outputDevice')}</span>
@@ -3946,6 +3988,7 @@
         </div>
       {/if}
     </div>
+    {#if platform === 'linux'}
     {#if showAlsaPluginSelector}
     <div class="setting-row">
       <div class="setting-info">
@@ -3971,6 +4014,7 @@
       <Toggle enabled={alsaHardwareVolume} onchange={handleAlsaHardwareVolumeChange} />
     </div>
     {/if}
+    {/if}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.audio.exclusiveMode')} <span class="help-tip" title={$t('settings.audio.exclusiveModeHelp')}>(?)</span></span>
@@ -3988,6 +4032,7 @@
     {#if dacPassthrough}
     <small class="setting-note">{$t('settings.audio.dacPassthroughNote')}</small>
     {/if}
+    {#if platform === 'linux'}
     {#if isFlatpak && selectedBackend === 'PipeWire' && dacPassthrough}
     <div class="flatpak-warning">
       <div class="warning-icon">⚠️</div>
@@ -4010,6 +4055,14 @@
     <small class="setting-note">{$t('settings.audio.pwForceBitperfectNote')}</small>
     {/if}
     {/if}
+    {/if}
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.audio.allowQualityFallback')} <span class="help-tip" title={$t('settings.audio.allowQualityFallbackHelp')}>(?)</span></span>
+        <span class="setting-desc">{$t('settings.audio.allowQualityFallbackDesc')}</span>
+      </div>
+      <Toggle enabled={allowQualityFallback} onchange={handleAllowQualityFallbackChange} />
+    </div>
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.audio.syncAudioOnStartup')}</span>
@@ -4017,6 +4070,18 @@
       </div>
       <Toggle enabled={syncAudioOnStartup} onchange={handleSyncAudioOnStartupChange} />
     </div>
+    {#if selectedBackend === 'PipeWire'}
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.audio.skipSinkSwitch')} <span class="help-tip" title={$t('settings.audio.skipSinkSwitchHelp')}>(?)</span></span>
+        <span class="setting-desc">{$t('settings.audio.skipSinkSwitchDesc')}</span>
+      </div>
+      <Toggle enabled={skipSinkSwitch} onchange={handleSkipSinkSwitchChange} disabled={dacPassthrough} />
+    </div>
+    {#if skipSinkSwitch}
+    <small class="setting-note">{$t('settings.audio.skipSinkSwitchNote')}</small>
+    {/if}
+    {/if}
     <div class="setting-row">
       <span class="setting-label">{$t('settings.audio.currentSampleRate')}</span>
       <span class="setting-value" class:muted={!hardwareStatus?.is_active}>
@@ -4182,7 +4247,7 @@
     {#if autoThemeGenerating}
       <div class="auto-theme-overlay">
         <div class="auto-theme-overlay-content">
-          <Loader2 size={32} class="spinner" />
+          <LoaderCircle size={32} class="spinner" />
           <span>{$t('settings.appearance.autoThemeGenerating')}</span>
         </div>
       </div>
@@ -4312,6 +4377,8 @@
       <span class="setting-label">{$t('settings.appearance.systemNotifications')}</span>
       <Toggle enabled={systemNotificationsEnabled} onchange={(v) => { systemNotificationsEnabled = v; setSystemNotificationsEnabled(v); }} />
     </div>
+    <!-- Title bar toggles: hidden on macOS (always uses native overlay title bar) -->
+    {#if platform !== 'macos'}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.useSystemTitleBar')}</span>
@@ -4326,6 +4393,9 @@
       </div>
       <Toggle enabled={hideTitleBar} onchange={(v) => setHideTitleBar(v)} disabled={useSystemTitleBar} />
     </div>
+    {/if}
+    <!-- Title bar customization: hidden on macOS (uses native overlay title bar) -->
+    {#if platform !== 'macos'}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.searchInTitleBar')}</span>
@@ -4482,6 +4552,7 @@
         disabled={hideTitleBar || useSystemTitleBar}
       />
     </div>
+    {/if}
     <div class="setting-row">
       <span class="setting-label">{$t('settings.appearance.miniplayerDefaultView')}</span>
       <Dropdown
@@ -4510,15 +4581,16 @@
       <Toggle enabled={purchasesEnabled} onchange={handlePurchasesToggle} />
     </div>
 
-    <!-- System Tray subsection -->
-    <h4 class="subsection-title">{$t('settings.appearance.tray.title')}</h4>
+    <!-- System Tray / Menu Bar subsection -->
+    <h4 class="subsection-title">{$t(platform === 'macos' ? 'settings.appearance.tray.titleMacos' : 'settings.appearance.tray.title')}</h4>
     <div class="setting-row">
       <div class="setting-info">
-        <span class="setting-label">{$t('settings.appearance.tray.enableTray')}</span>
-        <span class="setting-desc">{$t('settings.appearance.tray.enableTrayDesc')}</span>
+        <span class="setting-label">{$t(platform === 'macos' ? 'settings.appearance.tray.enableTrayMacos' : 'settings.appearance.tray.enableTray')}</span>
+        <span class="setting-desc">{$t(platform === 'macos' ? 'settings.appearance.tray.enableTrayDescMacos' : 'settings.appearance.tray.enableTrayDesc')}</span>
       </div>
       <Toggle enabled={enableTray} onchange={(v) => handleEnableTrayChange(v)} />
     </div>
+    {#if platform !== 'macos'}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.tray.minimizeToTray')}</span>
@@ -4533,6 +4605,7 @@
       </div>
       <Toggle enabled={closeToTray} onchange={(v) => handleCloseToTrayChange(v)} disabled={!enableTray} />
     </div>
+    {/if}
 
     <!-- Immersive subsection -->
     <h4 class="subsection-title">{$t('settings.appearance.immersive.title')}</h4>
@@ -4545,7 +4618,8 @@
       />
     </div>
 
-    <!-- Composition subsection (collapsible) -->
+    <!-- Composition subsection (collapsible, Linux-only: GDK/GSK/X11/Wayland/DMA-BUF) -->
+    {#if platform === 'linux'}
     <div class="collapsible-section composition-subsection">
       <button class="section-title-btn" onclick={() => compositionCollapsed = !compositionCollapsed}>
         <div class="section-title-row">
@@ -4563,7 +4637,7 @@
 
         {#if graphicsUsingFallback}
           <div class="composition-warning fallback-warning">
-            <AlertTriangle size={14} />
+            <TriangleAlert size={14} />
             <div>
               <span class="fallback-title">{$t('settings.appearance.composition.fallbackWarning')}</span>
               <span class="fallback-desc">{$t('settings.appearance.composition.fallbackDesc')}</span>
@@ -4573,7 +4647,7 @@
         {/if}
 
         <div class="composition-warning">
-          <AlertTriangle size={14} />
+          <TriangleAlert size={14} />
           <div>
             <span>{$t('settings.appearance.composition.recoveryNote')}</span>
             <code class="recovery-cmd">{$t('settings.appearance.composition.recoveryCmd')}</code>
@@ -4696,6 +4770,7 @@
         </div>
       {/if}
     </div>
+    {/if}
 
     <div class="setting-row">
       <div class="setting-info">
@@ -4822,9 +4897,9 @@
       <span class="setting-label">{$t('settings.offlineLibrary.cachedTracks')}</span>
       <span class="setting-value">
         {#if downloadStats}
-          {downloadStats.readyTracks} tracks ({formatBytes(downloadStats.totalSizeBytes)})
+          {downloadStats.readyTracks} {$t('library.tracks').toLowerCase()} ({formatBytes(downloadStats.totalSizeBytes)})
         {:else}
-          Loading...
+          {$t('actions.loading')}
         {/if}
       </span>
     </div>
@@ -4894,7 +4969,7 @@
           <div class="setting-with-description">
             <span class="setting-label">{$t('settings.contentFiltering.artistBlacklist')}</span>
             <span class="setting-description">
-              {blacklistCount} {blacklistCount === 1 ? 'artist' : 'artists'} blocked
+              {$t('settings.contentFiltering.artistsBlocked', { values: {"count": blacklistCount} })}
               {#if !blacklistEnabled}
                 <span class="status-disabled">({$t('settings.contentFiltering.disabled')})</span>
               {/if}
@@ -4915,7 +4990,8 @@
   <section class="section">
     <h3 class="section-title">{$t('settings.integrations.title')}</h3>
 
-    <!-- Qobuz Link Handler -->
+    <!-- Qobuz Link Handler (Linux only — macOS registers via Info.plist, Windows via registry) -->
+    {#if platform === 'linux'}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.integrations.qobuzLinkHandler')}</span>
@@ -4923,6 +4999,7 @@
       </div>
       <Toggle enabled={qobuzLinkHandlerEnabled} onchange={handleQobuzLinkHandlerToggle} disabled={qobuzLinkHandlerBusy} />
     </div>
+    {/if}
 
     <!-- Qobuz Connect Device Name -->
     <div class="setting-row">
@@ -5325,7 +5402,7 @@
         type="button"
       >
         {#if isCheckingUpdates}
-          <Loader2 size={14} class="spin" />
+          <LoaderCircle size={14} class="spin" />
           <span>{$t('settings.updates.checking')}</span>
         {:else}
           <span>{$t('settings.updates.check')}</span>
@@ -5518,9 +5595,9 @@
     {/if}
     <div class="setting-row">
       <div class="setting-info">
-        <span class="setting-label">Clear All Caches</span>
+        <span class="setting-label">{$t('settings.metadata.clearAllCaches')}</span>
         <small class="setting-note">
-          Clears all cached data above
+          {$t('settings.metadata.clearAllCachesDesc')}
         </small>
       </div>
       <button

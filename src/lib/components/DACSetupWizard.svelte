@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X, CheckCircle, Check, AlertTriangle, XCircle, Search, Loader2 } from 'lucide-svelte';
+  import { X, CircleCheckBig, Check, TriangleAlert, CircleX, Search, LoaderCircle } from 'lucide-svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { t } from '$lib/i18n';
   import WizardStepper, { type Step } from './wizard/WizardStepper.svelte';
@@ -457,22 +457,22 @@
 
                     {#if dacType === 'usb'}
                       <span class="dac-type usb">
-                        <CheckCircle size={14} />
+                        <CircleCheckBig size={14} />
                         {$t('dacWizard.detectDac.validation.usbDac')}
                       </span>
                     {:else if dacType === 'pci'}
                       <span class="dac-type pci">
-                        <AlertTriangle size={14} />
+                        <TriangleAlert size={14} />
                         {$t('dacWizard.detectDac.validation.pciDac')}
                       </span>
                     {:else if dacType === 'bluetooth'}
                       <span class="dac-type bluetooth">
-                        <XCircle size={14} />
+                        <CircleX size={14} />
                         {$t('dacWizard.detectDac.validation.bluetoothDac')}
                       </span>
                     {:else if dacType === 'virtual'}
                       <span class="dac-type virtual">
-                        <XCircle size={14} />
+                        <CircleX size={14} />
                         {$t('dacWizard.detectDac.validation.virtualDac')}
                       </span>
                     {/if}
@@ -480,7 +480,7 @@
                 {:else if dacValidation === 'invalid'}
                   <div class="validation-feedback">
                     <span class="validation-status invalid">
-                      <XCircle size={14} />
+                      <CircleX size={14} />
                       {$t('dacWizard.detectDac.validation.invalidFormat')}
                     </span>
                   </div>
@@ -496,7 +496,7 @@
                     disabled={isQueryingDac}
                   >
                     {#if isQueryingDac}
-                      <Loader2 size={16} class="spin" />
+                      <LoaderCircle size={16} class="spin" />
                       {$t('dacWizard.detectDac.query.querying')}
                     {:else}
                       <Search size={16} />
@@ -679,7 +679,7 @@
 
           {:else if currentStep === 'done'}
             <div class="done-content">
-              <CheckCircle size={64} class="done-icon" />
+              <CircleCheckBig size={64} class="done-icon" />
 
               {#if dacCapabilities?.description || dacNodeName}
                 <div class="done-dac-info">

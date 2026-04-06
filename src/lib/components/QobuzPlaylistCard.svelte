@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, onMount } from 'svelte';
-  import { Play, ListMusic, Plus, MoreHorizontal, ListPlus, Library, Share2 } from 'lucide-svelte';
+  import { Play, ListMusic, Plus, Ellipsis, ListPlus, Library, Share2 } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import {
     openMenu as openGlobalMenu,
@@ -257,7 +257,7 @@
             onclick={toggleMenu}
             title={$t('actions.moreOptions')}
           >
-            <MoreHorizontal size={18} />
+            <Ellipsis size={18} />
           </button>
         </div>
       </div>

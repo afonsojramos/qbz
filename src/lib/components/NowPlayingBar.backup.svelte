@@ -13,10 +13,11 @@
     VolumeX,
     Volume1,
     Cast,
-    Mic2
+    MicVocal
   } from 'lucide-svelte';
   import QualityBadge from './QualityBadge.svelte';
   import GlassSurface from './glass/GlassSurface.svelte';
+  import { t } from 'svelte-i18n';
 
   interface Props {
     artwork?: string;
@@ -167,7 +168,7 @@
       </div>
     {:else}
       <div class="empty-state">
-        <span class="empty-text">No track playing</span>
+        <span class="empty-text">{ $t('player.noTrackPlaying') }</span>
       </div>
     {/if}
   </div>
@@ -242,16 +243,16 @@
     <button class="action-btn" onclick={onOpenQueue}>
       <List size={20} />
     </button>
-    <button class="action-btn" onclick={onCast} title="Cast to device">
+    <button class="action-btn" onclick={onCast} title={ $t('player.castToDevice') }>
       <Cast size={20} />
     </button>
     <button
       class="action-btn"
       class:active={lyricsActive}
       onclick={onToggleLyrics}
-      title="Lyrics"
+      title={ $t('player.lyrics') }
     >
-      <Mic2 size={20} />
+      <MicVocal size={20} />
     </button>
 
     <!-- Volume Control -->

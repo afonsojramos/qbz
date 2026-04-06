@@ -2247,7 +2247,9 @@ pub async fn library_write_album_metadata_to_files_impl(
     let write_result = tokio::task::spawn_blocking({
         let request = request.clone();
         move || -> Result<(), String> {
-            use lofty::{Accessor, AudioFile, ItemKey, Tag, TaggedFileExt};
+            use lofty::prelude::*;
+            use lofty::tag::{ItemKey, Tag};
+            use lofty::config::WriteOptions;
 
             // Ensure we only write each file once.
             let mut by_file: HashMap<String, &LibraryAlbumTrackMetadataUpdate> = HashMap::new();
@@ -2300,16 +2302,19 @@ pub async fn library_write_album_metadata_to_files_impl(
 
                     // Album artist (not part of Accessor).
                     if request.album_artist.trim().is_empty() {
-                        tag.remove_key(&ItemKey::AlbumArtist);
+                        tag.remove_key(ItemKey::AlbumArtist);
                     } else {
                         tag.insert_text(ItemKey::AlbumArtist, request.album_artist.trim().to_string());
                     }
 
                     // Year / Genre
                     if let Some(year) = request.year {
-                        tag.set_year(year);
+                        tag.set_date(lofty::tag::items::Timestamp {
+                            year: year as u16,
+                            ..Default::default()
+                        });
                     } else {
-                        tag.remove_year();
+                        tag.remove_date();
                     }
 
                     if let Some(ref genre) = request.genre {
@@ -2326,17 +2331,17 @@ pub async fn library_write_album_metadata_to_files_impl(
                     if let Some(ref cat) = request.catalog_number {
                         let c = cat.trim();
                         if c.is_empty() {
-                            tag.remove_key(&ItemKey::CatalogNumber);
+                            tag.remove_key(ItemKey::CatalogNumber);
                         } else {
                             tag.insert_text(ItemKey::CatalogNumber, c.to_string());
                         }
                     } else {
-                        tag.remove_key(&ItemKey::CatalogNumber);
+                        tag.remove_key(ItemKey::CatalogNumber);
                     }
                 }
 
                 tagged_file
-                    .save_to_path(path)
+                    .save_to_path(path, WriteOptions::default())
                     .map_err(|_| "Failed to write tags to audio files. Check that the album folder is mounted read-write and you have permissions.".to_string())?;
             }
 

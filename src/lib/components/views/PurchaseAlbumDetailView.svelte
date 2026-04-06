@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { t } from '$lib/i18n';
+  import { t, locale } from '$lib/i18n';
   import { invoke } from '@tauri-apps/api/core';
-  import { ArrowLeft, Download, Check, Loader2, AlertTriangle, Library, Play, X } from 'lucide-svelte';
+  import { ArrowLeft, Download, Check, LoaderCircle, TriangleAlert, Library, Play, X } from 'lucide-svelte';
   import QualityBadge from '../QualityBadge.svelte';
   import Dropdown from '../Dropdown.svelte';
   import ViewTransition from '../ViewTransition.svelte';
@@ -73,7 +73,7 @@
   function formatPurchaseDate(ts?: number): string {
     if (!ts) return '';
     try {
-      return new Date(ts * 1000).toLocaleDateString(undefined, {
+      return new Date(ts * 1000).toLocaleDateString($locale ? $locale : 'en-us', {
         year: 'numeric',
         month: 'long',
         day: 'numeric',
@@ -239,7 +239,7 @@
         <img src={getQobuzImage(album.image)} alt={album.title} />
         {#if !album.downloadable}
           <div class="artwork-unavailable-overlay">
-            <AlertTriangle size={18} />
+            <TriangleAlert size={18} />
             <span>{$t('purchases.unavailable')}</span>
           </div>
         {/if}
@@ -295,7 +295,7 @@
               title={$t('purchases.downloadAll')}
             >
               {#if isDownloadingAll}
-                <Loader2 size={20} class="spin" />
+                <LoaderCircle size={20} class="spin" />
               {:else}
                 <Download size={20} />
               {/if}
@@ -324,7 +324,7 @@
             <X size={14} />
             <span>{$t('purchases.downloadCancelled', { values: { completed: completedCount, total: totalTracks } })}</span>
           {:else}
-            <Loader2 size={14} class="spin" />
+            <LoaderCircle size={14} class="spin" />
             <span>{$t('purchases.downloadProgress', { values: { current: completedCount, total: totalTracks } })}</span>
             <button
               class="cancel-download-btn"
@@ -352,7 +352,7 @@
       <div class="add-to-library">
         <button class="add-to-library-btn" onclick={handleAddToLibrary} disabled={addingToLibrary}>
           {#if addingToLibrary}
-            <Loader2 size={14} class="spin" />
+            <LoaderCircle size={14} class="spin" />
           {:else}
             <Library size={14} />
           {/if}
@@ -408,7 +408,7 @@
                     <span></span><span></span><span></span>
                   </div>
                 {:else if status === 'downloading'}
-                  <Loader2 size={14} class="spin" />
+                  <LoaderCircle size={14} class="spin" />
                 {:else}
                   <span>{track.track_number}</span>
                 {/if}
@@ -438,14 +438,14 @@
                     <span class="redownload-icon"><Download size={14} /></span>
                   </button>
                 {:else if status === 'downloading'}
-                  <span class="download-active"><Loader2 size={14} class="spin" /></span>
+                  <span class="download-active"><LoaderCircle size={14} class="spin" /></span>
                 {:else if status === 'failed'}
                   <button
                     class="download-track-btn failed"
                     onclick={(e) => { e.stopPropagation(); promptForFolder(track.id); }}
                     title={$t('purchases.failed')}
                   >
-                    <AlertTriangle size={14} />
+                    <TriangleAlert size={14} />
                   </button>
                 {:else if album.downloadable}
                   <button

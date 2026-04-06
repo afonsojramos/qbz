@@ -13,7 +13,7 @@ export function restoreScrollOnBackForward(
 
     tick().then(() => {
       if (containerEl) {
-          containerEl.scrollTop = saved;
+        containerEl.scrollTop = saved;
       }
     });
   }

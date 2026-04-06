@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Mic2 } from 'lucide-svelte';
+  import { MicVocal } from 'lucide-svelte';
   import { t } from 'svelte-i18n';
   import LyricsLines from './LyricsLines.svelte';
 
@@ -33,7 +33,7 @@
 <aside class="lyrics-sidebar">
   <div class="header">
     <div class="header-icon">
-      <Mic2 size={18} />
+      <MicVocal size={18} />
     </div>
     <div class="header-text">
       <div class="header-title">{$t('player.lyrics')}</div>

@@ -6,7 +6,7 @@
 //! - token: pairing token used by the remote control PWA
 
 use base64::Engine;
-use rand::RngCore;
+use rand::RngExt;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -248,7 +248,7 @@ impl RemoteControlSettingsState {
 
 fn generate_token() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CloudDownload, AlertCircle, CloudOff } from 'lucide-svelte';
+  import { CloudDownload, CircleAlert, CloudOff } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import {
     subscribe as subscribeOffline,
@@ -106,7 +106,7 @@
       />
     </svg>
   {:else if status === 'failed'}
-    <AlertCircle {size} />
+    <CircleAlert {size} />
   {:else if isOffline}
     <CloudOff {size} />
   {:else}

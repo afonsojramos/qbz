@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { X, Search, Heart, MoreVertical, Trash2, ListPlus, Info } from 'lucide-svelte';
+  import { X, Search, Heart, EllipsisVertical, Trash2, ListPlus, Info } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import {
@@ -316,7 +316,7 @@
                 <div class="np-title-row">
                   <span class="np-title">{currentTrack.title}</span>
                   {#if currentTrack.parental_warning}
-                    <span class="explicit-badge" title="Explicit"></span>
+                    <span class="explicit-badge" title={ $t('library.explicit') }></span>
                   {/if}
                 </div>
                 <div class="np-artist">{currentTrack.artist}</div>
@@ -369,7 +369,7 @@
                     <div class="track-title-row">
                       <span class="track-title">{queueTrack.title}</span>
                       {#if queueTrack.parental_warning}
-                        <span class="explicit-badge" title="Explicit"></span>
+                        <span class="explicit-badge" title={ $t('library.explicit') }></span>
                       {/if}
                     </div>
                     <div class="track-artist">{queueTrack.artist}</div>
@@ -381,7 +381,7 @@
                       onclick={(e) => toggleTrackMenu(e, originalIndex)}
                       title={$t('actions.more')}
                     >
-                      <MoreVertical size={16} />
+                      <EllipsisVertical size={16} />
                     </button>
                     {#if openMenuIndex === originalIndex}
                       <div class="track-context-menu">
@@ -444,7 +444,7 @@
                       onclick={(e) => toggleHistoryMenu(e, track.id)}
                       title={$t('actions.more')}
                     >
-                      <MoreVertical size={16} />
+                      <EllipsisVertical size={16} />
                     </button>
                     {#if openHistoryMenuId === track.id}
                       <div class="track-context-menu">

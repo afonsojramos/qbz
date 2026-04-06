@@ -3,7 +3,7 @@
   import { t } from '$lib/i18n';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { ArrowLeft, Loader2, Music, Search, X, LayoutGrid, PanelLeftClose, Mic2, Disc3, ChevronDown, Filter, SlidersHorizontal, Globe, Share2 } from 'lucide-svelte';
+  import { ArrowLeft, LoaderCircle, Music, Search, X, LayoutGrid, PanelLeftClose, MicVocal, Disc3, ChevronDown, Funnel, SlidersHorizontal, Globe, Share2 } from 'lucide-svelte';
   import VirtualizedFavoritesArtistGrid from '../VirtualizedFavoritesArtistGrid.svelte';
   import VirtualizedFavoritesArtistList from '../VirtualizedFavoritesArtistList.svelte';
   import AlbumCard from '../AlbumCard.svelte';
@@ -448,7 +448,7 @@
     <div class="favorites-nav">
       <div class="nav-left">
         <span class="results-count">
-          {filteredArtists.length}{(searchQuery || activeGenreFilters.size > 0) ? ` / ${allArtists.length}` : ''} artists
+          {filteredArtists.length}{(searchQuery || activeGenreFilters.size > 0) ? ` / ${allArtists.length}` : ''} {$t('search.artists').toLowerCase()}
         </span>
       </div>
       <div class="nav-right">
@@ -484,9 +484,9 @@
               class:active-filter={activeGenreFilters.size > 0}
               bind:this={genreFilterBtnEl}
               onclick={() => { showGenrePopup = !showGenrePopup; genreSearchQuery = ''; }}
-              title="Filter by genre"
+              title={$t('genreFilter.title')}
             >
-              <Filter size={16} />
+              <Funnel size={16} />
               {#if activeGenreFilters.size > 0}
                 <span class="filter-badge">{activeGenreFilters.size}</span>
               {/if}
@@ -725,12 +725,12 @@
         <div class="artist-albums-column">
           {#if !selectedArtist}
             <div class="artist-albums-empty">
-              <Mic2 size={48} />
+              <MicVocal size={48} />
               <p>{$t('favorites.selectArtistHint')}</p>
             </div>
           {:else if loadingAlbums}
             <div class="artist-albums-loading">
-              <Loader2 size={32} class="spinner-icon" />
+              <LoaderCircle size={32} class="spinner-icon" />
               <p>{$t('favorites.loadingAlbums')}</p>
             </div>
           {:else if albumsError}
@@ -1271,6 +1271,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .genre-name::first-letter {
+    text-transform: capitalize;
   }
 
   .genre-card.selected .genre-name {

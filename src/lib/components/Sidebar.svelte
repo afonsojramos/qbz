@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, MoreHorizontal, ArrowUpDown, ChevronRight, ChevronLeft, Folder, FolderPlus, X, User, Disc, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
+  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, Folder, FolderPlus, X, User, Disc, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
   import type { FavoritesPreferences } from '$lib/types';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
@@ -135,7 +135,7 @@
 
   // Favorites section state
   let favoritesExpanded = $state(false);
-  let favoritesTabOrder = $state<string[]>(['tracks', 'albums', 'artists']);
+  let favoritesTabOrder = $state<string[]>(['tracks', 'albums', 'artists', 'playlists']);
   let showFavoritesMenu = $state(false);
   let favoritesMenuPos = $state({ x: 0, y: 0 });
 
@@ -318,7 +318,7 @@
         }
 
         const artists = Array.from(artistNames).slice(0, 5);
-        const trackText = `${trackCount} ${trackCount === 1 ? 'Track' : 'Tracks'}`;
+        const trackText = `${trackCount} ${trackCount === 1 ? $t('playlist.track') : $t('playlist.tracks')}`;
 
         if (artists.length > 0) {
           return `${artists.join('\n')}\n${trackText}`;
@@ -329,12 +329,12 @@
       console.debug('Failed to fetch playlist artists:', err);
     }
 
-    return `${trackCount} ${trackCount === 1 ? 'Track' : 'Tracks'}`;
+    return `${trackCount} ${trackCount === 1 ? $t('playlist.track') : $t('playlist.tracks')}`;
   }
 
   // Format track count text with proper plural
   function formatTrackCount(total: number, localCount: number): string {
-    const plural = total === 1 ? 'Track' : 'Tracks';
+    const plural = total === 1 ? $t('playlist.track') : $t('playlist.tracks');
     if (localCount > 0) {
       return `${total} ${plural} (${localCount} local)`;
     }
@@ -933,8 +933,7 @@
   async function loadFavoritesPreferences() {
     try {
       const prefs = await invoke<FavoritesPreferences>('v2_get_favorites_preferences');
-      // Filter out 'playlists' from tab order for sidebar display
-      favoritesTabOrder = (prefs.tab_order || ['tracks', 'albums', 'artists']).filter(tab => tab !== 'playlists');
+      favoritesTabOrder = prefs.tab_order || ['tracks', 'albums', 'artists', 'playlists'];
     } catch (err) {
       console.debug('[Sidebar] Failed to load favorites preferences:', err);
     }
@@ -1514,6 +1513,8 @@
                     <Disc size={14} />
                   {:else if tab === 'tracks'}
                     <Music size={14} />
+                  {:else if tab === 'playlists'}
+                    <ListMusic size={14} />
                   {/if}
                 {/snippet}
               </NavigationItem>
@@ -1611,7 +1612,7 @@
               onclick={(e) => { e.stopPropagation(); toggleMenu(); }}
               title={$t('actions.more')}
             >
-              <MoreHorizontal size={14} />
+              <Ellipsis size={14} />
             </button>
             <button class="icon-btn" onclick={() => { playlistsCollapsed = !playlistsCollapsed; saveSidebarCollapseState(); }} title={playlistsCollapsed ? $t('actions.open') : $t('actions.close')}>
               {#if playlistsCollapsed}
@@ -1889,6 +1890,8 @@
           <Disc size={14} />
         {:else if tab === 'tracks'}
           <Music size={14} />
+        {:else if tab === 'playlists'}
+          <ListMusic size={14} />
         {/if}
         <span>{$t(`favorites.${tab}`)}</span>
       </button>
@@ -2027,7 +2030,7 @@
       </div>
     {:else}
       <div class="folder-popover-empty">
-        No playlists
+        { $t('empty.noPlaylists') }
       </div>
     {/if}
   </div>

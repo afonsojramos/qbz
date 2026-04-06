@@ -14,11 +14,12 @@
     VolumeX,
     Volume1,
     Cast,
-    Mic2,
+    MicVocal,
     Maximize2,
     PictureInPicture2,
-    AlertTriangle
+    TriangleAlert
   } from 'lucide-svelte';
+  import { t } from 'svelte-i18n';
   import QualityBadge from './QualityBadge.svelte';
   import AudioOutputBadges from './AudioOutputBadges.svelte';
   import QconnectBadge from './QconnectBadge.svelte';
@@ -91,6 +92,7 @@
     qconnectBusy?: boolean;
     showQconnectDevButton?: boolean;
     volumeLocked?: boolean;
+    bufferProgress?: number | null;
   }
 
   let {
@@ -145,6 +147,7 @@
     qconnectBusy = false,
     showQconnectDevButton = false,
     volumeLocked = false,
+    bufferProgress = null,
   }: Props = $props();
 
   let progressRef = $state<HTMLDivElement | null>(null);
@@ -274,6 +277,9 @@
       aria-valuemax={duration}
     >
       <div class="seekbar-track">
+        {#if bufferProgress != null && bufferProgress < 1}
+          <div class="seekbar-buffer" style="width: {bufferProgress * 100}%"></div>
+        {/if}
         <div class="seekbar-fill" style="width: {progress}%"></div>
       </div>
       <div class="seekbar-thumb" style="left: {progress}%"></div>
@@ -395,7 +401,7 @@
             <div class="song-title-row">
               <button class="song-title" title={$translateStore('actions.trackInfo')} onclick={onTrackClick}>{trackTitle}</button>
               {#if explicit}
-                <span class="explicit-badge" title="Explicit"></span>
+                <span class="explicit-badge" title={ $t('library.explicit') }></span>
               {/if}
             </div>
             <div class="song-meta">
@@ -457,7 +463,7 @@
           title={$translateStore('degraded.title')}
           role="status"
         >
-          <AlertTriangle size={16} />
+          <TriangleAlert size={16} />
         </div>
       {/if}
 
@@ -490,7 +496,7 @@
         title={isOffline ? $translateStore('offline.featureDisabled') : $translateStore('player.lyrics')}
         aria-label={isOffline ? $translateStore('offline.featureDisabled') : $translateStore('player.lyrics')}
       >
-        <Mic2 size={16} aria-hidden="true" />
+        <MicVocal size={16} aria-hidden="true" />
       </button>
 
       {#if onOpenMiniPlayer}
@@ -662,6 +668,7 @@
   }
 
   .seekbar-track {
+    position: relative;
     width: 100%;
     height: 3px;
     background: var(--border-subtle);
@@ -669,7 +676,17 @@
     overflow: hidden;
   }
 
+  .seekbar-buffer {
+    position: absolute;
+    height: 100%;
+    background: var(--text-muted, #666);
+    opacity: 0.3;
+    border-radius: 999px;
+    transition: width 250ms linear;
+  }
+
   .seekbar-fill {
+    position: relative;
     height: 100%;
     background: var(--accent-primary, #6366f1);
     border-radius: 999px;

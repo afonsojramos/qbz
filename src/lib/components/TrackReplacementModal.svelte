@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { X, Search, Play, Check, AlertCircle, Loader2 } from 'lucide-svelte';
+  import { X, Search, Play, Check, CircleAlert, LoaderCircle } from 'lucide-svelte';
   import { t } from '$lib/i18n';
 
   interface SearchTrack {
@@ -138,7 +138,7 @@
 
       <div class="search-section">
         <div class="search-info">
-          <AlertCircle size={16} />
+          <CircleAlert size={16} />
           <span>{$t('playlist.searchingFor')}: <strong>{trackTitle}</strong>{trackArtist ? ` - ${trackArtist}` : ''}</span>
         </div>
         <div class="search-input-container">
@@ -152,7 +152,7 @@
           />
           <button class="search-btn" onclick={doSearch} disabled={loading}>
             {#if loading}
-              <Loader2 size={16} class="spinner" />
+              <LoaderCircle size={16} class="spinner" />
             {:else}
               {$t('playlist.searchButton')}
             {/if}
@@ -163,12 +163,12 @@
       <div class="results-section">
         {#if loading}
           <div class="loading-state">
-            <Loader2 size={24} class="spinner" />
+            <LoaderCircle size={24} class="spinner" />
             <span>{$t('playlist.loading')}</span>
           </div>
         {:else if searched && results.length === 0}
           <div class="empty-state">
-            <AlertCircle size={32} />
+            <CircleAlert size={32} />
             <p>{$t('playlist.noReplacementsFound')}</p>
             <p class="hint">{$t('playlist.tryDifferentSearch')}</p>
           </div>
