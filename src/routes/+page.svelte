@@ -221,6 +221,7 @@
     clearQueue,
     playQueueIndex,
     nextTrack,
+    nextTrackGuarded,
     previousTrack,
     moveQueueTrack,
     setLocalTrackIds,
@@ -4369,7 +4370,7 @@
         return;
       }
       const previousTrackId = currentTrack?.id ?? null;
-      const nextTrackResult = await nextTrack();
+      const nextTrackResult = await nextTrackGuarded();
       if (nextTrackResult) {
         // Defensive fallback for issue #80:
         // if backend returns same track on auto-advance while repeat-one is off,
@@ -4383,7 +4384,7 @@
             '[Player] Auto-advance returned same track id, forcing one extra nextTrack()',
             previousTrackId
           );
-          const forcedNext = await nextTrack();
+          const forcedNext = await nextTrackGuarded();
           if (forcedNext && forcedNext.id !== previousTrackId) {
             await playQueueTrack(forcedNext);
             return;
@@ -4496,7 +4497,7 @@
       if (qconnectSuppressLocalPlaybackAutomation) return;
       console.log('[Gapless] Handling transition to track', trackId);
       // Advance the queue to match backend state
-      const advanced = await nextTrack();
+      const advanced = await nextTrackGuarded();
       if (advanced && advanced.id === trackId) {
         // Queue advanced successfully — update UI metadata
         await playQueueTrack(advanced, undefined, true);
