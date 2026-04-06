@@ -318,10 +318,10 @@ fn cached_quality_below_requested(data: &[u8], requested: Quality) -> bool {
     };
 
     let dominated = match requested {
-        // Hi-Res+ / Hi-Res: expect 24-bit. Don't check sample rate — a track
-        // mastered at 44.1kHz/24bit IS the maximum quality, re-downloading
-        // won't produce a higher sample rate.
-        Quality::UltraHiRes | Quality::HiRes => bit_depth < 24,
+        // Hi-Res+: expect 24-bit AND >96kHz
+        Quality::UltraHiRes => bit_depth < 24 || sample_rate <= 96000,
+        // Hi-Res: expect 24-bit
+        Quality::HiRes => bit_depth < 24,
         // Lossless / Mp3: any FLAC is fine
         _ => false,
     };
