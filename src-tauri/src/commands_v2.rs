@@ -7719,12 +7719,10 @@ pub async fn v2_play_next_gapless(
     }
 
     // Check local library
-    // Convert u64 to i64 for library query
     let track_id_i64 = track_id_to_play
         .try_into()
         .map_err(|_| RuntimeError::Internal("Track ID too large for i64".to_string()))?;
 
-    // Query V2 multi-track API with a single ID
     let tracks = v2_library_get_tracks_by_ids(vec![track_id_i64], library_state.clone())
         .await
         .map_err(|e| RuntimeError::Internal(format!("Failed to get local track: {}", e)))?;
