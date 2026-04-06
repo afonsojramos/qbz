@@ -4020,7 +4020,6 @@ pub async fn v2_library_play_track(
     library_state: State<'_, LibraryState>,
     bridge: State<'_, CoreBridgeState>,
     runtime: State<'_, RuntimeManagerState>,
-    app_state: State<'_, AppState>,
 ) -> Result<(), String> {
     runtime
         .manager()
@@ -4040,15 +4039,6 @@ pub async fn v2_library_play_track(
         return Err(format!("File not found: {}", track.file_path));
     }
     let audio_data = std::fs::read(file_path).map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let cache = app_state.audio_cache.clone();
-    if let Ok(track_id_u64) = u64::try_from(track_id) {
-        if !cache.contains(track_id_u64) {
-            cache.insert(track_id_u64, audio_data.clone());
-            log::info!("[V2/CACHED] Track {} stored in memory cache", track_id_u64);
-        }
-    }
-
     let bridge = bridge.get().await;
     bridge
         .player()
