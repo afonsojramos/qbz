@@ -4471,13 +4471,13 @@
       try {
         const queueState = getQueueState();
         if (queueState.queue.length > 0) {
-          const firstId = Number(queueState.queue[0].id);
           const currentId = currentTrack?.id ?? null;
 
           if (queueState.repeatMode == 'one') {
             return currentId;
           }
           
+          const firstId = Number(queueState.queue[0].id);
           if (!Number.isNaN(firstId) && firstId > 0 && firstId !== currentId) {
             return firstId;
           }
