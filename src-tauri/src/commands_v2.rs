@@ -657,8 +657,63 @@ async fn download_with_backoff(
     ))
 }
 
-// NOTE: download_audio_cmaf and try_cmaf_download removed -- replaced by
-// v2_cmaf_stream + try_cmaf_streaming_setup for streaming playback.
+/// Full CMAF download for prefetch/cache — downloads ALL segments, decrypts, returns FLAC bytes.
+/// Unlike streaming, this blocks until complete, but produces data suitable for cache insertion.
+async fn try_cmaf_full_download(
+    bridge: &CoreBridge,
+    track_id: u64,
+    quality: Quality,
+) -> Result<Vec<u8>, String> {
+    let setup = try_cmaf_streaming_setup(bridge, track_id, quality).await?;
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .use_native_tls()
+        .build()
+        .map_err(|e| format!("CMAF client error: {}", e))?;
+
+    let total_size: usize = setup.flac_header.len()
+        + setup.segment_table.iter().map(|s| s.byte_len as usize).sum::<usize>();
+    let mut output = Vec::with_capacity(total_size);
+    output.extend_from_slice(&setup.flac_header);
+
+    for seg_idx in 1..setup.n_segments {
+        let seg_url = setup.url_template.replace("$SEGMENT$", &seg_idx.to_string());
+        let seg_data = client
+            .get(&seg_url)
+            .header("User-Agent", "Mozilla/5.0")
+            .send().await
+            .map_err(|e| format!("CMAF prefetch seg {} fetch: {}", seg_idx, e))?
+            .bytes().await
+            .map_err(|e| format!("CMAF prefetch seg {} read: {}", seg_idx, e))?;
+
+        let crypto = qbz_cmaf::parse_segment_crypto(&seg_data)
+            .map_err(|e| format!("CMAF prefetch seg {} parse: {}", seg_idx, e))?;
+
+        let mut data_pos = crypto.data_offset;
+        for entry in &crypto.entries {
+            let frame_end = data_pos + entry.size as usize;
+            if frame_end > seg_data.len() {
+                return Err(format!("CMAF prefetch seg {} frame overflow", seg_idx));
+            }
+            let mut frame = seg_data[data_pos..frame_end].to_vec();
+            if entry.flags != 0 {
+                qbz_cmaf::decrypt_frame(&setup.content_key, &entry.iv, &mut frame);
+            }
+            output.extend_from_slice(&frame);
+            data_pos = frame_end;
+        }
+        if data_pos < crypto.mdat_end && crypto.mdat_end <= seg_data.len() {
+            output.extend_from_slice(&seg_data[data_pos..crypto.mdat_end]);
+        }
+    }
+
+    log::info!(
+        "[V2/CMAF-PREFETCH] Complete: track {} ({:.2} MB FLAC)",
+        track_id, output.len() as f64 / (1024.0 * 1024.0)
+    );
+    Ok(output)
+}
 
 /// Info gathered from the CMAF init segment, enough to start streaming playback.
 struct CmafStreamingInfo {
@@ -2228,13 +2283,23 @@ fn spawn_v2_prefetch_with_hw_check(
             let result = async {
                 let bridge_guard = bridge_clone.read().await;
                 let bridge = bridge_guard.as_ref().ok_or("CoreBridge not initialized")?;
+
+                // Try CMAF first (Akamai CDN), fall back to legacy (nginx CDN)
+                match try_cmaf_full_download(bridge, track_id, effective_quality).await {
+                    Ok(data) => return Ok::<Vec<u8>, String>(data),
+                    Err(e) => {
+                        log::warn!("[V2/PREFETCH] CMAF failed for track {}: {}, trying legacy", track_id, e);
+                    }
+                }
+
                 let stream_url = bridge.get_stream_url(track_id, effective_quality).await?;
-                download_with_backoff(&stream_url.url, track_id, effective_quality, bridge).await
+                let (data, _url) = download_with_backoff(&stream_url.url, track_id, effective_quality, bridge).await?;
+                Ok(data)
             }
             .await;
 
             match result {
-                Ok((data, _url)) => {
+                Ok(data) => {
                     // Small delay before cache insertion to avoid potential race with audio thread
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     cache_clone.insert(track_id, data);
