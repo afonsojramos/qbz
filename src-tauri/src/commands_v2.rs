@@ -2476,6 +2476,15 @@ pub async fn v2_logout(
     }
     log::info!("[v2_logout] Legacy client logged out");
 
+    // Step 4: Clear stored credentials (keyring + encrypted files)
+    if let Err(e) = crate::credentials::clear_oauth_token() {
+        log::warn!("[v2_logout] Failed to clear OAuth token: {}", e);
+    }
+    if let Err(e) = crate::credentials::clear_qobuz_credentials() {
+        log::warn!("[v2_logout] Failed to clear credentials: {}", e);
+    }
+    log::info!("[v2_logout] Stored credentials cleared");
+
     Ok(())
 }
 
