@@ -514,12 +514,20 @@ const OAUTH_TOKEN_KEY: &str = "qobuz-oauth-token";
 
 /// Persist the OAuth `user_auth_token` to keyring (primary) and encrypted file (fallback).
 pub fn save_oauth_token(token: &str) -> Result<(), String> {
-    // Try keyring first
-    if let Ok(entry) = Entry::new(SERVICE_NAME, OAUTH_TOKEN_KEY) {
-        match entry.set_password(token) {
+    // Try keyring first (Secret Service D-Bus API: GNOME Keyring, KWallet with bridge)
+    match Entry::new(SERVICE_NAME, OAUTH_TOKEN_KEY) {
+        Ok(entry) => match entry.set_password(token) {
             Ok(()) => log::info!("[Credentials] OAuth token saved to system keyring"),
-            Err(e) => log::debug!("[Credentials] Keyring save failed (not critical): {}", e),
-        }
+            Err(e) => log::warn!(
+                "[Credentials] Keyring save failed: {}. Token will be stored in encrypted file only. \
+                 KDE users: ensure org.freedesktop.secrets is enabled in KWallet settings.",
+                e
+            ),
+        },
+        Err(e) => log::warn!(
+            "[Credentials] Keyring not available: {}. Using encrypted file only.",
+            e
+        ),
     }
 
     // Always save encrypted file as fallback
@@ -553,10 +561,10 @@ pub fn load_oauth_token() -> Result<Option<String>, String> {
             }
             Ok(_) => {}
             Err(keyring::Error::NoEntry) => {
-                log::debug!("[Credentials] No OAuth token in keyring, checking file...");
+                log::info!("[Credentials] No OAuth token in keyring, checking file...");
             }
             Err(e) => {
-                log::debug!("[Credentials] Keyring load failed ({}), checking file...", e);
+                log::warn!("[Credentials] Keyring load failed ({}), checking file...", e);
             }
         }
     }
