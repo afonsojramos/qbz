@@ -163,6 +163,31 @@
     const ids = dragTrackIds?.length ? dragTrackIds : [trackId];
     e.dataTransfer.setData('application/x-qbz-tracks', JSON.stringify(ids));
     e.dataTransfer.setData('text/plain', title);
+
+    // Custom drag ghost: compact, semi-transparent pill
+    const ghost = document.createElement('div');
+    const count = ids.length;
+    ghost.textContent = count > 1 ? `${count} tracks` : title;
+    Object.assign(ghost.style, {
+      position: 'fixed',
+      top: '-1000px',
+      padding: '6px 14px',
+      maxWidth: '220px',
+      borderRadius: '8px',
+      background: 'rgba(30, 30, 40, 0.85)',
+      color: '#fff',
+      fontSize: '12px',
+      fontWeight: '500',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+      border: '1px solid rgba(255,255,255,0.1)',
+      opacity: '0.9',
+    });
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 16);
+    requestAnimationFrame(() => ghost.remove());
   }
 </script>
 
