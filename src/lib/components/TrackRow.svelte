@@ -42,6 +42,7 @@
     explicit?: boolean; // Parental advisory / explicit content
     selectable?: boolean; // Multi-select mode: show checkbox
     selected?: boolean;
+    dragTrackIds?: number[]; // When multi-selected, all selected IDs for drag
     onToggleSelect?: (e: MouseEvent) => void;
     onPlay?: () => void;
     onArtistClick?: () => void;
@@ -99,6 +100,7 @@
     artworkUrl,
     selectable = false,
     selected = false,
+    dragTrackIds,
     onToggleSelect,
     onPlay,
     onArtistClick,
@@ -154,6 +156,14 @@
     e.stopPropagation();
     void togglePlay();
   }
+
+  function handleDragStart(e: DragEvent) {
+    if (!e.dataTransfer || !trackId || isBlacklisted) return;
+    e.dataTransfer.effectAllowed = 'copy';
+    const ids = dragTrackIds?.length ? dragTrackIds : [trackId];
+    e.dataTransfer.setData('application/x-qbz-tracks', JSON.stringify(ids));
+    e.dataTransfer.setData('text/plain', title);
+  }
 </script>
 
 <div
@@ -164,6 +174,8 @@
   class:blacklisted={isBlacklisted}
   class:selected
   data-track-id={trackId ?? undefined}
+  draggable={!!trackId && !isBlacklisted}
+  ondragstart={handleDragStart}
   onmouseenter={() => (isHovered = true)}
   onmouseleave={() => (isHovered = false)}
   onclick={selectable ? onToggleSelect : (isBlacklisted ? undefined : onPlay)}
