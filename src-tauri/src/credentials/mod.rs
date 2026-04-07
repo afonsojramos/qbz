@@ -154,13 +154,51 @@ fn get_machine_id() -> Result<Vec<u8>, String> {
     load_or_create_machine_id_fallback()
 }
 
-/// Derive encryption key from machine ID
+/// Retrieve per-app secret from XDG Desktop Portal (cached for session lifetime).
+/// Returns None if portal is unavailable (headless, old DEs, non-Linux).
+#[cfg(target_os = "linux")]
+fn get_portal_secret() -> Option<Vec<u8>> {
+    use std::sync::OnceLock;
+    static PORTAL_SECRET: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+    PORTAL_SECRET
+        .get_or_init(|| {
+            let rt = tokio::runtime::Handle::try_current().ok()?;
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let _ = tx.send(ashpd::desktop::secret::retrieve().await.ok());
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(3)) {
+                Ok(secret) => {
+                    if secret.is_some() {
+                        log::info!("[Credentials] Using XDG portal secret for key derivation");
+                    }
+                    secret
+                }
+                Err(_) => {
+                    log::debug!("[Credentials] XDG portal secret unavailable (timeout/missing)");
+                    None
+                }
+            }
+        })
+        .clone()
+}
+
+/// Derive encryption key from XDG portal secret + machine ID + installation salt.
+/// Portal secret adds DE-agnostic, Flatpak-safe entropy when available.
 fn derive_key() -> Result<[u8; 32], String> {
     let machine_id = get_machine_id()?;
     let installation_salt = load_or_create_installation_salt()?;
 
+    #[cfg(target_os = "linux")]
+    let portal_secret = get_portal_secret();
+    #[cfg(not(target_os = "linux"))]
+    let portal_secret: Option<Vec<u8>> = None;
+
     let mut hasher = Sha256::new();
     hasher.update(&installation_salt);
+    if let Some(ref secret) = portal_secret {
+        hasher.update(secret);
+    }
     hasher.update(&machine_id);
     hasher.update(&installation_salt);
 
