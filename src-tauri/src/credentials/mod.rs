@@ -513,12 +513,20 @@ fn get_oauth_token_path() -> Option<PathBuf> {
 const OAUTH_TOKEN_KEY: &str = "qobuz-oauth-token";
 
 /// Persist the OAuth `user_auth_token`.
-/// Tries system keyring first. Only falls back to encrypted file if keyring is unavailable.
+/// Tries system keyring first (encrypted). Only falls back to encrypted file if keyring is unavailable.
+/// The token is AES-256-GCM encrypted before storing in keyring — `secret-tool` shows ciphertext, not the raw token.
 pub fn save_oauth_token(token: &str) -> Result<(), String> {
+    // Encrypt token before storing anywhere
+    let placeholder = QobuzCredentials {
+        email: token.to_string(),
+        password: String::new(),
+    };
+    let encrypted = encrypt_credentials(&placeholder)?;
+
     // Try keyring (Secret Service D-Bus: GNOME Keyring, KWallet with bridge)
     if let Ok(entry) = Entry::new(SERVICE_NAME, OAUTH_TOKEN_KEY) {
-        if entry.set_password(token).is_ok() {
-            log::info!("[Credentials] OAuth token saved to system keyring");
+        if entry.set_password(&encrypted).is_ok() {
+            log::info!("[Credentials] OAuth token saved to system keyring (encrypted)");
             // Keyring succeeded — remove any leftover file from previous versions
             if let Some(path) = get_oauth_token_path() {
                 if path.exists() {
@@ -541,26 +549,30 @@ pub fn save_oauth_token(token: &str) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create config directory: {}", e))?;
     }
-
-    let placeholder = QobuzCredentials {
-        email: token.to_string(),
-        password: String::new(),
-    };
-    let encrypted = encrypt_credentials(&placeholder)?;
-    fs::write(&path, encrypted).map_err(|e| format!("Failed to write OAuth token file: {}", e))?;
+    fs::write(&path, &encrypted).map_err(|e| format!("Failed to write OAuth token file: {}", e))?;
 
     log::info!("[Credentials] OAuth token saved to encrypted file (keyring fallback)");
     Ok(())
 }
 
 /// Load a previously saved OAuth `user_auth_token`, or `None` if absent.
-/// Tries system keyring first, falls back to encrypted file.
+/// Tries system keyring first (encrypted), falls back to encrypted file.
 pub fn load_oauth_token() -> Result<Option<String>, String> {
-    // Try keyring first
+    // Try keyring first — value is AES-256-GCM encrypted JSON
     if let Ok(entry) = Entry::new(SERVICE_NAME, OAUTH_TOKEN_KEY) {
         match entry.get_password() {
-            Ok(token) if !token.is_empty() => {
-                log::info!("[Credentials] OAuth token loaded from system keyring");
+            Ok(encrypted) if !encrypted.is_empty() => {
+                // Try decrypting (new format: encrypted JSON in keyring)
+                if let Ok(placeholder) = decrypt_credentials(&encrypted) {
+                    log::info!("[Credentials] OAuth token loaded from system keyring (encrypted)");
+                    return Ok(Some(placeholder.email));
+                }
+                // Might be old format (plaintext token in keyring) — migrate
+                log::info!("[Credentials] Migrating plaintext keyring entry to encrypted format");
+                let token = encrypted;
+                if let Ok(()) = save_oauth_token(&token) {
+                    log::info!("[Credentials] Keyring entry re-encrypted");
+                }
                 return Ok(Some(token));
             }
             Ok(_) => {}
@@ -589,11 +601,17 @@ pub fn load_oauth_token() -> Result<Option<String>, String> {
     match decrypt_credentials(&content) {
         Ok(placeholder) => {
             log::info!("[Credentials] OAuth token loaded from encrypted file");
-            // Migrate: save to keyring and remove file
+            // Migrate: save to keyring (encrypted) and remove file
             if let Ok(entry) = Entry::new(SERVICE_NAME, OAUTH_TOKEN_KEY) {
-                if entry.set_password(&placeholder.email).is_ok() {
-                    let _ = fs::remove_file(&path);
-                    log::info!("[Credentials] OAuth token migrated to keyring, file removed");
+                let re_encrypted = encrypt_credentials(&QobuzCredentials {
+                    email: placeholder.email.clone(),
+                    password: String::new(),
+                });
+                if let Ok(encrypted_str) = re_encrypted {
+                    if entry.set_password(&encrypted_str).is_ok() {
+                        let _ = fs::remove_file(&path);
+                        log::info!("[Credentials] OAuth token migrated to keyring (encrypted), file removed");
+                    }
                 }
             }
             Ok(Some(placeholder.email))
