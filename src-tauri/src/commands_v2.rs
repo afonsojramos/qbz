@@ -1846,7 +1846,18 @@ pub async fn v2_start_oauth_login(
     .build()
     .map_err(|e| format!("Failed to open OAuth window: {}", e))?;
 
-    // Wait up to 5 minutes for the user to complete login
+    // Detect when user closes the OAuth window manually
+    _oauth_window.on_window_event({
+        let notify_close = Arc::clone(&notify);
+        move |event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                log::info!("[OAuth] WebView window destroyed, unblocking wait");
+                notify_close.notify_one();
+            }
+        }
+    });
+
+    // Wait up to 5 minutes for the user to complete login (or window close)
     let timed_out = tokio::time::timeout(std::time::Duration::from_secs(300), notify.notified())
         .await
         .is_err();
