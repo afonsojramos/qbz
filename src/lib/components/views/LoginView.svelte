@@ -21,6 +21,8 @@
 
   let isOAuthLoading = $state(false);
   let isSystemBrowserLoading = $state(false);
+  let showCaptchaHint = $state(false);
+  let captchaHintTimerId: ReturnType<typeof setTimeout> | null = null;
   let isInitializing = $state(true);
   let initStatus = $state('Connecting to Qobuz™...');
   let error = $state<string | null>(null);
@@ -55,11 +57,12 @@
   $effect(() => {
     initializeClient();
     return () => {
-      // Cleanup timeout on unmount
+      // Cleanup timeouts on unmount
       if (timeoutId) {
         clearTimeout(timeoutId);
         timeoutId = null;
       }
+      clearCaptchaHintTimer();
     };
   });
 
@@ -217,10 +220,37 @@
       error = $t('auth.v2NotInitialized');
     } else if (response.error_code === 'oauth_cancelled') {
       error = null;
+      showCaptchaHint = true;
     } else {
       error = response.error || 'Login failed';
     }
     return false;
+  }
+
+  function clearCaptchaHintTimer() {
+    if (captchaHintTimerId) {
+      clearTimeout(captchaHintTimerId);
+      captchaHintTimerId = null;
+    }
+  }
+
+  async function handleCancelOAuthLogin() {
+    clearCaptchaHintTimer();
+    try {
+      await invoke('v2_cancel_oauth_login');
+    } catch { /* best effort */ }
+  }
+
+  async function handleCancelSystemBrowserLogin() {
+    try {
+      await invoke('v2_cancel_system_browser_oauth');
+    } catch { /* best effort */ }
+  }
+
+  async function handleCancelAndTrySystemBrowser() {
+    showCaptchaHint = false;
+    await handleCancelOAuthLogin();
+    handleSystemBrowserLogin();
   }
 
   async function handleOAuthLogin() {
@@ -231,10 +261,19 @@
 
     isOAuthLoading = true;
     error = null;
+    showCaptchaHint = false;
 
     try {
       await setTosAcceptance(true);
     } catch { /* continue */ }
+
+    // Start captcha hint timer (25s)
+    clearCaptchaHintTimer();
+    captchaHintTimerId = setTimeout(() => {
+      if (isOAuthLoading) {
+        showCaptchaHint = true;
+      }
+    }, 25000);
 
     try {
       const response = await invoke<OAuthResponse>('v2_start_oauth_login');
@@ -245,6 +284,7 @@
       error = formatErrorMessage(err);
     } finally {
       isOAuthLoading = false;
+      clearCaptchaHintTimer();
     }
   }
 
@@ -341,9 +381,34 @@
             {/if}
           </button>
 
+          {#if isOAuthLoading}
+            <p class="cancel-link">
+              <small>
+                <button type="button" class="link-button" onclick={handleCancelOAuthLogin}>
+                  {$t('actions.cancel')}
+                </button>
+              </small>
+            </p>
+          {/if}
+
+          {#if showCaptchaHint}
+            <div class="captcha-hint">
+              <p>{$t('auth.captchaHint')}</p>
+              <button type="button" class="link-button captcha-hint-action" onclick={handleCancelAndTrySystemBrowser}>
+                {$t('auth.trySystemBrowser')}
+              </button>
+            </div>
+          {/if}
+
           <p class="system-browser-link">
             {#if isSystemBrowserLoading}
-              <small><span class="link-button">{$t('auth.systemBrowserLoading')}</span></small>
+              <small>
+                <span class="link-button">{$t('auth.systemBrowserLoading')}</span>
+                &nbsp;
+                <button type="button" class="link-button" onclick={handleCancelSystemBrowserLogin}>
+                  {$t('actions.cancel')}
+                </button>
+              </small>
             {:else}
               <small>
                 <button
@@ -616,6 +681,31 @@
   .system-browser-link {
     margin-top: -8px;
     text-align: center;
+  }
+
+  .cancel-link {
+    margin-top: -12px;
+    text-align: center;
+  }
+
+  .captcha-hint {
+    text-align: center;
+    padding: 12px 16px;
+    background-color: var(--warning-bg);
+    border: 1px solid var(--warning-border);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .captcha-hint p {
+    margin: 0 0 8px 0;
+  }
+
+  .captcha-hint-action {
+    font-weight: 500;
+    color: var(--accent-primary) !important;
   }
 
   .offline-link {

@@ -1446,6 +1446,8 @@
     "oauthLoading": "Browser wird geöffnet...",
     "systemBrowserButton": "Stattdessen Systembrowser verwenden",
     "systemBrowserLoading": "Warte auf Anmeldung...",
+    "captchaHint": "Probleme mit dem Captcha? Der eingebaute Browser unterstützt es möglicherweise nicht gut.",
+    "trySystemBrowser": "Abbrechen und Systembrowser verwenden",
     "activeSubscriptionRequired": "QBZ erfordert ein aktives Qobuz™-Abonnement. Ihre Anmeldedaten werden direkt an Qobuz™ gesendet.",
     "APIUse": "Diese Anwendung verwendet die Qobuz-API, ist jedoch nicht von Qobuz zertifiziert."
   },

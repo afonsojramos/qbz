@@ -1446,6 +1446,8 @@
     "oauthLoading": "Ouverture du navigateur...",
     "systemBrowserButton": "Utiliser votre navigateur système",
     "systemBrowserLoading": "En attente de connexion...",
+    "captchaHint": "Des difficultés avec le captcha ? Le navigateur intégré peut ne pas bien le gérer.",
+    "trySystemBrowser": "Annuler et utiliser votre navigateur système",
     "activeSubscriptionRequired": "QBZ requiert un abonnement à Qobuz™ actif. Vos identifiants sont directement envoyés à Qobuz™.",
     "APIUse": "Cette application utilise l'API Qobuz™ mais n'est pas certifiée par Qobuz™."
   },
