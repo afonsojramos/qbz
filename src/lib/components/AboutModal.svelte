@@ -99,7 +99,7 @@
             <span class="label">{$t('about.buildInfo.version')}</span>
             <span class="value">{appVersion}</span>
             <span class="label">{$t('about.buildInfo.codename')}</span>
-            <span class="value codename">Bye bye plain auth</span>
+            <span class="value codename">Hardening playback</span>
             <span class="label">{$t('about.buildInfo.license')}</span>
             <span class="value">MIT</span>
             <span class="label">{$t('about.buildInfo.license')}</span>
@@ -180,6 +180,11 @@
             <button class="contributor-link" onclick={() => handleOpenUrl('https://github.com/GwendalBeaumont')}>
               <img src="https://github.com/GwendalBeaumont.png?size=28" alt="GwendalBeaumont" class="contributor-avatar" />
               GwendalBeaumont
+              <ExternalLink size={10} />
+            </button>
+            <button class="contributor-link" onclick={() => handleOpenUrl('https://github.com/AdamArstall')}>
+              <img src="https://github.com/AdamArstall.png?size=28" alt="AdamArstall" class="contributor-avatar" />
+              AdamArstall
               <ExternalLink size={10} />
             </button>
           </div>
