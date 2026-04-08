@@ -676,8 +676,13 @@ async fn download_with_backoff(
     ))
 }
 
+/// Max concurrent segment downloads for CMAF prefetch.
+/// Conservative to avoid CDN rate limiting (Qobuz uses Akamai).
+const CMAF_PREFETCH_CONCURRENCY: usize = 3;
+
 /// Full CMAF download for prefetch/cache — downloads ALL segments, decrypts, returns FLAC bytes.
 /// Unlike streaming, this blocks until complete, but produces data suitable for cache insertion.
+/// Segments are downloaded concurrently (up to CMAF_PREFETCH_CONCURRENCY) for speed.
 async fn try_cmaf_full_download(
     bridge: &CoreBridge,
     track_id: u64,
@@ -693,20 +698,50 @@ async fn try_cmaf_full_download(
 
     let total_size: usize = setup.flac_header.len()
         + setup.segment_table.iter().map(|s| s.byte_len as usize).sum::<usize>();
+
+    // Download all segments concurrently in batches
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(CMAF_PREFETCH_CONCURRENCY));
+    let seg_indices: Vec<u8> = (1..=setup.n_segments).collect();
+    let mut handles = Vec::with_capacity(seg_indices.len());
+
+    for seg_idx in seg_indices {
+        let sem = semaphore.clone();
+        let client = client.clone();
+        let seg_url = setup.url_template.replace("$SEGMENT$", &seg_idx.to_string());
+
+        handles.push(tokio::spawn(async move {
+            let permit = sem.acquire_owned().await.map_err(|e| format!("semaphore: {}", e))?;
+            let seg_data = client
+                .get(&seg_url)
+                .header("User-Agent", "Mozilla/5.0")
+                .send().await
+                .map_err(|e| format!("CMAF prefetch seg {} fetch: {}", seg_idx, e))?
+                .bytes().await
+                .map_err(|e| format!("CMAF prefetch seg {} read: {}", seg_idx, e))?;
+            // Cooldown before releasing the slot — keeps requests spaced out
+            // to stay under CDN rate limits (most use 1s windows)
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            drop(permit);
+            Ok::<(u8, Vec<u8>), String>((seg_idx, seg_data.to_vec()))
+        }));
+    }
+
+    // Collect results and sort by segment index to preserve order
+    let mut segments: Vec<(u8, Vec<u8>)> = Vec::with_capacity(handles.len());
+    for handle in handles {
+        let (idx, data) = handle.await
+            .map_err(|e| format!("CMAF prefetch task panic: {}", e))?
+            .map_err(|e| format!("CMAF prefetch download failed: {}", e))?;
+        segments.push((idx, data));
+    }
+    segments.sort_by_key(|(idx, _)| *idx);
+
+    // Decrypt and assemble in order
     let mut output = Vec::with_capacity(total_size);
     output.extend_from_slice(&setup.flac_header);
 
-    for seg_idx in 1..=setup.n_segments {
-        let seg_url = setup.url_template.replace("$SEGMENT$", &seg_idx.to_string());
-        let seg_data = client
-            .get(&seg_url)
-            .header("User-Agent", "Mozilla/5.0")
-            .send().await
-            .map_err(|e| format!("CMAF prefetch seg {} fetch: {}", seg_idx, e))?
-            .bytes().await
-            .map_err(|e| format!("CMAF prefetch seg {} read: {}", seg_idx, e))?;
-
-        let crypto = qbz_cmaf::parse_segment_crypto(&seg_data)
+    for (seg_idx, seg_data) in &segments {
+        let crypto = qbz_cmaf::parse_segment_crypto(seg_data)
             .map_err(|e| format!("CMAF prefetch seg {} parse: {}", seg_idx, e))?;
 
         let mut data_pos = crypto.data_offset;
@@ -728,13 +763,14 @@ async fn try_cmaf_full_download(
     }
 
     log::info!(
-        "[V2/CMAF-PREFETCH] Complete: track {} ({:.2} MB FLAC, expected {:.2} MB, segments 1..{}, table={} entries, n_segments={})",
+        "[V2/CMAF-PREFETCH] Complete: track {} ({:.2} MB FLAC, expected {:.2} MB, segments 1..{}, table={} entries, n_segments={}, concurrency={})",
         track_id,
         output.len() as f64 / (1024.0 * 1024.0),
         total_size as f64 / (1024.0 * 1024.0),
         setup.n_segments - 1,
         setup.segment_table.len(),
-        setup.n_segments
+        setup.n_segments,
+        CMAF_PREFETCH_CONCURRENCY,
     );
     Ok(output)
 }
