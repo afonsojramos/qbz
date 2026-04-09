@@ -102,6 +102,22 @@ pub async fn run(mut config: DaemonConfig) -> Result<(), String> {
     // Start playback state polling loop (broadcasts to event bus)
     spawn_playback_loop(daemon.core.clone(), daemon.event_bus.clone());
 
+    // Register mDNS service for LAN discovery
+    let _mdns_handle = if config.mdns.enabled {
+        match register_mdns(&config) {
+            Ok(handle) => {
+                log::info!("[qbzd] mDNS registered: _qbz._tcp on port {}", config.server.port);
+                Some(handle)
+            }
+            Err(e) => {
+                log::warn!("[qbzd] mDNS registration failed: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     log::info!(
         "[qbzd] Daemon ready on {}:{}",
         config.server.bind,
@@ -193,6 +209,36 @@ fn load_oauth_token() -> Option<String> {
             None
         }
     }
+}
+
+/// Register the daemon as a `_qbz._tcp` mDNS service for LAN discovery.
+fn register_mdns(config: &DaemonConfig) -> Result<mdns_sd::ServiceDaemon, String> {
+    let mdns = mdns_sd::ServiceDaemon::new()
+        .map_err(|e| format!("mDNS daemon error: {}", e))?;
+
+    let service_name = if config.mdns.name.is_empty() {
+        hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "qbzd".to_string())
+    } else {
+        config.mdns.name.clone()
+    };
+
+    let service_info = mdns_sd::ServiceInfo::new(
+        "_qbz._tcp.local.",
+        &service_name,
+        &format!("{}.", hostname::get().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "localhost".to_string())),
+        "",
+        config.server.port,
+        None,
+    )
+    .map_err(|e| format!("mDNS service info error: {}", e))?;
+
+    mdns.register(service_info)
+        .map_err(|e| format!("mDNS register error: {}", e))?;
+
+    Ok(mdns)
 }
 
 /// Spawn the playback state polling loop.

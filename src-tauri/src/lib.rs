@@ -59,6 +59,7 @@ pub mod tray;
 pub mod updates;
 pub mod user_data;
 pub mod visualizer;
+pub mod qbzd_discovery;
 
 use rustls::crypto::{aws_lc_rs, CryptoProvider};
 use std::sync::Arc;
@@ -756,6 +757,7 @@ pub fn run() {
         ))
         .manage(core_bridge::CoreBridgeState::new())
         .manage(commands_v2::OAuthCancelState::new())
+        .manage(qbzd_discovery::QbzdDiscoveryState::new())
         .manage(runtime::RuntimeManagerState::new())
         .manage(qconnect_service::QconnectServiceState::new())
         .manage(user_data_paths)
@@ -1224,6 +1226,9 @@ pub fn run() {
             commands_v2::v2_start_system_browser_oauth,
             commands_v2::v2_cancel_oauth_login,
             commands_v2::v2_cancel_system_browser_oauth,
+            qbzd_discovery::v2_qbzd_start_discovery,
+            qbzd_discovery::v2_qbzd_stop_discovery,
+            qbzd_discovery::v2_qbzd_get_devices,
             commands_v2::v2_get_user_info,
             commands_v2::v2_save_credentials,
             commands_v2::v2_clear_saved_credentials,

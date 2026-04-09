@@ -44,6 +44,10 @@ log = { workspace = true }
 env_logger = "0.11"
 sysinfo = "0.34"
 
+# mDNS discovery
+mdns-sd = "0.11"
+hostname = "0.4"
+
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }
 
