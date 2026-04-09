@@ -20,6 +20,15 @@ export function isRemote(): boolean {
   return getTarget().type === 'qbzd';
 }
 
+/**
+ * Guard for local-only operations. Returns true if we should skip.
+ * Use at the start of any function that only makes sense locally
+ * (offline cache, window settings, visualizer, etc.)
+ */
+export function skipIfRemote(): boolean {
+  return getTarget().type === 'qbzd';
+}
+
 /** Fetch from remote API (GET), or null if local */
 export async function remoteGetOrNull<T>(path: string): Promise<T | null> {
   if (!isRemote()) return null;

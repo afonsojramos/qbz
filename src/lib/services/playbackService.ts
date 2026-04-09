@@ -12,7 +12,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { get } from 'svelte/store';
 import { t } from '$lib/i18n';
-import { cmdStop, cmdPlayTrack } from '$lib/services/commandRouter';
+import { cmdStop, cmdPlayTrack, skipIfRemote } from '$lib/services/commandRouter';
 import { getTarget } from '$lib/stores/playbackTargetStore';
 import { remotePost } from '$lib/services/remoteApi';
 import { getUserItem, setUserItem } from '$lib/utils/userStorage';
@@ -488,6 +488,7 @@ export async function playTrack(
  * Update system media controls metadata (V2)
  */
 export async function updateMediaMetadata(metadata: MediaMetadata): Promise<void> {
+  if (skipIfRemote()) return;
   try {
     const coverUrl = normalizeCoverUrlForMetadata(metadata.coverUrl);
     await invoke('v2_set_media_metadata', {
@@ -569,6 +570,7 @@ export async function showTrackNotification(
   bitDepth?: number,
   sampleRate?: number
 ): Promise<void> {
+  if (skipIfRemote()) return;
   // Skip if system notifications are disabled
   if (!systemNotificationsEnabled) {
     return;
@@ -659,6 +661,7 @@ export async function updateListenBrainzNowPlaying(
   trackId: number,
   isrc?: string
 ): Promise<void> {
+  if (skipIfRemote()) return;
   // Check if ListenBrainz is connected and enabled
   const status = await getListenBrainzStatus();
   if (!status?.connected || !status?.enabled) return;
@@ -750,6 +753,7 @@ export async function updateListenBrainzNowPlaying(
  * Call this when transitioning from offline to online
  */
 export async function flushListenBrainzQueue(): Promise<number> {
+  if (skipIfRemote()) return 0;
   // Check if ListenBrainz is connected and enabled
   const status = await getListenBrainzStatus();
   if (!status?.connected || !status?.enabled) return 0;
@@ -782,6 +786,7 @@ export async function updateLastfmNowPlaying(
   durationSecs: number,
   trackId: number
 ): Promise<void> {
+  if (skipIfRemote()) return;
   // Check if scrobbling is enabled
   const scrobblingEnabled = getUserItem('qbz-lastfm-scrobbling') !== 'false';
   const sessionKey = getUserItem('qbz-lastfm-session-key');
@@ -848,6 +853,7 @@ export async function updateLastfmNowPlaying(
  * Call this when transitioning from offline to online
  */
 export async function flushScrobbleQueue(): Promise<{ sent: number; failed: number }> {
+  if (skipIfRemote()) return { sent: 0, failed: 0 };
   // Check if scrobbling is enabled
   const scrobblingEnabled = getUserItem('qbz-lastfm-scrobbling') !== 'false';
   const sessionKey = getUserItem('qbz-lastfm-session-key');
