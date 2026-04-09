@@ -217,28 +217,35 @@ async fn try_auto_login(core: &QbzCore<DaemonAdapter>) -> Option<u64> {
     }
 }
 
-/// Load OAuth token from system keyring.
-/// Uses the same service/key as the desktop app so credentials are shared.
+/// Load OAuth token — tries keyring first, then file fallback.
 fn load_oauth_token() -> Option<String> {
     const SERVICE: &str = "qbz-player";
     const KEY: &str = "qobuz-oauth-token";
 
-    let entry = keyring::Entry::new(SERVICE, KEY).ok()?;
-    match entry.get_password() {
-        Ok(token) if !token.is_empty() => {
-            log::info!("[qbzd] OAuth token loaded from keyring");
-            Some(token)
-        }
-        Ok(_) => None,
-        Err(keyring::Error::NoEntry) => {
-            log::debug!("[qbzd] No OAuth token in keyring");
-            None
-        }
-        Err(e) => {
-            log::warn!("[qbzd] Keyring access failed: {}", e);
-            None
+    // Try keyring first
+    if let Ok(entry) = keyring::Entry::new(SERVICE, KEY) {
+        match entry.get_password() {
+            Ok(token) if !token.is_empty() => {
+                log::info!("[qbzd] OAuth token loaded from keyring");
+                return Some(token);
+            }
+            Ok(_) => {}
+            Err(keyring::Error::NoEntry) => {
+                log::debug!("[qbzd] No OAuth token in keyring");
+            }
+            Err(e) => {
+                log::warn!("[qbzd] Keyring access failed: {}", e);
+            }
         }
     }
+
+    // Fallback: try file
+    if let Some(token) = crate::login::load_token_from_file() {
+        log::info!("[qbzd] OAuth token loaded from file fallback");
+        return Some(token);
+    }
+
+    None
 }
 
 /// Register the daemon as a `_qbz._tcp` mDNS service for LAN discovery.

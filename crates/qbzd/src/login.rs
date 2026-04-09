@@ -114,19 +114,54 @@ pub async fn interactive_login() -> Result<(), String> {
     Ok(())
 }
 
-/// Save OAuth token to system keyring (same service/key as desktop app).
+/// Save OAuth token — tries keyring first, falls back to encrypted file.
 fn save_token_to_keyring(token: &str) -> Result<(), String> {
     const SERVICE: &str = "qbz-player";
     const KEY: &str = "qobuz-oauth-token";
 
-    let entry = keyring::Entry::new(SERVICE, KEY)
-        .map_err(|e| format!("Keyring error: {}", e))?;
-    entry
-        .set_password(token)
-        .map_err(|e| format!("Failed to save to keyring: {}", e))?;
+    // Try keyring first
+    match keyring::Entry::new(SERVICE, KEY) {
+        Ok(entry) => match entry.set_password(token) {
+            Ok(()) => {
+                println!("Token saved to system keyring");
+                return Ok(());
+            }
+            Err(e) => {
+                println!("Keyring unavailable ({}), using file fallback", e);
+            }
+        },
+        Err(e) => {
+            println!("Keyring unavailable ({}), using file fallback", e);
+        }
+    }
 
-    println!("Token saved to system keyring (service: {}, key: {})", SERVICE, KEY);
+    // Fallback: save to file
+    save_token_to_file(token)
+}
+
+fn token_file_path() -> Option<std::path::PathBuf> {
+    dirs::data_dir().map(|d| d.join("qbz").join(".oauth-token"))
+}
+
+fn save_token_to_file(token: &str) -> Result<(), String> {
+    let path = token_file_path().ok_or("Cannot determine data directory")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(&path, token).map_err(|e| format!("Failed to write token file: {}", e))?;
+    // Restrict permissions on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    println!("Token saved to {}", path.display());
     Ok(())
+}
+
+pub fn load_token_from_file() -> Option<String> {
+    let path = token_file_path()?;
+    std::fs::read_to_string(&path).ok().filter(|t| !t.trim().is_empty())
 }
 
 /// Detect the primary LAN IP address of this machine.
