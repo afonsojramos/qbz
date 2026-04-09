@@ -48,54 +48,20 @@ pub async fn play_track(
 
     log::info!("[qbzd/play] Playing track {} (quality: {:?})", req.track_id, quality);
 
-    // Get stream URL from Qobuz
-    let stream_url = daemon.core.get_stream_url(req.track_id, quality)
-        .await
-        .map_err(|e| format!("Failed to get stream URL: {}", e))?;
+    // Stop current playback
+    let _ = daemon.core.stop();
 
-    log::info!("[qbzd/play] Stream: {}Hz, {:?}bit",
-        (stream_url.sampling_rate * 1000.0) as u32,
-        stream_url.bit_depth,
-    );
-
-    // Download the audio
-    let http = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP client error: {}", e))?;
-
-    let response = http
-        .get(&stream_url.url)
-        .send()
-        .await
-        .map_err(|e| format!("Download failed: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Download HTTP {}", response.status()));
-    }
-
-    let audio_data = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Read failed: {}", e))?
-        .to_vec();
-
-    log::info!("[qbzd/play] Downloaded {} bytes, feeding to player", audio_data.len());
+    // Download audio
+    let audio_data = crate::daemon::download_track(&daemon, req.track_id).await?;
 
     // Feed to player
-    let player = daemon.core.player();
-    player
+    daemon.core.player()
         .play_data(audio_data, req.track_id)
         .map_err(|e| format!("Player error: {}", e))?;
-
-    // Cache the audio
-    daemon.audio_cache.insert(req.track_id, vec![]); // TODO: cache actual data
 
     Ok(Json(serde_json::json!({
         "playing": true,
         "track_id": req.track_id,
-        "sample_rate": stream_url.sampling_rate,
-        "bit_depth": stream_url.bit_depth,
     })))
 }
 
@@ -156,20 +122,10 @@ pub async fn play_album(
         _ => qbz_models::Quality::HiRes,
     };
 
-    let stream_url = daemon.core.get_stream_url(first_track_id, quality).await
-        .map_err(|e| format!("Stream URL failed: {}", e))?;
+    // Stop current playback
+    let _ = daemon.core.stop();
 
-    let http = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP error: {}", e))?;
-
-    let audio_data = http.get(&stream_url.url).send().await
-        .map_err(|e| format!("Download failed: {}", e))?
-        .bytes().await
-        .map_err(|e| format!("Read failed: {}", e))?
-        .to_vec();
-
+    let audio_data = crate::daemon::download_track(&daemon, first_track_id).await?;
     daemon.core.player().play_data(audio_data, first_track_id)
         .map_err(|e| format!("Player error: {}", e))?;
 

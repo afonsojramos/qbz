@@ -126,8 +126,8 @@ pub async fn run(mut config: DaemonConfig) -> Result<(), String> {
     // Start playback state polling loop (broadcasts to event bus + MPRIS)
     spawn_playback_loop(daemon.core.clone(), daemon.event_bus.clone(), mpris_handle.clone());
 
-    // Start auto-advance: when a track ends, play the next one in the queue
-    spawn_auto_advance(daemon.clone());
+    // Playback orchestrator: auto-advance, gapless pre-queue, repeat modes
+    spawn_playback_orchestrator(daemon.clone());
 
     // Spawn MPRIS metadata updater (listens to event bus for TrackStarted)
     if let Some(ref mc) = mpris_handle {
@@ -251,69 +251,130 @@ fn load_oauth_token() -> Option<String> {
     None
 }
 
-/// Auto-advance: monitors playback and plays next track when current ends.
-fn spawn_auto_advance(daemon: Arc<DaemonCore>) {
+/// Playback orchestrator: handles auto-advance, gapless, and repeat.
+/// This replaces the frontend's setOnTrackEnded + setGaplessGetNextTrackId
+/// callbacks since the daemon has no frontend.
+fn spawn_playback_orchestrator(daemon: Arc<DaemonCore>) {
     tokio::spawn(async move {
         let mut last_track_id: u64 = 0;
         let mut was_playing = false;
+        let mut gapless_queued_for: u64 = 0; // Track ID we've already queued gapless for
 
         loop {
             let player = daemon.core.player();
             let state = &player.state;
             let track_id = state.current_track_id();
             let is_playing = state.is_playing();
-            let position = state.current_position();
-            let duration = state.duration();
+            let gapless_ready = state.is_gapless_ready();
 
-            // Detect track end: was playing, now stopped, and position >= duration
-            let track_ended = was_playing && !is_playing && track_id == 0 && last_track_id != 0;
+            // === GAPLESS PRE-QUEUE ===
+            // When player signals gapless_ready (5s before track end),
+            // download next track and queue it for seamless transition.
+            if gapless_ready && track_id != 0 && gapless_queued_for != track_id {
+                gapless_queued_for = track_id;
 
-            // Also detect when position reaches duration while still "playing"
-            let position_ended = is_playing && duration > 0 && position >= duration && track_id != 0;
+                let queue_state = daemon.core.get_queue_state().await;
+                let repeat_mode = queue_state.repeat;
 
-            if track_ended || (last_track_id != 0 && track_id == 0 && was_playing) {
-                log::info!("[qbzd/auto-advance] Track {} ended, advancing...", last_track_id);
+                // Determine next track ID (same logic as desktop's setGaplessGetNextTrackId)
+                let next_id = if repeat_mode == qbz_models::RepeatMode::One {
+                    Some(track_id) // Repeat same track
+                } else {
+                    // Peek at upcoming queue
+                    let upcoming = daemon.core.peek_upcoming(2).await;
+                    upcoming.first()
+                        .filter(|t| t.id != track_id)
+                        .or_else(|| upcoming.get(1).filter(|t| t.id != track_id))
+                        .map(|t| t.id)
+                };
 
-                // Get next track from queue
-                if let Some(next_track) = daemon.core.next_track().await {
-                    let next_id = next_track.id;
-                    log::info!("[qbzd/auto-advance] Next: {} - {}", next_track.artist, next_track.title);
-
-                    // Download and play
-                    let quality = qbz_models::Quality::HiRes;
-                    match daemon.core.get_stream_url(next_id, quality).await {
-                        Ok(stream_url) => {
-                            let http = reqwest::Client::builder()
-                                .connect_timeout(std::time::Duration::from_secs(10))
-                                .build();
-                            if let Ok(client) = http {
-                                if let Ok(resp) = client.get(&stream_url.url).send().await {
-                                    if let Ok(bytes) = resp.bytes().await {
-                                        let data = bytes.to_vec();
-                                        log::info!("[qbzd/auto-advance] Downloaded {} bytes", data.len());
-                                        if let Err(e) = daemon.core.player().play_data(data, next_id) {
-                                            log::error!("[qbzd/auto-advance] Play failed: {}", e);
-                                        }
-                                    }
-                                }
+                if let Some(next_id) = next_id {
+                    log::info!("[qbzd/gapless] Pre-queuing track {} for gapless", next_id);
+                    if let Ok(audio_data) = download_track(&daemon, next_id).await {
+                        match player.play_next(audio_data, next_id) {
+                            Ok(()) => {
+                                log::info!("[qbzd/gapless] Track {} queued for seamless transition", next_id);
+                            }
+                            Err(e) => {
+                                log::warn!("[qbzd/gapless] play_next failed: {}", e);
                             }
                         }
-                        Err(e) => {
-                            log::error!("[qbzd/auto-advance] Stream URL failed: {}", e);
-                        }
+                    }
+                }
+            }
+
+            // === AUTO-ADVANCE ===
+            // When track ends (was playing, now track_id is 0), advance queue.
+            // This handles the case when gapless wasn't available or failed.
+            let track_ended = was_playing && !is_playing && track_id == 0 && last_track_id != 0;
+
+            if track_ended {
+                let queue_state = daemon.core.get_queue_state().await;
+                let repeat_mode = queue_state.repeat;
+
+                // Repeat-one: replay the same track
+                if repeat_mode == qbz_models::RepeatMode::One {
+                    log::info!("[qbzd/advance] Repeat-one: replaying track {}", last_track_id);
+                    if let Ok(audio_data) = download_track(&daemon, last_track_id).await {
+                        let _ = player.play_data(audio_data, last_track_id);
                     }
                 } else {
-                    log::info!("[qbzd/auto-advance] Queue empty, playback stopped");
+                    // Normal advance
+                    let previous_id = last_track_id;
+                    if let Some(next_track) = daemon.core.next_track().await {
+                        // Defensive: if same track returned and not repeat-one, try one more
+                        let final_track = if next_track.id == previous_id {
+                            log::warn!("[qbzd/advance] Same track returned, forcing extra advance");
+                            daemon.core.next_track().await.unwrap_or(next_track)
+                        } else {
+                            next_track
+                        };
+
+                        log::info!("[qbzd/advance] Next: {} - {}", final_track.artist, final_track.title);
+                        if let Ok(audio_data) = download_track(&daemon, final_track.id).await {
+                            let _ = player.play_data(audio_data, final_track.id);
+                        }
+                    } else {
+                        log::info!("[qbzd/advance] Queue empty, playback stopped");
+                    }
                 }
+                gapless_queued_for = 0;
+            }
+
+            // Reset gapless tracking on track change
+            if track_id != last_track_id {
+                gapless_queued_for = 0;
             }
 
             last_track_id = track_id;
             was_playing = is_playing;
 
-            // Poll rate: check every 500ms
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
     });
+}
+
+/// Download a track's audio from Qobuz. Returns the raw audio bytes.
+pub async fn download_track(daemon: &DaemonCore, track_id: u64) -> Result<Vec<u8>, String> {
+    let quality = qbz_models::Quality::HiRes; // TODO: use configured quality
+    let stream_url = daemon.core.get_stream_url(track_id, quality).await
+        .map_err(|e| format!("Stream URL failed for {}: {}", track_id, e))?;
+
+    let http = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let data = http.get(&stream_url.url).send().await
+        .map_err(|e| format!("Download failed for {}: {}", track_id, e))?
+        .bytes().await
+        .map_err(|e| format!("Read failed for {}: {}", track_id, e))?
+        .to_vec();
+
+    log::info!("[qbzd/download] Track {} downloaded ({} bytes, {:.0}kHz/{}bit)",
+        track_id, data.len(), stream_url.sampling_rate, stream_url.bit_depth.unwrap_or(0));
+
+    Ok(data)
 }
 
 /// Register the daemon as a `_qbz._tcp` mDNS service for LAN discovery.
