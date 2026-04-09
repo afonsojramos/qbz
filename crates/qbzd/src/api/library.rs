@@ -114,14 +114,9 @@ pub async fn add_folder(
     Ok(Json(serde_json::json!({"path": req.path, "status": "added"})))
 }
 
-/// Trigger a library scan on all registered folders.
+/// Trigger a full library scan on all registered folders.
+/// Scans for audio files, extracts metadata, and inserts into the library DB.
 /// Runs in background, returns immediately.
-///
-/// Note: Full metadata extraction requires the MetadataExtractor from
-/// src-tauri/src/library/ which is not yet in the qbz-library crate.
-/// This endpoint uses the scanner to find audio files and logs results.
-/// Full metadata-aware scanning will be available when MetadataExtractor
-/// is moved to the crate.
 pub async fn start_scan(daemon: Arc<DaemonCore>) -> Result<Json<serde_json::Value>, String> {
     let user = daemon.user.read().await;
     let session = user.as_ref().ok_or("No active session")?;
@@ -137,11 +132,20 @@ pub async fn start_scan(daemon: Arc<DaemonCore>) -> Result<Json<serde_json::Valu
     }
 
     let folder_count = folders.len();
+    let data_dir = session.data_dir.clone();
 
     // Spawn scan in background
     tokio::task::spawn_blocking(move || {
         let scanner = qbz_library::LibraryScanner::new();
-        let mut total_files = 0usize;
+        let db = match qbz_library::LibraryDatabase::open(&data_dir.join("library.db")) {
+            Ok(db) => db,
+            Err(e) => {
+                log::error!("[qbzd] Scan: failed to open DB: {}", e);
+                return;
+            }
+        };
+
+        let mut total_tracks = 0usize;
 
         for folder in &folders {
             let path = std::path::Path::new(folder);
@@ -152,19 +156,30 @@ pub async fn start_scan(daemon: Arc<DaemonCore>) -> Result<Json<serde_json::Valu
             log::info!("[qbzd] Scanning: {}", folder);
             match scanner.scan_directory(path) {
                 Ok(result) => {
-                    let count = result.audio_files.len();
-                    total_files += count;
                     log::info!(
-                        "[qbzd] Scanned {}: {} audio files, {} CUE files",
-                        folder, count, result.cue_files.len()
+                        "[qbzd] Found {} audio files in {}",
+                        result.audio_files.len(), folder
                     );
+                    for file_path in &result.audio_files {
+                        match qbz_library::MetadataExtractor::extract(file_path) {
+                            Ok(track) => {
+                                if let Err(e) = db.insert_track(&track) {
+                                    log::debug!("[qbzd] Insert track: {}", e);
+                                }
+                                total_tracks += 1;
+                            }
+                            Err(e) => {
+                                log::debug!("[qbzd] Metadata extraction failed for {:?}: {}", file_path, e);
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     log::error!("[qbzd] Scan failed for {}: {}", folder, e);
                 }
             }
         }
-        log::info!("[qbzd] Library scan complete: {} audio files found", total_files);
+        log::info!("[qbzd] Library scan complete: {} tracks imported", total_tracks);
     });
 
     Ok(Json(serde_json::json!({
