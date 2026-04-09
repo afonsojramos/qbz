@@ -114,6 +114,65 @@ pub async fn add_folder(
     Ok(Json(serde_json::json!({"path": req.path, "status": "added"})))
 }
 
+/// Trigger a library scan on all registered folders.
+/// Runs in background, returns immediately.
+///
+/// Note: Full metadata extraction requires the MetadataExtractor from
+/// src-tauri/src/library/ which is not yet in the qbz-library crate.
+/// This endpoint uses the scanner to find audio files and logs results.
+/// Full metadata-aware scanning will be available when MetadataExtractor
+/// is moved to the crate.
+pub async fn start_scan(daemon: Arc<DaemonCore>) -> Result<Json<serde_json::Value>, String> {
+    let user = daemon.user.read().await;
+    let session = user.as_ref().ok_or("No active session")?;
+    let db_path = session.data_dir.join("library.db");
+
+    let db = qbz_library::LibraryDatabase::open(&db_path)
+        .map_err(|e| format!("Library DB error: {}", e))?;
+    let folders = db.get_folders()
+        .map_err(|e| format!("Failed to get folders: {}", e))?;
+
+    if folders.is_empty() {
+        return Ok(Json(serde_json::json!({"status": "no_folders", "message": "No folders configured. Add folders first."})));
+    }
+
+    let folder_count = folders.len();
+
+    // Spawn scan in background
+    tokio::task::spawn_blocking(move || {
+        let scanner = qbz_library::LibraryScanner::new();
+        let mut total_files = 0usize;
+
+        for folder in &folders {
+            let path = std::path::Path::new(folder);
+            if !path.exists() {
+                log::warn!("[qbzd] Scan: folder does not exist: {}", folder);
+                continue;
+            }
+            log::info!("[qbzd] Scanning: {}", folder);
+            match scanner.scan_directory(path) {
+                Ok(result) => {
+                    let count = result.audio_files.len();
+                    total_files += count;
+                    log::info!(
+                        "[qbzd] Scanned {}: {} audio files, {} CUE files",
+                        folder, count, result.cue_files.len()
+                    );
+                }
+                Err(e) => {
+                    log::error!("[qbzd] Scan failed for {}: {}", folder, e);
+                }
+            }
+        }
+        log::info!("[qbzd] Library scan complete: {} audio files found", total_files);
+    });
+
+    Ok(Json(serde_json::json!({
+        "status": "scanning",
+        "folders": folder_count,
+    })))
+}
+
 #[derive(Deserialize)]
 pub struct RemoveFolderRequest {
     pub path: String,

@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod daemon;
 mod adapter;
+mod login;
 mod resources;
 mod session;
 
@@ -96,9 +97,10 @@ async fn main() {
     // Handle subcommands
     match cli.command {
         Some(Commands::Login) => {
-            log::info!("Starting interactive login...");
-            // TODO: Phase 1 — OAuth via system browser
-            eprintln!("Login not yet implemented. Use qbzd.toml to configure credentials.");
+            if let Err(e) = login::interactive_login().await {
+                eprintln!("Login failed: {}", e);
+                std::process::exit(1);
+            }
         }
         Some(Commands::Status) => {
             println!("qbzd status: not running (status check requires daemon to be active)");

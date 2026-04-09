@@ -413,6 +413,7 @@ fn build_router(daemon: Arc<DaemonCore>) -> axum::Router {
         .route("/api/library/folders", get(with_daemon!(daemon, library::get_folders)))
         .route("/api/library/folders", post(with_daemon!(daemon, library::add_folder, json)))
         .route("/api/library/folders", delete(with_daemon!(daemon, library::remove_folder, json)))
+        .route("/api/library/scan", post(with_daemon!(daemon, library::start_scan)))
         // Integrations
         .route("/api/integrations/listenbrainz", get(with_daemon!(daemon, integrations::get_listenbrainz_status)))
         .route("/api/integrations/listenbrainz/connect", post(with_daemon!(daemon, integrations::connect_listenbrainz, json)))

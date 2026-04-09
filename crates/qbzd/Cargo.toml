@@ -38,6 +38,10 @@ serde_json = { workspace = true }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 
+# Browser open + URL encoding (for OAuth login)
+open = "5"
+urlencoding = "2"
+
 # System
 dirs = "6"
 log = { workspace = true }
