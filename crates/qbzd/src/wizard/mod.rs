@@ -5,6 +5,9 @@
 //! databases directly (runs without the daemon).
 
 mod audio;
+mod cache;
+mod integrations;
+mod qconnect;
 
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -128,27 +131,9 @@ fn draw_menu(frame: &mut Frame, selected: usize) {
 fn run_section(section: &str) -> Result<(), String> {
     match section {
         "audio" => audio::run_audio_wizard(),
-        "cache" => {
-            println!("\n=== Cache & Resources ===");
-            println!("Edit qbzd.toml [cache] section to configure:");
-            println!("  memory_mb, disk_mb, prefetch_count, prefetch_concurrent");
-            println!("  Set memory_mb = 0 for auto-detect from RAM\n");
-            Ok(())
-        }
-        "integrations" => {
-            println!("\n=== Integrations ===");
-            println!("ListenBrainz: use the HTTP API to connect:");
-            println!("  POST /api/integrations/listenbrainz/connect");
-            println!("  body: {{\"token\": \"your-listenbrainz-token\"}}\n");
-            Ok(())
-        }
-        "qconnect" => {
-            println!("\n=== QConnect ===");
-            println!("Edit qbzd.toml [qconnect] section:");
-            println!("  enabled = true/false");
-            println!("  device_name = \"your-device-name\"\n");
-            Ok(())
-        }
+        "cache" => cache::run_cache_wizard(),
+        "integrations" => integrations::run_integrations_wizard(),
+        "qconnect" => qconnect::run_qconnect_wizard(),
         _ => Err(format!("Unknown section: {}", section)),
     }
 }
