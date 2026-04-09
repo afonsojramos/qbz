@@ -65,3 +65,7 @@ keyring = { version = "3", features = ["async-secret-service", "crypto-rust"] }
 
 # MPRIS media controls (Linux D-Bus, headless)
 souvlaki = "0.8"
+
+# TUI wizard
+ratatui = "0.29"
+crossterm = "0.28"

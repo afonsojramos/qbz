@@ -6,6 +6,7 @@ mod login;
 mod mpris;
 mod qconnect;
 mod resources;
+mod wizard;
 mod session;
 
 use clap::{Parser, Subcommand};
@@ -132,11 +133,10 @@ async fn main() {
             }
         }
         Some(Commands::Setup { section }) => {
-            eprintln!("TUI setup wizard not yet implemented.");
-            if let Some(s) = section {
-                eprintln!("Requested section: {}", s);
+            if let Err(e) = wizard::run(section.as_deref()) {
+                eprintln!("Setup wizard error: {}", e);
+                std::process::exit(1);
             }
-            eprintln!("Use the HTTP API or qbzd.toml to configure for now.");
         }
         Some(Commands::Token) => {
             if cfg.server.token == "auto" {
