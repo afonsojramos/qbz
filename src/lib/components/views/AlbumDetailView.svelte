@@ -201,6 +201,23 @@
     multiSelectedIds = next;
   }
 
+  function toggleSelectAll() {
+    if (!album?.tracks) return;
+    const allIds = album.tracks.map(track => track.id);
+    if (multiSelectedIds.size === allIds.length) {
+      multiSelectedIds = new Set();
+    } else {
+      multiSelectedIds = new Set(allIds);
+    }
+  }
+
+  const selectAllState = $derived(
+    !album?.tracks || album.tracks.length === 0 ? 'none' as const
+    : multiSelectedIds.size === 0 ? 'none' as const
+    : multiSelectedIds.size === album.tracks.length ? 'all' as const
+    : 'partial' as const
+  );
+
   function buildAlbumQueueTracks(tracks: Track[]) {
     return tracks.map(trk => ({
       id: trk.id,
@@ -614,6 +631,17 @@
   <div class="track-list">
     <!-- Table Header -->
     <div class="table-header">
+      {#if multiSelectMode}
+        <div class="col-select-all">
+          <input
+            type="checkbox"
+            checked={selectAllState === 'all'}
+            indeterminate={selectAllState === 'partial'}
+            onchange={toggleSelectAll}
+            title={$t('actions.selectAll')}
+          />
+        </div>
+      {/if}
       <div class="col-number">#</div>
       <div class="col-title">{$t('tracklist.title')}</div>
       <div class="col-duration">{$t('tracklist.duration')}</div>
@@ -993,6 +1021,20 @@
     color: var(--text-muted);
     font-weight: 400;
     box-sizing: border-box;
+  }
+
+  .col-select-all {
+    width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .col-select-all input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
   }
 
   .col-number {

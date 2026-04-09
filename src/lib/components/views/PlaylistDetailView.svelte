@@ -1171,6 +1171,15 @@
     multiSelectedKeys = next;
   }
 
+  function toggleSelectAll() {
+    const allKeys = displayTracks.map(track => getTrackKey(track));
+    if (multiSelectedKeys.size === allKeys.length) {
+      multiSelectedKeys = new Set();
+    } else {
+      multiSelectedKeys = new Set(allKeys);
+    }
+  }
+
   async function handleBulkPlayNext() {
     const selected = displayTracks.filter(trk => multiSelectedKeys.has(getTrackKey(trk)));
     const { queueTracks } = buildQueueTracks(selected);
@@ -1461,6 +1470,13 @@
 
     return filtered;
   });
+
+  const selectAllState = $derived(
+    !displayTracks || displayTracks.length === 0 ? 'none' as const
+    : multiSelectedKeys.size === 0 ? 'none' as const
+    : multiSelectedKeys.size === displayTracks.length ? 'all' as const
+    : 'partial' as const
+  );
 
   // Virtual scrolling: total height of the track list
   const trackListTotalHeight = $derived(displayTracks.length * TRACK_ROW_HEIGHT);
@@ -2282,7 +2298,17 @@
         </div>
       {/if}
       <div class="track-list-header">
-        {#if isCustomOrderMode || multiSelectMode}
+        {#if multiSelectMode}
+          <div class="col-select-all">
+            <input
+              type="checkbox"
+              checked={selectAllState === 'all'}
+              indeterminate={selectAllState === 'partial'}
+              onchange={toggleSelectAll}
+              title={$t('actions.selectAll')}
+            />
+          </div>
+        {:else if isCustomOrderMode}
           <div class="col-checkbox"></div>
         {/if}
         <div class="col-number">#</div>
@@ -2834,6 +2860,20 @@
     box-sizing: border-box;
     border-bottom: 1px solid var(--bg-tertiary);
     margin-bottom: 8px;
+  }
+
+  .col-select-all {
+    width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .col-select-all input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
   }
 
   .col-number {

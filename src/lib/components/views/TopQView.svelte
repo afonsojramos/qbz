@@ -126,6 +126,15 @@
     multiSelectedIds = next;
   }
 
+  function toggleSelectAll() {
+    const allIds = filteredTracks.map(track => track.id);
+    if (multiSelectedIds.size === allIds.length) {
+      multiSelectedIds = new Set();
+    } else {
+      multiSelectedIds = new Set(allIds);
+    }
+  }
+
   async function handleBulkPlayNext() {
     const selected = filteredTracks.filter(trk => multiSelectedIds.has(trk.id));
     await invoke('v2_add_tracks_to_queue_next', { tracks: buildQueueTracks(selected) });
@@ -454,6 +463,13 @@
     });
   });
 
+  const selectAllState = $derived(
+    !filteredTracks || filteredTracks.length === 0 ? 'none' as const
+    : multiSelectedIds.size === 0 ? 'none' as const
+    : multiSelectedIds.size === filteredTracks.length ? 'all' as const
+    : 'partial' as const
+  );
+
   let showAlgoTooltip = $state(false);
   let algoTooltipTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -589,6 +605,17 @@
     {:else if result}
       <div class="track-list">
         <div class="track-list-header">
+          {#if multiSelectMode}
+            <div class="col-select-all">
+              <input
+                type="checkbox"
+                checked={selectAllState === 'all'}
+                indeterminate={selectAllState === 'partial'}
+                onchange={toggleSelectAll}
+                title={$t('actions.selectAll')}
+              />
+            </div>
+          {/if}
           <div class="col-number">#</div>
           <div class="col-artwork"></div>
           <div class="col-title">{ $t('tracklist.title') }</div>
@@ -932,6 +959,20 @@
     box-sizing: border-box;
     border-bottom: 1px solid var(--bg-tertiary);
     margin-bottom: 8px;
+  }
+
+  .col-select-all {
+    width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .col-select-all input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
   }
 
   .col-number {

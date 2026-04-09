@@ -407,6 +407,22 @@
     multiSelectedIds = next;
   }
 
+  function toggleSelectAll() {
+    const allIds = visibleTracks.map(track => track.id);
+    if (multiSelectedIds.size === allIds.length) {
+      multiSelectedIds = new Set();
+    } else {
+      multiSelectedIds = new Set(allIds);
+    }
+  }
+
+  const selectAllState = $derived(
+    !visibleTracks || visibleTracks.length === 0 ? 'none' as const
+    : multiSelectedIds.size === 0 ? 'none' as const
+    : multiSelectedIds.size === visibleTracks.length ? 'all' as const
+    : 'partial' as const
+  );
+
   function buildArtistQueueTracks(tracks: typeof topTracks) {
     return tracks
       .filter(trk => !trk.performer?.id || !isBlacklisted(trk.performer.id))
@@ -2041,6 +2057,19 @@
       {#if tracksLoading}
         <div class="tracks-loading">{$t('toast.loadingTracks')}</div>
       {:else}
+        {#if multiSelectMode}
+          <div class="track-list-header">
+            <div class="col-select-all">
+              <input
+                type="checkbox"
+                checked={selectAllState === 'all'}
+                indeterminate={selectAllState === 'partial'}
+                onchange={toggleSelectAll}
+                title={$t('actions.selectAll')}
+              />
+            </div>
+          </div>
+        {/if}
         <div class="tracks-list">
           {#each visibleTracks as track, index}
             {@const isActiveTrack = isPlaybackActive && activeTrackId === track.id}
@@ -4325,6 +4354,37 @@
     color: var(--text-muted);
     font-size: 14px;
     padding: 16px 0;
+  }
+
+  .track-list-header {
+    width: 100%;
+    height: 40px;
+    padding: 0 16px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #666666;
+    font-weight: 400;
+    box-sizing: border-box;
+    border-bottom: 1px solid var(--bg-tertiary);
+    margin-bottom: 8px;
+  }
+
+  .col-select-all {
+    width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .col-select-all input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
   }
 
   .tracks-list {
