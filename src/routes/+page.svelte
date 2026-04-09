@@ -6009,7 +6009,7 @@
     display: flex;
     flex: 1;
     min-width: 0;
-    height: calc(100vh - 148px); /* 104px NowPlayingBar + 44px TitleBar */
+    height: calc(100vh - var(--player-bar-height, 104px) - 44px);
     overflow: hidden;
     position: relative;
   }
@@ -6017,7 +6017,7 @@
   .main-content {
     flex: 1;
     min-width: 0;
-    height: calc(100vh - 148px); /* 104px NowPlayingBar + 44px TitleBar */
+    height: calc(100vh - var(--player-bar-height, 104px) - 44px);
     overflow: hidden; /* Views handle their own scrolling */
     padding-right: 8px; /* Gap between scrollbar and window edge */
     background-color: var(--bg-primary, #0f0f0f);
@@ -6026,7 +6026,7 @@
   /* Adjust heights when title bar is hidden */
   .app.no-titlebar .content-area,
   .app.no-titlebar .main-content {
-    height: calc(100vh - 104px); /* Only 104px NowPlayingBar, no title bar */
+    height: calc(100vh - var(--player-bar-height, 104px));
   }
 
   /* macOS: pad main content to clear native overlay title bar */
