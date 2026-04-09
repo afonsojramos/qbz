@@ -21,11 +21,14 @@ jobs:
       - run: cargo install cargo-zigbuild
 
       - name: Install dev headers
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libdbus-1-dev pkg-config
 
       - name: Build qbzd (x86_64, glibc 2.31)
         working-directory: crates
         run: cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31 -p qbzd
+
+      - name: Strip binary
+        run: strip crates/target/x86_64-unknown-linux-gnu/release/qbzd
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -49,17 +52,30 @@ jobs:
       - name: Install cross-compilation deps
         run: |
           sudo dpkg --add-architecture arm64
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy main universe" | sudo tee /etc/apt/sources.list.d/arm64.list
+          # Use Ubuntu ports for arm64 packages
+          cat <<'SOURCES' | sudo tee /etc/apt/sources.list.d/arm64.list
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates main universe
+          SOURCES
+          # Restrict default sources to amd64
+          sudo sed -i 's/^deb http/deb [arch=amd64] http/' /etc/apt/sources.list
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev:arm64 gcc-aarch64-linux-gnu pkg-config
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            pkg-config \
+            libasound2-dev:arm64 \
+            libdbus-1-dev:arm64
 
       - name: Build qbzd (aarch64, glibc 2.31)
         working-directory: crates
-        run: |
-          export PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu
-          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-          cargo zigbuild --release --target aarch64-unknown-linux-gnu.2.31 -p qbzd
+        env:
+          PKG_CONFIG_SYSROOT_DIR: /usr/aarch64-linux-gnu
+          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+          PKG_CONFIG_ALLOW_CROSS: 1
+        run: cargo zigbuild --release --target aarch64-unknown-linux-gnu.2.31 -p qbzd
+
+      - name: Strip binary
+        run: aarch64-linux-gnu-strip crates/target/aarch64-unknown-linux-gnu/release/qbzd
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -92,7 +108,6 @@ jobs:
           mv artifacts/x86_64/qbzd artifacts/qbzd-linux-x86_64
           mv artifacts/aarch64/qbzd artifacts/qbzd-linux-aarch64
           chmod +x artifacts/qbzd-*
-          # Bundle service files
           tar czf artifacts/qbzd-service-files.tar.gz -C crates/qbzd service-files/
 
       - name: Create release
