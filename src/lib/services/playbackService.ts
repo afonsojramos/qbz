@@ -184,19 +184,18 @@ export async function playTrack(
     let handledRemotely = false;
     const target = getTarget();
 
-    // When controlling a qbzd daemon, skip QConnect handoff entirely.
-    // The HTTP API sends directly to the target daemon.
+    // When controlling a qbzd daemon, send play directly to daemon.
+    // No local stop, no QConnect, no metadata — daemon handles everything.
     if (target.type === 'qbzd') {
-      // Stop local playback engine (if any)
-      try { await invoke('v2_stop_playback'); } catch { /* ignore */ }
-
       await remotePost('/api/playback/play-track', {
         track_id: track.id,
         quality: effectiveQuality(track),
       });
       setIsPlaying(true);
-      handledRemotely = true;
-    } else if (!gaplessTransition && !isLocal && source !== 'plex') {
+      return true;
+    }
+
+    if (!gaplessTransition && !isLocal && source !== 'plex') {
       handledRemotely = await handoffPlayTrackToRemoteRenderer(track.id);
     }
 
