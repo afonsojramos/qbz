@@ -182,8 +182,21 @@ export async function playTrack(
 
   try {
     let handledRemotely = false;
+    const target = getTarget();
 
-    if (!gaplessTransition && !isLocal && source !== 'plex') {
+    // When controlling a qbzd daemon, skip QConnect handoff entirely.
+    // The HTTP API sends directly to the target daemon.
+    if (target.type === 'qbzd') {
+      // Stop local playback engine (if any)
+      try { await invoke('v2_stop_playback'); } catch { /* ignore */ }
+
+      await remotePost('/api/playback/play-track', {
+        track_id: track.id,
+        quality: effectiveQuality(track),
+      });
+      setIsPlaying(true);
+      handledRemotely = true;
+    } else if (!gaplessTransition && !isLocal && source !== 'plex') {
       handledRemotely = await handoffPlayTrackToRemoteRenderer(track.id);
     }
 
