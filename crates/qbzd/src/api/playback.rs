@@ -28,6 +28,77 @@ pub async fn get_playback(daemon: Arc<DaemonCore>) -> Json<serde_json::Value> {
     }))
 }
 
+#[derive(Deserialize)]
+pub struct PlayTrackRequest {
+    pub track_id: u64,
+    pub quality: Option<String>,
+}
+
+/// Play a specific track by ID. Downloads audio from Qobuz and feeds to player.
+pub async fn play_track(
+    daemon: Arc<DaemonCore>,
+    Json(req): Json<PlayTrackRequest>,
+) -> Result<Json<serde_json::Value>, String> {
+    let quality = match req.quality.as_deref() {
+        Some("Hi-Res+") | Some("UltraHiRes") => qbz_models::Quality::UltraHiRes,
+        Some("Hi-Res") | Some("HiRes") => qbz_models::Quality::HiRes,
+        Some("Lossless") => qbz_models::Quality::Lossless,
+        _ => qbz_models::Quality::HiRes, // Default to HiRes
+    };
+
+    log::info!("[qbzd/play] Playing track {} (quality: {:?})", req.track_id, quality);
+
+    // Get stream URL from Qobuz
+    let stream_url = daemon.core.get_stream_url(req.track_id, quality)
+        .await
+        .map_err(|e| format!("Failed to get stream URL: {}", e))?;
+
+    log::info!("[qbzd/play] Stream: {}Hz, {:?}bit",
+        (stream_url.sampling_rate * 1000.0) as u32,
+        stream_url.bit_depth,
+    );
+
+    // Download the audio
+    let http = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let response = http
+        .get(&stream_url.url)
+        .send()
+        .await
+        .map_err(|e| format!("Download failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Download HTTP {}", response.status()));
+    }
+
+    let audio_data = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Read failed: {}", e))?
+        .to_vec();
+
+    log::info!("[qbzd/play] Downloaded {} bytes, feeding to player", audio_data.len());
+
+    // Feed to player
+    let player = daemon.core.player();
+    player
+        .play_data(audio_data, req.track_id)
+        .map_err(|e| format!("Player error: {}", e))?;
+
+    // Cache the audio
+    daemon.audio_cache.insert(req.track_id, vec![]); // TODO: cache actual data
+
+    Ok(Json(serde_json::json!({
+        "playing": true,
+        "track_id": req.track_id,
+        "sample_rate": stream_url.sampling_rate,
+        "bit_depth": stream_url.bit_depth,
+    })))
+}
+
 pub async fn play(daemon: Arc<DaemonCore>) -> Result<&'static str, String> {
     daemon.core.resume().map_err(|e| e.to_string())?;
     Ok("ok")

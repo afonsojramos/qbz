@@ -439,6 +439,7 @@ fn build_router(daemon: Arc<DaemonCore>) -> axum::Router {
         // Playback
         .route("/api/playback", get(with_daemon!(daemon, playback::get_playback)))
         .route("/api/playback/play", post(with_daemon!(daemon, playback::play)))
+        .route("/api/playback/play-track", post(with_daemon!(daemon, playback::play_track, json)))
         .route("/api/playback/pause", post(with_daemon!(daemon, playback::pause)))
         .route("/api/playback/stop", post(with_daemon!(daemon, playback::stop)))
         .route("/api/playback/next", post(with_daemon!(daemon, playback::next)))
