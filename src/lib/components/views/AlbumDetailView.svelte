@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+  import { cmdAddTracksToQueue, cmdAddTracksToQueueNext } from '$lib/services/commandRouter';
   import { open, save } from '@tauri-apps/plugin-dialog';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { t, locale } from 'svelte-i18n';
@@ -237,13 +238,13 @@
 
   async function handleBulkPlayNext() {
     const selected = album.tracks.filter(track => multiSelectedIds.has(track.id));
-    await invoke('v2_add_tracks_to_queue_next', { tracks: buildAlbumQueueTracks(selected) });
+    await cmdAddTracksToQueueNext(buildAlbumQueueTracks(selected));
     multiSelectMode = false; multiSelectedIds = new Set();
   }
 
   async function handleBulkPlayLater() {
     const selected = album.tracks.filter(track => multiSelectedIds.has(track.id));
-    await invoke('v2_add_tracks_to_queue', { tracks: buildAlbumQueueTracks(selected) });
+    await cmdAddTracksToQueue(buildAlbumQueueTracks(selected));
     multiSelectMode = false; multiSelectedIds = new Set();
   }
 

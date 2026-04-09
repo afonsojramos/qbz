@@ -12,6 +12,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { get } from 'svelte/store';
 import { t } from '$lib/i18n';
+import { cmdStop, cmdPlayTrack } from '$lib/services/commandRouter';
+import { getTarget } from '$lib/stores/playbackTargetStore';
+import { remotePost } from '$lib/services/remoteApi';
 import { getUserItem, setUserItem } from '$lib/utils/userStorage';
 import {
   isPlaybackSourceLocal,
@@ -192,7 +195,7 @@ export async function playTrack(
       // Stop any leftover local playback so the active remote renderer owns the session.
       if (!isCasting()) {
         try {
-          await invoke('v2_stop_playback');
+          await cmdStop();
         } catch {
           // Ignore errors - player might not be playing locally
         }
@@ -204,7 +207,7 @@ export async function playTrack(
       if (!isCasting()) {
         // Stop current playback immediately
         try {
-          await invoke('v2_stop_playback');
+          await cmdStop();
         } catch {
           // Ignore errors - player might not be playing
         }
@@ -250,19 +253,28 @@ export async function playTrack(
         } else if (isLocal) {
           await invoke('v2_library_play_track', { trackId: track.id });
         } else {
-          const result = await invoke<PlayTrackResult>('v2_play_track', {
-            trackId: track.id,
-            quality: effectiveQuality(track),
-            durationSecs: track.duration ? Math.round(track.duration) : null,
-            forceLowestQuality: forceLowestQuality || null
-          });
+          // Route to daemon or local based on playback target
+          const target = getTarget();
+          if (target.type === 'qbzd') {
+            await remotePost('/api/playback/play-track', {
+              track_id: track.id,
+              quality: effectiveQuality(track),
+            });
+          } else {
+            const result = await invoke<PlayTrackResult>('v2_play_track', {
+              trackId: track.id,
+              quality: effectiveQuality(track),
+              durationSecs: track.duration ? Math.round(track.duration) : null,
+              forceLowestQuality: forceLowestQuality || null
+            });
 
-          // Update track format based on actual stream format_id from Qobuz
-          const actualFormat = formatIdToString(result.format_id);
-          if (actualFormat) {
-            track.format = actualFormat;
-            // Re-set current track to update the UI with actual format
-            setCurrentTrack(track);
+            // Update track format based on actual stream format_id from Qobuz
+            const actualFormat = formatIdToString(result.format_id);
+            if (actualFormat) {
+              track.format = actualFormat;
+              // Re-set current track to update the UI with actual format
+              setCurrentTrack(track);
+            }
           }
         }
       }

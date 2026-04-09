@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+  import { cmdAddTracksToQueue, cmdAddTracksToQueueNext } from '$lib/services/commandRouter';
   import { open, save } from '@tauri-apps/plugin-dialog';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { setCustomImage, removeCustomImage as removeCustomImageFromStore } from '$lib/stores/customArtistImageStore';
@@ -444,13 +445,13 @@
 
   async function handleBulkPlayNext() {
     const selected = visibleTracks.filter(trk => multiSelectedIds.has(trk.id));
-    await invoke('v2_add_tracks_to_queue_next', { tracks: buildArtistQueueTracks(selected) });
+    await cmdAddTracksToQueueNext(buildArtistQueueTracks(selected));
     multiSelectMode = false; multiSelectedIds = new Set();
   }
 
   async function handleBulkPlayLater() {
     const selected = visibleTracks.filter(trk => multiSelectedIds.has(trk.id));
-    await invoke('v2_add_tracks_to_queue', { tracks: buildArtistQueueTracks(selected) });
+    await cmdAddTracksToQueue(buildArtistQueueTracks(selected));
     multiSelectMode = false; multiSelectedIds = new Set();
   }
 

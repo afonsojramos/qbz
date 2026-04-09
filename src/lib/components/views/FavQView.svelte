@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { cmdAddTracksToQueue, cmdAddTracksToQueueNext } from '$lib/services/commandRouter';
   import { onMount, onDestroy } from 'svelte';
   import { ArrowLeft, CloudDownload, Heart, Info, ListPlus, Play, RefreshCw, Search, Shuffle, X, SquareCheckBig } from 'lucide-svelte';
   import PlaylistModal from '$lib/components/PlaylistModal.svelte';
@@ -122,13 +123,13 @@
 
   async function handleBulkPlayNext() {
     const selected = filteredTracks.filter(trk => multiSelectedIds.has(trk.id));
-    await invoke('v2_add_tracks_to_queue_next', { tracks: buildQueueTracks(selected) });
+    await cmdAddTracksToQueueNext(buildQueueTracks(selected));
     multiSelectMode = false; multiSelectedIds = new Set();
   }
 
   async function handleBulkPlayLater() {
     const selected = filteredTracks.filter(trk => multiSelectedIds.has(trk.id));
-    await invoke('v2_add_tracks_to_queue', { tracks: buildQueueTracks(selected) });
+    await cmdAddTracksToQueue(buildQueueTracks(selected));
     multiSelectMode = false; multiSelectedIds = new Set();
   }
 

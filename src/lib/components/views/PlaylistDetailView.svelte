@@ -7,6 +7,7 @@
   import ViewTransition from '../ViewTransition.svelte';
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import { invoke } from '@tauri-apps/api/core';
+  import { cmdAddTracksToQueue, cmdAddTracksToQueueNext } from '$lib/services/commandRouter';
   import { open, ask } from '@tauri-apps/plugin-dialog';
   import TrackRow from '../TrackRow.svelte';
   import PlaylistSuggestions from '../PlaylistSuggestions.svelte';
@@ -1183,7 +1184,7 @@
   async function handleBulkPlayNext() {
     const selected = displayTracks.filter(trk => multiSelectedKeys.has(getTrackKey(trk)));
     const { queueTracks } = buildQueueTracks(selected);
-    await invoke('v2_add_tracks_to_queue_next', { tracks: queueTracks });
+    await cmdAddTracksToQueueNext(queueTracks);
     multiSelectedKeys = new Set();
     multiSelectMode = false;
   }
@@ -1191,7 +1192,7 @@
   async function handleBulkPlayLater() {
     const selected = displayTracks.filter(trk => multiSelectedKeys.has(getTrackKey(trk)));
     const { queueTracks } = buildQueueTracks(selected);
-    await invoke('v2_add_tracks_to_queue', { tracks: queueTracks });
+    await cmdAddTracksToQueue(queueTracks);
     multiSelectedKeys = new Set();
     multiSelectMode = false;
   }
@@ -1968,7 +1969,7 @@
     }));
 
     try {
-      await invoke('v2_add_tracks_to_queue_next', { tracks: queueTracks });
+      await cmdAddTracksToQueueNext(queueTracks);
 
       // Tell parent about local tracks added to queue
       if (localIds.length > 0) {
@@ -2013,7 +2014,7 @@
       .map(trk => Math.abs(trk.id));
 
     try {
-      await invoke('v2_add_tracks_to_queue', { tracks: queueTracks });
+      await cmdAddTracksToQueue(queueTracks);
 
       // Tell parent about local tracks added to queue
       if (localIds.length > 0) {

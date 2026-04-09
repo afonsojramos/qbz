@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { cmdAddTracksToQueue, cmdAddTracksToQueueNext } from '$lib/services/commandRouter';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { onMount, onDestroy } from 'svelte';
   import { ArrowLeft, Disc3, Play, Music, Ellipsis, Heart, User, ChevronDown, ChevronUp, SquareCheckBig } from 'lucide-svelte';
@@ -221,13 +222,13 @@
 
   async function handleBulkPlayNext() {
     const selected = visibleTracks.filter(trk => multiSelectedIds.has(trk.id));
-    await invoke('v2_add_tracks_to_queue_next', { tracks: buildTopTracksQueue(selected) });
+    await cmdAddTracksToQueueNext(buildTopTracksQueue(selected));
     multiSelectMode = false; multiSelectedIds = new Set();
   }
 
   async function handleBulkPlayLater() {
     const selected = visibleTracks.filter(trk => multiSelectedIds.has(trk.id));
-    await invoke('v2_add_tracks_to_queue', { tracks: buildTopTracksQueue(selected) });
+    await cmdAddTracksToQueue(buildTopTracksQueue(selected));
     multiSelectMode = false; multiSelectedIds = new Set();
   }
 

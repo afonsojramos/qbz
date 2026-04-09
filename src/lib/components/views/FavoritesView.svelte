@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { cmdAddTracksToQueue, cmdAddTracksToQueueNext } from '$lib/services/commandRouter';
   import { getUserInfo } from '$lib/stores/authStore';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import { onMount, tick } from 'svelte';
@@ -271,7 +272,7 @@
   async function handleBulkPlayNext() {
     const selected = filteredTracks.filter(trk => selectedTrackIds.has(trk.id));
     const tracks = buildFavoritesQueueTracks(selected);
-    await invoke('v2_add_tracks_to_queue_next', { tracks });
+    await cmdAddTracksToQueueNext(tracks);
     trackSelectMode = false;
     selectedTrackIds = new Set();
   }
@@ -279,7 +280,7 @@
   async function handleBulkPlayLater() {
     const selected = filteredTracks.filter(trk => selectedTrackIds.has(trk.id));
     const tracks = buildFavoritesQueueTracks(selected);
-    await invoke('v2_add_tracks_to_queue', { tracks });
+    await cmdAddTracksToQueue(tracks);
     trackSelectMode = false;
     selectedTrackIds = new Set();
   }
@@ -1298,7 +1299,7 @@
 
     try {
       const queueTracks = buildFavoritesQueueTracks(filteredTracks);
-      await invoke('v2_add_tracks_to_queue_next', { tracks: queueTracks });
+      await cmdAddTracksToQueueNext(queueTracks);
     } catch (err) {
       console.error('Failed to add tracks next:', err);
     }
@@ -1309,7 +1310,7 @@
 
     try {
       const queueTracks = buildFavoritesQueueTracks(filteredTracks);
-      await invoke('v2_add_tracks_to_queue', { tracks: queueTracks });
+      await cmdAddTracksToQueue(queueTracks);
     } catch (err) {
       console.error('Failed to add tracks to queue:', err);
     }
