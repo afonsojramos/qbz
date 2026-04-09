@@ -91,6 +91,24 @@ pub async fn run(mut config: DaemonConfig) -> Result<(), String> {
                     log::error!("[qbzd] Session activation failed: {}", e);
                 }
             }
+
+            // Start QConnect if enabled
+            if config.qconnect.enabled {
+                let device_name = if config.qconnect.device_name.is_empty() {
+                    hostname::get()
+                        .ok()
+                        .and_then(|h| h.into_string().ok())
+                        .unwrap_or_else(|| "qbzd".to_string())
+                } else {
+                    config.qconnect.device_name.clone()
+                };
+                let _qconnect = crate::qconnect::start_qconnect(
+                    &core,
+                    event_tx.clone(),
+                    &device_name,
+                )
+                .await;
+            }
         }
         None => {
             log::warn!("[qbzd] No saved credentials. Run `qbzd login` to authenticate.");

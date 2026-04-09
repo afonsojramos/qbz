@@ -4,6 +4,7 @@ mod daemon;
 mod adapter;
 mod login;
 mod mpris;
+mod qconnect;
 mod resources;
 mod session;
 

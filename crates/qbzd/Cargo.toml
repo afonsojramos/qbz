@@ -19,6 +19,8 @@ qbz-qobuz = { path = "../qbz-qobuz" }
 qbz-library = { path = "../qbz-library" }
 qbz-cache = { path = "../qbz-cache" }
 qbz-integrations = { path = "../qbz-integrations" }
+qconnect-app = { path = "../qconnect-app" }
+qconnect-transport-ws = { path = "../qconnect-transport-ws" }
 
 # HTTP server
 axum = { version = "0.8", features = ["ws"] }
