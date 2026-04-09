@@ -37,34 +37,29 @@ jobs:
           path: crates/target/x86_64-unknown-linux-gnu/release/qbzd
 
   build-aarch64:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-
-      - name: Build in Debian Bookworm aarch64 (QEMU)
-        uses: uraimo/run-on-arch-action@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          arch: aarch64
-          distro: bookworm
-          githubToken: ${{ github.token }}
-          setup: mkdir -p "${PWD}/artifacts"
-          dockerRunArgs: --volume "${PWD}/artifacts:/artifacts"
-          install: |
-            apt-get update
-            apt-get install -y curl build-essential libasound2-dev libdbus-1-dev pkg-config
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          run: |
-            source "$HOME/.cargo/env"
-            cd crates
-            cargo build --release -p qbzd
-            strip target/release/qbzd
-            cp target/release/qbzd /artifacts/qbzd
+          workspaces: crates -> target
+
+      - name: Install dev headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libdbus-1-dev pkg-config
+
+      - name: Build qbzd (aarch64 native)
+        working-directory: crates
+        run: cargo build --release -p qbzd
+
+      - name: Strip binary
+        run: strip crates/target/release/qbzd
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: qbzd-aarch64
-          path: artifacts/qbzd
+          path: crates/target/release/qbzd
 
   release:
     needs: [build-x86_64, build-aarch64]
