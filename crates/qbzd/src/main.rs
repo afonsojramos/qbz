@@ -104,7 +104,25 @@ async fn main() {
             }
         }
         Some(Commands::Status) => {
-            println!("qbzd status: not running (status check requires daemon to be active)");
+            let port = cfg.server.port;
+            match reqwest::Client::new()
+                .get(format!("http://127.0.0.1:{}/api/status", port))
+                .timeout(std::time::Duration::from_secs(3))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    println!("qbzd running on port {}", port);
+                    println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+                }
+                Ok(resp) => {
+                    println!("qbzd responded with HTTP {}", resp.status());
+                }
+                Err(_) => {
+                    println!("qbzd not running (no response on port {})", port);
+                }
+            }
         }
         Some(Commands::Token) => {
             if cfg.server.token == "auto" {

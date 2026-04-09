@@ -97,16 +97,16 @@ pub async fn run(mut config: DaemonConfig) -> Result<(), String> {
         }
     }
 
-    // Start playback state polling loop (broadcasts to event bus)
-    spawn_playback_loop(daemon.core.clone(), daemon.event_bus.clone());
-
     // Start MPRIS media controls (Linux D-Bus, headless)
-    let _mpris = if config.mpris.enabled {
+    let mpris_handle = if config.mpris.enabled {
         crate::mpris::start_mpris(daemon.core.clone())
     } else {
         log::info!("[qbzd] MPRIS disabled via config");
         None
     };
+
+    // Start playback state polling loop (broadcasts to event bus + MPRIS)
+    spawn_playback_loop(daemon.core.clone(), daemon.event_bus.clone(), mpris_handle);
 
     // Register mDNS service for LAN discovery
     let _mdns_handle = if config.mdns.enabled {
@@ -250,10 +250,12 @@ fn register_mdns(config: &DaemonConfig) -> Result<mdns_sd::ServiceDaemon, String
 
 /// Spawn the playback state polling loop.
 /// Reads player state and broadcasts PlaybackSnapshot events.
+/// Also updates MPRIS metadata when track changes.
 /// Adaptive polling: 250ms playing, 1s paused, 5s idle.
 fn spawn_playback_loop(
     core: Arc<QbzCore<DaemonAdapter>>,
     event_tx: broadcast::Sender<DaemonEvent>,
+    mpris: Option<Arc<std::sync::Mutex<souvlaki::MediaControls>>>,
 ) {
     tokio::spawn(async move {
         let mut last_position: u64 = 0;
@@ -296,6 +298,22 @@ fn spawn_playback_loop(
                     bit_depth,
                 };
                 let _ = event_tx.send(DaemonEvent::Playback(snapshot));
+
+                // Update MPRIS
+                if let Some(ref mc) = mpris {
+                    if track_id != last_track_id && track_id != 0 {
+                        // Track changed — update metadata
+                        // We don't have track title here (just ID), so use a
+                        // placeholder. Full metadata comes from CoreEvent::TrackStarted.
+                        crate::mpris::update_mpris_playback(mc, is_playing, position);
+                    } else {
+                        crate::mpris::update_mpris_playback(mc, is_playing, position);
+                    }
+                    if track_id == 0 && last_track_id != 0 {
+                        crate::mpris::update_mpris_playback(mc, false, 0);
+                    }
+                }
+
                 last_position = position;
                 last_is_playing = is_playing;
                 last_track_id = track_id;
