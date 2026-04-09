@@ -562,6 +562,7 @@
   },
   "player": {
     "nowPlaying": "Lecture en cours",
+    "controllingRemote": "Controle : {name}",
     "queue": "File d'attente",
     "upNext": "À suivre",
     "ofTotal": "de",

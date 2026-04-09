@@ -562,6 +562,7 @@
   },
   "player": {
     "nowPlaying": "Reproduciendo",
+    "controllingRemote": "Controlando: {name}",
     "queue": "Cola",
     "upNext": "Siguiente",
     "ofTotal": "de",

@@ -562,6 +562,7 @@
   },
   "player": {
     "nowPlaying": "Now Playing",
+    "controllingRemote": "Controlling: {name}",
     "queue": "Queue",
     "upNext": "Up Next",
     "ofTotal": "of",

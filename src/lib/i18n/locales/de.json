@@ -562,6 +562,7 @@
   },
   "player": {
     "nowPlaying": "Aktuell abgespielt",
+    "controllingRemote": "Steuert: {name}",
     "queue": "Warteschlange",
     "upNext": "Als Nächstes",
     "ofTotal": "von",

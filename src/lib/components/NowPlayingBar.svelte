@@ -13,6 +13,7 @@
     Volume2,
     VolumeX,
     Volume1,
+    Monitor,
     Cast,
     MicVocal,
     Maximize2,
@@ -20,6 +21,8 @@
     TriangleAlert
   } from 'lucide-svelte';
   import { t } from 'svelte-i18n';
+  import { isRemoteMode, playbackTarget } from '$lib/stores/playbackTargetStore';
+  import { disconnectFromRemote } from '$lib/stores/playbackTargetStore';
   import QualityBadge from './QualityBadge.svelte';
   import AudioOutputBadges from './AudioOutputBadges.svelte';
   import QconnectBadge from './QconnectBadge.svelte';
@@ -263,6 +266,13 @@
 </script>
 
 <div class="now-playing-bar">
+  {#if $isRemoteMode}
+    <div class="remote-indicator">
+      <Monitor size={14} />
+      <span>{$t('player.controllingRemote', { values: { name: $playbackTarget.name || 'Remote' } })}</span>
+      <button class="remote-disconnect" onclick={disconnectFromRemote}>{$t('actions.disconnect')}</button>
+    </div>
+  {/if}
   <!-- Top: Full-width Seekbar -->
   <div class="seekbar-container">
     <span class="time current">{formatTime(currentTime)}</span>
@@ -631,6 +641,34 @@
     z-index: 2001;
     display: flex;
     flex-direction: column;
+  }
+
+  .remote-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 4px 12px;
+    background: var(--accent-primary);
+    color: white;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+
+  .remote-disconnect {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-left: 4px;
+  }
+
+  .remote-disconnect:hover {
+    background: rgba(255, 255, 255, 0.35);
   }
 
   /* ===== Seekbar ===== */
