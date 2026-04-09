@@ -99,6 +99,9 @@ pub async fn run(mut config: DaemonConfig) -> Result<(), String> {
         }
     }
 
+    // Start playback state polling loop (broadcasts to event bus)
+    spawn_playback_loop(daemon.core.clone(), daemon.event_bus.clone());
+
     log::info!(
         "[qbzd] Daemon ready on {}:{}",
         config.server.bind,
@@ -192,6 +195,72 @@ fn load_oauth_token() -> Option<String> {
     }
 }
 
+/// Spawn the playback state polling loop.
+/// Reads player state and broadcasts PlaybackSnapshot events.
+/// Adaptive polling: 250ms playing, 1s paused, 5s idle.
+fn spawn_playback_loop(
+    core: Arc<QbzCore<DaemonAdapter>>,
+    event_tx: broadcast::Sender<DaemonEvent>,
+) {
+    tokio::spawn(async move {
+        let mut last_position: u64 = 0;
+        let mut last_is_playing = false;
+        let mut last_track_id: u64 = 0;
+
+        loop {
+            let player = core.player();
+            let state = &player.state;
+
+            let is_playing = state.is_playing();
+            let track_id = state.current_track_id();
+            let position = state.current_position();
+            let duration = state.duration();
+            let volume = state.volume();
+            let sample_rate = state.get_sample_rate();
+            let bit_depth = state.get_bit_depth();
+
+            let track_cleared = track_id == 0 && last_track_id != 0;
+            let should_emit = (track_id != 0
+                && (is_playing != last_is_playing
+                    || track_id != last_track_id
+                    || (is_playing && position != last_position)))
+                || track_cleared;
+
+            if should_emit {
+                let snapshot = crate::adapter::PlaybackSnapshot {
+                    state: if is_playing {
+                        "Playing".to_string()
+                    } else if track_id != 0 {
+                        "Paused".to_string()
+                    } else {
+                        "Stopped".to_string()
+                    },
+                    track_id,
+                    position_secs: position,
+                    duration_secs: duration,
+                    volume,
+                    sample_rate,
+                    bit_depth,
+                };
+                let _ = event_tx.send(DaemonEvent::Playback(snapshot));
+                last_position = position;
+                last_is_playing = is_playing;
+                last_track_id = track_id;
+            }
+
+            // Adaptive polling
+            let sleep_ms = if is_playing {
+                250
+            } else if track_id == 0 {
+                5000
+            } else {
+                1000
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
+        }
+    });
+}
+
 /// Build the Axum HTTP router.
 fn build_router(daemon: Arc<DaemonCore>) -> axum::Router {
     use axum::routing::get;
@@ -210,6 +279,13 @@ fn build_router(daemon: Arc<DaemonCore>) -> axum::Router {
             get({
                 let d = daemon.clone();
                 move || status_handler(d.clone())
+            }),
+        )
+        .route(
+            "/api/events",
+            get({
+                let d = daemon.clone();
+                move || crate::api::events::sse_handler(d.clone())
             }),
         )
 }
