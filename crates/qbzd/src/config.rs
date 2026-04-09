@@ -257,3 +257,21 @@ pub fn generate_token() -> String {
         .as_nanos();
     format!("{:032x}", seed)
 }
+
+/// Save config to the default config path (creates dir if needed).
+pub fn save_default_config(config: &DaemonConfig) -> Result<(), String> {
+    let config_dir = dirs::config_dir()
+        .ok_or("Could not determine config directory")?
+        .join("qbz");
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create config dir: {}", e))?;
+
+    let path = config_dir.join("qbzd.toml");
+    let content = toml::to_string_pretty(config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+
+    log::info!("[qbzd] Config saved to {}", path.display());
+    Ok(())
+}

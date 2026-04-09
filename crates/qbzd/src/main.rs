@@ -57,6 +57,12 @@ enum Commands {
     Status,
     /// Show or regenerate API token
     Token,
+    /// Interactive setup wizard (audio, playback, integrations)
+    Setup {
+        /// Run only a specific section (audio, playback, cache, integrations, qconnect)
+        #[arg(long)]
+        section: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -123,6 +129,13 @@ async fn main() {
                     println!("qbzd not running (no response on port {})", port);
                 }
             }
+        }
+        Some(Commands::Setup { section }) => {
+            eprintln!("TUI setup wizard not yet implemented.");
+            if let Some(s) = section {
+                eprintln!("Requested section: {}", s);
+            }
+            eprintln!("Use the HTTP API or qbzd.toml to configure for now.");
         }
         Some(Commands::Token) => {
             if cfg.server.token == "auto" {
