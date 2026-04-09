@@ -265,14 +265,14 @@
   });
 </script>
 
+{#if $isRemoteMode}
+  <div class="remote-indicator">
+    <Monitor size={14} />
+    <span>{$t('player.controllingRemote', { values: { name: $playbackTarget.name || 'Remote' } })}</span>
+    <button class="remote-disconnect" onclick={disconnectFromRemote}>{$t('actions.disconnect')}</button>
+  </div>
+{/if}
 <div class="now-playing-bar">
-  {#if $isRemoteMode}
-    <div class="remote-indicator">
-      <Monitor size={14} />
-      <span>{$t('player.controllingRemote', { values: { name: $playbackTarget.name || 'Remote' } })}</span>
-      <button class="remote-disconnect" onclick={disconnectFromRemote}>{$t('actions.disconnect')}</button>
-    </div>
-  {/if}
   <!-- Top: Full-width Seekbar -->
   <div class="seekbar-container">
     <span class="time current">{formatTime(currentTime)}</span>
@@ -644,6 +644,10 @@
   }
 
   .remote-indicator {
+    position: fixed;
+    bottom: 104px;
+    left: 0;
+    right: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -654,6 +658,7 @@
     font-size: 12px;
     font-weight: 500;
     letter-spacing: 0.02em;
+    z-index: 2001;
   }
 
   .remote-disconnect {
