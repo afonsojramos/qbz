@@ -14,8 +14,9 @@ use qconnect_app::{
     QconnectApp, QconnectAppEvent, QconnectEventSink,
     QueueCommandType, RendererReport, RendererReportType,
 };
-use qconnect_core::RendererCommand;
+use qconnect_core::{QConnectQueueState, RendererCommand};
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
+use qbz_models::{QueueTrack, Track};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -61,6 +62,9 @@ impl QconnectEventSink for HeadlessQconnectSink {
             }
             QconnectAppEvent::QueueUpdated(queue_state) => {
                 log::info!("[qbzd/qconnect] Queue: {} items", queue_state.queue_items.len());
+                if let Err(e) = materialize_remote_queue(&self.core, queue_state).await {
+                    log::warn!("[qbzd/qconnect] Failed to materialize queue: {}", e);
+                }
             }
             QconnectAppEvent::SessionManagementEvent { message_type, payload } => {
                 log::info!("[qbzd/qconnect] Session mgmt: {}", message_type);
@@ -177,6 +181,125 @@ async fn download_and_play_track(
         .map_err(|e| format!("Player error for {}: {}", track_id, e))?;
 
     Ok(())
+}
+
+/// Materialize the QConnect remote queue into the local QbzCore queue.
+/// This enables the local orchestrator's auto-advance and gapless logic
+/// to work when QConnect is the playback source.
+/// Mirrors desktop's materialize_remote_queue from qconnect_service.rs.
+async fn materialize_remote_queue(
+    core: &qbz_core::QbzCore<DaemonAdapter>,
+    queue_state: &QConnectQueueState,
+) -> Result<(), String> {
+    if queue_state.queue_items.is_empty() {
+        log::info!("[qbzd/qconnect] Empty queue, skipping materialization");
+        return Ok(());
+    }
+
+    // Dedupe track_ids before batch fetch
+    let mut unique_ids: Vec<u64> = Vec::with_capacity(queue_state.queue_items.len());
+    for item in &queue_state.queue_items {
+        if !unique_ids.contains(&item.track_id) {
+            unique_ids.push(item.track_id);
+        }
+    }
+
+    log::info!(
+        "[qbzd/qconnect] Materializing remote queue: {} items, {} unique tracks",
+        queue_state.queue_items.len(),
+        unique_ids.len()
+    );
+
+    let fetched_tracks = core
+        .get_tracks_batch(&unique_ids)
+        .await
+        .map_err(|e| format!("batch fetch failed: {}", e))?;
+
+    let mut tracks_by_id: std::collections::HashMap<u64, QueueTrack> =
+        std::collections::HashMap::with_capacity(fetched_tracks.len());
+    for track in fetched_tracks {
+        tracks_by_id.insert(track.id, track_to_queue_track(&track));
+    }
+
+    // Build the queue in QConnect order
+    let mut queue_tracks = Vec::with_capacity(queue_state.queue_items.len());
+    for item in &queue_state.queue_items {
+        if let Some(qt) = tracks_by_id.get(&item.track_id) {
+            queue_tracks.push(qt.clone());
+        } else {
+            log::warn!(
+                "[qbzd/qconnect] Track {} missing from batch fetch, skipping",
+                item.track_id
+            );
+        }
+    }
+
+    if queue_tracks.is_empty() {
+        return Err("zero playable tracks after materialization".to_string());
+    }
+
+    // Determine start index from currently playing track (if any)
+    let player = core.player();
+    let current_track_id = player.state.current_track_id();
+    let start_index = if current_track_id != 0 {
+        queue_state
+            .queue_items
+            .iter()
+            .position(|item| item.track_id == current_track_id)
+    } else {
+        Some(0)
+    };
+
+    log::info!(
+        "[qbzd/qconnect] Setting local queue: {} tracks, start_index={:?}",
+        queue_tracks.len(),
+        start_index
+    );
+
+    core.set_queue(queue_tracks, start_index).await;
+    Ok(())
+}
+
+/// Convert qbz_models::Track to QueueTrack.
+/// Mirrors desktop's model_track_to_core_queue_track.
+fn track_to_queue_track(track: &Track) -> QueueTrack {
+    let artwork_url = track
+        .album
+        .as_ref()
+        .and_then(|album| album.image.large.clone());
+    let artist = track
+        .performer
+        .as_ref()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| "Unknown Artist".to_string());
+    let album_title = track
+        .album
+        .as_ref()
+        .map(|a| a.title.clone())
+        .unwrap_or_else(|| "Unknown Album".to_string());
+    let album_id = track.album.as_ref().and_then(|a| {
+        let trimmed = a.id.trim();
+        if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    });
+    let artist_id = track.performer.as_ref().map(|p| p.id);
+
+    QueueTrack {
+        id: track.id,
+        title: track.title.clone(),
+        artist,
+        album: album_title,
+        duration_secs: track.duration as u64,
+        artwork_url,
+        hires: track.hires,
+        bit_depth: track.maximum_bit_depth,
+        sample_rate: track.maximum_sampling_rate,
+        is_local: false,
+        album_id,
+        artist_id,
+        streamable: track.streamable,
+        source: Some("qobuz".to_string()),
+        parental_warning: track.parental_warning,
+    }
 }
 
 /// Start QConnect — exact replica of desktop's QconnectServiceState::connect().
