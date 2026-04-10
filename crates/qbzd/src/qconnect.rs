@@ -347,12 +347,41 @@ async fn deferred_renderer_join(app: &Arc<App>, session_uuid: &str, device_name:
     log::info!("[qbzd/qconnect] Renderer join complete — visible to other devices");
 }
 
+/// Build device_info matching desktop's QconnectDeviceInfoPayload exactly.
+/// device_uuid is persistent per instance (generated once, reused).
 fn build_device_info(device_name: &str) -> serde_json::Value {
+    use std::sync::OnceLock;
+    static DEVICE_UUID: OnceLock<String> = OnceLock::new();
+    let uuid = DEVICE_UUID.get_or_init(|| {
+        // Try to load persisted UUID, or generate a new one
+        let uuid_path = dirs::data_dir()
+            .unwrap_or_default()
+            .join("qbz")
+            .join(".qconnect-device-uuid");
+        if let Ok(existing) = std::fs::read_to_string(&uuid_path) {
+            let trimmed = existing.trim().to_string();
+            if !trimmed.is_empty() {
+                return trimmed;
+            }
+        }
+        let new_uuid = Uuid::new_v4().to_string();
+        let _ = std::fs::create_dir_all(uuid_path.parent().unwrap_or(&uuid_path));
+        let _ = std::fs::write(&uuid_path, &new_uuid);
+        new_uuid
+    });
+
     serde_json::json!({
+        "device_uuid": uuid,
         "friendly_name": device_name,
         "brand": "QBZ",
         "model": "QBZ Daemon",
+        "serial_number": null,
         "device_type": 5,
+        "capabilities": {
+            "min_audio_quality": 1,
+            "max_audio_quality": 4,
+            "volume_remote_control": 2
+        },
         "software_version": format!("qbzd/{}", env!("CARGO_PKG_VERSION")),
     })
 }
