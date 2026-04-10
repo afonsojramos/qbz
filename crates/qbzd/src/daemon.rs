@@ -24,6 +24,9 @@ pub struct DaemonCore {
     pub user: RwLock<Option<UserSession>>,
     /// Flag to prevent orchestrator auto-advance during explicit play commands
     pub skip_auto_advance: std::sync::atomic::AtomicBool,
+    /// QConnect next track id (from SetState.next_track) for auto-advance
+    /// when iOS controls without sending a queue. 0 = no next track known.
+    pub qconnect_next_track_id: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Run the daemon main loop.
@@ -78,6 +81,7 @@ pub async fn run(mut config: DaemonConfig) -> Result<(), String> {
         event_bus: event_tx.clone(),
         user: RwLock::new(None),
         skip_auto_advance: std::sync::atomic::AtomicBool::new(false),
+        qconnect_next_track_id: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     });
 
     // Try auto-login from saved OAuth token
@@ -109,6 +113,7 @@ pub async fn run(mut config: DaemonConfig) -> Result<(), String> {
                     &core,
                     event_tx.clone(),
                     &device_name,
+                    daemon.qconnect_next_track_id.clone(),
                 )
                 .await;
             }
@@ -322,23 +327,29 @@ fn spawn_playback_orchestrator(daemon: Arc<DaemonCore>) {
                         let _ = player.play_data(audio_data, last_track_id);
                     }
                 } else {
-                    // Normal advance
+                    // Normal advance: try local queue first, then QConnect next_track fallback
                     let previous_id = last_track_id;
-                    if let Some(next_track) = daemon.core.next_track().await {
-                        // Defensive: if same track returned and not repeat-one, try one more
-                        let final_track = if next_track.id == previous_id {
-                            log::warn!("[qbzd/advance] Same track returned, forcing extra advance");
-                            daemon.core.next_track().await.unwrap_or(next_track)
-                        } else {
-                            next_track
-                        };
+                    let local_next = daemon.core.next_track().await
+                        .filter(|t| t.id != previous_id);
 
-                        log::info!("[qbzd/advance] Next: {} - {}", final_track.artist, final_track.title);
-                        if let Ok(audio_data) = download_track(&daemon, final_track.id).await {
-                            let _ = player.play_data(audio_data, final_track.id);
+                    if let Some(next_track) = local_next {
+                        log::info!("[qbzd/advance] Next (local queue): {} - {}", next_track.artist, next_track.title);
+                        if let Ok(audio_data) = download_track(&daemon, next_track.id).await {
+                            let _ = player.play_data(audio_data, next_track.id);
                         }
                     } else {
-                        log::info!("[qbzd/advance] Queue empty, playback stopped");
+                        // Fallback: use next_track from last QConnect SetState
+                        let qconnect_next = daemon.qconnect_next_track_id.load(std::sync::atomic::Ordering::Acquire);
+                        if qconnect_next != 0 && qconnect_next != previous_id {
+                            log::info!("[qbzd/advance] Next (QConnect fallback): {}", qconnect_next);
+                            // Clear before downloading to prevent re-use on next iteration
+                            daemon.qconnect_next_track_id.store(0, std::sync::atomic::Ordering::Release);
+                            if let Ok(audio_data) = download_track(&daemon, qconnect_next).await {
+                                let _ = player.play_data(audio_data, qconnect_next);
+                            }
+                        } else {
+                            log::info!("[qbzd/advance] Queue empty, playback stopped");
+                        }
                     }
                 }
                 gapless_queued_for = 0;

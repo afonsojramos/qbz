@@ -35,14 +35,16 @@ type App = QconnectApp<NativeWsTransport, HeadlessQconnectSink>;
 pub struct HeadlessQconnectSink {
     event_tx: broadcast::Sender<DaemonEvent>,
     core: Arc<qbz_core::QbzCore<DaemonAdapter>>,
+    qconnect_next_track_id: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl HeadlessQconnectSink {
     pub fn new(
         event_tx: broadcast::Sender<DaemonEvent>,
         core: Arc<qbz_core::QbzCore<DaemonAdapter>>,
+        qconnect_next_track_id: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
-        Self { event_tx, core }
+        Self { event_tx, core, qconnect_next_track_id }
     }
 }
 
@@ -58,7 +60,7 @@ impl QconnectEventSink for HeadlessQconnectSink {
             }
             QconnectAppEvent::RendererCommandApplied { command, .. } => {
                 log::info!("[qbzd/qconnect] Command: {:?}", command);
-                handle_renderer_command(&self.core, command).await;
+                handle_renderer_command(&self.core, command, &self.qconnect_next_track_id).await;
             }
             QconnectAppEvent::QueueUpdated(queue_state) => {
                 log::info!("[qbzd/qconnect] Queue: {} items", queue_state.queue_items.len());
@@ -77,9 +79,16 @@ impl QconnectEventSink for HeadlessQconnectSink {
 async fn handle_renderer_command(
     core: &qbz_core::QbzCore<DaemonAdapter>,
     command: &RendererCommand,
+    qconnect_next_track_id: &Arc<std::sync::atomic::AtomicU64>,
 ) {
     match command {
-        RendererCommand::SetState { playing_state, current_position_ms, current_track, .. } => {
+        RendererCommand::SetState { playing_state, current_position_ms, current_track, next_track } => {
+            // Track the next_track for orchestrator's auto-advance fallback
+            if let Some(nt) = next_track {
+                qconnect_next_track_id.store(nt.track_id, std::sync::atomic::Ordering::Release);
+                log::info!("[qbzd/qconnect] Stored next_track for auto-advance: {}", nt.track_id);
+            }
+
             // Step 1: If a current_track is specified, ensure it's loaded
             // (matches desktop's ensure_remote_track_loaded pattern)
             if let Some(track) = current_track {
@@ -307,6 +316,7 @@ pub async fn start_qconnect(
     core: &Arc<qbz_core::QbzCore<DaemonAdapter>>,
     event_tx: broadcast::Sender<DaemonEvent>,
     device_name: &str,
+    qconnect_next_track_id: Arc<std::sync::atomic::AtomicU64>,
 ) -> Option<Arc<App>> {
     // Step 1: Get credentials
     let client_arc = core.client();
@@ -317,7 +327,7 @@ pub async fn start_qconnect(
 
     // Step 2: Create transport + sink + app
     let transport = Arc::new(NativeWsTransport::new());
-    let sink = Arc::new(HeadlessQconnectSink::new(event_tx, core.clone()));
+    let sink = Arc::new(HeadlessQconnectSink::new(event_tx, core.clone(), qconnect_next_track_id));
     let app = Arc::new(QconnectApp::new(transport, sink));
 
     // Step 3: Connect transport
@@ -420,8 +430,69 @@ pub async fn start_qconnect(
         return None;
     }
 
+    // Step 7: Spawn periodic state reporter so iOS knows the renderer's state
+    spawn_state_reporter(app.clone(), core.clone());
+
     log::info!("[qbzd/qconnect] Started as '{}'", device_name);
     Some(app)
+}
+
+/// Periodic renderer state reporter — keeps iOS in sync with daemon playback.
+/// Reports every 2 seconds, and immediately on track end / state change.
+fn spawn_state_reporter(app: Arc<App>, core: Arc<qbz_core::QbzCore<DaemonAdapter>>) {
+    tokio::spawn(async move {
+        let mut last_playing_state: i32 = 0;
+        let mut last_track_id: u64 = 0;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+            let player = core.player();
+            let state = &player.state;
+            let track_id = state.current_track_id();
+            let is_playing = state.is_playing();
+            let position = state.current_position();
+            let duration = state.duration();
+
+            let playing_state = if is_playing {
+                PLAYING_STATE_PLAYING
+            } else if track_id != 0 {
+                PLAYING_STATE_PAUSED
+            } else {
+                PLAYING_STATE_STOPPED
+            };
+
+            let state_changed = playing_state != last_playing_state || track_id != last_track_id;
+            last_playing_state = playing_state;
+            last_track_id = track_id;
+
+            let queue_version = app.queue_state_snapshot().await.version;
+            let payload = serde_json::json!({
+                "playing_state": playing_state,
+                "buffer_state": BUFFER_STATE_OK,
+                "current_position": position * 1000, // ms
+                "duration": duration * 1000, // ms
+                "queue_version": {
+                    "major": queue_version.major,
+                    "minor": queue_version.minor
+                }
+            });
+
+            let report = RendererReport::new(
+                RendererReportType::RndrSrvrStateUpdated,
+                Uuid::new_v4().to_string(),
+                queue_version,
+                payload,
+            );
+            if let Err(e) = app.send_renderer_report_command(report).await {
+                log::debug!("[qbzd/qconnect] State report failed: {}", e);
+            } else if state_changed {
+                log::info!(
+                    "[qbzd/qconnect] State report sent: playing_state={} track={} pos={}s",
+                    playing_state, track_id, position
+                );
+            }
+        }
+    });
 }
 
 /// Bootstrap: controller JoinSession + AskForQueueState.
