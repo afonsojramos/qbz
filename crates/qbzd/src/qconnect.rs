@@ -205,6 +205,12 @@ async fn bootstrap_remote_presence(app: &Arc<App>, device_name: &str) -> Result<
     }
 
     log::info!("[qbzd/qconnect] Bootstrap: controller joined, queue requested");
+
+    // Wait a moment for server to process, then do immediate renderer join
+    // (without session_uuid — the server should assign one)
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    deferred_renderer_join(app, "", device_name).await;
+
     Ok(())
 }
 
@@ -263,7 +269,7 @@ async fn deferred_renderer_join(app: &Arc<App>, session_uuid: &str, device_name:
 
     // 1. Renderer JoinSession
     let join_payload = serde_json::json!({
-        "session_uuid": session_uuid,
+        "session_uuid": if session_uuid.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(session_uuid.to_string()) },
         "device_info": device_info,
         "is_active": true,
         "reason": JOIN_SESSION_REASON_CONTROLLER_REQUEST,
