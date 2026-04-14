@@ -5,7 +5,7 @@
    * hero info and uses the embedded releases arrays for the album
    * grids. Matches LabelView's overall structure.
    */
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { t } from '$lib/i18n';
   import { ArrowLeft, Award as AwardIcon, Heart, LoaderCircle, ArrowRight } from 'lucide-svelte';
@@ -195,10 +195,24 @@
     await toggleAwardFavorite(awardId);
   }
 
-  onMount(() => {
-    loadHero();
-    loadAlbums();
-    loadOtherAwards();
+  // Re-fetch whenever the awardId prop changes. Happens when the user
+  // jumps between awards via the "Other awards" carousel — the view
+  // stays mounted (same ViewType) so onMount wouldn't fire again.
+  let lastLoadedId = '';
+  $effect(() => {
+    if (awardId && awardId !== lastLoadedId) {
+      lastLoadedId = awardId;
+      page = null;
+      albums = [];
+      totalEstimate = null;
+      hasMore = false;
+      error = null;
+      heroImageFailed = false;
+      loading = true;
+      loadHero();
+      loadAlbums();
+      loadOtherAwards();
+    }
   });
 
   const displayName = $derived(page?.name ?? awardName ?? '');

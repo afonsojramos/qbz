@@ -1461,7 +1461,6 @@
                   album.audio_info?.maximum_bit_depth,
                   album.audio_info?.maximum_sampling_rate
                 )}
-                ribbon={pickAlbumRibbon(album.awards)}
                 onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
                 onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
                 onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
@@ -2016,7 +2015,6 @@
                 album.audio_info?.maximum_bit_depth,
                 album.audio_info?.maximum_sampling_rate
               )}
-              ribbon={pickAlbumRibbon(album.awards)}
               onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
               onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
               onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
