@@ -138,7 +138,9 @@
     "readLess": "READ LESS",
     "seeAll": "See all",
     "showMore": "Show more",
-    "showLess": "Show less"
+    "showLess": "Show less",
+    "follow": "Follow label",
+    "unfollow": "Unfollow label"
   },
   "labelReleases": {
     "albumCount": "{count} albums",

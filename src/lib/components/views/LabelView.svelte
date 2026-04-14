@@ -20,6 +20,12 @@
     isTrackToggling,
     toggleTrackFavorite
   } from '$lib/stores/favoritesStore';
+  import {
+    subscribe as subscribeLabelFavorites,
+    isLabelFavorite,
+    isLabelToggling,
+    toggleLabelFavorite
+  } from '$lib/stores/labelFavoritesStore';
   import type { QobuzAlbum, LabelPageData, LabelExploreItem, DisplayTrack } from '$lib/types';
 
   interface Track {
@@ -668,6 +674,23 @@
     return albumOfflineCacheStatuses.get(albumId) || false;
   }
 
+  // Label follow state — driven entirely by the labelFavoritesStore so any
+  // toggle elsewhere (e.g. a future favorites view) updates this view too.
+  let labelFavoritesVersion = $state(0);
+  let unsubLabelFavorites: (() => void) | null = null;
+  const labelIsFavorite = $derived.by(() => {
+    void labelFavoritesVersion;
+    return isLabelFavorite(labelId);
+  });
+  const labelIsToggling = $derived.by(() => {
+    void labelFavoritesVersion;
+    return isLabelToggling(labelId);
+  });
+
+  async function handleToggleLabelFavorite() {
+    await toggleLabelFavorite(labelId);
+  }
+
   onMount(() => {
     loadLabelPage();
     loadLabelAlbumsAndDescription();
@@ -675,10 +698,14 @@
     unsubFavorites = subscribeFavorites(() => {
       trackFavoritesVersion++;
     });
+    unsubLabelFavorites = subscribeLabelFavorites(() => {
+      labelFavoritesVersion++;
+    });
   });
 
   onDestroy(() => {
     unsubFavorites?.();
+    unsubLabelFavorites?.();
     jumpObserver?.disconnect();
   });
 
@@ -809,6 +836,24 @@
             {descriptionExpanded ? $t('label.readLess') : $t('label.readMore')}
           </button>
         {/if}
+
+        <!-- Follow Label — same heart/circle treatment as ArtistDetailView -->
+        <div class="label-actions">
+          <button
+            class="favorite-btn"
+            class:is-favorite={labelIsFavorite}
+            onclick={handleToggleLabelFavorite}
+            disabled={labelIsToggling}
+            title={labelIsFavorite ? $t('label.unfollow') : $t('label.follow')}
+            aria-label={labelIsFavorite ? $t('label.unfollow') : $t('label.follow')}
+          >
+            {#if labelIsFavorite}
+              <Heart size={24} fill="var(--accent-primary)" color="var(--accent-primary)" />
+            {:else}
+              <Heart size={24} />
+            {/if}
+          </button>
+        </div>
       </div>
     </header>
 
@@ -1294,6 +1339,42 @@
 
   /* Header */
   .label-header { display: flex; gap: 24px; margin-bottom: 40px; }
+
+  /* Follow button — visual parity with ArtistDetailView .artist-actions */
+  .label-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+  }
+
+  .favorite-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    background: var(--bg-tertiary);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+    flex-shrink: 0;
+  }
+
+  .favorite-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--accent-primary);
+  }
+
+  .favorite-btn.is-favorite {
+    background: rgba(var(--accent-primary-rgb, 139, 92, 246), 0.15);
+  }
+
+  .favorite-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
   .label-image-wrapper {
     width: 180px; height: 180px; border-radius: 50%;
     overflow: hidden; flex-shrink: 0; background: var(--bg-tertiary);

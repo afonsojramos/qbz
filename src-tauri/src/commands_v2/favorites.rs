@@ -351,3 +351,79 @@ pub async fn v2_uncache_favorite_artist(
         .remove_favorite_artist(artistId)
         .map_err(|e| RuntimeError::Internal(e))
 }
+
+// ============ Label favorites cache (mirrors artist) ============
+
+/// Get cached favorite labels (V2)
+#[tauri::command]
+pub async fn v2_get_cached_favorite_labels(
+    cache_state: State<'_, crate::config::favorites_cache::FavoritesCacheState>,
+) -> Result<Vec<i64>, RuntimeError> {
+    let guard = cache_state
+        .store
+        .lock()
+        .map_err(|_| RuntimeError::Internal("Failed to lock favorites cache".to_string()))?;
+    let store = guard
+        .as_ref()
+        .ok_or_else(|| RuntimeError::Internal("No active session".to_string()))?;
+    store
+        .get_favorite_label_ids()
+        .map_err(|e| RuntimeError::Internal(e))
+}
+
+/// Sync cached favorite labels (V2) — replaces the entire cached set
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_sync_cached_favorite_labels(
+    labelIds: Vec<i64>,
+    cache_state: State<'_, crate::config::favorites_cache::FavoritesCacheState>,
+) -> Result<(), RuntimeError> {
+    let guard = cache_state
+        .store
+        .lock()
+        .map_err(|_| RuntimeError::Internal("Failed to lock favorites cache".to_string()))?;
+    let store = guard
+        .as_ref()
+        .ok_or_else(|| RuntimeError::Internal("No active session".to_string()))?;
+    store
+        .sync_favorite_labels(&labelIds)
+        .map_err(|e| RuntimeError::Internal(e))
+}
+
+/// Cache a single favorite label (V2)
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_cache_favorite_label(
+    labelId: i64,
+    cache_state: State<'_, crate::config::favorites_cache::FavoritesCacheState>,
+) -> Result<(), RuntimeError> {
+    let guard = cache_state
+        .store
+        .lock()
+        .map_err(|_| RuntimeError::Internal("Failed to lock favorites cache".to_string()))?;
+    let store = guard
+        .as_ref()
+        .ok_or_else(|| RuntimeError::Internal("No active session".to_string()))?;
+    store
+        .add_favorite_label(labelId)
+        .map_err(|e| RuntimeError::Internal(e))
+}
+
+/// Uncache a favorite label (V2)
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_uncache_favorite_label(
+    labelId: i64,
+    cache_state: State<'_, crate::config::favorites_cache::FavoritesCacheState>,
+) -> Result<(), RuntimeError> {
+    let guard = cache_state
+        .store
+        .lock()
+        .map_err(|_| RuntimeError::Internal("Failed to lock favorites cache".to_string()))?;
+    let store = guard
+        .as_ref()
+        .ok_or_else(|| RuntimeError::Internal("No active session".to_string()))?;
+    store
+        .remove_favorite_label(labelId)
+        .map_err(|e| RuntimeError::Internal(e))
+}
