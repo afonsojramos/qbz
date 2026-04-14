@@ -767,21 +767,20 @@ impl QobuzClient {
         Ok(serde_json::from_value(albums.clone())?)
     }
 
-    /// Get Release Watch — new releases from artists, labels and awards the
-    /// user follows. The Qobuz mobile client surfaces this as "Radar de
-    /// Novedades" / "Release Watch".
+    /// Get Release Watch — new releases from artists, labels or awards the
+    /// user follows. Qobuz mobile surfaces this as "Radar de Novedades" /
+    /// "Release Watch". Endpoint and signature confirmed in
+    /// `qbz-nix-docs/qobuz-api-inferred-openapi-v9.7.0.3.yaml`.
     ///
-    /// This is a REST endpoint in the `/albums/*` plural namespace — called
-    /// with authenticated headers (X-App-Id + X-User-Auth-Token) and NO
-    /// request_sig/request_ts, same shape as the `/radio/*` endpoints. The
-    /// RPC signing protocol does NOT apply here and using it yields the
-    /// "no Service found" error.
+    /// `release_type` is required and must be one of `artists`, `labels`,
+    /// `awards` (matches the three tabs in the mobile UI).
     pub async fn get_release_watch(
         &self,
+        release_type: &str,
         limit: u32,
         offset: u32,
     ) -> Result<SearchResultsPage<Album>> {
-        let url = endpoints::build_url(paths::ALBUMS_RELEASE_WATCH);
+        let url = endpoints::build_url(paths::FAVORITE_GET_NEW_RELEASES);
         let limit_str = limit.to_string();
         let offset_str = offset.to_string();
 
@@ -790,6 +789,7 @@ impl QobuzClient {
             .get(&url)
             .headers(self.authenticated_headers().await?)
             .query(&[
+                ("type", release_type),
                 ("limit", limit_str.as_str()),
                 ("offset", offset_str.as_str()),
             ])
@@ -798,14 +798,13 @@ impl QobuzClient {
 
         let status = http_response.status();
         log::info!(
-            "[API] get_release_watch(limit={}, offset={}) status={}",
+            "[API] get_release_watch(type={}, limit={}, offset={}) status={}",
+            release_type,
             limit,
             offset,
             status
         );
 
-        // Capture body as text first so we can log it on unexpected shape
-        // regardless of JSON parse success.
         let body_text = http_response.text().await?;
         if !status.is_success() {
             log::warn!(
@@ -827,8 +826,9 @@ impl QobuzClient {
             );
         }
 
-        // Typical Qobuz paginated album wrapper: {albums: {items, total, ...}}.
-        // Fall back to root-level items if the server flattened it.
+        // Response is V2GenericListDto<AlbumDto> per x20/b.java. Qobuz
+        // wraps paginated album lists under `albums` by convention; try that
+        // first, fall back to root.
         let page_value = response.get("albums").cloned().unwrap_or(response);
         match serde_json::from_value::<SearchResultsPage<Album>>(page_value) {
             Ok(page) => Ok(page),

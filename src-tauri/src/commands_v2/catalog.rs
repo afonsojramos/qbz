@@ -258,14 +258,15 @@ pub async fn v2_get_featured_albums(
     Ok(results)
 }
 
-/// Get Release Watch (V2 — releases from followed artists, labels and awards).
+/// Get Release Watch (V2 — releases from followed artists/labels/awards).
 ///
-/// Calls the mobile "Radar de Novedades" endpoint (`/albums/releaseWatch`)
-/// with authenticated headers (no RPC signing). Runs the result through the
-/// artist blacklist filter.
+/// Calls `/favorite/getNewReleases?type=...` — the same endpoint the mobile
+/// client uses for its "Radar de Novedades" feed. `release_type` defaults to
+/// `"artists"` (the mobile default tab) and accepts `"labels"` or `"awards"`.
 #[tauri::command]
 #[allow(non_snake_case)]
 pub async fn v2_get_release_watch(
+    releaseType: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
     bridge: State<'_, CoreBridgeState>,
@@ -277,13 +278,19 @@ pub async fn v2_get_release_watch(
         .check_requirements(CommandRequirement::RequiresCoreBridgeAuth)
         .await?;
 
+    let release_type = releaseType.unwrap_or_else(|| "artists".to_string());
     let limit = limit.unwrap_or(20);
     let offset = offset.unwrap_or(0);
-    log::info!("[V2] get_release_watch: limit={}, offset={}", limit, offset);
+    log::info!(
+        "[V2] get_release_watch: type={}, limit={}, offset={}",
+        release_type,
+        limit,
+        offset
+    );
 
     let bridge = bridge.get().await;
     let mut results = bridge
-        .get_release_watch(limit, offset)
+        .get_release_watch(&release_type, limit, offset)
         .await
         .map_err(RuntimeError::Internal)?;
 

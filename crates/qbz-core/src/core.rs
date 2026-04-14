@@ -760,11 +760,11 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             .map_err(CoreError::Api)
     }
 
-    /// Get Release Watch — new releases from followed artists, labels and
-    /// awards (Qobuz mobile "Radar de Novedades"). REST endpoint called with
-    /// authenticated headers; no RPC signing.
+    /// Get Release Watch — new releases from followed artists/labels/awards.
+    /// `release_type` must be one of "artists" | "labels" | "awards".
     pub async fn get_release_watch(
         &self,
+        release_type: &str,
         limit: u32,
         offset: u32,
     ) -> Result<SearchResultsPage<Album>, CoreError> {
@@ -772,7 +772,7 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
 
         client
-            .get_release_watch(limit, offset)
+            .get_release_watch(release_type, limit, offset)
             .await
             .map_err(CoreError::Api)
     }
