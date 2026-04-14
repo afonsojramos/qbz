@@ -60,6 +60,7 @@ pub mod paths {
     // Award
     pub const AWARD_PAGE: &str = "/award/page";
     pub const AWARD_GET_ALBUMS: &str = "/award/getAlbums";
+    pub const AWARD_EXPLORE: &str = "/award/explore";
 
     // Genre
     pub const GENRE_LIST: &str = "/genre/list";

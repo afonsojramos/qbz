@@ -570,6 +570,18 @@ impl CoreBridge {
             .map_err(|e| e.to_string())
     }
 
+    /// Enumerate award catalog (/award/explore).
+    pub async fn get_award_explore(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<serde_json::Value, String> {
+        self.core
+            .get_award_explore(limit, offset)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     /// Get award page — hero info + award-winning releases.
     pub async fn get_award_page(&self, award_id: &str) -> Result<qbz_models::AwardPageData, String> {
         self.core

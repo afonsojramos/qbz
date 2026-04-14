@@ -851,6 +851,20 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             .map_err(CoreError::Api)
     }
 
+    /// Enumerate award catalog (/award/explore).
+    pub async fn get_award_explore(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<serde_json::Value, CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+        client
+            .get_award_explore(limit, offset)
+            .await
+            .map_err(CoreError::Api)
+    }
+
     /// Get award page — hero info + award-winning releases.
     pub async fn get_award_page(
         &self,

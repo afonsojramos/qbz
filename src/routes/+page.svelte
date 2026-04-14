@@ -155,6 +155,7 @@
   import { loadArtistFavorites } from '$lib/stores/artistFavoritesStore';
   import { loadLabelFavorites } from '$lib/stores/labelFavoritesStore';
   import { loadAwardFavorites } from '$lib/stores/awardFavoritesStore';
+  import { resolveAwardIdByName } from '$lib/stores/awardCatalogStore';
   import { getDefaultFavoritesTab } from '$lib/utils/favorites';
   import { platform } from '$lib/utils/platform';
   import type { FavoritesPreferences, ResolvedMusician } from '$lib/types';
@@ -1528,16 +1529,23 @@
     navigateTo('label-releases', labelId);
   }
 
-  function handleAwardClick(awardId: string, awardName: string) {
-    if (!awardId) {
-      // Some /album/get responses omit award.id. We still keep the
-      // click affordance so it looks interactive, but there is no
-      // target page to open — surface that to the user.
+  async function handleAwardClick(awardId: string, awardName: string) {
+    // Happy path: /album/get included the id — navigate immediately.
+    if (awardId) {
+      selectedAward = { id: awardId, name: awardName };
+      navigateTo('award', awardId);
+      return;
+    }
+    // /album/get sometimes returns an award entry with only a name.
+    // Resolve via the cached /award/explore catalog. One HTTP round-trip
+    // the first time, instant afterwards.
+    const resolved = await resolveAwardIdByName(awardName);
+    if (!resolved) {
       showToast($t('toast.awardUnavailable'), 'info');
       return;
     }
-    selectedAward = { id: awardId, name: awardName };
-    navigateTo('award', awardId);
+    selectedAward = { id: resolved, name: awardName };
+    navigateTo('award', resolved);
   }
 
   /**

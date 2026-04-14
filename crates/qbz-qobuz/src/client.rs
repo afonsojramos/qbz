@@ -1477,6 +1477,30 @@ impl QobuzClient {
         Ok(serde_json::from_value(response)?)
     }
 
+    /// Enumerate the award catalog (/award/explore). Paginated.
+    /// Returns raw JSON items so callers can extract just (id, name).
+    pub async fn get_award_explore(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<serde_json::Value> {
+        let url = endpoints::build_url(paths::AWARD_EXPLORE);
+        log::debug!("[API] get_award_explore(limit={}, offset={})", limit, offset);
+        let response: serde_json::Value = self
+            .signed_get_auth(
+                &url,
+                "awardexplore",
+                &[
+                    ("limit", limit.to_string()),
+                    ("offset", offset.to_string()),
+                ],
+            )
+            .await?
+            .json()
+            .await?;
+        Ok(response)
+    }
+
     /// Get award page — hero info + categorized award-winning releases.
     /// Mirrors Android's AwardDto shape from /award/page. Uses auth
     /// headers (app_id + user token) — region-gated catalog.

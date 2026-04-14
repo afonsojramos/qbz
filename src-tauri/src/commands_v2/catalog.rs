@@ -442,6 +442,31 @@ pub async fn v2_get_label_page(
         .map_err(RuntimeError::Internal)
 }
 
+/// Enumerate award catalog — paginated list of awards with their ids
+/// and names. Used by the frontend to resolve award ids by name when
+/// /album/get omits them.
+#[tauri::command]
+pub async fn v2_get_award_explore(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    bridge: State<'_, CoreBridgeState>,
+    runtime: State<'_, RuntimeManagerState>,
+) -> Result<serde_json::Value, RuntimeError> {
+    runtime
+        .manager()
+        .check_requirements(CommandRequirement::RequiresCoreBridgeAuth)
+        .await?;
+
+    let limit = limit.unwrap_or(100);
+    let offset = offset.unwrap_or(0);
+    log::info!("[V2] get_award_explore: limit={} offset={}", limit, offset);
+    let bridge = bridge.get().await;
+    bridge
+        .get_award_explore(limit, offset)
+        .await
+        .map_err(RuntimeError::Internal)
+}
+
 /// Get award page (hero info + award-winning releases).
 #[tauri::command]
 #[allow(non_snake_case)]

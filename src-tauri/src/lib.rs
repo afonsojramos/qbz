@@ -1603,6 +1603,7 @@ pub fn run() {
             commands_v2::v2_get_label_explore,
             commands_v2::v2_get_award_page,
             commands_v2::v2_get_award_albums,
+            commands_v2::v2_get_award_explore,
             commands_v2::v2_pause_playback,
             commands_v2::v2_resume_playback,
             commands_v2::v2_stop_playback,
