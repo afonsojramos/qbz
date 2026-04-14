@@ -150,6 +150,7 @@
     onNavigateQobuzissimes?: () => void;
     onNavigateAlbumsOfTheWeek?: () => void;
     onNavigatePressAccolades?: () => void;
+    onNavigateReleaseWatch?: () => void;
     onNavigateQobuzPlaylists?: () => void;
     onNavigateDailyQ?: () => void;
     onNavigateWeeklyQ?: () => void;
@@ -202,6 +203,7 @@
     onNavigateQobuzissimes,
     onNavigateAlbumsOfTheWeek,
     onNavigatePressAccolades,
+    onNavigateReleaseWatch,
     onNavigateQobuzPlaylists,
     onNavigateDailyQ,
     onNavigateWeeklyQ,
@@ -1371,9 +1373,14 @@
       {:else if releaseWatchAlbums.length > 0}
         <HorizontalScrollRow>
           {#snippet header()}
-            <div class="section-header-col">
-              <h2 class="section-title">{$t('home.releaseWatch')}</h2>
-              <p class="section-subtitle">{$t('discover.releaseWatch.subtitle')}</p>
+            <div class="section-header-group">
+              <div class="section-header-col">
+                <h2 class="section-title">{$t('home.releaseWatch')}</h2>
+                <p class="section-subtitle">{$t('discover.releaseWatch.subtitle')}</p>
+              </div>
+              {#if onNavigateReleaseWatch}
+                <button class="see-all-link" onclick={onNavigateReleaseWatch}>{$t('home.seeAll')}<ArrowRight size={14} /></button>
+              {/if}
             </div>
           {/snippet}
           {#snippet children()}

@@ -2613,5 +2613,17 @@
   "ribbon": {
     "albumOfTheWeek": "Álbum de la semana",
     "qobuzissime": "Qobuzissime"
+  },
+  "releaseWatch": {
+    "tabs": {
+      "artists": "Artistas",
+      "labels": "Sellos",
+      "awards": "Premios"
+    },
+    "empty": {
+      "artists": "No hay novedades de los artistas que sigues.",
+      "labels": "No hay novedades de los sellos que sigues.",
+      "awards": "No hay novedades de los premios que sigues."
+    }
   }
 }

@@ -32,6 +32,7 @@ export type ViewType =
   | 'discover-albums-of-the-week'
   | 'discover-press-accolades'
   | 'discover-playlists'
+  | 'discover-release-watch'
   | 'purchases'
   | 'purchase-album'
   | 'dailyq'

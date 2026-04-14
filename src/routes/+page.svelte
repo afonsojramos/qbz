@@ -415,6 +415,7 @@
   import BlacklistManagerView from '$lib/components/views/BlacklistManagerView.svelte';
   import DiscoverBrowseView from '$lib/components/views/DiscoverBrowseView.svelte';
   import DiscoverPlaylistsBrowseView from '$lib/components/views/DiscoverPlaylistsBrowseView.svelte';
+  import ReleaseWatchView from '$lib/components/views/ReleaseWatchView.svelte';
   import PurchasesView from '$lib/components/views/PurchasesView.svelte';
   import PurchaseAlbumDetailView from '$lib/components/views/PurchaseAlbumDetailView.svelte';
   import DynamicSuggestView from '$lib/components/views/DynamicSuggestView.svelte';
@@ -632,6 +633,7 @@
       case 'discover-albums-of-the-week':
       case 'discover-press-accolades':
       case 'discover-playlists':
+      case 'discover-release-watch':
       case 'purchases':
       case 'dailyq':
       case 'weeklyq':
@@ -5034,6 +5036,7 @@
             onNavigateQobuzissimes={() => navigateTo('discover-qobuzissimes')}
             onNavigateAlbumsOfTheWeek={() => navigateTo('discover-albums-of-the-week')}
             onNavigatePressAccolades={() => navigateTo('discover-press-accolades')}
+            onNavigateReleaseWatch={() => navigateTo('discover-release-watch')}
             onNavigateQobuzPlaylists={() => navigateTo('discover-playlists')}
             onNavigateDailyQ={() => navigateTo('dailyq')}
             onNavigateWeeklyQ={() => navigateTo('weeklyq')}
@@ -5519,6 +5522,23 @@
           onPlaylistPlayLater={queuePlaylistLaterById}
           onPlaylistCopyToLibrary={copyPlaylistToLibraryById}
           onPlaylistShareQobuz={sharePlaylistQobuzLinkById}
+        />
+      {:else if activeView === 'discover-release-watch'}
+        <ReleaseWatchView
+          onBack={navGoBack}
+          onAlbumClick={handleAlbumClick}
+          onAlbumPlay={playAlbumById}
+          onAlbumPlayNext={queueAlbumNextById}
+          onAlbumPlayLater={queueAlbumLaterById}
+          onAlbumShareQobuz={shareAlbumQobuzLinkById}
+          onAlbumShareSonglink={shareAlbumSonglinkById}
+          onAlbumDownload={downloadAlbumById}
+          onOpenAlbumFolder={openAlbumFolderById}
+          onReDownloadAlbum={reDownloadAlbumById}
+          onAddAlbumToPlaylist={addAlbumToPlaylistById}
+          checkAlbumFullyDownloaded={checkAlbumFullyDownloaded}
+          {downloadStateVersion}
+          onArtistClick={handleArtistClick}
         />
       {:else if activeView === 'dailyq'}
         <DynamicSuggestView
