@@ -1686,7 +1686,8 @@
     "loadingCredits": "Chargement des crédits...",
     "loadingDevices": "Chargement des appareils...",
     "playlistUpdated": "Playlist mise à jour",
-    "findingSimilarArtists": "Trouver des artistes similaires..."
+    "findingSimilarArtists": "Trouver des artistes similaires...",
+    "awardUnavailable": "Détail non disponible pour cette récompense."
   },
   "offline": {
     "title": "Mode hors ligne",

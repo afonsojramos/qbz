@@ -1709,7 +1709,8 @@
       "newState": "Lista negra {status}"
     },
     "laodingDevices": "Carregando dispositivos...",
-    "findingSimilarArtists": "Encontrando artistas semelhantes..."
+    "findingSimilarArtists": "Encontrando artistas semelhantes...",
+    "awardUnavailable": "Detalhe não disponível para este prêmio."
   },
   "offline": {
     "title": "Modo Offline",

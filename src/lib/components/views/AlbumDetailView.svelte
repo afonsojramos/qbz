@@ -764,8 +764,8 @@
               <button
                 class="sidebar-entity-card"
                 type="button"
-                onclick={() => { if (award.id && onAwardClick) onAwardClick(award.id, award.name); }}
-                disabled={!onAwardClick || !award.id}
+                onclick={() => onAwardClick?.(award.id ?? '', award.name)}
+                disabled={!onAwardClick}
               >
                 <div class="sidebar-entity-avatar award-avatar">
                   <Award size={22} />

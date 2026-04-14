@@ -1686,7 +1686,8 @@
       "newState": "Blacklist {status}"
     },
     "laodingDevices": "Geräte werden geladen...",
-    "findingSimilarArtists": "Suche nach ähnlichen Künstlern..."
+    "findingSimilarArtists": "Suche nach ähnlichen Künstlern...",
+    "awardUnavailable": "Detailansicht für diese Auszeichnung nicht verfügbar."
   },
   "offline": {
     "title": "Offline-Modus",

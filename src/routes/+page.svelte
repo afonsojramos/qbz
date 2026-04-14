@@ -1529,7 +1529,13 @@
   }
 
   function handleAwardClick(awardId: string, awardName: string) {
-    if (!awardId) return;
+    if (!awardId) {
+      // Some /album/get responses omit award.id. We still keep the
+      // click affordance so it looks interactive, but there is no
+      // target page to open — surface that to the user.
+      showToast($t('toast.awardUnavailable'), 'info');
+      return;
+    }
     selectedAward = { id: awardId, name: awardName };
     navigateTo('award', awardId);
   }

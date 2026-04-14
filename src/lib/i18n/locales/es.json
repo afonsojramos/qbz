@@ -1709,7 +1709,8 @@
     "copied": "¡Copiado!",
     "loadingCredits": "Cargando créditos...",
     "laodingDevices": "Cargando dispositivos...",
-    "findingSimilarArtists": "Encontrar artistas similares..."
+    "findingSimilarArtists": "Encontrar artistas similares...",
+    "awardUnavailable": "No hay detalle disponible para este premio."
   },
   "offline": {
     "title": "Modo Offline",
