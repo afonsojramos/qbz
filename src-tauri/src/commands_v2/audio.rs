@@ -1,11 +1,50 @@
 use tauri::State;
 
 use crate::audio::{AlsaPlugin, AudioBackendType};
+use crate::audio_device_watch::{check_selected_device_presence, DevicePresence};
 use crate::config::audio_settings::{AudioSettings, AudioSettingsState};
 use crate::core_bridge::CoreBridgeState;
 use crate::runtime::RuntimeError;
 
 use super::{convert_to_qbz_audio_settings, sync_audio_settings_to_player};
+
+/// Frontend-facing shape: serializable snapshot of the presence check.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AudioDevicePresence {
+    UsingDefault,
+    Present { wanted: String },
+    Missing { wanted: String, available: Vec<String> },
+    Inconclusive,
+}
+
+/// Snapshot the presence of the user's currently-selected output
+/// device. Frontend calls this on demand (e.g. when a
+/// `audio:device-missing` toast button fires Retry).
+#[tauri::command]
+pub fn v2_check_audio_device_presence(
+    audio_settings: State<'_, AudioSettingsState>,
+) -> Result<AudioDevicePresence, RuntimeError> {
+    let presence = check_selected_device_presence(&audio_settings);
+    Ok(match presence {
+        DevicePresence::UsingDefault => AudioDevicePresence::UsingDefault,
+        DevicePresence::Present => {
+            // Re-read the wanted name so we can echo it back.
+            let wanted = audio_settings
+                .store
+                .lock()
+                .ok()
+                .and_then(|g| g.as_ref().and_then(|s| s.get_settings().ok()))
+                .and_then(|s| s.output_device)
+                .unwrap_or_default();
+            AudioDevicePresence::Present { wanted }
+        }
+        DevicePresence::Missing { wanted, available } => {
+            AudioDevicePresence::Missing { wanted, available }
+        }
+        DevicePresence::Inconclusive => AudioDevicePresence::Inconclusive,
+    })
+}
 
 // ==================== Audio Device Commands (V2) ====================
 

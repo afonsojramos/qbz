@@ -4607,6 +4607,7 @@
     let unlistenQconnectAdmissionBlocked: UnlistenFn | null = null;
     let unlistenQconnectDiagnostic: UnlistenFn | null = null;
     let unlistenQconnectRendererReportDebug: UnlistenFn | null = null;
+    let unlistenAudioDeviceMissing: UnlistenFn | null = null;
 
     (async () => {
       const unlisten1 = await listen('tray:play_pause', () => {
@@ -4798,6 +4799,23 @@
       });
       if (disposed) { unlisten10(); return; }
       unlistenQconnectRendererReportDebug = unlisten10;
+
+      // Issue #307 — configured output device vanished mid-session
+      // (KVM switched away, USB unplugged, sink removed). Backend emits
+      // this right before play/resume when it detects the mismatch;
+      // init_device already falls back to default automatically, we
+      // just surface the fact to the user as a warning toast so they
+      // understand why audio is now coming out of a different sink.
+      const unlistenDeviceMissing = await listen<{ wanted: string; available: string[] }>('audio:device-missing', (event) => {
+        const wanted = event.payload?.wanted ?? '';
+        showToast(
+          $t('toast.audioDeviceMissing', { values: { device: wanted } }),
+          'warning',
+          6000
+        );
+      });
+      if (disposed) { unlistenDeviceMissing(); return; }
+      unlistenAudioDeviceMissing = unlistenDeviceMissing;
     })();
 
     return () => {
@@ -4814,6 +4832,7 @@
       unlistenQconnectAdmissionBlocked?.();
       unlistenQconnectDiagnostic?.();
       unlistenQconnectRendererReportDebug?.();
+      unlistenAudioDeviceMissing?.();
       // Save session before cleanup
       saveSessionBeforeClose();
       cleanupBootstrap();

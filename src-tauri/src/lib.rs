@@ -21,6 +21,7 @@ pub mod api_server;
 pub mod artist_blacklist;
 pub mod artist_vectors;
 pub mod audio;
+pub mod audio_device_watch;
 pub mod cache;
 pub mod cast;
 pub mod commands;
@@ -1199,6 +1200,7 @@ pub fn run() {
         .manage(api_cache_state)
         .manage(session_store_state)
         .manage(audio_settings_state)
+        .manage(audio_device_watch::DeviceMissingThrottle::new())
         .manage(download_settings_state)
         .manage(subscription_state)
         .manage(offline_state)
@@ -1615,6 +1617,7 @@ pub fn run() {
             commands_v2::v2_play_next_gapless,
             commands_v2::v2_prefetch_track,
             commands_v2::v2_reinit_audio_device,
+            commands_v2::v2_check_audio_device_presence,
             commands_v2::v2_get_audio_settings,
             commands_v2::v2_set_audio_output_device,
             commands_v2::v2_set_audio_exclusive_mode,

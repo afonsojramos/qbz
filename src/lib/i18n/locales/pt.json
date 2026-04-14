@@ -1710,7 +1710,8 @@
     },
     "laodingDevices": "Carregando dispositivos...",
     "findingSimilarArtists": "Encontrando artistas semelhantes...",
-    "awardUnavailable": "Detalhe não disponível para este prêmio."
+    "awardUnavailable": "Detalhe não disponível para este prêmio.",
+    "audioDeviceMissing": "Dispositivo '{device}' não está mais disponível. Usando o padrão do sistema."
   },
   "offline": {
     "title": "Modo Offline",

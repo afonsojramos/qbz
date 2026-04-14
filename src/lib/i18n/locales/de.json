@@ -1687,7 +1687,8 @@
     },
     "laodingDevices": "Geräte werden geladen...",
     "findingSimilarArtists": "Suche nach ähnlichen Künstlern...",
-    "awardUnavailable": "Detailansicht für diese Auszeichnung nicht verfügbar."
+    "awardUnavailable": "Detailansicht für diese Auszeichnung nicht verfügbar.",
+    "audioDeviceMissing": "Ausgabegerät '{device}' ist nicht mehr verfügbar. Standardgerät wird verwendet."
   },
   "offline": {
     "title": "Offline-Modus",

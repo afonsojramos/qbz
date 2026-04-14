@@ -1710,7 +1710,8 @@
     "loadingCredits": "Cargando créditos...",
     "laodingDevices": "Cargando dispositivos...",
     "findingSimilarArtists": "Encontrar artistas similares...",
-    "awardUnavailable": "No hay detalle disponible para este premio."
+    "awardUnavailable": "No hay detalle disponible para este premio.",
+    "audioDeviceMissing": "El dispositivo '{device}' ya no está disponible. Usando el predeterminado del sistema."
   },
   "offline": {
     "title": "Modo Offline",

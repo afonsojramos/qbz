@@ -1687,7 +1687,8 @@
     "loadingDevices": "Chargement des appareils...",
     "playlistUpdated": "Playlist mise à jour",
     "findingSimilarArtists": "Trouver des artistes similaires...",
-    "awardUnavailable": "Détail non disponible pour cette récompense."
+    "awardUnavailable": "Détail non disponible pour cette récompense.",
+    "audioDeviceMissing": "Le périphérique '{device}' n'est plus disponible. Utilisation du périphérique par défaut."
   },
   "offline": {
     "title": "Mode hors ligne",

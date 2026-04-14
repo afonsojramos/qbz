@@ -1710,7 +1710,8 @@
     "addedToPlaylist": "Added to playlist",
     "copied": "Copied!",
     "findingSimilarArtists": "Finding similar artists...",
-    "awardUnavailable": "Award detail not available for this entry."
+    "awardUnavailable": "Award detail not available for this entry.",
+    "audioDeviceMissing": "Output device '{device}' is no longer available. Using system default."
   },
   "offline": {
     "title": "Offline Mode",
