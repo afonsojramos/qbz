@@ -687,6 +687,9 @@
       "output": "Sortie",
       "resampled": "Rééchantillonné par le système",
       "qualityAdjusted": "Qualité ajustée pour compatibilité — bit-perfect, sans rééchantillonnage",
+      "plughwFallback": "Rééchantillonné par ALSA (plughw)",
+      "plughwFix": "Le DAC ne prend pas en charge cette fréquence nativement. Choisissez une source à fréquence plus basse ou un DAC avec un support plus large.",
+      "bitPerfect": "Bit-perfect : sortie matérielle directe",
       "fix": "Activez DAC Passthrough ou Mode Exclusif dans les Paramètres"
     },
     "stereo": "Stéréo",

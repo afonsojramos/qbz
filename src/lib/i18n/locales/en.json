@@ -687,7 +687,10 @@
       "output": "Output",
       "resampled": "Resampled by system",
       "qualityAdjusted": "Quality adjusted for device compatibility — bit-perfect, no resampling",
-      "fix": "Enable DAC Passthrough or Exclusive Mode in Settings"
+      "fix": "Enable DAC Passthrough or Exclusive Mode in Settings",
+      "plughwFallback": "Resampled by ALSA (plughw)",
+      "plughwFix": "DAC doesn't support this sample rate natively. Pick a lower-rate source or a DAC with broader rate support.",
+      "bitPerfect": "Bit-perfect: direct hardware output"
     },
     "stereo": "Stereo",
     "mono": "Mono"

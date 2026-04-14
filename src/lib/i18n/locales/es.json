@@ -687,6 +687,9 @@
       "output": "Salida",
       "resampled": "Remuestreado por el sistema",
       "qualityAdjusted": "Calidad ajustada por compatibilidad — bit-perfect, sin remuestreo",
+      "plughwFallback": "Remuestreado por ALSA (plughw)",
+      "plughwFix": "El DAC no soporta esta tasa de muestreo nativamente. Elige una fuente de menor tasa o un DAC con mayor soporte.",
+      "bitPerfect": "Bit-perfect: salida directa al hardware",
       "fix": "Activa DAC Passthrough o Modo Exclusivo en Ajustes"
     },
     "stereo": "Estéreo",

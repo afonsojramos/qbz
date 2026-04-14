@@ -8,6 +8,8 @@
     is_active: boolean;
   }
 
+  type BitPerfectMode = 'DirectHardware' | 'PluginFallback' | 'Disabled';
+
   interface Props {
     quality?: string;
     bitDepth?: number;
@@ -16,6 +18,9 @@
     originalSamplingRate?: number;
     format?: string;
     compact?: boolean;
+    /** Reported by the audio backend when a stream is opened. Lets us distinguish
+     *  ALSA plughw software resample (PluginFallback) from system resampling. */
+    bitPerfectMode?: BitPerfectMode | null;
   }
 
   let {
@@ -25,7 +30,8 @@
     originalBitDepth,
     originalSamplingRate,
     format,
-    compact = false
+    compact = false,
+    bitPerfectMode = null,
   }: Props = $props();
 
   // Hardware sample rate from /proc/asound (sub-ms read)
@@ -68,6 +74,14 @@
     }
     return false;
   });
+
+  // ALSA plughw fallback is its own failure mode: the stream is being resampled
+  // inside the kernel/ALSA space because the DAC does not accept the source
+  // rate (see issue #288). Distinct from isDowngraded which is about the
+  // pipewire/system path — both get surfaced in the UI but with different
+  // explanations so users know where to look for the fix.
+  const isPluginFallback = $derived(bitPerfectMode === 'PluginFallback');
+  const isBitPerfect = $derived(bitPerfectMode === 'DirectHardware');
 
   // Quality adjustment detection: QBZ fetched lower quality for hardware compatibility.
   // Decoded rate < original metadata rate, but hardware plays it natively (no resampling).
@@ -198,7 +212,9 @@
     class="quality-badge"
     class:downgraded={isDowngraded}
     class:adjusted={isQualityAdjusted}
-    title={isDowngraded || isQualityAdjusted ? undefined : `${tierLabel}: ${displayText}`}
+    class:plughw={isPluginFallback}
+    class:bitperfect={isBitPerfect}
+    title={isDowngraded || isQualityAdjusted || isPluginFallback ? undefined : `${tierLabel}: ${displayText}`}
     onmouseenter={() => { isHovering = true; }}
     onmouseleave={() => { isHovering = false; }}
   >
@@ -216,13 +232,34 @@
     <div class="badge-text">
       <span class="tier-label">
         {tierLabel}
-        <span class="downgrade-indicator" class:visible={isDowngraded || isQualityAdjusted} class:adjusted={isQualityAdjusted}>↓</span>
+        <span
+          class="downgrade-indicator"
+          class:visible={isDowngraded || isQualityAdjusted || isPluginFallback}
+          class:adjusted={isQualityAdjusted}
+          class:plughw={isPluginFallback}
+        >↓</span>
+        <span class="bitperfect-indicator" class:visible={isBitPerfect} title={$t('quality.tooltip.bitPerfect')}>✓</span>
       </span>
       <span class="quality-info">{displayText}</span>
     </div>
 
+    <!-- Custom tooltip for ALSA plughw fallback (software resample inside ALSA) -->
+    {#if isPluginFallback && !isDowngraded && !isQualityAdjusted && isHovering}
+      <div class="quality-tooltip">
+        <div class="tooltip-section">
+          <div class="tooltip-label">{$t('quality.tooltip.source')}</div>
+          <div class="tooltip-value">{displayText}</div>
+        </div>
+        <div class="tooltip-section">
+          <div class="tooltip-label">{$t('quality.tooltip.output')}</div>
+          <div class="tooltip-value">{effectiveOutputRateKHz ? `${effectiveOutputRateKHz} kHz` : displayText}</div>
+        </div>
+        <div class="tooltip-divider"></div>
+        <div class="tooltip-warning">{$t('quality.tooltip.plughwFallback')}</div>
+        <div class="tooltip-fix">{$t('quality.tooltip.plughwFix')}</div>
+      </div>
     <!-- Custom tooltip for quality-adjusted state (QBZ chose lower quality for hw compat) -->
-    {#if isQualityAdjusted && isHovering}
+    {:else if isQualityAdjusted && isHovering}
       <div class="quality-tooltip">
         <div class="tooltip-section">
           <div class="tooltip-label">{$t('quality.tooltip.source')}</div>
@@ -332,6 +369,14 @@
     border-color: rgba(234, 179, 8, 0.3);
   }
 
+  .quality-badge.plughw {
+    border-color: rgba(168, 85, 247, 0.3);
+  }
+
+  .quality-badge.bitperfect {
+    border-color: rgba(34, 197, 94, 0.25);
+  }
+
   .downgrade-indicator {
     color: #eab308;
     font-weight: 600;
@@ -345,6 +390,21 @@
 
   .downgrade-indicator.adjusted {
     color: #60a5fa;
+  }
+
+  .downgrade-indicator.plughw {
+    color: #a855f7;
+  }
+
+  .bitperfect-indicator {
+    color: #22c55e;
+    font-weight: 600;
+    margin-left: 2px;
+    visibility: hidden;
+  }
+
+  .bitperfect-indicator.visible {
+    visibility: visible;
   }
 
   /* Custom tooltip for degraded quality */

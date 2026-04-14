@@ -36,7 +36,12 @@
     refreshStatus,
     type OfflineReason
   } from '$lib/stores/offlineStore';
-  import { toggleMute } from '$lib/stores/playerStore';
+  import {
+    toggleMute,
+    getBitPerfectMode,
+    subscribe as subscribePlayer,
+    type BitPerfectMode,
+  } from '$lib/stores/playerStore';
   import {
     subscribe as subscribeDegraded,
     isDegraded
@@ -180,6 +185,16 @@
       isDegradedState = isDegraded();
     });
     return unsubDegraded;
+  });
+
+  // Bit-perfect mode reported by the audio backend (null until first stream).
+  let bitPerfectMode = $state<BitPerfectMode | null>(getBitPerfectMode());
+
+  $effect(() => {
+    const unsubPlayer = subscribePlayer(() => {
+      bitPerfectMode = getBitPerfectMode();
+    });
+    return unsubPlayer;
   });
 
   // Get human-readable offline reason
@@ -440,7 +455,7 @@
 
           <div class="badges-group">
             <div class="quality-indicator">
-              <QualityBadge {quality} {bitDepth} {samplingRate} {originalBitDepth} {originalSamplingRate} {format} />
+              <QualityBadge {quality} {bitDepth} {samplingRate} {originalBitDepth} {originalSamplingRate} {format} {bitPerfectMode} />
               <div class="audio-badges-row">
                 <AudioOutputBadges {samplingRate} />
               </div>
