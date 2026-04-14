@@ -8,7 +8,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { t } from '$lib/i18n';
-  import { ArrowLeft, Award as AwardIcon, Heart, LoaderCircle } from 'lucide-svelte';
+  import { ArrowLeft, Award as AwardIcon, Heart, LoaderCircle, ArrowRight } from 'lucide-svelte';
   import AlbumCard from '../AlbumCard.svelte';
   import type { AwardPageData, QobuzAlbum } from '$lib/types';
   import { formatQuality, getQobuzImage } from '$lib/adapters/qobuzAdapters';
@@ -47,6 +47,8 @@
     isAlbumDownloaded?: (albumId: string) => boolean;
     downloadStateVersion?: number;
     onArtistClick?: (artistId: number) => void;
+    /** Navigate to the full paginated listing of this award's albums. */
+    onNavigateAwardAlbums?: (awardId: string, awardName: string) => void;
   }
 
   let {
@@ -66,17 +68,16 @@
     isAlbumDownloaded,
     downloadStateVersion,
     onArtistClick,
+    onNavigateAwardAlbums,
   }: Props = $props();
 
-  const PAGE_SIZE = 50;
+  const PAGE_SIZE = 20;
 
   let page = $state<AwardPageData | null>(null);
   let albums = $state<AlbumCardData[]>([]);
-  let offset = $state(0);
   let totalEstimate = $state<number | null>(null);
-  let hasMore = $state(true);
+  let hasMore = $state(false);
   let loading = $state(true);
-  let loadingMore = $state(false);
   let error = $state<string | null>(null);
   let heroImageFailed = $state(false);
 
@@ -109,37 +110,27 @@
     }
   }
 
-  async function loadAlbums(reset: boolean) {
-    if (reset) {
-      offset = 0;
-      albums = [];
-      hasMore = true;
-      totalEstimate = null;
-      loading = true;
-    } else {
-      loadingMore = true;
-    }
+  async function loadAlbums() {
+    loading = true;
+    error = null;
     try {
       const result = await invoke<{ items: QobuzAlbum[]; total: number; offset: number; limit: number }>(
         'v2_get_award_albums',
-        { awardId, limit: PAGE_SIZE, offset }
+        { awardId, limit: PAGE_SIZE, offset: 0 }
       );
-      const mapped = (result.items ?? []).map(qobuzToCard);
-      albums = reset ? mapped : [...albums, ...mapped];
-      offset = albums.length;
+      albums = (result.items ?? []).map(qobuzToCard);
       totalEstimate = result.total;
-      hasMore = mapped.length >= PAGE_SIZE && offset < result.total;
+      hasMore = albums.length >= PAGE_SIZE && albums.length < result.total;
     } catch (err) {
       console.error('[AwardView] failed to load albums:', err);
       error = String(err);
     } finally {
       loading = false;
-      loadingMore = false;
     }
   }
 
-  function handleLoadMore() {
-    if (!loading && !loadingMore && hasMore) loadAlbums(false);
+  function handleSeeAll() {
+    onNavigateAwardAlbums?.(awardId, displayName);
   }
 
   // Subscribe to the favorites store so the Follow button's visual
@@ -165,7 +156,7 @@
 
   onMount(() => {
     loadHero();
-    loadAlbums(true);
+    loadAlbums();
   });
 
   const displayName = $derived(page?.name ?? awardName ?? '');
@@ -224,9 +215,17 @@
 
   <main class="content">
     <div class="section-header">
-      <h2 class="section-title">{$t('award.section.releases')}</h2>
-      {#if totalEstimate}
-        <span class="section-count">{totalEstimate}</span>
+      <div class="section-title-group">
+        <h2 class="section-title">{$t('award.section.releases')}</h2>
+        {#if totalEstimate}
+          <span class="section-count">{totalEstimate}</span>
+        {/if}
+      </div>
+      {#if hasMore && onNavigateAwardAlbums}
+        <button class="see-all-link" onclick={handleSeeAll}>
+          {$t('home.seeAll')}
+          <ArrowRight size={14} />
+        </button>
       {/if}
     </div>
 
@@ -239,7 +238,7 @@
       <div class="error">
         <p>{$t('favorites.failedLoadFavorites')}</p>
         <p class="error-detail">{error}</p>
-        <button class="retry-btn" onclick={() => loadAlbums(true)}>{$t('actions.retry')}</button>
+        <button class="retry-btn" onclick={loadAlbums}>{$t('actions.retry')}</button>
       </div>
     {:else if albums.length === 0}
       <div class="empty">
@@ -274,16 +273,6 @@
           />
         {/each}
       </div>
-      {#if hasMore}
-        <div class="load-more-wrapper">
-          <button class="load-more-btn" onclick={handleLoadMore} disabled={loadingMore}>
-            {#if loadingMore}
-              <LoaderCircle size={16} class="spinner" />
-            {/if}
-            <span>{loadingMore ? $t('album.loading') : $t('home.seeMore')}</span>
-          </button>
-        </div>
-      {/if}
     {/if}
   </main>
 </div>
@@ -376,6 +365,9 @@
 
   .content { display: flex; flex-direction: column; gap: 20px; }
   .section-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .section-title-group {
     display: flex; align-items: baseline; gap: 12px;
   }
   .section-title {
@@ -384,27 +376,24 @@
   .section-count {
     font-size: 12px; color: var(--text-muted);
   }
+  .see-all-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 6px 10px;
+    background: transparent; border: none; border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 13px; font-weight: 500;
+    cursor: pointer;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+  .see-all-link:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+  }
   .album-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 24px 16px;
   }
-  .load-more-wrapper {
-    display: flex; justify-content: center; margin-top: 8px;
-  }
-  .load-more-btn {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 8px 20px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-primary);
-    border-radius: 6px;
-    color: var(--text-primary);
-    font-size: 13px;
-    cursor: pointer;
-    transition: background-color 150ms ease;
-  }
-  .load-more-btn:hover:not(:disabled) { background: var(--bg-secondary); }
-  .load-more-btn:disabled { opacity: 0.6; cursor: wait; }
 
   .loading,
   .error,

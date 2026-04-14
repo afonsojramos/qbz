@@ -419,6 +419,7 @@
   import DiscoverPlaylistsBrowseView from '$lib/components/views/DiscoverPlaylistsBrowseView.svelte';
   import ReleaseWatchView from '$lib/components/views/ReleaseWatchView.svelte';
   import AwardView from '$lib/components/views/AwardView.svelte';
+  import AwardAlbumsView from '$lib/components/views/AwardAlbumsView.svelte';
   import PurchasesView from '$lib/components/views/PurchasesView.svelte';
   import PurchaseAlbumDetailView from '$lib/components/views/PurchaseAlbumDetailView.svelte';
   import DynamicSuggestView from '$lib/components/views/DynamicSuggestView.svelte';
@@ -1329,6 +1330,7 @@
           selectedLabel = { id: Number(itemId), name: selectedLabel?.name || '' };
           break;
         case 'award':
+        case 'award-albums':
           selectedAward = { id: String(itemId), name: selectedAward?.name || '' };
           break;
         case 'musician':
@@ -1527,6 +1529,12 @@
   function handleNavigateLabelReleases(labelId: number, labelName: string) {
     selectedLabel = { id: labelId, name: labelName };
     navigateTo('label-releases', labelId);
+  }
+
+  function handleNavigateAwardAlbums(awardId: string, awardName: string) {
+    if (!awardId) return;
+    selectedAward = { id: awardId, name: awardName };
+    navigateTo('award-albums', awardId);
   }
 
   async function handleAwardClick(awardId: string, awardName: string) {
@@ -5315,6 +5323,26 @@
           onOpenAlbumFolder={openAlbumFolderById}
           onReDownloadAlbum={reDownloadAlbumById}
           onAddAlbumToPlaylist={addAlbumToPlaylistById}
+          onNavigateAwardAlbums={handleNavigateAwardAlbums}
+          {downloadStateVersion}
+          onArtistClick={handleArtistClick}
+        />
+      {:else if activeView === 'award-albums' && selectedAward}
+        <AwardAlbumsView
+          awardId={selectedAward.id}
+          awardName={selectedAward.name}
+          onBack={navGoBack}
+          onAlbumClick={handleAlbumClick}
+          onAlbumPlay={playAlbumById}
+          onAlbumPlayNext={queueAlbumNextById}
+          onAlbumPlayLater={queueAlbumLaterById}
+          onAlbumShareQobuz={shareAlbumQobuzLinkById}
+          onAlbumShareSonglink={shareAlbumSonglinkById}
+          onAlbumDownload={downloadAlbumById}
+          onOpenAlbumFolder={openAlbumFolderById}
+          onReDownloadAlbum={reDownloadAlbumById}
+          onAddAlbumToPlaylist={addAlbumToPlaylistById}
+          checkAlbumFullyDownloaded={checkAlbumFullyDownloaded}
           {downloadStateVersion}
           onArtistClick={handleArtistClick}
         />
