@@ -383,6 +383,7 @@
     qobuzPlaylists = cached.qobuzPlaylists;
     essentialDiscography = cached.essentialDiscography;
     playlistTags = cached.playlistTags;
+    releaseWatchAlbums = cached.releaseWatchAlbums ?? [];
 
     loadingNewReleases = false;
     loadingPressAwards = false;
@@ -395,6 +396,7 @@
     loadingFavoriteAlbums = false;
     loadingQobuzPlaylists = false;
     loadingEssentialDiscography = false;
+    loadingReleaseWatch = false;
 
     requestAnimationFrame(() => {
       if (homeViewEl && cached.scrollTop > 0) {
@@ -405,7 +407,8 @@
     const allAlbums = [
       ...cached.newReleases, ...cached.pressAwards, ...cached.mostStreamed,
       ...cached.qobuzissimes, ...cached.editorPicks,
-      ...cached.recentAlbums, ...cached.favoriteAlbums
+      ...cached.recentAlbums, ...cached.favoriteAlbums,
+      ...(cached.releaseWatchAlbums ?? [])
     ];
     loadAllAlbumDownloadStatusesBatch(allAlbums);
   }
@@ -447,6 +450,7 @@
         newReleases, pressAwards, mostStreamed, qobuzissimes, editorPicks,
         recentAlbums, continueTracks, topArtists, favoriteAlbums,
         qobuzPlaylists, essentialDiscography, playlistTags,
+        releaseWatchAlbums,
         genreIds
       });
     }

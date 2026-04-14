@@ -48,6 +48,9 @@ export interface HomeCacheData {
   essentialDiscography: DiscoverAlbum[];
   playlistTags: PlaylistTag[];
 
+  // Release Watch (REST /albums/releaseWatch)
+  releaseWatchAlbums: AlbumCardData[];
+
   // Metadata
   timestamp: number;
   genreIds: number[]; // snapshot of genre filter at cache time
