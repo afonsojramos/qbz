@@ -1691,6 +1691,7 @@
     "someLocal": "Teilweise offline verfügbar",
     "notAvailable": "Offline nicht verfügbar",
     "trackNotAvailable": "Dieser Titel ist offline nicht verfügbar",
+    "trackNotAvailableOffline": "\"{title}\" ist nicht für die Offline-Wiedergabe gespeichert",
     "featureDisabled": "Diese Funktion erfordert eine Internetverbindung",
     "startWithoutLogin": "Offline starten (kein Zugriff auf Qobuz™-Dienste)",
     "noPreviousSession": "Sie müssen sich mindestens einmal anmelden, bevor Sie den Offline-Modus verwenden können. Stellen Sie eine Internetverbindung her und melden Sie sich an.",

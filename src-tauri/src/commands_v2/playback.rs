@@ -447,6 +447,13 @@ pub async fn v2_play_next_gapless(
         };
         if let Some(file_path) = cached_path {
             let path = std::path::Path::new(&file_path);
+            if !path.exists() {
+                log::warn!(
+                    "[V2/GAPLESS/CACHE STALE] Track {} DB entry points to missing file {:?}",
+                    track_id,
+                    path
+                );
+            }
             if path.exists() {
                 log::info!("[V2/GAPLESS] Track {} from OFFLINE cache", track_id);
                 let audio_data = std::fs::read(path).map_err(|e| {
@@ -589,6 +596,13 @@ pub async fn v2_prefetch_track(
             };
             if let Some(file_path) = cached_path {
                 let path = std::path::Path::new(&file_path);
+                if !path.exists() {
+                    log::warn!(
+                        "[V2/PREFETCH/CACHE STALE] Track {} DB entry points to missing file {:?}",
+                        track_id,
+                        path
+                    );
+                }
                 if path.exists() {
                     log::info!("[V2] Prefetching track {} from offline cache", track_id);
                     let audio_data = std::fs::read(path).map_err(|e| {
@@ -658,6 +672,7 @@ pub async fn v2_play_track(
     bridge: State<'_, CoreBridgeState>,
     offline_cache: State<'_, OfflineCacheState>,
     audio_settings: State<'_, AudioSettingsState>,
+    offline_state: State<'_, crate::offline::OfflineState>,
     app_state: State<'_, AppState>,
     runtime: State<'_, RuntimeManagerState>,
 ) -> Result<V2PlayTrackResult, RuntimeError> {
@@ -705,14 +720,34 @@ pub async fn v2_play_track(
         final_quality
     };
 
-    // Check streaming settings
+    // Manual offline mode — read once up front so the cache-miss branch
+    // below knows whether to fail loudly instead of silently reaching for
+    // the network (issue #279).
+    let manual_offline_mode = {
+        let guard = offline_state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Offline state lock error: {}", e)))?;
+        guard
+            .as_ref()
+            .and_then(|s| s.get_settings().ok())
+            .map(|s| s.manual_offline_mode)
+            .unwrap_or(false)
+    };
+
+    // Check streaming settings. In manual offline mode we also force
+    // stream-first off at read time in case the set_manual_offline command
+    // raced with a fresh settings write.
     let (stream_first_enabled, streaming_only) = {
         let guard = audio_settings
             .store
             .lock()
             .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
         match guard.as_ref().and_then(|s| s.get_settings().ok()) {
-            Some(s) => (s.stream_first_track, s.streaming_only),
+            Some(s) => {
+                let stream_first = s.stream_first_track && !manual_offline_mode;
+                (stream_first, s.streaming_only)
+            }
             None => (false, false),
         }
     };
@@ -773,6 +808,16 @@ pub async fn v2_play_track(
         };
         if let Some(file_path) = cached_path {
             let path = std::path::Path::new(&file_path);
+            if !path.exists() {
+                // DB said cached, disk says no. Without this log the bug is
+                // invisible — the app silently reaches for the network. See
+                // issue #279.
+                log::warn!(
+                    "[V2/CACHE STALE] Track {} DB entry points to missing file {:?} — entry is orphaned (filesystem moved/unmounted/cleaned?)",
+                    track_id,
+                    path
+                );
+            }
             if path.exists() {
                 log::info!(
                     "[V2/CACHE HIT] Track {} from OFFLINE cache: {:?}",
@@ -922,6 +967,23 @@ pub async fn v2_play_track(
             "[V2] Track {} not in cache, fetching from network...",
             track_id
         );
+    }
+
+    // Offline guard: if the user has manual offline mode enabled and we got
+    // this far (meaning no cache had a usable hit), refuse to reach the
+    // network. Returning an explicit error lets the frontend show a clear
+    // "not available offline" toast instead of streaming invisibly — that
+    // silent fallback was the root of issue #279.
+    //
+    // If we have a low-quality fallback in memory we play that instead; the
+    // user at least hears something, which is better than nothing, and a
+    // partial match is a real offline cache hit (just at a degraded tier).
+    if manual_offline_mode && low_quality_fallback.is_none() {
+        log::warn!(
+            "[V2/OFFLINE] Track {} not in any cache and manual offline mode is ON — refusing network fetch",
+            track_id
+        );
+        return Err(RuntimeError::TrackNotAvailableOffline);
     }
 
     // Try CMAF streaming pipeline (Akamai CDN, encrypted segments)

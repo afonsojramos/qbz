@@ -1714,6 +1714,7 @@
     "someLocal": "Parcialmente Disponível Offline",
     "notAvailable": "Não Disponível Offline",
     "trackNotAvailable": "Esta faixa não está disponível offline",
+    "trackNotAvailableOffline": "\"{title}\" não está salva para reprodução offline",
     "featureDisabled": "Este recurso requer conexão com a internet",
     "startWithoutLogin": "Iniciar offline (sem acesso aos serviços do Qobuz™)",
     "noPreviousSession": "Você precisa fazer login pelo menos uma vez antes de usar o modo offline. Conecte-se à internet e faça login para criar seu perfil.",

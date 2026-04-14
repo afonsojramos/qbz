@@ -1691,6 +1691,7 @@
     "someLocal": "Partiellement disponible hors ligne",
     "notAvailable": "Non disponible hors ligne",
     "trackNotAvailable": "Ce titre n'est pas disponible hors ligne",
+    "trackNotAvailableOffline": "\"{title}\" n'est pas enregistré pour la lecture hors ligne",
     "featureDisabled": "Cette fonctionnalité nécessite une connexion Internet",
     "startWithoutLogin": "Démarrer hors ligne (pas d'accès aux services Qobuz™)",
     "noPreviousSession": "Vous devez vous connecter au moins une fois avant d'utiliser le mode hors ligne. Connectez-vous à Internet et identifiez-vous pour créer votre profil.",
