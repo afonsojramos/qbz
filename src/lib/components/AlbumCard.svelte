@@ -42,9 +42,11 @@
     sourceBadge?: 'user' | 'qobuz_download' | 'qobuz_purchase' | 'plex';
     artistId?: number;
     onArtistClick?: (artistId: number) => void;
-    /** Editorial ribbon — Qobuz "Album of the Week" (award id 151)
-     *  or "Qobuzissime" (award id 88). */
-    ribbon?: 'albumOfTheWeek' | 'qobuzissime';
+    /** Editorial ribbon: Qobuz award (id 88 = Qobuzissime,
+     *  id 151 = Album of the Week) or a press accolade
+     *  (Pitchfork BNM, Rolling Stone 5★, etc.). `label` is the
+     *  display string the card renders. */
+    ribbon?: { kind: 'qobuzissime' | 'albumOfTheWeek' | 'press'; label: string };
   }
 
   let {
@@ -286,11 +288,16 @@
       </div>
     {/if}
 
-    <!-- Editorial ribbon (Album of the Week / Qobuzissime). Rendered
-         after the action-overlay so it stays visible on hover. -->
+    <!-- Editorial ribbon (Album of the Week / Qobuzissime / Press).
+         Only the last award in album.awards is shown on the card; the
+         full stack lives in AlbumView's sidebar. -->
     {#if ribbon}
-      <div class="editorial-ribbon" class:ribbon-aotw={ribbon === 'albumOfTheWeek'} class:ribbon-qbz={ribbon === 'qobuzissime'}>
-        {ribbon === 'albumOfTheWeek' ? $t('ribbon.albumOfTheWeek') : $t('ribbon.qobuzissime')}
+      <div class="editorial-ribbon"
+           class:ribbon-aotw={ribbon.kind === 'albumOfTheWeek'}
+           class:ribbon-qbz={ribbon.kind === 'qobuzissime'}
+           class:ribbon-press={ribbon.kind === 'press'}
+           title={ribbon.label}>
+        {ribbon.label}
       </div>
     {/if}
 
@@ -445,6 +452,10 @@
 
   .editorial-ribbon.ribbon-qbz {
     border-left-color: #8b5cf6;
+  }
+
+  .editorial-ribbon.ribbon-press {
+    border-left-color: #ef4444;
   }
 
   .source-badge {

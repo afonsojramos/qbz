@@ -64,6 +64,11 @@
     playCount: number;
   }
 
+  interface AlbumRibbon {
+    kind: 'qobuzissime' | 'albumOfTheWeek' | 'press';
+    label: string;
+  }
+
   interface AlbumCardData {
     id: string;
     artwork: string;
@@ -73,24 +78,27 @@
     genre: string;
     quality?: string;
     releaseDate?: string;
-    ribbon?: 'albumOfTheWeek' | 'qobuzissime';
+    ribbon?: AlbumRibbon;
   }
 
   /**
-   * Qobuz award IDs are stable across locales (unlike the award `name`
-   * which is translated). Stable IDs taken from decompiled API samples:
-   *   88  = Qobuzissime
-   *   151 = Álbum de la semana Qobuz / Qobuz Album of the Week
+   * Qobuz award IDs 88 (Qobuzissime) and 151 (Álbum de la semana) are
+   * locale-stable Qobuz-branded distinctions. Everything else in the
+   * awards array is a press accolade (Pitchfork BNM, Rolling Stone 5★,
+   * Gramophone Editor's Choice…).
+   *
+   * Per product decision, the card shows only the LAST entry in the
+   * awards array — i.e. the most recently granted. The AlbumView
+   * sidebar will render the full stack.
    */
   function pickAlbumRibbon(
-    awards?: { id: number }[] | null
-  ): 'albumOfTheWeek' | 'qobuzissime' | undefined {
+    awards?: { id: number; name: string }[] | null
+  ): AlbumRibbon | undefined {
     if (!awards || awards.length === 0) return undefined;
-    for (const award of awards) {
-      if (award.id === 151) return 'albumOfTheWeek';
-      if (award.id === 88) return 'qobuzissime';
-    }
-    return undefined;
+    const last = awards[awards.length - 1];
+    if (last.id === 88) return { kind: 'qobuzissime', label: last.name };
+    if (last.id === 151) return { kind: 'albumOfTheWeek', label: last.name };
+    return { kind: 'press', label: last.name };
   }
 
   interface ArtistCardData {
