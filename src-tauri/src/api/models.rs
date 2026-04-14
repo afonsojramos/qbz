@@ -232,7 +232,7 @@ pub struct Album {
     pub description: Option<String>,
     /// Editorial awards attached to the album.
     #[serde(default)]
-    pub awards: Option<Vec<PageArtistAward>>,
+    pub awards: Option<Vec<AlbumAward>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -965,13 +965,22 @@ pub struct PageArtistRights {
 pub struct PageArtistAward {
     pub id: u64,
     pub name: String,
-    /// Qobuz returns this either as "YYYY-MM-DD" or a Unix timestamp
-    /// integer depending on the endpoint — accept both.
-    #[serde(default, deserialize_with = "deserialize_awarded_at")]
     pub awarded_at: Option<String>,
 }
 
-fn deserialize_awarded_at<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+/// Tolerant award struct used in Album responses where Qobuz is
+/// inconsistent about optional id and awarded_at types.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AlbumAward {
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, deserialize_with = "deserialize_album_awarded_at")]
+    pub awarded_at: Option<String>,
+}
+
+fn deserialize_album_awarded_at<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -979,8 +988,7 @@ where
     Ok(match value {
         Some(serde_json::Value::String(s)) => Some(s),
         Some(serde_json::Value::Number(n)) => Some(n.to_string()),
-        Some(serde_json::Value::Null) | None => None,
-        Some(_) => None,
+        _ => None,
     })
 }
 

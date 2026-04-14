@@ -267,7 +267,7 @@ pub struct Album {
     pub goodies: Option<Vec<Goody>>,
     /// Editorial awards (Qobuzissime, Album of the Week, press accolades).
     #[serde(default)]
-    pub awards: Option<Vec<PageArtistAward>>,
+    pub awards: Option<Vec<AlbumAward>>,
 }
 
 /// A downloadable extra bundled with an album (e.g. PDF booklet)
@@ -678,7 +678,7 @@ pub struct DiscoverAlbum {
     /// Editorial awards attached to the album. Id 88 = Qobuzissime,
     /// id 151 = Qobuz Album of the Week (locale-stable).
     #[serde(default)]
-    pub awards: Option<Vec<PageArtistAward>>,
+    pub awards: Option<Vec<AlbumAward>>,
 }
 
 /// Album image from discover endpoint
@@ -826,14 +826,26 @@ pub struct PageArtistRights {
 pub struct PageArtistAward {
     pub id: u64,
     pub name: String,
-    /// Qobuz is inconsistent — /discover/index returns this as a
-    /// "YYYY-MM-DD" string, /album/get returns a Unix timestamp integer.
-    /// Accept both and emit a string downstream.
-    #[serde(default, deserialize_with = "deserialize_awarded_at")]
     pub awarded_at: Option<String>,
 }
 
-fn deserialize_awarded_at<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+/// Award attached to an album. Shape is intentionally lenient because
+/// Qobuz returns different field types across endpoints:
+/// - `/discover/index` — id=int, name=string, awarded_at="YYYY-MM-DD"
+/// - `/album/get` — id may be missing, awarded_at may be Unix epoch int
+/// Keeps the parent Album struct from blowing up on any of those
+/// variations while still giving the UI enough to render a ribbon.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AlbumAward {
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, deserialize_with = "deserialize_award_awarded_at")]
+    pub awarded_at: Option<String>,
+}
+
+fn deserialize_award_awarded_at<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -841,8 +853,7 @@ where
     Ok(match value {
         Some(serde_json::Value::String(s)) => Some(s),
         Some(serde_json::Value::Number(n)) => Some(n.to_string()),
-        Some(serde_json::Value::Null) | None => None,
-        Some(_) => None,
+        _ => None,
     })
 }
 
