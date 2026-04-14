@@ -106,7 +106,7 @@ export interface QobuzAlbum {
   parental_warning?: boolean;
   upc?: string;
   goodies?: QobuzGoody[];
-  awards?: { id: number; name: string; awarded_at?: string }[];
+  awards?: { id?: number; name: string; awarded_at?: string }[];
 }
 
 export interface QobuzGoody {
@@ -182,7 +182,8 @@ export interface Track {
 }
 
 export interface AlbumAward {
-  id: number;
+  /** Optional because /album/get sometimes omits the award id. */
+  id?: number;
   name: string;
   awardedAt?: string;
 }
@@ -319,6 +320,22 @@ export interface LabelReleaseContainer {
 export interface LabelExploreResponse {
   has_more?: boolean;
   items?: LabelExploreItem[];
+}
+
+/** Response from /award/page */
+export interface AwardPageData {
+  id: string;
+  name: string;
+  image?: string | null;
+  awarded_at?: string | null;
+  magazine?: { id?: string; name?: string; image?: string } | null;
+  releases?: AwardPageContainer[];
+  playlists?: { has_more?: boolean; items?: Record<string, unknown>[] };
+}
+
+export interface AwardPageContainer {
+  id?: string | null;
+  data?: { has_more?: boolean; items?: Record<string, unknown>[] };
 }
 
 export interface LabelExploreItem {

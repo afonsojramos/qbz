@@ -17,6 +17,7 @@ export type ViewType =
   | 'musician'
   | 'label'
   | 'label-releases'
+  | 'award'
   | 'playlist'
   | 'playlist-manager'
   | 'blacklist-manager'

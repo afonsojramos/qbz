@@ -416,6 +416,7 @@
   import DiscoverBrowseView from '$lib/components/views/DiscoverBrowseView.svelte';
   import DiscoverPlaylistsBrowseView from '$lib/components/views/DiscoverPlaylistsBrowseView.svelte';
   import ReleaseWatchView from '$lib/components/views/ReleaseWatchView.svelte';
+  import AwardView from '$lib/components/views/AwardView.svelte';
   import PurchasesView from '$lib/components/views/PurchasesView.svelte';
   import PurchaseAlbumDetailView from '$lib/components/views/PurchaseAlbumDetailView.svelte';
   import DynamicSuggestView from '$lib/components/views/DynamicSuggestView.svelte';
@@ -573,6 +574,7 @@
   let artistTopTracks = $state<PageArtistTrack[]>([]);
   let artistSimilarArtists = $state<PageArtistSimilarItem[]>([]);
   let selectedLabel = $state<{ id: number; name: string } | null>(null);
+  let selectedAward = $state<{ id: string; name: string } | null>(null);
   let selectedMusician = $state<ResolvedMusician | null>(null);
   let musicianModalData = $state<ResolvedMusician | null>(null);
   let isArtistAlbumsLoading = $state(false);
@@ -1324,6 +1326,9 @@
         case 'label-releases':
           selectedLabel = { id: Number(itemId), name: selectedLabel?.name || '' };
           break;
+        case 'award':
+          selectedAward = { id: String(itemId), name: selectedAward?.name || '' };
+          break;
         case 'musician':
           // Musician data is already in selectedMusician from the original navigation
           break;
@@ -1520,6 +1525,11 @@
   function handleNavigateLabelReleases(labelId: number, labelName: string) {
     selectedLabel = { id: labelId, name: labelName };
     navigateTo('label-releases', labelId);
+  }
+
+  function handleAwardClick(awardId: number, awardName: string) {
+    selectedAward = { id: String(awardId), name: awardName };
+    navigateTo('award', String(awardId));
   }
 
   /**
@@ -5126,6 +5136,7 @@
           onBack={navGoBack}
           onArtistClick={() => selectedAlbum?.artistId && handleArtistClick(selectedAlbum.artistId)}
           onLabelClick={handleLabelClick}
+          onAwardClick={handleAwardClick}
           onTrackPlay={handleAlbumTrackPlay}
           onTrackPlayNext={handleAlbumTrackPlayNext}
           onTrackPlayLater={handleAlbumTrackPlayLater}
@@ -5269,6 +5280,24 @@
           onOpenAlbumFolder={openAlbumFolderById}
           onReDownloadAlbum={reDownloadAlbumById}
           checkAlbumFullyDownloaded={checkAlbumFullyDownloaded}
+          {downloadStateVersion}
+          onArtistClick={handleArtistClick}
+        />
+      {:else if activeView === 'award' && selectedAward}
+        <AwardView
+          awardId={selectedAward.id}
+          awardName={selectedAward.name}
+          onBack={navGoBack}
+          onAlbumClick={handleAlbumClick}
+          onAlbumPlay={playAlbumById}
+          onAlbumPlayNext={queueAlbumNextById}
+          onAlbumPlayLater={queueAlbumLaterById}
+          onAlbumShareQobuz={shareAlbumQobuzLinkById}
+          onAlbumShareSonglink={shareAlbumSonglinkById}
+          onAlbumDownload={downloadAlbumById}
+          onOpenAlbumFolder={openAlbumFolderById}
+          onReDownloadAlbum={reDownloadAlbumById}
+          onAddAlbumToPlaylist={addAlbumToPlaylistById}
           {downloadStateVersion}
           onArtistClick={handleArtistClick}
         />

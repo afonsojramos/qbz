@@ -58,7 +58,8 @@
   }
 
   interface Award {
-    id: number;
+    /** Optional — some /album/get entries omit the id. */
+    id?: number;
     name: string;
     awardedAt?: string;
   }
@@ -759,12 +760,12 @@
         <section class="sidebar-section">
           <h3 class="sidebar-section-title">{$t('album.sidebar.awards')}</h3>
           <div class="sidebar-awards-list">
-            {#each album.awards as award (award.id + ':' + award.name)}
+            {#each album.awards as award (award.name)}
               <button
                 class="sidebar-entity-card"
                 type="button"
-                onclick={() => onAwardClick?.(award.id, award.name)}
-                disabled={!onAwardClick}
+                onclick={() => { if (award.id !== undefined && onAwardClick) onAwardClick(award.id, award.name); }}
+                disabled={!onAwardClick || award.id === undefined}
               >
                 <div class="sidebar-entity-avatar award-avatar">
                   <Award size={22} />
