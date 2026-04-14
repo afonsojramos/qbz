@@ -1,9 +1,9 @@
 use tauri::State;
 
 use qbz_models::{
-    Album, Artist, DiscoverAlbum, DiscoverData, DiscoverPlaylistsResponse, DiscoverResponse,
-    GenreInfo, LabelDetail, LabelExploreResponse, LabelPageData, PageArtistResponse,
-    PlaylistTag, SearchResultsPage, Track,
+    Album, Artist, AwardPageData, DiscoverAlbum, DiscoverData, DiscoverPlaylistsResponse,
+    DiscoverResponse, GenreInfo, LabelDetail, LabelExploreResponse, LabelPageData,
+    PageArtistResponse, PlaylistTag, SearchResultsPage, Track,
 };
 
 use crate::artist_blacklist::BlacklistState;
@@ -438,6 +438,57 @@ pub async fn v2_get_label_page(
     let bridge = bridge.get().await;
     bridge
         .get_label_page(labelId)
+        .await
+        .map_err(RuntimeError::Internal)
+}
+
+/// Get award page (hero info + award-winning releases).
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_get_award_page(
+    awardId: String,
+    bridge: State<'_, CoreBridgeState>,
+    runtime: State<'_, RuntimeManagerState>,
+) -> Result<AwardPageData, RuntimeError> {
+    runtime
+        .manager()
+        .check_requirements(CommandRequirement::RequiresCoreBridgeAuth)
+        .await?;
+
+    log::info!("[V2] get_award_page: {}", awardId);
+    let bridge = bridge.get().await;
+    bridge
+        .get_award_page(&awardId)
+        .await
+        .map_err(RuntimeError::Internal)
+}
+
+/// Paginated albums for a single award.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_get_award_albums(
+    awardId: String,
+    limit: Option<u32>,
+    offset: Option<u32>,
+    bridge: State<'_, CoreBridgeState>,
+    runtime: State<'_, RuntimeManagerState>,
+) -> Result<SearchResultsPage<Album>, RuntimeError> {
+    runtime
+        .manager()
+        .check_requirements(CommandRequirement::RequiresCoreBridgeAuth)
+        .await?;
+
+    let limit = limit.unwrap_or(50);
+    let offset = offset.unwrap_or(0);
+    log::info!(
+        "[V2] get_award_albums: award={}, limit={}, offset={}",
+        awardId,
+        limit,
+        offset
+    );
+    let bridge = bridge.get().await;
+    bridge
+        .get_award_albums(&awardId, limit, offset)
         .await
         .map_err(RuntimeError::Internal)
 }

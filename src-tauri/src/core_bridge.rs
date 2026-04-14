@@ -570,6 +570,27 @@ impl CoreBridge {
             .map_err(|e| e.to_string())
     }
 
+    /// Get award page — hero info + award-winning releases.
+    pub async fn get_award_page(&self, award_id: &str) -> Result<qbz_models::AwardPageData, String> {
+        self.core
+            .get_award_page(award_id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Get paginated albums for an award (/award/getAlbums).
+    pub async fn get_award_albums(
+        &self,
+        award_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<SearchResultsPage<Album>, String> {
+        self.core
+            .get_award_albums(award_id, limit, offset)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     /// Get label explore (discover more labels)
     pub async fn get_label_explore(
         &self,

@@ -1477,6 +1477,66 @@ impl QobuzClient {
         Ok(serde_json::from_value(response)?)
     }
 
+    /// Get award page — hero info + categorized award-winning releases.
+    /// Mirrors Android's AwardDto shape from /award/page.
+    pub async fn get_award_page(&self, award_id: &str) -> Result<qbz_models::AwardPageData> {
+        let url = endpoints::build_url(paths::AWARD_PAGE);
+        log::debug!("[API] get_award_page({})", award_id);
+        let response: serde_json::Value = self
+            .signed_get(&url, "awardpage", &[("award_id", award_id.to_string())])
+            .await?
+            .json()
+            .await?;
+        Ok(serde_json::from_value(response)?)
+    }
+
+    /// Get paginated albums for a single award (/award/getAlbums).
+    pub async fn get_award_albums(
+        &self,
+        award_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<SearchResultsPage<Album>> {
+        let url = endpoints::build_url(paths::AWARD_GET_ALBUMS);
+        log::debug!("[API] get_award_albums({}, limit={}, offset={})", award_id, limit, offset);
+        let response: serde_json::Value = self
+            .signed_get(
+                &url,
+                "awardgetAlbums",
+                &[
+                    ("award_id", award_id.to_string()),
+                    ("limit", limit.to_string()),
+                    ("offset", offset.to_string()),
+                ],
+            )
+            .await?
+            .json()
+            .await?;
+
+        // Response envelope may be V2GenericListDto {has_more,items} or the
+        // search-style {albums: {items,total,offset,limit}}. Try both.
+        if let Some(albums_obj) = response.get("albums") {
+            return Ok(serde_json::from_value(albums_obj.clone())?);
+        }
+        let items_value = response.get("items").cloned().unwrap_or(serde_json::Value::Null);
+        let items: Vec<Album> = serde_json::from_value(items_value).unwrap_or_default();
+        let has_more = response
+            .get("has_more")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let total_hint = if has_more {
+            offset + items.len() as u32 + 1
+        } else {
+            offset + items.len() as u32
+        };
+        Ok(SearchResultsPage::<Album> {
+            items,
+            total: total_hint,
+            offset,
+            limit,
+        })
+    }
+
     /// Get label explore (discover more labels)
     pub async fn get_label_explore(&self, limit: u32, offset: u32) -> Result<LabelExploreResponse> {
         let url = endpoints::build_url(paths::LABEL_EXPLORE);
