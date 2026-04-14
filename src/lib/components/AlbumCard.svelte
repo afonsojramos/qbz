@@ -411,13 +411,14 @@
   }
 
   /* Source badge for Local Library albums */
-  /* Editorial ribbon — sits at top-left of the artwork. z-index
-     above the action-overlay so it remains legible on hover. */
+  /* Editorial ribbon — sits at bottom-left of the artwork. z-index
+     below the action-overlay (z-index 2) so it hides on hover, as
+     requested. */
   .editorial-ribbon {
     position: absolute;
-    top: 8px;
+    bottom: 8px;
     left: 0;
-    z-index: 4;
+    z-index: 1;
     padding: 3px 10px 3px 8px;
     font-family: var(--font-sans);
     font-size: 9px;
