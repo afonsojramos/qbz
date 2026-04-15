@@ -6231,23 +6231,16 @@
     margin: 0 !important;
     padding: 0 !important;
   }
+  /* Small win that works today: rounded corners matching the detected
+     desktop decoration radius. clip-path + border-radius + GPU layer
+     give clean anti-aliasing on WebKitGTK. A proper system shadow and
+     frame need compositor hints that wry doesn't expose yet — tracked
+     as a Phase 3 follow-up. */
   .app.match-chrome.floating {
     border-radius: var(--chrome-radius, 10px);
-    /* clip-path gives the cleanest anti-alias on rounded corners in
-       WebKitGTK. Inset box-shadows below still render because they paint
-       _inside_ the clipped region. */
     clip-path: inset(0 round var(--chrome-radius, 10px));
     transform: translateZ(0);
     backface-visibility: hidden;
-    /* Visible edge on every side so the window stops mimetising with
-       the desktop. A crisp dark outer band (outer 1px inset) reads as
-       the frame; a softer light highlight (inner 1px) picks out the
-       edge against dark surfaces. Outer drop shadow is deprioritised —
-       kept low-weight so it complements but doesn't dominate. */
-    box-shadow:
-      inset 0 0 0 1px rgba(0, 0, 0, 0.75),
-      inset 0 0 0 2px rgba(255, 255, 255, 0.06),
-      0 8px 20px rgba(0, 0, 0, 0.45);
   }
   .app.match-chrome:not(.floating) {
     border-radius: 0;
