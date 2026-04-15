@@ -188,6 +188,30 @@
     currentFolderId: null
   });
   let contextMenuSearch = $state('');
+  // Bound to the rendered context menu element so the positioning helper
+  // can measure it after mount and flip/clamp to keep it inside the
+  // viewport (bug: playlist context menu could fall below the window).
+  let contextMenuEl = $state<HTMLDivElement | null>(null);
+  let contextMenuStyle = $state('');
+
+  async function setContextMenuPosition() {
+    await tick();
+    if (!contextMenuEl) return;
+    const menuRect = contextMenuEl.getBoundingClientRect();
+    const pad = 8;
+    let x = contextMenu.x;
+    let y = contextMenu.y;
+    if (x + menuRect.width > window.innerWidth - pad) {
+      x = Math.max(pad, window.innerWidth - menuRect.width - pad);
+    }
+    if (y + menuRect.height > window.innerHeight - pad) {
+      // Prefer flipping the menu upward from the cursor; if still spilling
+      // off the top, clamp to the bottom edge of the viewport.
+      const flipped = y - menuRect.height;
+      y = flipped >= pad ? flipped : Math.max(pad, window.innerHeight - menuRect.height - pad);
+    }
+    contextMenuStyle = `left: ${x}px; top: ${y}px;`;
+  }
   const FOLDER_SEARCH_THRESHOLD = 8;
   let draggedPlaylistId = $state<number | null>(null);
   let draggedFromFolderId = $state<string | null>(null);
@@ -556,6 +580,21 @@
     }
 
     menuStyle = `left: ${left}px; top: ${top}px;`;
+  }
+
+  /**
+   * Svelte action: teleport the node into document.body on mount so it
+   * escapes any ancestor with `overflow: hidden`. Used by the Sort
+   * submenu which lives inside the dropdown-menu and was being clipped
+   * against the dropdown's right edge.
+   */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        if (node.parentNode) node.parentNode.removeChild(node);
+      },
+    };
   }
 
   async function setSubmenuPosition() {
@@ -1231,6 +1270,8 @@
       folder: null,
       currentFolderId
     };
+    contextMenuStyle = `left: ${e.clientX}px; top: ${e.clientY}px;`;
+    void setContextMenuPosition();
   }
 
   function handleFolderContextMenu(e: MouseEvent, folder: PlaylistFolder) {
@@ -1246,6 +1287,8 @@
       folder,
       currentFolderId: folder.id
     };
+    contextMenuStyle = `left: ${e.clientX}px; top: ${e.clientY}px;`;
+    void setContextMenuPosition();
   }
 
   function closeContextMenu() {
@@ -1698,6 +1741,7 @@
               tabindex="-1"
               onmouseenter={openSubmenu}
               onmouseleave={closeSubmenuDelayed}
+              use:portal
             >
               <button class="menu-item" class:selected={sortOption === 'name'} onclick={() => handleSortChange('name')}>
                 {$t('sort.nameAZ')}
@@ -1955,7 +1999,8 @@
   <div
     class="context-menu"
     class:has-search={showSearch}
-    style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+    bind:this={contextMenuEl}
+    style={contextMenuStyle}
     onclick={(e) => e.stopPropagation()}
     onmouseenter={() => isHoveringContextMenu = true}
     onmouseleave={() => isHoveringContextMenu = false}
