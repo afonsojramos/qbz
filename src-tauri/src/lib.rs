@@ -12,6 +12,7 @@ pub mod session_lifecycle;
 pub mod tauri_adapter;
 
 pub mod auto_theme;
+pub mod desktop_theme;
 #[cfg(target_os = "linux")]
 pub mod autoconfig_graphics;
 
@@ -1761,6 +1762,8 @@ pub fn run() {
             commands_v2::v2_set_image_cache_max_size,
             commands_v2::v2_get_image_cache_stats,
             commands_v2::v2_clear_image_cache,
+            // Desktop theme detection (KDE/Klassy → adaptive window controls)
+            desktop_theme::detect_desktop_theme,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
