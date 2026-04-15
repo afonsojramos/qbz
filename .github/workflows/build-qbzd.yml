@@ -1,9 +1,13 @@
 name: Build qbzd
 
+# Paused: qbzd is not ready for public release yet. The tag trigger is
+# intentionally commented out so that creating a new `v*` or `qbzd-v*` tag
+# does not build and attach qbzd artifacts. Re-enable by restoring the
+# `push.tags` block when qbzd ships.
 on:
-  push:
-    tags:
-      - 'qbzd-v*'
+  # push:
+  #   tags:
+  #     - 'qbzd-v*'
   workflow_dispatch:
 
 jobs:

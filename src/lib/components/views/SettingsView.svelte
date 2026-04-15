@@ -121,7 +121,8 @@
     type ButtonShape,
     type ButtonSize,
     type ButtonColorSet,
-    type WindowControlsConfig
+    type WindowControlsConfig,
+    type DesktopThemeInfo
   } from '$lib/stores/windowControlsStore';
   import {
     getPlaybackPreferences,
@@ -985,7 +986,7 @@
   // `null` until the first detect call returns. `isKlassy=true` means a
   // genuine Klassy install was detected; `desktop` starting with "plasma"
   // means any KDE decoration theme (we can still pull colors).
-  let detectedTheme = $state<import('$lib/stores/windowControlsStore').DesktopThemeInfo | null>(null);
+  let detectedTheme = $state<DesktopThemeInfo | null>(null);
 
   // Search bar location
   let searchInTitlebar = $state(getSearchBarLocation() === 'titlebar');
@@ -6101,7 +6102,6 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
   .dac-setup-btn .gandalf-icon {
     width: 24px;
     height: 24px;
-    filter: invert(1);
   }
 
   .dac-tooltip {
@@ -6135,6 +6135,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     width: 36px;
     height: 36px;
     opacity: 0.9;
+    filter: invert(1);
   }
 
   .tooltip-content {

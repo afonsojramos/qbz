@@ -62,7 +62,12 @@
 
   let { isOpen, onClose }: Props = $props();
 
-  let activeProtocol = $state<CastProtocol | 'qbzd'>('qbzd');
+  // Feature flag: qbzd (QBZ Daemon) is not ready for release yet. Keep the
+  // code paths but hide the tab and skip the backend invocations so users
+  // don't see a broken option. Flip to `true` when qbzd ships.
+  const QBZD_ENABLED = false;
+
+  let activeProtocol = $state<CastProtocol | 'qbzd'>(QBZD_ENABLED ? 'qbzd' : 'chromecast');
   let manualAddress = $state('');
   let savedDaemons = $state<SavedDaemon[]>(loadSavedDaemons());
   let chromecastDevices = $state<CastDevice[]>([]);
@@ -124,7 +129,7 @@
       await Promise.allSettled([
         invoke('v2_cast_start_discovery'),
         invoke('v2_dlna_start_discovery'),
-        invoke('v2_qbzd_start_discovery'),
+        ...(QBZD_ENABLED ? [invoke('v2_qbzd_start_discovery')] : []),
       ]);
       // Poll for devices
       pollDevices();
@@ -140,7 +145,7 @@
       await Promise.allSettled([
         invoke('v2_cast_stop_discovery'),
         invoke('v2_dlna_stop_discovery'),
-        invoke('v2_qbzd_stop_discovery'),
+        ...(QBZD_ENABLED ? [invoke('v2_qbzd_stop_discovery')] : []),
       ]);
     } catch (err) {
       console.error('Failed to stop discovery:', err);
@@ -153,20 +158,21 @@
     try {
       // Poll active protocols in parallel
       // Note: AirPlay polling disabled until RAOP streaming is implemented
-      const [chromecast, dlna, qbzd] = await Promise.allSettled([
+      const results = await Promise.allSettled([
         invoke<CastDevice[]>('v2_cast_get_devices'),
         invoke<CastDevice[]>('v2_dlna_get_devices'),
-        invoke<QbzdDevice[]>('v2_qbzd_get_devices'),
+        ...(QBZD_ENABLED ? [invoke<QbzdDevice[]>('v2_qbzd_get_devices')] : []),
       ]);
+      const [chromecast, dlna, qbzd] = results;
 
       if (chromecast.status === 'fulfilled') {
-        chromecastDevices = chromecast.value;
+        chromecastDevices = chromecast.value as CastDevice[];
       }
       if (dlna.status === 'fulfilled') {
-        dlnaDevices = dlna.value;
+        dlnaDevices = dlna.value as CastDevice[];
       }
-      if (qbzd.status === 'fulfilled') {
-        qbzdDevices = qbzd.value;
+      if (QBZD_ENABLED && qbzd && qbzd.status === 'fulfilled') {
+        qbzdDevices = qbzd.value as QbzdDevice[];
       }
     } catch (err) {
       console.error('Failed to get devices:', err);
@@ -351,17 +357,19 @@
       {:else}
         <!-- Protocol Tabs (only show when not connected) -->
         <div class="protocol-tabs">
-          <button
-            class="protocol-tab"
-            class:active={activeProtocol === 'qbzd'}
-            onclick={() => activeProtocol = 'qbzd'}
-          >
-            <Monitor size={16} />
-            <span>QBZ Daemon</span>
-            {#if qbzdDevices.length > 0}
-              <span class="count">{qbzdDevices.length}</span>
-            {/if}
-          </button>
+          {#if QBZD_ENABLED}
+            <button
+              class="protocol-tab"
+              class:active={activeProtocol === 'qbzd'}
+              onclick={() => activeProtocol = 'qbzd'}
+            >
+              <Monitor size={16} />
+              <span>QBZ Daemon</span>
+              {#if qbzdDevices.length > 0}
+                <span class="count">{qbzdDevices.length}</span>
+              {/if}
+            </button>
+          {/if}
           <button
             class="protocol-tab"
             class:active={activeProtocol === 'chromecast'}
