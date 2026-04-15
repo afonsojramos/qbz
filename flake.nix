@@ -93,6 +93,14 @@
         # Dev shell with all build dependencies
         devShells.default = pkgs.mkShell {
           inputsFrom = [ self.packages.${system}.default ];
+
+          # `inputsFrom` pulls in buildInputs/nativeBuildInputs from the
+          # package but does NOT propagate `env.*` attributes, so we must
+          # re-export LIBCLANG_PATH here — otherwise `mupdf-sys`'s bindgen
+          # fails with "Unable to find libclang" when running
+          # `npm run tauri dev` inside `nix develop` (issue #312).
+          LIBCLANG_PATH = "${pkgs.lib.getLib pkgs.llvmPackages.libclang}/lib";
+
           packages = with pkgs; [
             rust-analyzer
             rustfmt
