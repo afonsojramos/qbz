@@ -41,15 +41,31 @@
   <screenshots>
     <screenshot type="default">
       <caption xml:lang="en">Home and discovery view</caption>
-      <image>https://raw.githubusercontent.com/vicrodh/qbz/cff32e5da726719b983770c7f4c2ff52bb51e14d/packaging/flatpak/screenshots/home-discover.png</image>
+      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/home-discover.png</image>
     </screenshot>
     <screenshot>
       <caption xml:lang="en">Immersive cover flow mode</caption>
-      <image>https://raw.githubusercontent.com/vicrodh/qbz/cff32e5da726719b983770c7f4c2ff52bb51e14d/packaging/flatpak/screenshots/immersive-cover-flow.png</image>
+      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/immersive-cover-flow.png</image>
+    </screenshot>
+    <screenshot>
+      <caption xml:lang="en">Immersive line-bed playback view</caption>
+      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/immersive-line-bed.png</image>
+    </screenshot>
+    <screenshot>
+      <caption xml:lang="en">Artist page with editorial enrichment</caption>
+      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/enriched-artist-page.png</image>
     </screenshot>
     <screenshot>
       <caption xml:lang="en">Local library view</caption>
-      <image>https://raw.githubusercontent.com/vicrodh/qbz/cff32e5da726719b983770c7f4c2ff52bb51e14d/packaging/flatpak/screenshots/local-library.png</image>
+      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/local-library.png</image>
+    </screenshot>
+    <screenshot>
+      <caption xml:lang="en">Hi-Fi DAC setup wizard</caption>
+      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/hifi-wizard.png</image>
+    </screenshot>
+    <screenshot>
+      <caption xml:lang="en">Audio settings — backend, device, and quality</caption>
+      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/default-settings.png</image>
     </screenshot>
   </screenshots>
   <releases>
