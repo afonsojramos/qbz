@@ -428,8 +428,15 @@ export async function togglePlay(): Promise<void> {
           const localTrackId = Math.abs(currentTrack.id);
           await invoke('v2_library_play_track', { trackId: localTrackId });
         } else {
-          // Qobuz track - use v2_play_track
-          await cmdPlayTrack(currentTrack.id, getStreamingQuality());
+          // Qobuz track - use v2_play_track. Pass duration so the
+          // streaming backend's current_position() doesn't clamp to 0
+          // (the value flows into thread_state.duration and seekbar
+          // progress is capped by .min(duration)).
+          await cmdPlayTrack(
+            currentTrack.id,
+            getStreamingQuality(),
+            currentTrack.duration ? Math.round(currentTrack.duration) : null,
+          );
         }
 
       } else {

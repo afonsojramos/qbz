@@ -103,13 +103,24 @@ export async function cmdPrevious(): Promise<unknown> {
 export async function cmdPlayTrack(
   trackId: number,
   quality?: string,
-  lowQualityFallback?: unknown,
+  durationSecs?: number | null,
+  forceLowestQuality?: boolean | null,
 ): Promise<unknown> {
   const target = getTarget();
   if (target.type === 'qbzd') {
     return remotePost('/api/playback/play-track', { track_id: trackId, quality });
   } else {
-    return invoke('v2_play_track', { trackId, qualityStr: quality, lowQualityFallback: lowQualityFallback ?? null });
+    // Parameter names MUST match Tauri's camelCase mapping of Rust
+    // v2_play_track(track_id, quality, force_lowest_quality, duration_secs).
+    // duration_secs is required on the streaming path — without it the
+    // backend stores duration=0 and current_position() clamps to 0,
+    // freezing the seekbar (seen on session-restore first play).
+    return invoke('v2_play_track', {
+      trackId,
+      quality: quality ?? null,
+      forceLowestQuality: forceLowestQuality ?? null,
+      durationSecs: durationSecs ?? null,
+    });
   }
 }
 
