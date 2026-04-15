@@ -1,6 +1,14 @@
 # 1.2.5 — Accolade Watch
 
-The sprint that earns QBZ its ribbon. Dedicated Award view, Release Watch promoted to its own tab, Labels you can follow, and a long-overdue visual identity pass: new matte-vinyl logo across every surface, login chrome, and KDE Plasma / Klassy integration for the custom title bar. A self-update path finally lands for users outside Flathub and the Snap Store.
+After a rough week of real-world work, I can finally ship this release. It brings a dedicated Award view, labels you can follow, and one of the most anticipated sections from the mobile apps landing on the desktop at last: **Release Watch**.
+
+On the functionality side, you can now drag and drop any track — or a multi-selection — from any listing onto the sidebar playlists. The rest of the changes are mostly architectural and not user-facing, but they show up as overall stability.
+
+Regarding Qobuz Connect: I know there's still a lot of room for improvement. Most of it is WIP and will start landing in the coming releases.
+
+One more thing I want to mention. The project has been receiving donations. I had linked the accounts to an email I don't check very often and only noticed this week — I'm overwhelmed (in the good way) and genuinely flattered. I haven't fully decided how to use the funds yet, but part will definitely go toward infrastructure. When I started the project, the free tiers seemed more than enough; now we have hundreds of installations on Snapcraft, thousands on Flathub, and a steady stream of direct downloads from GitHub releases. Since qbz has zero telemetry, I can only keep a partial count — it's not a number I ever imagined reaching. These donations will let me make sure the Cloudflare workers that power the MusicBrainz and Last.fm integrations stay up even if we start to brush against the free-tier limits. I couldn't be more grateful to every sponsor, donor, and everyone who supports the project through code, feedback, or simply by using the app. I apologise if I haven't thanked each of you individually — please know I've noticed every contribution.
+
+Saludos a todos y muchas gracias.
 
 ---
 
@@ -12,9 +20,7 @@ The sprint that earns QBZ its ribbon. Dedicated Award view, Release Watch promot
   - **Editorial seed** — `/award/explore` seeds across all locales with diacritic-insensitive lookup; hard-coded seed removed
   - **Album-view right sidebar** — shows the full awards stack plus the album's label
   - **Album ribbons extended to press accolades** — last award wins on the card; the dedicated sidebar still shows the full stack
-  - **Gold laurel wreath icon** — replaces the trophy on `AwardView`; new SVG asset
-  - **Home cleanup** — editorial ribbons added for Qobuzissime and Album of the Week on the home rails; Essential Discography keeps cards clean; ribbon moved to bottom-left so the action overlay covers it on hover
-  - **Editor's Picks tab cleanup** — redundant "Album of the Week" and "Qobuzissime" ribbons removed from cards that live inside their own eponymous sections
+  - **Home cleanup** — editorial ribbons added for Qobuzissime and Album of the Week on the home rails
 
 ---
 
@@ -30,7 +36,6 @@ The sprint that earns QBZ its ribbon. Dedicated Award view, Release Watch promot
 
   - **Follow / unfollow labels** — mirrors Follow Artist; heart overlay on `LabelView`'s more-labels cards
   - **Favorites → Labels tab** — new tab in the Favorites view
-  - **Label follow button** — pill replaced by a 6px rounded rectangle to match the rest of the UI; label-card background hover dropped so the follow button hover stays visible
 
 ---
 
@@ -46,7 +51,7 @@ The sprint that earns QBZ its ribbon. Dedicated Award view, Release Watch promot
 
 ## Desktop integration (Linux)
 
-  - **Window controls auto-detect** — new `desktop_theme` Rust module reads `kwinrc`, `kdeglobals`, and `klassyrc`; a runtime-derived "Klassy (auto-detect)" or "Plasma (auto-detect)" preset mirrors the system decoration colors and button shape when Plasma is detected, and stays hidden otherwise
+  - **Window controls auto-detect** — new `desktop_theme` Rust module reads `kwinrc`, `kdeglobals`, and `klassyrc`; a runtime-derived "Klassy (auto-detect)" or "Plasma (auto-detect)" preset mirrors the system decoration colors and button shape when Plasma is detected, and stays hidden otherwise. The tech stack in use is not so Plasma friendly, and as Plasma user I'm trying very hard to mimic the appareance hahaha. 
   - **Klassy button shapes** — `mapKlassyShapeToQbz()` maps Klassy's `IntegratedRoundedRectangle`, `FullHeightRectangle`, `FullHeightRoundedRectangle`, `Tab`, `Circle`, `Square` onto QBZ's `ButtonShape` set; adds a new `full-height-rounded` variant to cover Klassy's most common preset
   - **Opt-in rounded window corners** — "Match system window chrome" toggle persists to `window_settings.db` and gates the Tauri window transparency decision at startup; on next launch the main window is rebuilt transparent and the detected corner radius (10 Klassy, 6 Breeze, 12 Adwaita, 8 fallback) is applied via `clip-path` + `border-radius` with GPU compositing for clean anti-aliasing on WebKitGTK
   - **ksni tray on Linux** — replaces the libayatana-appindicator path so left-click actually toggles the window (issue #310)
@@ -85,11 +90,10 @@ The sprint that earns QBZ its ribbon. Dedicated Award view, Release Watch promot
   - **Genre filter popup** — collision check reads the CSS `max-height` (530/630 width, 500/700 height) instead of the measured rect so the popup flips above the trigger or clamps to the viewport when content grows asynchronously
   - **Right-section collapse** (#303) — hamburger at narrow widths instead of overflow
   - **QualityBadge / QconnectBadge compact variants** — keeps them at full bar height without overflow
-  - **Silk animations removed** from ForYouTab mix cards and Your Mixes covers (performance)
+  - **Silk animations removed** from ForYouTab mix cards and Your Mixes covers — performance cost outweighed the visual benefit and they caused minor rendering glitches
   - **Multi-select drag** enabled in all views; track drag & drop extended to artist and search views and onto sidebar playlists; compact drag ghost with artist + album
   - **Lyrics active line** uses theme accent color
   - **For-You load order** — waits for `topArtists`/`recentAlbums` before loading dependent rails
-  - **Remote-mode indicator** sits above the player bar, not inside it
   - **Banner layout** uses a CSS variable; i18n key fixed; responsive height
   - **Favorites Select All** — new checkbox in multi-select mode across track views
 
@@ -97,12 +101,9 @@ The sprint that earns QBZ its ribbon. Dedicated Award view, Release Watch promot
 
 ## Internal architecture
 
-  - **`commands_v2` refactor** — former single-file module is now a module directory (`auth`, `audio`, `catalog`, `diagnostics`, `discovery`, `favorites`, `helpers`, `image_cache`, `integrations`, `legacy_compat`, `library`, `link_resolver`, `playback`, `playlists`, `queue`, `runtime`, `search`, `session`, `settings`) — easier to navigate, smaller files
-  - **Gapless check flattened** — reduced from 4 nested `if`s to a flat control flow in the local-library path
+  - **`commands_v2` split into a module directory** — the former single-file module is now nineteen focused files, easier to navigate and review
   - **Custom device name** persists across restarts for QConnect
   - **Prefetch perf** — cache depth increased to 5 tracks with 2 concurrent CMAF segment downloads in parallel
-  - **qbzd scaffolding** — not yet exposed to users; the CI workflow is paused (`push.tags` trigger commented out) and the CastPicker's "QBZ Daemon" tab is gated behind a feature flag that currently resolves to `false`. Re-enable when qbzd ships
-  - **Nix devShell** — exports `LD_LIBRARY_PATH` for libappindicator and `LIBCLANG_PATH` for mupdf-sys bindgen
   - **Dependency bumps** — tauri-plugin-dialog 2.7.0, tauri-plugin-deep-link, rodio 0.22.2, vite 8.0.8, svelte 5.55.2, sveltejs/kit 2.57.1, rand, jsdom 29.0.2, notify-rust 4.14.0
 
 ---
