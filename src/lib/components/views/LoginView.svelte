@@ -321,6 +321,8 @@
     <!-- Logo -->
     <div class="logo">
       <img src="/logo.png" alt="QBZ Logo" class="logo-img" />
+      <div class="brand-name">{$t('app.name')}</div>
+      <div class="brand-subtitle">{$t('app.tagline')}</div>
     </div>
 
     {#if isTimedOut}
@@ -478,13 +480,32 @@
   .logo {
     text-align: center;
     margin-bottom: 32px;
+    padding-top: 12px;
     color: var(--accent-primary);
   }
 
   .logo-img {
-    width: 80px;
-    height: 80px;
+    width: 175px;
+    height: 175px;
     object-fit: contain;
+    filter: drop-shadow(0 3px 14px color-mix(in srgb, var(--text-muted) 22%, transparent));
+  }
+
+  .brand-name {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: 8px;
+    text-transform: uppercase;
+    color: var(--text-primary);
+  }
+
+  .brand-subtitle {
+    margin: 0;
+    font-size: 14px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--text-muted);
   }
 
   .login-body {

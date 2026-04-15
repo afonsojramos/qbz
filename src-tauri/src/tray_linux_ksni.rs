@@ -22,15 +22,53 @@ use ksni::{
 };
 use tauri::{AppHandle, Emitter, Manager};
 
-const TRAY_ICON_PNG: &[u8] = include_bytes!("../icons/tray.png");
+const TRAY_ICON_DARK_PNG: &[u8] = include_bytes!("../icons/tray-dark.png");
+const TRAY_ICON_LIGHT_PNG: &[u8] = include_bytes!("../icons/tray-light.png");
 
 fn is_flatpak() -> bool {
     std::env::var("FLATPAK_ID").is_ok() || std::path::Path::new("/.flatpak-info").exists()
 }
 
+/// Detect whether the system prefers a dark color scheme. Used to pick the
+/// matching tray icon variant (white glyph for dark trays, black for light).
+/// Tries (in order): GNOME `color-scheme`, GTK `prefer-dark-theme`,
+/// KDE `ColorScheme`. Defaults to `false` (light) when nothing matches.
+fn prefer_dark_tray() -> bool {
+    if let Ok(out) = std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+        .output()
+    {
+        if String::from_utf8_lossy(&out.stdout).contains("prefer-dark") {
+            return true;
+        }
+    }
+    if let Some(config) = dirs::config_dir() {
+        for variant in ["gtk-4.0", "gtk-3.0"] {
+            let path = config.join(variant).join("settings.ini");
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                for line in content.lines() {
+                    if let Some(rest) = line.trim().strip_prefix("gtk-application-prefer-dark-theme") {
+                        let v = rest.trim_start_matches(['=', ' ']);
+                        return v.starts_with('1') || v.starts_with("true");
+                    }
+                }
+            }
+        }
+        if let Ok(content) = std::fs::read_to_string(config.join("kdeglobals")) {
+            for line in content.lines() {
+                if let Some(rest) = line.trim().strip_prefix("ColorScheme") {
+                    return rest.trim_start_matches(['=', ' ']).to_lowercase().contains("dark");
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Convert an embedded RGBA PNG to the ARGB32 big-endian layout ksni expects.
 fn decode_tray_icon() -> Result<Icon, String> {
-    let img = image::load_from_memory(TRAY_ICON_PNG)
+    let bytes = if prefer_dark_tray() { TRAY_ICON_DARK_PNG } else { TRAY_ICON_LIGHT_PNG };
+    let img = image::load_from_memory(bytes)
         .map_err(|e| format!("decode tray icon: {e}"))?;
     let (width, height) = img.dimensions();
     let mut data = img.into_rgba8().into_vec();
