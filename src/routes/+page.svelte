@@ -6231,9 +6231,20 @@
   }
   .app.match-chrome.floating {
     border-radius: var(--chrome-radius, 10px);
+    /* clip-path gives cleaner anti-aliasing on rounded corners in
+       WebKitGTK than border-radius + overflow:hidden alone. Keep
+       border-radius too so the box-shadow follows the rounded shape. */
+    clip-path: inset(0 round var(--chrome-radius, 10px));
+    /* GPU-accelerate the clipped container so WebKitGTK picks a smoother
+       anti-alias path on the rounded edge. */
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    /* Drop shadow only — no hard 1px outline, which amplifies jaggies on
+       rounded corners in WebKitGTK. The shadow alone is enough to lift
+       the window off the desktop. */
     box-shadow:
-      0 12px 28px rgba(0, 0, 0, 0.55),
-      0 0 0 1px rgba(0, 0, 0, 0.65);
+      0 16px 32px rgba(0, 0, 0, 0.55),
+      0 2px 8px rgba(0, 0, 0, 0.35);
   }
   .app.match-chrome:not(.floating) {
     border-radius: 0;
