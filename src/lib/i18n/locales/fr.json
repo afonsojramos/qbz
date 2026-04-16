@@ -943,7 +943,11 @@
         "langley": "Langley",
         "ayanami": "Ayanami",
         "iscariot": "Iscariot",
-        "system": "Systeme"
+        "system": "Systeme",
+        "wcagLight": "WCAG Clair",
+        "wcagDark": "WCAG Sombre",
+        "highContrast": "Contraste Élevé",
+        "colorblind": "Daltonien"
       },
       "autoTheme": "Theme automatique",
       "autoThemeDesc": "Génère un thème de couleurs à partir de votre fond d'écran ou d'une image personnalisée",
@@ -1636,6 +1640,7 @@
     "addedTracksToQueue": "{count} titres ajoutés à la file d'attente",
     "failedPreviousTrack": "Impossible de revenir au titre précédent",
     "failedNextTrack": "Impossible de passer au titre suivant",
+    "failedToSavePreference": "Échec de l'enregistrement de la préférence",
     "tracksAddedToPlaylist": "Titre(s) ajouté(s) à la playlist",
     "playlistCreated": "Playlist créée",
     "offlineModeStarted": "Démarré en mode hors ligne",

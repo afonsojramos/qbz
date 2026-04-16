@@ -943,7 +943,11 @@
         "langley": "Langley",
         "ayanami": "Ayanami",
         "iscariot": "Iscariot",
-        "system": "System"
+        "system": "System",
+        "wcagLight": "WCAG Hell",
+        "wcagDark": "WCAG Dunkel",
+        "highContrast": "Hoher Kontrast",
+        "colorblind": "Farbenblind"
       },
       "autoTheme": "Auto-Theme",
       "autoThemeDesc": "Erstellt ein Farbschema aus deinem System-Hintergrundbild oder einem eigenen Bild",
@@ -1636,6 +1640,7 @@
     "addedTracksToQueue": "{count} Titel zur Warteschlange hinzugefügt",
     "failedPreviousTrack": "Zum vorherigen Titel wechseln fehlgeschlagen",
     "failedNextTrack": "Zum nächsten Titel wechseln fehlgeschlagen",
+    "failedToSavePreference": "Einstellung konnte nicht gespeichert werden",
     "tracksAddedToPlaylist": "Titel zur Playlist hinzugefügt",
     "playlistCreated": "Playlist erstellt",
     "offlineModeStarted": "Im Offline-Modus gestartet",

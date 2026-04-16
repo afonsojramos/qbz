@@ -55,7 +55,9 @@
   import {
     initPlaybackPreferences,
     getCachedPreferences,
-    isAutoplayEnabled
+    isAutoplayEnabled,
+    isInfinitePlayEnabled,
+    setAutoplayMode
   } from '$lib/stores/playbackPreferencesStore';
   import { initBlacklistStore, isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
   import { initCustomArtistImageStore, clearCustomArtistImages } from '$lib/stores/customArtistImageStore';
@@ -2475,7 +2477,30 @@
 
     setIsSkipping(true);
     try {
-      const nextTrackResult = await nextTrack();
+      let nextTrackResult = await nextTrack();
+      if (!nextTrackResult && infinitePlayEnabled) {
+        // Queue ended with infinite play on — fetch radio tracks based on
+        // the last 5 played + current track, append, then advance.
+        const recentIds: number[] = [];
+        if (playerState.currentTrack) recentIds.push(playerState.currentTrack.id);
+        for (const item of historyTracks.slice(0, 5)) {
+          const numericId = (item as any).trackId;
+          if (typeof numericId === 'number') recentIds.push(numericId);
+        }
+        if (recentIds.length > 0) {
+          try {
+            const radioTracks = await invoke<BackendQueueTrack[]>('v2_create_infinite_radio', {
+              recentTrackIds: recentIds.slice(0, 5)
+            });
+            if (radioTracks && radioTracks.length > 0) {
+              await invoke('v2_bulk_add_to_queue', { tracks: radioTracks });
+              nextTrackResult = await nextTrack();
+            }
+          } catch (err) {
+            console.error('Failed to extend queue with infinite radio:', err);
+          }
+        }
+      }
       if (nextTrackResult) {
         await playQueueTrack(nextTrackResult);
       } else {
@@ -2700,15 +2725,16 @@
   }
 
   // Toggle infinite play mode (auto-refill queue with similar tracks)
-  function handleToggleInfinitePlay() {
-    infinitePlayEnabled = !infinitePlayEnabled;
-    // Persist to localStorage
+  async function handleToggleInfinitePlay() {
+    const next = !infinitePlayEnabled;
     try {
-      setUserItem('qbz-infinite-play', JSON.stringify(infinitePlayEnabled));
-    } catch {
-      // Ignore storage errors
+      await setAutoplayMode(next ? 'infinite' : 'continue');
+      infinitePlayEnabled = next;
+      showToast(next ? $t('toast.infinitePlayEnabled') : $t('toast.infinitePlayDisabled'), 'info');
+    } catch (err) {
+      console.error('Failed to set autoplay mode:', err);
+      showToast($t('toast.failedToSavePreference'), 'error');
     }
-    showToast(infinitePlayEnabled ? $t('toast.infinitePlayEnabled') : $t('toast.infinitePlayDisabled'), 'info');
   }
 
   // Play a track from history
@@ -4125,15 +4151,7 @@
     // Initialize playback context store (local state only, no backend calls)
     initPlaybackContextStore();
 
-    // Load infinite play preference
-    try {
-      const stored = getUserItem('qbz-infinite-play');
-      if (stored !== null) {
-        infinitePlayEnabled = JSON.parse(stored);
-      }
-    } catch {
-      // Ignore storage errors
-    }
+    infinitePlayEnabled = isInfinitePlayEnabled();
 
     // NOTE: Audio settings are loaded AFTER session is ready (in handleLoginSuccess)
     // to avoid "No active session" errors from per-user state
@@ -4489,14 +4507,38 @@
         console.log('[Player] Auto-advance suppressed: QConnect is controlling playback');
         return;
       }
-      if (!isAutoplayEnabled()) {
+      // Only `track_only` mode stops auto-advance. Both `continue` and `infinite`
+      // advance through the queue; `infinite` additionally refills it on end.
+      if (!isAutoplayEnabled() && !isInfinitePlayEnabled()) {
         setQueueEnded(true);
         await stopPlayback();
         setIsPlaying(false);
         return;
       }
       const previousTrackId = currentTrack?.id ?? null;
-      const nextTrackResult = await nextTrackGuarded();
+      let nextTrackResult = await nextTrackGuarded();
+      if (!nextTrackResult && isInfinitePlayEnabled()) {
+        // Queue ended with infinite play on — extend with radio and retry.
+        const recentIds: number[] = [];
+        if (currentTrack) recentIds.push(currentTrack.id);
+        for (const item of historyTracks.slice(0, 5)) {
+          const numericId = (item as any).trackId;
+          if (typeof numericId === 'number') recentIds.push(numericId);
+        }
+        if (recentIds.length > 0) {
+          try {
+            const radioTracks = await invoke<BackendQueueTrack[]>('v2_create_infinite_radio', {
+              recentTrackIds: recentIds.slice(0, 5)
+            });
+            if (radioTracks && radioTracks.length > 0) {
+              await invoke('v2_bulk_add_to_queue', { tracks: radioTracks });
+              nextTrackResult = await nextTrackGuarded();
+            }
+          } catch (err) {
+            console.error('[Player] Auto-advance: infinite radio extend failed:', err);
+          }
+        }
+      }
       if (nextTrackResult) {
         // Defensive fallback for issue #80:
         // if backend returns same track on auto-advance while repeat-one is off,
