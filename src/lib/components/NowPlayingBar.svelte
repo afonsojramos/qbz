@@ -453,85 +453,89 @@
       </button>
     </div>
 
-    <!-- Center: Song Card -->
+    <!-- Center: Song Card slot + always-visible QConnect badge -->
     <div class="center-section">
-      {#if hasTrack}
-        <div class="song-card">
-          <button
-            class="artwork-container"
-            onclick={onOpenFullScreen}
-            onmouseenter={() => showArtworkPreview = true}
-            onmouseleave={() => showArtworkPreview = false}
-          >
-            {#if artwork}
-              <img use:cachedSrc={artwork} alt={trackTitle} class="artwork" />
-            {:else}
-              <div class="artwork-placeholder"></div>
-            {/if}
+      <div class="song-card-slot">
+        {#if hasTrack}
+          <div class="song-card">
+            <button
+              class="artwork-container"
+              onclick={onOpenFullScreen}
+              onmouseenter={() => showArtworkPreview = true}
+              onmouseleave={() => showArtworkPreview = false}
+            >
+              {#if artwork}
+                <img use:cachedSrc={artwork} alt={trackTitle} class="artwork" />
+              {:else}
+                <div class="artwork-placeholder"></div>
+              {/if}
 
-            <!-- Artwork Preview on Hover -->
-            {#if showArtworkPreview && artwork}
-              <div class="artwork-preview">
-                <img use:cachedSrc={artwork} alt={trackTitle} />
+              <!-- Artwork Preview on Hover -->
+              {#if showArtworkPreview && artwork}
+                <div class="artwork-preview">
+                  <img use:cachedSrc={artwork} alt={trackTitle} />
+                </div>
+              {/if}
+            </button>
+
+            <div class="song-info">
+              <div class="song-title-row">
+                <button class="song-title" title={$translateStore('actions.trackInfo')} onclick={onTrackClick}>{trackTitle}</button>
+                {#if explicit}
+                  <span class="explicit-badge" title={ $t('library.explicit') }></span>
+                {/if}
               </div>
-            {/if}
-          </button>
-
-          <div class="song-info">
-            <div class="song-title-row">
-              <button class="song-title" title={$translateStore('actions.trackInfo')} onclick={onTrackClick}>{trackTitle}</button>
-              {#if explicit}
-                <span class="explicit-badge" title={ $t('library.explicit') }></span>
-              {/if}
-            </div>
-            <div class="song-meta">
-              <StackIcon size={12} class="stack-icon" onClick={onContextClick} />
-              {#if artist}
-                <button class="meta-link" onclick={onArtistClick} title={$translateStore('actions.goToArtist')}>
-                  {artist}
-                </button>
-              {/if}
-              {#if artist && album}
-                <span class="meta-separator">·</span>
-              {/if}
-              {#if album}
-                <button class="meta-link" onclick={onAlbumClick} title={$translateStore('actions.goToAlbum')}>
-                  {album}
-                </button>
-              {/if}
-            </div>
-          </div>
-
-          <div class="badges-group" class:narrow={isNarrowBar}>
-            <div class="quality-indicator">
-              <QualityBadge
-                {quality}
-                {bitDepth}
-                {samplingRate}
-                {originalBitDepth}
-                {originalSamplingRate}
-                {format}
-                {bitPerfectMode}
-                compact={isNarrowBar}
-              />
-              <div class="audio-badges-row">
-                <AudioOutputBadges {samplingRate} />
+              <div class="song-meta">
+                <StackIcon size={12} class="stack-icon" onClick={onContextClick} />
+                {#if artist}
+                  <button class="meta-link" onclick={onArtistClick} title={$translateStore('actions.goToArtist')}>
+                    {artist}
+                  </button>
+                {/if}
+                {#if artist && album}
+                  <span class="meta-separator">·</span>
+                {/if}
+                {#if album}
+                  <button class="meta-link" onclick={onAlbumClick} title={$translateStore('actions.goToAlbum')}>
+                    {album}
+                  </button>
+                {/if}
               </div>
             </div>
-            <QconnectBadge
-              connected={isQobuzConnectConnected}
-              sessionSnapshot={qconnectSessionSnapshot}
-              onToggleConnection={onToggleQconnectConnection ?? (() => {})}
-              busy={qconnectBusy}
-              compact={isNarrowBar}
-            />
+
+            <div class="badges-group" class:narrow={isNarrowBar}>
+              <div class="quality-indicator">
+                <QualityBadge
+                  {quality}
+                  {bitDepth}
+                  {samplingRate}
+                  {originalBitDepth}
+                  {originalSamplingRate}
+                  {format}
+                  {bitPerfectMode}
+                  compact={isNarrowBar}
+                />
+                <div class="audio-badges-row">
+                  <AudioOutputBadges {samplingRate} />
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-      {:else}
-        <div class="empty-state">
-          <span>{$translateStore('player.noTrackPlaying')}</span>
-        </div>
-      {/if}
+        {:else}
+          <div class="empty-state">
+            <span>{$translateStore('player.noTrackPlaying')}</span>
+          </div>
+        {/if}
+      </div>
+      <!-- QConnect badge is rendered outside the songcard slot so it stays
+           visible (and in a stable position) whether or not a track is playing. -->
+      <QconnectBadge
+        connected={isQobuzConnectConnected}
+        sessionSnapshot={qconnectSessionSnapshot}
+        onToggleConnection={onToggleQconnectConnection ?? (() => {})}
+        busy={qconnectBusy}
+        compact={isNarrowBar}
+      />
     </div>
 
     <!-- Right: Actions & Volume -->
@@ -996,7 +1000,29 @@
     flex: 1;
     display: flex;
     justify-content: center;
+    align-items: center;
+    gap: 8px;
     min-width: 0;
+  }
+
+  .song-card-slot {
+    display: flex;
+    align-items: stretch;
+    flex: 1;
+    min-width: 354px;
+    max-width: 718px;
+    min-height: 48px;
+  }
+
+  .song-card-slot > .song-card,
+  .song-card-slot > .empty-state {
+    flex: 1;
+  }
+
+  .song-card-slot > .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   /* ===== Control Buttons ===== */
