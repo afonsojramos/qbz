@@ -1698,7 +1698,9 @@ pub async fn v2_create_infinite_radio(
     .await
     .map_err(|e| format!("Infinite radio task failed: {}", e))??;
 
-    log::info!("[V2 Radio] Infinite radio session created: {}", session_id);
+    // Demoted to debug to keep the radio session id out of default-level
+    // logs (CodeQL rust/cleartext-logging). Set RUST_LOG=debug to see.
+    log::debug!("[V2 Radio] Infinite radio session created: {}", session_id);
 
     let track_ids = tokio::task::spawn_blocking({
         let session_id = session_id.clone();
