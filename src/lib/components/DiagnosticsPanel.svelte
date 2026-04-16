@@ -58,6 +58,24 @@
     status: 'match' | 'mismatch' | 'info';
   }
 
+  interface SystemInfo {
+    os: string;
+    arch: string;
+    kernelVersion: string | null;
+    distroId: string | null;
+    distroVersionId: string | null;
+    distroPrettyName: string | null;
+    installMethod: string;
+    flatpakRuntime: string | null;
+    flatpakRuntimeVersion: string | null;
+    webkit2gtkVersion: string | null;
+    gtkVersion: string | null;
+    glibcVersion: string | null;
+    alsaVersion: string | null;
+    pipewireVersion: string | null;
+    pulseaudioVersion: string | null;
+  }
+
   interface PlaybackSnapshot {
     isPlaying: boolean;
     volumePercent: number;
@@ -101,6 +119,7 @@
   }
 
   let diagnostics = $state<RuntimeDiagnostics | null>(null);
+  let systemInfo = $state<SystemInfo | null>(null);
   let playback = $state<PlaybackSnapshot | null>(null);
   let qconnect = $state<QconnectDiag | null>(null);
   let castScan = $state<CastScanResult | null>(null);
@@ -116,6 +135,7 @@
   let playbackOpen = $state(true);
   let qconnectOpen = $state(true);
   let castOpen = $state(true);
+  let systemOpen = $state(true);
 
   const CAST_SCAN_DURATION_MS = 10000;
 
@@ -311,14 +331,18 @@
     loading = true;
     error = null;
     try {
-      const [diagRes, qcRes] = await Promise.allSettled([
+      const [diagRes, sysRes, qcRes] = await Promise.allSettled([
         invoke<RuntimeDiagnostics>('v2_get_runtime_diagnostics'),
+        invoke<SystemInfo>('v2_get_system_info'),
         snapshotQconnect(),
       ]);
       if (diagRes.status === 'fulfilled') {
         diagnostics = diagRes.value;
       } else {
         error = String(diagRes.reason);
+      }
+      if (sysRes.status === 'fulfilled') {
+        systemInfo = sysRes.value;
       }
       if (qcRes.status === 'fulfilled') {
         qconnect = qcRes.value;
@@ -334,6 +358,7 @@
     try {
       const exportData = {
         ...diagnostics,
+        systemInfo,
         playback,
         qconnect,
         castScan,
@@ -345,7 +370,7 @@
     } catch {
       try {
         await navigator.clipboard.writeText(
-          JSON.stringify({ ...diagnostics, playback, qconnect, castScan }, null, 2)
+          JSON.stringify({ ...diagnostics, systemInfo, playback, qconnect, castScan }, null, 2)
         );
         copied = true;
         setTimeout(() => { copied = false; }, 1500);
@@ -369,6 +394,30 @@
   onDestroy(() => {
     // (intentional) don't leave any subscriptions behind
   });
+
+  function systemRows(s: SystemInfo): DiagRow[] {
+    const rows: DiagRow[] = [
+      { label: 'OS', saved: '—', runtime: s.os, status: 'info' },
+      { label: 'Arch', saved: '—', runtime: s.arch, status: 'info' },
+      { label: 'Kernel', saved: '—', runtime: str(s.kernelVersion), status: 'info' },
+      { label: 'Distro', saved: '—', runtime: str(s.distroPrettyName), status: 'info' },
+      { label: 'Distro ID', saved: '—', runtime: str(s.distroId), status: 'info' },
+      { label: 'Distro Version', saved: '—', runtime: str(s.distroVersionId), status: 'info' },
+      { label: 'Install Method', saved: '—', runtime: s.installMethod, status: 'info' },
+    ];
+    if (s.flatpakRuntime) {
+      rows.push({ label: 'Flatpak Runtime', saved: '—', runtime: `${s.flatpakRuntime} ${str(s.flatpakRuntimeVersion)}`, status: 'info' });
+    }
+    rows.push(
+      { label: 'WebKit2GTK', saved: '—', runtime: str(s.webkit2gtkVersion), status: 'info' },
+      { label: 'GTK', saved: '—', runtime: str(s.gtkVersion), status: 'info' },
+      { label: 'glibc', saved: '—', runtime: str(s.glibcVersion), status: 'info' },
+      { label: 'ALSA', saved: '—', runtime: str(s.alsaVersion), status: 'info' },
+      { label: 'PipeWire', saved: '—', runtime: str(s.pipewireVersion), status: 'info' },
+      { label: 'PulseAudio', saved: '—', runtime: str(s.pulseaudioVersion), status: 'info' },
+    );
+    return rows;
+  }
 
   function playbackRows(p: PlaybackSnapshot): DiagRow[] {
     return [
@@ -449,6 +498,34 @@
 
   {#if diagnostics}
     <div class="diag-version">QBZ v{diagnostics.appVersion}</div>
+
+    <!-- System Info Section -->
+    {#if systemInfo}
+      <button class="section-toggle" onclick={() => systemOpen = !systemOpen}>
+        {#if systemOpen}<ChevronDown size={14} />{:else}<ChevronRight size={14} />{/if}
+        {$t('settings.developer.diagnostics.sectionSystem')}
+      </button>
+      {#if systemOpen}
+        <table class="diag-table">
+          <thead>
+            <tr>
+              <th>{$t('settings.developer.diagnostics.colSetting')}</th>
+              <th colspan="2">{$t('settings.developer.diagnostics.colRuntime')}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each systemRows(systemInfo) as row (row.label)}
+              <tr>
+                <td class="label-cell">{row.label}</td>
+                <td class="value-cell" colspan="2">{row.runtime}</td>
+                <td class="status-cell info">·</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+    {/if}
 
     <!-- Playback Section -->
     {#if playback}

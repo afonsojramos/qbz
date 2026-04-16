@@ -1373,6 +1373,7 @@
         "sectionGraphics": "Gráficos e renderização",
         "sectionEnv": "Variáveis de ambiente",
         "sectionPlayback": "Reprodução",
+        "sectionSystem": "Sistema",
         "sectionQconnect": "Qobuz Connect",
         "sectionCast": "Descoberta Cast",
         "castScan": "Escanear 10s",
