@@ -322,6 +322,114 @@ If QBZ crashes on startup: `qbz --reset-graphics`
 
 User guides, audio configuration, integrations, and troubleshooting: **[QBZ Wiki](https://github.com/vicrodh/qbz/wiki)** (work in progress).
 
+
+## Diagram
+
+```mermaid
+flowchart TD
+
+subgraph group_frontend["Frontend"]
+  node_ui_shell["Svelte UI<br/>sveltekit app"]
+  node_ui_state["Stores & Services<br/>ui orchestration"]
+  node_ui_views["Views<br/>screen layer"]
+  node_ui_remote["Remote Runtime<br/>qconnect client<br/>[qconnectRuntime.ts]"]
+end
+
+subgraph group_tauri["Desktop App"]
+  node_tauri_backend["Tauri Backend<br/>native backend"]
+  node_cmd_v2["Commands v2<br/>backend api"]
+  node_cmd_legacy["Legacy Commands<br/>compat api"]
+  node_app_audio["App Audio<br/>backend audio"]
+  node_app_player["App Player<br/>playback engine"]
+  node_app_library["App Library<br/>library service"]
+  node_app_cache["Offline Cache<br/>local cache"]
+  node_app_cast["Casting<br/>device handoff"]
+  node_app_connect["Qconnect Service<br/>remote control bridge"]
+end
+
+subgraph group_crates["Rust Crates"]
+  node_rust_player["qbz-player<br/>playback core"]
+  node_rust_audio["qbz-audio<br/>audio backend"]
+  node_rust_cache["qbz-cache<br/>audio cache"]
+  node_rust_qobuz["qbz-qobuz<br/>api client"]
+  node_rust_library["qbz-library<br/>library index"]
+  node_rust_cast["qbz-cast<br/>cast stack"]
+  node_rust_connect["qconnect stack<br/>protocol stack"]
+  node_rust_integrations["qbz-integrations<br/>external services"]
+end
+
+subgraph group_service["Daemon"]
+  node_daemon["qbzd<br/>local daemon"]
+end
+
+subgraph group_packaging["Packaging"]
+  node_packaging_ci["Packaging & CI<br/>release automation<br/>[workflows]"]
+end
+
+node_ui_shell -->|"uses"| node_ui_state
+node_ui_shell -->|"renders"| node_ui_views
+node_ui_state -->|"calls"| node_cmd_v2
+node_ui_state -->|"syncs"| node_ui_remote
+node_ui_remote -->|"bridges"| node_app_connect
+node_tauri_backend -->|"exposes"| node_cmd_v2
+node_tauri_backend -.->|"keeps"| node_cmd_legacy
+node_cmd_v2 -->|"drives"| node_app_player
+node_cmd_v2 -->|"queries"| node_app_library
+node_cmd_v2 -->|"reads/writes"| node_app_cache
+node_cmd_v2 -->|"controls"| node_app_cast
+node_cmd_v2 -->|"syncs"| node_rust_integrations
+node_app_player -->|"uses"| node_rust_player
+node_app_audio -->|"uses"| node_rust_audio
+node_app_player -->|"prefetches"| node_rust_cache
+node_app_library -->|"indexes"| node_rust_library
+node_app_library -->|"enriches"| node_rust_qobuz
+node_app_cast -->|"delegates"| node_rust_cast
+node_app_connect -->|"implements"| node_rust_connect
+node_daemon -->|"coordinates"| node_app_player
+node_daemon -->|"serves"| node_app_library
+node_daemon -->|"hosts"| node_app_connect
+node_packaging_ci -.->|"builds"| node_tauri_backend
+node_packaging_ci -.->|"packages"| node_daemon
+node_packaging_ci -.->|"bundles"| node_ui_shell
+
+click node_ui_shell "https://github.com/vicrodh/qbz/tree/main/src"
+click node_ui_state "https://github.com/vicrodh/qbz/tree/main/src/lib/stores"
+click node_ui_views "https://github.com/vicrodh/qbz/tree/main/src/lib/components/views"
+click node_ui_remote "https://github.com/vicrodh/qbz/blob/main/src/lib/services/qconnectRuntime.ts"
+click node_tauri_backend "https://github.com/vicrodh/qbz/tree/main/src-tauri/src"
+click node_cmd_v2 "https://github.com/vicrodh/qbz/tree/main/src-tauri/src/commands_v2"
+click node_cmd_legacy "https://github.com/vicrodh/qbz/tree/main/src-tauri/src/commands"
+click node_app_audio "https://github.com/vicrodh/qbz/tree/main/src-tauri/src/audio"
+click node_app_player "https://github.com/vicrodh/qbz/tree/main/src-tauri/src/player"
+click node_app_library "https://github.com/vicrodh/qbz/tree/main/src-tauri/src/library"
+click node_app_cache "https://github.com/vicrodh/qbz/tree/main/src-tauri/src/offline_cache"
+click node_app_cast "https://github.com/vicrodh/qbz/tree/main/src-tauri/src/cast"
+click node_app_connect "https://github.com/vicrodh/qbz/blob/main/src-tauri/src/qconnect_service.rs"
+click node_rust_player "https://github.com/vicrodh/qbz/tree/main/crates/qbz-player/src"
+click node_rust_audio "https://github.com/vicrodh/qbz/tree/main/crates/qbz-audio/src"
+click node_rust_cache "https://github.com/vicrodh/qbz/tree/main/crates/qbz-cache/src"
+click node_rust_qobuz "https://github.com/vicrodh/qbz/tree/main/crates/qbz-qobuz/src"
+click node_rust_library "https://github.com/vicrodh/qbz/tree/main/crates/qbz-library/src"
+click node_rust_cast "https://github.com/vicrodh/qbz/tree/main/crates/qbz-cast/src"
+click node_rust_connect "https://github.com/vicrodh/qbz/tree/main/crates/qconnect-protocol/src"
+click node_rust_integrations "https://github.com/vicrodh/qbz/tree/main/crates/qbz-integrations/src"
+click node_daemon "https://github.com/vicrodh/qbz/tree/main/crates/qbzd/src"
+click node_packaging_ci "https://github.com/vicrodh/qbz/blob/main/.github/workflows"
+
+classDef toneNeutral fill:#f8fafc,stroke:#334155,stroke-width:1.5px,color:#0f172a
+classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
+classDef toneAmber fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
+classDef toneMint fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
+classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337
+classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81
+classDef toneTeal fill:#ccfbf1,stroke:#0f766e,stroke-width:1.5px,color:#134e4a
+class node_ui_shell,node_ui_state,node_ui_views,node_ui_remote toneBlue
+class node_tauri_backend,node_cmd_v2,node_cmd_legacy,node_app_audio,node_app_player,node_app_library,node_app_cache,node_app_cast,node_app_connect toneAmber
+class node_rust_player,node_rust_audio,node_rust_cache,node_rust_qobuz,node_rust_library,node_rust_cast,node_rust_connect,node_rust_integrations toneMint
+class node_daemon toneRose
+class node_packaging_ci toneIndigo
+```
+
 ## Open Source
 
 QBZ is MIT-licensed. No telemetry, no tracking, no hidden services. Built for Linux audio enthusiasts, with experimental macOS support.
@@ -351,8 +459,4 @@ MIT
   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=vicrodh/qbz&type=date&legend=top-left" />
 </picture>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=vicrodh/qbz&style=landscape1&theme=dark" />
-  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=vicrodh/qbz&style=landscape1&theme=dark" />
-  <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=vicrodh/qbz&style=landscape1&theme=dark" />
-</picture>
+
