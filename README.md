@@ -346,13 +346,13 @@ MIT
 ## Fancy charts
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=star-history/star-history&type=date&theme=dark&legend=top-left" />
-  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=star-history/star-history&type=date&legend=top-left" />
-  <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=star-history/star-history&type=date&legend=top-left" />
+  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=vicrodh/qbz&type=date&theme=dark&legend=top-left" />
+  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=vicrodh/qbz&type=date&legend=top-left" />
+  <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=vicrodh/qbz&type=date&legend=top-left" />
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=star-history/star-history&style=landscape1&theme=dark" />
-  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=star-history/star-history&style=landscape1" />
-  <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=star-history/star-history&style=landscape1" />
+  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=vicrodh/qbz&style=landscape1&theme=dark" />
+  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=vicrodh/qbz&style=landscape1&theme=dark" />
+  <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=vicrodh/qbz&style=landscape1&theme=dark" />
 </picture>
