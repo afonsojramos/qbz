@@ -1,17 +1,10 @@
 # 1.2.7 — Accolade Watch (diagnostics + carousel fix)
 
-Two things drove this release, both of them corrections:
-
-A defensive fix for the Discover carousel click-through regression introduced in 1.2.6: the mouse-drag scroll used implicit pointer capture on `pointerdown`, which on some WebKitGTK + compositor combinations retargeted the subsequent click to the scroll container instead of the card — so opening albums, artists, or playlists from Home / Editor's Picks / For You quietly stopped working. Capture is now deferred until a real drag is in progress; normal clicks fall through cleanly.
-
-A big expansion of **System Diagnostics**: the one-shot snapshot now reports OS / distro / install method / key library versions (WebKitGTK, GTK, glibc, ALSA, PipeWire, PulseAudio), live playback state, the Qobuz Connect role (controller / local renderer / observer), and — opt-out toggle in the View Logs modal — an optional 10-second Chromecast + DLNA scan, all bundled into the same paste upload. Bug reports can ship one link instead of three, and no sensitive data (no track/user/device IDs) ever reaches the paste.
-
-My apologies for stacking three releases where one would have been enough — I misjudged the scope and timing of each batch.
-
-Everything from 1.2.6 and 1.2.5 below is included as well.
+Defensive fix for the click-through regression on Discover carousels introduced in 1.2.6, plus a substantial expansion of System Diagnostics (apologies for stacking three releases where one would have been enough).
 
 ---
 
+# 1.2.6 — Accolade Watch (accessibility patch)
 
 A quick follow-up on the heels of 1.2.5. Two things drove this release:
 
@@ -144,4 +137,4 @@ Saludos a todos y muchas gracias.
 
 ---
 
-Full changelog: https://github.com/vicrodh/qbz/compare/v1.2.6...v1.2.7
+Full changelog: https://github.com/vicrodh/qbz/compare/v1.2.5...v1.2.6
