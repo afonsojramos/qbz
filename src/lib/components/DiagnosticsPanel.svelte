@@ -380,14 +380,8 @@
 
   function togglePanel() {
     panelOpen = !panelOpen;
-    if (panelOpen) {
-      if (!diagnostics) loadDiagnostics();
-      // Auto-run a cast scan the first time the panel is opened. Don't
-      // block the diagnostics load on it — scan runs concurrently and
-      // fills its own section when done.
-      if (!castScan && !castScanning) {
-        void runCastScan();
-      }
+    if (panelOpen && !diagnostics) {
+      loadDiagnostics();
     }
   }
 
