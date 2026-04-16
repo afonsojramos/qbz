@@ -1707,6 +1707,13 @@
     "awardUnavailable": "Détail non disponible pour cette récompense.",
     "audioDeviceMissing": "Le périphérique '{device}' n'est plus disponible. Utilisation du périphérique par défaut."
   },
+  "reportIssue": {
+    "title": "Signaler un problème",
+    "intro": "Pour faciliter la résolution des bugs et des problèmes, il est recommandé de partager les journaux de l'application. Nous avons pris soin de masquer les journaux envoyés afin qu'aucune donnée sensible ne soit incluse. Le processus est manuel, jamais automatique, pour que vous puissiez vérifier ce qui est partagé.",
+    "goToLogs": "Aller aux journaux",
+    "createIssue": "Créer un rapport",
+    "hideNextTime": "Ne plus afficher. Vous pouvez toujours accéder à l'écran des journaux via Paramètres > Mode développeur > Voir les journaux."
+  },
   "offline": {
     "title": "Mode hors ligne",
     "message": "Connectez-vous à Internet pour accéder au contenu Qobuz™.",

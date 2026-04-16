@@ -1730,6 +1730,13 @@
     "awardUnavailable": "Detalhe não disponível para este prêmio.",
     "audioDeviceMissing": "Dispositivo '{device}' não está mais disponível. Usando o padrão do sistema."
   },
+  "reportIssue": {
+    "title": "Reportar um problema",
+    "intro": "Para facilitar a resolução de bugs e problemas, é recomendado compartilhar os logs da aplicação. Tivemos o cuidado de mascarar os logs enviados para que nenhum dado sensível seja incluído. O processo é manual, nunca automático, para que você possa verificar o que é compartilhado.",
+    "goToLogs": "Ir para os logs",
+    "createIssue": "Criar relato",
+    "hideNextTime": "Não mostrar novamente. Você sempre pode acessar a tela de logs em Configurações > Modo Desenvolvedor > Ver logs."
+  },
   "offline": {
     "title": "Modo Offline",
     "message": "Conecte-se à internet para acessar o conteúdo do Qobuz™.",

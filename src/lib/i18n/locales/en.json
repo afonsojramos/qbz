@@ -1736,6 +1736,13 @@
     "awardUnavailable": "Award detail not available for this entry.",
     "audioDeviceMissing": "Output device '{device}' is no longer available. Using system default."
   },
+  "reportIssue": {
+    "title": "Report an issue",
+    "intro": "To make bug and issue resolution easier, it's recommended to share the application logs. We have been careful to mask the logs we send so no sensitive data is included. The process is manual, never automatic, so you can verify what is being shared.",
+    "goToLogs": "Go to logs",
+    "createIssue": "Create issue report",
+    "hideNextTime": "Do not show this again, you can always access the log screen on Settings > Developer Mode > View logs"
+  },
   "offline": {
     "title": "Offline Mode",
     "message": "Connect to the internet to access Qobuz™ content.",

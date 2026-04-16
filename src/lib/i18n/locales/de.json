@@ -1707,6 +1707,13 @@
     "awardUnavailable": "Detailansicht für diese Auszeichnung nicht verfügbar.",
     "audioDeviceMissing": "Ausgabegerät '{device}' ist nicht mehr verfügbar. Standardgerät wird verwendet."
   },
+  "reportIssue": {
+    "title": "Problem melden",
+    "intro": "Um die Behebung von Bugs und Problemen zu erleichtern, empfehlen wir, die Anwendungsprotokolle zu teilen. Wir haben uns sehr bemüht, die übermittelten Protokolle zu maskieren, damit keine sensiblen Daten enthalten sind. Der Vorgang ist manuell, niemals automatisch, damit du prüfen kannst, was geteilt wird.",
+    "goToLogs": "Zu den Protokollen",
+    "createIssue": "Problembericht erstellen",
+    "hideNextTime": "Nicht mehr anzeigen. Du kannst die Protokoll-Ansicht jederzeit unter Einstellungen > Entwicklermodus > Protokolle anzeigen öffnen."
+  },
   "offline": {
     "title": "Offline-Modus",
     "message": "Verbinde dich mit dem Internet, um auf Qobuz™-Inhalte zuzugreifen.",

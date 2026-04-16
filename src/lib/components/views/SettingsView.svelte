@@ -14,6 +14,7 @@
   import RemoteControlSetupGuide from '../RemoteControlSetupGuide.svelte';
   import LogsModal from '../LogsModal.svelte';
   import DiagnosticsPanel from '../DiagnosticsPanel.svelte';
+  import { consumeSettingsIntent } from '$lib/stores/settingsIntentStore';
   import { platform } from '$lib/utils/platform';
   import VolumeSlider from '../VolumeSlider.svelte';
   import UpdateCheckResultModal from '../updates/UpdateCheckResultModal.svelte';
@@ -1416,6 +1417,20 @@
 
   // Load saved settings on mount
   onMount(() => {
+    // Cross-component intent: e.g. the Report Issue modal tells us to jump
+    // to Developer Mode and auto-open the Logs modal. Apply once and clear.
+    try {
+      const intent = consumeSettingsIntent();
+      if (intent?.section) {
+        activeSection = intent.section;
+      }
+      if (intent?.openLogs) {
+        showLogsModal = true;
+      }
+    } catch {
+      // Ignore — defensive
+    }
+
     // Fire desktop theme detection in the background (Plasma/Klassy). Used
     // to decide whether to expose the "Klassy/Plasma (auto-detect)" preset
     // in the Appearance section. Non-blocking — failure just leaves the
