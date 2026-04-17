@@ -202,6 +202,11 @@ impl CoreBridge {
         self.core.play_index(index).await
     }
 
+    /// Jump to a track by its position in the upcoming list (shuffle-aware)
+    pub async fn play_upcoming_at(&self, upcoming_index: usize) -> Option<QueueTrack> {
+        self.core.play_upcoming_at(upcoming_index).await
+    }
+
     /// Advance to next track in queue
     pub async fn next_track(&self) -> Option<QueueTrack> {
         self.core.next_track().await
