@@ -225,7 +225,7 @@ export function getCachedDesktopTheme(): DesktopThemeInfo | null {
 
 export async function detectDesktopThemeCached(force = false): Promise<DesktopThemeInfo | null> {
   if (!force && cachedTheme) return cachedTheme;
-  if (detectInFlight) return detectInFlight;
+  if (detectInFlight !== null) return detectInFlight;
   detectInFlight = (async () => {
     try {
       const { invoke } = await import('@tauri-apps/api/core');

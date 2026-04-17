@@ -105,7 +105,7 @@ export function rememberAwardsFromAlbums(
 
 async function loadCatalog(): Promise<void> {
   if (catalogLoaded) return;
-  if (inflight) return inflight;
+  if (inflight !== null) return inflight;
 
   inflight = (async () => {
     let offset = 0;
