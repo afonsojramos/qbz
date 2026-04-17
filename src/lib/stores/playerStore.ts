@@ -814,7 +814,12 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
           })
           .finally(() => {
             gaplessRequestInFlight = false;
-            gaplessAttemptTrackId = null;
+            // Keep gaplessAttemptTrackId pinned to currentTrack.id so the
+            // one-shot guard above blocks re-attempts for the same
+            // playing track. It is cleared naturally when the playback
+            // event reports a new track_id (see line ~634). Clearing it
+            // here defeats the one-shot intent and causes per-second
+            // spam when the backend reports "not cached".
           });
       }
     }
