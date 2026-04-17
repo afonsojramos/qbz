@@ -580,6 +580,30 @@ impl QueueManager {
         prev_idx.and_then(|idx| state.tracks.get(idx).cloned())
     }
 
+    /// Jump to a track by its position in the `upcoming` list as returned by
+    /// `get_state`. This is the position the user sees in the Queue sidebar;
+    /// the method resolves it to the correct canonical index even when
+    /// shuffle is active (where the display order differs from the canonical
+    /// `tracks` order).
+    ///
+    /// Used by the "click a track in the queue panel" path — fixes issue
+    /// #327 where shuffle mode caused a different track than the one
+    /// clicked to be played.
+    pub fn play_upcoming_at(&self, upcoming_index: usize) -> Option<QueueTrack> {
+        let canonical_index = {
+            let state = self.state.lock().unwrap();
+            match state.current_index {
+                Some(_) if state.shuffle => state
+                    .shuffle_order
+                    .get(state.shuffle_position + 1 + upcoming_index)
+                    .copied(),
+                Some(curr_idx) => Some(curr_idx + 1 + upcoming_index),
+                None => Some(upcoming_index),
+            }
+        };
+        canonical_index.and_then(|idx| self.play_index(idx))
+    }
+
     /// Jump to a specific track by index
     pub fn play_index(&self, index: usize) -> Option<QueueTrack> {
         let mut state = self.state.lock().unwrap();
@@ -1101,6 +1125,51 @@ mod tests {
         let state = queue.get_state();
         assert_eq!(state.total_tracks, 11);
         assert_eq!(state.upcoming.len(), 10);
+    }
+
+    #[test]
+    fn test_play_upcoming_at_without_shuffle_uses_linear_offset() {
+        let queue = QueueManager::new();
+        for i in 1..=5 {
+            queue.add_track(create_test_track(i));
+        }
+        queue.play_index(1); // current = track id 2
+
+        // upcoming list is [3, 4, 5]; clicking position 1 must play id 4
+        let track = queue.play_upcoming_at(1).expect("track");
+        assert_eq!(track.id, 4);
+    }
+
+    #[test]
+    fn test_play_upcoming_at_with_shuffle_follows_shuffle_order() {
+        let queue = QueueManager::new();
+        for i in 1..=5 {
+            queue.add_track(create_test_track(i));
+        }
+
+        // Authoritative shuffle: playing head is shuffle[0]=2 (id 3),
+        // upcoming order becomes [5, 2, 4, 1] (track ids).
+        queue.set_queue_with_order(
+            (1..=5).map(create_test_track).collect(),
+            Some(2),
+            true,
+            Some(vec![2, 4, 1, 3, 0]),
+        );
+
+        let state = queue.get_state();
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>(),
+            vec![5, 2, 4, 1]
+        );
+
+        // Clicking upcoming position 2 must play track id 4, not id 5
+        // (which would be the "current_index + 2 + 1" = 5 broken path).
+        let track = queue.play_upcoming_at(2).expect("track");
+        assert_eq!(track.id, 4);
     }
 
     #[test]

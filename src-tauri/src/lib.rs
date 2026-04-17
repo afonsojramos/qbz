@@ -1591,6 +1591,7 @@ pub fn run() {
             commands_v2::v2_next_track,
             commands_v2::v2_previous_track,
             commands_v2::v2_play_queue_index,
+            commands_v2::v2_play_queue_upcoming_at,
             commands_v2::v2_move_queue_track,
             commands_v2::v2_add_tracks_to_queue,
             commands_v2::v2_add_tracks_to_queue_next,

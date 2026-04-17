@@ -33,7 +33,7 @@
     queueRemainingTracks?: number; // Remaining tracks after current (total - played - 1)
     historyTracks?: QueueTrack[];
     isRadioMode?: boolean; // Is radio/similar tracks mode active
-    onPlayTrack?: (trackId: string) => void;
+    onPlayTrack?: (trackId: string, upcomingIndex: number) => void;
     onPlayHistoryTrack?: (trackId: string) => void;
     onClearQueue?: () => void;
     onSaveAsPlaylist?: () => void;
@@ -216,9 +216,9 @@
     dragOverIndex = null;
   }
 
-  function handleTrackClick(track: QueueTrack) {
+  function handleTrackClick(track: QueueTrack, upcomingIndex: number) {
     if (track.available === false) return;
-    onPlayTrack?.(track.id);
+    onPlayTrack?.(track.id, upcomingIndex);
   }
 
   function handleHistoryTrackClick(track: QueueTrack) {
@@ -354,7 +354,7 @@
                   class:drag-over={dragOverIndex === originalIndex && draggedIndex !== originalIndex}
                   class:unavailable={isUnavailable}
                   draggable={canDrag && !isUnavailable}
-                  onclick={() => handleTrackClick(queueTrack)}
+                  onclick={() => handleTrackClick(queueTrack, originalIndex)}
                   ondragstart={(e) => handleDragStart(e, originalIndex)}
                   ondragover={(e) => handleDragOver(e, originalIndex)}
                   ondragleave={handleDragLeave}
@@ -362,7 +362,7 @@
                   ondragend={handleDragEnd}
                   role="button"
                   tabindex={isUnavailable ? -1 : 0}
-                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTrackClick(queueTrack); } }}
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTrackClick(queueTrack, originalIndex); } }}
                 >
                   <span class="track-number">{originalIndex + 1}</span>
                   <div class="track-info">

@@ -327,6 +327,19 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         track
     }
 
+    /// Jump to a track by its position in the upcoming list (as shown in the
+    /// Queue sidebar). Shuffle-aware: resolves through `shuffle_order` when
+    /// shuffle is active.
+    pub async fn play_upcoming_at(&self, upcoming_index: usize) -> Option<QueueTrack> {
+        let queue = self.queue.write().await;
+        let track = queue.play_upcoming_at(upcoming_index);
+        self.emit(CoreEvent::QueueUpdated {
+            state: queue.get_state(),
+        })
+        .await;
+        track
+    }
+
     /// Advance to next track in queue
     pub async fn next_track(&self) -> Option<QueueTrack> {
         let queue = self.queue.write().await;

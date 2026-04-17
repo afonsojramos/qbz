@@ -424,6 +424,20 @@ export async function playQueueIndex(index: number): Promise<BackendQueueTrack |
 }
 
 /**
+ * Play a track at a given position in the upcoming list (shuffle-aware, V2).
+ * `upcomingIndex` matches the position shown in the queue sidebar; the
+ * backend resolves to the correct canonical track even when shuffle is on.
+ */
+export async function playQueueUpcomingAt(upcomingIndex: number): Promise<BackendQueueTrack | null> {
+  try {
+    return await invoke<BackendQueueTrack | null>('v2_play_queue_upcoming_at', { upcomingIndex });
+  } catch (err) {
+    console.error('Failed to play queue upcoming index:', err);
+    return null;
+  }
+}
+
+/**
  * Get next track from queue (V2)
  */
 export async function nextTrack(): Promise<BackendQueueTrack | null> {

@@ -438,50 +438,6 @@ fn default_streamable() -> bool {
     true
 }
 
-impl From<V2QueueTrack> for crate::queue::QueueTrack {
-    fn from(t: V2QueueTrack) -> Self {
-        Self {
-            id: t.id,
-            title: t.title,
-            artist: t.artist,
-            album: t.album,
-            duration_secs: t.duration_secs,
-            artwork_url: t.artwork_url,
-            hires: t.hires,
-            bit_depth: t.bit_depth,
-            sample_rate: t.sample_rate,
-            is_local: t.is_local,
-            album_id: t.album_id,
-            artist_id: t.artist_id,
-            streamable: t.streamable,
-            source: t.source,
-            parental_warning: t.parental_warning,
-        }
-    }
-}
-
-impl From<crate::queue::QueueTrack> for V2QueueTrack {
-    fn from(t: crate::queue::QueueTrack) -> Self {
-        Self {
-            id: t.id,
-            title: t.title,
-            artist: t.artist,
-            album: t.album,
-            duration_secs: t.duration_secs,
-            artwork_url: t.artwork_url,
-            hires: t.hires,
-            bit_depth: t.bit_depth,
-            sample_rate: t.sample_rate,
-            is_local: t.is_local,
-            album_id: t.album_id,
-            artist_id: t.artist_id,
-            streamable: t.streamable,
-            source: t.source,
-            parental_warning: t.parental_warning,
-        }
-    }
-}
-
 // V2 queue track <-> qbz_models::QueueTrack (CoreQueueTrack)
 impl From<V2QueueTrack> for CoreQueueTrack {
     fn from(t: V2QueueTrack) -> Self {
@@ -746,6 +702,26 @@ pub async fn v2_play_queue_index(
     log::info!("[V2] play_queue_index: {}", index);
     let bridge = bridge.get().await;
     let track = bridge.play_index(index).await;
+    Ok(track.map(Into::into))
+}
+
+/// Play a track at a given position in the upcoming list (V2 - shuffle-aware).
+/// `upcoming_index` matches the position shown in the Queue sidebar; the
+/// backend resolves it to the canonical track index, handling shuffle mode
+/// correctly. Fixes issue #327.
+#[tauri::command]
+pub async fn v2_play_queue_upcoming_at(
+    upcoming_index: usize,
+    bridge: State<'_, CoreBridgeState>,
+    runtime: State<'_, RuntimeManagerState>,
+) -> Result<Option<V2QueueTrack>, RuntimeError> {
+    runtime
+        .manager()
+        .check_requirements(CommandRequirement::RequiresUserSession)
+        .await?;
+    log::info!("[V2] play_queue_upcoming_at: {}", upcoming_index);
+    let bridge = bridge.get().await;
+    let track = bridge.play_upcoming_at(upcoming_index).await;
     Ok(track.map(Into::into))
 }
 

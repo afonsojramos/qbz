@@ -244,6 +244,7 @@
     setQueue,
     clearQueue,
     playQueueIndex,
+    playQueueUpcomingAt,
     nextTrack,
     nextTrackGuarded,
     previousTrack,
@@ -2608,8 +2609,8 @@
     }, { isLocal, source: source as 'qobuz' | 'local' | 'plex', showLoadingToast: false, gaplessTransition });
   }
 
-  // Play a specific track from the queue panel
-  async function handleQueueTrackPlay(trackId: string) {
+  // Play a specific track from the queue panel (shuffle-aware, fixes issue #327)
+  async function handleQueueTrackPlay(trackId: string, upcomingIndex: number) {
     try {
       const handledRemotely = await invoke<boolean>('v2_qconnect_play_track_if_remote', { trackId: parseInt(trackId, 10) });
       if (handledRemotely) {
@@ -2622,32 +2623,11 @@
     }
 
     try {
-      // Find the index in the queue
-      const queueState = await getBackendQueueState();
-      if (!queueState) {
+      const track = await playQueueUpcomingAt(upcomingIndex);
+      if (track) {
+        await playQueueTrack(track);
+      } else {
         showToast($t('toast.failedPlayTrack'), 'error');
-        return;
-      }
-
-      const allTracks = [queueState.current_track, ...queueState.upcoming].filter(Boolean) as BackendQueueTrack[];
-      const trackIndex = allTracks.findIndex(trk => String(trk.id) === trackId);
-
-      if (trackIndex >= 0) {
-        // If it's the current track (index 0), just ensure it's playing
-        if (trackIndex === 0 && queueState.current_index !== null) {
-          // Already current, nothing to do
-          return;
-        }
-
-        // Play by index (accounting for current track offset)
-        const actualIndex = queueState.current_index !== null
-          ? queueState.current_index + trackIndex
-          : trackIndex;
-
-        const track = await playQueueIndex(actualIndex);
-        if (track) {
-          await playQueueTrack(track);
-        }
       }
     } catch (err) {
       console.error('Failed to play queue track:', err);
@@ -6101,7 +6081,7 @@
           } else if (index > historyLen) {
             // Playing from upcoming queue
             const queueIndex = index - historyLen - 1;
-            handleQueueTrackPlay(queue[queueIndex]?.id?.toString() ?? '');
+            handleQueueTrackPlay(queue[queueIndex]?.id?.toString() ?? '', queueIndex);
           }
           // index === historyLen is current track, do nothing
         }}
