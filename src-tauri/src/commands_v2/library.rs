@@ -496,11 +496,13 @@ pub async fn v2_library_play_track(
             .ok_or_else(|| "Track not found".to_string())?
     };
 
-    // Qobuz-cached offline tracks may be stored in the new v2 CMAF format
-    // (cache_format=2), in which case `track.file_path` in the library
-    // index points at a directory, not a playable FLAC. Route those
-    // through the offline-cache playback helper; it decrypts and hands us
-    // plain FLAC bytes identical to what a v1 cached file would yield.
+    // Qobuz-cached offline tracks are authoritative in the offline-cache
+    // DB, not the library index. The library row for these tracks carries
+    // metadata only (title/artist/album) plus a display path; the library's
+    // `file_path` for v2 entries is a track directory that is not playable
+    // directly. So for source='qobuz_download' we always resolve through
+    // the offline-cache DB — cache_format tells us whether to decrypt the
+    // CMAF bundle or to read a plain-FLAC v1 file.
     let is_qobuz_cached = track.source.as_deref() == Some("qobuz_download");
     if is_qobuz_cached {
         let bundle_row = {
@@ -509,42 +511,75 @@ pub async fn v2_library_play_track(
                 .as_ref()
                 .and_then(|db| db.get_cmaf_bundle(track_id as u64).ok().flatten())
         };
-        if let Some(row) = bundle_row {
-            if row.cache_format == 2 {
+        match bundle_row {
+            Some(row) if row.cache_format == 2 => {
                 let cache_path = offline_cache.get_cache_path();
-                if let Some(audio_data) = crate::offline_cache::playback::load_cmaf_bundle(
+                let audio_data = crate::offline_cache::playback::load_cmaf_bundle(
                     track_id as u64,
                     &row,
                     std::path::Path::new(&cache_path),
-                ) {
-                    let bridge = bridge.get().await;
-                    bridge
-                        .player()
-                        .play_data(audio_data, track_id as u64)
-                        .map_err(|e| format!("Failed to play CMAF offline bundle: {}", e))?;
-                    if let Some(start_secs) = track.cue_start_secs {
-                        let start_pos = start_secs as u64;
-                        if start_pos > 0 {
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                            bridge
-                                .player()
-                                .seek(start_pos)
-                                .map_err(|e| format!("Failed to seek: {}", e))?;
-                        }
+                )
+                .ok_or_else(|| {
+                    format!(
+                        "Offline CMAF bundle for track {} is present but failed to decrypt",
+                        track_id
+                    )
+                })?;
+                let bridge = bridge.get().await;
+                bridge
+                    .player()
+                    .play_data(audio_data, track_id as u64)
+                    .map_err(|e| format!("Failed to play CMAF offline bundle: {}", e))?;
+                if let Some(start_secs) = track.cue_start_secs {
+                    let start_pos = start_secs as u64;
+                    if start_pos > 0 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        bridge
+                            .player()
+                            .seek(start_pos)
+                            .map_err(|e| format!("Failed to seek: {}", e))?;
                     }
-                    return Ok(());
                 }
+                return Ok(());
+            }
+            Some(row) => {
+                // cache_format=1 (legacy plain FLAC). The authoritative path
+                // is the offline-cache row's `segments_path` field (v1 stored
+                // the FLAC file path there), not the library index file_path
+                // (which for qobuz_download entries is now a display-only
+                // value that may be a directory).
+                let file_path = std::path::Path::new(&row.segments_path);
+                if !file_path.exists() {
+                    return Err(format!(
+                        "Offline cache file missing for track {}: {}",
+                        track_id, row.segments_path
+                    ));
+                }
+                let audio_data = std::fs::read(file_path)
+                    .map_err(|e| format!("Failed to read v1 offline file: {}", e))?;
+                let bridge = bridge.get().await;
+                bridge
+                    .player()
+                    .play_data(audio_data, track_id as u64)
+                    .map_err(|e| format!("Failed to play: {}", e))?;
+                return Ok(());
+            }
+            None => {
+                // Orphan: library row says qobuz_download but offline cache
+                // has no record. Either the cache was partially wiped or
+                // there's a corruption — surface the error instead of
+                // trying to read whatever the library file_path says (which
+                // for v2 is a directory and blows up with os error 21).
                 return Err(format!(
-                    "Offline cache CMAF bundle for track {} is present but failed to decrypt",
+                    "Offline cache entry for track {} is missing (library index is stale)",
                     track_id
                 ));
             }
-            // cache_format=1 — fall through to the legacy plain-FLAC branch
         }
     }
 
-    // Legacy plain-FLAC path: v1 Qobuz-cached entries OR regular user
-    // local library files. Read the file directly and play.
+    // Regular user local library files (FLAC/MP3 owned by the user,
+    // not Qobuz-cached). Read the file path from the library row.
     let file_path = std::path::Path::new(&track.file_path);
     if !file_path.exists() {
         return Err(format!("File not found: {}", track.file_path));

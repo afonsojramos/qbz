@@ -436,38 +436,69 @@ pub async fn v2_play_next_gapless(
         return Ok(false);
     }
 
-    // Check offline cache (persistent disk cache)
+    // Check offline cache (persistent disk cache). Branch on cache_format:
+    // - v2 (CMAF bundle) → decrypt to plain FLAC via load_cmaf_bundle
+    // - v1 (plain FLAC)  → read segments_path (which for v1 entries is
+    //                       the actual FLAC file path)
+    //
+    // The previous implementation used get_file_path() which blindly
+    // returned the file_path column, then std::fs::read() on it. For v2
+    // entries that column is segments.bin (encrypted bytes), so the
+    // downstream player probe failed with "end of stream" and gapless
+    // fell apart across v2 offline-cache tracks.
     {
-        let cached_path = {
+        let bundle_row = {
             let db_opt = offline_cache.db.lock().await;
-            if let Some(db) = db_opt.as_ref() {
-                if let Ok(Some(file_path)) = db.get_file_path(track_id) {
-                    Some(file_path)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            db_opt
+                .as_ref()
+                .and_then(|db| db.get_cmaf_bundle(track_id).ok().flatten())
         };
-        if let Some(file_path) = cached_path {
-            let path = std::path::Path::new(&file_path);
-            if !path.exists() {
-                log::warn!(
-                    "[V2/GAPLESS/CACHE STALE] Track {} DB entry points to missing file {:?}",
-                    track_id,
-                    path
-                );
-            }
-            if path.exists() {
-                log::info!("[V2/GAPLESS] Track {} from OFFLINE cache", track_id);
-                let audio_data = std::fs::read(path).map_err(|e| {
-                    RuntimeError::Internal(format!("Failed to read cached file: {}", e))
-                })?;
-                player
-                    .play_next(audio_data, track_id)
-                    .map_err(RuntimeError::Internal)?;
-                return Ok(true);
+        if let Some(row) = bundle_row {
+            match row.cache_format {
+                2 => {
+                    let cache_path = offline_cache.get_cache_path();
+                    if let Some(audio_data) = crate::offline_cache::playback::load_cmaf_bundle(
+                        track_id,
+                        &row,
+                        std::path::Path::new(&cache_path),
+                    ) {
+                        log::info!(
+                            "[V2/GAPLESS] Track {} from OFFLINE cache (CMAF v2)",
+                            track_id
+                        );
+                        player
+                            .play_next(audio_data, track_id)
+                            .map_err(RuntimeError::Internal)?;
+                        return Ok(true);
+                    } else {
+                        log::warn!(
+                            "[V2/GAPLESS] Track {} CMAF v2 bundle present but decrypt failed — skipping offline tier",
+                            track_id
+                        );
+                    }
+                }
+                _ => {
+                    let path = std::path::Path::new(&row.segments_path);
+                    if !path.exists() {
+                        log::warn!(
+                            "[V2/GAPLESS/CACHE STALE] Track {} DB entry points to missing file {:?}",
+                            track_id,
+                            path
+                        );
+                    } else {
+                        log::info!(
+                            "[V2/GAPLESS] Track {} from OFFLINE cache (legacy)",
+                            track_id
+                        );
+                        let audio_data = std::fs::read(path).map_err(|e| {
+                            RuntimeError::Internal(format!("Failed to read cached file: {}", e))
+                        })?;
+                        player
+                            .play_next(audio_data, track_id)
+                            .map_err(RuntimeError::Internal)?;
+                        return Ok(true);
+                    }
+                }
             }
         }
     }
