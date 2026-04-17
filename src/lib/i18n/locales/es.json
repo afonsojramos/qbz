@@ -1414,7 +1414,7 @@
     },
     "offlineLibrary": {
       "title": "Reproducción Offline",
-      "disclaimer": "El caché offline es un almacenamiento temporal de reproducción para escucha sin conexión mientras tengas una suscripción válida de Qobuz. No recibes una licencia para conservar o redistribuir el contenido. Si tu suscripción deja de ser válida, QBZ eliminará todo el contenido en caché después de 3 días.",
+      "disclaimer": "El caché offline es un almacenamiento temporal de reproducción para escucha sin conexión mientras tengas una suscripción válida de Qobuz. No recibes una licencia para conservar o redistribuir el contenido. Si tu suscripción deja de ser válida, QBZ eliminará todo el contenido en caché después de 30 días.",
       "cachedTracks": "Pistas Offline",
       "cachedTracksDesc": "Pistas en caché para reproducción offline",
       "showInLibrary": "Mostrar en Biblioteca Local",

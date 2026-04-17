@@ -1408,7 +1408,7 @@
     },
     "offlineLibrary": {
       "title": "Offline-Bibliothek",
-      "disclaimer": "Die Offline-Bibliothek ist ein temporärer Wiedergabe-Cache für das Offline-Hören, solange Sie ein gültiges Qobuz-Abonnement haben. Sie erhalten keine Lizenz zum Behalten oder Weiterverteilen der Inhalte. Wenn Ihr Abonnement ungültig wird, entfernt QBZ alle zwischengespeicherten Inhalte nach 3 Tagen.",
+      "disclaimer": "Die Offline-Bibliothek ist ein temporärer Wiedergabe-Cache für das Offline-Hören, solange Sie ein gültiges Qobuz-Abonnement haben. Sie erhalten keine Lizenz zum Behalten oder Weiterverteilen der Inhalte. Wenn Ihr Abonnement ungültig wird, entfernt QBZ alle zwischengespeicherten Inhalte nach 30 Tagen.",
       "cachedTracks": "Offline-Titel",
       "cachedTracksDesc": "Zwischengespeicherte Titel für die Offline-Wiedergabe",
       "clearCache": "Alles löschen",

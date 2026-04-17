@@ -9,7 +9,20 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-const GRACE_PERIOD_SECS: i64 = 3 * 24 * 60 * 60; // 3 days
+/// How long we keep honoring offline access after the server first
+/// reports an invalid subscription.
+///
+/// Qobuz's own mobile app gives a 30-day offline grace window, so we
+/// match that — this is the correct posture for the compliance story
+/// with Qobuz (we're not weaker than them, but we're also not
+/// suspiciously more lenient). Shorter windows would punish users on
+/// flaky networks; longer windows would be a compliance red flag.
+///
+/// NOTE: the useful protection against "bulk-download and ghost"
+/// attacks comes from the CMAF-at-rest offline cache (v2 format), not
+/// from aggressive revalidation. This grace period is a belt on top of
+/// those suspenders, not the primary defense.
+const GRACE_PERIOD_SECS: i64 = 30 * 24 * 60 * 60; // 30 days — Qobuz mobile parity
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
