@@ -591,12 +591,31 @@ pub async fn purge_all_cached_files(
         db.clear_all()?
     };
 
-    // Delete all files
+    // Delete all files. For v1 entries `file_path` is the plain FLAC;
+    // for v2 entries it's `<dir>/segments.bin` — we remove the enclosing
+    // track directory so init.mp4 + manifest.json + segments.bin all go
+    // in one step. Plain files still work because remove_dir_all on a
+    // file path fails silently and we fall through to remove_file.
     for path in paths {
         let p = std::path::Path::new(&path);
-        if p.exists() {
-            let _ = std::fs::remove_file(p);
+        if !p.exists() {
+            continue;
         }
+        // Heuristic: the v2 layout puts everything inside `tracks-cmaf/<id>/`.
+        // If the parent directory matches that shape, remove the directory.
+        let looks_like_v2 = p
+            .parent()
+            .and_then(|parent| parent.parent())
+            .and_then(|root| root.file_name())
+            .and_then(|n| n.to_str())
+            == Some("tracks-cmaf");
+        if looks_like_v2 {
+            if let Some(track_dir) = p.parent() {
+                let _ = std::fs::remove_dir_all(track_dir);
+                continue;
+            }
+        }
+        let _ = std::fs::remove_file(p);
     }
 
     // Also clear the tracks directory (legacy unorganized files)
@@ -608,6 +627,14 @@ pub async fn purge_all_cached_files(
                 let _ = std::fs::remove_file(entry.path());
             }
         }
+    }
+
+    // And the tracks-cmaf directory (v2 bundles) — belt-and-suspenders
+    // so orphan bundles from corrupt DB rows get cleaned up too.
+    let tracks_cmaf_dir = cache_dir.join("tracks-cmaf");
+    if tracks_cmaf_dir.exists() {
+        let _ = std::fs::remove_dir_all(&tracks_cmaf_dir);
+        log::info!("[OfflineCache/Purge] Removed tracks-cmaf/ directory");
     }
 
     // Clear organized artist/album folders

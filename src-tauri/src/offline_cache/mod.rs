@@ -13,6 +13,7 @@ pub mod downloader;
 pub mod metadata;
 pub mod migration;
 pub mod path_validator;
+pub mod playback;
 pub mod secret_vault;
 
 use serde::{Deserialize, Serialize};

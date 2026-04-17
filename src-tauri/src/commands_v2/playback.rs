@@ -47,119 +47,6 @@ lazy_static::lazy_static! {
         tokio::sync::Semaphore::new(V2_MAX_CONCURRENT_PREFETCH);
 }
 
-/// Load and decrypt a v2 CMAF offline-cache bundle back into plain FLAC
-/// bytes ready for `player.play_data`.
-///
-/// Returns `None` on any failure (missing files, wrong cache_format,
-/// vault error, corrupted bundle) — the caller should treat that as a
-/// cache miss and continue to the next cache tier or network fetch.
-async fn load_cmaf_offline_bundle(
-    track_id: u64,
-    row: &crate::offline_cache::db::CmafBundleRow,
-    offline_cache: &tauri::State<'_, crate::offline_cache::OfflineCacheState>,
-) -> Option<Vec<u8>> {
-    if row.cache_format != 2 {
-        return None;
-    }
-    let init_path = match &row.init_path {
-        Some(p) => p.clone(),
-        None => {
-            log::warn!(
-                "[V2/CACHE] Track {} — cache_format=2 but init_path is null, skipping",
-                track_id
-            );
-            return None;
-        }
-    };
-    let content_key_wrapped = match &row.content_key_wrapped {
-        Some(b) => b.clone(),
-        None => {
-            log::warn!(
-                "[V2/CACHE] Track {} — cache_format=2 but content_key_wrapped is null, skipping",
-                track_id
-            );
-            return None;
-        }
-    };
-
-    // Recover the layout from known paths. Init + manifest live next to
-    // segments.bin; cmaf_store::read_bundle uses those directly.
-    let segments_path = std::path::PathBuf::from(&row.segments_path);
-    let track_dir = segments_path.parent()?.to_path_buf();
-    let layout = crate::offline_cache::cmaf_store::BundleLayout {
-        track_dir,
-        init_path: std::path::PathBuf::from(init_path),
-        segments_path: segments_path.clone(),
-        manifest_path: segments_path.with_file_name("manifest.json"),
-    };
-
-    let loaded = match crate::offline_cache::cmaf_store::read_bundle(&layout) {
-        Ok(lb) => lb,
-        Err(e) => {
-            log::warn!(
-                "[V2/CACHE] Track {} — failed to read CMAF bundle: {}",
-                track_id,
-                e
-            );
-            return None;
-        }
-    };
-
-    let vault = match crate::offline_cache::secret_vault::get_or_init(std::path::Path::new(
-        &offline_cache.get_cache_path(),
-    )) {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!(
-                "[V2/CACHE] Track {} — SecretBox init failed: {}",
-                track_id,
-                e
-            );
-            return None;
-        }
-    };
-    let unwrapped = match vault.unwrap(&content_key_wrapped) {
-        Ok(k) => k,
-        Err(e) => {
-            log::warn!(
-                "[V2/CACHE] Track {} — content_key unwrap failed: {}",
-                track_id,
-                e
-            );
-            return None;
-        }
-    };
-    if unwrapped.len() != 16 {
-        log::warn!(
-            "[V2/CACHE] Track {} — unwrapped content_key wrong size ({} bytes)",
-            track_id,
-            unwrapped.len()
-        );
-        return None;
-    }
-    let mut content_key = [0u8; 16];
-    content_key.copy_from_slice(&unwrapped);
-
-    match loaded.decrypt_to_flac(&content_key) {
-        Ok(flac_bytes) => {
-            log::info!(
-                "[V2/CACHE HIT] Track {} from OFFLINE cache (CMAF v2): decrypted {:.2} MB",
-                track_id,
-                flac_bytes.len() as f64 / (1024.0 * 1024.0)
-            );
-            Some(flac_bytes)
-        }
-        Err(e) => {
-            log::warn!(
-                "[V2/CACHE] Track {} — CMAF decrypt failed: {}",
-                track_id,
-                e
-            );
-            None
-        }
-    }
-}
-
 /// Spawn background tasks to prefetch upcoming Qobuz tracks (V2)
 /// Takes upcoming tracks directly from CoreBridge (not legacy AppState queue)
 fn spawn_v2_prefetch(
@@ -931,7 +818,11 @@ pub async fn v2_play_track(
             // content key from the secret vault, decrypt to plain FLAC,
             // hand to the player just like any other cache hit.
             let audio_data_opt: Option<Vec<u8>> = if row.cache_format == 2 {
-                load_cmaf_offline_bundle(track_id, &row, &offline_cache).await
+                crate::offline_cache::playback::load_cmaf_bundle(
+                    track_id,
+                    &row,
+                    std::path::Path::new(&offline_cache.get_cache_path()),
+                )
             } else {
                 // cache_format = 1 (legacy plain FLAC)
                 let path = std::path::Path::new(&row.segments_path);

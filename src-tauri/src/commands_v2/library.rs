@@ -479,6 +479,7 @@ pub async fn v2_library_play_track(
     track_id: i64,
     library_state: State<'_, LibraryState>,
     bridge: State<'_, CoreBridgeState>,
+    offline_cache: State<'_, crate::offline_cache::OfflineCacheState>,
     runtime: State<'_, RuntimeManagerState>,
 ) -> Result<(), String> {
     runtime
@@ -494,6 +495,56 @@ pub async fn v2_library_play_track(
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Track not found".to_string())?
     };
+
+    // Qobuz-cached offline tracks may be stored in the new v2 CMAF format
+    // (cache_format=2), in which case `track.file_path` in the library
+    // index points at a directory, not a playable FLAC. Route those
+    // through the offline-cache playback helper; it decrypts and hands us
+    // plain FLAC bytes identical to what a v1 cached file would yield.
+    let is_qobuz_cached = track.source.as_deref() == Some("qobuz_download");
+    if is_qobuz_cached {
+        let bundle_row = {
+            let guard = offline_cache.db.lock().await;
+            guard
+                .as_ref()
+                .and_then(|db| db.get_cmaf_bundle(track_id as u64).ok().flatten())
+        };
+        if let Some(row) = bundle_row {
+            if row.cache_format == 2 {
+                let cache_path = offline_cache.get_cache_path();
+                if let Some(audio_data) = crate::offline_cache::playback::load_cmaf_bundle(
+                    track_id as u64,
+                    &row,
+                    std::path::Path::new(&cache_path),
+                ) {
+                    let bridge = bridge.get().await;
+                    bridge
+                        .player()
+                        .play_data(audio_data, track_id as u64)
+                        .map_err(|e| format!("Failed to play CMAF offline bundle: {}", e))?;
+                    if let Some(start_secs) = track.cue_start_secs {
+                        let start_pos = start_secs as u64;
+                        if start_pos > 0 {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            bridge
+                                .player()
+                                .seek(start_pos)
+                                .map_err(|e| format!("Failed to seek: {}", e))?;
+                        }
+                    }
+                    return Ok(());
+                }
+                return Err(format!(
+                    "Offline cache CMAF bundle for track {} is present but failed to decrypt",
+                    track_id
+                ));
+            }
+            // cache_format=1 — fall through to the legacy plain-FLAC branch
+        }
+    }
+
+    // Legacy plain-FLAC path: v1 Qobuz-cached entries OR regular user
+    // local library files. Read the file directly and play.
     let file_path = std::path::Path::new(&track.file_path);
     if !file_path.exists() {
         return Err(format!("File not found: {}", track.file_path));
