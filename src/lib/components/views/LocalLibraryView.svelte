@@ -542,7 +542,16 @@
   }
 
   function selectedLocalTracks(): LocalTrack[] {
-    return tracks.filter(trk => selectedTrackIds.has(trk.id));
+    // Union of library-wide tracks and current album tracks so selection works
+    // from both the tracks tab and the album detail view.
+    const byId = new Map<number, LocalTrack>();
+    for (const trk of tracks) {
+      if (selectedTrackIds.has(trk.id)) byId.set(trk.id, trk);
+    }
+    for (const trk of albumTracks) {
+      if (selectedTrackIds.has(trk.id) && !byId.has(trk.id)) byId.set(trk.id, trk);
+    }
+    return [...byId.values()];
   }
 
   async function handleBulkPlayNext() {
@@ -570,6 +579,13 @@
     onBulkAddToPlaylist?.(ids);
     trackSelectMode = false;
     selectedTrackIds = new Set();
+  }
+
+  function resetMultiSelect() {
+    if (trackSelectMode || selectedTrackIds.size > 0) {
+      trackSelectMode = false;
+      selectedTrackIds = new Set();
+    }
   }
 
   // Reactive counters based on filtered data
@@ -977,6 +993,13 @@
   let albumTracks = $state<LocalTrack[]>([]);
   let albumTrackSearch = $state('');
   let showAlbumTrackSearch = $state(false);
+
+  // Clear multi-select when switching tabs or entering/leaving album detail
+  $effect(() => {
+    void activeTab;
+    void selectedAlbum?.id;
+    resetMultiSelect();
+  });
 
   // Qobuz artist images cache (artist name -> image URL)
   let artistImages = $state<Map<string, string>>(new Map());
@@ -3315,6 +3338,14 @@
             <button class="action-btn-circle" onclick={handleShuffleAllAlbum} title={$t('actions.shuffle')}>
               <Shuffle size={18} />
             </button>
+            <button
+              class="action-btn-circle"
+              class:is-active={trackSelectMode}
+              onclick={toggleTrackSelectMode}
+              title={trackSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+            >
+              <SquareCheckBig size={18} />
+            </button>
           </div>
         </div>
       </div>
@@ -3346,6 +3377,9 @@
               localSource={track.source === 'plex' ? 'plex' : 'local'}
               hideDownload={true}
               hideFavorite={true}
+              selectable={trackSelectMode}
+              selected={selectedTrackIds.has(track.id)}
+              onToggleSelect={() => toggleTrackSelect(track.id)}
               onArtistClick={track.artist && track.artist !== selectedAlbum?.artist
                 ? () => handleLocalArtistClick(track.artist)
                 : undefined}
@@ -3360,6 +3394,13 @@
           {/each}
         {/each}
       </div>
+      <BulkActionBar
+        count={selectedTrackIds.size}
+        onPlayNext={handleBulkPlayNext}
+        onPlayLater={handleBulkPlayLater}
+        onAddToPlaylist={handleBulkAddToPlaylist}
+        onClearSelection={() => { selectedTrackIds = new Set(); }}
+      />
     </div>
   {:else}
     <!-- Main Library View -->
