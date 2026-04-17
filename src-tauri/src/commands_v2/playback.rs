@@ -436,16 +436,48 @@ pub async fn v2_play_next_gapless(
         return Ok(false);
     }
 
-    // Check offline cache (persistent disk cache). Branch on cache_format:
-    // - v2 (CMAF bundle) → decrypt to plain FLAC via load_cmaf_bundle
-    // - v1 (plain FLAC)  → read segments_path (which for v1 entries is
-    //                       the actual FLAC file path)
+    // Tier order: L1 memory → L2 disk → offline cache → local library.
     //
-    // The previous implementation used get_file_path() which blindly
-    // returned the file_path column, then std::fs::read() on it. For v2
-    // entries that column is segments.bin (encrypted bytes), so the
-    // downstream player probe failed with "end of stream" and gapless
-    // fell apart across v2 offline-cache tracks.
+    // L1/L2 come first because the offline cache v2 path requires a disk
+    // read + AES decrypt + FLAC assembly (~5-7s for a HiRes track). If
+    // the same track is already in L1 (prefetch from CDN) we'd otherwise
+    // pay the decrypt cost for bytes we already have in RAM — and by the
+    // time we finish, the player's gapless engine has been dropped.
+
+    let cache = app_state.audio_cache.clone();
+
+    // L1: in-memory
+    if let Some(cached) = cache.get(track_id) {
+        log::info!(
+            "[V2/GAPLESS] Track {} from MEMORY cache ({} bytes)",
+            track_id,
+            cached.size_bytes
+        );
+        player
+            .play_next(cached.data, track_id)
+            .map_err(RuntimeError::Internal)?;
+        return Ok(true);
+    }
+
+    // L2: on-disk plain-FLAC playback cache
+    if let Some(playback_cache) = cache.get_playback_cache() {
+        if let Some(audio_data) = playback_cache.get(track_id) {
+            log::info!(
+                "[V2/GAPLESS] Track {} from DISK cache ({} bytes)",
+                track_id,
+                audio_data.len()
+            );
+            cache.insert(track_id, audio_data.clone());
+            player
+                .play_next(audio_data, track_id)
+                .map_err(RuntimeError::Internal)?;
+            return Ok(true);
+        }
+    }
+
+    // Offline cache (persistent). Branch on cache_format:
+    // - v2 (CMAF bundle) → decrypt to plain FLAC via load_cmaf_bundle
+    // - v1 (plain FLAC)  → read segments_path directly
     {
         let bundle_row = {
             let db_opt = offline_cache.db.lock().await;
@@ -513,35 +545,6 @@ pub async fn v2_play_next_gapless(
                     }
                 }
             }
-        }
-    }
-
-    // Check memory cache (L1)
-    let cache = app_state.audio_cache.clone();
-    if let Some(cached) = cache.get(track_id) {
-        log::info!(
-            "[V2/GAPLESS] Track {} from MEMORY cache ({} bytes)",
-            track_id,
-            cached.size_bytes
-        );
-        player
-            .play_next(cached.data, track_id)
-            .map_err(RuntimeError::Internal)?;
-        return Ok(true);
-    }
-
-    // Check playback cache (L2 - disk)
-    if let Some(playback_cache) = cache.get_playback_cache() {
-        if let Some(audio_data) = playback_cache.get(track_id) {
-            log::info!(
-                "[V2/GAPLESS] Track {} from DISK cache ({} bytes)",
-                track_id,
-                audio_data.len()
-            );
-            player
-                .play_next(audio_data, track_id)
-                .map_err(RuntimeError::Internal)?;
-            return Ok(true);
         }
     }
 
