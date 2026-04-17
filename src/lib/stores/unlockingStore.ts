@@ -15,6 +15,13 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 const unlockingIds = new Set<number>();
+// Brief "just unlocked" window so the UI can show an opened-padlock glyph
+// between the end of decrypt and the first audio frame. Cleared on a
+// per-id timeout — NOT reused across tracks.
+const recentlyUnlockedIds = new Set<number>();
+const recentlyUnlockedTimers = new Map<number, ReturnType<typeof setTimeout>>();
+const UNLOCKED_HOLD_MS = 600;
+
 const listeners = new Set<() => void>();
 let backendUnlisteners: UnlistenFn[] = [];
 let started = false;
@@ -29,9 +36,35 @@ function notify(): void {
   }
 }
 
+function markRecentlyUnlocked(id: number): void {
+  const existing = recentlyUnlockedTimers.get(id);
+  if (existing) clearTimeout(existing);
+  recentlyUnlockedIds.add(id);
+  const timer = setTimeout(() => {
+    recentlyUnlockedIds.delete(id);
+    recentlyUnlockedTimers.delete(id);
+    notify();
+  }, UNLOCKED_HOLD_MS);
+  recentlyUnlockedTimers.set(id, timer);
+}
+
 export function isUnlocking(trackId: number | null | undefined): boolean {
   if (trackId == null) return false;
   return unlockingIds.has(trackId);
+}
+
+export function isRecentlyUnlocked(trackId: number | null | undefined): boolean {
+  if (trackId == null) return false;
+  return recentlyUnlockedIds.has(trackId);
+}
+
+/**
+ * True if ANY track is currently being decrypted. Used by the global
+ * buffering toast to swap its label from "Buffering" to "Unlocking"
+ * without needing to know which track triggered it.
+ */
+export function isAnyUnlocking(): boolean {
+  return unlockingIds.size > 0;
 }
 
 /**
@@ -69,7 +102,15 @@ export async function startPolling(): Promise<void> {
       (event) => {
         const id = event.payload?.trackId;
         if (typeof id !== 'number') return;
-        if (unlockingIds.delete(id)) {
+        const wasUnlocking = unlockingIds.delete(id);
+        // Only show the "unlocked" flash on successful decrypt — on
+        // failure the row should fall back to its normal glyph
+        // immediately, no celebratory padlock.
+        const success = event.payload?.success !== false;
+        if (success) {
+          markRecentlyUnlocked(id);
+        }
+        if (wasUnlocking || success) {
           notify();
         }
       }
@@ -95,6 +136,9 @@ export function stopPolling(): void {
   }
   backendUnlisteners = [];
   unlockingIds.clear();
+  for (const timer of recentlyUnlockedTimers.values()) clearTimeout(timer);
+  recentlyUnlockedTimers.clear();
+  recentlyUnlockedIds.clear();
   started = false;
   notify();
 }
