@@ -65,7 +65,61 @@ impl OfflineCacheDb {
             )
             .map_err(|e| format!("Failed to initialize database schema: {}", e))?;
 
+        self.migrate_v2_cmaf_columns()?;
+
         Ok(())
+    }
+
+    /// Additive migration for the v2 offline format.
+    ///
+    /// Adds columns for bit-identical CMAF storage:
+    /// - `cache_format`: 1 = legacy plain FLAC, 2 = raw CMAF bundle
+    /// - `init_path`: path to the init.mp4 (contains FLAC header + table)
+    /// - `content_key_wrapped`: AES content key wrapped with qbz-secrets
+    /// - `infos_wrapped`: session infos salt wrapped with qbz-secrets
+    /// - `format_id`: Qobuz format id (e.g. 5/6/7/27)
+    /// - `n_segments`: number of audio segments (s=1..=n)
+    ///
+    /// Existing rows keep `cache_format=1` so playback continues to read
+    /// the legacy plain-FLAC `file_path` for them. New downloads go to
+    /// `cache_format=2`. We never rewrite v1 rows into v2 — the two
+    /// formats coexist until the v1 rows naturally expire via the
+    /// subscription-lapse cache wipe or user-triggered re-download.
+    fn migrate_v2_cmaf_columns(&self) -> Result<(), String> {
+        let existing = self.existing_columns("cached_tracks")?;
+        let add = |col: &str, ddl: &str| -> Result<(), String> {
+            if !existing.iter().any(|c| c == col) {
+                let sql = format!("ALTER TABLE cached_tracks ADD COLUMN {}", ddl);
+                self.conn
+                    .execute(&sql, [])
+                    .map_err(|e| format!("Failed to add column {}: {}", col, e))?;
+                log::info!(
+                    "[OfflineCache/MIGRATE] Added column {} to cached_tracks",
+                    col
+                );
+            }
+            Ok(())
+        };
+        add("cache_format", "cache_format INTEGER NOT NULL DEFAULT 1")?;
+        add("init_path", "init_path TEXT")?;
+        add("content_key_wrapped", "content_key_wrapped BLOB")?;
+        add("infos_wrapped", "infos_wrapped BLOB")?;
+        add("format_id", "format_id INTEGER")?;
+        add("n_segments", "n_segments INTEGER")?;
+        Ok(())
+    }
+
+    fn existing_columns(&self, table: &str) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("PRAGMA table_info({})", table))
+            .map_err(|e| format!("Failed to prepare PRAGMA: {}", e))?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| format!("Failed to read PRAGMA: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to iterate PRAGMA: {}", e))?;
+        Ok(cols)
     }
 
     /// Insert a new track to cache for offline
@@ -468,4 +522,97 @@ impl OfflineCacheDb {
             .map_err(|e| format!("Failed to update artwork path: {}", e))?;
         Ok(())
     }
+
+    // ==================== v2 CMAF bundle fields ====================
+
+    /// Persist the CMAF-specific columns for a track after it was
+    /// successfully downloaded as a raw encrypted bundle.
+    ///
+    /// `file_path` here is the concatenated-segments file (or primary
+    /// segment file, depending on how the caller lays out the bundle on
+    /// disk). `init_path` is the init.mp4. Both keys are already wrapped
+    /// by the caller via `qbz-secrets::SecretBox::wrap`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_cmaf_bundle(
+        &self,
+        track_id: u64,
+        segments_path: &str,
+        init_path: &str,
+        content_key_wrapped: &[u8],
+        infos_wrapped: &[u8],
+        format_id: u32,
+        n_segments: u32,
+        total_bytes: u64,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE cached_tracks
+                    SET cache_format = 2,
+                        file_path = ?1,
+                        init_path = ?2,
+                        content_key_wrapped = ?3,
+                        infos_wrapped = ?4,
+                        format_id = ?5,
+                        n_segments = ?6,
+                        file_size_bytes = ?7
+                    WHERE track_id = ?8",
+                params![
+                    segments_path,
+                    init_path,
+                    content_key_wrapped,
+                    infos_wrapped,
+                    format_id as i64,
+                    n_segments as i64,
+                    total_bytes as i64,
+                    track_id as i64,
+                ],
+            )
+            .map_err(|e| format!("Failed to write CMAF bundle fields: {}", e))?;
+        Ok(())
+    }
+
+    /// Read back the bundle fields for a track, for offline playback.
+    pub fn get_cmaf_bundle(&self, track_id: u64) -> Result<Option<CmafBundleRow>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT cache_format, file_path, init_path, content_key_wrapped,
+                        infos_wrapped, format_id, n_segments
+                   FROM cached_tracks
+                  WHERE track_id = ?1",
+            )
+            .map_err(|e| format!("Failed to prepare CMAF bundle select: {}", e))?;
+        let row: Result<CmafBundleRow, _> = stmt.query_row(params![track_id as i64], |row| {
+            Ok(CmafBundleRow {
+                cache_format: row.get::<_, i64>(0)? as u8,
+                segments_path: row.get(1)?,
+                init_path: row.get::<_, Option<String>>(2)?,
+                content_key_wrapped: row.get::<_, Option<Vec<u8>>>(3)?,
+                infos_wrapped: row.get::<_, Option<Vec<u8>>>(4)?,
+                format_id: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
+                n_segments: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+            })
+        });
+        match row {
+            Ok(r) => Ok(Some(r)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("Failed to read CMAF bundle: {}", e)),
+        }
+    }
+}
+
+/// Raw snapshot of the v2 bundle columns for a cached track.
+///
+/// `cache_format` tells the caller how to interpret the rest:
+/// - `1` — legacy plain FLAC at `segments_path`; other fields empty.
+/// - `2` — raw CMAF bundle; all fields populated.
+#[derive(Debug, Clone)]
+pub struct CmafBundleRow {
+    pub cache_format: u8,
+    pub segments_path: String,
+    pub init_path: Option<String>,
+    pub content_key_wrapped: Option<Vec<u8>>,
+    pub infos_wrapped: Option<Vec<u8>>,
+    pub format_id: Option<u32>,
+    pub n_segments: Option<u32>,
 }

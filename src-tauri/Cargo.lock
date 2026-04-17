@@ -4948,6 +4948,7 @@ dependencies = [
  "qbz-models",
  "qbz-player",
  "qbz-qobuz",
+ "qbz-secrets",
  "qconnect-app",
  "qconnect-core",
  "qconnect-transport-ws",
@@ -5023,6 +5024,22 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "qbz-secrets"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "hkdf",
+ "keyring",
+ "log",
+ "rand 0.9.3",
+ "serde",
+ "sha2",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
