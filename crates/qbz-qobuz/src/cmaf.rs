@@ -45,6 +45,23 @@ use crate::error::Result;
 /// past ~5 parallel requests per client IP.
 pub const CMAF_PREFETCH_CONCURRENCY: usize = 3;
 
+/// Progress callback shape for the download helpers. Each call reports
+/// "k of n segments complete" with the bytes received for that segment,
+/// so the caller can emit UI progress events without knowing the CMAF
+/// internals. Callbacks must be `Send + Sync` because segments are
+/// fetched in parallel.
+pub type CmafProgressCallback =
+    std::sync::Arc<dyn Fn(CmafProgressUpdate) + Send + Sync>;
+
+/// A single progress tick. `segments_completed` is cumulative (1..=n),
+/// `n_segments` is the total including the init segment if you count it.
+#[derive(Debug, Clone, Copy)]
+pub struct CmafProgressUpdate {
+    pub segments_completed: u32,
+    pub n_segments: u32,
+    pub bytes_this_segment: u64,
+}
+
 /// Info gathered from the CMAF init segment, enough to start streaming
 /// playback. The caller is expected to fetch audio segments 1..n_segments
 /// and feed them through [`qbz_cmaf::parse_segment_crypto`] +
@@ -183,13 +200,31 @@ pub async fn download_full(
     track_id: u64,
     quality: Quality,
 ) -> std::result::Result<Vec<u8>, String> {
+    download_full_with_progress(client, track_id, quality, None).await
+}
+
+/// Same as [`download_full`] but with a progress callback fired once per
+/// completed segment.
+pub async fn download_full_with_progress(
+    client: &QobuzClient,
+    track_id: u64,
+    quality: Quality,
+    on_progress: Option<CmafProgressCallback>,
+) -> std::result::Result<Vec<u8>, String> {
     let setup = setup_streaming(client, track_id, quality).await?;
     let http = build_cdn_client()?;
 
     let total_size: usize = setup.flac_header.len()
         + setup.segment_table.iter().map(|s| s.byte_len as usize).sum::<usize>();
 
-    let segments = fetch_all_segments(&http, &setup.url_template, setup.n_segments, "CMAF-FULL").await?;
+    let segments = fetch_all_segments(
+        &http,
+        &setup.url_template,
+        setup.n_segments,
+        "CMAF-FULL",
+        on_progress,
+    )
+    .await?;
 
     let mut output = Vec::with_capacity(total_size);
     output.extend_from_slice(&setup.flac_header);
@@ -220,6 +255,18 @@ pub async fn download_raw(
     client: &QobuzClient,
     track_id: u64,
     quality: Quality,
+) -> std::result::Result<CmafRawBundle, String> {
+    download_raw_with_progress(client, track_id, quality, None).await
+}
+
+/// Same as [`download_raw`] but with a progress callback fired once per
+/// completed audio segment. The init segment doesn't count toward progress
+/// — it's downloaded up front and is typically tiny (<1% of total bytes).
+pub async fn download_raw_with_progress(
+    client: &QobuzClient,
+    track_id: u64,
+    quality: Quality,
+    on_progress: Option<CmafProgressCallback>,
 ) -> std::result::Result<CmafRawBundle, String> {
     let file_url = client.get_file_url(track_id, quality).await
         .map_err(|e| format!("get_file_url failed: {}", e))?;
@@ -259,7 +306,14 @@ pub async fn download_raw(
         .to_vec();
 
     // Audio segments — encrypted, stored as-is
-    let segments = fetch_all_segments(&http, &url_template, file_url.n_segments, "CMAF-RAW").await?;
+    let segments = fetch_all_segments(
+        &http,
+        &url_template,
+        file_url.n_segments,
+        "CMAF-RAW",
+        on_progress,
+    )
+    .await?;
 
     log::info!(
         "[CMAF-RAW] Track {} bundle: init={}B, {} encrypted segments, total raw size={} bytes",
@@ -298,21 +352,30 @@ fn build_cdn_client() -> std::result::Result<reqwest::Client, String> {
 
 /// Fetch segments 1..=n_segments concurrently with a semaphore cap and a
 /// cooldown per slot to stay under CDN rate limits.
+///
+/// If `on_progress` is `Some`, it's invoked once per completed segment
+/// (not per HTTP chunk — the cooldown happens on the worker, not here).
+/// Callbacks fire in completion order, not segment order.
 async fn fetch_all_segments(
     http: &reqwest::Client,
     url_template: &str,
     n_segments: u8,
     log_tag: &str,
+    on_progress: Option<CmafProgressCallback>,
 ) -> std::result::Result<Vec<Vec<u8>>, String> {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(CMAF_PREFETCH_CONCURRENCY));
     let seg_indices: Vec<u8> = (1..=n_segments).collect();
     let mut handles = Vec::with_capacity(seg_indices.len());
+
+    let completed_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
     for seg_idx in seg_indices {
         let sem = semaphore.clone();
         let http = http.clone();
         let seg_url = url_template.replace("$SEGMENT$", &seg_idx.to_string());
         let log_tag = log_tag.to_string();
+        let progress = on_progress.clone();
+        let counter = completed_count.clone();
 
         handles.push(tokio::spawn(async move {
             let permit = sem.acquire_owned().await.map_err(|e| format!("semaphore: {}", e))?;
@@ -325,6 +388,15 @@ async fn fetch_all_segments(
                 .bytes()
                 .await
                 .map_err(|e| format!("[{}] seg {} read: {}", log_tag, seg_idx, e))?;
+            let bytes_this_segment = seg_data.len() as u64;
+            if let Some(cb) = progress {
+                let done = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                cb(CmafProgressUpdate {
+                    segments_completed: done,
+                    n_segments: n_segments as u32,
+                    bytes_this_segment,
+                });
+            }
             // Cooldown before releasing the slot — keeps requests spaced out
             // to stay under CDN rate limits (most use 1s windows)
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;

@@ -512,6 +512,47 @@ async fn try_cmaf_offline_download(
 
     let offline_root_path = std::path::PathBuf::from(offline_root);
 
+    // Progress callback: emit the same `offline:caching_progress` event
+    // shape the legacy StreamFetcher fires, so the UI's progress ring
+    // doesn't care whether the bytes came from CMAF or legacy.
+    //
+    // Note: one 'started' event here up front so the frontend sees
+    // 'downloading' status immediately (the ring starts empty); actual
+    // percentage updates arrive per completed segment.
+    let _ = app.emit(
+        "offline:caching_progress",
+        serde_json::json!({
+            "trackId": track_id,
+            "progressPercent": 0u32,
+            "bytesDownloaded": 0u64,
+            "totalBytes": serde_json::Value::Null,
+            "status": "downloading",
+        }),
+    );
+
+    let app_for_cb = app.clone();
+    let progress_cb: qbz_qobuz::CmafProgressCallback = std::sync::Arc::new(
+        move |update: qbz_qobuz::CmafProgressUpdate| {
+            let percent = if update.n_segments > 0 {
+                (update.segments_completed as f64 / update.n_segments as f64 * 100.0)
+                    .round()
+                    .clamp(0.0, 100.0) as u32
+            } else {
+                0u32
+            };
+            let _ = app_for_cb.emit(
+                "offline:caching_progress",
+                serde_json::json!({
+                    "trackId": track_id,
+                    "progressPercent": percent,
+                    "bytesDownloaded": update.bytes_this_segment,
+                    "totalBytes": serde_json::Value::Null,
+                    "status": "downloading",
+                }),
+            );
+        },
+    );
+
     // Fetch the raw CMAF bundle. Requires an initialized CoreBridge →
     // QobuzClient; if either is missing, bail so the legacy path runs.
     let bundle = {
@@ -524,7 +565,13 @@ async fn try_cmaf_offline_download(
         let qobuz_client = client_guard
             .as_ref()
             .ok_or_else(|| "QobuzClient not initialized".to_string())?;
-        qbz_qobuz::cmaf::download_raw(qobuz_client, track_id, Quality::UltraHiRes).await?
+        qbz_qobuz::cmaf::download_raw_with_progress(
+            qobuz_client,
+            track_id,
+            Quality::UltraHiRes,
+            Some(progress_cb),
+        )
+        .await?
     };
 
     // Open (or lazily init) the secret vault and wrap the keying material
