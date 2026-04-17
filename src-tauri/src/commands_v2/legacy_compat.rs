@@ -611,14 +611,37 @@ async fn try_cmaf_offline_download(
     }
 
     // Fetch metadata for the library row (same source the legacy path uses).
-    // We don't write FLAC tags or embed artwork — the v2 on-disk blob is
-    // encrypted and those operations would corrupt it. The library row
-    // carries title/artist/album directly, which is what the UI reads.
+    // We don't write FLAC tags or embed artwork INSIDE the encrypted blob
+    // — that would corrupt it. But we DO save a cover.jpg next to the
+    // bundle directory so the library UI has artwork to display.
     let metadata = {
         let qobuz_client = client.read().await;
         crate::offline_cache::metadata::fetch_complete_metadata(track_id, &*qobuz_client).await
     };
     if let Ok(metadata) = metadata {
+        // Download and save album artwork alongside the bundle, same as
+        // the legacy path does next to the FLAC file. cover.jpg lives at
+        // <offline_root>/tracks-cmaf/<track_id>/cover.jpg — set as the
+        // library row's artwork_path so the UI picks it up.
+        let artwork_path: Option<String> = if let Some(artwork_url) = metadata.artwork_url.as_deref() {
+            match crate::offline_cache::metadata::save_album_artwork(&layout.track_dir, artwork_url).await {
+                Ok(()) => {
+                    let cover = layout.track_dir.join("cover.jpg");
+                    if cover.exists() {
+                        Some(cover.to_string_lossy().to_string())
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[Offline/CMAF] Track {} artwork save failed: {}", track_id, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let album_artist = metadata.album_artist.as_ref().unwrap_or(&metadata.artist);
         let album_group_key = format!("{}|{}", metadata.album, album_artist);
         let lib_opt = library_db.lock().await;
@@ -641,7 +664,7 @@ async fn try_cmaf_offline_download(
                 &metadata.album,
                 bundle.bit_depth,
                 bundle.sampling_rate.map(|r| r as f64),
-                None,
+                artwork_path.as_deref(),
             );
         }
     } else if let Err(e) = metadata {
@@ -851,15 +874,33 @@ fn spawn_track_cache_download(
                     }
                 };
 
-                if let Some(artwork_url) = &metadata.artwork_url {
-                    if let Some(parent_dir) = std::path::Path::new(&new_path).parent() {
-                        let _ = crate::offline_cache::metadata::save_album_artwork(
-                            parent_dir,
-                            artwork_url,
-                        )
-                        .await;
-                    }
-                }
+                // Save cover.jpg next to the organized FLAC so the library
+                // UI has artwork to display.
+                let artwork_path_v1: Option<String> =
+                    if let Some(artwork_url) = metadata.artwork_url.as_deref() {
+                        if let Some(parent_dir) = std::path::Path::new(&new_path).parent() {
+                            match crate::offline_cache::metadata::save_album_artwork(
+                                parent_dir,
+                                artwork_url,
+                            )
+                            .await
+                            {
+                                Ok(()) => {
+                                    let cover = parent_dir.join("cover.jpg");
+                                    if cover.exists() {
+                                        Some(cover.to_string_lossy().to_string())
+                                    } else {
+                                        None
+                                    }
+                                }
+                                Err(_) => None,
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
 
                 let (bit_depth_detected, sample_rate_detected) =
                     match lofty::read_from_path(&new_path) {
@@ -893,7 +934,7 @@ fn spawn_track_cache_download(
                         &metadata.album,
                         bit_depth_detected,
                         sample_rate_detected,
-                        None,
+                        artwork_path_v1.as_deref(),
                     );
                 }
 
