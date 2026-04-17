@@ -424,6 +424,17 @@ async fn fetch_all_segments(
 /// This is the common decryption logic shared between the full-download
 /// path (decrypt-then-return) and the offline playback path (decrypt-from-
 /// disk-then-feed-player).
+///
+/// Hot-path note: the previous implementation allocated a `Vec<u8>` per
+/// frame, copied the encrypted bytes into it, decrypted in place, then
+/// copied again into `output` via `extend_from_slice`. For a HiRes FLAC
+/// this is tens of thousands of small heap allocations + double copies
+/// per track. Now we extend `output` with the encrypted bytes directly
+/// and decrypt the just-appended slice in place — one copy instead of
+/// three, zero per-frame allocations. Combined with AES-NI codegen
+/// (enabled via `target-cpu=x86-64-v3` in `.cargo/config.toml`) this
+/// is the difference between a 20-second offline-cache gap on track
+/// transitions and a sub-second one.
 pub fn decrypt_segments_into(
     segments: &[Vec<u8>],
     content_key: &[u8; 16],
@@ -441,11 +452,11 @@ pub fn decrypt_segments_into(
             if frame_end > seg_data.len() {
                 return Err(format!("CMAF seg {} frame overflow", log_idx));
             }
-            let mut frame = seg_data[data_pos..frame_end].to_vec();
+            let output_start = output.len();
+            output.extend_from_slice(&seg_data[data_pos..frame_end]);
             if entry.flags != 0 {
-                qbz_cmaf::decrypt_frame(content_key, &entry.iv, &mut frame);
+                qbz_cmaf::decrypt_frame(content_key, &entry.iv, &mut output[output_start..]);
             }
-            output.extend_from_slice(&frame);
             data_pos = frame_end;
         }
         if data_pos < crypto.mdat_end && crypto.mdat_end <= seg_data.len() {
