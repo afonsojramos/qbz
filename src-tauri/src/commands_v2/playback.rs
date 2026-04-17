@@ -418,6 +418,7 @@ pub async fn v2_play_next_gapless(
     offline_cache: State<'_, OfflineCacheState>,
     app_state: State<'_, AppState>,
     library_state: State<'_, LibraryState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<bool, RuntimeError> {
     log::info!("[V2] Command: play_next_gapless for track {}", track_id);
 
@@ -436,44 +437,17 @@ pub async fn v2_play_next_gapless(
         return Ok(false);
     }
 
-    // Check offline cache (persistent disk cache)
-    {
-        let cached_path = {
-            let db_opt = offline_cache.db.lock().await;
-            if let Some(db) = db_opt.as_ref() {
-                if let Ok(Some(file_path)) = db.get_file_path(track_id) {
-                    Some(file_path)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-        if let Some(file_path) = cached_path {
-            let path = std::path::Path::new(&file_path);
-            if !path.exists() {
-                log::warn!(
-                    "[V2/GAPLESS/CACHE STALE] Track {} DB entry points to missing file {:?}",
-                    track_id,
-                    path
-                );
-            }
-            if path.exists() {
-                log::info!("[V2/GAPLESS] Track {} from OFFLINE cache", track_id);
-                let audio_data = std::fs::read(path).map_err(|e| {
-                    RuntimeError::Internal(format!("Failed to read cached file: {}", e))
-                })?;
-                player
-                    .play_next(audio_data, track_id)
-                    .map_err(RuntimeError::Internal)?;
-                return Ok(true);
-            }
-        }
-    }
+    // Tier order: L1 memory → L2 disk → offline cache → local library.
+    //
+    // L1/L2 come first because the offline cache v2 path requires a disk
+    // read + AES decrypt + FLAC assembly (~5-7s for a HiRes track). If
+    // the same track is already in L1 (prefetch from CDN) we'd otherwise
+    // pay the decrypt cost for bytes we already have in RAM — and by the
+    // time we finish, the player's gapless engine has been dropped.
 
-    // Check memory cache (L1)
     let cache = app_state.audio_cache.clone();
+
+    // L1: in-memory
     if let Some(cached) = cache.get(track_id) {
         log::info!(
             "[V2/GAPLESS] Track {} from MEMORY cache ({} bytes)",
@@ -486,7 +460,7 @@ pub async fn v2_play_next_gapless(
         return Ok(true);
     }
 
-    // Check playback cache (L2 - disk)
+    // L2: on-disk plain-FLAC playback cache
     if let Some(playback_cache) = cache.get_playback_cache() {
         if let Some(audio_data) = playback_cache.get(track_id) {
             log::info!(
@@ -494,6 +468,7 @@ pub async fn v2_play_next_gapless(
                 track_id,
                 audio_data.len()
             );
+            cache.insert(track_id, audio_data.clone());
             player
                 .play_next(audio_data, track_id)
                 .map_err(RuntimeError::Internal)?;
@@ -501,23 +476,175 @@ pub async fn v2_play_next_gapless(
         }
     }
 
-    // Check local library
+    // Offline cache (persistent). Branch on cache_format:
+    // - v2 (CMAF bundle) → decrypt to plain FLAC via load_cmaf_bundle
+    // - v1 (plain FLAC)  → read segments_path directly
+    {
+        let bundle_row = {
+            let db_opt = offline_cache.db.lock().await;
+            db_opt
+                .as_ref()
+                .and_then(|db| db.get_cmaf_bundle(track_id).ok().flatten())
+        };
+        if let Some(row) = bundle_row {
+            match row.cache_format {
+                2 => {
+                    let cache_path = offline_cache.get_cache_path();
+                    let decrypted =
+                        crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
+                            &app_handle,
+                            track_id,
+                            track_id,
+                            row.clone(),
+                            cache_path,
+                        )
+                        .await;
+                    if let Some(audio_data) = decrypted {
+                        log::info!(
+                            "[V2/GAPLESS] Track {} from OFFLINE cache (CMAF v2)",
+                            track_id
+                        );
+                        // Warm L1 with the decrypted bytes so subsequent
+                        // accesses (re-gapless, replay, scrub) skip the
+                        // disk-read + decrypt and hit memory directly.
+                        // Without this, every offline-cache gapless attempt
+                        // re-does 5-7s of I/O + AES work.
+                        app_state.audio_cache.insert(track_id, audio_data.clone());
+                        player
+                            .play_next(audio_data, track_id)
+                            .map_err(RuntimeError::Internal)?;
+                        return Ok(true);
+                    } else {
+                        log::warn!(
+                            "[V2/GAPLESS] Track {} CMAF v2 bundle present but decrypt failed — skipping offline tier",
+                            track_id
+                        );
+                    }
+                }
+                _ => {
+                    let path = std::path::Path::new(&row.segments_path);
+                    if !path.exists() {
+                        log::warn!(
+                            "[V2/GAPLESS/CACHE STALE] Track {} DB entry points to missing file {:?}",
+                            track_id,
+                            path
+                        );
+                    } else {
+                        log::info!(
+                            "[V2/GAPLESS] Track {} from OFFLINE cache (legacy)",
+                            track_id
+                        );
+                        let audio_data = std::fs::read(path).map_err(|e| {
+                            RuntimeError::Internal(format!("Failed to read cached file: {}", e))
+                        })?;
+                        player
+                            .play_next(audio_data, track_id)
+                            .map_err(RuntimeError::Internal)?;
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+
+    // Check local library. Library track ids are the row id (small
+    // autoincrement), not the Qobuz track id. For source='qobuz_download'
+    // tracks that happen to live in offline cache as v2 bundles, their
+    // file_path in the library index is a directory, not a FLAC — we
+    // need to translate row id → qobuz_track_id → offline cache lookup.
     if let Ok(track_id_i64) = i64::try_from(track_id) {
-        let local_path = v2_library_get_tracks_by_ids(vec![track_id_i64], library_state.clone())
+        let lib_track = v2_library_get_tracks_by_ids(vec![track_id_i64], library_state.clone())
             .await
             .ok()
-            .and_then(|mut tracks| tracks.pop())
-            .map(|track| std::path::PathBuf::from(track.file_path))
-            .filter(|p| p.exists());
+            .and_then(|mut tracks| tracks.pop());
 
-        if let Some(path) = local_path {
-            log::info!("[V2/GAPLESS] Track {} from LOCAL library", track_id);
-            let audio_data = std::fs::read(&path)
-                .map_err(|e| RuntimeError::Internal(format!("Failed to read local file: {}", e)))?;
-            bridge.get().await.player()
-                .play_next(audio_data, track_id)
-                .map_err(RuntimeError::Internal)?;
-            return Ok(true);
+        if let Some(track) = lib_track {
+            // Qobuz-cached library track: route through offline cache by
+            // its Qobuz id instead of reading the display file_path.
+            if track.source.as_deref() == Some("qobuz_download") {
+                if let Some(qid) = track.qobuz_track_id {
+                    let bundle_row = {
+                        let db_opt = offline_cache.db.lock().await;
+                        db_opt
+                            .as_ref()
+                            .and_then(|db| db.get_cmaf_bundle(qid as u64).ok().flatten())
+                    };
+                    if let Some(row) = bundle_row {
+                        match row.cache_format {
+                            2 => {
+                                let cache_path = offline_cache.get_cache_path();
+                                let decrypted =
+                                    crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
+                                        &app_handle,
+                                        track_id,  // display: library row id
+                                        qid as u64, // cmaf/bundle: qobuz id
+                                        row.clone(),
+                                        cache_path,
+                                    )
+                                    .await;
+                                if let Some(audio_data) = decrypted {
+                                    log::info!(
+                                        "[V2/GAPLESS] Library track {} (qobuz {}) from OFFLINE cache (CMAF v2)",
+                                        track_id,
+                                        qid
+                                    );
+                                    // Warm L1 keyed by LIBRARY row id —
+                                    // the player is fed library ids, so
+                                    // future cache hits for this library
+                                    // row land here.
+                                    cache.insert(track_id, audio_data.clone());
+                                    bridge
+                                        .get()
+                                        .await
+                                        .player()
+                                        .play_next(audio_data, track_id)
+                                        .map_err(RuntimeError::Internal)?;
+                                    return Ok(true);
+                                }
+                            }
+                            _ => {
+                                let path = std::path::Path::new(&row.segments_path);
+                                if path.exists() {
+                                    let audio_data = std::fs::read(path).map_err(|e| {
+                                        RuntimeError::Internal(format!(
+                                            "Failed to read v1 cached FLAC: {}",
+                                            e
+                                        ))
+                                    })?;
+                                    log::info!(
+                                        "[V2/GAPLESS] Library track {} (qobuz {}) from OFFLINE cache (legacy)",
+                                        track_id,
+                                        qid
+                                    );
+                                    bridge
+                                        .get()
+                                        .await
+                                        .player()
+                                        .play_next(audio_data, track_id)
+                                        .map_err(RuntimeError::Internal)?;
+                                    return Ok(true);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Regular local library FLAC (user-owned file).
+            let path = std::path::PathBuf::from(&track.file_path);
+            if path.exists() {
+                log::info!("[V2/GAPLESS] Track {} from LOCAL library", track_id);
+                let audio_data = std::fs::read(&path).map_err(|e| {
+                    RuntimeError::Internal(format!("Failed to read local file: {}", e))
+                })?;
+                bridge
+                    .get()
+                    .await
+                    .player()
+                    .play_next(audio_data, track_id)
+                    .map_err(RuntimeError::Internal)?;
+                return Ok(true);
+            }
         }
     }
 
@@ -679,6 +806,7 @@ pub async fn v2_play_track(
     audio_settings: State<'_, AudioSettingsState>,
     offline_state: State<'_, crate::offline::OfflineState>,
     app_state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     runtime: State<'_, RuntimeManagerState>,
 ) -> Result<V2PlayTrackResult, RuntimeError> {
     // Runtime contract: require CoreBridge auth for V2 playback
@@ -798,12 +926,14 @@ pub async fn v2_play_track(
 
     // Check offline cache (persistent disk cache)
     {
-        let cached_path = {
+        // Pull the row once so we see cache_format + file_path + v2 bundle
+        // columns without a second roundtrip. touch() updates last_accessed.
+        let bundle_row = {
             let db_opt = offline_cache.db.lock().await;
             if let Some(db) = db_opt.as_ref() {
-                if let Ok(Some(file_path)) = db.get_file_path(track_id) {
+                if let Ok(Some(row)) = db.get_cmaf_bundle(track_id) {
                     let _ = db.touch(track_id);
-                    Some(file_path)
+                    Some(row)
                 } else {
                     None
                 }
@@ -811,27 +941,55 @@ pub async fn v2_play_track(
                 None
             }
         };
-        if let Some(file_path) = cached_path {
-            let path = std::path::Path::new(&file_path);
-            if !path.exists() {
-                // DB said cached, disk says no. Without this log the bug is
-                // invisible — the app silently reaches for the network. See
-                // issue #279.
-                log::warn!(
-                    "[V2/CACHE STALE] Track {} DB entry points to missing file {:?} — entry is orphaned (filesystem moved/unmounted/cleaned?)",
+        if let Some(row) = bundle_row {
+            // v2 CMAF bundle: read init + encrypted segments, unwrap the
+            // content key from the secret vault, decrypt to plain FLAC,
+            // hand to the player just like any other cache hit.
+            // spawn_blocking via the ui-events helper so the track row
+            // shows an "unlocking" animation while decrypt runs.
+            let audio_data_opt: Option<Vec<u8>> = if row.cache_format == 2 {
+                let cache_path = offline_cache.get_cache_path();
+                crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
+                    &app_handle,
                     track_id,
-                    path
-                );
-            }
-            if path.exists() {
-                log::info!(
-                    "[V2/CACHE HIT] Track {} from OFFLINE cache: {:?}",
                     track_id,
-                    path
-                );
-                let audio_data = std::fs::read(path).map_err(|e| {
-                    RuntimeError::Internal(format!("Failed to read cached file: {}", e))
-                })?;
+                    row.clone(),
+                    cache_path,
+                )
+                .await
+            } else {
+                // cache_format = 1 (legacy plain FLAC)
+                let path = std::path::Path::new(&row.segments_path);
+                if !path.exists() {
+                    log::warn!(
+                        "[V2/CACHE STALE] Track {} DB entry points to missing file {:?} — entry is orphaned (filesystem moved/unmounted/cleaned?)",
+                        track_id,
+                        path
+                    );
+                    None
+                } else {
+                    match std::fs::read(path) {
+                        Ok(bytes) => {
+                            log::info!(
+                                "[V2/CACHE HIT] Track {} from OFFLINE cache (legacy format): {:?}",
+                                track_id,
+                                path
+                            );
+                            Some(bytes)
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[V2/CACHE] Track {} — failed to read legacy cache file: {}",
+                                track_id,
+                                e
+                            );
+                            None
+                        }
+                    }
+                }
+            };
+
+            if let Some(audio_data) = audio_data_opt {
 
                 // Check hardware compatibility (ALSA only)
                 #[cfg(target_os = "linux")]
@@ -852,6 +1010,13 @@ pub async fn v2_play_track(
                     // Keep as fallback — don't discard, network might fail
                     low_quality_fallback = Some(audio_data);
                 } else {
+                    // Warm L1 with the decrypted bytes so the next
+                    // access (replay, gapless re-queue, scrub) skips
+                    // the 5-7s disk + AES decrypt round-trip. Without
+                    // this, every offline-cache play_next_gapless fails
+                    // to land in time and the player's gapless engine
+                    // has already been dropped.
+                    app_state.audio_cache.insert(track_id, audio_data.clone());
                     player
                         .play_data(audio_data, track_id)
                         .map_err(RuntimeError::Internal)?;

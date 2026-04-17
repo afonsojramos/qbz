@@ -479,6 +479,9 @@ pub async fn v2_library_play_track(
     track_id: i64,
     library_state: State<'_, LibraryState>,
     bridge: State<'_, CoreBridgeState>,
+    offline_cache: State<'_, crate::offline_cache::OfflineCacheState>,
+    app_state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     runtime: State<'_, RuntimeManagerState>,
 ) -> Result<(), String> {
     runtime
@@ -494,6 +497,127 @@ pub async fn v2_library_play_track(
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Track not found".to_string())?
     };
+
+    // Qobuz-cached offline tracks are authoritative in the offline-cache
+    // DB, not the library index. The library row for these tracks carries
+    // metadata only (title/artist/album) plus a display path; the library's
+    // `file_path` for v2 entries is a track directory that is not playable
+    // directly. So for source='qobuz_download' we always resolve through
+    // the offline-cache DB — cache_format tells us whether to decrypt the
+    // CMAF bundle or to read a plain-FLAC v1 file.
+    //
+    // NOTE: `track_id` here is the library row id (autoincrement), NOT the
+    // Qobuz track id. The offline-cache DB is keyed by Qobuz track id. The
+    // library row carries the Qobuz id in `qobuz_track_id`.
+    let is_qobuz_cached = track.source.as_deref() == Some("qobuz_download");
+    if is_qobuz_cached {
+        let qobuz_track_id = match track.qobuz_track_id {
+            Some(id) => id,
+            None => {
+                return Err(format!(
+                    "Library row {} is marked qobuz_download but has no qobuz_track_id",
+                    track_id
+                ));
+            }
+        };
+        let bundle_row = {
+            let guard = offline_cache.db.lock().await;
+            guard
+                .as_ref()
+                .and_then(|db| db.get_cmaf_bundle(qobuz_track_id as u64).ok().flatten())
+        };
+        match bundle_row {
+            Some(row) if row.cache_format == 2 => {
+                let cache_path = offline_cache.get_cache_path();
+                // spawn_blocking via the ui-events helper so the track row
+                // shows an "unlocking" animation while decrypt runs.
+                // Display id = library row id (what the UI renders by),
+                // CMAF id = qobuz track id (what the bundle is keyed by).
+                let audio_data =
+                    crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
+                        &app_handle,
+                        track_id as u64,
+                        qobuz_track_id as u64,
+                        row.clone(),
+                        cache_path,
+                    )
+                    .await
+                    .ok_or_else(|| {
+                        format!(
+                            "Offline CMAF bundle for Qobuz track {} is present but failed to decrypt",
+                            qobuz_track_id
+                        )
+                    })?;
+                // Warm L1 so subsequent access (replay, gapless) is instant.
+                // Keyed by the library row id so Library replay hits; the
+                // offline cache DB itself is keyed by Qobuz id and is
+                // consulted separately up above.
+                app_state.audio_cache.insert(track_id as u64, audio_data.clone());
+                let bridge = bridge.get().await;
+                // IMPORTANT: play_data gets the LIBRARY track_id (the row
+                // id the frontend already tracks), NOT the Qobuz track id.
+                // Every piece of UI state — currently-playing card,
+                // seekbar position updates, queue auto-advance detection —
+                // keys off the id the frontend sent in. Using the Qobuz
+                // id here silently desynced the player from the UI:
+                // backend reports "playing 95787326" while the frontend
+                // waits for updates on 542 → seekbar never ticks, track
+                // never auto-advances, queue panics and starts calling
+                // next_track every second.
+                bridge
+                    .player()
+                    .play_data(audio_data, track_id as u64)
+                    .map_err(|e| format!("Failed to play CMAF offline bundle: {}", e))?;
+                if let Some(start_secs) = track.cue_start_secs {
+                    let start_pos = start_secs as u64;
+                    if start_pos > 0 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        bridge
+                            .player()
+                            .seek(start_pos)
+                            .map_err(|e| format!("Failed to seek: {}", e))?;
+                    }
+                }
+                return Ok(());
+            }
+            Some(row) => {
+                // cache_format=1 (legacy plain FLAC). The authoritative path
+                // is the offline-cache row's `segments_path` field (v1 stored
+                // the FLAC file path there), not the library index file_path
+                // (which for qobuz_download entries is now a display-only
+                // value that may be a directory).
+                let file_path = std::path::Path::new(&row.segments_path);
+                if !file_path.exists() {
+                    return Err(format!(
+                        "Offline cache file missing for Qobuz track {}: {}",
+                        qobuz_track_id, row.segments_path
+                    ));
+                }
+                let audio_data = std::fs::read(file_path)
+                    .map_err(|e| format!("Failed to read v1 offline file: {}", e))?;
+                let bridge = bridge.get().await;
+                bridge
+                    .player()
+                    .play_data(audio_data, track_id as u64)
+                    .map_err(|e| format!("Failed to play: {}", e))?;
+                return Ok(());
+            }
+            None => {
+                // Orphan: library row says qobuz_download but offline cache
+                // has no record. Either the cache was partially wiped or
+                // there's a corruption — surface the error instead of
+                // trying to read whatever the library file_path says (which
+                // for v2 is a directory and blows up with os error 21).
+                return Err(format!(
+                    "Offline cache entry for Qobuz track {} is missing (library index is stale)",
+                    qobuz_track_id
+                ));
+            }
+        }
+    }
+
+    // Regular user local library files (FLAC/MP3 owned by the user,
+    // not Qobuz-cached). Read the file path from the library row.
     let file_path = std::path::Path::new(&track.file_path);
     if !file_path.exists() {
         return Err(format!("File not found: {}", track.file_path));

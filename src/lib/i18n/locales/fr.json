@@ -1408,7 +1408,7 @@
     },
     "offlineLibrary": {
       "title": "Bibliothèque hors ligne",
-      "disclaimer": "La bibliothèque hors ligne est un cache de lecture temporaire pour l'écoute hors ligne lorsque vous avez un abonnement Qobuz valide. Vous ne recevez pas de licence pour conserver ou redistribuer le contenu. Si votre abonnement devient invalide, QBZ supprimera tout le contenu mis en cache après 3 jours.",
+      "disclaimer": "La bibliothèque hors ligne est un cache de lecture temporaire pour l'écoute hors ligne lorsque vous avez un abonnement Qobuz valide. Vous ne recevez pas de licence pour conserver ou redistribuer le contenu. Si votre abonnement devient invalide, QBZ supprimera tout le contenu mis en cache après 30 jours.",
       "cachedTracks": "Titres hors ligne",
       "cachedTracksDesc": "Titres mis en cache pour lecture hors ligne",
       "showInLibrary": "Afficher dans la bibliothèque locale",

@@ -189,7 +189,7 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
     };
 
     if should_purge {
-        log::warn!("[SessionLifecycle] Subscription invalid for >3 days. Purging offline cache.");
+        log::warn!("[SessionLifecycle] Subscription invalid beyond the grace window. Purging offline cache.");
         if let Err(e) = crate::offline_cache::commands::purge_all_cached_files(
             offline_cache.inner(),
             library.inner(),

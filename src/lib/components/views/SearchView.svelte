@@ -1392,12 +1392,12 @@
                     </div>
                   </button>
                   {#if album.maximum_bit_depth || album.maximum_sampling_rate}
-                    <div class="popular-quality-badge">
-                      <QualityBadge
-                        compact
-                        bitDepth={album.maximum_bit_depth}
-                        samplingRate={album.maximum_sampling_rate}
-                      />
+                    <div class="popular-quality-text">
+                      {formatQuality(
+                        (album.maximum_bit_depth ?? 16) > 16,
+                        album.maximum_bit_depth,
+                        album.maximum_sampling_rate
+                      )}
                     </div>
                   {/if}
                 </div>
@@ -1494,12 +1494,12 @@
                     </div>
                   </div>
                   {#if track.maximum_bit_depth || track.maximum_sampling_rate}
-                    <div class="popular-quality-badge">
-                      <QualityBadge
-                        compact
-                        bitDepth={track.maximum_bit_depth}
-                        samplingRate={track.maximum_sampling_rate}
-                      />
+                    <div class="popular-quality-text">
+                      {formatQuality(
+                        (track.maximum_bit_depth ?? 16) > 16,
+                        track.maximum_bit_depth,
+                        track.maximum_sampling_rate
+                      )}
                     </div>
                   {/if}
                 </div>
@@ -2679,20 +2679,12 @@
     color: var(--text-muted);
   }
 
-  .popular-quality-badge {
+  .popular-quality-text {
     margin-top: auto;
     padding-top: 5px;
     padding-bottom: 1px;
-  }
-
-  .popular-quality-badge :global(.quality-badge-compact) {
-    font-size: 10px;
-    width: auto;
+    font-size: 11px;
     color: var(--text-muted);
-    background: var(--alpha-10);
-    border: 1px solid var(--alpha-15);
-    border-radius: 4px;
-    padding: 3px 6px;
   }
 
   .popular-card-overlay {

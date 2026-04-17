@@ -1414,7 +1414,7 @@
     },
     "offlineLibrary": {
       "title": "Offline Playback",
-      "disclaimer": "The offline cache is a temporary playback cache for offline listening while you have a valid Qobuz subscription. You do not receive a license to keep or redistribute the content. If your subscription becomes invalid, QBZ will remove all cached content after 3 days.",
+      "disclaimer": "The offline cache is a temporary playback cache for offline listening while you have a valid Qobuz subscription. You do not receive a license to keep or redistribute the content. If your subscription becomes invalid, QBZ will remove all cached content after 30 days.",
       "cachedTracks": "Offline Tracks",
       "cachedTracksDesc": "Cached tracks for offline playback",
       "showInLibrary": "Show in Local Library",

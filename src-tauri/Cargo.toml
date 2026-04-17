@@ -35,6 +35,7 @@ qbz-cache = { path = "../crates/qbz-cache" }
 qbz-library = { path = "../crates/qbz-library" }
 qbz-cast = { path = "../crates/qbz-cast" }
 qbz-cmaf = { path = "../crates/qbz-cmaf" }
+qbz-secrets = { path = "../crates/qbz-secrets" }
 mdns-sd = "0.11"
 qconnect-app = { path = "../crates/qconnect-app" }
 qconnect-core = { path = "../crates/qconnect-core" }

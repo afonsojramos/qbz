@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { Play, Pause, Heart, HardDrive, CircleAlert, Ban, Music } from 'lucide-svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { Play, Pause, Heart, HardDrive, CircleAlert, Ban, Music, Lock, LockOpen } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import TrackMenu from './TrackMenu.svelte';
@@ -12,6 +12,11 @@
     toggleTrackFavorite
   } from '$lib/stores/favoritesStore';
   import { togglePlay } from '$lib/stores/playerStore';
+  import {
+    isUnlocking as isTrackUnlocking,
+    isRecentlyUnlocked as isTrackRecentlyUnlocked,
+    subscribe as subscribeUnlocking
+  } from '$lib/stores/unlockingStore';
 
   // Offline cache status for tracks
   type OfflineCacheStatus = 'none' | 'queued' | 'downloading' | 'ready' | 'failed';
@@ -114,6 +119,15 @@
   let contextMenuPos = $state<{ x: number; y: number } | null>(null);
   let favoriteFromStore = $state(false);
   let isToggling = $state(false);
+  // Reactive flag: is THIS track currently being decrypted from an
+  // offline CMAF bundle? Incremented on offline:unlock_start, cleared
+  // on offline:unlock_end. While true, the row's play glyph is
+  // replaced with an animated padlock (see the template below).
+  let isUnlocking = $state(false);
+  // Brief post-decrypt state: shows an opened-padlock glyph for a few
+  // hundred ms after unlock finishes, bridging visually to the first
+  // audio frame.
+  let isRecentlyUnlocked = $state(false);
 
   // Use override if provided, otherwise use store
   const isFavorite = $derived(isFavoriteOverride ?? favoriteFromStore);
@@ -132,6 +146,29 @@
       }, trackId);
       return unsubscribe;
     }
+  });
+
+  // Subscribe to unlocking state. One global store, each row filters by
+  // its own trackId. The listener re-checks on every change and only
+  // updates local state if the boolean actually flipped — avoids
+  // needless re-renders across large tracklists.
+  let unsubscribeUnlocking: (() => void) | null = null;
+  onMount(() => {
+    const refresh = () => {
+      const nextUnlocking = isTrackUnlocking(trackId);
+      if (nextUnlocking !== isUnlocking) {
+        isUnlocking = nextUnlocking;
+      }
+      const nextRecent = isTrackRecentlyUnlocked(trackId);
+      if (nextRecent !== isRecentlyUnlocked) {
+        isRecentlyUnlocked = nextRecent;
+      }
+    };
+    refresh();
+    unsubscribeUnlocking = subscribeUnlocking(refresh);
+  });
+  onDestroy(() => {
+    unsubscribeUnlocking?.();
   });
 
   // Handle favorite toggle internally
@@ -247,6 +284,20 @@
     {:else if isUnavailable}
       <span class="unavailable-icon" title={unavailableTooltip}>
         <CircleAlert size={16} />
+      </span>
+    {:else if isUnlocking}
+      <!-- Offline CMAF decrypt in progress: swap the play glyph for an
+           animated padlock so the user gets honest feedback that the
+           app is unwrapping encrypted content, not just stalling. -->
+      <span class="unlocking-icon" title="Preparing offline track…" aria-label="Preparing offline track">
+        <Lock size={16} class="lock-shake" />
+      </span>
+    {:else if isRecentlyUnlocked}
+      <!-- Brief post-decrypt beat: opened-padlock glyph flashes while
+           the audio pipeline picks up the first frame. Cleared ~600ms
+           after unlock_end by the store. -->
+      <span class="unlocked-icon" title="Offline track unlocked" aria-label="Offline track unlocked">
+        <LockOpen size={16} class="lock-pop" />
       </span>
     {:else if isActiveTrack || isPlaying}
       {#if isHovered}
@@ -488,6 +539,65 @@
     justify-content: center;
     color: var(--error-color, #ef4444);
     cursor: help;
+  }
+
+  /* Offline-cache unlock-in-progress indicator.
+     The Lock icon itself is a static lucide-svelte glyph; :global() is
+     needed because the animation targets the SVG lucide injects inside
+     the span and Svelte's scoped styles don't reach into the child
+     component's DOM otherwise. */
+  .unlocking-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-primary, #5c6bc0);
+    cursor: progress;
+  }
+
+  .unlocking-icon :global(.lock-shake) {
+    animation: qbz-unlocking 1.2s ease-in-out infinite;
+    transform-origin: 50% 70%;
+  }
+
+  @keyframes qbz-unlocking {
+    0%, 100% {
+      transform: rotate(0deg) scale(1);
+      opacity: 0.65;
+    }
+    15% { transform: rotate(-10deg) scale(1.05); }
+    30% { transform: rotate(10deg) scale(1.05); }
+    45% { transform: rotate(-6deg) scale(1.08); opacity: 1; }
+    60% { transform: rotate(6deg) scale(1.08); opacity: 1; }
+    75% { transform: rotate(-3deg) scale(1.04); }
+  }
+
+  /* Post-decrypt "open padlock" flash. Runs once; the row flips to
+     playing/equalizer as soon as the audio frame arrives. */
+  .unlocked-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-primary, #5c6bc0);
+  }
+
+  .unlocked-icon :global(.lock-pop) {
+    animation: qbz-unlocked 600ms ease-out 1;
+    transform-origin: 50% 70%;
+  }
+
+  @keyframes qbz-unlocked {
+    0% {
+      transform: scale(0.85) rotate(-6deg);
+      opacity: 0.4;
+    }
+    40% {
+      transform: scale(1.18) rotate(4deg);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(1) rotate(0deg);
+      opacity: 1;
+    }
   }
 
   /* Blacklisted track styles */
