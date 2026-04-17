@@ -6,10 +6,17 @@
 # clears 400+ MB/s. For HiRes (200 MB+ tracks) this is the difference
 # between a 20-second gap and a sub-second one.
 #
-# `target-cpu=x86-64-v3` = Haswell baseline (2013+). Every CPU that
-# QBZ realistically runs on supports it. If we later ship prebuilt
-# binaries for older CPUs we can switch to a runtime-dispatch path,
-# but for self-built and workstation-compiled binaries this is the
-# right default.
+# Two things needed:
+# 1. `target-cpu=x86-64-v3` = Haswell microarchitecture baseline
+#    (2013+). Every CPU QBZ realistically runs on supports it. This
+#    gives AVX2, BMI2, etc. for general codegen.
+# 2. `target-feature=+aes,+ssse3` to explicitly enable the AES-NI
+#    instruction set — which is NOT included in x86-64-v3 as a
+#    microarch level. Without this flag the `aes` crate's hardware
+#    dispatch never gets compiled in, no matter how capable the CPU.
+#
+# If we later ship prebuilt binaries for older CPUs we can switch to
+# a runtime-dispatch path, but for self-built and workstation-compiled
+# binaries this is the right default.
 [build]
-rustflags = ["-C", "target-cpu=x86-64-v3"]
+rustflags = ["-C", "target-cpu=x86-64-v3", "-C", "target-feature=+aes,+ssse3"]
