@@ -628,6 +628,9 @@
         "soft": "Suave",
         "strong": "Fuerte"
       },
+      "activeColor": "Color karaoke",
+      "useThemeColor": "Tema",
+      "uppercase": "Mayúsculas",
       "reset": "Reiniciar"
     },
     "noLyrics": "No hay letras disponibles",

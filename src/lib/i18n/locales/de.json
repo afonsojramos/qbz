@@ -628,6 +628,9 @@
         "soft": "Leicht",
         "strong": "Stark"
       },
+      "activeColor": "Aktive Farbe",
+      "useThemeColor": "Design",
+      "uppercase": "Großbuchstaben",
       "reset": "Zurücksetzen"
     },
     "noLyrics": "Keine Songtexte verfügbar",

@@ -25,6 +25,8 @@
     fontMode?: LyricsFont;
     fontSizeMode?: LyricsFontSize;
     dimmingMode?: LyricsDimming;
+    activeColor?: string;
+    uppercase?: boolean;
   }
 
   let {
@@ -39,7 +41,9 @@
     isSynced = false,
     fontMode,
     fontSizeMode,
-    dimmingMode
+    dimmingMode,
+    activeColor,
+    uppercase = false
   }: Props = $props();
 
   // Calculate line duration for CSS animation (immersive mode only)
@@ -162,6 +166,8 @@
   class:font-montserrat={compact && fontMode === 'montserrat'}
   class:font-noto-sans={compact && fontMode === 'noto-sans'}
   class:font-source-sans-3={compact && fontMode === 'source-sans-3'}
+  class:uppercase={compact && uppercase}
+  style:--lyrics-active-color={compact && activeColor ? activeColor : null}
   bind:this={container}
 >
   {#if lines.length === 0}
@@ -369,8 +375,8 @@
     text-shadow:
       0 1px 3px rgba(0, 0, 0, 0.6),
       0 2px 10px rgba(0, 0, 0, 0.4),
-      0 0 40px color-mix(in srgb, var(--accent-primary) 40%, transparent),
-      0 0 80px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+      0 0 40px color-mix(in srgb, var(--lyrics-active-color, var(--accent-primary)) 40%, transparent),
+      0 0 80px color-mix(in srgb, var(--lyrics-active-color, var(--accent-primary)) 20%, transparent);
   }
 
   .lyrics-lines.center .lyrics-line.active {
@@ -382,8 +388,8 @@
     --progress-pos: calc(var(--line-progress, 0) * 100%);
     background: linear-gradient(
       90deg,
-      var(--accent-primary) 0%,
-      var(--accent-primary) var(--progress-pos),
+      var(--lyrics-active-color, var(--accent-primary)) 0%,
+      var(--lyrics-active-color, var(--accent-primary)) var(--progress-pos),
       var(--text-primary) var(--progress-pos),
       var(--text-primary) 100%
     );
@@ -413,16 +419,21 @@
     font-size: 17px;
   }
   .lyrics-lines.compact.size-large .lyrics-line {
-    font-size: 17px;
+    font-size: 18px;
   }
   .lyrics-lines.compact.size-large .lyrics-line.active {
-    font-size: 20px;
+    font-size: 21px;
   }
   .lyrics-lines.compact.size-xl .lyrics-line {
-    font-size: 20px;
+    font-size: 22px;
   }
   .lyrics-lines.compact.size-xl .lyrics-line.active {
-    font-size: 24px;
+    font-size: 26px;
+  }
+
+  /* Sidebar uppercase override (compact mode only) */
+  .lyrics-lines.compact.uppercase .lyrics-line {
+    text-transform: uppercase;
   }
 
   /* Sidebar font family overrides (compact mode only) */

@@ -26,6 +26,10 @@ export interface LyricsDisplayPrefs {
   font: LyricsFont;
   fontSize: LyricsFontSize;
   dimming: LyricsDimming;
+  /** Hex color `#RRGGBB` for the active (karaoke) line, or empty string to follow the theme accent. */
+  activeColor: string;
+  /** Render all lyric lines in uppercase (compact/sidebar mode only). */
+  uppercase: boolean;
 }
 
 export const STORAGE_KEY = 'qbz-lyrics-display';
@@ -34,8 +38,18 @@ export const DEFAULT_LYRICS_DISPLAY: LyricsDisplayPrefs = {
   autoFollow: true,
   font: 'system',
   fontSize: 'medium',
-  dimming: 'strong'
+  dimming: 'strong',
+  activeColor: '',
+  uppercase: false
 };
+
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+function isValidActiveColor(v: unknown): v is string {
+  if (typeof v !== 'string') return false;
+  if (v === '') return true;
+  return HEX_COLOR_RE.test(v);
+}
 
 const VALID_FONTS: LyricsFont[] = [
   'system',
@@ -54,7 +68,9 @@ function sanitize(raw: unknown): LyricsDisplayPrefs {
     autoFollow: typeof r.autoFollow === 'boolean' ? r.autoFollow : DEFAULT_LYRICS_DISPLAY.autoFollow,
     font: VALID_FONTS.includes(r.font as LyricsFont) ? (r.font as LyricsFont) : DEFAULT_LYRICS_DISPLAY.font,
     fontSize: VALID_SIZES.includes(r.fontSize as LyricsFontSize) ? (r.fontSize as LyricsFontSize) : DEFAULT_LYRICS_DISPLAY.fontSize,
-    dimming: VALID_DIMMINGS.includes(r.dimming as LyricsDimming) ? (r.dimming as LyricsDimming) : DEFAULT_LYRICS_DISPLAY.dimming
+    dimming: VALID_DIMMINGS.includes(r.dimming as LyricsDimming) ? (r.dimming as LyricsDimming) : DEFAULT_LYRICS_DISPLAY.dimming,
+    activeColor: isValidActiveColor(r.activeColor) ? r.activeColor : DEFAULT_LYRICS_DISPLAY.activeColor,
+    uppercase: typeof r.uppercase === 'boolean' ? r.uppercase : DEFAULT_LYRICS_DISPLAY.uppercase
   };
 }
 
@@ -101,6 +117,23 @@ export function setLyricsFontSize(fontSize: LyricsFontSize): void {
 export function setLyricsDimming(dimming: LyricsDimming): void {
   lyricsDisplayStore.update((p) => {
     const next = { ...p, dimming };
+    persist(next);
+    return next;
+  });
+}
+
+export function setLyricsActiveColor(activeColor: string): void {
+  const safe = isValidActiveColor(activeColor) ? activeColor : DEFAULT_LYRICS_DISPLAY.activeColor;
+  lyricsDisplayStore.update((p) => {
+    const next = { ...p, activeColor: safe };
+    persist(next);
+    return next;
+  });
+}
+
+export function setLyricsUppercase(uppercase: boolean): void {
+  lyricsDisplayStore.update((p) => {
+    const next = { ...p, uppercase };
     persist(next);
     return next;
   });

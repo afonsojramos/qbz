@@ -10,6 +10,8 @@
     setLyricsFont,
     setLyricsFontSize,
     setLyricsDimming,
+    setLyricsActiveColor,
+    setLyricsUppercase,
     resetLyricsDisplay,
     type LyricsFont,
     type LyricsFontSize,
@@ -80,6 +82,14 @@
   function handleFontChange(label: string): void {
     const match = fontOptions.find((opt) => $t(opt.labelKey) === label);
     if (match) setLyricsFont(match.value);
+  }
+
+  /** Fallback hex shown in the color input when the user hasn't picked one yet. */
+  const FALLBACK_COLOR = '#8b5cf6';
+
+  function handleActiveColorInput(event: Event): void {
+    const target = event.currentTarget as HTMLInputElement;
+    setLyricsActiveColor(target.value);
   }
 
   function handleClickOutside(event: MouseEvent) {
@@ -160,6 +170,45 @@
           </button>
         {/each}
       </div>
+    </div>
+
+    <div class="row">
+      <span class="label">{$t('player.lyricsControls.activeColor')}</span>
+      <div class="color-wrap">
+        {#if prefs.activeColor}
+          <button
+            type="button"
+            class="color-clear"
+            aria-label={$t('player.lyricsControls.useThemeColor')}
+            title={$t('player.lyricsControls.useThemeColor')}
+            onclick={() => setLyricsActiveColor('')}
+          >
+            {$t('player.lyricsControls.useThemeColor')}
+          </button>
+        {/if}
+        <input
+          type="color"
+          class="color-input"
+          aria-label={$t('player.lyricsControls.activeColor')}
+          value={prefs.activeColor || FALLBACK_COLOR}
+          oninput={handleActiveColorInput}
+        />
+      </div>
+    </div>
+
+    <div class="row">
+      <span class="label">{$t('player.lyricsControls.uppercase')}</span>
+      <button
+        type="button"
+        class="switch"
+        class:on={prefs.uppercase}
+        role="switch"
+        aria-checked={prefs.uppercase}
+        aria-label={$t('player.lyricsControls.uppercase')}
+        onclick={() => setLyricsUppercase(!prefs.uppercase)}
+      >
+        <span class="switch-thumb"></span>
+      </button>
     </div>
 
     <div class="row">
@@ -274,6 +323,53 @@
     padding: 0 10px;
     font-size: 12px;
     border-radius: 6px;
+  }
+
+  .color-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .color-input {
+    width: 36px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    cursor: pointer;
+    overflow: hidden;
+  }
+
+  /* Remove the default inner padding/border of the color input to show a clean swatch. */
+  .color-input::-webkit-color-swatch-wrapper {
+    padding: 0;
+  }
+  .color-input::-webkit-color-swatch {
+    border: none;
+    border-radius: 4px;
+  }
+  .color-input::-moz-color-swatch {
+    border: none;
+    border-radius: 4px;
+  }
+
+  .color-clear {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: var(--font-sans);
+    cursor: pointer;
+    transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+  }
+
+  .color-clear:hover {
+    color: var(--text-primary);
+    background: var(--bg-secondary);
   }
 
   .segmented {

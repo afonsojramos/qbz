@@ -628,6 +628,9 @@
         "soft": "Suave",
         "strong": "Forte"
       },
+      "activeColor": "Cor ativa",
+      "useThemeColor": "Tema",
+      "uppercase": "Maiúsculas",
       "reset": "Redefinir"
     },
     "noLyrics": "Letras não disponíveis",

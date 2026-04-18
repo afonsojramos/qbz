@@ -23,6 +23,8 @@ import {
   setLyricsFont,
   setLyricsFontSize,
   setLyricsDimming,
+  setLyricsActiveColor,
+  setLyricsUppercase,
   resetLyricsDisplay,
   DEFAULT_LYRICS_DISPLAY,
   STORAGE_KEY
@@ -39,7 +41,9 @@ describe('lyricsDisplayStore', () => {
       autoFollow: true,
       font: 'system',
       fontSize: 'medium',
-      dimming: 'strong'
+      dimming: 'strong',
+      activeColor: '',
+      uppercase: false
     });
   });
 
@@ -52,17 +56,35 @@ describe('lyricsDisplayStore', () => {
     setLyricsFont('montserrat');
     setLyricsFontSize('large');
     setLyricsDimming('soft');
+    setLyricsActiveColor('#ff00aa');
+    setLyricsUppercase(true);
 
     expect(get(lyricsDisplayStore)).toEqual({
       autoFollow: false,
       font: 'montserrat',
       fontSize: 'large',
-      dimming: 'soft'
+      dimming: 'soft',
+      activeColor: '#ff00aa',
+      uppercase: true
     });
 
     const persisted = userStorage.getUserItem(STORAGE_KEY);
     expect(persisted).not.toBeNull();
     expect(JSON.parse(persisted as string)).toEqual(get(lyricsDisplayStore));
+  });
+
+  it('setLyricsActiveColor rejects invalid hex and falls back to default', () => {
+    setLyricsActiveColor('#abc');        // too short
+    expect(get(lyricsDisplayStore).activeColor).toBe('');
+
+    setLyricsActiveColor('not-a-color');
+    expect(get(lyricsDisplayStore).activeColor).toBe('');
+
+    setLyricsActiveColor('');
+    expect(get(lyricsDisplayStore).activeColor).toBe('');
+
+    setLyricsActiveColor('#A1B2C3');
+    expect(get(lyricsDisplayStore).activeColor).toBe('#A1B2C3');
   });
 
   it('resetLyricsDisplay returns to defaults and persists', () => {

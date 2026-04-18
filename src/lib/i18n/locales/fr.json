@@ -628,6 +628,9 @@
         "soft": "Légère",
         "strong": "Forte"
       },
+      "activeColor": "Couleur active",
+      "useThemeColor": "Thème",
+      "uppercase": "Majuscules",
       "reset": "Réinitialiser"
     },
     "noLyrics": "Aucune parole disponible",

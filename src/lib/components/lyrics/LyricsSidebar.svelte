@@ -88,6 +88,8 @@
         fontMode={prefs.font}
         fontSizeMode={prefs.fontSize}
         dimmingMode={prefs.dimming}
+        activeColor={prefs.activeColor}
+        uppercase={prefs.uppercase}
       />
     {/if}
   </div>

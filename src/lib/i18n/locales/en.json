@@ -630,6 +630,9 @@
         "soft": "Soft",
         "strong": "Strong"
       },
+      "activeColor": "Active color",
+      "useThemeColor": "Theme",
+      "uppercase": "Uppercase",
       "reset": "Reset"
     },
     "noLyrics": "No lyrics available",
