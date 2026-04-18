@@ -432,6 +432,10 @@ pub struct V2QueueTrack {
     pub source: Option<String>,
     #[serde(default)]
     pub parental_warning: bool,
+    /// Opaque identifier of the Mixtape/Collection item that produced this track.
+    /// For non-Mixtape paths, set to album_id as fallback. None is safe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_item_id_hint: Option<String>,
 }
 
 fn default_streamable() -> bool {
@@ -452,11 +456,12 @@ impl From<V2QueueTrack> for CoreQueueTrack {
             bit_depth: t.bit_depth,
             sample_rate: t.sample_rate,
             is_local: t.is_local,
-            album_id: t.album_id,
+            album_id: t.album_id.clone(),
             artist_id: t.artist_id,
             streamable: t.streamable,
             source: t.source,
             parental_warning: t.parental_warning,
+            source_item_id_hint: t.source_item_id_hint.or(t.album_id),
         }
     }
 }
@@ -479,6 +484,7 @@ impl From<CoreQueueTrack> for V2QueueTrack {
             streamable: t.streamable,
             source: t.source,
             parental_warning: t.parental_warning,
+            source_item_id_hint: t.source_item_id_hint,
         }
     }
 }

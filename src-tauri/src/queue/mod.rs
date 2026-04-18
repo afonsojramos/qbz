@@ -57,6 +57,10 @@ pub struct QueueTrack {
     /// Parental advisory / explicit content
     #[serde(default)]
     pub parental_warning: bool,
+    /// Opaque identifier of the Mixtape/Collection item that produced this track.
+    /// For non-Mixtape paths, set to album_id as fallback. None is safe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_item_id_hint: Option<String>,
 }
 
 fn default_streamable() -> bool {
@@ -763,6 +767,7 @@ mod tests {
             streamable: true,
             source: Some("test".to_string()),
             parental_warning: false,
+            source_item_id_hint: None,
         }
     }
 

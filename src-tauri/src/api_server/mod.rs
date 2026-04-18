@@ -980,6 +980,7 @@ async fn play_album(
                     streamable: t.streamable,
                     source: Some("qobuz".to_string()),
                     parental_warning: t.parental_warning,
+                    source_item_id_hint: Some(album.id.clone()),
                 }
             })
             .collect()

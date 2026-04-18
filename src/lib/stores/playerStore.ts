@@ -107,6 +107,7 @@ interface QueueTrack {
   source?: string;
   album_id?: string | null;
   artist_id?: number | null;
+  source_item_id_hint?: string | null;
 }
 
 interface PlexPlayTrackResult {

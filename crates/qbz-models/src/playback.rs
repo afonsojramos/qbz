@@ -39,6 +39,13 @@ pub struct QueueTrack {
     /// Parental advisory / explicit content
     #[serde(default)]
     pub parental_warning: bool,
+    /// Opaque identifier of the Mixtape/Collection item that produced this track,
+    /// used by v2_skip_to_next_item / v2_skip_to_previous_item to detect boundaries.
+    /// For non-Mixtape enqueue paths, set to the track's album_id so boundary
+    /// detection still works for "play album" flows. None is a safe fallback
+    /// (the skip commands fall back to album_id when this is absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_item_id_hint: Option<String>,
 }
 
 fn default_streamable() -> bool {

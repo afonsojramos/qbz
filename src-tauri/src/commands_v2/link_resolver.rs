@@ -1746,11 +1746,12 @@ pub async fn v2_create_infinite_radio(
                 bit_depth: core.bit_depth,
                 sample_rate: core.sample_rate,
                 is_local: core.is_local,
-                album_id: core.album_id,
+                album_id: core.album_id.clone(),
                 artist_id: core.artist_id,
                 streamable: core.streamable,
                 source: core.source,
                 parental_warning: core.parental_warning,
+                source_item_id_hint: core.source_item_id_hint.or(core.album_id),
             });
         }
     }
@@ -1794,10 +1795,11 @@ fn track_to_queue_track_from_api(track: &crate::api::Track) -> CoreQueueTrack {
         bit_depth: track.maximum_bit_depth,
         sample_rate: track.maximum_sampling_rate,
         is_local: false,
-        album_id,
+        album_id: album_id.clone(),
         artist_id,
         streamable: track.streamable,
         source: Some("qobuz".to_string()),
         parental_warning: track.parental_warning,
+        source_item_id_hint: album_id,
     }
 }

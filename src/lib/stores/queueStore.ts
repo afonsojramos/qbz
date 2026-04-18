@@ -39,6 +39,8 @@ export interface BackendQueueTrack {
   /** Track source: qobuz | local | plex */
   source?: string;
   parental_warning?: boolean;
+  /** Opaque id of the Mixtape/Collection item that enqueued this track; album_id as fallback */
+  source_item_id_hint?: string | null;
 }
 
 interface BackendQueueState {
