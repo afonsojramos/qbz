@@ -1526,7 +1526,7 @@
     "tosAgreementPrefix": "Eu li os",
     "tosLinkText": "Termos de Serviço do Qobuz™",
     "tosRequiredToLogin": "Confirme que você leu os Termos de Serviço do Qobuz™ para continuar.",
-    "trademarkNotice": "Qobuz™ é uma marca registrada da Qobuz. O QBZ não é afiliado, endossado ou certificado pela Qobuz."
+    "trademarkNotice": "Qobuz™ é uma marca registrada da Qobuz. O QBZ é uma aplicação de código aberto sob a licença MIT e não é afiliado, endossado ou certificado pela Qobuz."
   },
   "notifications": {
     "trackAdded": "Faixa adicionada à fila",

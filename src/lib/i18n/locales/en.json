@@ -1532,7 +1532,7 @@
     "tosAgreementPrefix": "I have read the",
     "tosLinkText": "Qobuz™ Terms of Service",
     "tosRequiredToLogin": "Please confirm that you have read the Qobuz™ Terms of Service to continue.",
-    "trademarkNotice": "Qobuz™ is a trademark of Qobuz. QBZ is not affiliated with, endorsed by, or certified by Qobuz."
+    "trademarkNotice": "Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz."
   },
   "notifications": {
     "trackAdded": "Track added to queue",

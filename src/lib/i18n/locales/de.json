@@ -1503,7 +1503,7 @@
     "tosAgreementPrefix": "Ich habe die",
     "tosLinkText": "Qobuz™-Nutzungsbedingungen",
     "tosRequiredToLogin": "Bitte bestätigen Sie, dass Sie die Qobuz™-Nutzungsbedingungen gelesen haben, um fortzufahren.",
-    "trademarkNotice": "Qobuz™ ist eine Marke von Qobuz. QBZ ist nicht mit Qobuz verbunden, wird nicht von Qobuz unterstützt oder zertifiziert."
+    "trademarkNotice": "Qobuz™ ist eine Marke von Qobuz. QBZ ist eine Open-Source-Anwendung unter der MIT-Lizenz und ist nicht mit Qobuz verbunden, wird nicht von Qobuz unterstützt oder zertifiziert."
   },
   "notifications": {
     "trackAdded": "Titel zur Warteschlange hinzugefügt",

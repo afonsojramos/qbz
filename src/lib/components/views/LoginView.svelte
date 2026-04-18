@@ -445,6 +445,16 @@
     {/if}
     </div>
   </div>
+  {#if isInitializing}
+    <!-- Full API-usage + trademark disclaimer pinned to the bottom of
+         the loading screen (logo + spinner only). Mirrors the footer
+         shown on the login screen proper. Kept outside .login-view so
+         the spinner stays visually centered; the wrapper is a flex
+         column so this lands at the bottom naturally. -->
+    <div class="init-disclaimer">
+      {$t('auth.APIUse')} {$t('legal.trademarkNotice')}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -547,6 +557,23 @@
   .initializing p {
     margin-top: 16px;
     color: var(--text-muted);
+  }
+
+  /* API-usage + trademark disclaimer on the loading screen. Sized at
+     the smallest value that stays legible at the minimum app zoom
+     (~11px base) with generous letter-spacing for readability. The
+     max-width keeps the two-sentence line from spanning the entire
+     window on wide displays. */
+  .init-disclaimer {
+    max-width: 720px;
+    margin: 0 auto;
+    text-align: center;
+    padding: 0 24px 18px;
+    font-size: 11px;
+    line-height: 1.4;
+    letter-spacing: 0.2px;
+    color: var(--text-muted);
+    opacity: 0.75;
   }
 
   .error-box {
