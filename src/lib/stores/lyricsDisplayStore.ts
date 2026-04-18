@@ -18,7 +18,7 @@ export type LyricsFont =
   | 'noto-sans'
   | 'source-sans-3';
 
-export type LyricsFontSize = 'small' | 'medium' | 'large';
+export type LyricsFontSize = 'small' | 'medium' | 'large' | 'xl';
 export type LyricsDimming = 'off' | 'soft' | 'strong';
 
 export interface LyricsDisplayPrefs {
@@ -44,7 +44,7 @@ const VALID_FONTS: LyricsFont[] = [
   'noto-sans',
   'source-sans-3'
 ];
-const VALID_SIZES: LyricsFontSize[] = ['small', 'medium', 'large'];
+const VALID_SIZES: LyricsFontSize[] = ['small', 'medium', 'large', 'xl'];
 const VALID_DIMMINGS: LyricsDimming[] = ['off', 'soft', 'strong'];
 
 function sanitize(raw: unknown): LyricsDisplayPrefs {

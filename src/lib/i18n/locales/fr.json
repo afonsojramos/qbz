@@ -616,7 +616,8 @@
       "sizes": {
         "small": "S",
         "medium": "M",
-        "large": "L"
+        "large": "L",
+        "xl": "XL"
       },
       "dimming": "Atténuation",
       "dimmingLevels": {

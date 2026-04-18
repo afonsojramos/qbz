@@ -2,6 +2,7 @@
   import { RotateCcw } from 'lucide-svelte';
   import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';
+  import Dropdown from '../Dropdown.svelte';
   import {
     lyricsDisplayStore,
     setLyricsAutoFollow,
@@ -37,7 +38,8 @@
   const sizeOptions: { value: LyricsFontSize; labelKey: string }[] = [
     { value: 'small', labelKey: 'player.lyricsControls.sizes.small' },
     { value: 'medium', labelKey: 'player.lyricsControls.sizes.medium' },
-    { value: 'large', labelKey: 'player.lyricsControls.sizes.large' }
+    { value: 'large', labelKey: 'player.lyricsControls.sizes.large' },
+    { value: 'xl', labelKey: 'player.lyricsControls.sizes.xl' }
   ];
 
   const dimmingOptions: { value: LyricsDimming; labelKey: string }[] = [
@@ -45,6 +47,11 @@
     { value: 'soft', labelKey: 'player.lyricsControls.dimmingLevels.soft' },
     { value: 'strong', labelKey: 'player.lyricsControls.dimmingLevels.strong' }
   ];
+
+  function handleFontChange(label: string): void {
+    const match = fontOptions.find((opt) => $t(opt.labelKey) === label);
+    if (match) setLyricsFont(match.value);
+  }
 
   function handleClickOutside(event: MouseEvent) {
     if (!open) return;
@@ -89,6 +96,7 @@
         class:on={prefs.autoFollow}
         role="switch"
         aria-checked={prefs.autoFollow}
+        aria-label={$t('player.lyricsControls.autoFollow')}
         onclick={() => setLyricsAutoFollow(!prefs.autoFollow)}
       >
         <span class="switch-thumb"></span>
@@ -97,15 +105,15 @@
 
     <div class="row">
       <span class="label">{$t('player.lyricsControls.font')}</span>
-      <select
-        class="select"
-        value={prefs.font}
-        onchange={(e) => setLyricsFont((e.currentTarget as HTMLSelectElement).value as LyricsFont)}
-      >
-        {#each fontOptions as opt (opt.value)}
-          <option value={opt.value}>{$t(opt.labelKey)}</option>
-        {/each}
-      </select>
+      <div class="dropdown-wrap">
+        <Dropdown
+          value={$t(fontOptions.find((opt) => opt.value === prefs.font)?.labelKey ?? fontOptions[0].labelKey)}
+          options={fontOptions.map((opt) => $t(opt.labelKey))}
+          onchange={handleFontChange}
+          expandLeft
+          compact
+        />
+      </div>
     </div>
 
     <div class="row">
@@ -157,7 +165,7 @@
     top: calc(100% + 8px);
     right: 8px;
     z-index: 100;
-    width: 240px;
+    width: 268px;
     padding: 12px;
     display: flex;
     flex-direction: column;
@@ -215,15 +223,13 @@
     transform: translateX(16px);
   }
 
-  .select {
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    border: 1px solid var(--bg-tertiary);
+  /* Shrink the app Dropdown to fit the popover scale. */
+  .dropdown-wrap :global(.dropdown .trigger) {
+    height: 28px;
+    width: 170px;
+    padding: 0 10px;
+    font-size: 12px;
     border-radius: 6px;
-    padding: 4px 8px;
-    font-size: 13px;
-    font-family: var(--font-sans);
-    max-width: 140px;
   }
 
   .segmented {

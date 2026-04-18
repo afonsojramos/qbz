@@ -157,6 +157,7 @@
   class:size-small={compact && fontSizeMode === 'small'}
   class:size-medium={compact && fontSizeMode === 'medium'}
   class:size-large={compact && fontSizeMode === 'large'}
+  class:size-xl={compact && fontSizeMode === 'xl'}
   class:font-line-seed-jp={compact && fontMode === 'line-seed-jp'}
   class:font-montserrat={compact && fontMode === 'montserrat'}
   class:font-noto-sans={compact && fontMode === 'noto-sans'}
@@ -416,6 +417,12 @@
   }
   .lyrics-lines.compact.size-large .lyrics-line.active {
     font-size: 20px;
+  }
+  .lyrics-lines.compact.size-xl .lyrics-line {
+    font-size: 20px;
+  }
+  .lyrics-lines.compact.size-xl .lyrics-line.active {
+    font-size: 24px;
   }
 
   /* Sidebar font family overrides (compact mode only) */
