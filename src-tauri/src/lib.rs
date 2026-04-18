@@ -51,6 +51,7 @@ pub mod logging;
 pub mod lyrics;
 pub mod media_controls;
 pub mod migration;
+pub mod mixtape;
 pub mod musicbrainz;
 pub mod network;
 pub mod offline;
