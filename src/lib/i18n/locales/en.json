@@ -277,6 +277,8 @@
     "localTrackIndicator": "Local track - only available on this device",
     "singleFileAlbumNotice": "This album appears to be a single file containing the full disc. Individual track navigation requires the Plex server to split the file (e.g., via cue sheet scanner).",
     "plexTrackIndicator": "Plex track - served from your local Plex library",
+    "qobuzTrackIndicator": "Qobuz streaming track",
+    "qobuzPurchaseIndicator": "Purchased from Qobuz",
     "refreshMetadata": "Refresh metadata",
     "albumSettings": "Album settings",
     "albumArtwork": "Album Artwork",

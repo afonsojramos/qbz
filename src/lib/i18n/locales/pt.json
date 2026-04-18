@@ -276,6 +276,8 @@
     "localTrackIndicator": "Faixa local - disponível apenas neste dispositivo",
     "singleFileAlbumNotice": "Este álbum parece ser um arquivo único contendo o disco completo. A navegação por faixas individuais requer que o servidor Plex divida o arquivo (ex.: via scanner de cue sheet).",
     "plexTrackIndicator": "Faixa Plex - servida da sua biblioteca Plex local",
+    "qobuzTrackIndicator": "Faixa do Qobuz (streaming)",
+    "qobuzPurchaseIndicator": "Compra do Qobuz",
     "refreshMetadata": "Atualizar metadados",
     "albumSettings": "Configurações do álbum",
     "albumArtwork": "Capa do Álbum",

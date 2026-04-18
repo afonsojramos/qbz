@@ -269,6 +269,8 @@
     "hideAlbumHint": "Les albums cachés peuvent être consultés dans Paramètres",
     "localTrackIndicator": "Titre local - disponible uniquement sur cet appareil",
     "plexTrackIndicator": "Titre Plex - diffusé depuis votre bibliothèque Plex locale",
+    "qobuzTrackIndicator": "Piste Qobuz (streaming)",
+    "qobuzPurchaseIndicator": "Achat Qobuz",
     "refreshMetadata": "Rafraîchir",
     "albumSettings": "Paramètres de l'album",
     "albumArtwork": "Pochette de l'album",

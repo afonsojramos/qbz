@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { Play, Disc3, Heart, HardDrive } from 'lucide-svelte';
+  import { Play, Disc3, Heart } from 'lucide-svelte';
   import { t, locale } from 'svelte-i18n';
   import AlbumMenu from './AlbumMenu.svelte';
   import {
@@ -12,6 +12,7 @@
   } from '$lib/stores/albumFavoritesStore';
   import { resolveAlbumCover } from '$lib/stores/customAlbumCoverStore';
   import { cachedSrc } from '$lib/actions/cachedImage';
+  import SourceBadge from './SourceBadge.svelte';
 
   interface Props {
     albumId?: string;
@@ -303,21 +304,8 @@
 
     <!-- Source Badge (Local Library only) -->
     {#if sourceBadge}
-      <div
-        class="source-badge"
-        class:local-badge={sourceBadge === 'user'}
-        class:purchase-badge={sourceBadge === 'qobuz_purchase'}
-        title={sourceBadge === 'user' ? 'Local file' : sourceBadge === 'plex' ? 'Plex library' : sourceBadge === 'qobuz_purchase' ? 'Qobuz purchase' : 'Qobuz offline'}
-      >
-        {#if sourceBadge === 'user'}
-          <HardDrive size={14} />
-        {:else if sourceBadge === 'plex'}
-          <img src="/plex-logo.svg" alt="Plex" class="qobuz-badge-icon plex-logo-icon" />
-        {:else if sourceBadge === 'qobuz_purchase'}
-          <img src="/qobuz-logo-filled.svg" alt="Qobuz purchase" class="qobuz-badge-icon" />
-        {:else}
-          <img src="/qobuz-logo-filled.svg" alt="Qobuz" class="qobuz-badge-icon" />
-        {/if}
+      <div class="source-badge-slot">
+        <SourceBadge value={sourceBadge} />
       </div>
     {/if}
   </div>
@@ -465,47 +453,11 @@
     text-shadow: 0 1px 0 rgba(255, 255, 255, 0.15);
   }
 
-  .source-badge {
+  .source-badge-slot {
     position: absolute;
     bottom: 6px;
     right: 6px;
     z-index: 3;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    color: var(--text-secondary);
-    border-radius: 4px;
-  }
-
-  .source-badge.local-badge {
-    background: rgba(0, 0, 0, 0.7);
-    border-radius: 4px;
-    backdrop-filter: blur(4px);
-  }
-
-  .source-badge.purchase-badge {
-    background: rgba(30, 20, 0, 0.85);
-    border-radius: 4px;
-    backdrop-filter: blur(4px);
-    border: 1px solid rgba(234, 179, 8, 0.5);
-  }
-
-  .source-badge.purchase-badge .qobuz-badge-icon {
-    filter: brightness(0) saturate(100%) invert(75%) sepia(80%) saturate(500%) hue-rotate(10deg) brightness(105%) contrast(90%);
-  }
-
-  .source-badge .qobuz-badge-icon {
-    width: 24px;
-    height: 24px;
-  }
-
-  .source-badge .plex-logo-icon {
-    width: 18px;
-    height: 18px;
-    object-fit: contain;
-    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
   }
 
   .action-overlay {
