@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { MicVocal } from 'lucide-svelte';
+  import { MicVocal, SlidersHorizontal } from 'lucide-svelte';
   import { t } from 'svelte-i18n';
   import LyricsLines from './LyricsLines.svelte';
+  import LyricsControlsPopover from './LyricsControlsPopover.svelte';
+  import { lyricsDisplayStore } from '$lib/stores/lyricsDisplayStore';
 
   interface LyricsLine {
     text: string;
@@ -28,6 +30,12 @@
     isLoading = false,
     error = null
   }: Props = $props();
+
+  let popoverOpen = $state(false);
+  let anchorEl: HTMLButtonElement | null = $state(null);
+
+  const prefs = $derived($lyricsDisplayStore);
+  const canCopy = $derived(!isLoading && !error && lines.length > 0);
 </script>
 
 <aside class="lyrics-sidebar">
@@ -41,6 +49,23 @@
         <div class="header-meta">{title}{title && artist ? ' - ' : ''}{artist}</div>
       {/if}
     </div>
+    <button
+      type="button"
+      class="controls-trigger"
+      bind:this={anchorEl}
+      aria-label={$t('player.lyricsControls.openControls')}
+      aria-expanded={popoverOpen}
+      onclick={() => (popoverOpen = !popoverOpen)}
+    >
+      <SlidersHorizontal size={18} />
+    </button>
+    <LyricsControlsPopover
+      open={popoverOpen}
+      {anchorEl}
+      {lines}
+      {canCopy}
+      onClose={() => (popoverOpen = false)}
+    />
   </div>
 
   <div class="panel">
@@ -59,6 +84,12 @@
         {isSynced}
         compact={true}
         center={false}
+        scrollToActive={prefs.autoFollow}
+        fontMode={prefs.font}
+        fontSizeMode={prefs.fontSize}
+        dimmingMode={prefs.dimming}
+        activeColor={prefs.activeColor}
+        uppercase={prefs.uppercase}
       />
     {/if}
   </div>
@@ -83,6 +114,7 @@
     padding: 16px;
     border-bottom: 1px solid var(--bg-tertiary);
     background: var(--bg-primary);
+    position: relative;
   }
 
   .header-icon {
@@ -153,4 +185,31 @@
       transform: rotate(360deg);
     }
   }
+
+  .controls-trigger {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+  }
+
+  .controls-trigger:hover {
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border-color: var(--bg-tertiary);
+  }
+
+  .controls-trigger[aria-expanded='true'] {
+    color: var(--accent-primary);
+    background: var(--bg-secondary);
+    border-color: var(--bg-tertiary);
+  }
+
 </style>
