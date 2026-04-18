@@ -1,6 +1,11 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { t } from 'svelte-i18n';
+  import type {
+    LyricsFont,
+    LyricsFontSize,
+    LyricsDimming
+  } from '$lib/stores/lyricsDisplayStore';
 
   interface LyricsLine {
     text: string;
@@ -17,6 +22,9 @@
     scrollToActive?: boolean;
     immersive?: boolean;
     isSynced?: boolean;
+    fontMode?: LyricsFont;
+    fontSizeMode?: LyricsFontSize;
+    dimmingMode?: LyricsDimming;
   }
 
   let {
@@ -28,7 +36,10 @@
     compact = false,
     scrollToActive = true,
     immersive = false,
-    isSynced = false
+    isSynced = false,
+    fontMode,
+    fontSizeMode,
+    dimmingMode
   }: Props = $props();
 
   // Calculate line duration for CSS animation (immersive mode only)
@@ -77,6 +88,11 @@
   function getLineOpacity(index: number, active: number): number {
     if (!dimInactive || active < 0) return 1;
     if (index === active) return 1;
+
+    // Sidebar dimming override (only when dimmingMode is provided)
+    if (dimmingMode === 'off') return 1;
+    if (dimmingMode === 'soft') return 0.6;
+    // 'strong' (or undefined) falls through to the existing ladder
 
     const distance = Math.abs(index - active);
     if (distance === 1) return 0.5;
@@ -138,6 +154,13 @@
   class:center
   class:immersive
   class:static={!isSynced}
+  class:size-small={compact && fontSizeMode === 'small'}
+  class:size-medium={compact && fontSizeMode === 'medium'}
+  class:size-large={compact && fontSizeMode === 'large'}
+  class:font-line-seed-jp={compact && fontMode === 'line-seed-jp'}
+  class:font-montserrat={compact && fontMode === 'montserrat'}
+  class:font-noto-sans={compact && fontMode === 'noto-sans'}
+  class:font-source-sans-3={compact && fontMode === 'source-sans-3'}
   bind:this={container}
 >
   {#if lines.length === 0}
@@ -373,5 +396,39 @@
     font-size: 14px;
     text-align: center;
     padding: 48px 0;
+  }
+
+  /* Sidebar font size overrides (compact mode only) */
+  .lyrics-lines.compact.size-small .lyrics-line {
+    font-size: 13px;
+  }
+  .lyrics-lines.compact.size-small .lyrics-line.active {
+    font-size: 15px;
+  }
+  .lyrics-lines.compact.size-medium .lyrics-line {
+    font-size: 15px;
+  }
+  .lyrics-lines.compact.size-medium .lyrics-line.active {
+    font-size: 17px;
+  }
+  .lyrics-lines.compact.size-large .lyrics-line {
+    font-size: 17px;
+  }
+  .lyrics-lines.compact.size-large .lyrics-line.active {
+    font-size: 20px;
+  }
+
+  /* Sidebar font family overrides (compact mode only) */
+  .lyrics-lines.compact.font-line-seed-jp .lyrics-line {
+    font-family: 'LINE Seed JP', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+  .lyrics-lines.compact.font-montserrat .lyrics-line {
+    font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+  .lyrics-lines.compact.font-noto-sans .lyrics-line {
+    font-family: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+  .lyrics-lines.compact.font-source-sans-3 .lyrics-line {
+    font-family: 'Source Sans 3', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   }
 </style>
