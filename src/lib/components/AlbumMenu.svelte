@@ -7,6 +7,7 @@
     ListPlus,
     ListEnd,
     ListMusic,
+    CassetteTape,
     Share2,
     CloudDownload,
     Link,
@@ -25,6 +26,7 @@
     onPlayNext?: () => void;
     onPlayLater?: () => void;
     onAddToPlaylist?: () => void;
+    onAddToMixtape?: () => void;
     onShareQobuz?: () => void;
     onShareSonglink?: () => void;
     onDownload?: () => void;
@@ -43,6 +45,7 @@
     onPlayNext,
     onPlayLater,
     onAddToPlaylist,
+    onAddToMixtape,
     onShareQobuz,
     onShareSonglink,
     onDownload,
@@ -77,10 +80,11 @@
 
   const hasQueue = $derived(!!(onPlayNext || onPlayLater));
   const hasLibrary = $derived(!!onAddToPlaylist);
+  const hasMixtape = $derived(!!onAddToMixtape);
   const hasShare = $derived(!!(onShareQobuz || onShareSonglink));
   const hasDownload = $derived(!!onDownload || isAlbumFullyDownloaded);
   const hasOffline = $derived(!!onMakeOffline);
-  const hasMenu = $derived(hasQueue || hasLibrary || hasShare || hasDownload || hasOffline);
+  const hasMenu = $derived(hasQueue || hasLibrary || hasMixtape || hasShare || hasDownload || hasOffline);
 
   function closeMenu() {
     isOpen = false;
@@ -367,7 +371,14 @@
             </button>
           {/if}
 
-          {#if hasLibrary && (hasShare || hasDownload)}
+          {#if hasMixtape}
+            <button class="menu-item" onclick={() => handleAction(onAddToMixtape)}>
+              <CassetteTape size={14} />
+              <span>{$t('common.addToMixtapeOrCollection')}</span>
+            </button>
+          {/if}
+
+          {#if (hasLibrary || hasMixtape) && (hasShare || hasDownload)}
             <div class="separator"></div>
           {/if}
 

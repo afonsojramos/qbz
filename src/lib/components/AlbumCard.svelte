@@ -3,6 +3,7 @@
   import { Play, Disc3, Heart } from 'lucide-svelte';
   import { t, locale } from 'svelte-i18n';
   import AlbumMenu from './AlbumMenu.svelte';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import {
     subscribe as subscribeAlbumFavorites,
     isAlbumFavorite,
@@ -48,6 +49,12 @@
      *  (Pitchfork BNM, Rolling Stone 5★, etc.). `label` is the
      *  display string the card renders. */
     ribbon?: { kind: 'qobuzissime' | 'albumOfTheWeek' | 'press'; label: string };
+    /** Whether this album is from the local library (determines source field in AddToMixtapeItem) */
+    isLocal?: boolean;
+    /** Year for AddToMixtapeItem (optional, parsed from releaseDate if not provided) */
+    year?: number;
+    /** Track count for AddToMixtapeItem */
+    trackCount?: number;
   }
 
   let {
@@ -78,7 +85,10 @@
     sourceBadge,
     artistId,
     onArtistClick,
-    ribbon
+    ribbon,
+    isLocal,
+    year,
+    trackCount
   }: Props = $props();
   
   const isDownloaded = $derived.by(() => {
@@ -103,7 +113,7 @@
   let favoriteFromStore = $state(false);
   let isToggling = $state(false);
   const isFavorite = $derived(albumId ? favoriteFromStore : false);
-  const hasMenu = $derived(!!(onPlayNext || onPlayLater || onShareQobuz || onShareSonglink || onDownload));
+  const hasMenu = $derived(!!(onPlayNext || onPlayLater || onShareQobuz || onShareSonglink || onDownload || albumId));
   const showFavoriteButton = $derived(showFavorite ?? !!albumId);
   const favoriteAvailable = $derived(favoriteEnabled ?? !!albumId);
   const hasOverlay = $derived(!!(showFavoriteButton || onPlay || hasMenu));
@@ -147,6 +157,22 @@
   }
 
   const artistClickable = $derived(!!(artistId && onArtistClick));
+
+  function handleAddToMixtape() {
+    if (!albumId) return;
+    const source = isLocal || !!sourceBadge ? 'local' : 'qobuz';
+    const parsedYear = year ?? (releaseDate ? new Date(releaseDate).getFullYear() : undefined);
+    openAddToMixtape({
+      item_type: 'album',
+      source,
+      source_item_id: albumId,
+      title,
+      subtitle: artist,
+      artwork_url: artwork,
+      year: parsedYear && !isNaN(parsedYear) ? parsedYear : undefined,
+      track_count: trackCount,
+    });
+  }
 
   function isOverlayAction(target: EventTarget | null) {
     if (!(target instanceof HTMLElement)) return false;
@@ -273,6 +299,7 @@
                 onPlayNext={onPlayNext}
                 onPlayLater={onPlayLater}
                 onAddToPlaylist={onAddAlbumToPlaylist}
+                onAddToMixtape={albumId ? handleAddToMixtape : undefined}
                 onShareQobuz={onShareQobuz}
                 onShareSonglink={onShareSonglink}
                 onDownload={onDownload}

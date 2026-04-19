@@ -484,6 +484,8 @@
   import KeyboardShortcutsModal from '$lib/components/KeyboardShortcutsModal.svelte';
   import KeybindingsSettings from '$lib/components/KeybindingsSettings.svelte';
   import LinkResolverModal from '$lib/components/LinkResolverModal.svelte';
+  import AddToMixtapeModal from '$lib/components/AddToMixtapeModal.svelte';
+  import { addToMixtapeModal, closeAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import type { ReleaseInfo } from '$lib/stores/updatesStore';
   import { isAutoUpdateEligible, refreshUpdatePreferences, resetUpdatesStore } from '$lib/stores/updatesStore';
   import { getShowPurchases, setShowPurchases, rehydratePurchasesStore } from '$lib/stores/purchasesStore';
@@ -6343,6 +6345,13 @@
         onNavigateToArtist={handleArtistClick}
       />
     {/if}
+
+    <!-- Add to Mixtape/Collection Modal (global, single instance) -->
+    <AddToMixtapeModal
+      open={$addToMixtapeModal.open}
+      item={$addToMixtapeModal.item}
+      onClose={closeAddToMixtape}
+    />
 
     <!-- Cast Picker -->
     <CastPicker
