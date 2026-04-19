@@ -77,3 +77,6 @@ pub(crate) use discovery::normalize_artist_name;
 
 mod diagnostics;
 pub use diagnostics::*;
+
+mod mixtapes;
+pub use mixtapes::*;

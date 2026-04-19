@@ -754,6 +754,17 @@ impl LibraryDatabase {
         f(&self.conn)
     }
 
+    /// Provide mutable raw connection access for operations that require a
+    /// transaction (e.g. reorder operations that delete + reinsert rows).
+    ///
+    /// Use sparingly — prefer adding methods to LibraryDatabase directly.
+    pub fn with_connection_mut<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Connection) -> R,
+    {
+        f(&mut self.conn)
+    }
+
     // === Folder Management ===
 
     /// Add a folder to the library with optional network info

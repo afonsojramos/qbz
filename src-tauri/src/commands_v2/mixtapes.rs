@@ -1,0 +1,324 @@
+//! Tauri command layer for Mixtapes & Collections CRUD.
+//!
+//! These 12 commands wrap `mixtape::repo` functions with the standard
+//! LibraryState access pattern used by the rest of commands_v2.
+
+use tauri::State;
+
+use crate::library::LibraryState;
+use crate::runtime::RuntimeError;
+
+// ──────────────────────────── String → enum helpers ────────────────────────────
+// These mirror the private helpers in mixtape::repo. Duplicated here to avoid
+// making the repo helpers pub; they're small enough that duplication is fine.
+
+fn parse_kind(s: &str) -> qbz_models::mixtape::CollectionKind {
+    use qbz_models::mixtape::CollectionKind;
+    match s {
+        "mixtape" => CollectionKind::Mixtape,
+        "artist_collection" => CollectionKind::ArtistCollection,
+        _ => CollectionKind::Collection,
+    }
+}
+
+fn parse_source_type(s: &str) -> qbz_models::mixtape::CollectionSourceType {
+    use qbz_models::mixtape::CollectionSourceType;
+    match s {
+        "artist_discography" => CollectionSourceType::ArtistDiscography,
+        _ => CollectionSourceType::Manual,
+    }
+}
+
+fn parse_play_mode(s: &str) -> qbz_models::mixtape::CollectionPlayMode {
+    use qbz_models::mixtape::CollectionPlayMode;
+    match s {
+        "album_shuffle" => CollectionPlayMode::AlbumShuffle,
+        _ => CollectionPlayMode::InOrder,
+    }
+}
+
+fn parse_item_type(s: &str) -> qbz_models::mixtape::ItemType {
+    use qbz_models::mixtape::ItemType;
+    match s {
+        "track" => ItemType::Track,
+        "playlist" => ItemType::Playlist,
+        _ => ItemType::Album,
+    }
+}
+
+fn parse_source(s: &str) -> qbz_models::mixtape::AlbumSource {
+    use qbz_models::mixtape::AlbumSource;
+    match s {
+        "local" => AlbumSource::Local,
+        _ => AlbumSource::Qobuz,
+    }
+}
+
+// ──────────────────────────── Helper macro ────────────────────────────
+
+/// Acquire a shared `&LibraryDatabase` from LibraryState or return
+/// `RuntimeError::UserSessionNotActivated`.
+macro_rules! acquire_db {
+    ($library:expr) => {{
+        let guard__ = $library.db.lock().await;
+        // SAFETY: guard__ must outlive the reference we hand back.
+        // We move the guard into a let-binding that lives for the rest of
+        // the enclosing block.
+        guard__
+    }};
+}
+
+// ──────────────────────────── Collection commands ────────────────────────────
+
+/// List all mixtape collections, optionally filtered by kind.
+///
+/// `kind`: `"mixtape"` | `"collection"` | `"artist_collection"` | `null`
+#[tauri::command]
+pub async fn v2_list_mixtape_collections(
+    kind: Option<String>,
+    library: State<'_, LibraryState>,
+) -> Result<Vec<qbz_models::mixtape::MixtapeCollection>, RuntimeError> {
+    log::debug!("[V2] list_mixtape_collections kind={:?}", kind);
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        let k = kind.as_deref().map(parse_kind);
+        crate::mixtape::repo::list_collections(conn, k)
+            .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Get a single mixtape collection (with its items) by ID.
+#[tauri::command]
+pub async fn v2_get_mixtape_collection(
+    id: String,
+    library: State<'_, LibraryState>,
+) -> Result<Option<qbz_models::mixtape::MixtapeCollection>, RuntimeError> {
+    log::debug!("[V2] get_mixtape_collection id={}", id);
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        crate::mixtape::repo::get_collection(conn, &id)
+            .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Create a new mixtape collection.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_create_mixtape_collection(
+    kind: String,
+    name: String,
+    description: Option<String>,
+    source_type: Option<String>,
+    source_ref: Option<String>,
+    library: State<'_, LibraryState>,
+) -> Result<qbz_models::mixtape::MixtapeCollection, RuntimeError> {
+    log::debug!("[V2] create_mixtape_collection kind={} name={}", kind, name);
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        let k = parse_kind(&kind);
+        let st = source_type.as_deref().map(parse_source_type)
+            .unwrap_or(qbz_models::mixtape::CollectionSourceType::Manual);
+        crate::mixtape::repo::create_collection(
+            conn,
+            k,
+            &name,
+            description.as_deref(),
+            st,
+            source_ref.as_deref(),
+        )
+        .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Rename a mixtape collection.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_rename_mixtape_collection(
+    id: String,
+    new_name: String,
+    library: State<'_, LibraryState>,
+) -> Result<(), RuntimeError> {
+    log::debug!("[V2] rename_mixtape_collection id={}", id);
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        crate::mixtape::repo::rename_collection(conn, &id, &new_name)
+            .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Set the description of a mixtape collection (pass `null` to clear it).
+#[tauri::command]
+pub async fn v2_set_mixtape_description(
+    id: String,
+    description: Option<String>,
+    library: State<'_, LibraryState>,
+) -> Result<(), RuntimeError> {
+    log::debug!("[V2] set_mixtape_description id={}", id);
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        crate::mixtape::repo::set_description(conn, &id, description.as_deref())
+            .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Set the play mode of a mixtape collection.
+///
+/// `mode`: `"in_order"` | `"album_shuffle"`
+#[tauri::command]
+pub async fn v2_set_mixtape_play_mode(
+    id: String,
+    mode: String,
+    library: State<'_, LibraryState>,
+) -> Result<(), RuntimeError> {
+    log::debug!("[V2] set_mixtape_play_mode id={} mode={}", id, mode);
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        crate::mixtape::repo::set_play_mode(conn, &id, parse_play_mode(&mode))
+            .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Change the kind of a mixtape collection between `"mixtape"` and `"collection"`.
+///
+/// Converting to/from `"artist_collection"` is rejected by the repository.
+#[tauri::command]
+pub async fn v2_set_mixtape_kind(
+    id: String,
+    kind: String,
+    library: State<'_, LibraryState>,
+) -> Result<(), RuntimeError> {
+    log::debug!("[V2] set_mixtape_kind id={} kind={}", id, kind);
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        crate::mixtape::repo::set_kind(conn, &id, parse_kind(&kind))
+            .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Set (or clear) the custom artwork path for a mixtape collection.
+#[tauri::command]
+pub async fn v2_set_mixtape_custom_artwork(
+    id: String,
+    path: Option<String>,
+    library: State<'_, LibraryState>,
+) -> Result<(), RuntimeError> {
+    log::debug!("[V2] set_mixtape_custom_artwork id={}", id);
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        crate::mixtape::repo::set_custom_artwork(conn, &id, path.as_deref())
+            .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Delete a mixtape collection and all its items (CASCADE).
+#[tauri::command]
+pub async fn v2_delete_mixtape_collection(
+    id: String,
+    library: State<'_, LibraryState>,
+) -> Result<(), RuntimeError> {
+    log::debug!("[V2] delete_mixtape_collection id={}", id);
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        crate::mixtape::repo::delete_collection(conn, &id)
+            .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+// ──────────────────────────── Item commands ────────────────────────────
+
+/// Add an item to a mixtape collection.
+///
+/// Returns `true` if the item was inserted, `false` if it was a duplicate
+/// (same `source` + `sourceItemId` already exists in the collection).
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_add_mixtape_item(
+    collection_id: String,
+    item_type: String,
+    source: String,
+    source_item_id: String,
+    title: String,
+    subtitle: Option<String>,
+    artwork_url: Option<String>,
+    year: Option<i32>,
+    track_count: Option<i32>,
+    library: State<'_, LibraryState>,
+) -> Result<bool, RuntimeError> {
+    log::debug!(
+        "[V2] add_mixtape_item collection_id={} source_item_id={}",
+        collection_id,
+        source_item_id
+    );
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        crate::mixtape::repo::add_item(
+            conn,
+            &collection_id,
+            parse_item_type(&item_type),
+            parse_source(&source),
+            &source_item_id,
+            &title,
+            subtitle.as_deref(),
+            artwork_url.as_deref(),
+            year,
+            track_count,
+        )
+        .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Remove the item at `position` from a mixtape collection.
+///
+/// Positions above the removed index are compacted automatically.
+#[tauri::command]
+pub async fn v2_remove_mixtape_item(
+    collection_id: String,
+    position: i32,
+    library: State<'_, LibraryState>,
+) -> Result<(), RuntimeError> {
+    log::debug!(
+        "[V2] remove_mixtape_item collection_id={} position={}",
+        collection_id,
+        position
+    );
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        crate::mixtape::repo::remove_item(conn, &collection_id, position)
+            .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Reorder the items in a mixtape collection.
+///
+/// `new_order` is a permutation of the current positions (0..N). For example,
+/// `[2, 0, 1]` means: slot 0 ← old item 2, slot 1 ← old item 0, etc.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_reorder_mixtape_items(
+    collection_id: String,
+    new_order: Vec<i32>,
+    library: State<'_, LibraryState>,
+) -> Result<(), RuntimeError> {
+    log::debug!(
+        "[V2] reorder_mixtape_items collection_id={} len={}",
+        collection_id,
+        new_order.len()
+    );
+    let mut guard = library.db.lock().await;
+    let db = guard.as_mut().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection_mut(|conn| {
+        crate::mixtape::repo::reorder_items(conn, &collection_id, &new_order)
+            .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
