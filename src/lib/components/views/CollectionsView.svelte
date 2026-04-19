@@ -12,9 +12,8 @@
   interface Props {
     onOpen?: (id: string) => void;
     onCreate?: () => void;
-    onBuildArtistCollection?: () => void;
   }
-  let { onOpen, onCreate, onBuildArtistCollection }: Props = $props();
+  let { onOpen, onCreate }: Props = $props();
 
   /** Both plain Collections and ArtistCollections live in this view. */
   const collections = $derived(
@@ -42,13 +41,6 @@
     <div class="header-actions">
       <button
         type="button"
-        class="secondary-cta"
-        onclick={() => onBuildArtistCollection?.()}
-      >
-        {$t('collections.buildFromArtist')}
-      </button>
-      <button
-        type="button"
         class="primary-cta"
         onclick={() => onCreate?.()}
       >
@@ -70,14 +62,13 @@
         >
           {$t('collections.empty.cta')}
         </button>
-        <button
-          type="button"
-          class="secondary-cta"
-          onclick={() => onBuildArtistCollection?.()}
-        >
-          {$t('collections.buildFromArtist')}
-        </button>
       </div>
+      <!--
+        Artist Collections are created from the artist's own page via the
+        circular action button next to Follow / Radio. Not exposed here
+        to avoid shipping a CTA that needs an artist picker we haven't
+        built yet.
+      -->
     </div>
   {:else}
     <div class="grid">
@@ -143,24 +134,6 @@
   }
   .primary-cta:hover {
     filter: brightness(1.1);
-  }
-
-  .secondary-cta {
-    display: inline-flex;
-    align-items: center;
-    padding: 9px 16px;
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    border: 1px solid var(--bg-tertiary);
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
-    transition: background 150ms ease;
-  }
-  .secondary-cta:hover {
-    background: var(--bg-hover);
   }
 
   .grid {

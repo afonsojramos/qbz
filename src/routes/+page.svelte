@@ -5946,10 +5946,6 @@
         <CollectionsView
           onOpen={(id) => openMixtapeDetail(id)}
           onCreate={() => openCreateModal('collection')}
-          onBuildArtistCollection={() => {
-            // Artist picker not yet available from CollectionsView — entry point lives in ArtistDetailView
-            console.log('[+page] Build Artist Collection: use ArtistDetailView entry point');
-          }}
         />
       {:else if activeView === 'mixtape-detail'}
         {#if mixtapeDetailId}
