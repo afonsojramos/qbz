@@ -1679,13 +1679,19 @@
         }}
       >
         <div class="icon-container">
-          <img
-            class="my-qbz-icon"
-            src={$myQbzNavStore.iconPath === DEFAULT_ICON
-              ? DEFAULT_ICON
-              : convertFileSrc($myQbzNavStore.iconPath)}
-            alt=""
-          />
+          {#if $myQbzNavStore.iconPath === DEFAULT_ICON}
+            <span
+              class="my-qbz-icon my-qbz-icon-mask"
+              style:--mask-url="url('{DEFAULT_ICON}')"
+              aria-hidden="true"
+            ></span>
+          {:else}
+            <img
+              class="my-qbz-icon"
+              src={convertFileSrc($myQbzNavStore.iconPath)}
+              alt=""
+            />
+          {/if}
         </div>
         <span class="label">{$myQbzNavStore.label}</span>
         <span class="my-qbz-chevron" class:expanded={$myQbzNavStore.expanded}>
@@ -1702,7 +1708,7 @@
             showLabel={true}
             indented={true}
           >
-            {#snippet icon()}<img class="my-qbz-child-icon" src="/cassette.svg" alt="" />{/snippet}
+            {#snippet icon()}<span class="my-qbz-child-icon my-qbz-icon-mask" style:--mask-url="url('/cassette.svg')" aria-hidden="true"></span>{/snippet}
           </NavigationItem>
           <NavigationItem
             label={$t('collections.nav')}
@@ -1711,7 +1717,7 @@
             showLabel={true}
             indented={true}
           >
-            {#snippet icon()}<img class="my-qbz-child-icon" src="/collection.svg" alt="" />{/snippet}
+            {#snippet icon()}<span class="my-qbz-child-icon my-qbz-icon-mask" style:--mask-url="url('/collection.svg')" aria-hidden="true"></span>{/snippet}
           </NavigationItem>
         </div>
       {/if}
@@ -3286,8 +3292,18 @@
     width: 14px;
     height: 14px;
     object-fit: contain;
-    opacity: 0.75;
-    filter: var(--icon-filter, none);
+    opacity: 0.85;
+  }
+
+  /* Monochrome SVG tinting via CSS mask — the icon becomes a silhouette painted
+     with currentColor, so it inherits the theme's text color. Used for the
+     default icons; when the user uploads a custom icon (my-qbz.iconPath !==
+     DEFAULT_ICON) we render an <img> instead and let the file's own colors show. */
+  .my-qbz-icon-mask {
+    display: inline-block;
+    background-color: currentColor;
+    -webkit-mask: var(--mask-url) center / contain no-repeat;
+    mask: var(--mask-url) center / contain no-repeat;
   }
 
   .my-qbz-parent:hover .my-qbz-icon,
@@ -3299,8 +3315,7 @@
     width: 14px;
     height: 14px;
     object-fit: contain;
-    opacity: 0.75;
-    filter: var(--icon-filter, none);
+    opacity: 0.85;
   }
 
   .my-qbz-chevron {
