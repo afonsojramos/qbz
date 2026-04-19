@@ -6,7 +6,7 @@
   import { setCustomImage, removeCustomImage as removeCustomImageFromStore } from '$lib/stores/customArtistImageStore';
   import { t, locale } from 'svelte-i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
-  import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, Ellipsis, Info, Disc, Settings, SquareCheckBig, PanelRightClose, ThumbsDown } from 'lucide-svelte';
+  import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, Ellipsis, Info, Disc, Settings, SquareCheckBig, PanelRightClose, ThumbsDown, LibraryBig } from 'lucide-svelte';
   import {
     isBlacklisted,
     isEnabled as isFilteringEnabled,
@@ -106,6 +106,7 @@
     onLabelClick?: (labelId: number, labelName?: string) => void;
     onMusicianClick?: (name: string, role: string) => void;
     onLocationClick?: (context: ArtistsByLocationContext) => void;
+    onBuildArtistCollection?: (artistId: string) => void;
     knownMbid?: string | null;
     activeTrackId?: number | null;
     isPlaybackActive?: boolean;
@@ -183,6 +184,7 @@
     onLabelClick,
     onMusicianClick,
     onLocationClick,
+    onBuildArtistCollection,
     knownMbid = null,
     activeTrackId = null,
     isPlaybackActive = false
@@ -1823,6 +1825,16 @@
         >
           <img src="/user-add.svg" alt="" class="artist-fav-icon" />
         </button>
+        {#if onBuildArtistCollection}
+          <button
+            class="build-collection-btn"
+            onclick={() => onBuildArtistCollection?.(String(artist.id))}
+            title={$t('collections.buildFromArtist')}
+          >
+            <LibraryBig size={16} />
+            <span>{$t('collections.buildFromArtist')}</span>
+          </button>
+        {/if}
         <div class="radio-btn-wrapper">
           <button
             class="radio-btn"
@@ -3369,6 +3381,28 @@
     color: var(--text-primary);
     margin: 0 0 16px 0;
     text-align: left;
+  }
+
+  .build-collection-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 14px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+  }
+  .build-collection-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--bg-tertiary);
   }
 
   .favorite-btn {

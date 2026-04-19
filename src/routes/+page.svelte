@@ -189,6 +189,7 @@
   import MixtapesView from '$lib/components/views/MixtapesView.svelte';
   import CollectionsView from '$lib/components/views/CollectionsView.svelte';
   import MixtapeCollectionDetailView from '$lib/components/views/MixtapeCollectionDetailView.svelte';
+  import DiscographyBuilderView from '$lib/components/views/DiscographyBuilderView.svelte';
   import {
     collectionsStore,
     createCollection,
@@ -572,6 +573,7 @@
 
   // Mixtape / Collection routing state
   let mixtapeDetailId = $state<string | null>(null);
+  let discographyArtistId = $state<string | null>(null);
   let showCreateModal = $state(false);
   let createModalKind = $state<CollectionKind>('mixtape');
   let createModalName = $state('');
@@ -5454,6 +5456,10 @@
           onLabelClick={handleLabelClick}
           onMusicianClick={handleMusicianClick}
           onLocationClick={handleLocationClick}
+          onBuildArtistCollection={(artistId) => {
+            discographyArtistId = artistId;
+            navTo('discography-builder', artistId);
+          }}
           activeTrackId={currentTrack?.id ?? null}
           isPlaybackActive={isPlaying}
         />
@@ -5941,8 +5947,8 @@
           onOpen={(id) => openMixtapeDetail(id)}
           onCreate={() => openCreateModal('collection')}
           onBuildArtistCollection={() => {
-            // TODO: Phase 8 — open DiscographyBuilderView
-            console.log('[+page] Build Artist Collection clicked — Phase 8 feature');
+            // Artist picker not yet available from CollectionsView — entry point lives in ArtistDetailView
+            console.log('[+page] Build Artist Collection: use ArtistDetailView entry point');
           }}
         />
       {:else if activeView === 'mixtape-detail'}
@@ -5962,6 +5968,26 @@
         {:else}
           <div class="detail-placeholder">
             <p>No collection selected.</p>
+          </div>
+        {/if}
+      {:else if activeView === 'discography-builder'}
+        {#if discographyArtistId}
+          <DiscographyBuilderView
+            artistId={discographyArtistId}
+            onBack={() => {
+              const prevId = discographyArtistId;
+              discographyArtistId = null;
+              navigateTo('artist', prevId ?? undefined);
+            }}
+            onCreated={(col) => {
+              discographyArtistId = null;
+              mixtapeDetailId = col.id;
+              navTo('mixtape-detail', col.id);
+            }}
+          />
+        {:else}
+          <div class="detail-placeholder">
+            <p>No artist selected.</p>
           </div>
         {/if}
       {:else}

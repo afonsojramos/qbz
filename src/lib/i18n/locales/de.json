@@ -1038,6 +1038,8 @@
     "addedToPlaylist": "Zur Playlist hinzugefügt",
     "removedFromPlaylist": "Aus Playlist entfernt",
     "playlistCreated": "Playlist erstellt",
+    "collectionCreated": "Artist Collection erstellt",
+    "collectionCreateFailed": "Fehler beim Erstellen der Sammlung",
     "playlistDeleted": "Playlist gelöscht",
     "cachingStarted": "Vorbereitung für offline",
     "cachedForOffline": "Jetzt offline verfügbar",
