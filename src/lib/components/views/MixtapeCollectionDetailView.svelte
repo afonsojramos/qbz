@@ -4,7 +4,6 @@
   } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import {
-    collectionsStore,
     getCollection,
     enqueueCollection,
     removeItem as removeCollectionItem,
@@ -56,17 +55,12 @@
     }
   }
 
-  // Reactive subscribe to the store — pick up metadata changes without a full refetch
+  // Re-load whenever collectionId changes. The detail view owns its own
+  // `collection` state — every mutation handler below calls loadCollection()
+  // explicitly after success, so we don't ALSO sync from $collectionsStore
+  // here. Reading and writing `collection` inside the same $effect produces
+  // an infinite effect-update loop (Svelte 5 effect_update_depth_exceeded).
   $effect(() => {
-    const fromStore = $collectionsStore.find((col) => col.id === collectionId);
-    if (fromStore && collection && fromStore.id === collection.id) {
-      // Merge — keep our local items since the store doesn't always carry them
-      collection = { ...fromStore, items: collection.items };
-    }
-  });
-
-  $effect(() => {
-    // Re-load whenever collectionId changes
     void collectionId;
     loadCollection();
   });
