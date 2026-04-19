@@ -1827,12 +1827,11 @@
         </button>
         {#if onBuildArtistCollection}
           <button
-            class="build-collection-btn"
+            class="collection-btn"
             onclick={() => onBuildArtistCollection?.(String(artist.id))}
             title={$t('collections.buildFromArtist')}
           >
-            <LibraryBig size={16} />
-            <span>{$t('collections.buildFromArtist')}</span>
+            <LibraryBig size={24} />
           </button>
         {/if}
         <div class="radio-btn-wrapper">
@@ -3383,26 +3382,25 @@
     text-align: left;
   }
 
-  .build-collection-btn {
-    display: inline-flex;
+  /* Mirror of .favorite-btn — circular action button matching the sibling
+     visual language (radio-btn, network-btn, etc.). */
+  .collection-btn {
+    display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 9px 14px;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
     background: var(--bg-tertiary);
-    color: var(--text-secondary);
-    border: 1px solid transparent;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 600;
-    font-family: inherit;
+    border: none;
+    border-radius: 50%;
     cursor: pointer;
-    white-space: nowrap;
-    transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+    color: var(--text-muted);
+    transition: color 150ms ease, background-color 150ms ease;
+    flex-shrink: 0;
   }
-  .build-collection-btn:hover {
+  .collection-btn:hover {
     background: var(--bg-hover);
-    color: var(--text-primary);
-    border-color: var(--bg-tertiary);
+    color: var(--accent-primary);
   }
 
   .favorite-btn {
