@@ -12,6 +12,7 @@
     toggleTrackFavorite
   } from '$lib/stores/favoritesStore';
   import { togglePlay } from '$lib/stores/playerStore';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import {
     isUnlocking as isTrackUnlocking,
     isRecentlyUnlocked as isTrackRecentlyUnlocked,
@@ -192,6 +193,17 @@
   function handlePauseClick(e: MouseEvent) {
     e.stopPropagation();
     void togglePlay();
+  }
+
+  function handleAddToMixtape() {
+    openAddToMixtape({
+      item_type: 'track',
+      source: isLocal ? 'local' : 'qobuz',
+      source_item_id: String(trackId),
+      title,
+      subtitle: [artist, album].filter(Boolean).join(' \u00B7 '),
+      artwork_url: artworkUrl,
+    });
   }
 
   function handleDragStart(e: DragEvent) {
@@ -443,6 +455,7 @@
       onCreateQbzRadio={menuActions?.onCreateQbzRadio}
       onCreateQobuzRadio={menuActions?.onCreateQobuzRadio}
       onAddFavorite={trackId !== undefined ? () => toggleTrackFavorite(trackId) : undefined}
+      onAddToMixtape={trackId !== undefined ? handleAddToMixtape : undefined}
       onAddToPlaylist={menuActions?.onAddToPlaylist}
       onRemoveFromPlaylist={menuActions?.onRemoveFromPlaylist}
       onFindReplacement={menuActions?.onFindReplacement}

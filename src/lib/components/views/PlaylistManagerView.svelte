@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { ArrowLeft, Funnel, ArrowUpDown, LayoutGrid, List, GripVertical, EyeOff, Eye, ChartNoAxesColumn, Play, Pencil, Search, X, Cloud, CloudOff, Wifi, Heart, Folder, FolderPlus, FolderOpen, ChevronRight, ChevronDown, ChevronUp, Trash2, Star, Music, Disc, Library, Info, Rows3, Network } from 'lucide-svelte';
+  import { ArrowLeft, Funnel, ArrowUpDown, LayoutGrid, List, GripVertical, EyeOff, Eye, ChartNoAxesColumn, Play, Pencil, Search, X, Cloud, CloudOff, Wifi, Heart, Folder, FolderPlus, FolderOpen, ChevronRight, ChevronDown, ChevronUp, Trash2, Star, Music, Disc, Library, Info, Rows3, Network, CassetteTape } from 'lucide-svelte';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import PlaylistCollage from '../PlaylistCollage.svelte';
   import PlaylistModal from '../PlaylistModal.svelte';
   import ViewTransition from '../ViewTransition.svelte';
@@ -1325,6 +1326,13 @@
                 >
                   <Pencil size={12} />
                 </button>
+                <button
+                  class="mixtape-btn"
+                  onclick={(e) => { e.stopPropagation(); openAddToMixtape({ item_type: 'playlist', source: 'qobuz', source_item_id: String(playlist.id), title: playlist.name, subtitle: playlist.owner?.name ?? '', artwork_url: playlist.images?.[0] ?? undefined, track_count: playlist.tracks_count ?? undefined }); }}
+                  title={ $t('common.addToMixtapeOrCollection') }
+                >
+                  <CassetteTape size={12} />
+                </button>
               </div>
             {:else}
               <span class="view-only-badge" title={$t('offline.viewOnly')}>
@@ -1418,6 +1426,13 @@
                         >
                           <Pencil size={12} />
                         </button>
+                        <button
+                          class="mixtape-btn"
+                          onclick={(e) => { e.stopPropagation(); openAddToMixtape({ item_type: 'playlist', source: 'qobuz', source_item_id: String(playlist.id), title: playlist.name, subtitle: playlist.owner?.name ?? '', artwork_url: playlist.images?.[0] ?? undefined, track_count: playlist.tracks_count ?? undefined }); }}
+                          title={ $t('common.addToMixtapeOrCollection') }
+                        >
+                          <CassetteTape size={12} />
+                        </button>
                       </div>
                     {/if}
                   </div>
@@ -1478,6 +1493,13 @@
                   title={$t('playlist.editPlaylist')}
                 >
                   <Pencil size={12} />
+                </button>
+                <button
+                  class="mixtape-btn"
+                  onclick={(e) => { e.stopPropagation(); openAddToMixtape({ item_type: 'playlist', source: 'qobuz', source_item_id: String(playlist.id), title: playlist.name, subtitle: playlist.owner?.name ?? '', artwork_url: playlist.images?.[0] ?? undefined, track_count: playlist.tracks_count ?? undefined }); }}
+                  title={ $t('common.addToMixtapeOrCollection') }
+                >
+                  <CassetteTape size={12} />
                 </button>
               </div>
             {/if}
@@ -1596,6 +1618,13 @@
               title={$t('playlist.editPlaylist')}
             >
               <Pencil size={14} />
+            </button>
+            <button
+              class="mixtape-btn"
+              onclick={(e) => { e.stopPropagation(); openAddToMixtape({ item_type: 'playlist', source: 'qobuz', source_item_id: String(playlist.id), title: playlist.name, subtitle: playlist.owner?.name ?? '', artwork_url: playlist.images?.[0] ?? undefined, track_count: playlist.tracks_count ?? undefined }); }}
+              title={ $t('common.addToMixtapeOrCollection') }
+            >
+              <CassetteTape size={14} />
             </button>
           {/if}
         </div>
@@ -2285,6 +2314,24 @@
   .edit-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+
+  .mixtape-btn {
+    padding: 4px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+  }
+
+  .mixtape-btn:hover {
+    background: var(--bg-hover);
+    color: var(--accent-primary);
   }
 
   .visibility-btn {
