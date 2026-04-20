@@ -143,6 +143,7 @@
     isDiscoverInTitlebar,
     isFavoritesInTitlebar,
     isLibraryInTitlebar,
+    isMyQbzInTitlebar,
     isPurchasesInTitlebar
   } from '$lib/stores/titlebarNavStore';
 
@@ -330,6 +331,7 @@
     isPlaybackSourceLocal,
     resolvePlaybackSource
   } from '$lib/services/playbackSource';
+  import { resolveQueueTrackArtwork } from '$lib/services/queueArtwork';
 
   import {
     queueTrackNext,
@@ -549,6 +551,7 @@
   let tbNavDiscover = $state(isDiscoverInTitlebar());
   let tbNavFavorites = $state(isFavoritesInTitlebar());
   let tbNavLibrary = $state(isLibraryInTitlebar());
+  let tbNavMyQbz = $state(isMyQbzInTitlebar());
   let tbNavPurchases = $state(isPurchasesInTitlebar());
 
   // Window floating state (not maximized/tiled — for rounded corners + shadow)
@@ -1645,9 +1648,50 @@
     item: MixtapeCollectionItem,
     action: 'play' | 'play_next' | 'queue_later',
   ) {
-    if (item.item_type !== 'album' || item.source !== 'qobuz') {
-      showToast($t('toast.actionNotAvailableYet') ||
-        'Action not available for this item type yet', 'info');
+    // For local + plex albums (and anything non-Qobuz), delegate resolution to
+    // the backend's ProdItemResolver via v2_enqueue_collection_item. Same path
+    // the whole-collection Play button uses — handles local_tracks lookup and
+    // plex_cache in one call. The Qobuz fast path below stays as-is because
+    // the frontend already has blacklist filtering and artwork fallbacks
+    // wired against the Qobuz API response.
+    const isQobuzAlbum = item.item_type === 'album' && item.source === 'qobuz';
+    if (!isQobuzAlbum) {
+      const collectionId = mixtapeDetailId;
+      if (!collectionId) {
+        showToast($t('toast.actionNotAvailableYet') ||
+          'Action not available for this item type yet', 'info');
+        return;
+      }
+      const mode = action === 'play' ? 'replace'
+                 : action === 'play_next' ? 'play_next'
+                 : 'append';
+      try {
+        await invoke('v2_enqueue_collection_item', {
+          collectionId,
+          position: item.position,
+          mode,
+        });
+        if (action === 'play') {
+          // Backend stopped audio + set queue to index 0 + called play_index(0),
+          // but play_index only moves the cursor. We still need to fetch the
+          // current queue track and push it through playQueueTrack so the
+          // playback service actually loads bytes via library_play_track /
+          // plex_play_track based on source.
+          const trk = await playQueueIndex(0);
+          if (trk) await playQueueTrack(trk);
+          showToast($t('toast.playingAlbum', { values: { count: 1 } }) ||
+            'Playing album', 'success');
+        } else if (action === 'play_next') {
+          showToast($t('toast.addedToQueueNext', { values: { count: 1 } }) ||
+            'Playing next', 'success');
+        } else {
+          showToast($t('toast.addedToQueue', { values: { count: 1 } }) ||
+            'Added to queue', 'success');
+        }
+      } catch (err) {
+        console.error('[Mixtape] enqueue_collection_item failed:', err);
+        showToast($t('toast.failedAddToQueue'), 'error');
+      }
       return;
     }
 
@@ -1691,10 +1735,18 @@
         return;
       }
 
-      const trackIds = queueTracks.map((qt) => qt.id);
       if (action === 'play') {
-        await invoke('v2_set_queue', { trackIds });
-        await invoke('v2_play_queue_index', { index: 0 });
+        // Canonical set-queue + start-audio pattern: v2_set_queue only stages
+        // the queue server-side, and v2_play_queue_index just moves the
+        // index — neither actually tells the player to load bytes. We need
+        // to resolve the new current track and push it through playQueueTrack
+        // so the playback service invokes v2_play_track / v2_library_play_track
+        // based on source. Same path the main Play button uses.
+        await setQueue(queueTracks, 0, true);
+        const trk = await playQueueIndex(0);
+        if (trk) {
+          await playQueueTrack(trk);
+        }
         showToast($t('toast.playingAlbum', { values: { count: queueTracks.length } }) ||
           `Playing ${queueTracks.length} tracks`, 'success');
       } else if (action === 'play_next') {
@@ -2873,13 +2925,16 @@
           ? 'Hi-Res'
           : '-';
 
-    // Play track using unified service
+    // Play track using unified service. artwork_url coming off a queue track
+    // can be a raw Plex path ("/library/metadata/.../thumb/...") or a bare
+    // local filesystem path — NowPlayingBar renders it directly into <img src>
+    // so we must resolve to an http(s) / file:// / tauri-asset URL here.
     await playTrack({
       id: track.id,
       title: track.title,
       artist: track.artist,
       album: track.album,
-      artwork: track.artwork_url || '',
+      artwork: resolveQueueTrackArtwork(track.artwork_url),
       duration: track.duration_secs,
       quality,
       bitDepth: track.bit_depth ?? undefined,
@@ -3918,7 +3973,11 @@
             sample_rate: trk.sample_rate ?? null,
             is_local: trk.is_local ?? false,
             album_id: trk.album_id ?? null,
-            artist_id: trk.artist_id ?? null
+            artist_id: trk.artist_id ?? null,
+            // Fall back to deriving source from is_local for tracks saved by
+            // older versions that didn't persist source. Without this, a
+            // restored local queue routed next-track auto-advance to Qobuz.
+            source: trk.source ?? (trk.is_local ? 'local' : undefined),
           }));
 
           await setQueue(tracks, session.current_index ?? 0, true);
@@ -3948,7 +4007,7 @@
               title: track.title,
               artist: track.artist,
               album: track.album,
-              artwork: track.artwork_url || '',
+              artwork: resolveQueueTrackArtwork(track.artwork_url),
               duration: track.duration_secs,
               quality,
               bitDepth: track.bit_depth ?? undefined,
@@ -3956,7 +4015,7 @@
               albumId: track.album_id ?? undefined,
               artistId: track.artist_id ?? undefined,
               isLocal: track.is_local ?? false,
-              source: track.source ?? 'qobuz',
+              source: (track.source as 'qobuz' | 'local' | 'plex' | undefined) ?? (track.is_local ? 'local' : 'qobuz'),
               parental_warning: track.parental_warning ?? false,
             });
 
@@ -4161,6 +4220,11 @@
         is_local: track.is_local ?? false,
         album_id: track.album_id ?? null,
         artist_id: track.artist_id ?? null,
+        // Preserve source (qobuz | local | plex). Dropping this on save meant
+        // local/plex queues came back as Qobuz after session restore, and
+        // auto-advance routed to v2_play_track with library row ids — which
+        // Qobuz then "resolved" to whatever track happened to share the id.
+        source: track.source ?? (track.is_local ? 'local' : null),
       }));
 
       await saveSessionState(
@@ -4630,6 +4694,7 @@
       tbNavDiscover = isDiscoverInTitlebar();
       tbNavFavorites = isFavoritesInTitlebar();
       tbNavLibrary = isLibraryInTitlebar();
+      tbNavMyQbz = isMyQbzInTitlebar();
       tbNavPurchases = isPurchasesInTitlebar();
     });
 
@@ -5401,6 +5466,7 @@
     showDiscover={tbNavDiscover}
     showFavorites={tbNavFavorites}
     showLibrary={tbNavLibrary}
+    showMyQbz={tbNavMyQbz}
     showPurchases={tbNavPurchases && showPurchases}
   />
 {/snippet}
@@ -6181,11 +6247,13 @@
         <MixtapesView
           onOpen={(id) => openMixtapeDetail(id)}
           onCreate={() => openCreateModal('mixtape')}
+          onBack={navGoBack}
         />
       {:else if activeView === 'collections'}
         <CollectionsView
           onOpen={(id) => openMixtapeDetail(id)}
           onCreate={() => openCreateModal('collection')}
+          onBack={navGoBack}
         />
       {:else if activeView === 'mixtape-detail'}
         {#if mixtapeDetailId}
