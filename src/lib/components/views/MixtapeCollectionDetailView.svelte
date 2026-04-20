@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-dialog';
   import {
@@ -26,11 +26,12 @@
     type ItemType,
   } from '$lib/stores/mixtapeCollectionsStore';
   import CollectionMosaic from '../CollectionMosaic.svelte';
-  import QualityBadge from '../QualityBadge.svelte';
+  import QualityBadgeStatic from '../QualityBadgeStatic.svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
   import TrackRow from '../TrackRow.svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import { showToast } from '$lib/stores/toastStore';
-  import { getUserItem } from '$lib/utils/userStorage';
+  import { getUserItem, setUserItem, removeUserItem } from '$lib/utils/userStorage';
   import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { playTrack } from '$lib/services/playbackService';
   import { playQueueIndex } from '$lib/stores/queueStore';
@@ -174,12 +175,17 @@
     }
   }
 
-  // Whenever the user switches INTO expanded mode, fire off one fetch per
-  // eligible item. Already-fetched items are skipped. We don't await all of
-  // them — each completes independently and triggers a reactive update.
+  // Expanded mode: only fetch tracks for items currently in the virtual
+  // window (or that will be shortly — WINDOW_BUFFER rows above/below). Large
+  // collections used to trigger 60+ concurrent backend calls on mode switch
+  // and mount 600+ TrackRow components before the user could even scroll.
+  // Already-fetched items are skipped; the cache persists so re-scrolling
+  // back to a row is instant.
   $effect(() => {
     if (viewMode !== 'expanded' || !collection) return;
-    for (const it of collection.items) {
+    const { firstIdx, lastIdx } = virtualWindow;
+    const slice = visibleItems.slice(firstIdx, lastIdx);
+    for (const it of slice) {
       if (canExpand(it)) {
         void ensureTracksLoaded(it);
       }
@@ -496,6 +502,147 @@
     return filtered;
   });
 
+  // ── Virtualization ────────────────────────────────────────────────────────
+  // Fixed-height windowing for list/grid modes. Large collections (60+ items)
+  // were rendering every row + every artwork <img> up front — scroll felt
+  // laggy and initial paint took seconds. We keep the whole `.detail-view`
+  // as the scroller so the hero + toolbar can share its scroll (toolbar
+  // stays sticky; hero can scroll away), and compute a visible index range
+  // from scrollTop relative to the list's offsetTop inside that scroller.
+  //
+  // Expanded mode isn't virtualized (row heights vary with loaded tracks),
+  // but auto-track-fetching is gated to the virtual window so only visible
+  // items trigger backend calls.
+  // Row height MUST match the CSS rule .item-row { min-height: 56px } below.
+  // The variable-height case (subtitle wrapping to 2 lines) pushed actual row
+  // height up to ~60px, so 52px as a constant left ~8px of unaccounted space
+  // per row — over 60 rows that's ~480px of scroll-height error, enough that
+  // the scrollbar can't reach the true bottom. Fixing CSS + constant together
+  // is the cheapest path to smooth scroll without variable-height windowing.
+  const LIST_ROW_HEIGHT = 56;
+  const GRID_CARD_MIN_W = 170; // px — matches grid-template-columns minmax
+  const GRID_GAP = 20; // px — matches .item-grid gap
+  const GRID_ROW_HEIGHT = 240; // px — card (170 art + title + subtitle + padding) + gap
+  const WINDOW_BUFFER = 4; // extra rows above/below viewport
+
+  let scrollEl = $state<HTMLDivElement | null>(null);
+  let listAnchorEl = $state<HTMLDivElement | null>(null);
+  let viewportHeight = $state(0);
+  let listScrollTop = $state(0); // scrollTop of scrollEl, 0 when hero in view
+  let listAnchorOffsetTop = $state(0); // distance from scroller top to list start
+  let listContainerWidth = $state(0);
+
+  function onDetailScroll() {
+    if (!scrollEl) return;
+    listScrollTop = scrollEl.scrollTop;
+  }
+
+  // Re-measure listAnchorOffsetTop when the *scroller itself* resizes. We do
+  // NOT observe the list anchor — its height changes every frame as the
+  // virtual spacers update, and a height change there does not affect its
+  // own offsetTop (that's determined by the hero + sticky-toolbar above it).
+  // Observing the anchor caused RO to fire on every scroll tick, which in
+  // turn ticked an unrelated scroll-reset effect and fought the user's
+  // scroll. One measurement on mount + re-measures on scroller resize is
+  // enough.
+  $effect(() => {
+    if (!listAnchorEl || !scrollEl) return;
+    const measure = () => {
+      if (!listAnchorEl || !scrollEl) return;
+      const lRect = listAnchorEl.getBoundingClientRect();
+      const sRect = scrollEl.getBoundingClientRect();
+      listAnchorOffsetTop = lRect.top - sRect.top + scrollEl.scrollTop;
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(scrollEl);
+    return () => ro.disconnect();
+  });
+
+  // Reset scroll when the active filter / view mode changes — otherwise the
+  // user would land mid-list after switching from grid → list and see blank
+  // spacer rows. Read scrollEl/listAnchorOffsetTop via untrack so this effect
+  // only re-runs for the explicit deps (viewMode / search / filters). Without
+  // untrack, any RO-driven change to listAnchorOffsetTop during scroll would
+  // re-fire the effect and snap scroll back — visible as scroll stutter.
+  $effect(() => {
+    viewMode; // track
+    normalizedSearch;
+    typeFilter;
+    sourceFilter;
+    untrack(() => {
+      if (scrollEl && listAnchorOffsetTop > 0 && scrollEl.scrollTop > listAnchorOffsetTop) {
+        scrollEl.scrollTop = listAnchorOffsetTop;
+      }
+    });
+  });
+
+  const gridColumns = $derived.by(() => {
+    if (viewMode !== 'grid' || listContainerWidth <= 0) return 1;
+    return Math.max(
+      1,
+      Math.floor((listContainerWidth + GRID_GAP) / (GRID_CARD_MIN_W + GRID_GAP)),
+    );
+  });
+
+  // Compute [firstIdx, lastIdx) of items to render + top/bottom spacer heights.
+  const virtualWindow = $derived.by(() => {
+    const total = visibleItems.length;
+    const empty = { firstIdx: 0, lastIdx: total, topSpacer: 0, bottomSpacer: 0 };
+    if (total === 0 || viewportHeight <= 0) return empty;
+
+    const localScroll = Math.max(0, listScrollTop - listAnchorOffsetTop);
+
+    if (viewMode === 'grid') {
+      const cols = Math.max(1, gridColumns);
+      const totalRows = Math.ceil(total / cols);
+      const firstRow = Math.max(0, Math.floor(localScroll / GRID_ROW_HEIGHT) - WINDOW_BUFFER);
+      const lastRow = Math.min(
+        totalRows,
+        Math.ceil((localScroll + viewportHeight) / GRID_ROW_HEIGHT) + WINDOW_BUFFER,
+      );
+      return {
+        firstIdx: firstRow * cols,
+        lastIdx: Math.min(total, lastRow * cols),
+        topSpacer: firstRow * GRID_ROW_HEIGHT,
+        bottomSpacer: Math.max(0, (totalRows - lastRow) * GRID_ROW_HEIGHT),
+      };
+    }
+
+    // list / expanded — expanded rows vary in height once tracks mount, but
+    // using the base row height still correctly windows the top-level items;
+    // the loaded tracks just overflow the reserved spacer. Good enough for
+    // the 60+ item case this is actually trying to fix.
+    const firstIdx = Math.max(0, Math.floor(localScroll / LIST_ROW_HEIGHT) - WINDOW_BUFFER);
+    const lastIdx = Math.min(
+      total,
+      Math.ceil((localScroll + viewportHeight) / LIST_ROW_HEIGHT) + WINDOW_BUFFER,
+    );
+    return {
+      firstIdx,
+      lastIdx,
+      topSpacer: firstIdx * LIST_ROW_HEIGHT,
+      bottomSpacer: Math.max(0, (total - lastIdx) * LIST_ROW_HEIGHT),
+    };
+  });
+
+  const windowedItems = $derived(
+    visibleItems.slice(virtualWindow.firstIdx, virtualWindow.lastIdx),
+  );
+
+  // Qobuz artwork URLs follow `<cdn>/.../<hash>_<size>.jpg` where size is
+  // one of 50/100/150/230/300/600. In list/grid listings we never need the
+  // 600px original — downsize to whatever actually fits the rendered <img>
+  // so the WebView doesn't waste memory decoding huge JPEGs. Non-Qobuz URLs
+  // (local file:// / tauri asset URLs / Plex) are returned as-is.
+  function smallQobuzArtwork(
+    url: string | null | undefined,
+    target: 50 | 150 = 50,
+  ): string | null {
+    if (!url) return null;
+    return url.replace(/_(50|100|150|230|300|600|max|org)\.jpg/i, `_${target}.jpg`);
+  }
+
   function toggleSelect(position: number) {
     const next = new Set(selectedPositions);
     if (next.has(position)) next.delete(position);
@@ -602,6 +749,82 @@
 
   onMount(() => {
     loadReleaseTypeOverrides();
+  });
+
+  // ── Per-collection view preferences ───────────────────────────────────────
+  // Remember viewMode / sort / filters per collection id so opening a
+  // specific Mixtape or Collection keeps its user-chosen layout. Stored in
+  // per-user localStorage under one key per collection so a collection
+  // deletion can trivially clean up (see onDelete below). searchQuery and
+  // selectMode intentionally stay transient — they're per-session UI state.
+  interface ViewPrefs {
+    viewMode?: ViewMode;
+    sortBy?: SortBy;
+    sortDir?: SortDir;
+    typeFilter?: TypeFilter;
+    sourceFilter?: SourceKind[]; // Set serialized as array
+  }
+  function prefsKey(id: string): string {
+    return `collection-view-prefs.${id}`;
+  }
+  function loadPrefs(id: string): ViewPrefs | null {
+    try {
+      const raw = getUserItem(prefsKey(id));
+      if (!raw) return null;
+      return JSON.parse(raw) as ViewPrefs;
+    } catch {
+      return null;
+    }
+  }
+  function savePrefs(id: string, prefs: ViewPrefs): void {
+    try {
+      setUserItem(prefsKey(id), JSON.stringify(prefs));
+    } catch {
+      // localStorage quota / disabled — silently skip, prefs are non-critical.
+    }
+  }
+
+  // Hydration gate: the load effect applies stored prefs to the state vars,
+  // which would immediately re-trigger the persist effect below and save
+  // those same values back (fine) OR save defaults before load had a chance
+  // (NOT fine — overwrites stored prefs). prefsHydrated flips true only
+  // AFTER load has run, so the persist effect does nothing until then.
+  let prefsHydrated = $state(false);
+
+  $effect(() => {
+    const id = collectionId;
+    if (!id) return;
+    prefsHydrated = false;
+    const stored = loadPrefs(id);
+    if (stored) {
+      if (stored.viewMode) viewMode = stored.viewMode;
+      if (stored.sortBy) sortBy = stored.sortBy;
+      if (stored.sortDir) sortDir = stored.sortDir;
+      if (stored.typeFilter) typeFilter = stored.typeFilter;
+      if (stored.sourceFilter) sourceFilter = new Set(stored.sourceFilter);
+    } else {
+      // Reset to defaults when the collectionId changes to a collection with
+      // no stored prefs — otherwise state leaks from the previous collection.
+      viewMode = 'list';
+      sortBy = 'position';
+      sortDir = 'asc';
+      typeFilter = 'all';
+      sourceFilter = new Set();
+    }
+    prefsHydrated = true;
+  });
+
+  $effect(() => {
+    // Read the prefs so Svelte tracks them as deps, then persist.
+    const payload: ViewPrefs = {
+      viewMode,
+      sortBy,
+      sortDir,
+      typeFilter,
+      sourceFilter: Array.from(sourceFilter),
+    };
+    if (!prefsHydrated || !collectionId) return;
+    savePrefs(collectionId, payload);
   });
 
   // ──────── helpers ────────
@@ -969,6 +1192,9 @@
     if (!collection) return;
     try {
       await deleteCollection(collectionId);
+      // Drop the persisted view prefs for this collection — no point
+      // leaving orphaned keys in localStorage when the collection is gone.
+      removeUserItem(prefsKey(collectionId));
       onBack?.();
     } catch (err) {
       console.error('[MixtapeCollectionDetailView] delete failed:', err);
@@ -1004,7 +1230,12 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="detail-view">
+<div
+  class="detail-view"
+  bind:this={scrollEl}
+  bind:clientHeight={viewportHeight}
+  onscroll={onDetailScroll}
+>
   {#if loading}
     <div class="loading">{$t('actions.loading')}</div>
   {:else if !collection}
@@ -1138,6 +1369,7 @@
         <p>No items yet. Add albums, tracks, or playlists from their detail pages.</p>
       </div>
     {:else}
+      <div class="sticky-toolbar">
       <div class="list-controls">
         <div class="search-box" class:has-query={normalizedSearch.length > 0}>
           <Search size={14} />
@@ -1318,10 +1550,16 @@
           </button>
         </div>
       </div>
-
+      </div>
+      <div
+        class="list-anchor"
+        bind:this={listAnchorEl}
+        bind:clientWidth={listContainerWidth}
+      >
       {#if viewMode === 'grid'}
+        <div class="virtual-spacer" style:height="{virtualWindow.topSpacer}px"></div>
         <div class="item-grid">
-          {#each visibleItems as item (item.position)}
+          {#each windowedItems as item (item.position)}
             {@const resolved = resolvedFor(item)}
             {@const artworkSrc = item.artwork_url || resolved.artworkUrl}
             {@const isSelected = selectedPositions.has(item.position)}
@@ -1347,7 +1585,13 @@
             >
               <div class="grid-artwork-wrap">
                 {#if artworkSrc}
-                  <img class="grid-artwork" src={artworkSrc} alt="" loading="lazy" />
+                  <img
+                    class="grid-artwork"
+                    use:cachedSrc={smallQobuzArtwork(artworkSrc, 150) ?? artworkSrc}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                  />
                 {:else}
                   <div class="grid-artwork grid-artwork-placeholder">
                     {#if item.item_type === 'track'}
@@ -1386,6 +1630,7 @@
             </div>
           {/each}
         </div>
+        <div class="virtual-spacer" style:height="{virtualWindow.bottomSpacer}px"></div>
       {:else}
       <div class="item-list">
         <div class="item-list-header">
@@ -1399,7 +1644,8 @@
           <div class="col-menu"></div>
         </div>
 
-        {#each visibleItems as item (item.position)}
+        <div class="virtual-spacer" style:height="{virtualWindow.topSpacer}px"></div>
+        {#each windowedItems as item (item.position)}
           {@const resolved = resolvedFor(item)}
           {@const artworkSrc = item.artwork_url || resolved.artworkUrl}
           {@const isSelected = selectedPositions.has(item.position)}
@@ -1425,7 +1671,13 @@
             <div class="col-item">
               <div class="artwork-wrap">
                 {#if artworkSrc}
-                  <img class="artwork" src={artworkSrc} alt="" loading="lazy" />
+                  <img
+                    class="artwork"
+                    use:cachedSrc={smallQobuzArtwork(artworkSrc, 50) ?? artworkSrc}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                  />
                 {:else}
                   <div class="artwork artwork-placeholder">
                     {#if item.item_type === 'track'}
@@ -1506,7 +1758,7 @@
             </div>
 
             <div class="col-quality">
-              <QualityBadge
+              <QualityBadgeStatic
                 bitDepth={resolved.bitDepth ?? undefined}
                 samplingRate={resolved.sampleRateKhz ?? undefined}
                 format={resolved.format ?? undefined}
@@ -1654,8 +1906,10 @@
             </div>
           {/if}
         {/each}
+        <div class="virtual-spacer" style:height="{virtualWindow.bottomSpacer}px"></div>
       </div>
       {/if}
+      </div>
 
       <BulkActionBar
         count={selectedPositions.size}
@@ -1741,19 +1995,19 @@
 </div>
 
 <style>
-  /* Canonical scroll pattern from ArtistDetailView — the view itself owns
-     the scroll container (full height of .main-content, overflow-y: auto). */
+  /* Canonical scroll pattern + root-view padding that matches AlbumDetailView
+     so the Back button + hero line up with the rest of the app. */
   .detail-view {
     width: 100%;
     height: 100%;
-    padding: 24px 32px;
+    padding: 8px 8px 100px 18px;
     color: var(--text-primary);
     box-sizing: border-box;
     overflow-y: auto;
     position: relative;
   }
 
-  /* Mirror of ArtistDetailView's .back-btn — borderless, text + icon, muted. */
+  /* Mirror of AlbumDetailView's .back-btn — borderless, text + icon, muted. */
   .back-btn {
     display: flex;
     align-items: center;
@@ -1765,7 +2019,7 @@
     cursor: pointer;
     font-family: inherit;
     padding: 0;
-    margin-top: 24px;
+    margin-top: 8px;
     margin-bottom: 24px;
     transition: color 150ms ease;
   }
@@ -1863,6 +2117,47 @@
 
   /* Sort + filter + search controls — same dropdown pattern as
      LocalLibraryView / PlaylistDetailView. */
+  /* Toolbar is pinned to the top of the scroller so Search / Filter / Sort /
+     view-mode / Select stay reachable while the hero scrolls away. The
+     hero (cover + name + description + CTAs) remains in normal flow above.
+     z-index sits under the overflow menu backdrops (which use inline fixed
+     positioning) but above row hover states. */
+  .sticky-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--bg-primary, #0b0b0b);
+    /* box-shadow extends the opaque --bg-primary 8px above and 8px below the
+       toolbar's border-box:
+         •  -8px up: covers the scroller's padding-top: 8px zone where rows
+            scrolling above the sticky used to peek through.
+         •  +8px down: cushions any sub-pixel / next-element margin seam. */
+    box-shadow:
+      0 -8px 0 0 var(--bg-primary, #0b0b0b),
+      0 8px 0 0 var(--bg-primary, #0b0b0b);
+    padding-top: 4px;
+    padding-bottom: 4px;
+    margin: 0 -18px 0 -18px; /* negative margin so the sticky band extends
+                               past .detail-view's left/right padding */
+    padding-left: 18px;
+    padding-right: 8px;
+  }
+
+  /* Item list anchor — measures its own offsetTop inside the scroller so the
+     virtual window can convert scrollTop → local offset even when the hero
+     has variable height. */
+  .list-anchor {
+    position: relative;
+  }
+
+  /* Virtual spacer — reserves scroll height for items that are unmounted.
+     Using `content-visibility: auto` lets the browser skip painting this
+     empty region entirely. */
+  .virtual-spacer {
+    flex-shrink: 0;
+    content-visibility: auto;
+  }
+
   .list-controls {
     display: flex;
     align-items: center;
@@ -2170,9 +2465,9 @@
     mask: url('/qobuz-logo.svg') center / contain no-repeat;
   }
 
-  /* Full QualityBadge — same treatment as DiscographyBuilder: pass
-     bitDepth + samplingRate + format and let the component handle it.
-     No local overrides. */
+  /* Static quality badge — visually identical to QualityBadge's full mode but
+     not reactive to now-playing. List rows show the stored quality of each
+     item, not the currently-decoded/hardware state. */
   .col-quality {
     display: inline-flex;
     align-items: center;
@@ -2314,8 +2609,19 @@
     padding-bottom: 10px;
   }
 
+  /* Fixed row height — MUST match LIST_ROW_HEIGHT in the script (56). The
+     virtualization math uses that constant to compute top/bottom spacer
+     heights; any mismatch between the constant and the actual rendered
+     row height compounds over the list and causes the scrollbar to report
+     a scrollHeight that doesn't line up with the real end of the content,
+     which shows up as stuttering / inability to reach the last row.
+     Use explicit height (not min-height) so rows can't bulge when a title
+     or subtitle wraps. Overflow hidden clips the rare long string. */
   .item-row {
     position: relative;
+    height: 56px;
+    box-sizing: border-box;
+    overflow: hidden;
   }
   .item-row:not(:last-child) {
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);

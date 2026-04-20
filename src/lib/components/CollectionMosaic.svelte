@@ -1,5 +1,6 @@
 <script lang="ts">
   import { CassetteTape, LibraryBig, User } from 'lucide-svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import type { MixtapeCollectionItem, CollectionKind } from '$lib/stores/mixtapeCollectionsStore';
 
   interface Props {
@@ -18,6 +19,18 @@
     kind === 'collection' && items.length >= 9 ? 3 : 2
   );
   const cellCount = $derived(cols * cols);
+
+  // Each mosaic cell is a fraction of `size` (2x2 → size/2, 3x3 → size/3). Use
+  // the closest smaller Qobuz JPEG size instead of whatever resolution was
+  // originally stored in the collection (typically 600px). Matters when the
+  // CollectionsView / MixtapesView grids render 20+ mosaics at once — each
+  // one with 4-9 cells was pulling full 600px covers.
+  const cellPx = $derived(Math.round(size / cols));
+  const qobuzTargetSize = $derived(cellPx <= 80 ? 50 : cellPx <= 200 ? 150 : 300);
+  function smallQobuzUrl(url: string | null | undefined, target: number): string {
+    if (!url) return '';
+    return url.replace(/_(50|100|150|230|300|600|max|org)\.jpg/i, `_${target}.jpg`);
+  }
 
   /** Fill with real items, pad with empty placeholders to cellCount. */
   const cells = $derived(
@@ -57,9 +70,10 @@
       {#if item?.artwork_url}
         <img
           class="cell"
-          src={item.artwork_url}
+          use:cachedSrc={smallQobuzUrl(item.artwork_url, qobuzTargetSize)}
           alt=""
           loading="lazy"
+          decoding="async"
         />
       {:else}
         <div class="cell empty-cell"></div>

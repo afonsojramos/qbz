@@ -3,6 +3,7 @@
   import AlbumMenu from '../AlbumMenu.svelte';
   import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import PlaylistCollage from '../PlaylistCollage.svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
   import PlaylistModal from '../PlaylistModal.svelte';
   import TrackReplacementModal from '../TrackReplacementModal.svelte';
   import ViewTransition from '../ViewTransition.svelte';
@@ -2114,7 +2115,12 @@
       <div class="artwork-container">
         {#if customArtworkPath}
           <div class="artwork custom-artwork">
-            <img src={resolveArtworkPath(customArtworkPath)} alt={playlist.name} />
+            <img
+              use:cachedSrc={resolveArtworkPath(customArtworkPath)}
+              alt={playlist.name}
+              loading="lazy"
+              decoding="async"
+            />
             <div class="artwork-overlay">
               <button class="artwork-btn artwork-clear" onclick={clearCustomArtwork} title={$t('playlist.removeCustomArtwork')}>
                 <X size={20} />
@@ -2231,84 +2237,94 @@
       </div>
     </div>
 
-    <!-- Track List Controls -->
-    <div class="track-controls">
-      <!-- Search -->
-      <div class="search-container">
-        <Search size={16} class="search-icon" />
-        <input
-          type="text"
-          placeholder={$t('placeholders.searchInPlaylist')}
-          bind:value={searchQuery}
-          class="search-input"
-        />
-        {#if searchQuery}
-          <button class="search-clear" onclick={() => searchQuery = ''}>
-            <X size={14} />
-          </button>
-        {/if}
-      </div>
-
-      <!-- Sort dropdown -->
-      <div class="sort-container">
-        <button class="sort-btn" onclick={() => showSortMenu = !showSortMenu}>
-          <span>{$t('sort.sort')}: {sortOptions.find(o => o.field === sortBy)?.label}</span>
-          <span class="chevron" class:rotated={showSortMenu}><ChevronDown size={14} /></span>
-        </button>
-        {#if showSortMenu}
-          <div class="sort-menu">
-            {#each sortOptions as option}
-              <button
-                class="sort-option"
-                class:active={sortBy === option.field}
-                onclick={() => selectSort(option.field)}
-              >
-                <span>{option.label}</span>
-                {#if sortBy === option.field && option.field !== 'default' && option.field !== 'custom'}
-                  <span class="sort-indicator">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                {/if}
-              </button>
-            {/each}
-          </div>
-        {/if}
-      </div>
-
-      <!-- Multi-select toggle -->
-      <button
-        class="sort-btn icon-only"
-        class:active={multiSelectMode}
-        onclick={toggleMultiSelectMode}
-        title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
-      >
-        <SquareCheckBig size={16} />
-      </button>
-    </div>
-
-    <!-- Track List (virtualized) -->
+    <!-- Track List (virtualized). The sticky block below wraps the search
+         toolbar AND the column header so they pin as ONE unit — previous
+         layout had them as separate stickies with a visible row peeking
+         through the gap, and the toolbar's sticky containing block was the
+         `.view-transition` wrapper (height: 100%), which meant the toolbar
+         disappeared once scroll exceeded the viewport. Keeping them inside
+         `.track-list` makes the track-list the containing block — it's as
+         tall as the virtualized content, so the header pins for the whole
+         scroll range. -->
     <div class="track-list" bind:this={trackListEl}>
-      {#if isCustomOrderMode}
-        <div class="batch-controls">
-          <div class="batch-left">
-            {#if selectedTrackKeys.size > 0}
-              <span class="selection-count">{selectedTrackKeys.size} selected</span>
-              <button class="batch-btn" onclick={clearSelection}>{ $t('actions.clear') }</button>
-            {:else}
-              <button class="batch-btn" onclick={selectAllTracks}>{ $t('actions.selectAll') }</button>
+      <div class="tracks-sticky-header">
+        <!-- Track List Controls -->
+        <div class="track-controls">
+          <!-- Search -->
+          <div class="search-container">
+            <Search size={16} class="search-icon" />
+            <input
+              type="text"
+              placeholder={$t('placeholders.searchInPlaylist')}
+              bind:value={searchQuery}
+              class="search-input"
+            />
+            {#if searchQuery}
+              <button class="search-clear" onclick={() => searchQuery = ''}>
+                <X size={14} />
+              </button>
             {/if}
           </div>
-          {#if selectedTrackKeys.size > 0}
-            <div class="batch-right">
-              <button class="batch-btn" onclick={moveSelectedUp} title="Move selected up">
-                <ChevronUp size={14} /> { $t('favorites.moveUp') }
-              </button>
-              <button class="batch-btn" onclick={moveSelectedDown} title="Move selected down">
-                <ChevronDown size={14} /> { $t('favorites.moveDown') }
-              </button>
-            </div>
-          {/if}
+
+          <!-- Sort dropdown -->
+          <div class="sort-container">
+            <button class="sort-btn" onclick={() => showSortMenu = !showSortMenu}>
+              <span>{$t('sort.sort')}: {sortOptions.find(o => o.field === sortBy)?.label}</span>
+              <span class="chevron" class:rotated={showSortMenu}><ChevronDown size={14} /></span>
+            </button>
+            {#if showSortMenu}
+              <div class="sort-menu">
+                {#each sortOptions as option}
+                  <button
+                    class="sort-option"
+                    class:active={sortBy === option.field}
+                    onclick={() => selectSort(option.field)}
+                  >
+                    <span>{option.label}</span>
+                    {#if sortBy === option.field && option.field !== 'default' && option.field !== 'custom'}
+                      <span class="sort-indicator">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                    {/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <!-- Multi-select toggle -->
+          <button
+            class="sort-btn icon-only"
+            class:active={multiSelectMode}
+            onclick={toggleMultiSelectMode}
+            title={multiSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+          >
+            <SquareCheckBig size={16} />
+          </button>
         </div>
-      {/if}
-      <div class="track-list-header">
+
+        {#if isCustomOrderMode}
+          <div class="batch-controls">
+            <div class="batch-left">
+              {#if selectedTrackKeys.size > 0}
+                <span class="selection-count">{selectedTrackKeys.size} selected</span>
+                <button class="batch-btn" onclick={clearSelection}>{ $t('actions.clear') }</button>
+              {:else}
+                <button class="batch-btn" onclick={selectAllTracks}>{ $t('actions.selectAll') }</button>
+              {/if}
+            </div>
+            {#if selectedTrackKeys.size > 0}
+              <div class="batch-right">
+                <button class="batch-btn" onclick={moveSelectedUp} title="Move selected up">
+                  <ChevronUp size={14} /> { $t('favorites.moveUp') }
+                </button>
+                <button class="batch-btn" onclick={moveSelectedDown} title="Move selected down">
+                  <ChevronDown size={14} /> { $t('favorites.moveDown') }
+                </button>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <div class="track-list-header">
         {#if multiSelectMode}
           <div class="col-select-all">
             <input
@@ -2331,6 +2347,7 @@
         <div class="col-icon"><Heart size={14} /></div>
         <div class="col-icon"><CloudDownload size={14} /></div>
         <div class="col-spacer"></div>
+        </div>
       </div>
 
       <div class="virtual-track-content" style="height: {trackListTotalHeight}px;">
@@ -2856,6 +2873,19 @@
     margin-top: 24px;
   }
 
+  /* Unified sticky header — toolbar + optional batch bar + column labels
+     all pinned as ONE block. Single sticky element eliminates the visible
+     gap rows used to slip through when toolbar and column header were two
+     separate stickies at top:0 and top:56. Containing block is .track-list
+     (tall as the virtualized content) so the block stays pinned for the
+     whole scroll range instead of getting dragged out with .view-transition. */
+  .tracks-sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg-primary, #0b0b0b);
+  }
+
   .track-list-header {
     width: 100%;
     height: 40px;
@@ -2930,13 +2960,19 @@
     width: 28px;
   }
 
-  /* Track Controls */
+  /* Track Controls — now a flow child of .tracks-sticky-header. The wrapper
+     handles the stickiness; the controls row itself is just layout. No
+     gap at the bottom: the column header (.track-list-header) follows
+     flush so search+sort+select and the column labels read as a single
+     unified pinned band. Top padding stays so the search input isn't
+     flush with the hero bottom during the transition in. */
   .track-controls {
     display: flex;
     align-items: center;
     gap: 16px;
-    margin-top: 24px;
-    margin-bottom: 16px;
+    padding-top: 8px;
+    padding-bottom: 0;
+    margin-bottom: 0;
   }
 
   .search-container {

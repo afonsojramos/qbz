@@ -7,6 +7,8 @@
   import PlaylistModal from '../PlaylistModal.svelte';
   import ViewTransition from '../ViewTransition.svelte';
   import FolderEditModal from '../FolderEditModal.svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
+  import { convertFileSrc } from '@tauri-apps/api/core';
   import { t } from '$lib/i18n';
   import {
     subscribe as subscribeOffline,
@@ -1127,7 +1129,13 @@
                   >
                     <div class="folder-icon" style={folder.icon_color ? `background: ${folder.icon_color};` : ''}>
                       {#if folder.icon_type === 'custom' && folder.custom_image_path}
-                        <img src={folder.custom_image_path} alt="" class="folder-custom-img" />
+                        <img
+                          use:cachedSrc={convertFileSrc(folder.custom_image_path)}
+                          alt=""
+                          class="folder-custom-img"
+                          loading="lazy"
+                          decoding="async"
+                        />
                       {:else if folder.icon_preset === 'heart'}
                         <Heart size={32} />
                       {:else if folder.icon_preset === 'star'}
@@ -1173,7 +1181,13 @@
                 >
                   <div class="folder-list-icon" style={folder.icon_color ? `background: ${folder.icon_color};` : ''}>
                     {#if folder.icon_type === 'custom' && folder.custom_image_path}
-                      <img src={folder.custom_image_path} alt="" class="folder-list-img" />
+                      <img
+                        use:cachedSrc={convertFileSrc(folder.custom_image_path)}
+                        alt=""
+                        class="folder-list-img"
+                        loading="lazy"
+                        decoding="async"
+                      />
                     {:else if folder.icon_preset === 'heart'}
                       <Heart size={20} />
                     {:else if folder.icon_preset === 'star'}
@@ -1357,7 +1371,13 @@
               {/if}
               <div class="tree-folder-icon" style={node.folder.icon_color ? `background: ${node.folder.icon_color};` : ''}>
                 {#if node.folder.icon_type === 'custom' && node.folder.custom_image_path}
-                  <img src={node.folder.custom_image_path} alt="" class="tree-folder-img" />
+                  <img
+                    use:cachedSrc={convertFileSrc(node.folder.custom_image_path)}
+                    alt=""
+                    class="tree-folder-img"
+                    loading="lazy"
+                    decoding="async"
+                  />
                 {:else if node.folder.icon_preset === 'heart'}
                   <Heart size={16} />
                 {:else if node.folder.icon_preset === 'star'}
@@ -1709,7 +1729,7 @@
     color: var(--text-muted);
     cursor: pointer;
     font-size: 14px;
-    margin-top: 24px;
+    margin-top: 8px;
     margin-bottom: 24px;
     transition: color 150ms ease;
   }
@@ -2003,11 +2023,32 @@
     color: var(--text-primary);
   }
 
+  /* Sticky toolbar — Search / Filter / Sort / view-mode stay reachable
+     while the grid / list / tree scrolls past. Hero (title + breadcrumb)
+     remains above in normal flow and scrolls away.
+     Two box-shadows extend the opaque --bg-primary background beyond the
+     sticky's border-box:
+       • -8px upward covers the scroller's 8px padding-top gap — where
+         rows scrolling above the sticky used to peek through.
+       • +12px downward covers any hairline between the toolbar and the
+         next content (next-element margin / sub-pixel rounding).
+     The sticky's own z-index: 10 puts it above the scrolling content, and
+     the shadows inherit that stacking context so they mask rather than
+     sit behind. */
   .controls {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg-primary, #0b0b0b);
+    box-shadow:
+      0 -8px 0 0 var(--bg-primary, #0b0b0b),
+      0 12px 0 0 var(--bg-primary, #0b0b0b);
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
+    padding-top: 8px;
+    padding-bottom: 8px;
     flex-wrap: wrap;
   }
 

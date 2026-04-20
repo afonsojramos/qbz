@@ -14,30 +14,41 @@
     class: className = ''
   }: Props = $props();
 
-  // Upscale Qobuz image URLs to larger resolution
-  function upscaleImageUrl(url: string): string {
+  // Pick a Qobuz thumbnail size that fits the rendered collage. The old
+  // implementation always upscaled to _600.jpg which wasted decoder budget
+  // when 20+ collages of size 140 render simultaneously in the PlaylistManager
+  // grid. Choose based on the individual TILE size (quad layout tiles are a
+  // third of the full collage side).
+  function pickQobuzSize(targetPx: number): number {
+    if (targetPx <= 80) return 50;
+    if (targetPx <= 200) return 150;
+    if (targetPx <= 400) return 300;
+    return 600;
+  }
+  function resizeImageUrl(url: string, targetPx: number): string {
     if (!url) return url;
+    const target = pickQobuzSize(targetPx);
+    const tag = `/${target}x${target}/`;
     return url
-      .replace(/_50\.jpg/, '_600.jpg')
-      .replace(/_100\.jpg/, '_600.jpg')
-      .replace(/_150\.jpg/, '_600.jpg')
-      .replace(/_230\.jpg/, '_600.jpg')
-      .replace(/_300\.jpg/, '_600.jpg')
-      .replace(/\/50x50\//, '/600x600/')
-      .replace(/\/100x100\//, '/600x600/')
-      .replace(/\/150x150\//, '/600x600/')
-      .replace(/\/230x230\//, '/600x600/')
-      .replace(/\/300x300\//, '/600x600/');
+      .replace(/_(50|100|150|230|300|600|max|org)\.jpg/i, `_${target}.jpg`)
+      .replace(/\/(50x50|100x100|150x150|230x230|300x300|600x600)\//, tag);
   }
 
-  // Get unique artworks (dedupe same album covers) and upscale
+  // For quad layouts the big tile is ~(size * 2/3); small tiles are ~(size / 3).
+  // We use one URL size per collage as an approximation — good enough for a
+  // 140px-or-smaller collage, and the cachedSrc layer dedupes requests across
+  // tiles anyway so the worst case is one decoded image per unique artwork.
+  const thumbSize = $derived(Math.max(40, Math.round(size * 0.66)));
+
+  // Get unique artworks (dedupe same album covers) and size-match for the
+  // collage tile they'll live in.
   const uniqueArtworks = $derived.by(() => {
     const seen = new Set<string>();
     return artworks.filter(art => {
       if (!art || seen.has(art)) return false;
       seen.add(art);
       return true;
-    }).slice(0, 4).map(upscaleImageUrl);
+    }).slice(0, 4).map((url) => resizeImageUrl(url, thumbSize));
   });
 
   const count = $derived(uniqueArtworks.length);
@@ -56,20 +67,20 @@
       <Music size={size * 0.3} />
     </div>
   {:else if count === 1}
-    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover full" />
+    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover full" loading="lazy" decoding="async" />
   {:else if count === 2}
-    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover half-left" />
-    <img use:cachedSrc={uniqueArtworks[1]} alt="" class="cover half-right" />
+    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover half-left" loading="lazy" decoding="async" />
+    <img use:cachedSrc={uniqueArtworks[1]} alt="" class="cover half-right" loading="lazy" decoding="async" />
   {:else if count === 3}
-    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover half-left" />
-    <img use:cachedSrc={uniqueArtworks[1]} alt="" class="cover quarter top-right" />
-    <img use:cachedSrc={uniqueArtworks[2]} alt="" class="cover quarter bottom-right" />
+    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover half-left" loading="lazy" decoding="async" />
+    <img use:cachedSrc={uniqueArtworks[1]} alt="" class="cover quarter top-right" loading="lazy" decoding="async" />
+    <img use:cachedSrc={uniqueArtworks[2]} alt="" class="cover quarter bottom-right" loading="lazy" decoding="async" />
   {:else}
     <!-- 4 covers: 3 small stacked left, 1 large right -->
-    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover small-top" />
-    <img use:cachedSrc={uniqueArtworks[1]} alt="" class="cover small-mid" />
-    <img use:cachedSrc={uniqueArtworks[2]} alt="" class="cover small-bot" />
-    <img use:cachedSrc={uniqueArtworks[3]} alt="" class="cover large-right" />
+    <img use:cachedSrc={uniqueArtworks[0]} alt="" class="cover small-top" loading="lazy" decoding="async" />
+    <img use:cachedSrc={uniqueArtworks[1]} alt="" class="cover small-mid" loading="lazy" decoding="async" />
+    <img use:cachedSrc={uniqueArtworks[2]} alt="" class="cover small-bot" loading="lazy" decoding="async" />
+    <img use:cachedSrc={uniqueArtworks[3]} alt="" class="cover large-right" loading="lazy" decoding="async" />
   {/if}
 </div>
 
