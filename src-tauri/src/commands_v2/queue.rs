@@ -134,9 +134,15 @@ pub async fn v2_set_shuffle(
     Ok(())
 }
 
-/// Clear the queue (V2 - uses QbzCore)
+/// Clear the queue (V2 - uses QbzCore).
+///
+/// `includeCurrent` (camelCase from frontend → `include_current` here): when
+/// true, also wipes the now-playing slot and stops playback. Frontend sets
+/// this when nothing is actively playing so the stale "now playing" track
+/// doesn't linger after a clear. Defaults to false for historical behavior.
 #[tauri::command]
 pub async fn v2_clear_queue(
+    include_current: Option<bool>,
     bridge: State<'_, CoreBridgeState>,
     qconnect: State<'_, QconnectServiceState>,
     runtime: State<'_, RuntimeManagerState>,
@@ -154,8 +160,14 @@ pub async fn v2_clear_queue(
         return Ok(());
     }
 
+    let wipe_all = include_current.unwrap_or(false);
     let bridge = bridge.get().await;
-    bridge.clear_queue().await;
+    if wipe_all {
+        // Stop audio output first so the current track stops playing / being
+        // "loaded" before we wipe it from the queue state.
+        let _ = bridge.stop();
+    }
+    bridge.clear_queue(!wipe_all).await;
     // Queue replaced — Mixtape context is no longer valid.
     runtime.manager().set_queue_source_collection(None).await;
     Ok(())

@@ -3102,7 +3102,8 @@ async fn materialize_remote_queue_to_corebridge(
     };
 
     if queue_state.queue_items.is_empty() {
-        bridge.clear_queue().await;
+        // Preserve legacy behavior: keep current track on qconnect sync clears.
+        bridge.clear_queue(true).await;
         bridge.set_shuffle(false).await;
         let mut state = sync_state.lock().await;
         state.last_materialized_start_index = None;

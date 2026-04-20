@@ -190,12 +190,17 @@ impl QueueManager {
         Self::set_identity_shuffle_order_internal(&mut state);
     }
 
-    /// Clear the queue
-    pub fn clear(&self) {
+    /// Clear the queue.
+    ///
+    /// When `keep_current` is true (default / historical behavior), the track
+    /// at `current_index` is preserved as the sole remaining entry so the
+    /// "now playing" slot doesn't go dark mid-song. Callers that know nothing
+    /// is playing (or want to fully reset) can pass `false` to wipe everything,
+    /// including the current track.
+    pub fn clear(&self, keep_current: bool) {
         let mut state = self.state.lock().unwrap();
 
-        // A track is currently playing, keep it as the only item left.
-        if let Some(_curr_idx) = state.current_index {
+        if keep_current && state.current_index.is_some() {
             state.tracks.truncate(1);
             state.current_index = Some(0);
         } else {
@@ -912,7 +917,7 @@ mod tests {
         queue.add_track(create_test_track(124));
         queue.add_track(create_test_track(125));
 
-        queue.clear();
+        queue.clear(true);
 
         let state = queue.get_state();
         assert!(state.current_track.is_none());
@@ -929,13 +934,31 @@ mod tests {
         queue.add_track(create_test_track(125));
         queue.play_index(0);
 
-        queue.clear();
+        queue.clear(true);
 
         let state = queue.get_state();
         assert!(state.current_track.is_some());
         assert_eq!(state.current_track.unwrap().id, 123);
         assert!(state.upcoming.is_empty());
         assert_eq!(state.total_tracks, 1);
+    }
+
+    #[test]
+    fn test_clear_wipes_current_track_when_not_kept() {
+        let queue = QueueManager::new();
+
+        queue.add_track(create_test_track(123));
+        queue.add_track(create_test_track(124));
+        queue.play_index(0);
+
+        // keep_current: false — user pressed Clear Queue while nothing was
+        // actively playing, so the stale "now playing" slot should go too.
+        queue.clear(false);
+
+        let state = queue.get_state();
+        assert!(state.current_track.is_none());
+        assert!(state.upcoming.is_empty());
+        assert_eq!(state.total_tracks, 0);
     }
 
     #[test]
@@ -952,7 +975,7 @@ mod tests {
         assert_eq!(before.history.len(), 1);
         assert_eq!(before.history[0].id, 123);
 
-        queue.clear();
+        queue.clear(true);
 
         let after = queue.get_state();
         assert_eq!(after.history.len(), 1);
