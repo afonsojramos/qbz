@@ -16,6 +16,7 @@ export interface TitlebarNavConfig {
   discover: boolean;
   favorites: boolean;
   library: boolean;
+  myQbz: boolean;
   purchases: boolean;
   position: TitlebarNavPosition;
 }
@@ -25,6 +26,7 @@ let config: TitlebarNavConfig = {
   discover: false,
   favorites: false,
   library: false,
+  myQbz: false,
   purchases: false,
   position: 'auto',
 };
@@ -93,7 +95,7 @@ export function getTitlebarNavConfig(): TitlebarNavConfig {
  * Check if ANY nav item is enabled for the titlebar
  */
 export function isTitlebarNavEnabled(): boolean {
-  return config.discover || config.favorites || config.library || config.purchases;
+  return config.discover || config.favorites || config.library || config.myQbz || config.purchases;
 }
 
 /**
@@ -102,6 +104,7 @@ export function isTitlebarNavEnabled(): boolean {
 export function isDiscoverInTitlebar(): boolean { return config.discover; }
 export function isFavoritesInTitlebar(): boolean { return config.favorites; }
 export function isLibraryInTitlebar(): boolean { return config.library; }
+export function isMyQbzInTitlebar(): boolean { return config.myQbz; }
 export function isPurchasesInTitlebar(): boolean { return config.purchases; }
 
 /**
@@ -132,6 +135,12 @@ export function setFavoritesInTitlebar(value: boolean): void {
 
 export function setLibraryInTitlebar(value: boolean): void {
   config = { ...config, library: value };
+  persist();
+  notifyListeners();
+}
+
+export function setMyQbzInTitlebar(value: boolean): void {
+  config = { ...config, myQbz: value };
   persist();
   notifyListeners();
 }

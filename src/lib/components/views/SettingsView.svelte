@@ -116,6 +116,7 @@
     setDiscoverInTitlebar,
     setFavoritesInTitlebar,
     setLibraryInTitlebar,
+    setMyQbzInTitlebar,
     setPurchasesInTitlebar,
     type TitlebarNavPosition
   } from '$lib/stores/titlebarNavStore';
@@ -4603,6 +4604,14 @@
       <Toggle
         enabled={tbNavConfig.library}
         onchange={(v) => setLibraryInTitlebar(v)}
+        disabled={hideTitleBar || useSystemTitleBar}
+      />
+    </div>
+    <div class="setting-row indented-setting">
+      <span class="setting-label">{$t('nav.myQbz')}</span>
+      <Toggle
+        enabled={tbNavConfig.myQbz}
+        onchange={(v) => setMyQbzInTitlebar(v)}
         disabled={hideTitleBar || useSystemTitleBar}
       />
     </div>
