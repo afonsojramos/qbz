@@ -6381,7 +6381,7 @@
     <!-- Add to Mixtape/Collection Modal (global, single instance) -->
     <AddToMixtapeModal
       open={$addToMixtapeModal.open}
-      item={$addToMixtapeModal.item}
+      items={$addToMixtapeModal.items}
       onClose={closeAddToMixtape}
     />
 
@@ -6615,7 +6615,7 @@
     justify-content: center;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     transition: background 150ms ease, color 150ms ease;
-    z-index: 50;
+    z-index: 200;
   }
 
   .back-to-top-global:hover {
