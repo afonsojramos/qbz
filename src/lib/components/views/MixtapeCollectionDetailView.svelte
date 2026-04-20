@@ -1,6 +1,11 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+  import { open } from '@tauri-apps/plugin-dialog';
   import {
-    Play, Shuffle, MoreHorizontal, ArrowLeft, Disc, Music2, ListMusic, Trash2
+    Play, Shuffle, MoreHorizontal, ArrowLeft, Disc, Music2, ListMusic, Trash2,
+    Check, ChevronRight, ChevronDown, RotateCcw, LoaderCircle, ArrowUpDown, Filter,
+    SquareCheckBig, List, LayoutGrid, AlignJustify, Search, X
   } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import {
@@ -12,6 +17,8 @@
     setPlayMode,
     setKind,
     deleteCollection,
+    uploadCustomCover,
+    removeCustomCover,
     type MixtapeCollection,
     type MixtapeCollectionItem,
     type CollectionKind,
@@ -19,15 +26,532 @@
     type ItemType,
   } from '$lib/stores/mixtapeCollectionsStore';
   import CollectionMosaic from '../CollectionMosaic.svelte';
-  import SourceBadge, { type SourceBadgeValue } from '../SourceBadge.svelte';
   import QualityBadge from '../QualityBadge.svelte';
+  import BulkActionBar from '../BulkActionBar.svelte';
+  import TrackRow from '../TrackRow.svelte';
   import { showToast } from '$lib/stores/toastStore';
+  import { getUserItem } from '$lib/utils/userStorage';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
+  import { playTrack } from '$lib/services/playbackService';
+  import { playQueueIndex } from '$lib/stores/queueStore';
+  import {
+    releaseTypeOverrides,
+    loadReleaseTypeOverrides,
+    setReleaseTypeOverride,
+    clearReleaseTypeOverride,
+    hasReleaseTypeOverride,
+    RELEASE_TYPE_CHOICES,
+    type ReleaseType,
+  } from '$lib/stores/releaseTypeOverridesStore';
 
   interface Props {
     collectionId: string;
     onBack?: () => void;
+    /** Navigate to an item's detail page (album / track-album / playlist). */
+    onOpenItem?: (
+      source: 'qobuz' | 'local',
+      itemType: ItemType,
+      sourceItemId: string,
+    ) => void;
+    /** Navigate to the artist page by name (runtime-resolved). */
+    onOpenArtist?: (source: 'qobuz' | 'local', artistName: string) => void;
+    /** Play / queue-next / queue-later a single collection item. */
+    onPlayItem?: (item: MixtapeCollectionItem) => void;
+    onPlayItemNext?: (item: MixtapeCollectionItem) => void;
+    onAddItemToQueueLater?: (item: MixtapeCollectionItem) => void;
+    /** Bulk actions for multi-selected items. */
+    onBulkPlayNext?: (items: MixtapeCollectionItem[]) => void;
+    onBulkPlayLater?: (items: MixtapeCollectionItem[]) => void;
+    onBulkAddToPlaylist?: (items: MixtapeCollectionItem[]) => void;
+    /** Play a specific track inside an expanded album, starting playback
+     *  there (with the rest of the album queued behind it). */
+    onPlayTrackFromItem?: (item: MixtapeCollectionItem, trackId: number) => void;
+    /** Queue-next / queue-later a single Qobuz track id. */
+    onPlayTrackNext?: (trackId: number) => void;
+    onPlayTrackLater?: (trackId: number) => void;
   }
-  let { collectionId, onBack }: Props = $props();
+  let {
+    collectionId,
+    onBack,
+    onOpenItem,
+    onOpenArtist,
+    onPlayItem,
+    onPlayItemNext,
+    onAddItemToQueueLater,
+    onBulkPlayNext,
+    onBulkPlayLater,
+    onBulkAddToPlaylist,
+    onPlayTrackFromItem,
+    onPlayTrackNext,
+    onPlayTrackLater,
+  }: Props = $props();
+
+  // Selection state — only active while selectMode is on. Toggle lives in
+  // the hero actions (SquareCheckBig button), same pattern as
+  // ArtistDetailView's popular-tracks multi-select.
+  let selectMode = $state(false);
+  let selectedPositions = $state<Set<number>>(new Set());
+  const hasSelection = $derived(selectedPositions.size > 0);
+
+  function toggleSelectMode() {
+    selectMode = !selectMode;
+    if (!selectMode) selectedPositions = new Set();
+  }
+
+  // ── View mode ─────────────────────────────────────────────────────────────
+  // 'list'     — default album-row listing (no chevron, no tracks inline)
+  // 'grid'     — each item rendered as an AlbumCard-like tile
+  // 'expanded' — same as list, but every album/playlist has its tracks
+  //              rendered directly underneath (no chevron — tracks are
+  //              always visible, just like LocalLibrary's Tracks page
+  //              with "Group by album" active)
+  type ViewMode = 'list' | 'grid' | 'expanded';
+  let viewMode = $state<ViewMode>('list');
+
+  // ── Inline expand — show tracks under album/playlist items ────────────────
+  // Expanded state keyed by `${source}|${source_item_id}`. Tracks are lazy-
+  // fetched on first expand and cached so subsequent toggles are instant.
+  interface ExpandedTrack {
+    id: number;
+    number: number;
+    title: string;
+    artist?: string;
+    duration: number; // seconds (for internal math)
+    durationStr: string; // formatted "m:ss" for TrackRow
+    quality?: string; // e.g. "FLAC 24/96" — shown in TrackRow quality column
+    parental_warning?: boolean;
+    isLocal?: boolean;
+    localSource?: 'local' | 'plex';
+  }
+
+  let expandedTracks = $state<Record<string, ExpandedTrack[]>>({});
+  let expandLoading = $state<Set<string>>(new Set());
+
+  function itemKey(item: MixtapeCollectionItem): string {
+    return `${item.source}|${item.source_item_id}`;
+  }
+
+  function canExpand(item: MixtapeCollectionItem): boolean {
+    // Only album + playlist rows have tracks to show. Single-track items
+    // have nothing useful to expand.
+    return item.item_type === 'album' || item.item_type === 'playlist';
+  }
+
+  async function ensureTracksLoaded(item: MixtapeCollectionItem) {
+    if (!canExpand(item)) return;
+    const key = itemKey(item);
+    if (expandedTracks[key] || expandLoading.has(key)) return;
+
+    const loading = new Set(expandLoading);
+    loading.add(key);
+    expandLoading = loading;
+
+    try {
+      const tracks = await fetchTracksForItem(item);
+      console.log(
+        '[MixtapeCollectionDetailView] fetched tracks for',
+        key,
+        'item_type=', item.item_type,
+        'source=', item.source,
+        'source_item_id=', item.source_item_id,
+        '→', tracks.length, 'tracks',
+      );
+      expandedTracks = { ...expandedTracks, [key]: tracks };
+    } catch (err) {
+      console.error(
+        '[MixtapeCollectionDetailView] fetch tracks failed for',
+        key,
+        '(item_type=', item.item_type, 'source=', item.source,
+        'source_item_id=', item.source_item_id, ')',
+        err,
+      );
+      // Empty array so the spinner clears and the "No results" state shows.
+      expandedTracks = { ...expandedTracks, [key]: [] };
+    } finally {
+      const done = new Set(expandLoading);
+      done.delete(key);
+      expandLoading = done;
+    }
+  }
+
+  // Whenever the user switches INTO expanded mode, fire off one fetch per
+  // eligible item. Already-fetched items are skipped. We don't await all of
+  // them — each completes independently and triggers a reactive update.
+  $effect(() => {
+    if (viewMode !== 'expanded' || !collection) return;
+    for (const it of collection.items) {
+      if (canExpand(it)) {
+        void ensureTracksLoaded(it);
+      }
+    }
+  });
+
+  async function fetchTracksForItem(item: MixtapeCollectionItem): Promise<ExpandedTrack[]> {
+    if (item.item_type === 'album' && item.source === 'qobuz') {
+      interface RawTrack {
+        id: number;
+        track_number?: number;
+        title: string;
+        duration?: number;
+        performer?: { name?: string };
+        parental_warning?: boolean;
+      }
+      const album = await invoke<{
+        tracks?: { items?: RawTrack[] } | RawTrack[];
+        maximum_bit_depth?: number;
+        maximum_sampling_rate?: number;
+      }>('v2_get_album', { albumId: item.source_item_id });
+
+      const raw = Array.isArray(album.tracks)
+        ? album.tracks
+        : album.tracks?.items ?? [];
+
+      const qualityStr = album.maximum_bit_depth && album.maximum_sampling_rate
+        ? `FLAC ${album.maximum_bit_depth}/${album.maximum_sampling_rate}`
+        : undefined;
+
+      return raw.map((t, i) => ({
+        id: t.id,
+        number: t.track_number ?? i + 1,
+        title: t.title,
+        artist: t.performer?.name,
+        duration: t.duration ?? 0,
+        durationStr: formatSec(t.duration ?? 0),
+        quality: qualityStr,
+        parental_warning: t.parental_warning,
+      }));
+    }
+
+    // Local library album (includes plex-synced rows — source='plex' on
+    // the local_tracks side). Uses the same v2_library_get_album_tracks
+    // LocalLibrary uses when opening an album.
+    if (item.item_type === 'album' && item.source === 'local') {
+      // Plex items store their album_key as source_item_id (e.g. "plex:123…").
+      // These live in the Plex cache DB, not local_tracks, so route to the
+      // Plex-specific command. Same detection LocalLibraryView.fetchAlbumTracks
+      // uses (album.source === 'plex'), here by id prefix and resolvedFor.
+      const kind = resolvedFor(item).kind;
+      const isPlexItem = kind === 'plex' || item.source_item_id.startsWith('plex:');
+      if (isPlexItem) {
+        interface RawPlexTrack {
+          id: number;
+          ratingKey: string;
+          title: string;
+          artist: string;
+          durationSecs: number;
+          format: string;
+          bitDepth?: number;
+          sampleRate: number;
+          trackNumber?: number;
+        }
+        const tracks = await invoke<RawPlexTrack[]>('v2_plex_cache_get_album_tracks', {
+          albumKey: item.source_item_id,
+        });
+        return tracks.map((t, i) => {
+          const secs = Number(t.durationSecs) || 0;
+          const fmt = (t.format ?? '').toUpperCase() || 'FLAC';
+          const bd = t.bitDepth && t.bitDepth > 0 ? String(t.bitDepth) : '--';
+          const sr = t.sampleRate && t.sampleRate > 0
+            ? Number((t.sampleRate / 1000).toFixed(1)).toString()
+            : '--';
+          return {
+            id: t.id,
+            number: t.trackNumber ?? i + 1,
+            title: t.title,
+            artist: t.artist,
+            duration: secs,
+            durationStr: formatSec(secs),
+            quality: `${fmt} ${bd}/${sr}`,
+            parental_warning: false,
+            isLocal: true,
+            localSource: 'plex' as const,
+          };
+        });
+      }
+
+      interface RawLocalTrack {
+        id: number;
+        track_number?: number;
+        title: string;
+        artist: string;
+        duration_secs: number;
+        format: string;
+        bit_depth?: number;
+        sample_rate: number;
+      }
+      interface RawLocalTrackExtended extends RawLocalTrack {
+        source?: string;
+      }
+      let tracks = await invoke<RawLocalTrackExtended[]>('v2_library_get_album_tracks', {
+        albumGroupKey: item.source_item_id,
+      });
+
+      // Fallback: if the stored group_key no longer matches any tracks (e.g.
+      // the library was re-indexed and the group_key composition changed
+      // after this item was added to the collection), look the album up by
+      // title + artist in the current albums list and retry.
+      if (!tracks || tracks.length === 0) {
+        try {
+          interface RawLocalAlbum {
+            id: string;
+            title: string;
+            artist: string;
+            all_artists?: string;
+          }
+          const albums = await invoke<RawLocalAlbum[]>('v2_library_get_albums', {
+            includeHidden: false,
+            excludeNetworkFolders: false,
+          });
+          const needleTitle = item.title.toLowerCase().trim();
+          const needleArtist = (item.subtitle ?? '').toLowerCase().trim();
+          const match = albums.find((a) => {
+            const t = a.title.toLowerCase().trim();
+            const ar = a.artist.toLowerCase().trim();
+            const allAr = (a.all_artists ?? '').toLowerCase();
+            if (t !== needleTitle) return false;
+            if (!needleArtist) return true;
+            return ar === needleArtist || allAr.includes(needleArtist);
+          });
+          if (match && match.id !== item.source_item_id) {
+            console.log(
+              '[MixtapeCollectionDetailView] local album group_key re-resolved',
+              item.source_item_id, '→', match.id,
+            );
+            tracks = await invoke<RawLocalTrackExtended[]>(
+              'v2_library_get_album_tracks',
+              { albumGroupKey: match.id },
+            );
+          }
+        } catch (err) {
+          console.warn(
+            '[MixtapeCollectionDetailView] group_key fallback failed:',
+            err,
+          );
+        }
+      }
+      return tracks.map((t, i) => {
+        const secs = Number(t.duration_secs) || 0;
+        const fmt = (t.format ?? '').toUpperCase() || 'FLAC';
+        const bd = t.bit_depth && t.bit_depth > 0 ? String(t.bit_depth) : '--';
+        const sr = t.sample_rate && t.sample_rate > 0
+          ? Number((t.sample_rate / 1000).toFixed(1)).toString()
+          : '--';
+        return {
+          id: t.id,
+          number: t.track_number ?? i + 1,
+          title: t.title,
+          artist: t.artist,
+          duration: secs,
+          durationStr: formatSec(secs),
+          quality: `${fmt} ${bd}/${sr}`,
+          parental_warning: false,
+          isLocal: true,
+          localSource: t.source === 'plex' ? 'plex' as const : 'local' as const,
+        };
+      });
+    }
+
+    // Plex cache / playlist paths still follow-ups.
+    return [];
+  }
+
+  function formatSec(seconds: number): string {
+    if (!seconds || seconds < 0) return '--:--';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  }
+
+  // ── Sort + filter state ───────────────────────────────────────────────────
+  type SortBy = 'position' | 'name' | 'year' | 'tracks';
+  type SortDir = 'asc' | 'desc';
+  type TypeFilter = 'all' | 'album' | 'track' | 'playlist';
+
+  let sortBy = $state<SortBy>('position');
+  let sortDir = $state<SortDir>('asc');
+  let showSortMenu = $state(false);
+  let typeFilter = $state<TypeFilter>('all');
+  let showFilterMenu = $state(false);
+
+  // Source filter — multi-select, maps to the resolved item kind (qobuz /
+  // plex / local, see resolveItems). Empty set means "all pass" (no filter).
+  let sourceFilter = $state<Set<SourceKind>>(new Set());
+  function toggleSourceFilter(kind: SourceKind) {
+    const next = new Set(sourceFilter);
+    if (next.has(kind)) next.delete(kind);
+    else next.add(kind);
+    sourceFilter = next;
+  }
+  const hasAnyFilter = $derived(
+    typeFilter !== 'all' ||
+    sourceFilter.size > 0 ||
+    sortBy !== 'position' ||
+    sortDir !== 'asc',
+  );
+
+  // Search query — matches against item title / subtitle always, and against
+  // track titles when tracks are loaded (expanded view or cached from a
+  // previous expand). An album passes if the album itself matches OR any of
+  // its tracks match; in the latter case, only the matching tracks render.
+  let searchQuery = $state('');
+  const normalizedSearch = $derived(searchQuery.trim().toLowerCase());
+
+  // Auto-load tracks while a non-empty search is active, so a user typing
+  // a song title gets results even when the collection has never been
+  // switched into Expanded view. Same fetch path as the Expanded mode
+  // effect — already-fetched items skip.
+  $effect(() => {
+    if (!normalizedSearch || !collection) return;
+    for (const it of collection.items) {
+      if (canExpand(it)) {
+        void ensureTracksLoaded(it);
+      }
+    }
+  });
+
+  function itemMatchesSearch(it: MixtapeCollectionItem): boolean {
+    if (!normalizedSearch) return true;
+    if (it.title.toLowerCase().includes(normalizedSearch)) return true;
+    if (it.subtitle?.toLowerCase().includes(normalizedSearch)) return true;
+    // Track-level match: any loaded track whose title contains the query.
+    const cached = expandedTracks[itemKey(it)];
+    if (cached?.some((track) => track.title.toLowerCase().includes(normalizedSearch))) {
+      return true;
+    }
+    return false;
+  }
+
+  function filteredTracksFor(it: MixtapeCollectionItem): ExpandedTrack[] {
+    const all = expandedTracks[itemKey(it)] ?? [];
+    if (!normalizedSearch) return all;
+    // If the album title itself matched, don't narrow — show all its tracks.
+    if (
+      it.title.toLowerCase().includes(normalizedSearch) ||
+      it.subtitle?.toLowerCase().includes(normalizedSearch)
+    ) {
+      return all;
+    }
+    return all.filter((track) => track.title.toLowerCase().includes(normalizedSearch));
+  }
+
+  function selectSort(value: SortBy) {
+    if (sortBy === value) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortBy = value;
+      sortDir = 'asc';
+    }
+    showSortMenu = false;
+  }
+
+  const sortOptions: { value: SortBy; label: string }[] = $derived([
+    { value: 'position', label: $t('collectionDetail.sortByPosition') || 'Position' },
+    { value: 'name', label: $t('collectionDetail.sortByName') || 'Name' },
+    { value: 'year', label: $t('collectionDetail.sortByYear') || 'Year' },
+    { value: 'tracks', label: $t('collectionDetail.sortByTracks') || 'Tracks' },
+  ]);
+
+  const typeFilterOptions: { value: TypeFilter; label: string }[] = $derived([
+    { value: 'all', label: $t('collectionDetail.filterAll') || 'All' },
+    { value: 'album', label: $t('itemType.album') },
+    { value: 'track', label: $t('itemType.track') },
+    { value: 'playlist', label: $t('itemType.playlist') },
+  ]);
+
+  /**
+   * Visible items = filter + sort applied. Sort is non-destructive — the
+   * underlying `collection.items` keeps its persisted order so the Play
+   * action still plays "in order" according to the user's curated sequence.
+   */
+  const visibleItems = $derived.by(() => {
+    if (!collection) return [] as MixtapeCollectionItem[];
+    let filtered = typeFilter === 'all'
+      ? collection.items.slice()
+      : collection.items.filter((it) => it.item_type === typeFilter);
+    if (sourceFilter.size > 0) {
+      filtered = filtered.filter((it) => sourceFilter.has(resolvedFor(it).kind));
+    }
+    if (normalizedSearch) {
+      filtered = filtered.filter(itemMatchesSearch);
+    }
+    const dir = sortDir === 'asc' ? 1 : -1;
+    filtered.sort((a, b) => {
+      switch (sortBy) {
+        case 'name':
+          return a.title.localeCompare(b.title) * dir;
+        case 'year': {
+          const ya = a.year ?? 0;
+          const yb = b.year ?? 0;
+          return (ya - yb) * dir;
+        }
+        case 'tracks': {
+          const ta = a.track_count ?? 0;
+          const tb = b.track_count ?? 0;
+          return (ta - tb) * dir;
+        }
+        default:
+          return (a.position - b.position) * dir;
+      }
+    });
+    return filtered;
+  });
+
+  function toggleSelect(position: number) {
+    const next = new Set(selectedPositions);
+    if (next.has(position)) next.delete(position);
+    else next.add(position);
+    selectedPositions = next;
+  }
+
+  function clearSelection() {
+    selectedPositions = new Set();
+  }
+
+  function selectedItems(): MixtapeCollectionItem[] {
+    if (!collection) return [];
+    return collection.items.filter((it) => selectedPositions.has(it.position));
+  }
+
+  function toAddToMixtapeItem(it: MixtapeCollectionItem) {
+    return {
+      item_type: it.item_type,
+      source: it.source,
+      source_item_id: it.source_item_id,
+      title: it.title,
+      subtitle: it.subtitle ?? undefined,
+      artwork_url: it.artwork_url ?? undefined,
+      year: it.year ?? undefined,
+      track_count: it.track_count ?? undefined,
+    };
+  }
+
+  async function handleBulkRemove() {
+    const items = selectedItems();
+    if (items.length === 0) return;
+    try {
+      // Sort descending so earlier positions don't shift as we remove.
+      const sorted = [...items].sort((a, b) => b.position - a.position);
+      for (const it of sorted) {
+        await removeCollectionItem(collectionId, it.position);
+      }
+      await loadCollection();
+      clearSelection();
+      showToast(
+        $t('toast.removedFromQueue', { values: { count: items.length } }) ||
+          `Removed ${items.length}`,
+        'info',
+      );
+    } catch (err) {
+      console.error('[MixtapeCollectionDetailView] bulk remove failed:', err);
+      showToast('Failed to remove items', 'error');
+    }
+  }
+
+  function handleBulkAddToMixtape() {
+    const items = selectedItems();
+    if (items.length === 0) return;
+    openAddToMixtape(items.map(toAddToMixtapeItem));
+  }
 
   let collection = $state<MixtapeCollection | null>(null);
   let loading = $state(true);
@@ -42,11 +566,22 @@
 
   // Item overflow menus (track which item's ⋯ is open)
   let openItemMenu = $state<number | null>(null);
+  // When non-null, the "Change release type" submenu is expanded for this
+  // position inside the row's ⋯ menu.
+  let openTypeSubmenu = $state<number | null>(null);
+
+  function currentReleaseTypeFor(item: MixtapeCollectionItem): ReleaseType | null {
+    const override = $releaseTypeOverrides[`${item.source}|${item.source_item_id}`];
+    return (override as ReleaseType | undefined) ?? null;
+  }
 
   async function loadCollection() {
     loading = true;
     try {
       collection = await getCollection(collectionId);
+      if (collection) {
+        void resolveItems(collection.items);
+      }
     } catch (err) {
       console.error('[MixtapeCollectionDetailView] load failed:', err);
       collection = null;
@@ -63,6 +598,10 @@
   $effect(() => {
     void collectionId;
     loadCollection();
+  });
+
+  onMount(() => {
+    loadReleaseTypeOverrides();
   });
 
   // ──────── helpers ────────
@@ -84,6 +623,20 @@
     return $t('itemType.playlist');
   }
 
+  /**
+   * Displayed label in the Type column. Tracks and playlists keep their
+   * item-type label unchanged; album items surface the effective release
+   * type (either the user's override or 'album' as the default) so the
+   * column visibly reacts when the user picks EP / Single / Live / etc.
+   * from the row ⋯ menu.
+   */
+  function displayedTypeLabel(item: MixtapeCollectionItem): string {
+    if (item.item_type !== 'album') return itemTypeLabel(item.item_type);
+    const override = currentReleaseTypeFor(item);
+    const effective: ReleaseType = override ?? 'album';
+    return $t(`discographyBuilder.releaseType.${effective}`);
+  }
+
   function itemTracks(item: MixtapeCollectionItem): string {
     if (item.item_type === 'track') return '1';
     return item.track_count == null ? '—' : String(item.track_count);
@@ -93,36 +646,239 @@
     return item.year == null ? '' : String(item.year);
   }
 
-  /** Resolve the source badge value for an item.
-   *  For Qobuz items: 'qobuz_streaming'.
-   *  For Local items: fall back to 'user' for MVP.
-   *  Live-resolve is a follow-up (spec §2.3). */
-  function sourceBadgeFor(item: MixtapeCollectionItem): SourceBadgeValue {
-    if (item.source === 'qobuz') return 'qobuz_streaming';
-    return 'user';
+  // ──────── live source/artwork/quality resolution ────────
+  // Items only store `source: 'qobuz' | 'local'` at persistence time. The
+  // real story — plex vs local file, offline-cached vs streaming vs
+  // purchased — has to be resolved at render time by cross-referencing
+  // the local library + plex cache. We do this once on mount and cache
+  // the result per item id.
+
+  type SourceKind = 'qobuz' | 'plex' | 'local';
+
+  interface ResolvedItem {
+    kind: SourceKind;
+    artworkUrl: string | null;
+    bitDepth: number | null;
+    /** kHz (not Hz) — matches QualityBadge's samplingRate prop */
+    sampleRateKhz: number | null;
+    format: string | null;
+  }
+
+  let resolvedById = $state<Record<string, ResolvedItem>>({});
+
+  function buildPlexArtworkUrl(path: string): string | null {
+    const baseUrl = (getUserItem('qbz-plex-poc-base-url') || '').trim();
+    const token = (getUserItem('qbz-plex-poc-token') || '').trim();
+    if (!baseUrl || !token) return null;
+    const base = baseUrl.replace(/\/+$/, '');
+    const separator = path.includes('?') ? '&' : '?';
+    return `${base}${path}${separator}X-Plex-Token=${encodeURIComponent(token)}`;
+  }
+
+  async function resolveItems(items: MixtapeCollectionItem[]) {
+    if (items.length === 0) {
+      resolvedById = {};
+      return;
+    }
+
+    const plexEnabled = getUserItem('qbz-plex-enabled') === 'true';
+
+    const [localAlbumsRaw, plexAlbumsRaw] = await Promise.all([
+      invoke<Array<{
+        id: string;
+        source?: string;
+        format?: string;
+        bit_depth?: number;
+        sample_rate?: number;
+        artwork_path?: string;
+      }>>('v2_library_get_albums', {
+        includeHidden: false,
+        excludeNetworkFolders: false,
+      }).catch(() => []),
+      plexEnabled
+        ? invoke<Array<{
+            id: string;
+            format?: string;
+            bitDepth?: number;
+            sampleRate?: number;
+            artworkPath?: string;
+          }>>('v2_plex_cache_get_albums').catch(() => [])
+        : Promise.resolve([]),
+    ]);
+
+    const localMap = new Map(localAlbumsRaw.map((a) => [a.id, a]));
+    const plexMap = new Map(plexAlbumsRaw.map((a) => [a.id, a]));
+
+    // Qobuz items: fire-and-forget v2_get_album in parallel to get audio_info.
+    // The Qobuz API returns maximum_bit_depth + maximum_sampling_rate (kHz).
+    const qobuzAlbumFetches = items
+      .filter((it) => it.source === 'qobuz' && it.item_type === 'album')
+      .map(async (item) => {
+        try {
+          const album = await invoke<{
+            maximum_bit_depth?: number;
+            maximum_sampling_rate?: number;
+          }>('v2_get_album', { albumId: item.source_item_id });
+          return { item, album };
+        } catch {
+          return { item, album: null as { maximum_bit_depth?: number; maximum_sampling_rate?: number } | null };
+        }
+      });
+    const qobuzResults = await Promise.all(qobuzAlbumFetches);
+    const qobuzMap = new Map(
+      qobuzResults
+        .filter((r) => r.album)
+        .map((r) => [r.item.source_item_id, r.album!]),
+    );
+
+    const next: Record<string, ResolvedItem> = {};
+    for (const item of items) {
+      const key = `${item.source}|${item.source_item_id}`;
+
+      const plexHit = plexMap.get(item.source_item_id);
+      if (plexHit) {
+        next[key] = {
+          kind: 'plex',
+          artworkUrl: plexHit.artworkPath
+            ? buildPlexArtworkUrl(plexHit.artworkPath)
+            : null,
+          bitDepth: plexHit.bitDepth ?? null,
+          sampleRateKhz: plexHit.sampleRate ? plexHit.sampleRate / 1000 : null,
+          format: plexHit.format ?? null,
+        };
+        continue;
+      }
+
+      const localHit = localMap.get(item.source_item_id);
+      if (localHit) {
+        const src = localHit.source ?? 'user';
+        // qobuz_download / qobuz_purchase are still *Qobuz-origin* albums,
+        // just stored locally. Surface them as 'qobuz' — matches the
+        // DiscographyBuilder's 3-kind model (qobuz | plex | local).
+        const kind: SourceKind =
+          src === 'plex'
+            ? 'plex'
+            : src === 'qobuz_download' || src === 'qobuz_purchase'
+              ? 'qobuz'
+              : 'local';
+        next[key] = {
+          kind,
+          artworkUrl: null,
+          bitDepth: localHit.bit_depth ?? null,
+          sampleRateKhz: localHit.sample_rate
+            ? localHit.sample_rate / 1000
+            : null,
+          format: localHit.format ?? null,
+        };
+        continue;
+      }
+
+      const qobuzHit = qobuzMap.get(item.source_item_id);
+      if (qobuzHit) {
+        next[key] = {
+          kind: 'qobuz',
+          artworkUrl: null,
+          bitDepth: qobuzHit.maximum_bit_depth ?? null,
+          // v2_get_album returns sampling_rate in kHz already.
+          sampleRateKhz: qobuzHit.maximum_sampling_rate ?? null,
+          format: 'FLAC',
+        };
+        continue;
+      }
+
+      next[key] = {
+        kind: item.source === 'qobuz' ? 'qobuz' : 'local',
+        artworkUrl: null,
+        bitDepth: null,
+        sampleRateKhz: null,
+        format: null,
+      };
+    }
+
+    resolvedById = next;
+  }
+
+  function resolvedFor(item: MixtapeCollectionItem): ResolvedItem {
+    const key = `${item.source}|${item.source_item_id}`;
+    return (
+      resolvedById[key] ?? {
+        kind: item.source === 'qobuz' ? 'qobuz' : 'local',
+        artworkUrl: null,
+        bitDepth: null,
+        sampleRateKhz: null,
+        format: null,
+      }
+    );
   }
 
   // ──────── actions ────────
 
+  // True while v2_enqueue_collection is resolving + initial track is loading.
+  // Used to disable Play/Shuffle buttons and swap their icons for a spinner.
+  let playLoading = $state(false);
+
+  /**
+   * v2_enqueue_collection sets the queue and calls bridge.play_index(0),
+   * but play_index only updates queue state — it does NOT start audio.
+   * The authoritative audio-start happens when the frontend calls playTrack().
+   * Mirror the pattern used by ArtistDetailView for radio playback:
+   *   1. enqueueCollection('replace') — populate queue
+   *   2. playQueueIndex(0) — reads the first queue track back from the core
+   *   3. playTrack(trackData) — actually starts the audio pipeline
+   */
+  async function startPlaybackFromQueue() {
+    const firstTrack = await playQueueIndex(0);
+    if (!firstTrack) {
+      throw new Error('Queue empty after enqueue');
+    }
+    const quality = firstTrack.hires && firstTrack.bit_depth && firstTrack.sample_rate
+      ? `${firstTrack.bit_depth}bit/${firstTrack.sample_rate}kHz`
+      : firstTrack.hires
+        ? 'Hi-Res'
+        : '-';
+    await playTrack({
+      id: firstTrack.id,
+      title: firstTrack.title,
+      artist: firstTrack.artist,
+      album: firstTrack.album ?? '',
+      artwork: firstTrack.artwork_url ?? '',
+      duration: firstTrack.duration_secs,
+      quality,
+      bitDepth: firstTrack.bit_depth ?? undefined,
+      samplingRate: firstTrack.sample_rate ?? undefined,
+      albumId: firstTrack.album_id ?? undefined,
+      artistId: firstTrack.artist_id ?? undefined,
+    });
+  }
+
   async function handlePlay() {
+    if (playLoading) return;
+    playLoading = true;
     try {
       await enqueueCollection(collectionId, 'replace');
+      await startPlaybackFromQueue();
     } catch (err) {
       console.error('[MixtapeCollectionDetailView] enqueue (play) failed:', err);
-      showToast('Failed to start playback', 'error');
+      showToast($t('toast.failedStartPlayback') || 'Failed to start playback', 'error');
+    } finally {
+      playLoading = false;
     }
   }
 
   async function handleShuffle() {
-    if (!collection) return;
+    if (!collection || playLoading) return;
+    playLoading = true;
     try {
       if (collection.play_mode !== 'album_shuffle') {
         await setPlayMode(collectionId, 'album_shuffle');
       }
       await enqueueCollection(collectionId, 'replace');
+      await startPlaybackFromQueue();
     } catch (err) {
       console.error('[MixtapeCollectionDetailView] enqueue (shuffle) failed:', err);
-      showToast('Failed to start playback', 'error');
+      showToast($t('toast.failedStartPlayback') || 'Failed to start playback', 'error');
+    } finally {
+      playLoading = false;
     }
   }
 
@@ -163,6 +919,35 @@
     await setPlayMode(collectionId, next);
     await loadCollection();
     overflowOpen = false;
+  }
+
+  async function handleUploadCover() {
+    overflowOpen = false;
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      });
+      if (!selected || typeof selected !== 'string') return;
+      await uploadCustomCover(collectionId, selected);
+      await loadCollection();
+      showToast($t('collectionDetail.coverUploaded'), 'success');
+    } catch (err) {
+      console.error('[MixtapeCollectionDetailView] uploadCover failed:', err);
+      showToast($t('collectionDetail.coverUploadFailed'), 'error');
+    }
+  }
+
+  async function handleRemoveCover() {
+    overflowOpen = false;
+    try {
+      await removeCustomCover(collectionId);
+      await loadCollection();
+      showToast($t('collectionDetail.coverRemoved'), 'success');
+    } catch (err) {
+      console.error('[MixtapeCollectionDetailView] removeCover failed:', err);
+      showToast($t('collectionDetail.coverRemoveFailed'), 'error');
+    }
   }
 
   async function convertKind() {
@@ -242,7 +1027,14 @@
 
       <div class="header-content">
         <div class="header-cover">
-          <CollectionMosaic items={collection.items} size={240} kind={collection.kind} />
+          <CollectionMosaic
+            items={collection.items}
+            size={240}
+            kind={collection.kind}
+            customCoverUrl={collection.custom_artwork_path
+              ? convertFileSrc(collection.custom_artwork_path)
+              : null}
+          />
         </div>
 
         <div class="header-info">
@@ -259,28 +1051,39 @@
 
           <div class="header-actions">
             <button
-              class="primary-action"
+              class="action-btn-circle primary"
               onclick={handlePlay}
-              disabled={collection.items.length === 0}
+              disabled={collection.items.length === 0 || playLoading}
+              title={$t('common.playAllInOrder')}
+              aria-label={$t('common.playAllInOrder')}
             >
-              <Play size={16} fill="currentColor" />
-              <span>{$t('common.playAllInOrder')}</span>
+              {#if playLoading}
+                <LoaderCircle size={20} class="spin" />
+              {:else}
+                <Play size={20} fill="currentColor" color="currentColor" />
+              {/if}
             </button>
             <button
-              class="secondary-action"
+              class="action-btn-circle"
               onclick={handleShuffle}
-              disabled={collection.items.length === 0}
+              disabled={collection.items.length === 0 || playLoading}
+              title={$t('common.shuffleAlbums')}
+              aria-label={$t('common.shuffleAlbums')}
             >
-              <Shuffle size={16} />
-              <span>{$t('common.shuffleAlbums')}</span>
+              {#if playLoading}
+                <LoaderCircle size={18} class="spin" />
+              {:else}
+                <Shuffle size={18} />
+              {/if}
             </button>
             <div class="overflow-wrap">
               <button
-                class="icon-action"
+                class="action-btn-circle"
                 onclick={() => (overflowOpen = !overflowOpen)}
-                aria-label="More"
+                aria-label={$t('actions.more')}
+                title={$t('actions.more')}
               >
-                <MoreHorizontal size={16} />
+                <MoreHorizontal size={18} />
               </button>
               {#if overflowOpen}
                 <div
@@ -295,6 +1098,14 @@
                   <button class="overflow-item" onclick={openDescriptionModal}>
                     {$t('collectionDetail.editDescription')}
                   </button>
+                  <button class="overflow-item" onclick={handleUploadCover}>
+                    {$t('collectionDetail.uploadCover')}
+                  </button>
+                  {#if collection.custom_artwork_path}
+                    <button class="overflow-item" onclick={handleRemoveCover}>
+                      {$t('collectionDetail.clearCustomCover')}
+                    </button>
+                  {/if}
                   <button class="overflow-item" onclick={togglePlayMode}>
                     {collection.play_mode === 'in_order'
                       ? $t('common.playModeAlbumShuffle')
@@ -327,6 +1138,255 @@
         <p>No items yet. Add albums, tracks, or playlists from their detail pages.</p>
       </div>
     {:else}
+      <div class="list-controls">
+        <div class="search-box" class:has-query={normalizedSearch.length > 0}>
+          <Search size={14} />
+          <input
+            type="text"
+            class="search-input"
+            placeholder={$t('collectionDetail.searchPlaceholder') || 'Search albums & tracks…'}
+            bind:value={searchQuery}
+            aria-label={$t('collectionDetail.searchPlaceholder') || 'Search'}
+          />
+          {#if normalizedSearch}
+            <button
+              type="button"
+              class="search-clear"
+              onclick={() => (searchQuery = '')}
+              aria-label={$t('actions.clearSearch') || 'Clear search'}
+              title={$t('actions.clearSearch') || 'Clear'}
+            >
+              <X size={12} />
+            </button>
+          {/if}
+        </div>
+        <div class="dropdown-container">
+          <button
+            type="button"
+            class="control-btn"
+            onclick={() => { showSortMenu = !showSortMenu; showFilterMenu = false; }}
+            title={$t('collectionDetail.sort') || 'Sort'}
+          >
+            <ArrowUpDown size={14} />
+            <span>{sortOptions.find((o) => o.value === sortBy)?.label}</span>
+            <span class="sort-indicator">{sortDir === 'asc' ? '↑' : '↓'}</span>
+          </button>
+          {#if showSortMenu}
+            <div class="control-backdrop" onclick={() => (showSortMenu = false)} role="presentation"></div>
+            <div class="control-menu">
+              {#each sortOptions as option}
+                <button
+                  type="button"
+                  class="control-menu-item"
+                  class:selected={sortBy === option.value}
+                  onclick={() => selectSort(option.value)}
+                >
+                  <span>{option.label}</span>
+                  {#if sortBy === option.value}
+                    <span class="sort-indicator">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <div class="dropdown-container">
+          <button
+            type="button"
+            class="control-btn"
+            class:active={typeFilter !== 'all' || sourceFilter.size > 0}
+            onclick={() => { showFilterMenu = !showFilterMenu; showSortMenu = false; }}
+            title={$t('collectionDetail.filter') || 'Filter'}
+          >
+            <Filter size={14} />
+            <span>{$t('collectionDetail.filter') || 'Filter'}</span>
+            {#if sourceFilter.size > 0 || typeFilter !== 'all'}
+              <span class="filter-count">{(sourceFilter.size) + (typeFilter !== 'all' ? 1 : 0)}</span>
+            {/if}
+          </button>
+          {#if showFilterMenu}
+            <div class="control-backdrop" onclick={() => (showFilterMenu = false)} role="presentation"></div>
+            <div class="control-menu wide">
+              <div class="filter-section-label">{$t('collectionDetail.colType') || $t('discographyBuilder.colType')}</div>
+              {#each typeFilterOptions as option}
+                <button
+                  type="button"
+                  class="control-menu-item"
+                  class:selected={typeFilter === option.value}
+                  onclick={() => { typeFilter = option.value; }}
+                >
+                  <span>{option.label}</span>
+                  {#if typeFilter === option.value}
+                    <Check size={12} />
+                  {/if}
+                </button>
+              {/each}
+
+              <div class="filter-section-divider"></div>
+
+              <div class="filter-section-label">{$t('library.source')}</div>
+              <button
+                type="button"
+                class="control-menu-item"
+                class:selected={sourceFilter.has('qobuz')}
+                onclick={() => toggleSourceFilter('qobuz')}
+              >
+                <span>{$t('library.qobuzTrackIndicator')}</span>
+                {#if sourceFilter.has('qobuz')}<Check size={12} />{/if}
+              </button>
+              <button
+                type="button"
+                class="control-menu-item"
+                class:selected={sourceFilter.has('plex')}
+                onclick={() => toggleSourceFilter('plex')}
+              >
+                <span>{$t('library.plexTrackIndicator')}</span>
+                {#if sourceFilter.has('plex')}<Check size={12} />{/if}
+              </button>
+              <button
+                type="button"
+                class="control-menu-item"
+                class:selected={sourceFilter.has('local')}
+                onclick={() => toggleSourceFilter('local')}
+              >
+                <span>{$t('library.localTrackIndicator')}</span>
+                {#if sourceFilter.has('local')}<Check size={12} />{/if}
+              </button>
+            </div>
+          {/if}
+        </div>
+
+        {#if hasAnyFilter}
+          <button
+            type="button"
+            class="control-btn subtle"
+            onclick={() => { typeFilter = 'all'; sourceFilter = new Set(); sortBy = 'position'; sortDir = 'asc'; }}
+            title={$t('discographyBuilder.typeOverrideReset') || 'Reset'}
+          >
+            <RotateCcw size={12} />
+          </button>
+        {/if}
+
+        <button
+          type="button"
+          class="control-btn"
+          class:active={selectMode}
+          onclick={toggleSelectMode}
+          disabled={collection.items.length === 0}
+          title={selectMode ? ($t('actions.cancelSelection') || 'Cancel selection') : ($t('actions.select') || 'Select')}
+          aria-label={selectMode ? ($t('actions.cancelSelection') || 'Cancel selection') : ($t('actions.select') || 'Select')}
+        >
+          <SquareCheckBig size={14} />
+          <span>{selectMode ? ($t('actions.cancelSelection') || 'Cancel') : ($t('actions.select') || 'Select')}</span>
+        </button>
+
+        <!-- View-mode segmented control: list / grid / expanded. -->
+        <div class="view-mode-group" role="radiogroup" aria-label={$t('collectionDetail.viewMode') || 'View mode'}>
+          <button
+            type="button"
+            class="control-btn seg"
+            class:active={viewMode === 'list'}
+            onclick={() => (viewMode = 'list')}
+            title={$t('collectionDetail.viewList') || 'List'}
+            aria-label={$t('collectionDetail.viewList') || 'List'}
+            aria-pressed={viewMode === 'list'}
+          >
+            <List size={14} />
+          </button>
+          <button
+            type="button"
+            class="control-btn seg"
+            class:active={viewMode === 'grid'}
+            onclick={() => (viewMode = 'grid')}
+            title={$t('collectionDetail.viewGrid') || 'Grid'}
+            aria-label={$t('collectionDetail.viewGrid') || 'Grid'}
+            aria-pressed={viewMode === 'grid'}
+          >
+            <LayoutGrid size={14} />
+          </button>
+          <button
+            type="button"
+            class="control-btn seg"
+            class:active={viewMode === 'expanded'}
+            onclick={() => (viewMode = 'expanded')}
+            title={$t('collectionDetail.viewExpanded') || 'Expanded'}
+            aria-label={$t('collectionDetail.viewExpanded') || 'Expanded'}
+            aria-pressed={viewMode === 'expanded'}
+          >
+            <AlignJustify size={14} />
+          </button>
+        </div>
+      </div>
+
+      {#if viewMode === 'grid'}
+        <div class="item-grid">
+          {#each visibleItems as item (item.position)}
+            {@const resolved = resolvedFor(item)}
+            {@const artworkSrc = item.artwork_url || resolved.artworkUrl}
+            {@const isSelected = selectedPositions.has(item.position)}
+            <div
+              class="grid-card"
+              class:is-selected={isSelected}
+              role="button"
+              tabindex="0"
+              onclick={() => {
+                if (selectMode) {
+                  toggleSelect(item.position);
+                } else {
+                  onOpenItem?.(item.source, item.item_type, item.source_item_id);
+                }
+              }}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  if (selectMode) toggleSelect(item.position);
+                  else onOpenItem?.(item.source, item.item_type, item.source_item_id);
+                }
+              }}
+            >
+              <div class="grid-artwork-wrap">
+                {#if artworkSrc}
+                  <img class="grid-artwork" src={artworkSrc} alt="" loading="lazy" />
+                {:else}
+                  <div class="grid-artwork grid-artwork-placeholder">
+                    {#if item.item_type === 'track'}
+                      <Music2 size={28} />
+                    {:else if item.item_type === 'playlist'}
+                      <ListMusic size={28} />
+                    {:else}
+                      <Disc size={28} />
+                    {/if}
+                  </div>
+                {/if}
+                {#if selectMode}
+                  <input
+                    type="checkbox"
+                    class="grid-checkbox"
+                    checked={isSelected}
+                    onclick={(e) => { e.stopPropagation(); toggleSelect(item.position); }}
+                    onchange={() => {}}
+                    aria-label={$t('collectionDetail.selectItem') || 'Select item'}
+                  />
+                {:else}
+                  <button
+                    type="button"
+                    class="grid-play-overlay"
+                    onclick={(e) => { e.stopPropagation(); onPlayItem?.(item); }}
+                    aria-label={$t('actions.play')}
+                  >
+                    <Play size={24} fill="currentColor" />
+                  </button>
+                {/if}
+              </div>
+              <div class="grid-title" title={item.title}>{item.title}</div>
+              {#if item.subtitle}
+                <div class="grid-subtitle" title={item.subtitle}>{item.subtitle}</div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {:else}
       <div class="item-list">
         <div class="item-list-header">
           <div class="col-idx">#</div>
@@ -339,20 +1399,76 @@
           <div class="col-menu"></div>
         </div>
 
-        {#each collection.items as item (item.position)}
-          <div class="item-row">
-            <div class="col-idx">{item.position + 1}</div>
+        {#each visibleItems as item (item.position)}
+          {@const resolved = resolvedFor(item)}
+          {@const artworkSrc = item.artwork_url || resolved.artworkUrl}
+          {@const isSelected = selectedPositions.has(item.position)}
+          {@const key = itemKey(item)}
+          {@const isExpandLoading = expandLoading.has(key)}
+          {@const showTracks = viewMode === 'expanded' && canExpand(item)}
+          <div class="item-row" class:is-selected={isSelected} class:is-expanded={showTracks}>
+            <div class="col-idx">
+              {#if selectMode}
+                <input
+                  type="checkbox"
+                  class="row-checkbox"
+                  checked={isSelected}
+                  onclick={(e) => e.stopPropagation()}
+                  onchange={() => toggleSelect(item.position)}
+                  aria-label={$t('collectionDetail.selectItem') || 'Select item'}
+                />
+              {:else}
+                <span class="row-index">{item.position + 1}</span>
+              {/if}
+            </div>
 
             <div class="col-item">
-              {#if item.artwork_url}
-                <img class="artwork" src={item.artwork_url} alt="" loading="lazy" />
-              {:else}
-                <div class="artwork artwork-placeholder"></div>
-              {/if}
+              <div class="artwork-wrap">
+                {#if artworkSrc}
+                  <img class="artwork" src={artworkSrc} alt="" loading="lazy" />
+                {:else}
+                  <div class="artwork artwork-placeholder">
+                    {#if item.item_type === 'track'}
+                      <Music2 size={18} />
+                    {:else if item.item_type === 'playlist'}
+                      <ListMusic size={18} />
+                    {:else}
+                      <Disc size={18} />
+                    {/if}
+                  </div>
+                {/if}
+                <button
+                  type="button"
+                  class="row-play-overlay"
+                  onclick={(e) => { e.stopPropagation(); onPlayItem?.(item); }}
+                  aria-label={$t('actions.play')}
+                  title={$t('actions.play')}
+                >
+                  <Play size={16} fill="currentColor" />
+                </button>
+              </div>
               <div class="item-meta">
-                <div class="item-title">{item.title}</div>
+                <button
+                  type="button"
+                  class="item-title item-link"
+                  onclick={() => onOpenItem?.(item.source, item.item_type, item.source_item_id)}
+                  title={item.title}
+                >
+                  {item.title}
+                </button>
                 {#if item.subtitle}
-                  <div class="item-subtitle">{item.subtitle}</div>
+                  {#if item.source === 'qobuz'}
+                    <button
+                      type="button"
+                      class="item-subtitle item-link"
+                      onclick={() => onOpenArtist?.(item.source, item.subtitle ?? '')}
+                      title={item.subtitle}
+                    >
+                      {item.subtitle}
+                    </button>
+                  {:else}
+                    <div class="item-subtitle">{item.subtitle}</div>
+                  {/if}
                 {/if}
               </div>
             </div>
@@ -366,16 +1482,35 @@
                 {:else}
                   <ListMusic size={13} />
                 {/if}
-                <span class="type-label">{itemTypeLabel(item.item_type)}</span>
+                <span class="type-label">{displayedTypeLabel(item)}</span>
               </span>
             </div>
 
             <div class="col-source">
-              <SourceBadge value={sourceBadgeFor(item)} />
+              <div
+                class="source-indicator"
+                title={resolved.kind === 'plex'
+                  ? $t('library.plexTrackIndicator')
+                  : resolved.kind === 'qobuz'
+                    ? $t('library.qobuzTrackIndicator')
+                    : $t('library.localTrackIndicator')}
+              >
+                {#if resolved.kind === 'plex'}
+                  <span class="plex-indicator-icon" aria-hidden="true"></span>
+                {:else if resolved.kind === 'qobuz'}
+                  <span class="qobuz-indicator-icon" aria-hidden="true"></span>
+                {:else}
+                  <span class="local-indicator-icon" aria-hidden="true"></span>
+                {/if}
+              </div>
             </div>
 
             <div class="col-quality">
-              <QualityBadge compact />
+              <QualityBadge
+                bitDepth={resolved.bitDepth ?? undefined}
+                samplingRate={resolved.sampleRateKhz ?? undefined}
+                format={resolved.format ?? undefined}
+              />
             </div>
 
             <div class="col-tracks">{itemTracks(item)}</div>
@@ -384,30 +1519,159 @@
             <div class="col-menu">
               <button
                 class="icon-action small"
-                onclick={() => (openItemMenu = openItemMenu === item.position ? null : item.position)}
-                aria-label="Item actions"
+                onclick={() => {
+                  if (openItemMenu === item.position) {
+                    openItemMenu = null;
+                    openTypeSubmenu = null;
+                  } else {
+                    openItemMenu = item.position;
+                    openTypeSubmenu = null;
+                  }
+                }}
+                aria-label={$t('collectionDetail.itemActions')}
               >
                 <MoreHorizontal size={14} />
               </button>
               {#if openItemMenu === item.position}
                 <div
                   class="overflow-backdrop"
-                  onclick={() => (openItemMenu = null)}
+                  onclick={() => { openItemMenu = null; openTypeSubmenu = null; }}
                   role="presentation"
                 ></div>
                 <div class="overflow-menu item-menu" role="menu">
                   <button
+                    class="overflow-item"
+                    onclick={() => { onPlayItem?.(item); openItemMenu = null; openTypeSubmenu = null; }}
+                  >
+                    <Play size={13} />
+                    <span>{$t('actions.play')}</span>
+                  </button>
+                  <button
+                    class="overflow-item"
+                    onclick={() => { onPlayItemNext?.(item); openItemMenu = null; openTypeSubmenu = null; }}
+                  >
+                    <span>{$t('actions.playNext')}</span>
+                  </button>
+                  <button
+                    class="overflow-item"
+                    onclick={() => { onAddItemToQueueLater?.(item); openItemMenu = null; openTypeSubmenu = null; }}
+                  >
+                    <span>{$t('actions.addToQueue')}</span>
+                  </button>
+                  <div class="overflow-divider"></div>
+                  {#if item.item_type === 'album'}
+                    <button
+                      class="overflow-item with-trailing"
+                      onclick={() => (openTypeSubmenu = openTypeSubmenu === item.position ? null : item.position)}
+                    >
+                      <span>{$t('collectionDetail.changeReleaseType')}</span>
+                      <ChevronRight size={13} />
+                    </button>
+                    {#if openTypeSubmenu === item.position}
+                      {@const currentType = currentReleaseTypeFor(item)}
+                      <div class="submenu">
+                        {#each RELEASE_TYPE_CHOICES as choice}
+                          <button
+                            class="overflow-item with-leading"
+                            class:selected={currentType === choice}
+                            onclick={() => {
+                              setReleaseTypeOverride(item.source, item.source_item_id, choice);
+                              openTypeSubmenu = null;
+                              openItemMenu = null;
+                            }}
+                          >
+                            {#if currentType === choice}
+                              <Check size={12} />
+                            {:else}
+                              <span class="check-placeholder"></span>
+                            {/if}
+                            <span>{$t(`discographyBuilder.releaseType.${choice}`)}</span>
+                          </button>
+                        {/each}
+                        {#if hasReleaseTypeOverride(item.source, item.source_item_id)}
+                          <div class="submenu-divider"></div>
+                          <button
+                            class="overflow-item with-leading reset"
+                            onclick={() => {
+                              clearReleaseTypeOverride(item.source, item.source_item_id);
+                              openTypeSubmenu = null;
+                              openItemMenu = null;
+                            }}
+                          >
+                            <RotateCcw size={12} />
+                            <span>{$t('discographyBuilder.typeOverrideReset')}</span>
+                          </button>
+                        {/if}
+                      </div>
+                    {/if}
+                    <div class="overflow-divider"></div>
+                  {/if}
+                  <button
                     class="overflow-item destructive"
                     onclick={() => handleRemoveItem(item.position)}
                   >
-                    <Trash2 size={13} /> Remove
+                    <Trash2 size={13} />
+                    <span>{$t('collectionDetail.removeItem')}</span>
                   </button>
                 </div>
               {/if}
             </div>
           </div>
+
+          {#if showTracks}
+            {@const tracksForRow = filteredTracksFor(item)}
+            <div class="expanded-tracks">
+              {#if isExpandLoading && !expandedTracks[key]}
+                <div class="expanded-empty">
+                  <LoaderCircle size={14} class="spin" />
+                </div>
+              {:else if tracksForRow.length === 0}
+                <div class="expanded-empty">{$t('search.noResults')}</div>
+              {:else}
+                {#each tracksForRow as et}
+                  <TrackRow
+                    trackId={et.id}
+                    number={et.number}
+                    title={et.title}
+                    artist={et.artist}
+                    duration={et.durationStr}
+                    quality={et.quality}
+                    explicit={et.parental_warning === true}
+                    isLocal={et.isLocal === true}
+                    localSource={et.localSource ?? 'local'}
+                    hideDownload={true}
+                    hideFavorite={et.isLocal === true}
+                    onPlay={() => onPlayTrackFromItem?.(item, et.id)}
+                    menuActions={{
+                      onPlayNow: () => onPlayTrackFromItem?.(item, et.id),
+                      onPlayNext: () => onPlayTrackNext?.(et.id),
+                      onPlayLater: () => onPlayTrackLater?.(et.id),
+                      onGoToAlbum: () => onOpenItem?.(item.source, item.item_type, item.source_item_id),
+                    }}
+                  />
+                {/each}
+              {/if}
+            </div>
+          {/if}
         {/each}
       </div>
+      {/if}
+
+      <BulkActionBar
+        count={selectedPositions.size}
+        onPlayNext={() => {
+          onBulkPlayNext?.(selectedItems());
+        }}
+        onPlayLater={() => {
+          onBulkPlayLater?.(selectedItems());
+        }}
+        onAddToPlaylist={() => {
+          onBulkAddToPlaylist?.(selectedItems());
+        }}
+        onAddToMixtape={handleBulkAddToMixtape}
+        onRemoveFromCollection={handleBulkRemove}
+        onClearSelection={clearSelection}
+      />
     {/if}
 
     <!-- Rename modal -->
@@ -477,9 +1741,16 @@
 </div>
 
 <style>
+  /* Canonical scroll pattern from ArtistDetailView — the view itself owns
+     the scroll container (full height of .main-content, overflow-y: auto). */
   .detail-view {
+    width: 100%;
+    height: 100%;
     padding: 24px 32px;
     color: var(--text-primary);
+    box-sizing: border-box;
+    overflow-y: auto;
+    position: relative;
   }
 
   /* Mirror of ArtistDetailView's .back-btn — borderless, text + icon, muted. */
@@ -575,70 +1846,356 @@
     margin-top: 12px;
   }
 
-  .primary-action {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 22px;
-    background: var(--accent-primary);
-    color: #fff;
-    border: none;
-    border-radius: 999px;
-    font-size: 14px;
-    font-weight: 700;
-    font-family: inherit;
-    cursor: pointer;
+  /* Play/Shuffle/More in the hero use the global .action-btn-circle family
+     (see src/app.css). Canonical pattern — same treatment as AlbumDetailView. */
+
+  /* Source indicator — same monochrome masked-svg treatment as
+     DiscographyBuilder (and TrackRow's .local-indicator in LocalLibrary).
+     Live-resolved kind is one of: qobuz | plex | local. */
+  /* Spin keyframe for the Play/Shuffle loading spinner (LoaderCircle icon).
+     Scoped-global so the svg class from lucide-svelte picks it up. */
+  :global(.spin) {
+    animation: spin 0.8s linear infinite;
   }
-  .primary-action:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .primary-action:hover:not(:disabled) {
-    filter: brightness(1.1);
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 
-  .secondary-action {
-    display: inline-flex;
+  /* Sort + filter + search controls — same dropdown pattern as
+     LocalLibraryView / PlaylistDetailView. */
+  .list-controls {
+    display: flex;
     align-items: center;
     gap: 8px;
-    padding: 9px 16px;
+    margin: 0 0 10px;
+    padding: 0 12px;
+    flex-wrap: wrap;
+  }
+
+  /* Search box matches the canonical `.search-container` look used across
+     the app — input embedded with a leading magnifying glass and a trailing
+     clear button that appears when the query is non-empty. */
+  .search-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
     background: var(--bg-secondary);
-    color: var(--text-primary);
     border: 1px solid var(--bg-tertiary);
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
+    border-radius: 6px;
+    color: var(--text-muted);
+    min-width: 220px;
+    max-width: 320px;
+    flex: 0 1 260px;
+  }
+  .search-box.has-query {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+  }
+  .search-input {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
     font-family: inherit;
-    cursor: pointer;
+    font-size: 12px;
+    padding: 0;
   }
-  .secondary-action:hover:not(:disabled) {
-    background: var(--bg-hover);
+  .search-input::placeholder {
+    color: var(--text-muted);
   }
-  .secondary-action:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .icon-action {
+  .search-clear {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
-    border: 1px solid var(--bg-tertiary);
-    border-radius: 8px;
-    font-family: inherit;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
     cursor: pointer;
+    border-radius: 3px;
   }
-  .icon-action:hover {
+  .search-clear:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
   }
+  .dropdown-container {
+    position: relative;
+  }
+  .control-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .control-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .control-btn.active {
+    color: var(--accent-primary);
+    border-color: var(--accent-primary);
+  }
+  .control-btn.subtle {
+    background: transparent;
+    border-color: transparent;
+    padding: 6px;
+  }
+  .sort-indicator {
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+  .control-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+  }
+  .control-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 101;
+    min-width: 160px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+  }
+  .control-menu-item {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .control-menu-item:hover {
+    background: var(--bg-hover);
+  }
+  .control-menu-item.selected {
+    color: var(--accent-primary);
+  }
+  .control-menu.wide {
+    min-width: 200px;
+  }
+  .filter-section-label {
+    padding: 6px 8px 2px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .filter-section-divider {
+    height: 1px;
+    background: var(--bg-tertiary);
+    margin: 4px 0;
+  }
+  .filter-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 10px;
+    font-weight: 600;
+    background: var(--accent-primary);
+    color: #fff;
+    border-radius: 10px;
+    margin-left: 2px;
+  }
+
+  /* View-mode segmented group — three buttons packed tight with shared borders. */
+  .view-mode-group {
+    display: inline-flex;
+    margin-left: auto;
+  }
+  .view-mode-group .control-btn.seg {
+    padding: 6px 8px;
+    border-radius: 0;
+    border-right-width: 0;
+  }
+  .view-mode-group .control-btn.seg:first-child {
+    border-top-left-radius: 6px;
+    border-bottom-left-radius: 6px;
+  }
+  .view-mode-group .control-btn.seg:last-child {
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+    border-right-width: 1px;
+  }
+  .view-mode-group .control-btn.seg.active {
+    background: var(--accent-primary);
+    color: #fff;
+    border-color: var(--accent-primary);
+  }
+
+  /* Grid view — auto-fill tiles mirroring AlbumCard proportions. */
+  .item-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 20px;
+    padding: 0 12px;
+  }
+  .grid-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 120ms ease;
+    background: transparent;
+  }
+  .grid-card:hover {
+    background: var(--bg-hover);
+  }
+  .grid-card.is-selected {
+    background: var(--bg-hover);
+    outline: 2px solid var(--accent-primary);
+  }
+  .grid-artwork-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg-tertiary);
+  }
+  .grid-artwork {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .grid-artwork-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+  }
+  .grid-play-overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+  }
+  .grid-card:hover .grid-play-overlay {
+    display: flex;
+  }
+  .grid-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent-primary);
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .grid-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .grid-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .source-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    opacity: 0.9;
+  }
+  .plex-indicator-icon,
+  .local-indicator-icon {
+    width: 14px;
+    height: 14px;
+    background-color: var(--accent-primary);
+  }
+  .plex-indicator-icon {
+    -webkit-mask: url('/plex-mono.svg') center / contain no-repeat;
+    mask: url('/plex-mono.svg') center / contain no-repeat;
+  }
+  .local-indicator-icon {
+    -webkit-mask: url('/hdd.svg') center / contain no-repeat;
+    mask: url('/hdd.svg') center / contain no-repeat;
+  }
+  .qobuz-indicator-icon {
+    width: 16px;
+    height: 16px;
+    background-color: var(--accent-primary);
+    -webkit-mask: url('/qobuz-logo.svg') center / contain no-repeat;
+    mask: url('/qobuz-logo.svg') center / contain no-repeat;
+  }
+
+  /* Full QualityBadge — same treatment as DiscographyBuilder: pass
+     bitDepth + samplingRate + format and let the component handle it.
+     No local overrides. */
+  .col-quality {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  /* Small icon button (used on row ⋯ menu trigger). */
   .icon-action.small {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 24px;
     height: 24px;
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .icon-action.small:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
   }
 
   /* ── Overflow menu (shared by header ⋯ and row ⋯) ── */
@@ -688,7 +2245,48 @@
   }
 
   .item-menu {
-    min-width: 140px;
+    min-width: 180px;
+  }
+
+  /* "Change release type ▸" row layout — label left, chevron right. */
+  .overflow-item.with-trailing {
+    justify-content: space-between;
+  }
+  .overflow-item.with-leading .check-placeholder {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+  .overflow-item.with-leading.selected {
+    color: var(--accent-primary);
+  }
+  .overflow-item.with-leading.reset {
+    color: var(--text-muted);
+  }
+
+  .submenu {
+    display: flex;
+    flex-direction: column;
+    margin: 4px 8px 4px 16px;
+    padding: 4px;
+    background: var(--bg-primary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 6px;
+  }
+  .submenu .overflow-item {
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+  .submenu-divider {
+    height: 1px;
+    background: var(--bg-tertiary);
+    margin: 4px 0;
+  }
+  .overflow-divider {
+    height: 1px;
+    background: var(--bg-tertiary);
+    margin: 4px 0;
   }
 
   /* ── Item list — matches existing track-list vocabulary ── */
@@ -699,7 +2297,7 @@
   .item-list-header,
   .item-row {
     display: grid;
-    grid-template-columns: 40px 1fr 140px 80px 90px 72px 60px 40px;
+    grid-template-columns: 40px 1fr 140px 80px 160px 72px 60px 40px;
     align-items: center;
     gap: 12px;
     padding: 8px 12px;
@@ -730,6 +2328,37 @@
     color: var(--text-muted);
     font-size: 13px;
     text-align: center;
+    position: relative;
+  }
+
+  /* Selection checkbox — only rendered when selectMode is ON (hero toggle).
+     Mirrors the ArtistDetailView multi-select pattern: default state shows
+     index + expand chevron; entering select mode swaps that for a checkbox. */
+  .row-checkbox {
+    margin: 0;
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
+  }
+  .item-row.is-selected {
+    background: var(--bg-hover);
+  }
+
+  /* Expanded-mode tracks: render real TrackRow components. Only the
+     container + empty/loading placeholder stays local here — TrackRow
+     handles its own internal layout, quality badge, play overlay, menu. */
+  .expanded-tracks {
+    display: flex;
+    flex-direction: column;
+    margin: 4px 12px 8px 52px;
+    padding: 4px 0;
+  }
+  .expanded-empty {
+    padding: 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
   }
 
   .col-item {
@@ -739,16 +2368,51 @@
     min-width: 0;
   }
 
+  /* Artwork wrapper hosts the play overlay (same pattern as ArtistDetailView
+     popular tracks .track-play-overlay). */
+  .artwork-wrap {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
   .artwork {
     width: 36px;
     height: 36px;
     object-fit: cover;
     border-radius: 4px;
-    flex-shrink: 0;
+    display: block;
   }
 
   .artwork-placeholder {
     background: var(--bg-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+  }
+
+  .row-play-overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    transition: background 150ms ease;
+    z-index: 2;
+  }
+  .item-row:hover .row-play-overlay {
+    display: flex;
+  }
+  .row-play-overlay:hover {
+    background: rgba(0, 0, 0, 0.78);
   }
 
   .item-meta {
@@ -773,6 +2437,27 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Clickable title / artist buttons inside item-meta. No visual weight of
+     their own; the underline on hover signals the link affordance. */
+  .item-link {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    display: block;
+    max-width: 100%;
+  }
+  .item-link:hover {
+    color: var(--accent-primary);
+    text-decoration: underline;
   }
 
   .type-cell {
