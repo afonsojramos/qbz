@@ -325,7 +325,13 @@
     },
     "label": "COLLECTION",
     "artistLabel": "ARTISTA",
-    "buildFromArtist": "Criar Artist Collection"
+    "buildFromArtist": "Criar Artist Collection",
+    "searchPlaceholder": "Pesquisar coleções…",
+    "sortByItems": "Itens",
+    "sortByUpdated": "Atualizados recentemente",
+    "kindFilterAll": "Todos os tipos",
+    "kindFilterCollection": "Collections",
+    "kindFilterArtistCollection": "Artist Collections"
   },
   "common": {
     "name": "Nome",
@@ -1043,7 +1049,14 @@
       "title": "Criar Mixtape"
     },
     "label": "MIXTAPE",
-    "albumCount": "{count, plural, one {# álbum} other {# álbuns}}"
+    "searchPlaceholder": "Pesquisar mixtapes…",
+    "albumCount": "{count, plural, one {# álbum} other {# álbuns}}",
+    "bulkAdded": "{count} adicionados a {name}",
+    "bulkAddTitle": "{count} itens",
+    "dupSummary": "{count, plural, one {# item já está em} other {# itens já estão em}} {name}",
+    "dupFreshHint": "{count, plural, one {# outro item} other {# outros itens}} serão adicionados mesmo assim.",
+    "dupAddAnyway": "Adicionar mesmo assim",
+    "dupSkip": "Ignorar duplicatas"
   },
   "musician": {
     "knownFor": "Conhecido por",
@@ -1067,7 +1080,8 @@
     "updates": "Atualizações",
     "flatpak": "Flatpak",
     "snap": "Snap",
-    "purchases": "Compras"
+    "purchases": "Compras",
+    "myQbz": "My QBZ"
   },
   "notifications": {
     "trackAdded": "Faixa adicionada à fila",
