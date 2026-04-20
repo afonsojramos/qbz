@@ -315,7 +315,8 @@
     "playAllInOrder": "Abspielen",
     "shuffleAlbums": "Alben-Zufallsmodus",
     "playModeInOrder": "Der Reihe nach",
-    "playModeAlbumShuffle": "Alben-Zufallsmodus"
+    "playModeAlbumShuffle": "Alben-Zufallsmodus",
+    "trackCount": "{count} Titel"
   },
   "confirm": {
     "deletePlaylist": "Sind Sie sicher, dass Sie diese Playlist löschen möchten?",
@@ -492,7 +493,24 @@
     "alternateLabel": "Alternative",
     "compilationLabel": "Compilation",
     "selectedCount": "{selected} von {total} Alben ausgewählt",
-    "createBtn": "Collection erstellen"
+    "createBtn": "Collection erstellen",
+    "colYear": "Jahr",
+    "colType": "Typ",
+    "colAlbum": "Album",
+    "colTracks": "Titel",
+    "colSource": "Quelle",
+    "colQuality": "Qualität",
+    "releaseType": {
+      "album": "Album",
+      "ep": "EP",
+      "single": "Single",
+      "live": "Live",
+      "compilation": "Compilation"
+    },
+    "checkAll": "Alle auswählen",
+    "uncheckAll": "Alle abwählen",
+    "typeOverrideHint": "Klicken, um Veröffentlichungstyp zu überschreiben",
+    "typeOverrideReset": "Auto-erkannten verwenden"
   },
   "discover": {
     "newReleases": "Neuerscheinungen",
