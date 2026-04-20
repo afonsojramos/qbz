@@ -299,6 +299,21 @@ async fn resolve_local_album(
     library: &crate::library::LibraryState,
     group_key: &str,
 ) -> Result<Vec<CoreQueueTrack>, String> {
+    // Plex-backed items carry a Plex album_key as their source_item_id. Those
+    // rows live in the Plex cache DB (plex_cache_tracks), not local_tracks,
+    // so route them to the Plex cache fetcher instead of db.get_album_tracks.
+    if group_key.starts_with("plex:") {
+        let tracks = crate::plex::plex_cache_get_album_tracks(group_key.to_string())
+            .map_err(|e| format!("plex cache get_album_tracks({}) failed: {}", group_key, e))?;
+        if tracks.is_empty() {
+            return Err(format!(
+                "plex album {} has 0 tracks (cache empty — visit LocalLibrary to sync)",
+                group_key
+            ));
+        }
+        return Ok(tracks.iter().map(plex_cached_track_to_queue_track).collect());
+    }
+
     let guard = library.db.lock().await;
     let db = guard
         .as_ref()
@@ -382,6 +397,38 @@ fn track_to_queue_track_from_api(track: &crate::api::Track) -> CoreQueueTrack {
 /// Map a `LocalTrack` to a `CoreQueueTrack`.
 /// `is_local = true`, `source = "local"`, `sample_rate` is converted from Hz
 /// to kHz to match the Qobuz convention used elsewhere in the queue display.
+/// Map a cached Plex track to a CoreQueueTrack. The Plex rating_key (numeric
+/// string) becomes the QueueTrack.id so the frontend's Plex playback path
+/// (`v2_plex_play_track` with `ratingKey: String(track.id)`) resolves to the
+/// same Plex object. source="plex" lets playbackService.playTrack route to
+/// the Plex branch instead of the local-file branch.
+fn plex_cached_track_to_queue_track(track: &crate::plex::PlexCachedTrack) -> CoreQueueTrack {
+    let id: u64 = track.rating_key.parse().unwrap_or(track.id);
+    let sample_rate_khz = if track.sample_rate > 0 {
+        Some((track.sample_rate as f64) / 1000.0)
+    } else {
+        None
+    };
+    CoreQueueTrack {
+        id,
+        title: track.title.clone(),
+        artist: track.artist.clone(),
+        album: track.album.clone(),
+        duration_secs: track.duration_secs,
+        artwork_url: track.artwork_path.clone(),
+        hires: track.bit_depth.map(|d| d > 16).unwrap_or(false),
+        bit_depth: track.bit_depth,
+        sample_rate: sample_rate_khz,
+        is_local: true,
+        album_id: Some(track.album_key.clone()),
+        artist_id: None,
+        streamable: true,
+        source: Some("plex".to_string()),
+        parental_warning: false,
+        source_item_id_hint: None,
+    }
+}
+
 pub fn local_track_to_queue_track(track: &qbz_library::LocalTrack) -> CoreQueueTrack {
     // Artwork: local tracks store a file path; expose it as a `file://` URL
     // so the frontend's <img> can load it. Falls back to None when absent.

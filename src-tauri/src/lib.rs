@@ -1800,9 +1800,11 @@ pub fn run() {
             commands_v2::v2_mixtape_remove_custom_cover,
             commands_v2::v2_delete_mixtape_collection,
             commands_v2::v2_add_mixtape_item,
+            commands_v2::v2_mixtape_item_exists,
             commands_v2::v2_remove_mixtape_item,
             commands_v2::v2_reorder_mixtape_items,
             commands_v2::v2_enqueue_collection,
+            commands_v2::v2_enqueue_collection_item,
             commands_v2::v2_skip_to_next_item,
             commands_v2::v2_skip_to_previous_item,
         ])

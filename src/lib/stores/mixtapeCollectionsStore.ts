@@ -167,7 +167,11 @@ export async function deleteCollection(id: string): Promise<void> {
  * Returns true if the item was added, false if the backend rejected it
  * as a dedup (exact source+source_item_id already in this collection).
  */
-export async function addItem(collectionId: string, item: NewItemInput): Promise<boolean> {
+export async function addItem(
+  collectionId: string,
+  item: NewItemInput,
+  opts?: { allowDuplicate?: boolean },
+): Promise<boolean> {
   return await invoke<boolean>('v2_add_mixtape_item', {
     collectionId,
     itemType: item.item_type,
@@ -178,6 +182,24 @@ export async function addItem(collectionId: string, item: NewItemInput): Promise
     artworkUrl: item.artwork_url ?? null,
     year: item.year ?? null,
     trackCount: item.track_count ?? null,
+    allowDuplicate: opts?.allowDuplicate ?? false,
+  });
+}
+
+/**
+ * Returns true if the given (source, source_item_id) tuple already has an
+ * item inside the target collection. Used by AddToMixtapeModal to warn the
+ * user before inserting a duplicate.
+ */
+export async function itemExists(
+  collectionId: string,
+  source: 'qobuz' | 'local',
+  sourceItemId: string,
+): Promise<boolean> {
+  return await invoke<boolean>('v2_mixtape_item_exists', {
+    collectionId,
+    source,
+    sourceItemId,
   });
 }
 

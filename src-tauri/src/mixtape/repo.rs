@@ -253,15 +253,42 @@ pub fn add_item(
     year: Option<i32>,
     track_count: Option<i32>,
 ) -> Result<bool> {
-    let exists: bool = conn
-        .prepare(
-            "SELECT 1 FROM mixtape_collection_items
-               WHERE collection_id = ?1 AND source = ?2 AND source_item_id = ?3
-               LIMIT 1",
-        )?
-        .exists(params![collection_id, serialize_source(source), source_item_id])?;
-    if exists {
-        return Ok(false);
+    add_item_with(
+        conn, collection_id, item_type, source, source_item_id,
+        title, subtitle, artwork_url, year, track_count,
+        false,
+    )
+}
+
+/// Same as `add_item` but when `allow_duplicate` is true the
+/// `(collection_id, source, source_item_id)` dedup check is skipped and the
+/// row is always inserted. Used by the confirmation-backed add flow so a
+/// user that explicitly says "yes, add it again" gets their duplicate.
+#[allow(clippy::too_many_arguments)]
+pub fn add_item_with(
+    conn: &Connection,
+    collection_id: &str,
+    item_type: ItemType,
+    source: AlbumSource,
+    source_item_id: &str,
+    title: &str,
+    subtitle: Option<&str>,
+    artwork_url: Option<&str>,
+    year: Option<i32>,
+    track_count: Option<i32>,
+    allow_duplicate: bool,
+) -> Result<bool> {
+    if !allow_duplicate {
+        let exists: bool = conn
+            .prepare(
+                "SELECT 1 FROM mixtape_collection_items
+                   WHERE collection_id = ?1 AND source = ?2 AND source_item_id = ?3
+                   LIMIT 1",
+            )?
+            .exists(params![collection_id, serialize_source(source), source_item_id])?;
+        if exists {
+            return Ok(false);
+        }
     }
 
     let next_pos: i32 = conn.query_row(
@@ -296,6 +323,25 @@ pub fn add_item(
         params![ts, collection_id],
     )?;
     Ok(true)
+}
+
+/// Returns true if this `(collection_id, source, source_item_id)` tuple
+/// already has at least one row in mixtape_collection_items. Used by the
+/// bulk-add confirmation flow so the UI can ask before inserting duplicates.
+pub fn item_exists(
+    conn: &Connection,
+    collection_id: &str,
+    source: AlbumSource,
+    source_item_id: &str,
+) -> Result<bool> {
+    let exists: bool = conn
+        .prepare(
+            "SELECT 1 FROM mixtape_collection_items
+               WHERE collection_id = ?1 AND source = ?2 AND source_item_id = ?3
+               LIMIT 1",
+        )?
+        .exists(params![collection_id, serialize_source(source), source_item_id])?;
+    Ok(exists)
 }
 
 pub fn remove_item(conn: &Connection, collection_id: &str, position: i32) -> Result<()> {

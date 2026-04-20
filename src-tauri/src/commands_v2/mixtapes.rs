@@ -366,7 +366,7 @@ pub async fn v2_delete_mixtape_collection(
 /// Returns `true` if the item was inserted, `false` if it was a duplicate
 /// (same `source` + `sourceItemId` already exists in the collection).
 #[tauri::command]
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 pub async fn v2_add_mixtape_item(
     collection_id: String,
     item_type: String,
@@ -377,17 +377,19 @@ pub async fn v2_add_mixtape_item(
     artwork_url: Option<String>,
     year: Option<i32>,
     track_count: Option<i32>,
+    allow_duplicate: Option<bool>,
     library: State<'_, LibraryState>,
 ) -> Result<bool, RuntimeError> {
     log::debug!(
-        "[V2] add_mixtape_item collection_id={} source_item_id={}",
+        "[V2] add_mixtape_item collection_id={} source_item_id={} allow_duplicate={:?}",
         collection_id,
-        source_item_id
+        source_item_id,
+        allow_duplicate
     );
     let guard = acquire_db!(library);
     let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
     db.with_connection(|conn| {
-        crate::mixtape::repo::add_item(
+        crate::mixtape::repo::add_item_with(
             conn,
             &collection_id,
             parse_item_type(&item_type),
@@ -398,6 +400,32 @@ pub async fn v2_add_mixtape_item(
             artwork_url.as_deref(),
             year,
             track_count,
+            allow_duplicate.unwrap_or(false),
+        )
+        .map_err(|e| RuntimeError::Internal(e.to_string()))
+    })
+}
+
+/// Check whether `(collection_id, source, source_item_id)` already has an
+/// item inside the given collection. Lets the frontend ask "are any of
+/// these items already in there?" before bulk-adding and show a
+/// confirmation dialog.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_mixtape_item_exists(
+    collection_id: String,
+    source: String,
+    source_item_id: String,
+    library: State<'_, LibraryState>,
+) -> Result<bool, RuntimeError> {
+    let guard = acquire_db!(library);
+    let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+    db.with_connection(|conn| {
+        crate::mixtape::repo::item_exists(
+            conn,
+            &collection_id,
+            parse_source(&source),
+            &source_item_id,
         )
         .map_err(|e| RuntimeError::Internal(e.to_string()))
     })
@@ -560,6 +588,107 @@ pub async fn v2_enqueue_collection(
             let _ = db.with_connection(|conn| {
                 crate::mixtape::repo::touch_play(conn, &collection_id)
             });
+        }
+    }
+
+    Ok(())
+}
+
+/// Enqueue a single Collection/Mixtape item (by position) through the same
+/// ProdItemResolver used by v2_enqueue_collection. Lets the per-row Play /
+/// Play-next / Queue-later buttons in the detail view work for local and
+/// plex items too — the frontend can't resolve those itself without duplicating
+/// the local_tracks + plex_cache lookup logic. `mode` matches v2_enqueue_collection:
+/// "replace" (stop + set queue + play from 0), "play_next", or default/append.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+#[allow(non_snake_case)]
+pub async fn v2_enqueue_collection_item(
+    collectionId: String,
+    position: usize,
+    mode: String,
+    library: State<'_, LibraryState>,
+    state: State<'_, crate::AppState>,
+    bridge: State<'_, crate::core_bridge::CoreBridgeState>,
+    runtime: State<'_, crate::runtime::RuntimeManagerState>,
+) -> Result<(), RuntimeError> {
+    use crate::mixtape::enqueue::{ItemResolver, ProdItemResolver};
+    use crate::runtime::CommandRequirement;
+
+    runtime
+        .manager()
+        .check_requirements(CommandRequirement::RequiresUserSession)
+        .await?;
+
+    log::info!(
+        "[V2] enqueue_collection_item id={} position={} mode={}",
+        collectionId,
+        position,
+        mode
+    );
+
+    let collection = {
+        let guard = acquire_db!(library);
+        let db = guard.as_ref().ok_or(RuntimeError::UserSessionNotActivated)?;
+        db.with_connection(|conn| {
+            crate::mixtape::repo::get_collection(conn, &collectionId)
+                .map_err(|e| RuntimeError::Internal(e.to_string()))
+        })?
+        .ok_or_else(|| RuntimeError::Internal("collection not found".into()))?
+    };
+
+    let item = collection
+        .items
+        .iter()
+        .find(|it| it.position as usize == position)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeError::Internal(format!(
+                "item at position {} not found in collection {}",
+                position, collectionId
+            ))
+        })?;
+
+    let client_guard = state.client.read().await;
+    let client = client_guard.clone();
+    drop(client_guard);
+
+    let resolver = ProdItemResolver {
+        client: &client,
+        library: &library,
+    };
+
+    let mut tracks = resolver
+        .resolve(&item)
+        .await
+        .map_err(|e| RuntimeError::Internal(format!("item resolve failed: {}", e)))?;
+
+    // Same source_item_id_hint stamp the whole-collection path applies, so
+    // item-boundary skip commands still recognize the item.
+    let hint = item.source_item_id.clone();
+    for track in &mut tracks {
+        track.source_item_id_hint = Some(hint.clone());
+    }
+
+    if tracks.is_empty() {
+        return Err(RuntimeError::Internal(
+            "item resolved to 0 playable tracks".into(),
+        ));
+    }
+
+    let bridge = bridge.get().await;
+    match mode.as_str() {
+        "replace" => {
+            bridge.set_queue(tracks, Some(0)).await;
+            bridge.play_index(0).await;
+        }
+        "play_next" => {
+            for track in tracks.into_iter().rev() {
+                bridge.add_track_next(track).await;
+            }
+        }
+        _ => {
+            bridge.add_tracks(tracks).await;
         }
     }
 
