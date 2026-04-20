@@ -400,12 +400,15 @@ export async function setQueue(tracks: BackendQueueTrack[], startIndex: number, 
 }
 
 /**
- * Clear the queue (V2)
+ * Clear the queue (V2). When `includeCurrent` is true, also wipes the
+ * now-playing slot (and stops playback server-side) — used when the user
+ * presses Clear while nothing is actively playing so a stale track doesn't
+ * linger in the NOW PLAYING section.
  */
-export async function clearQueue(): Promise<boolean> {
+export async function clearQueue(opts?: { includeCurrent?: boolean }): Promise<boolean> {
   try {
     queueEpoch++;
-    await cmdClearQueue();
+    await cmdClearQueue(opts);
     return true;
   } catch (err) {
     console.error('Failed to clear queue:', err);

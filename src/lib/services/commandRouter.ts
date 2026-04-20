@@ -171,12 +171,12 @@ export async function cmdAddTracksToQueueNext(tracks: unknown[]): Promise<void> 
   }
 }
 
-export async function cmdClearQueue(): Promise<void> {
+export async function cmdClearQueue(opts?: { includeCurrent?: boolean }): Promise<void> {
   const target = getTarget();
   if (target.type === 'qbzd') {
     await remotePost('/api/queue/clear');
   } else {
-    await invoke('v2_clear_queue');
+    await invoke('v2_clear_queue', { includeCurrent: opts?.includeCurrent ?? false });
   }
 }
 
