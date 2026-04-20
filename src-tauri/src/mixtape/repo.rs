@@ -107,6 +107,12 @@ pub fn list_collections(
             }
         }
     }
+    // Hydrate items for every listed collection so the sidebar / AddToMixtape
+    // modal can show accurate item counts + mosaic artwork. Without this the
+    // listing returns `items: []` and every count reads as zero.
+    for c in out.iter_mut() {
+        c.items = list_items(conn, &c.id)?;
+    }
     Ok(out)
 }
 
@@ -180,6 +186,21 @@ pub fn set_custom_artwork(conn: &Connection, id: &str, path: Option<&str>) -> Re
         params![path, now_ms(), id],
     )?;
     Ok(())
+}
+
+/// Returns the currently stored `custom_artwork_path` for a collection, if
+/// any. Used before overwriting / clearing to find the previous file that
+/// needs deleting from disk.
+pub fn get_custom_artwork(conn: &Connection, id: &str) -> Result<Option<String>> {
+    let path = conn
+        .query_row(
+            "SELECT custom_artwork_path FROM mixtape_collections WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten();
+    Ok(path)
 }
 
 pub fn delete_collection(conn: &Connection, id: &str) -> Result<()> {
