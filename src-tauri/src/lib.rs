@@ -1796,6 +1796,8 @@ pub fn run() {
             commands_v2::v2_set_mixtape_play_mode,
             commands_v2::v2_set_mixtape_kind,
             commands_v2::v2_set_mixtape_custom_artwork,
+            commands_v2::v2_mixtape_upload_custom_cover,
+            commands_v2::v2_mixtape_remove_custom_cover,
             commands_v2::v2_delete_mixtape_collection,
             commands_v2::v2_add_mixtape_item,
             commands_v2::v2_remove_mixtape_item,

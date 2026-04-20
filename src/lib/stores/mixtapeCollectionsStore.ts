@@ -133,6 +133,29 @@ export async function setCustomArtwork(id: string, path: string | null): Promise
   );
 }
 
+/**
+ * Copy a user-picked image into the app's artwork cache, resize, and set it
+ * as this collection's custom cover. Mirrors v2_library_set_custom_album_cover.
+ * Returns the stored path; callers should pass it through convertFileSrc().
+ */
+export async function uploadCustomCover(id: string, sourcePath: string): Promise<string> {
+  const storedPath = await invoke<string>('v2_mixtape_upload_custom_cover', {
+    id,
+    sourcePath,
+  });
+  collectionsStore.update((cs) =>
+    cs.map((c) => (c.id === id ? { ...c, custom_artwork_path: storedPath } : c)),
+  );
+  return storedPath;
+}
+
+export async function removeCustomCover(id: string): Promise<void> {
+  await invoke('v2_mixtape_remove_custom_cover', { id });
+  collectionsStore.update((cs) =>
+    cs.map((c) => (c.id === id ? { ...c, custom_artwork_path: null } : c)),
+  );
+}
+
 export async function deleteCollection(id: string): Promise<void> {
   await invoke('v2_delete_mixtape_collection', { id });
   collectionsStore.update((cs) => cs.filter((c) => c.id !== id));

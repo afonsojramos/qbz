@@ -219,6 +219,131 @@ pub async fn v2_set_mixtape_custom_artwork(
     })
 }
 
+/// Upload a user-picked image to become a mixtape / collection's custom
+/// cover. Mirrors v2_library_set_custom_album_cover: copies source → artwork
+/// cache, resizes to 1000×1000, then stamps the resulting path into
+/// mixtape_collections.custom_artwork_path. Returns the stored path so the
+/// frontend can `convertFileSrc` it immediately.
+#[tauri::command]
+pub async fn v2_mixtape_upload_custom_cover(
+    id: String,
+    source_path: String,
+    library: State<'_, LibraryState>,
+) -> Result<String, RuntimeError> {
+    log::debug!("[V2] mixtape_upload_custom_cover id={}", id);
+
+    let source = std::path::Path::new(&source_path);
+    if !source.exists() {
+        return Err(RuntimeError::Internal(format!(
+            "Source image does not exist: {}",
+            source_path
+        )));
+    }
+    let extension = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if !["png", "jpg", "jpeg", "webp"].contains(&extension.as_str()) {
+        return Err(RuntimeError::Internal(format!(
+            "Unsupported image format: {}. Use png, jpg, jpeg, or webp.",
+            extension
+        )));
+    }
+
+    // Clean up previous custom cover file if one existed.
+    let previous_path: Option<String> = {
+        let guard = acquire_db!(library);
+        let db = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        db.with_connection(|conn| {
+            crate::mixtape::repo::get_custom_artwork(conn, &id)
+                .map_err(|e| RuntimeError::Internal(e.to_string()))
+        })?
+    };
+
+    let artwork_dir = qbz_library::get_artwork_cache_dir();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let safe_id = id.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect::<String>();
+    let filename = format!("mixtape_custom_{}_{}.jpg", safe_id, timestamp);
+    let dest_path = artwork_dir.join(&filename);
+
+    let img = image::ImageReader::open(source)
+        .map_err(|e| RuntimeError::Internal(format!("Failed to open image: {}", e)))?
+        .decode()
+        .map_err(|e| RuntimeError::Internal(format!("Failed to decode image: {}", e)))?;
+    let resized = img.resize(1000, 1000, image::imageops::FilterType::Lanczos3);
+    resized
+        .save(&dest_path)
+        .map_err(|e| RuntimeError::Internal(format!("Failed to save resized image: {}", e)))?;
+
+    let dest_str = dest_path.to_string_lossy().into_owned();
+    {
+        let guard = acquire_db!(library);
+        let db = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        db.with_connection(|conn| {
+            crate::mixtape::repo::set_custom_artwork(conn, &id, Some(&dest_str))
+                .map_err(|e| RuntimeError::Internal(e.to_string()))
+        })?;
+    }
+
+    // Delete the previous file AFTER the new path is persisted, so a failure
+    // above leaves the previous cover intact.
+    if let Some(prev) = previous_path {
+        if prev != dest_str {
+            let _ = std::fs::remove_file(&prev);
+        }
+    }
+
+    Ok(dest_str)
+}
+
+/// Clear a mixtape / collection's custom cover: delete the file on disk
+/// and null out the DB column.
+#[tauri::command]
+pub async fn v2_mixtape_remove_custom_cover(
+    id: String,
+    library: State<'_, LibraryState>,
+) -> Result<(), RuntimeError> {
+    log::debug!("[V2] mixtape_remove_custom_cover id={}", id);
+
+    let previous_path: Option<String> = {
+        let guard = acquire_db!(library);
+        let db = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        db.with_connection(|conn| {
+            crate::mixtape::repo::get_custom_artwork(conn, &id)
+                .map_err(|e| RuntimeError::Internal(e.to_string()))
+        })?
+    };
+
+    {
+        let guard = acquire_db!(library);
+        let db = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        db.with_connection(|conn| {
+            crate::mixtape::repo::set_custom_artwork(conn, &id, None)
+                .map_err(|e| RuntimeError::Internal(e.to_string()))
+        })?;
+    }
+
+    if let Some(prev) = previous_path {
+        let _ = std::fs::remove_file(&prev);
+    }
+
+    Ok(())
+}
+
 /// Delete a mixtape collection and all its items (CASCADE).
 #[tauri::command]
 pub async fn v2_delete_mixtape_collection(
