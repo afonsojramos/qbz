@@ -2689,9 +2689,12 @@
     }
   }
 
-  // Clear the queue
+  // Clear the queue. If nothing is actively playing, also wipe the
+  // now-playing slot so a stale track doesn't linger in NOW PLAYING
+  // after the user pressed Clear.
   async function handleClearQueue() {
-    const success = await clearQueue();
+    const includeCurrent = !isPlaying;
+    const success = await clearQueue({ includeCurrent });
     if (success) {
       showToast($t('toast.queueCleared'), 'info');
       // Immediately persist the empty state so it survives app close
@@ -4652,10 +4655,17 @@
         }
         await playQueueTrack(nextTrackResult);
       } else {
-        // Queue ended - stop playback and clear player
+        // Queue ended — stop playback AND clear the now-playing slot.
+        // Without the includeCurrent-clear, the last track that finished
+        // stays parked in NOW PLAYING indefinitely (survives app restart)
+        // because v2_enqueue_collection / set_queue both preserve
+        // current_index. We reach this branch specifically when repeat is
+        // off and next() returned nothing, so there is no useful reason
+        // to keep a stale track around.
         setQueueEnded(true);
         await stopPlayback();
         setIsPlaying(false);
+        await clearQueue({ includeCurrent: true });
       }
     });
 
