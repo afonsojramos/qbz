@@ -39,6 +39,8 @@ export interface BackendQueueTrack {
   /** Track source: qobuz | local | plex */
   source?: string;
   parental_warning?: boolean;
+  /** Opaque id of the Mixtape/Collection item that enqueued this track; album_id as fallback */
+  source_item_id_hint?: string | null;
 }
 
 interface BackendQueueState {
@@ -398,12 +400,15 @@ export async function setQueue(tracks: BackendQueueTrack[], startIndex: number, 
 }
 
 /**
- * Clear the queue (V2)
+ * Clear the queue (V2). When `includeCurrent` is true, also wipes the
+ * now-playing slot (and stops playback server-side) — used when the user
+ * presses Clear while nothing is actively playing so a stale track doesn't
+ * linger in the NOW PLAYING section.
  */
-export async function clearQueue(): Promise<boolean> {
+export async function clearQueue(opts?: { includeCurrent?: boolean }): Promise<boolean> {
   try {
     queueEpoch++;
-    await cmdClearQueue();
+    await cmdClearQueue(opts);
     return true;
   } catch (err) {
     console.error('Failed to clear queue:', err);

@@ -108,6 +108,7 @@ pub async fn play_album(
             streamable: true,
             source: Some("qobuz".to_string()),
             parental_warning: track.parental_warning,
+            source_item_id_hint: Some(album.id.clone()),
         }
     }).collect();
 

@@ -48,6 +48,8 @@ pub struct PlexTrack {
     pub bit_depth: Option<u32>,
     pub track_number: Option<u32>,
     pub disc_number: Option<u32>,
+    pub year: Option<u32>,
+    pub genre: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,6 +110,8 @@ pub struct PlexCachedAlbum {
     pub sample_rate: u32,
     pub source: String,
     pub likely_single_file_album: bool,
+    pub year: Option<u32>,
+    pub genre: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,6 +170,8 @@ struct TrackBuilder {
     bit_depth: Option<u32>,
     track_number: Option<u32>,
     disc_number: Option<u32>,
+    year: Option<u32>,
+    genre: Option<String>,
 }
 
 fn normalize_base_url(base_url: &str) -> String {
@@ -225,11 +231,15 @@ fn open_plex_cache_db() -> Result<Connection, String> {
     )
     .map_err(|e| format!("Failed to initialize Plex cache schema: {}", e))?;
 
-    // Migration: add track_number, disc_number, album_key columns if missing
+    // Migration: add track_number, disc_number, album_key, year, genre columns
+    // if missing. Year + genre added 2026-04-19 to surface release year and
+    // genre for Plex albums inside Local Library and Discography Builder.
     for col in &[
         "track_number INTEGER",
         "disc_number INTEGER",
         "album_key TEXT",
+        "year INTEGER",
+        "genre TEXT",
     ] {
         let stmt = format!("ALTER TABLE plex_cache_tracks ADD COLUMN {col}");
         let _ = conn.execute(&stmt, []);
@@ -543,6 +553,25 @@ fn parse_music_sections(xml: &str) -> Vec<PlexMusicSection> {
 }
 
 fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
+    // Plex exposes album release year via parentYear on the Track element
+    // (same structure that drives the Plex client's year display); fall back
+    // to year, and to the first 4 digits of originallyAvailableAt / parentOriginallyAvailableAt
+    // (ISO date) when parentYear is missing on older metadata writes.
+    let year = parse_u32(get_attr(start_tag, "parentYear"))
+        .or_else(|| parse_u32(get_attr(start_tag, "year")))
+        .or_else(|| {
+            let iso = get_attr(start_tag, "parentOriginallyAvailableAt")
+                .or_else(|| get_attr(start_tag, "originallyAvailableAt"));
+            parse_u32(iso.and_then(|s| s.get(..4).map(|s| s.to_string())))
+        });
+
+    // Genre may appear either as an attribute or as a nested <Genre tag="..."/>.
+    let genre_inline = get_attr(start_tag, "genre");
+    let genre_nested = collect_start_tags(inner_xml, "Genre")
+        .into_iter()
+        .find_map(|tag| get_attr(&tag, "tag"));
+    let genre = genre_inline.or(genre_nested);
+
     let mut t = TrackBuilder {
         rating_key: get_attr(start_tag, "ratingKey"),
         title: get_attr(start_tag, "title"),
@@ -555,6 +584,8 @@ fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
             .or_else(|| get_attr(start_tag, "grandparentThumb")),
         track_number: parse_u32(get_attr(start_tag, "index")),
         disc_number: parse_u32(get_attr(start_tag, "parentIndex")),
+        year,
+        genre,
         ..Default::default()
     };
 
@@ -641,6 +672,8 @@ fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
         bit_depth: t.bit_depth,
         track_number: t.track_number,
         disc_number: t.disc_number,
+        year: t.year,
+        genre: t.genre,
     })
 }
 
@@ -911,7 +944,8 @@ pub fn plex_cache_get_tracks(
         let mut stmt = conn
             .prepare(
                 "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
-                        codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number
+                        codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
+                        year, genre
                  FROM plex_cache_tracks
                  WHERE section_key = ?1
                  ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number, title COLLATE NOCASE
@@ -940,6 +974,8 @@ pub fn plex_cache_get_tracks(
                     bit_depth: row.get(12)?,
                     track_number: row.get(13)?,
                     disc_number: row.get(14)?,
+                    year: row.get::<_, Option<i64>>(15)?.map(|v| v as u32),
+                    genre: row.get(16)?,
                 })
             })
             .map_err(|e| format!("Failed to query Plex cache tracks: {}", e))?;
@@ -950,7 +986,8 @@ pub fn plex_cache_get_tracks(
         let mut stmt = conn
             .prepare(
                 "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
-                        codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number
+                        codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
+                        year, genre
                  FROM plex_cache_tracks
                  ORDER BY updated_at DESC
                  LIMIT ?1",
@@ -978,6 +1015,8 @@ pub fn plex_cache_get_tracks(
                     bit_depth: row.get(12)?,
                     track_number: row.get(13)?,
                     disc_number: row.get(14)?,
+                    year: row.get::<_, Option<i64>>(15)?.map(|v| v as u32),
+                    genre: row.get(16)?,
                 })
             })
             .map_err(|e| format!("Failed to query Plex cache tracks: {}", e))?;
@@ -994,7 +1033,7 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
     let conn = open_plex_cache_db()?;
     let mut stmt = conn
         .prepare(
-            "SELECT artist, album, duration_ms, artwork_path, container, sampling_rate_hz, bit_depth
+            "SELECT artist, album, duration_ms, artwork_path, container, sampling_rate_hz, bit_depth, year, genre
              FROM plex_cache_tracks",
         )
         .map_err(|e| format!("Failed to prepare Plex cache album aggregation query: {}", e))?;
@@ -1009,6 +1048,8 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, Option<i64>>(5)?,
                 row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<String>>(8)?,
             ))
         })
         .map_err(|e| {
@@ -1029,6 +1070,8 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
             container,
             sampling_rate_hz_opt,
             bit_depth_opt,
+            year_opt,
+            genre_opt,
         ) = row.map_err(|e| format!("Failed to read Plex cache aggregation row: {}", e))?;
         let artist = artist_opt
             .map(|v| decode_xml_entities(v.trim()))
@@ -1055,7 +1098,16 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
                 sample_rate: sampling_rate_hz_opt.map(|v| v as u32).unwrap_or(44100),
                 source: "plex".to_string(),
                 likely_single_file_album: false,
+                year: None,
+                genre: None,
             });
+
+        if entry.year.is_none() {
+            entry.year = year_opt.map(|v| v as u32);
+        }
+        if entry.genre.is_none() {
+            entry.genre = genre_opt.clone().filter(|s| !s.is_empty());
+        }
 
         entry.track_count += 1;
         if let Some(duration_ms) = duration_ms_opt {
@@ -1344,8 +1396,8 @@ pub fn plex_cache_save_tracks(
             "INSERT INTO plex_cache_tracks
              (rating_key, section_key, server_id, title, artist, album, duration_ms, artwork_path,
               part_key, container, codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth,
-              track_number, disc_number, album_key, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+              track_number, disc_number, album_key, year, genre, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 track.rating_key,
                 section_key,
@@ -1365,6 +1417,8 @@ pub fn plex_cache_save_tracks(
                 track.track_number.map(|v| v as i64),
                 track.disc_number.map(|v| v as i64),
                 track_album_key,
+                track.year.map(|v| v as i64),
+                track.genre.clone(),
                 now,
             ],
         )

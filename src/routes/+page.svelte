@@ -143,6 +143,7 @@
     isDiscoverInTitlebar,
     isFavoritesInTitlebar,
     isLibraryInTitlebar,
+    isMyQbzInTitlebar,
     isPurchasesInTitlebar
   } from '$lib/stores/titlebarNavStore';
 
@@ -185,6 +186,18 @@
   import { platform } from '$lib/utils/platform';
   import type { FavoritesPreferences, ResolvedMusician } from '$lib/types';
 
+  // Mixtapes / Collections views and store
+  import MixtapesView from '$lib/components/views/MixtapesView.svelte';
+  import CollectionsView from '$lib/components/views/CollectionsView.svelte';
+  import MixtapeCollectionDetailView from '$lib/components/views/MixtapeCollectionDetailView.svelte';
+  import DiscographyBuilderView from '$lib/components/views/DiscographyBuilderView.svelte';
+  import {
+    collectionsStore,
+    createCollection,
+    type CollectionKind,
+    type MixtapeCollectionItem,
+  } from '$lib/stores/mixtapeCollectionsStore';
+
   // Navigation state management
   import {
     subscribe as subscribeNav,
@@ -193,6 +206,7 @@
     goBack as navGoBack,
     goForward as navGoForward,
     selectPlaylist,
+    selectLocalAlbum,
     getNavigationState,
     getActiveItemId,
     isBackForward,
@@ -317,6 +331,7 @@
     isPlaybackSourceLocal,
     resolvePlaybackSource
   } from '$lib/services/playbackSource';
+  import { resolveQueueTrackArtwork } from '$lib/services/queueArtwork';
 
   import {
     queueTrackNext,
@@ -464,6 +479,7 @@
   import CastPicker from '$lib/components/CastPicker.svelte';
   import LyricsSidebar from '$lib/components/lyrics/LyricsSidebar.svelte';
   import { reloadLyricsDisplay } from '$lib/stores/lyricsDisplayStore';
+  import { reloadMyQbzNav } from '$lib/stores/myQbzNavStore';
   import OfflinePlaceholder from '$lib/components/OfflinePlaceholder.svelte';
   import UpdateAvailableModal from '$lib/components/updates/UpdateAvailableModal.svelte';
   import UpdateReminderModal from '$lib/components/updates/UpdateReminderModal.svelte';
@@ -473,6 +489,8 @@
   import KeyboardShortcutsModal from '$lib/components/KeyboardShortcutsModal.svelte';
   import KeybindingsSettings from '$lib/components/KeybindingsSettings.svelte';
   import LinkResolverModal from '$lib/components/LinkResolverModal.svelte';
+  import AddToMixtapeModal from '$lib/components/AddToMixtapeModal.svelte';
+  import { addToMixtapeModal, closeAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import type { ReleaseInfo } from '$lib/stores/updatesStore';
   import { isAutoUpdateEligible, refreshUpdatePreferences, resetUpdatesStore } from '$lib/stores/updatesStore';
   import { getShowPurchases, setShowPurchases, rehydratePurchasesStore } from '$lib/stores/purchasesStore';
@@ -533,6 +551,7 @@
   let tbNavDiscover = $state(isDiscoverInTitlebar());
   let tbNavFavorites = $state(isFavoritesInTitlebar());
   let tbNavLibrary = $state(isLibraryInTitlebar());
+  let tbNavMyQbz = $state(isMyQbzInTitlebar());
   let tbNavPurchases = $state(isPurchasesInTitlebar());
 
   // Window floating state (not maximized/tiled — for rounded corners + shadow)
@@ -556,6 +575,14 @@
   // Sequential modal queue: Flatpak → What's new → Update available
   let pendingWhatsNewRelease = $state<ReleaseInfo | null>(null);
   let pendingUpdateRelease = $state<ReleaseInfo | null>(null);
+
+  // Mixtape / Collection routing state
+  let mixtapeDetailId = $state<string | null>(null);
+  let discographyArtistId = $state<string | null>(null);
+  let showCreateModal = $state(false);
+  let createModalKind = $state<CollectionKind>('mixtape');
+  let createModalName = $state('');
+  let createModalBusy = $state(false);
 
   // Auto-update state
   let isAutoUpdating = $state(false);
@@ -1336,6 +1363,34 @@
     navTo(view as ViewType, itemId);
   }
 
+  // ── Mixtapes / Collections routing helpers ──────────────────────────────
+
+  function openMixtapeDetail(id: string) {
+    mixtapeDetailId = id;
+    navTo('mixtape-detail', id);
+  }
+
+  function openCreateModal(kind: CollectionKind) {
+    createModalKind = kind;
+    createModalName = '';
+    showCreateModal = true;
+  }
+
+  async function submitCreateModal() {
+    const name = createModalName.trim();
+    if (!name) return;
+    createModalBusy = true;
+    try {
+      const created = await createCollection(createModalKind, name);
+      showCreateModal = false;
+      openMixtapeDetail(created.id);
+    } catch (err) {
+      console.error('[+page] createCollection failed:', err);
+    } finally {
+      createModalBusy = false;
+    }
+  }
+
   /**
    * Restore item data when navigating back/forward.
    * Re-fetches the specific album/artist/playlist/label so the correct page is shown.
@@ -1429,6 +1484,283 @@
     } catch (err) {
       console.error('Failed to load album:', err);
       showToast($t('toast.failedLoadAlbum'), 'error');
+    }
+  }
+
+  /**
+   * Resolve an artist by free-text name (runtime Qobuz search), then
+   * navigate to the artist page for the top match. Used by Mixtape /
+   * Collection row subtitles which only carry the artist display name.
+   */
+  async function handleOpenArtistByName(artistName: string) {
+    const query = artistName.trim();
+    if (!query) return;
+    try {
+      interface ArtistHit { id: number; name?: { display?: string } | string }
+      const page = await invoke<{ items: ArtistHit[] }>('v2_search_artists', {
+        query,
+        limit: 1,
+        offset: 0,
+        searchType: null,
+      });
+      const hit = page.items?.[0];
+      if (!hit) {
+        showToast($t('toast.artistNotFound', { values: { name: query } }) ||
+          `Artist not found: ${query}`, 'info');
+        return;
+      }
+      navTo('artist', String(hit.id));
+    } catch (err) {
+      console.error('[Mixtape] handleOpenArtistByName failed:', err);
+      showToast($t('toast.failedToLoad'), 'error');
+    }
+  }
+
+  /**
+   * Row-level action for an item in a Mixtape / Collection. Currently
+   * supports Qobuz album items (fetch tracks + play / play next / queue
+   * later). Other combinations toast "not yet supported" so the menu
+   * entries still render but don't leave the user hanging silently.
+   */
+
+  /**
+   * Play an expanded-view track starting from a specific track inside its
+   * parent Qobuz album. Builds the full album queue and jumps to the picked
+   * track's index so the rest of the album continues after it.
+   */
+  async function handleMixtapePlayTrackFromAlbum(
+    item: MixtapeCollectionItem,
+    trackId: number,
+  ) {
+    if (item.item_type !== 'album' || item.source !== 'qobuz') {
+      showToast($t('toast.actionNotAvailableYet') ||
+        'Not available for this item type yet', 'info');
+      return;
+    }
+    try {
+      const album = await invoke<QobuzAlbum>('v2_get_album', {
+        albumId: item.source_item_id,
+      });
+      const converted = convertQobuzAlbum(album);
+      if (!converted?.tracks?.length) {
+        showToast($t('toast.failedLoadAlbum'), 'error');
+        return;
+      }
+      const playableTracks = converted.tracks.filter((trk) => {
+        const artistId = trk.artistId ?? converted.artistId;
+        return !artistId || !isArtistBlacklisted(artistId);
+      });
+      if (playableTracks.length === 0) {
+        showToast($t('toast.noPlayableTracks') || 'No playable tracks', 'info');
+        return;
+      }
+      const startIndex = Math.max(
+        0,
+        playableTracks.findIndex((trk) => trk.id === trackId),
+      );
+      const artwork = converted.artwork || '';
+      const queueTracks = playableTracks.map((trk) => ({
+        id: trk.id,
+        title: trk.title,
+        artist: trk.artist || converted.artist || 'Unknown Artist',
+        album: converted.title || '',
+        duration_secs: trk.durationSeconds,
+        artwork_url: artwork || null,
+        hires: trk.hires ?? false,
+        bit_depth: trk.bitDepth ?? null,
+        sample_rate: trk.samplingRate ?? null,
+        is_local: false,
+        album_id: converted.id,
+        artist_id: trk.artistId ?? converted.artistId,
+        streamable: trk.streamable ?? true,
+        source: 'qobuz' as const,
+        parental_warning: trk.parental_warning ?? false,
+      }));
+      await invoke('v2_set_queue', { trackIds: queueTracks.map((qt) => qt.id) });
+      await invoke('v2_play_queue_index', { index: startIndex });
+    } catch (err) {
+      console.error('[Mixtape] handleMixtapePlayTrackFromAlbum failed:', err);
+      showToast($t('toast.failedAddToQueue'), 'error');
+    }
+  }
+
+  /**
+   * Queue a single Qobuz track (by track id) — used for per-track Play Next /
+   * Play Later from the expanded-view TrackRow menu.
+   */
+  async function handleMixtapeQueueTrack(
+    trackId: number,
+    action: 'play_next' | 'queue_later',
+  ) {
+    try {
+      const track = await invoke<{
+        id: number;
+        title: string;
+        duration?: number;
+        performer?: { name?: string };
+        album?: {
+          id?: string;
+          title?: string;
+          image?: { thumbnail?: string; small?: string; large?: string };
+          maximum_bit_depth?: number;
+          maximum_sampling_rate?: number;
+        };
+        parental_warning?: boolean;
+      }>('v2_get_track', { trackId });
+
+      const queueTrack = {
+        id: track.id,
+        title: track.title,
+        artist: track.performer?.name ?? 'Unknown Artist',
+        album: track.album?.title ?? '',
+        duration_secs: track.duration ?? 0,
+        artwork_url:
+          track.album?.image?.large ??
+          track.album?.image?.small ??
+          track.album?.image?.thumbnail ??
+          null,
+        hires: (track.album?.maximum_bit_depth ?? 0) > 16,
+        bit_depth: track.album?.maximum_bit_depth ?? null,
+        sample_rate: track.album?.maximum_sampling_rate ?? null,
+        is_local: false,
+        album_id: track.album?.id,
+        streamable: true,
+        source: 'qobuz' as const,
+        parental_warning: track.parental_warning ?? false,
+      };
+
+      if (action === 'play_next') {
+        await invoke('v2_add_tracks_to_queue_next', { tracks: [queueTrack] });
+        showToast($t('toast.addedToQueueNext', { values: { count: 1 } }) ||
+          'Playing next', 'success');
+      } else {
+        await invoke('v2_add_tracks_to_queue', { tracks: [queueTrack] });
+        showToast($t('toast.addedToQueue', { values: { count: 1 } }) ||
+          'Added to queue', 'success');
+      }
+    } catch (err) {
+      console.error('[Mixtape] handleMixtapeQueueTrack failed:', err);
+      showToast($t('toast.failedAddToQueue'), 'error');
+    }
+  }
+
+  async function handleMixtapeItemAction(
+    item: MixtapeCollectionItem,
+    action: 'play' | 'play_next' | 'queue_later',
+  ) {
+    // For local + plex albums (and anything non-Qobuz), delegate resolution to
+    // the backend's ProdItemResolver via v2_enqueue_collection_item. Same path
+    // the whole-collection Play button uses — handles local_tracks lookup and
+    // plex_cache in one call. The Qobuz fast path below stays as-is because
+    // the frontend already has blacklist filtering and artwork fallbacks
+    // wired against the Qobuz API response.
+    const isQobuzAlbum = item.item_type === 'album' && item.source === 'qobuz';
+    if (!isQobuzAlbum) {
+      const collectionId = mixtapeDetailId;
+      if (!collectionId) {
+        showToast($t('toast.actionNotAvailableYet') ||
+          'Action not available for this item type yet', 'info');
+        return;
+      }
+      const mode = action === 'play' ? 'replace'
+                 : action === 'play_next' ? 'play_next'
+                 : 'append';
+      try {
+        await invoke('v2_enqueue_collection_item', {
+          collectionId,
+          position: item.position,
+          mode,
+        });
+        if (action === 'play') {
+          // Backend stopped audio + set queue to index 0 + called play_index(0),
+          // but play_index only moves the cursor. We still need to fetch the
+          // current queue track and push it through playQueueTrack so the
+          // playback service actually loads bytes via library_play_track /
+          // plex_play_track based on source.
+          const trk = await playQueueIndex(0);
+          if (trk) await playQueueTrack(trk);
+          showToast($t('toast.playingAlbum', { values: { count: 1 } }) ||
+            'Playing album', 'success');
+        } else if (action === 'play_next') {
+          showToast($t('toast.addedToQueueNext', { values: { count: 1 } }) ||
+            'Playing next', 'success');
+        } else {
+          showToast($t('toast.addedToQueue', { values: { count: 1 } }) ||
+            'Added to queue', 'success');
+        }
+      } catch (err) {
+        console.error('[Mixtape] enqueue_collection_item failed:', err);
+        showToast($t('toast.failedAddToQueue'), 'error');
+      }
+      return;
+    }
+
+    try {
+      const album = await invoke<QobuzAlbum>('v2_get_album', {
+        albumId: item.source_item_id,
+      });
+      const converted = convertQobuzAlbum(album);
+      if (!converted?.tracks?.length) {
+        showToast($t('toast.failedLoadAlbum'), 'error');
+        return;
+      }
+      const artwork = converted.artwork || '';
+      const albumTitle = converted.title || item.title || '';
+
+      const queueTracks = converted.tracks
+        .filter((trk) => {
+          const artistId = trk.artistId ?? converted.artistId;
+          return !artistId || !isArtistBlacklisted(artistId);
+        })
+        .map((trk) => ({
+          id: trk.id,
+          title: trk.title,
+          artist: trk.artist || converted.artist || 'Unknown Artist',
+          album: albumTitle,
+          duration_secs: trk.durationSeconds,
+          artwork_url: artwork || null,
+          hires: trk.hires ?? false,
+          bit_depth: trk.bitDepth ?? null,
+          sample_rate: trk.samplingRate ?? null,
+          is_local: false,
+          album_id: converted.id,
+          artist_id: trk.artistId ?? converted.artistId,
+          streamable: trk.streamable ?? true,
+          source: 'qobuz' as const,
+          parental_warning: trk.parental_warning ?? false,
+        }));
+
+      if (queueTracks.length === 0) {
+        showToast($t('toast.noPlayableTracks') || 'No playable tracks', 'info');
+        return;
+      }
+
+      if (action === 'play') {
+        // Canonical set-queue + start-audio pattern: v2_set_queue only stages
+        // the queue server-side, and v2_play_queue_index just moves the
+        // index — neither actually tells the player to load bytes. We need
+        // to resolve the new current track and push it through playQueueTrack
+        // so the playback service invokes v2_play_track / v2_library_play_track
+        // based on source. Same path the main Play button uses.
+        await setQueue(queueTracks, 0, true);
+        const trk = await playQueueIndex(0);
+        if (trk) {
+          await playQueueTrack(trk);
+        }
+        showToast($t('toast.playingAlbum', { values: { count: queueTracks.length } }) ||
+          `Playing ${queueTracks.length} tracks`, 'success');
+      } else if (action === 'play_next') {
+        await invoke('v2_add_tracks_to_queue_next', { tracks: queueTracks });
+        showToast($t('toast.addedToQueueNext', { values: { count: queueTracks.length } }) ||
+          `Playing next: ${queueTracks.length} tracks`, 'success');
+      } else {
+        await invoke('v2_add_tracks_to_queue', { tracks: queueTracks });
+        showToast($t('toast.addedToQueue', { values: { count: queueTracks.length } }) ||
+          `Added ${queueTracks.length} tracks to queue`, 'success');
+      }
+    } catch (err) {
+      console.error('[Mixtape] handleMixtapeItemAction failed:', err);
+      showToast($t('toast.failedAddToQueue'), 'error');
     }
   }
 
@@ -2593,13 +2925,16 @@
           ? 'Hi-Res'
           : '-';
 
-    // Play track using unified service
+    // Play track using unified service. artwork_url coming off a queue track
+    // can be a raw Plex path ("/library/metadata/.../thumb/...") or a bare
+    // local filesystem path — NowPlayingBar renders it directly into <img src>
+    // so we must resolve to an http(s) / file:// / tauri-asset URL here.
     await playTrack({
       id: track.id,
       title: track.title,
       artist: track.artist,
       album: track.album,
-      artwork: track.artwork_url || '',
+      artwork: resolveQueueTrackArtwork(track.artwork_url),
       duration: track.duration_secs,
       quality,
       bitDepth: track.bit_depth ?? undefined,
@@ -2639,9 +2974,12 @@
     }
   }
 
-  // Clear the queue
+  // Clear the queue. If nothing is actively playing, also wipe the
+  // now-playing slot so a stale track doesn't linger in NOW PLAYING
+  // after the user pressed Clear.
   async function handleClearQueue() {
-    const success = await clearQueue();
+    const includeCurrent = !isPlaying;
+    const success = await clearQueue({ includeCurrent });
     if (success) {
       showToast($t('toast.queueCleared'), 'info');
       // Immediately persist the empty state so it survives app close
@@ -3585,6 +3923,7 @@
     // Re-sync volume from the now-correct user-scoped localStorage key
     await resyncPersistedVolume();
     reloadLyricsDisplay();
+    reloadMyQbzNav();
 
     // Signal that per-user backend stores are ready — the launch update
     // flow $effect gates on this to avoid reading default preferences
@@ -3634,7 +3973,11 @@
             sample_rate: trk.sample_rate ?? null,
             is_local: trk.is_local ?? false,
             album_id: trk.album_id ?? null,
-            artist_id: trk.artist_id ?? null
+            artist_id: trk.artist_id ?? null,
+            // Fall back to deriving source from is_local for tracks saved by
+            // older versions that didn't persist source. Without this, a
+            // restored local queue routed next-track auto-advance to Qobuz.
+            source: trk.source ?? (trk.is_local ? 'local' : undefined),
           }));
 
           await setQueue(tracks, session.current_index ?? 0, true);
@@ -3664,7 +4007,7 @@
               title: track.title,
               artist: track.artist,
               album: track.album,
-              artwork: track.artwork_url || '',
+              artwork: resolveQueueTrackArtwork(track.artwork_url),
               duration: track.duration_secs,
               quality,
               bitDepth: track.bit_depth ?? undefined,
@@ -3672,7 +4015,7 @@
               albumId: track.album_id ?? undefined,
               artistId: track.artist_id ?? undefined,
               isLocal: track.is_local ?? false,
-              source: track.source ?? 'qobuz',
+              source: (track.source as 'qobuz' | 'local' | 'plex' | undefined) ?? (track.is_local ? 'local' : 'qobuz'),
               parental_warning: track.parental_warning ?? false,
             });
 
@@ -3877,6 +4220,11 @@
         is_local: track.is_local ?? false,
         album_id: track.album_id ?? null,
         artist_id: track.artist_id ?? null,
+        // Preserve source (qobuz | local | plex). Dropping this on save meant
+        // local/plex queues came back as Qobuz after session restore, and
+        // auto-advance routed to v2_play_track with library row ids — which
+        // Qobuz then "resolved" to whatever track happened to share the id.
+        source: track.source ?? (track.is_local ? 'local' : null),
       }));
 
       await saveSessionState(
@@ -4346,6 +4694,7 @@
       tbNavDiscover = isDiscoverInTitlebar();
       tbNavFavorites = isFavoritesInTitlebar();
       tbNavLibrary = isLibraryInTitlebar();
+      tbNavMyQbz = isMyQbzInTitlebar();
       tbNavPurchases = isPurchasesInTitlebar();
     });
 
@@ -4601,10 +4950,17 @@
         }
         await playQueueTrack(nextTrackResult);
       } else {
-        // Queue ended - stop playback and clear player
+        // Queue ended — stop playback AND clear the now-playing slot.
+        // Without the includeCurrent-clear, the last track that finished
+        // stays parked in NOW PLAYING indefinitely (survives app restart)
+        // because v2_enqueue_collection / set_queue both preserve
+        // current_index. We reach this branch specifically when repeat is
+        // off and next() returned nothing, so there is no useful reason
+        // to keep a stale track around.
         setQueueEnded(true);
         await stopPlayback();
         setIsPlaying(false);
+        await clearQueue({ includeCurrent: true });
       }
     });
 
@@ -5110,6 +5466,7 @@
     showDiscover={tbNavDiscover}
     showFavorites={tbNavFavorites}
     showLibrary={tbNavLibrary}
+    showMyQbz={tbNavMyQbz}
     showPurchases={tbNavPurchases && showPurchases}
   />
 {/snippet}
@@ -5405,6 +5762,10 @@
           onLabelClick={handleLabelClick}
           onMusicianClick={handleMusicianClick}
           onLocationClick={handleLocationClick}
+          onBuildArtistCollection={(artistId) => {
+            discographyArtistId = artistId;
+            navTo('discography-builder', artistId);
+          }}
           activeTrackId={currentTrack?.id ?? null}
           isPlaybackActive={isPlaying}
         />
@@ -5882,6 +6243,110 @@
           onAlbumClick={handleAlbumClick}
           onAlbumPlay={playAlbumById}
         />
+      {:else if activeView === 'mixtapes'}
+        <MixtapesView
+          onOpen={(id) => openMixtapeDetail(id)}
+          onCreate={() => openCreateModal('mixtape')}
+          onBack={navGoBack}
+        />
+      {:else if activeView === 'collections'}
+        <CollectionsView
+          onOpen={(id) => openMixtapeDetail(id)}
+          onCreate={() => openCreateModal('collection')}
+          onBack={navGoBack}
+        />
+      {:else if activeView === 'mixtape-detail'}
+        {#if mixtapeDetailId}
+          <MixtapeCollectionDetailView
+            collectionId={mixtapeDetailId}
+            onBack={() => {
+              const col = $collectionsStore.find((x) => x.id === mixtapeDetailId);
+              if (col?.kind === 'collection' || col?.kind === 'artist_collection') {
+                navigateTo('collections');
+              } else {
+                navigateTo('mixtapes');
+              }
+              mixtapeDetailId = null;
+            }}
+            onOpenItem={(source, itemType, sourceItemId) => {
+              if (itemType === 'album') {
+                if (source === 'qobuz') handleAlbumClick(sourceItemId);
+                else selectLocalAlbum(sourceItemId);
+              } else if (itemType === 'playlist') {
+                const numericId = parseInt(sourceItemId, 10);
+                if (!Number.isNaN(numericId)) selectPlaylist(numericId);
+              }
+              // tracks: item-level navigation is not yet a dedicated view
+            }}
+            onOpenArtist={(source, artistName) => {
+              if (source === 'qobuz' && artistName) {
+                handleOpenArtistByName(artistName);
+              }
+            }}
+            onPlayItem={(item) => handleMixtapeItemAction(item, 'play')}
+            onPlayItemNext={(item) => handleMixtapeItemAction(item, 'play_next')}
+            onAddItemToQueueLater={(item) => handleMixtapeItemAction(item, 'queue_later')}
+            onBulkPlayNext={async (items) => {
+              for (const it of items) await handleMixtapeItemAction(it, 'play_next');
+            }}
+            onBulkPlayLater={async (items) => {
+              for (const it of items) await handleMixtapeItemAction(it, 'queue_later');
+            }}
+            onBulkAddToPlaylist={(items) => {
+              const trackIds: number[] = [];
+              for (const it of items) {
+                if (it.item_type === 'track' && it.source === 'qobuz') {
+                  const n = Number(it.source_item_id);
+                  if (!Number.isNaN(n)) trackIds.push(n);
+                }
+              }
+              if (trackIds.length === 0) {
+                showToast($t('toast.actionNotAvailableYet') ||
+                  'Add-to-playlist is only available for Qobuz tracks right now', 'info');
+                return;
+              }
+              userPlaylists = sidebarRef?.getPlaylists() ?? [];
+              openPlaylistModal('addTrack', trackIds, false);
+            }}
+            onPlayTrackFromItem={(item, trackId) => handleMixtapePlayTrackFromAlbum(item, trackId)}
+            onPlayTrackNext={(trackId) => handleMixtapeQueueTrack(trackId, 'play_next')}
+            onPlayTrackLater={(trackId) => handleMixtapeQueueTrack(trackId, 'queue_later')}
+          />
+        {:else}
+          <div class="detail-placeholder">
+            <p>No collection selected.</p>
+          </div>
+        {/if}
+      {:else if activeView === 'discography-builder'}
+        {#if discographyArtistId}
+          <DiscographyBuilderView
+            artistId={discographyArtistId}
+            onBack={() => {
+              const prevId = discographyArtistId;
+              discographyArtistId = null;
+              navigateTo('artist', prevId ?? undefined);
+            }}
+            onCreated={(col) => {
+              discographyArtistId = null;
+              mixtapeDetailId = col.id;
+              navTo('mixtape-detail', col.id);
+            }}
+            onOpenAlbum={(source, sourceItemId) => {
+              if (source === 'qobuz') {
+                handleAlbumClick(sourceItemId);
+              } else {
+                // Both 'local' and 'plex' albums are addressable via the
+                // local-album route (Plex albums are stored under the same
+                // id scheme after LocalLibraryView's mapPlexAlbum).
+                selectLocalAlbum(sourceItemId);
+              }
+            }}
+          />
+        {:else}
+          <div class="detail-placeholder">
+            <p>No artist selected.</p>
+          </div>
+        {/if}
       {:else}
         <!-- Catch-all fallback: view has no matching data, show loading/error -->
         <div class="view-error">
@@ -6264,6 +6729,13 @@
       />
     {/if}
 
+    <!-- Add to Mixtape/Collection Modal (global, single instance) -->
+    <AddToMixtapeModal
+      open={$addToMixtapeModal.open}
+      items={$addToMixtapeModal.items}
+      onClose={closeAddToMixtape}
+    />
+
     <!-- Cast Picker -->
     <CastPicker
       isOpen={isCastPickerOpen}
@@ -6284,6 +6756,74 @@
       onClearDiagnostics={clearQobuzConnectDiagnostics}
     />
 
+    <!-- Create Mixtape / Collection Modal (Phase 5.3 inline — replaced in Phase 6) -->
+    {#if showCreateModal}
+      <div
+        class="create-modal-backdrop"
+        role="presentation"
+        onclick={() => (showCreateModal = false)}
+      ></div>
+      <div class="create-modal" role="dialog" aria-label={createModalKind === 'mixtape' ? $t('mixtapes.create.title') : $t('collections.create.title')}>
+        <h2>
+          {createModalKind === 'mixtape' ? $t('mixtapes.create.title') : $t('collections.create.title')}
+        </h2>
+
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input
+            type="text"
+            bind:value={createModalName}
+            maxlength="80"
+            disabled={createModalBusy}
+          />
+        </label>
+
+        <div class="field">
+          <span class="field-label">Kind</span>
+          <div class="kind-toggle">
+            <label>
+              <input
+                type="radio"
+                name="create-modal-kind"
+                value="mixtape"
+                bind:group={createModalKind}
+                disabled={createModalBusy}
+              />
+              <span>{$t('mixtapes.nav')}</span>
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="create-modal-kind"
+                value="collection"
+                bind:group={createModalKind}
+                disabled={createModalBusy}
+              />
+              <span>{$t('collections.nav')}</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button
+            class="secondary-btn"
+            onclick={() => (showCreateModal = false)}
+            disabled={createModalBusy}
+          >
+            {$t('actions.cancel')}
+          </button>
+          <button
+            class="primary-btn"
+            onclick={submitCreateModal}
+            disabled={createModalBusy || !createModalName.trim()}
+          >
+            {createModalKind === 'mixtape'
+              ? $t('mixtapes.empty.cta')
+              : $t('collections.empty.cta')}
+          </button>
+        </div>
+      </div>
+    {/if}
 
   </div>
 {/if}
@@ -6426,12 +6966,115 @@
     justify-content: center;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     transition: background 150ms ease, color 150ms ease;
-    z-index: 50;
+    z-index: 200;
   }
 
   .back-to-top-global:hover {
     background: var(--bg-tertiary);
     color: var(--text-primary);
+  }
+
+  /* Fallback shell for "no collection selected" / "no artist selected" — the
+     real detail view lives in MixtapeCollectionDetailView.svelte. */
+  .detail-placeholder {
+    padding: 40px;
+    color: var(--text-primary);
+  }
+
+  /* Inline create modal (replaced / enhanced in Phase 6) */
+  .create-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 9998;
+  }
+  .create-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 420px;
+    max-width: 90vw;
+    padding: 24px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .create-modal h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .create-modal .field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .create-modal .field-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .create-modal input[type="text"] {
+    padding: 10px 12px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .create-modal .kind-toggle {
+    display: flex;
+    gap: 12px;
+  }
+  .create-modal .kind-toggle label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-primary);
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .create-modal .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .create-modal .primary-btn {
+    padding: 10px 20px;
+    background: var(--accent-primary);
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .create-modal .primary-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .create-modal .secondary-btn {
+    padding: 10px 16px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
   }
 
 </style>

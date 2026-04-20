@@ -5,6 +5,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { ArrowLeft, Disc3, Play, Music, Ellipsis, Heart, User, UserPlus, Check, ChevronDown, ChevronUp, SquareCheckBig } from 'lucide-svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { t } from '$lib/i18n';
   import AlbumCard from '../AlbumCard.svelte';
   import HorizontalScrollRow from '../HorizontalScrollRow.svelte';
@@ -849,7 +850,7 @@
           </button>
         {/if}
 
-        <!-- Follow Label — same heart/circle treatment as ArtistDetailView -->
+        <!-- Follow Label — user-add icon, active state via CSS class -->
         <div class="label-actions">
           <button
             class="favorite-btn"
@@ -859,11 +860,7 @@
             title={labelIsFavorite ? $t('label.unfollow') : $t('label.follow')}
             aria-label={labelIsFavorite ? $t('label.unfollow') : $t('label.follow')}
           >
-            {#if labelIsFavorite}
-              <Heart size={24} fill="var(--accent-primary)" color="var(--accent-primary)" />
-            {:else}
-              <Heart size={24} />
-            {/if}
+            <img src="/user-add.svg" alt="" class="label-fav-icon" />
           </button>
         </div>
       </div>
@@ -1055,7 +1052,7 @@
                       await toggleTrackFavorite(track.id);
                     }}
                     disabled={trackIsToggling}
-                    title={trackIsFav ? 'Remove from favorites' : 'Add to favorites'}
+                    title={trackIsFav ? $t('actions.removeFromFavorites') : $t('actions.addToFavorites')}
                   >
                     {#if trackIsFav}
                       <Heart size={16} fill="var(--accent-primary)" color="var(--accent-primary)" />
@@ -1071,6 +1068,14 @@
                   onCreateQbzRadio={() => createTrackRadio(track)}
                   onCreateQobuzRadio={() => createQobuzTrackRadio(track)}
                   onAddFavorite={onTrackAddFavorite ? () => onTrackAddFavorite(track.id) : undefined}
+                  onAddToMixtape={() => openAddToMixtape({
+                    item_type: 'track',
+                    source: 'qobuz',
+                    source_item_id: String(track.id),
+                    title: track.title,
+                    subtitle: [track.performer?.name, track.album?.title].filter(Boolean).join(' \u00B7 '),
+                    artwork_url: track.album?.image?.thumbnail ?? track.album?.image?.small ?? undefined,
+                  })}
                   onAddToPlaylist={onTrackAddToPlaylist ? () => onTrackAddToPlaylist(track.id) : undefined}
                   onGoToAlbum={track.album?.id && onTrackGoToAlbum ? () => onTrackGoToAlbum(track.album!.id) : undefined}
                   contextMenuPosition={trackContextMenu?.trackId === track.id ? { x: trackContextMenu.x, y: trackContextMenu.y } : null}
@@ -1406,6 +1411,26 @@
     opacity: 0.5;
     cursor: not-allowed;
   }
+
+  .label-fav-icon {
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
+    opacity: 0.7;
+    filter: var(--icon-filter, none);
+    transition: opacity 150ms ease, filter 150ms ease;
+  }
+
+  .favorite-btn:hover:not(:disabled) .label-fav-icon {
+    opacity: 1;
+    filter: brightness(0) saturate(100%) invert(38%) sepia(99%) saturate(600%) hue-rotate(240deg) brightness(110%);
+  }
+
+  .favorite-btn.is-favorite .label-fav-icon {
+    opacity: 1;
+    filter: brightness(0) saturate(100%) invert(38%) sepia(99%) saturate(600%) hue-rotate(240deg) brightness(110%);
+  }
+
   .label-image-wrapper {
     width: 180px; height: 180px; border-radius: 50%;
     overflow: hidden; flex-shrink: 0; background: var(--bg-tertiary);

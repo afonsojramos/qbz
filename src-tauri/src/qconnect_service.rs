@@ -3102,7 +3102,8 @@ async fn materialize_remote_queue_to_corebridge(
     };
 
     if queue_state.queue_items.is_empty() {
-        bridge.clear_queue().await;
+        // Preserve legacy behavior: keep current track on qconnect sync clears.
+        bridge.clear_queue(true).await;
         bridge.set_shuffle(false).await;
         let mut state = sync_state.lock().await;
         state.last_materialized_start_index = None;
@@ -3702,11 +3703,12 @@ fn model_track_to_core_queue_track(track: &Track) -> QueueTrack {
         bit_depth: track.maximum_bit_depth,
         sample_rate: track.maximum_sampling_rate,
         is_local: false,
-        album_id,
+        album_id: album_id.clone(),
         artist_id,
         streamable: track.streamable,
         source: Some(QCONNECT_REMOTE_QUEUE_SOURCE.to_string()),
         parental_warning: track.parental_warning,
+        source_item_id_hint: album_id,
     }
 }
 

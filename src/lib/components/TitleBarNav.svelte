@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Heart, HardDrive, ChevronDown, User, Disc, Disc3, Music, ListMusic, ShoppingBag } from 'lucide-svelte';
+  import { HardDrive, ChevronDown, User, Disc, Disc3, Music, ListMusic, ShoppingBag, CassetteTape, LibraryBig } from 'lucide-svelte';
   import { t } from '$lib/i18n';
+  import { myQbzNavStore } from '$lib/stores/myQbzNavStore';
 
   interface Props {
     activeView: string;
@@ -11,6 +12,7 @@
     showDiscover?: boolean;
     showFavorites?: boolean;
     showLibrary?: boolean;
+    showMyQbz?: boolean;
     showPurchases?: boolean;
   }
 
@@ -23,14 +25,17 @@
     showDiscover = false,
     showFavorites = false,
     showLibrary = false,
+    showMyQbz = false,
     showPurchases = false
   }: Props = $props();
 
   let discoverOpen = $state(false);
   let favoritesOpen = $state(false);
+  let myQbzOpen = $state(false);
   let purchasesMenuOpen = $state(false);
   let discoverTimeout: ReturnType<typeof setTimeout> | null = null;
   let favoritesTimeout: ReturnType<typeof setTimeout> | null = null;
+  let myQbzTimeout: ReturnType<typeof setTimeout> | null = null;
   let purchasesTimeout: ReturnType<typeof setTimeout> | null = null;
 
   function isDiscoverActive(): boolean {
@@ -85,11 +90,33 @@
     onNavigate('library');
   }
 
+  function openMyQbz() {
+    if (myQbzTimeout) { clearTimeout(myQbzTimeout); myQbzTimeout = null; }
+    myQbzOpen = true;
+    discoverOpen = false;
+    favoritesOpen = false;
+    purchasesMenuOpen = false;
+  }
+
+  function closeMyQbzDelayed() {
+    myQbzTimeout = setTimeout(() => { myQbzOpen = false; }, 200);
+  }
+
+  function keepMyQbz() {
+    if (myQbzTimeout) { clearTimeout(myQbzTimeout); myQbzTimeout = null; }
+  }
+
+  function handleMyQbzItem(view: 'mixtapes' | 'collections') {
+    onNavigate(view);
+    myQbzOpen = false;
+  }
+
   function openPurchasesMenu() {
     if (purchasesTimeout) { clearTimeout(purchasesTimeout); purchasesTimeout = null; }
     purchasesMenuOpen = true;
     discoverOpen = false;
     favoritesOpen = false;
+    myQbzOpen = false;
   }
 
   function closePurchasesDelayed() {
@@ -111,6 +138,7 @@
     if (!target.closest('.titlebar-nav')) {
       discoverOpen = false;
       favoritesOpen = false;
+      myQbzOpen = false;
       purchasesMenuOpen = false;
     }
   }
@@ -185,7 +213,7 @@
       onclick={() => onNavigate('favorites-tracks')}
       data-tauri-drag-region="false"
     >
-      <Heart size={12} />
+      <span class="titlebar-nav-icon titlebar-nav-icon-mask" aria-hidden="true"></span>
       <span class="nav-label">{$t('nav.favorites')}</span>
       <ChevronDown size={10} />
     </button>
@@ -233,6 +261,58 @@
     <HardDrive size={12} />
     <span class="nav-label">{$t('library.title')}</span>
   </button>
+  {/if}
+
+  <!-- My QBZ (with dropdown: Mixtapes / Collections). Mirrors the sidebar's
+       My QBZ parent row: parent isn't a destination itself (neither are
+       Mixtapes/Collections collapsibles there), so we just open the menu
+       on hover/click and each sub-item navigates. Label comes from the
+       same myQbzNavStore the sidebar uses — if the user renamed "My QBZ"
+       to something else, the title bar picks up the rename too. -->
+  {#if showMyQbz}
+  <div
+    class="nav-btn-wrapper"
+    role="navigation"
+    onmouseenter={openMyQbz}
+    onmouseleave={closeMyQbzDelayed}
+  >
+    <button
+      class="nav-btn"
+      class:active={activeView === 'mixtapes' || activeView === 'collections' || activeView === 'mixtape-detail'}
+      onclick={() => (myQbzOpen = !myQbzOpen)}
+      data-tauri-drag-region="false"
+    >
+      <CassetteTape size={12} />
+      <span class="nav-label">{$myQbzNavStore.label}</span>
+      <ChevronDown size={10} />
+    </button>
+    {#if myQbzOpen}
+      <div
+        class="dropdown"
+        role="menu"
+        tabindex="-1"
+        onmouseenter={keepMyQbz}
+        onmouseleave={closeMyQbzDelayed}
+      >
+        <button
+          class="dropdown-item"
+          class:active={activeView === 'mixtapes'}
+          onclick={() => handleMyQbzItem('mixtapes')}
+        >
+          <CassetteTape size={12} />
+          <span>{$t('mixtapes.nav')}</span>
+        </button>
+        <button
+          class="dropdown-item"
+          class:active={activeView === 'collections'}
+          onclick={() => handleMyQbzItem('collections')}
+        >
+          <LibraryBig size={12} />
+          <span>{$t('collections.nav')}</span>
+        </button>
+      </div>
+    {/if}
+  </div>
   {/if}
 
   <!-- Purchases (with dropdown) -->
@@ -340,6 +420,27 @@
   .nav-btn :global(svg) {
     flex-shrink: 0;
     opacity: 0.8;
+  }
+
+  .titlebar-nav-icon {
+    width: 12px;
+    height: 12px;
+    object-fit: contain;
+    flex-shrink: 0;
+    opacity: 0.85;
+  }
+
+  /* Monochrome SVG tinting via CSS mask — silhouette inherits currentColor. */
+  .titlebar-nav-icon-mask {
+    display: inline-block;
+    background-color: currentColor;
+    -webkit-mask: url('/music-library-2.svg') center / contain no-repeat;
+    mask: url('/music-library-2.svg') center / contain no-repeat;
+  }
+
+  .nav-btn.active .titlebar-nav-icon,
+  .nav-btn:hover .titlebar-nav-icon {
+    opacity: 1;
   }
 
   .nav-label {

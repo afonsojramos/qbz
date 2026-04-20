@@ -6,7 +6,7 @@
   import { setCustomImage, removeCustomImage as removeCustomImageFromStore } from '$lib/stores/customArtistImageStore';
   import { t, locale } from 'svelte-i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
-  import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, Ellipsis, Info, Disc, Settings, SquareCheckBig, PanelRightClose, ThumbsDown } from 'lucide-svelte';
+  import { ArrowLeft, User, ChevronDown, ChevronUp, Play, Music, Heart, Search, X, ChevronLeft, ChevronRight, Radio, Ellipsis, Info, Disc, Settings, SquareCheckBig, PanelRightClose, ThumbsDown, LibraryBig } from 'lucide-svelte';
   import {
     isBlacklisted,
     isEnabled as isFilteringEnabled,
@@ -15,6 +15,7 @@
     subscribe as subscribeBlacklist
   } from '$lib/stores/artistBlacklistStore';
   import { showToast } from '$lib/stores/toastStore';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import type { ArtistDetail, QobuzArtist, PageArtistTrack, PageArtistSimilarItem } from '$lib/types';
   import AlbumCard from '../AlbumCard.svelte';
   import TrackMenu from '../TrackMenu.svelte';
@@ -106,6 +107,7 @@
     onLabelClick?: (labelId: number, labelName?: string) => void;
     onMusicianClick?: (name: string, role: string) => void;
     onLocationClick?: (context: ArtistsByLocationContext) => void;
+    onBuildArtistCollection?: (artistId: string) => void;
     knownMbid?: string | null;
     activeTrackId?: number | null;
     isPlaybackActive?: boolean;
@@ -183,6 +185,7 @@
     onLabelClick,
     onMusicianClick,
     onLocationClick,
+    onBuildArtistCollection,
     knownMbid = null,
     activeTrackId = null,
     isPlaybackActive = false
@@ -1821,12 +1824,17 @@
           disabled={isFavoriteLoading}
           title={isFavorite ? $t('actions.removeFromFavorites') : $t('actions.addToFavorites')}
         >
-          {#if isFavorite}
-            <Heart size={24} fill="var(--accent-primary)" color="var(--accent-primary)" />
-          {:else}
-            <Heart size={24} />
-          {/if}
+          <span class="artist-fav-icon" aria-hidden="true"></span>
         </button>
+        {#if onBuildArtistCollection}
+          <button
+            class="collection-btn"
+            onclick={() => onBuildArtistCollection?.(String(artist.id))}
+            title={$t('collections.buildFromArtist')}
+          >
+            <LibraryBig size={24} />
+          </button>
+        {/if}
         <div class="radio-btn-wrapper">
           <button
             class="radio-btn"
@@ -2194,7 +2202,7 @@
                       await toggleTrackFavorite(track.id);
                     }}
                     disabled={trackIsToggling}
-                    title={trackIsFav ? 'Remove from favorites' : 'Add to favorites'}
+                    title={trackIsFav ? $t('actions.removeFromFavorites') : $t('actions.addToFavorites')}
                   >
                     {#if trackIsFav}
                       <Heart size={16} fill="var(--accent-primary)" color="var(--accent-primary)" />
@@ -2210,6 +2218,14 @@
                   onCreateQbzRadio={() => createTrackRadio(track)}
                   onCreateQobuzRadio={() => createQobuzTrackRadio(track)}
                   onAddFavorite={onTrackAddFavorite ? () => onTrackAddFavorite(track.id) : undefined}
+                  onAddToMixtape={() => openAddToMixtape({
+                    item_type: 'track',
+                    source: 'qobuz',
+                    source_item_id: String(track.id),
+                    title: track.title,
+                    subtitle: [track.performer?.name, track.album?.title].filter(Boolean).join(' \u00B7 '),
+                    artwork_url: track.album?.image?.thumbnail ?? track.album?.image?.small ?? undefined,
+                  })}
                   onAddToPlaylist={onTrackAddToPlaylist ? () => onTrackAddToPlaylist(track.id) : undefined}
                   onShareQobuz={onTrackShareQobuz ? () => onTrackShareQobuz(track.id) : undefined}
                   onShareSonglink={onTrackShareSonglink ? () => onTrackShareSonglink(track) : undefined}
@@ -3022,11 +3038,9 @@
   .artist-detail {
     width: 100%;
     height: 100%;
-    padding: 24px;
-    padding-top: 0;
-    padding-left: 18px;
-    padding-right: 8px;
-    padding-bottom: 0;
+    /* Standard root-view padding — matches AlbumDetailView / FavoritesView /
+       PlaylistDetailView so the Back button and hero line up across the app. */
+    padding: 8px 8px 0 18px;
     overflow-y: auto;
     position: relative;
   }
@@ -3304,7 +3318,7 @@
     background: none;
     border: none;
     cursor: pointer;
-    margin-top: 24px;
+    margin-top: 8px;
     margin-bottom: 24px;
     transition: color 150ms ease;
   }
@@ -3375,6 +3389,27 @@
     text-align: left;
   }
 
+  /* Mirror of .favorite-btn — circular action button matching the sibling
+     visual language (radio-btn, network-btn, etc.). */
+  .collection-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    background: var(--bg-tertiary);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 150ms ease, background-color 150ms ease;
+    flex-shrink: 0;
+  }
+  .collection-btn:hover {
+    background: var(--bg-hover);
+    color: var(--accent-primary);
+  }
+
   .favorite-btn {
     display: flex;
     align-items: center;
@@ -3402,6 +3437,25 @@
   .favorite-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  /* CSS-mask approach so the icon inherits the button's `color` — adapts to
+     any theme's --text-muted / --accent-primary. The SVG's own fills are
+     ignored, only its shape is used as a mask. */
+  .artist-fav-icon {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    background-color: currentColor;
+    -webkit-mask: url('/user-add.svg') center / contain no-repeat;
+    mask: url('/user-add.svg') center / contain no-repeat;
+    opacity: 0.7;
+    transition: opacity 150ms ease;
+  }
+
+  .favorite-btn:hover:not(:disabled) .artist-fav-icon,
+  .favorite-btn.is-favorite .artist-fav-icon {
+    opacity: 1;
   }
 
   .radio-btn {

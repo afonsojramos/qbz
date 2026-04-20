@@ -18,7 +18,8 @@
     RefreshCw,
     Radio,
     Info,
-    Search
+    Search,
+    CassetteTape
   } from 'lucide-svelte';
   import { shouldHidePlaylistFeatures } from '$lib/utils/offlineHelpers';
   import {
@@ -38,6 +39,7 @@
     onCreateQbzRadio?: () => void;
     onCreateQobuzRadio?: () => void;
     onAddFavorite?: () => void;
+    onAddToMixtape?: () => void;
     onAddToPlaylist?: () => void;
     onRemoveFromPlaylist?: () => void;
     onFindReplacement?: () => void;
@@ -63,6 +65,7 @@
     onCreateQbzRadio,
     onCreateQobuzRadio,
     onAddFavorite,
+    onAddToMixtape,
     onAddToPlaylist,
     onRemoveFromPlaylist,
     onFindReplacement,
@@ -119,7 +122,7 @@
 
   const hasRadio = $derived(!!(onCreateQbzRadio || onCreateQobuzRadio));
   const hasPlayback = $derived(!!(onPlayNow || onPlayTrackOnly || onPlayFromHere || onPlayNext || onPlayLater || hasRadio));
-  const hasLibrary = $derived(!!(onAddFavorite || onAddToPlaylist || onRemoveFromPlaylist || onFindReplacement));
+  const hasLibrary = $derived(!!(onAddFavorite || onAddToMixtape || onAddToPlaylist || onRemoveFromPlaylist || onFindReplacement));
   const hasShare = $derived(!!(onShareQobuz || onShareSonglink));
   const hasDownload = $derived(!!onDownload || isTrackDownloaded);
   const hasNav = $derived(!!(onGoToAlbum || onGoToArtist || onShowInfo));
@@ -591,6 +594,12 @@
               <button class="menu-item" onclick={() => handleAction(onAddFavorite)}>
                 <Heart size={14} />
                 <span>{ $t('actions.addToFavorites') }</span>
+              </button>
+            {/if}
+            {#if onAddToMixtape}
+              <button class="menu-item" onclick={() => handleAction(onAddToMixtape)}>
+                <CassetteTape size={14} />
+                <span>{ $t('common.addToMixtapeOrCollection') }</span>
               </button>
             {/if}
             {#if onAddToPlaylist && !shouldHidePlaylistFeatures()}

@@ -144,9 +144,10 @@ impl CoreBridge {
             .await
     }
 
-    /// Clear the queue
-    pub async fn clear_queue(&self) {
-        self.core.clear_queue().await
+    /// Clear the queue. `keep_current` preserves the now-playing slot
+    /// (legacy default); passing `false` wipes everything for a full reset.
+    pub async fn clear_queue(&self, keep_current: bool) {
+        self.core.clear_queue(keep_current).await
     }
 
     /// Add a track to the end of the queue

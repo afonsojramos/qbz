@@ -7,9 +7,10 @@
   import {
     HardDrive, Music, Disc3, MicVocal, FolderPlus, Trash2, RefreshCw,
     Settings, ArrowLeft, X, Play, CircleAlert, ImageDown, Upload, Search, LayoutGrid, List, PenLine,
-    Network, Power, PowerOff, ChevronLeft, ChevronRight, Shuffle, SlidersHorizontal, ArrowUpDown, ChevronDown, Check, SquareCheckBig
+    Network, Power, PowerOff, ChevronLeft, ChevronRight, Shuffle, SlidersHorizontal, ArrowUpDown, ChevronDown, Check, SquareCheckBig, CassetteTape
   } from 'lucide-svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { buildQueueTrackFromLocalTrack } from '$lib/services/trackActions';
   import { cmdAddTracksToQueue, cmdAddTracksToQueueNext } from '$lib/services/commandRouter';
   import FolderSettingsModal from '../FolderSettingsModal.svelte';
@@ -86,6 +87,7 @@
     artist: string;
     all_artists?: string; // Comma-separated list of all contributing artists
     year?: number;
+    genre?: string;
     catalog_number?: string;
     artwork_path?: string;
     track_count: number;
@@ -110,6 +112,8 @@
     sampleRate: number;
     source: string;
     likelySingleFileAlbum?: boolean;
+    year?: number;
+    genre?: string;
   }
 
   interface PlexCachedTrack {
@@ -586,6 +590,96 @@
       trackSelectMode = false;
       selectedTrackIds = new Set();
     }
+    if (albumSelectMode || selectedAlbumIds.size > 0) {
+      albumSelectMode = false;
+      selectedAlbumIds = new Set();
+    }
+  }
+
+  // Multi-select for albums tab — mirrors track-select state.
+  let albumSelectMode = $state(false);
+  let selectedAlbumIds = $state(new Set<string>());
+
+  function toggleAlbumSelectMode() {
+    albumSelectMode = !albumSelectMode;
+    if (!albumSelectMode) selectedAlbumIds = new Set();
+  }
+
+  function toggleAlbumSelect(album: LocalAlbum) {
+    const next = new Set(selectedAlbumIds);
+    if (next.has(album.id)) next.delete(album.id);
+    else next.add(album.id);
+    selectedAlbumIds = next;
+  }
+
+  function selectedAlbums(): LocalAlbum[] {
+    return albums.filter((a) => selectedAlbumIds.has(a.id));
+  }
+
+  /** Resolve tracks for a list of albums, concatenated in list order.
+   *  Reuses fetchAlbumTracks so Plex/qobuz_download/user paths all work. */
+  async function resolveAlbumsTracks(albumList: LocalAlbum[]): Promise<LocalTrack[]> {
+    const all: LocalTrack[] = [];
+    for (const album of albumList) {
+      try {
+        const tracksForAlbum = await fetchAlbumTracks(album);
+        all.push(...tracksForAlbum);
+      } catch (err) {
+        console.warn('[LocalLibrary] bulk fetch tracks failed for album:', album.id, err);
+      }
+    }
+    return all;
+  }
+
+  async function handleAlbumBulkPlayNext() {
+    const picked = selectedAlbums();
+    if (picked.length === 0) return;
+    const tracksFlat = await resolveAlbumsTracks(picked);
+    const queueTracks = tracksFlat.map(buildQueueTrackFromLocalTrack);
+    if (queueTracks.length === 0) return;
+    await cmdAddTracksToQueueNext(queueTracks);
+    albumSelectMode = false;
+    selectedAlbumIds = new Set();
+  }
+
+  async function handleAlbumBulkPlayLater() {
+    const picked = selectedAlbums();
+    if (picked.length === 0) return;
+    const tracksFlat = await resolveAlbumsTracks(picked);
+    const queueTracks = tracksFlat.map(buildQueueTrackFromLocalTrack);
+    if (queueTracks.length === 0) return;
+    await cmdAddTracksToQueue(queueTracks);
+    albumSelectMode = false;
+    selectedAlbumIds = new Set();
+  }
+
+  function handleAlbumBulkAddToMixtape() {
+    const picked = selectedAlbums();
+    if (picked.length === 0) return;
+    openAddToMixtape(picked.map((album) => ({
+      item_type: 'album' as const,
+      source: 'local' as const,
+      source_item_id: album.id,
+      title: album.title,
+      subtitle: album.artist,
+      year: album.year,
+      track_count: album.track_count,
+    })));
+    albumSelectMode = false;
+    selectedAlbumIds = new Set();
+  }
+
+  /** Bulk-add selected albums' tracks to a playlist. Albums → tracks →
+   *  playlist flow, skipping Plex tracks (mirrors per-row guard). */
+  async function handleAlbumBulkAddToPlaylist() {
+    const picked = selectedAlbums();
+    if (picked.length === 0) return;
+    const tracksFlat = await resolveAlbumsTracks(picked);
+    const ids = tracksFlat.filter((trk) => trk.source !== 'plex').map((trk) => trk.id);
+    if (ids.length === 0) return;
+    onBulkAddToPlaylist?.(ids);
+    albumSelectMode = false;
+    selectedAlbumIds = new Set();
   }
 
   // Reactive counters based on filtered data
@@ -1367,7 +1461,9 @@
       sample_rate: plexAlbum.sampleRate,
       directory_path: '',
       source: 'plex',
-      likely_single_file_album: plexAlbum.likelySingleFileAlbum
+      likely_single_file_album: plexAlbum.likelySingleFileAlbum,
+      year: plexAlbum.year,
+      genre: plexAlbum.genre
     };
   }
 
@@ -3349,6 +3445,25 @@
             >
               <SquareCheckBig size={18} />
             </button>
+            <button
+              class="action-btn-circle"
+              onclick={() => {
+                if (!selectedAlbum) return;
+                openAddToMixtape({
+                  item_type: 'album',
+                  source: 'local',
+                  source_item_id: selectedAlbum.id,
+                  title: selectedAlbum.title,
+                  subtitle: selectedAlbum.artist,
+                  year: selectedAlbum.year,
+                  track_count: selectedAlbum.track_count,
+                });
+              }}
+              title={$t('common.addToMixtapeOrCollection')}
+              aria-label={$t('common.addToMixtapeOrCollection')}
+            >
+              <CassetteTape size={18} />
+            </button>
           </div>
         </div>
       </div>
@@ -3955,6 +4070,15 @@
               {/if}
             </button>
 
+            <button
+              class="control-btn icon-only"
+              class:active={albumSelectMode}
+              onclick={toggleAlbumSelectMode}
+              title={albumSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+            >
+              <SquareCheckBig size={16} />
+            </button>
+
             {#if albumGroupingEnabled && albumGroupMode === 'alpha'}
               <div class="alpha-index-inline">
                 {#each alphaIndexLetters as letter}
@@ -3997,12 +4121,24 @@
                   onAlbumQueueLater={handleAlbumQueueLaterFromGrid}
                   scrollToGroupId={virtualizedScrollTarget}
                   showSourceBadge={true}
+                  selectable={albumSelectMode}
+                  selectedAlbumIds={selectedAlbumIds}
+                  onAlbumToggleSelect={toggleAlbumSelect}
                 />
               </div>
             </div>
           {/if}
         {/if}
         {/if}
+
+        <BulkActionBar
+          count={selectedAlbumIds.size}
+          onPlayNext={handleAlbumBulkPlayNext}
+          onPlayLater={handleAlbumBulkPlayLater}
+          onAddToPlaylist={handleAlbumBulkAddToPlaylist}
+          onAddToMixtape={handleAlbumBulkAddToMixtape}
+          onClearSelection={() => { albumSelectMode = false; selectedAlbumIds = new Set(); }}
+        />
         </ViewTransition>
         {/key}
       {:else if activeTab === 'artists'}
@@ -4098,6 +4234,9 @@
                   <div class="artist-albums-grid">
                     {#each selectedArtistAlbums as album}
                       <AlbumCard
+                        albumId={album.id}
+                        year={album.year}
+                        trackCount={album.track_count}
                         artwork={getArtworkUrl(album.artwork_path)}
                         title={album.title}
                         artist={album.artist}
@@ -4435,8 +4574,7 @@
 
 <style>
   .library-view {
-    padding: 0 24px 100px 18px;
-    padding-right: 8px;
+    padding: 8px 8px 100px 18px;
     overflow-y: auto;
     height: 100%;
   }
@@ -5667,7 +5805,7 @@
     color: var(--text-muted);
     font-size: 14px;
     cursor: pointer;
-    margin-top: 24px;
+    margin-top: 8px;
     margin-bottom: 24px;
     transition: color 150ms ease;
   }

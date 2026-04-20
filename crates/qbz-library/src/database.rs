@@ -741,6 +741,30 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    /// Provide raw connection access for external schema migrations.
+    ///
+    /// This is intentionally narrow: callers receive a shared reference so
+    /// they can run DDL (CREATE TABLE, ALTER TABLE) but cannot move the
+    /// connection out or replace it.  Use sparingly — prefer adding methods
+    /// to LibraryDatabase directly for DML queries.
+    pub fn with_connection<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&Connection) -> R,
+    {
+        f(&self.conn)
+    }
+
+    /// Provide mutable raw connection access for operations that require a
+    /// transaction (e.g. reorder operations that delete + reinsert rows).
+    ///
+    /// Use sparingly — prefer adding methods to LibraryDatabase directly.
+    pub fn with_connection_mut<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Connection) -> R,
+    {
+        f(&mut self.conn)
+    }
+
     // === Folder Management ===
 
     /// Add a folder to the library with optional network info

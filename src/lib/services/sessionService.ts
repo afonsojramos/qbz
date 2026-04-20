@@ -21,6 +21,11 @@ export interface PersistedQueueTrack {
   is_local?: boolean;
   album_id?: string | null;
   artist_id?: number | null;
+  // Must round-trip through save/restore — otherwise a LocalLibrary queue
+  // comes back as a Qobuz queue and auto-advance routes track_ids to
+  // v2_play_track (Qobuz) instead of v2_library_play_track. Backend also
+  // keeps this in session_store; this interface just needs to carry it.
+  source?: string | null;
 }
 
 export interface PersistedSession {

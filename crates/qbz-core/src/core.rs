@@ -216,10 +216,13 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         new_enabled
     }
 
-    /// Clear the queue
-    pub async fn clear_queue(&self) {
+    /// Clear the queue. `keep_current=true` preserves the now-playing track
+    /// (historical behavior); `false` wipes everything including the current
+    /// slot — use when nothing is actively playing and the user wants a full
+    /// reset.
+    pub async fn clear_queue(&self, keep_current: bool) {
         let queue = self.queue.write().await;
-        queue.clear();
+        queue.clear(keep_current);
         self.emit(CoreEvent::QueueUpdated {
             state: queue.get_state(),
         })

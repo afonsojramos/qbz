@@ -51,6 +51,7 @@ pub mod logging;
 pub mod lyrics;
 pub mod media_controls;
 pub mod migration;
+pub mod mixtape;
 pub mod musicbrainz;
 pub mod network;
 pub mod offline;
@@ -1786,6 +1787,26 @@ pub fn run() {
             commands_v2::v2_clear_image_cache,
             // Desktop theme detection (KDE/Klassy → adaptive window controls)
             desktop_theme::detect_desktop_theme,
+            // Mixtapes & Collections
+            commands_v2::v2_list_mixtape_collections,
+            commands_v2::v2_get_mixtape_collection,
+            commands_v2::v2_create_mixtape_collection,
+            commands_v2::v2_rename_mixtape_collection,
+            commands_v2::v2_set_mixtape_description,
+            commands_v2::v2_set_mixtape_play_mode,
+            commands_v2::v2_set_mixtape_kind,
+            commands_v2::v2_set_mixtape_custom_artwork,
+            commands_v2::v2_mixtape_upload_custom_cover,
+            commands_v2::v2_mixtape_remove_custom_cover,
+            commands_v2::v2_delete_mixtape_collection,
+            commands_v2::v2_add_mixtape_item,
+            commands_v2::v2_mixtape_item_exists,
+            commands_v2::v2_remove_mixtape_item,
+            commands_v2::v2_reorder_mixtape_items,
+            commands_v2::v2_enqueue_collection,
+            commands_v2::v2_enqueue_collection_item,
+            commands_v2::v2_skip_to_next_item,
+            commands_v2::v2_skip_to_previous_item,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

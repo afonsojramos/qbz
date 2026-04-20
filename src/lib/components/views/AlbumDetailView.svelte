@@ -11,7 +11,8 @@
     setCustomAlbumCover,
     removeCustomAlbumCover as removeCustomCoverFromStore
   } from '$lib/stores/customAlbumCoverStore';
-  import { ArrowLeft, Play, Shuffle, Heart, Radio, CloudDownload, ChevronLeft, ChevronRight, LoaderCircle, SquareCheckBig, BookOpen, Disc3 } from 'lucide-svelte';
+  import { ArrowLeft, Play, Shuffle, Heart, Radio, CloudDownload, ChevronLeft, ChevronRight, LoaderCircle, SquareCheckBig, BookOpen, Disc3, CassetteTape } from 'lucide-svelte';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import AlbumCard from '../AlbumCard.svelte';
   import TrackRow from '../TrackRow.svelte';
@@ -500,6 +501,20 @@
     if (!album?.tracks?.length) return;
     onAddAlbumToPlaylist?.();
   }
+
+  function handleAddToMixtape() {
+    const parsedYear = album.year ? parseInt(album.year, 10) : undefined;
+    openAddToMixtape({
+      item_type: 'album',
+      source: 'qobuz',
+      source_item_id: album.id,
+      title: album.title,
+      subtitle: album.artist,
+      artwork_url: album.artwork,
+      year: parsedYear && !isNaN(parsedYear) ? parsedYear : undefined,
+      track_count: album.trackCount,
+    });
+  }
 </script>
 
 <ViewTransition duration={200} distance={12} direction="up">
@@ -616,6 +631,7 @@
           onPlayNext={onPlayAllNext}
           onPlayLater={onPlayAllLater}
           onAddToPlaylist={onAddAlbumToPlaylist ? handleAddAlbumToPlaylist : undefined}
+          onAddToMixtape={handleAddToMixtape}
           onShareQobuz={onShareAlbumQobuz}
           onShareSonglink={onShareAlbumSonglink}
           onDownload={onDownloadAlbum}
@@ -623,6 +639,13 @@
           onOpenContainingFolder={onOpenAlbumFolder}
           onReDownloadAlbum={onReDownloadAlbum}
         />
+        <button
+          class="action-btn-circle"
+          onclick={handleAddToMixtape}
+          title={$t('common.addToMixtapeOrCollection')}
+        >
+          <CassetteTape size={18} />
+        </button>
         <button
           class="action-btn-circle"
           class:is-active={multiSelectMode}

@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { Play, Disc3, Heart, HardDrive } from 'lucide-svelte';
+  import { Play, Disc3, Heart, Check } from 'lucide-svelte';
   import { t, locale } from 'svelte-i18n';
   import AlbumMenu from './AlbumMenu.svelte';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import {
     subscribe as subscribeAlbumFavorites,
     isAlbumFavorite,
@@ -12,6 +13,7 @@
   } from '$lib/stores/albumFavoritesStore';
   import { resolveAlbumCover } from '$lib/stores/customAlbumCoverStore';
   import { cachedSrc } from '$lib/actions/cachedImage';
+  import SourceBadge from './SourceBadge.svelte';
 
   interface Props {
     albumId?: string;
@@ -47,6 +49,17 @@
      *  (Pitchfork BNM, Rolling Stone 5★, etc.). `label` is the
      *  display string the card renders. */
     ribbon?: { kind: 'qobuzissime' | 'albumOfTheWeek' | 'press'; label: string };
+    /** Whether this album is from the local library (determines source field in AddToMixtapeItem) */
+    isLocal?: boolean;
+    /** Year for AddToMixtapeItem (optional, parsed from releaseDate if not provided) */
+    year?: number;
+    /** Track count for AddToMixtapeItem */
+    trackCount?: number;
+    /** Multi-select mode: shows a persistent corner checkbox and routes
+     *  clicks through onToggleSelect instead of onclick. */
+    selectable?: boolean;
+    selected?: boolean;
+    onToggleSelect?: () => void;
   }
 
   let {
@@ -77,7 +90,13 @@
     sourceBadge,
     artistId,
     onArtistClick,
-    ribbon
+    ribbon,
+    isLocal,
+    year,
+    trackCount,
+    selectable = false,
+    selected = false,
+    onToggleSelect
   }: Props = $props();
   
   const isDownloaded = $derived.by(() => {
@@ -102,7 +121,7 @@
   let favoriteFromStore = $state(false);
   let isToggling = $state(false);
   const isFavorite = $derived(albumId ? favoriteFromStore : false);
-  const hasMenu = $derived(!!(onPlayNext || onPlayLater || onShareQobuz || onShareSonglink || onDownload));
+  const hasMenu = $derived(!!(onPlayNext || onPlayLater || onShareQobuz || onShareSonglink || onDownload || albumId));
   const showFavoriteButton = $derived(showFavorite ?? !!albumId);
   const favoriteAvailable = $derived(favoriteEnabled ?? !!albumId);
   const hasOverlay = $derived(!!(showFavoriteButton || onPlay || hasMenu));
@@ -147,6 +166,22 @@
 
   const artistClickable = $derived(!!(artistId && onArtistClick));
 
+  function handleAddToMixtape() {
+    if (!albumId) return;
+    const source = isLocal || !!sourceBadge ? 'local' : 'qobuz';
+    const parsedYear = year ?? (releaseDate ? new Date(releaseDate).getFullYear() : undefined);
+    openAddToMixtape({
+      item_type: 'album',
+      source,
+      source_item_id: albumId,
+      title,
+      subtitle: artist,
+      artwork_url: artwork,
+      year: parsedYear && !isNaN(parsedYear) ? parsedYear : undefined,
+      track_count: trackCount,
+    });
+  }
+
   function isOverlayAction(target: EventTarget | null) {
     if (!(target instanceof HTMLElement)) return false;
     return !!target.closest('.action-buttons') || !!target.closest('.artist-link');
@@ -154,6 +189,11 @@
 
   function handleCardClick(event: MouseEvent) {
     if (isOverlayAction(event.target)) return;
+    // Multi-select mode: click toggles selection instead of opening the card.
+    if (selectable) {
+      onToggleSelect?.();
+      return;
+    }
     onclick?.();
   }
 
@@ -206,6 +246,8 @@
 
 <div
   class="album-card"
+  class:is-selectable={selectable}
+  class:is-selected={selectable && selected}
   style="width: {cardSize}px"
   data-search-id={searchId}
   onclick={handleCardClick}
@@ -214,7 +256,13 @@
   onfocus={measureOverflowOnce}
   role="button"
   tabindex="0"
-  onkeydown={(e) => e.key === 'Enter' && onclick?.()}
+  onkeydown={(e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (selectable) onToggleSelect?.();
+      else onclick?.();
+    }
+  }}
 >
   <!-- Artwork Container -->
   <div
@@ -229,6 +277,12 @@
     <!-- Image overlays placeholder when loaded -->
     {#if !imageError && artwork}
       <img class="artwork-image" use:cachedSrc={albumId ? resolveAlbumCover(albumId, artwork) : artwork} alt={title} loading="lazy" decoding="async" onerror={handleImageError} />
+    {/if}
+
+    {#if selectable}
+      <div class="select-checkbox" aria-hidden="true">
+        {#if selected}<Check size={14} />{/if}
+      </div>
     {/if}
 
     <!-- Action Overlay -->
@@ -272,6 +326,7 @@
                 onPlayNext={onPlayNext}
                 onPlayLater={onPlayLater}
                 onAddToPlaylist={onAddAlbumToPlaylist}
+                onAddToMixtape={albumId ? handleAddToMixtape : undefined}
                 onShareQobuz={onShareQobuz}
                 onShareSonglink={onShareSonglink}
                 onDownload={onDownload}
@@ -303,21 +358,8 @@
 
     <!-- Source Badge (Local Library only) -->
     {#if sourceBadge}
-      <div
-        class="source-badge"
-        class:local-badge={sourceBadge === 'user'}
-        class:purchase-badge={sourceBadge === 'qobuz_purchase'}
-        title={sourceBadge === 'user' ? 'Local file' : sourceBadge === 'plex' ? 'Plex library' : sourceBadge === 'qobuz_purchase' ? 'Qobuz purchase' : 'Qobuz offline'}
-      >
-        {#if sourceBadge === 'user'}
-          <HardDrive size={14} />
-        {:else if sourceBadge === 'plex'}
-          <img src="/plex-logo.svg" alt="Plex" class="qobuz-badge-icon plex-logo-icon" />
-        {:else if sourceBadge === 'qobuz_purchase'}
-          <img src="/qobuz-logo-filled.svg" alt="Qobuz purchase" class="qobuz-badge-icon" />
-        {:else}
-          <img src="/qobuz-logo-filled.svg" alt="Qobuz" class="qobuz-badge-icon" />
-        {/if}
+      <div class="source-badge-slot">
+        <SourceBadge value={sourceBadge} />
       </div>
     {/if}
   </div>
@@ -371,6 +413,40 @@
     margin-bottom: 8px;
     border-radius: 8px;
     overflow: hidden;
+  }
+
+  /* Multi-select corner checkbox (top-left of the artwork). Always rendered
+     when selectable=true; filled accent when selected, outlined-only when not. */
+  .select-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.85);
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    pointer-events: none;
+    backdrop-filter: blur(2px);
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  .album-card.is-selected .select-checkbox {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+  }
+  .album-card.is-selected {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+    border-radius: 10px;
+  }
+  /* Disable the drag-cursor feel when in select-mode — tap = toggle. */
+  .album-card.is-selectable {
+    cursor: pointer;
   }
 
   .artwork-container .artwork-image {
@@ -465,47 +541,11 @@
     text-shadow: 0 1px 0 rgba(255, 255, 255, 0.15);
   }
 
-  .source-badge {
+  .source-badge-slot {
     position: absolute;
     bottom: 6px;
     right: 6px;
     z-index: 3;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    color: var(--text-secondary);
-    border-radius: 4px;
-  }
-
-  .source-badge.local-badge {
-    background: rgba(0, 0, 0, 0.7);
-    border-radius: 4px;
-    backdrop-filter: blur(4px);
-  }
-
-  .source-badge.purchase-badge {
-    background: rgba(30, 20, 0, 0.85);
-    border-radius: 4px;
-    backdrop-filter: blur(4px);
-    border: 1px solid rgba(234, 179, 8, 0.5);
-  }
-
-  .source-badge.purchase-badge .qobuz-badge-icon {
-    filter: brightness(0) saturate(100%) invert(75%) sepia(80%) saturate(500%) hue-rotate(10deg) brightness(105%) contrast(90%);
-  }
-
-  .source-badge .qobuz-badge-icon {
-    width: 24px;
-    height: 24px;
-  }
-
-  .source-badge .plex-logo-icon {
-    width: 18px;
-    height: 18px;
-    object-fit: contain;
-    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
   }
 
   .action-overlay {

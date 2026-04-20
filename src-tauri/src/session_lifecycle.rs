@@ -119,6 +119,21 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
     allowed_origins.init_at(&data_dir)?;
     updates.init_at(&data_dir)?;
     library.init_at(&data_dir).await?;
+
+    // Run mixtape schema migrations on the library DB immediately after it opens.
+    // We hold the async Mutex briefly to get a raw-connection callback; the lock
+    // is dropped before returning so other commands are not blocked.
+    {
+        let db_guard = library.db.lock().await;
+        if let Some(db) = db_guard.as_ref() {
+            db.with_connection(|conn| {
+                if let Err(e) = crate::mixtape::schema::run_mixtape_migrations(conn) {
+                    log::error!("[SessionLifecycle] Mixtape schema migration failed: {}", e);
+                }
+            });
+        }
+    }
+
     reco.init_at(&data_dir).await?;
     api_cache.init_at(&data_dir).await?;
     artist_vectors.init_at(&data_dir).await?;
@@ -380,6 +395,19 @@ pub async fn activate_offline_session(app: &tauri::AppHandle) -> Result<(), Stri
         app.state::<crate::config::favorites_preferences::FavoritesPreferencesState>();
 
     library.init_at(&data_dir).await?;
+
+    // Run mixtape schema migrations on the library DB (offline activation path).
+    {
+        let db_guard = library.db.lock().await;
+        if let Some(db) = db_guard.as_ref() {
+            db.with_connection(|conn| {
+                if let Err(e) = crate::mixtape::schema::run_mixtape_migrations(conn) {
+                    log::error!("[SessionLifecycle] Mixtape schema migration failed (offline): {}", e);
+                }
+            });
+        }
+    }
+
     offline.init_at(&data_dir)?;
     offline_cache.init_at(&cache_dir).await?;
     offline_cache.init_library_connection(&data_dir).await?;

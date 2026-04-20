@@ -98,7 +98,8 @@ pub async fn move_track(
 }
 
 pub async fn clear(daemon: Arc<DaemonCore>) -> &'static str {
-    daemon.core.clear_queue().await;
+    // Daemon clear keeps the current track — matches legacy TUI behavior.
+    daemon.core.clear_queue(true).await;
     "ok"
 }
 
