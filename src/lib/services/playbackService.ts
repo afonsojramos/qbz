@@ -20,6 +20,7 @@ import {
   isPlaybackSourceLocal,
   resolvePlaybackSource
 } from '$lib/services/playbackSource';
+import { resolveQueueTrackArtwork } from '$lib/services/queueArtwork';
 
 /**
  * Get the preferred streaming quality from localStorage
@@ -400,7 +401,7 @@ export async function playTrack(
             artist: next.artist,
             album: next.album,
             duration: next.duration_secs,
-            artwork: next.artwork_url || '',
+            artwork: resolveQueueTrackArtwork(next.artwork_url),
             quality: next.hires ? 'Hi-Res' : 'CD Quality',
             albumId: next.album_id || undefined,
             artistId: next.artist_id || undefined,
