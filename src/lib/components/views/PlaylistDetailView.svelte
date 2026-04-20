@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ArrowLeft, Play, Shuffle, ListMusic, Search, X, ChevronDown, ChevronRight, ChevronUp, ImagePlus, PenLine, ChartNoAxesColumn, Heart, CloudDownload, ListPlus, GripVertical, SquareCheckBig, Bookmark } from 'lucide-svelte';
   import AlbumMenu from '../AlbumMenu.svelte';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import PlaylistCollage from '../PlaylistCollage.svelte';
   import PlaylistModal from '../PlaylistModal.svelte';
   import TrackReplacementModal from '../TrackReplacementModal.svelte';
@@ -2214,6 +2215,15 @@
           <AlbumMenu
             onPlayNext={handlePlayAllNext}
             onPlayLater={handlePlayAllLater}
+            onAddToMixtape={playlist ? () => openAddToMixtape({
+              item_type: 'playlist',
+              source: 'qobuz',
+              source_item_id: String(playlist!.id),
+              title: playlist!.name,
+              subtitle: playlist!.owner?.name ?? '',
+              artwork_url: playlist!.images?.[0] ?? undefined,
+              track_count: playlist!.tracks_count ?? undefined,
+            }) : undefined}
             onShareQobuz={sharePlaylistQobuz}
             onMakeOffline={handleMakePlaylistOffline}
           />

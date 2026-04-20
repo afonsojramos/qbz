@@ -5,6 +5,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { ArrowLeft, Disc3, Play, Music, Ellipsis, Heart, User, UserPlus, Check, ChevronDown, ChevronUp, SquareCheckBig } from 'lucide-svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { t } from '$lib/i18n';
   import AlbumCard from '../AlbumCard.svelte';
   import HorizontalScrollRow from '../HorizontalScrollRow.svelte';
@@ -1067,6 +1068,14 @@
                   onCreateQbzRadio={() => createTrackRadio(track)}
                   onCreateQobuzRadio={() => createQobuzTrackRadio(track)}
                   onAddFavorite={onTrackAddFavorite ? () => onTrackAddFavorite(track.id) : undefined}
+                  onAddToMixtape={() => openAddToMixtape({
+                    item_type: 'track',
+                    source: 'qobuz',
+                    source_item_id: String(track.id),
+                    title: track.title,
+                    subtitle: [track.performer?.name, track.album?.title].filter(Boolean).join(' \u00B7 '),
+                    artwork_url: track.album?.image?.thumbnail ?? track.album?.image?.small ?? undefined,
+                  })}
                   onAddToPlaylist={onTrackAddToPlaylist ? () => onTrackAddToPlaylist(track.id) : undefined}
                   onGoToAlbum={track.album?.id && onTrackGoToAlbum ? () => onTrackGoToAlbum(track.album!.id) : undefined}
                   contextMenuPosition={trackContextMenu?.trackId === track.id ? { x: trackContextMenu.x, y: trackContextMenu.y } : null}

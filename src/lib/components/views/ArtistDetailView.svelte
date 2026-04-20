@@ -15,6 +15,7 @@
     subscribe as subscribeBlacklist
   } from '$lib/stores/artistBlacklistStore';
   import { showToast } from '$lib/stores/toastStore';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import type { ArtistDetail, QobuzArtist, PageArtistTrack, PageArtistSimilarItem } from '$lib/types';
   import AlbumCard from '../AlbumCard.svelte';
   import TrackMenu from '../TrackMenu.svelte';
@@ -1823,7 +1824,7 @@
           disabled={isFavoriteLoading}
           title={isFavorite ? $t('actions.removeFromFavorites') : $t('actions.addToFavorites')}
         >
-          <img src="/user-add.svg" alt="" class="artist-fav-icon" />
+          <span class="artist-fav-icon" aria-hidden="true"></span>
         </button>
         {#if onBuildArtistCollection}
           <button
@@ -2217,6 +2218,14 @@
                   onCreateQbzRadio={() => createTrackRadio(track)}
                   onCreateQobuzRadio={() => createQobuzTrackRadio(track)}
                   onAddFavorite={onTrackAddFavorite ? () => onTrackAddFavorite(track.id) : undefined}
+                  onAddToMixtape={() => openAddToMixtape({
+                    item_type: 'track',
+                    source: 'qobuz',
+                    source_item_id: String(track.id),
+                    title: track.title,
+                    subtitle: [track.performer?.name, track.album?.title].filter(Boolean).join(' \u00B7 '),
+                    artwork_url: track.album?.image?.thumbnail ?? track.album?.image?.small ?? undefined,
+                  })}
                   onAddToPlaylist={onTrackAddToPlaylist ? () => onTrackAddToPlaylist(track.id) : undefined}
                   onShareQobuz={onTrackShareQobuz ? () => onTrackShareQobuz(track.id) : undefined}
                   onShareSonglink={onTrackShareSonglink ? () => onTrackShareSonglink(track) : undefined}
@@ -3432,23 +3441,23 @@
     cursor: not-allowed;
   }
 
+  /* CSS-mask approach so the icon inherits the button's `color` — adapts to
+     any theme's --text-muted / --accent-primary. The SVG's own fills are
+     ignored, only its shape is used as a mask. */
   .artist-fav-icon {
+    display: inline-block;
     width: 24px;
     height: 24px;
-    object-fit: contain;
+    background-color: currentColor;
+    -webkit-mask: url('/user-add.svg') center / contain no-repeat;
+    mask: url('/user-add.svg') center / contain no-repeat;
     opacity: 0.7;
-    filter: var(--icon-filter, none);
-    transition: opacity 150ms ease, filter 150ms ease;
+    transition: opacity 150ms ease;
   }
 
-  .favorite-btn:hover:not(:disabled) .artist-fav-icon {
-    opacity: 1;
-    filter: brightness(0) saturate(100%) invert(38%) sepia(99%) saturate(600%) hue-rotate(240deg) brightness(110%);
-  }
-
+  .favorite-btn:hover:not(:disabled) .artist-fav-icon,
   .favorite-btn.is-favorite .artist-fav-icon {
     opacity: 1;
-    filter: brightness(0) saturate(100%) invert(38%) sepia(99%) saturate(600%) hue-rotate(240deg) brightness(110%);
   }
 
   .radio-btn {

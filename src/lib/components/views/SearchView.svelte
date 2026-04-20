@@ -8,6 +8,7 @@
   import SearchPlaylistCard from '../SearchPlaylistCard.svelte';
   import ViewTransition from '../ViewTransition.svelte';
   import TrackMenu from '../TrackMenu.svelte';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import QualityBadge from '../QualityBadge.svelte';
   import { formatQuality } from '$lib/adapters/qobuzAdapters';
   import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
@@ -1751,6 +1752,14 @@
                         onPlayNext={onTrackPlayNext ? () => onTrackPlayNext(track) : undefined}
                         onPlayLater={onTrackPlayLater ? () => onTrackPlayLater(track) : undefined}
                         onAddFavorite={onTrackAddFavorite ? () => onTrackAddFavorite(track.id) : undefined}
+                        onAddToMixtape={() => openAddToMixtape({
+                          item_type: 'track',
+                          source: 'qobuz',
+                          source_item_id: String(track.id),
+                          title: track.title,
+                          subtitle: [track.performer?.name, track.album?.title].filter(Boolean).join(' \u00B7 '),
+                          artwork_url: track.album?.image?.thumbnail ?? track.album?.image?.small ?? undefined,
+                        })}
                         onAddToPlaylist={onTrackAddToPlaylist ? () => onTrackAddToPlaylist(track.id) : undefined}
                         onShareQobuz={onTrackShareQobuz ? () => onTrackShareQobuz(track.id) : undefined}
                         onShareSonglink={onTrackShareSonglink ? () => onTrackShareSonglink(track) : undefined}
@@ -1951,6 +1960,14 @@
                         onPlayNext={onTrackPlayNext ? () => onTrackPlayNext(track) : undefined}
                         onPlayLater={onTrackPlayLater ? () => onTrackPlayLater(track) : undefined}
                         onAddFavorite={onTrackAddFavorite ? () => onTrackAddFavorite(track.id) : undefined}
+                        onAddToMixtape={() => openAddToMixtape({
+                          item_type: 'track',
+                          source: 'qobuz',
+                          source_item_id: String(track.id),
+                          title: track.title,
+                          subtitle: [track.performer?.name, track.album?.title].filter(Boolean).join(' \u00B7 '),
+                          artwork_url: track.album?.image?.thumbnail ?? track.album?.image?.small ?? undefined,
+                        })}
                         onAddToPlaylist={onTrackAddToPlaylist ? () => onTrackAddToPlaylist(track.id) : undefined}
                         onShareQobuz={onTrackShareQobuz ? () => onTrackShareQobuz(track.id) : undefined}
                         onShareSonglink={onTrackShareSonglink ? () => onTrackShareSonglink(track) : undefined}
