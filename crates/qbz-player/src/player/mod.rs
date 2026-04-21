@@ -2123,10 +2123,24 @@ impl Player {
                             *gapless_request_armed = false;
                             thread_state.set_gapless_ready(false);
                             thread_state.set_gapless_next_track_id(0);
-                            let Some(ref audio_data) = *current_audio_data else {
-                                log::warn!("Audio thread: cannot seek - no audio data available");
+
+                            // Two source kinds reach this handler: full-file
+                            // playback (current_audio_data holds the complete
+                            // bytes) and CMAF streaming (bytes live inside
+                            // Arc<BufferedMediaSource> so current_audio_data
+                            // is None). Previously the handler early-returned
+                            // on None, so every seek during active streaming
+                            // silently dropped and the UI snapped back
+                            // (issue #335). Now it branches on whichever
+                            // source is live.
+                            if current_audio_data.is_none()
+                                && current_streaming_source.is_none()
+                            {
+                                log::warn!(
+                                    "Audio thread: cannot seek - no audio data available"
+                                );
                                 return;
-                            };
+                            }
 
                             let Some(ref stream) = *stream_opt else {
                                 log::error!(
@@ -2171,17 +2185,39 @@ impl Player {
                             let volume = thread_state.volume.load(Ordering::SeqCst) as f32 / 100.0;
                             engine.set_volume(volume);
 
-                            let source = match decode_with_fallback(audio_data) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    log::error!("Failed to decode audio for seek: {}", e);
-                                    return;
-                                }
-                            };
-
+                            // Build the decoded source for the seek. Streaming:
+                            // create a fresh IncrementalStreamingSource on the
+                            // shared BufferedMediaSource — new reader at byte 0,
+                            // same downloaded bytes (no re-download). Non-streaming:
+                            // decode the in-RAM full file as before.
                             let skip_duration = Duration::from_secs(position_secs);
                             let skipped_source: Box<dyn Source<Item = f32> + Send> =
-                                Box::new(source.skip_duration(skip_duration));
+                                if let Some(ref stream_src) = *current_streaming_source {
+                                    match IncrementalStreamingSource::new(stream_src.clone()) {
+                                        Ok(s) => Box::new(s.skip_duration(skip_duration)),
+                                        Err(e) => {
+                                            log::error!(
+                                                "Failed to create streaming source for seek: {}",
+                                                e
+                                            );
+                                            return;
+                                        }
+                                    }
+                                } else {
+                                    let audio_data = current_audio_data
+                                        .as_ref()
+                                        .expect("current_audio_data was checked Some above");
+                                    match decode_with_fallback(audio_data) {
+                                        Ok(s) => Box::new(s.skip_duration(skip_duration)),
+                                        Err(e) => {
+                                            log::error!(
+                                                "Failed to decode audio for seek: {}",
+                                                e
+                                            );
+                                            return;
+                                        }
+                                    }
+                                };
 
                             // Send Reset to analyzer (seek invalidates accumulated samples)
                             let _ = analyzer_tx.try_send(AnalyzerMessage::Reset);
