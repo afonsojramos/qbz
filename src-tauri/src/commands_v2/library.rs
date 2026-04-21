@@ -446,6 +446,151 @@ fn local_track_content_type(track: &LocalTrack) -> String {
     }
 }
 
+/// Play a PLEX track on a DLNA renderer. Plex serves audio via its own HTTP
+/// server, but streaming directly from Plex to the DLNA renderer would
+/// require the renderer to present the user's Plex token — we proxy the
+/// bytes through our local media server instead so auth stays ours.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_dlna_play_plex_track(
+    baseUrl: String,
+    token: String,
+    ratingKey: String,
+    metadata: DlnaMetadata,
+    dlna_state: State<'_, DlnaState>,
+) -> Result<(), String> {
+    log::info!("DLNA: dlna_play_plex_track called for rating_key={}", ratingKey);
+
+    let resolved =
+        crate::plex::plex_resolve_track_media(baseUrl, token, ratingKey.clone()).await?;
+    // Plex sometimes omits content-type on transcoded streams; audio/mpeg is
+    // the most common transcode target and a safe DLNA fallback.
+    let content_type = resolved
+        .content_type
+        .clone()
+        .unwrap_or_else(|| "audio/mpeg".to_string());
+
+    let target_ip = {
+        let connection = dlna_state.connection.lock().await;
+        connection.as_ref().map(|conn| conn.device_ip().to_string())
+    };
+
+    dlna_state
+        .ensure_media_server()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let media_key = plex_key_to_u64(&ratingKey);
+    let url = {
+        let mut server_guard = dlna_state.media_server.lock().await;
+        let server = server_guard
+            .as_mut()
+            .ok_or("Media server not initialized")?;
+        server.register_audio(media_key, resolved.bytes.clone(), &content_type);
+        match target_ip.as_deref() {
+            Some(ip) => server.get_audio_url_for_target(media_key, ip),
+            None => server.get_audio_url(media_key),
+        }
+        .ok_or_else(|| "Failed to build media URL".to_string())?
+    };
+
+    log::info!(
+        "DLNA: Playing plex track {} ({}) via MediaServer URL: {}",
+        ratingKey,
+        content_type,
+        url
+    );
+
+    {
+        let mut connection = dlna_state.connection.lock().await;
+        let conn = connection.as_mut().ok_or("Not connected")?;
+        conn.load_media(&url, &metadata, &content_type)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    {
+        let mut connection = dlna_state.connection.lock().await;
+        let conn = connection.as_mut().ok_or("Not connected")?;
+        conn.play().await.map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Play a PLEX track on a Chromecast device. Companion to v2_dlna_play_plex_track.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_cast_play_plex_track(
+    baseUrl: String,
+    token: String,
+    ratingKey: String,
+    metadata: MediaMetadata,
+    cast_state: State<'_, CastState>,
+) -> Result<(), String> {
+    log::info!("Chromecast: cast_play_plex_track called for rating_key={}", ratingKey);
+
+    let resolved =
+        crate::plex::plex_resolve_track_media(baseUrl, token, ratingKey.clone()).await?;
+    // Plex sometimes omits content-type on transcoded streams; audio/mpeg is
+    // the most common transcode target and a safe DLNA fallback.
+    let content_type = resolved
+        .content_type
+        .clone()
+        .unwrap_or_else(|| "audio/mpeg".to_string());
+
+    let target_ip = {
+        let connected = cast_state.connected_device_ip.lock().await;
+        connected.clone()
+    };
+
+    cast_state
+        .get_or_create_media_server()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let media_key = plex_key_to_u64(&ratingKey);
+    let url = {
+        let mut server_guard = cast_state.media_server.lock().await;
+        let server = server_guard
+            .as_mut()
+            .ok_or("Media server not initialized")?;
+        server.register_audio(media_key, resolved.bytes.clone(), &content_type);
+        match target_ip.as_deref() {
+            Some(ip) => server.get_audio_url_for_target(media_key, ip),
+            None => server.get_audio_url(media_key),
+        }
+        .ok_or_else(|| "Failed to build media URL".to_string())?
+    };
+
+    log::info!(
+        "Chromecast: Playing plex track {} ({}) via MediaServer URL: {}",
+        ratingKey,
+        content_type,
+        url
+    );
+
+    cast_state
+        .chromecast
+        .load_media(url, content_type, metadata)
+        .map_err(|e| e.to_string())
+}
+
+/// Namespace a Plex rating key into u64 for the MediaServer. Most Plex
+/// ratingKey strings parse as numeric; fall back to a stable hash so
+/// non-numeric keys still route correctly and don't collide with library
+/// ids in the low u64 range. High bit set to separate from Qobuz/library.
+fn plex_key_to_u64(rating_key: &str) -> u64 {
+    const PLEX_NAMESPACE: u64 = 0x4000_0000_0000_0000;
+    if let Ok(n) = rating_key.parse::<u64>() {
+        return PLEX_NAMESPACE | (n & !PLEX_NAMESPACE);
+    }
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    rating_key.hash(&mut hasher);
+    PLEX_NAMESPACE | (hasher.finish() & !PLEX_NAMESPACE)
+}
+
 #[tauri::command]
 pub async fn v2_dlna_play(state: State<'_, DlnaState>) -> Result<(), String> {
     let mut connection = state.connection.lock().await;
