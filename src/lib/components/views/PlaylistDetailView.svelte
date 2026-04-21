@@ -2030,8 +2030,14 @@
     const allTracks = displayTracks;
     if (allTracks.length === 0) return;
 
-    // Filter out blacklisted tracks
+    // Filter out blacklisted tracks and tracks that aren't reachable.
+    // isTrackAvailable already handles "removed from Qobuz" (always
+    // unplayable) and "offline + no local copy" (unplayable until we're
+    // online again). Dropping them at enqueue time means the queue
+    // never hits the fail-then-auto-skip loop and the "playing N of M"
+    // count reflects what's actually going to play.
     const playableTracks = allTracks.filter(trk => {
+      if (!isTrackAvailable(trk)) return false;
       if (trk.isLocal) return true;
       if (!trk.artistId) return true;
       return !isArtistBlacklisted(trk.artistId);
@@ -2124,8 +2130,14 @@
     const allTracks = displayTracks;
     if (allTracks.length === 0) return;
 
-    // Filter out blacklisted tracks
+    // Filter out blacklisted tracks and tracks that aren't reachable.
+    // isTrackAvailable already handles "removed from Qobuz" (always
+    // unplayable) and "offline + no local copy" (unplayable until we're
+    // online again). Dropping them at enqueue time means the queue
+    // never hits the fail-then-auto-skip loop and the "playing N of M"
+    // count reflects what's actually going to play.
     const playableTracks = allTracks.filter(trk => {
+      if (!isTrackAvailable(trk)) return false;
       if (trk.isLocal) return true;
       if (!trk.artistId) return true;
       return !isArtistBlacklisted(trk.artistId);
@@ -2170,8 +2182,14 @@
     const allTracks = displayTracks;
     if (allTracks.length === 0) return;
 
-    // Filter out blacklisted tracks
+    // Filter out blacklisted tracks and tracks that aren't reachable.
+    // isTrackAvailable already handles "removed from Qobuz" (always
+    // unplayable) and "offline + no local copy" (unplayable until we're
+    // online again). Dropping them at enqueue time means the queue
+    // never hits the fail-then-auto-skip loop and the "playing N of M"
+    // count reflects what's actually going to play.
     const playableTracks = allTracks.filter(trk => {
+      if (!isTrackAvailable(trk)) return false;
       if (trk.isLocal) return true;
       if (!trk.artistId) return true;
       return !isArtistBlacklisted(trk.artistId);
