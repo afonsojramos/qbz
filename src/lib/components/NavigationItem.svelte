@@ -113,7 +113,7 @@
     border-radius: 6px;
     border: none;
     background: transparent;
-    color: var(--text-primary);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     text-align: left;
@@ -149,7 +149,7 @@
   .label {
     font-size: 13px;
     font-weight: 400;
-    color: var(--text-primary);
+    color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

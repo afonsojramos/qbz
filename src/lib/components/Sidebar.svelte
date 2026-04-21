@@ -2450,7 +2450,7 @@
   }
 
   .section-header-with-icon > span {
-    color: var(--text-primary);
+    color: var(--text-secondary);
   }
 
   .section-header-btn {
@@ -2672,7 +2672,7 @@
     flex: 1;
     font-size: 13px;
     font-weight: 400;
-    color: var(--text-primary);
+    color: var(--text-secondary);
     text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2741,7 +2741,7 @@
   }
 
   .folder-popover-header > span {
-    color: var(--text-primary);
+    color: var(--text-secondary);
   }
 
   .folder-popover-list {
@@ -3139,7 +3139,7 @@
     border-radius: 6px;
     border: none;
     background: transparent;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     text-align: left;
@@ -3151,7 +3151,6 @@
 
   .favorites-nav-item.active {
     background-color: var(--bg-tertiary);
-    color: var(--text-primary);
   }
 
   .favorites-nav-item .icon-container {
@@ -3161,6 +3160,7 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    color: var(--accent-primary);
   }
 
   .favorites-nav-item .label {
@@ -3291,7 +3291,7 @@
     padding: 0 8px;
     border-radius: 6px;
     background: transparent;
-    color: var(--text-primary);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease;
     user-select: none;
