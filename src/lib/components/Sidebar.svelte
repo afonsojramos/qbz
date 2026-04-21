@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, LibraryBig, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, X, User, Disc, Disc3, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
+  import { Search, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, LibraryBig, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, X, User, Disc, Disc3, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
   import FolderGlyph from './icons/FolderGlyph.svelte';
   import PlaylistsGlyph from './icons/PlaylistsGlyph.svelte';
   import type { FavoritesPreferences } from '$lib/types';
@@ -144,7 +144,6 @@
   let playlistsLoading = $state(false);
   let playlistsCollapsed = $state(false);
   let showPlaylistCollage = $state(getShowPlaylistCollage());
-  let localLibraryCollapsed = $state(false);
 
   // Favorites section state
   let favoritesExpanded = $state(false);
@@ -1020,7 +1019,6 @@
   interface SidebarCollapseState {
     favoritesExpanded: boolean;
     playlistsCollapsed: boolean;
-    localLibraryCollapsed: boolean;
   }
 
   function loadSidebarCollapseState() {
@@ -1030,7 +1028,6 @@
         const state: SidebarCollapseState = JSON.parse(stored);
         favoritesExpanded = state.favoritesExpanded ?? false;
         playlistsCollapsed = state.playlistsCollapsed ?? false;
-        localLibraryCollapsed = state.localLibraryCollapsed ?? false;
       }
     } catch (err) {
       console.debug('[Sidebar] Failed to load collapse state:', err);
@@ -1041,8 +1038,7 @@
     try {
       const state: SidebarCollapseState = {
         favoritesExpanded,
-        playlistsCollapsed,
-        localLibraryCollapsed
+        playlistsCollapsed
       };
       localStorage.setItem(SIDEBAR_COLLAPSE_KEY, JSON.stringify(state));
     } catch (err) {
@@ -2052,33 +2048,18 @@
     </div>
     {/if}
 
-    <!-- Local Library Section (hidden when Library is in titlebar) -->
+    <!-- Local Library (hidden when Library is in titlebar) -->
     {#if !libraryInTitlebar}
-    <div class="section local-library-section">
-      {#if isExpanded}
-        <button class="section-header-btn" onclick={() => { localLibraryCollapsed = !localLibraryCollapsed; saveSidebarCollapseState(); }}>
-          <span class="section-header section-header-with-icon">
-            <LibraryBig size={12} />
-            <span>{$t('library.title')}</span>
-          </span>
-          {#if localLibraryCollapsed}
-            <ChevronDown size={12} />
-          {:else}
-            <ChevronUp size={12} />
-          {/if}
-        </button>
-      {/if}
-      {#if !localLibraryCollapsed || !isExpanded}
-        <NavigationItem
-          label={$t('library.browse')}
-          active={activeView === 'library'}
-          onclick={() => handleViewChange('library')}
-          showLabel={isExpanded}
-        >
-          {#snippet icon()}<HardDrive size={14} />{/snippet}
-        </NavigationItem>
-      {/if}
-    </div>
+    <nav class="nav-section local-library-section">
+      <NavigationItem
+        label={$t('library.title')}
+        active={activeView === 'library'}
+        onclick={() => handleViewChange('library')}
+        showLabel={isExpanded}
+      >
+        {#snippet icon()}<LibraryBig size={14} />{/snippet}
+      </NavigationItem>
+    </nav>
     {/if}
   </div>
 
