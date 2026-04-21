@@ -1,7 +1,8 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, X, User, Disc, Disc3, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
+  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, LibraryBig, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, X, User, Disc, Disc3, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
   import FolderGlyph from './icons/FolderGlyph.svelte';
+  import PlaylistsGlyph from './icons/PlaylistsGlyph.svelte';
   import type { FavoritesPreferences } from '$lib/types';
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
@@ -1793,7 +1794,10 @@
               </button>
             </div>
           {:else}
-            <div class="section-header">{$t('nav.playlists')}</div>
+            <div class="section-header section-header-with-icon">
+              <PlaylistsGlyph size={12} />
+              <span>{$t('nav.playlists')}</span>
+            </div>
           {/if}
           <div class="header-actions" bind:this={menuRef}>
             <button
@@ -2053,7 +2057,10 @@
     <div class="section local-library-section">
       {#if isExpanded}
         <button class="section-header-btn" onclick={() => { localLibraryCollapsed = !localLibraryCollapsed; saveSidebarCollapseState(); }}>
-          <span class="section-header">{$t('library.title')}</span>
+          <span class="section-header section-header-with-icon">
+            <LibraryBig size={12} />
+            <span>{$t('library.title')}</span>
+          </span>
           {#if localLibraryCollapsed}
             <ChevronDown size={12} />
           {:else}
@@ -2454,6 +2461,17 @@
     padding: 0 8px;
   }
 
+  .section-header-with-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--accent-primary);
+  }
+
+  .section-header-with-icon > span {
+    color: var(--text-primary);
+  }
+
   .section-header-btn {
     display: flex;
     align-items: center;
@@ -2644,7 +2662,7 @@
     border: none;
     border-radius: 6px;
     cursor: pointer;
-    color: var(--text-muted);
+    color: var(--accent-primary);
     transition: background-color 150ms ease;
   }
 
@@ -2673,7 +2691,7 @@
     flex: 1;
     font-size: 13px;
     font-weight: 400;
-    color: var(--text-muted);
+    color: var(--text-primary);
     text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2701,7 +2719,7 @@
     border: none;
     border-radius: 6px;
     cursor: pointer;
-    color: var(--text-muted);
+    color: var(--accent-primary);
     transition: background-color 150ms ease, color 150ms ease;
   }
 
@@ -2734,11 +2752,15 @@
     padding: 8px;
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--accent-primary);
     text-transform: uppercase;
     letter-spacing: 0.03em;
     border-bottom: 1px solid var(--border-subtle);
     margin-bottom: 4px;
+  }
+
+  .folder-popover-header > span {
+    color: var(--text-primary);
   }
 
   .folder-popover-list {
@@ -3288,7 +3310,7 @@
     padding: 0 8px;
     border-radius: 6px;
     background: transparent;
-    color: var(--text-muted);
+    color: var(--text-primary);
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease;
     user-select: none;
@@ -3300,7 +3322,6 @@
 
   .my-qbz-parent.active {
     background-color: var(--bg-tertiary);
-    color: var(--text-primary);
   }
 
   .my-qbz-parent .icon-container {
@@ -3310,6 +3331,7 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    color: var(--accent-primary);
   }
 
   .my-qbz-parent .label {
