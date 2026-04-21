@@ -398,6 +398,11 @@ export interface DisplayTrack {
    *  sits on a network mount (/mnt, /media, UNC, etc.) and is
    *  therefore unreachable when the wire is cut. */
   filePath?: string;
+  /** Backend-provided flag: true when the track's file_path lives on
+   *  a network filesystem (NFS / CIFS / SSHFS / etc.). Authoritative
+   *  — read from local_tracks.is_network_mount, set by the library
+   *  scanner on index. Fallback when unset: the filePath heuristic. */
+  isNetworkMount?: boolean;
   artworkPath?: string;
 }
 

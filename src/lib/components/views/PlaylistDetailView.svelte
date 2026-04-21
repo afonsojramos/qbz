@@ -100,6 +100,10 @@
     /** Raw audio file path — used by the offline heuristic to detect
      *  network-mounted local paths. */
     filePath?: string;
+    /** Backend-provided flag: true when the file lives on a network
+     *  filesystem (NFS, CIFS, SSHFS, …). Authoritative when present;
+     *  the filePath heuristic is the fallback. */
+    isNetworkMount?: boolean;
     artworkPath?: string;
     playlistTrackId?: number; // Qobuz playlist-specific ID for removal
     label?: string;           // Record label name from Qobuz
@@ -134,6 +138,7 @@
     bit_depth?: number;
     sample_rate: number;
     artwork_path?: string;
+    is_network_mount?: boolean;
     playlist_position: number;
   }
 
@@ -504,11 +509,13 @@
     }
     if (track.isLocal) {
       // Network-mounted local paths behave like Plex when the wire is
-      // cut. If the file_path looks like a network mount (Linux
-      // /mnt/.., /media/.., /run/media/…/…, or Windows UNC \\host),
-      // treat it as unreachable under forced offline.
-      if (isForced && track.filePath && isNetworkPath(track.filePath)) {
-        return false;
+      // cut. Prefer the backend flag (authoritative, populated by the
+      // library scanner from /proc/mounts). Fall back to the string
+      // heuristic on platforms without a flag (pre-migration rows on
+      // first run after upgrade, macOS, Windows).
+      if (isForced) {
+        if (track.isNetworkMount === true) return false;
+        if (track.filePath && isNetworkPath(track.filePath)) return false;
       }
       return true;
     }
@@ -1505,6 +1512,7 @@
       isLocal: true,
       localTrackId: track.id,
       filePath: track.file_path,
+      isNetworkMount: track.is_network_mount === true,
       artworkPath: track.artwork_path
     };
   }
