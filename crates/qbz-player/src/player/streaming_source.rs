@@ -32,7 +32,7 @@ use rodio::Source;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{Decoder, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::{FormatOptions, FormatReader};
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
@@ -585,6 +585,35 @@ impl IncrementalStreamingSource {
     /// Get reference to the buffered source for cache retrieval
     pub fn buffered_source(&self) -> &Arc<BufferedMediaSource> {
         &self.buffered_source
+    }
+
+    /// Seek the decoder to the given time using Symphonia's native seek.
+    ///
+    /// For FLAC this uses the seek table to jump directly to the nearest
+    /// seek point, then decodes forward to the exact sample — far cheaper
+    /// than skip_duration's decode-every-sample-from-zero path. For MP3
+    /// with Xing/VBRI headers it uses the TOC; without headers, Symphonia
+    /// falls back to a binary search, still much cheaper than linear decode.
+    ///
+    /// The underlying BufferedMediaSource::seek is the I/O target. If the
+    /// requested byte offset isn't buffered yet it will block on the
+    /// condition variable — callers must only invoke this for times within
+    /// the downloaded watermark.
+    pub fn seek_to(&mut self, time: Duration) -> Result<(), String> {
+        self.format
+            .seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time: time.into(),
+                    track_id: Some(self.track_id),
+                },
+            )
+            .map_err(|e| format!("Symphonia seek failed: {}", e))?;
+        self.decoder.reset();
+        self.sample_queue.clear();
+        self.packets_decoded = 0;
+        self.finished = false;
+        Ok(())
     }
 
     /// Decode more packets to fill the sample queue.

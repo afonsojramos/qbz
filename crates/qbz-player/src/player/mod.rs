@@ -2226,15 +2226,29 @@ impl Player {
                             engine.set_volume(volume);
 
                             // Build the decoded source for the seek. Streaming:
-                            // create a fresh IncrementalStreamingSource on the
-                            // shared BufferedMediaSource — new reader at byte 0,
-                            // same downloaded bytes (no re-download). Non-streaming:
-                            // decode the in-RAM full file as before.
+                            // create a fresh IncrementalStreamingSource and use
+                            // Symphonia's native seek — jumps via FLAC seek
+                            // table / MP3 TOC to the target byte, then decodes
+                            // forward to the exact sample. Far cheaper than
+                            // skip_duration's decode-every-sample-from-zero
+                            // loop, which stuttered under the buffered-source
+                            // mutex. Non-streaming: decode the in-RAM full file
+                            // and skip_duration as before (no lock contention,
+                            // fast).
                             let skip_duration = Duration::from_secs(position_secs);
                             let skipped_source: Box<dyn Source<Item = f32> + Send> =
                                 if let Some(ref stream_src) = *current_streaming_source {
                                     match IncrementalStreamingSource::new(stream_src.clone()) {
-                                        Ok(s) => Box::new(s.skip_duration(skip_duration)),
+                                        Ok(mut s) => {
+                                            if let Err(e) = s.seek_to(skip_duration) {
+                                                log::error!(
+                                                    "Failed to native-seek streaming source: {}",
+                                                    e
+                                                );
+                                                return;
+                                            }
+                                            Box::new(s)
+                                        }
                                         Err(e) => {
                                             log::error!(
                                                 "Failed to create streaming source for seek: {}",
