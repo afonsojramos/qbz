@@ -72,10 +72,25 @@
   let isDraggingVolume = $state(false);
   let volumePopoverOpen = $state(false);
   let dragPreviewTime = $state<number | null>(null);
+  // Pin thumb to target while backend finishes the seek (see NowPlayingBar).
+  let pendingSeekTime = $state<number | null>(null);
+  let pendingSeekTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let microTrackOverflow = $state(0);
 
-  const effectiveTime = $derived(dragPreviewTime ?? currentTime);
+  const effectiveTime = $derived(dragPreviewTime ?? pendingSeekTime ?? currentTime);
   const progress = $derived(duration > 0 ? Math.max(0, Math.min(100, (effectiveTime / duration) * 100)) : 0);
+  const isSeekingPending = $derived(pendingSeekTime !== null && !isDraggingSeek);
+
+  $effect(() => {
+    if (pendingSeekTime === null) return;
+    if (Math.abs(currentTime - pendingSeekTime) < 2) {
+      pendingSeekTime = null;
+      if (pendingSeekTimeoutId !== null) {
+        clearTimeout(pendingSeekTimeoutId);
+        pendingSeekTimeoutId = null;
+      }
+    }
+  });
   const tickerSpeed = 40;
   const microTrackOffset = $derived(microTrackOverflow > 0 ? `-${microTrackOverflow + 16}px` : '0px');
   const microTrackDuration = $derived(microTrackOverflow > 0 ? `${(microTrackOverflow + 16) / tickerSpeed}s` : '0s');
@@ -142,7 +157,13 @@
 
   function handleMouseUp(): void {
     if (isDraggingSeek && dragPreviewTime !== null) {
+      pendingSeekTime = dragPreviewTime;
       onSeek(dragPreviewTime);
+      if (pendingSeekTimeoutId !== null) clearTimeout(pendingSeekTimeoutId);
+      pendingSeekTimeoutId = setTimeout(() => {
+        pendingSeekTime = null;
+        pendingSeekTimeoutId = null;
+      }, 8000);
     }
     isDraggingSeek = false;
     isDraggingVolume = false;
@@ -227,7 +248,7 @@
       <div class="seek-track">
         <div class="seek-fill" style="width: {progress}%"></div>
       </div>
-      <div class="seek-thumb" style="left: {progress}%" class:visible={isDraggingSeek}></div>
+      <div class="seek-thumb" style="left: {progress}%" class:visible={isDraggingSeek} class:seeking={isSeekingPending}></div>
     </div>
 
     <div class="times">
@@ -371,7 +392,7 @@
       <div class="seek-track">
         <div class="seek-fill" style="width: {progress}%"></div>
       </div>
-      <div class="seek-thumb" style="left: {progress}%" class:visible={isDraggingSeek}></div>
+      <div class="seek-thumb" style="left: {progress}%" class:visible={isDraggingSeek} class:seeking={isSeekingPending}></div>
     </div>
   {/if}
 </div>
@@ -471,6 +492,29 @@
 
   .seek-thumb {
     display: none;
+  }
+
+  .seek-thumb.seeking {
+    display: block;
+    position: absolute;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    background: transparent;
+    border: 2px solid var(--accent-primary, #6366f1);
+    border-top-color: transparent;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    animation: seek-thumb-spin 0.7s linear infinite;
+  }
+
+  @keyframes seek-thumb-spin {
+    from {
+      transform: translate(-50%, -50%) rotate(0deg);
+    }
+    to {
+      transform: translate(-50%, -50%) rotate(360deg);
+    }
   }
 
   .times {
