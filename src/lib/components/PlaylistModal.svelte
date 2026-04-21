@@ -36,6 +36,7 @@
     onDelete?: (playlistId: number) => void;
     isHidden?: boolean;
     isLocalTracks?: boolean;
+    plexRatingKeys?: string[];
     currentFolderId?: string | null;
   }
 
@@ -50,8 +51,11 @@
     onDelete,
     isHidden = false,
     isLocalTracks = false,
+    plexRatingKeys = [],
     currentFolderId = null
   }: Props = $props();
+
+  const isPlexTracks = $derived(plexRatingKeys.length > 0);
 
   // Form state
   let name = $state('');
@@ -400,13 +404,16 @@
   }
 
   async function handleAddToPlaylist() {
-    if (!selectedPlaylistId || trackIds.length === 0) {
+    const hasIds = trackIds.length > 0 || plexRatingKeys.length > 0;
+    if (!selectedPlaylistId || !hasIds) {
       error = $t('playlist.selectPlaylist');
       return;
     }
 
-    // For pending playlists and local tracks add directly
-    if (selectedPlaylistId < 0 || isLocalTracks) {
+    // For pending playlists, local tracks, and Plex tracks add directly.
+    // Duplicate detection below only covers Qobuz tracks, so anything
+    // non-Qobuz bypasses it.
+    if (selectedPlaylistId < 0 || isLocalTracks || isPlexTracks) {
       await handleDirectAddToPlaylist();
       return;
     }
@@ -442,7 +449,8 @@
   }
 
   async function handleDirectAddToPlaylist() {
-    if (!selectedPlaylistId || trackIds.length === 0) {
+    const hasIds = trackIds.length > 0 || plexRatingKeys.length > 0;
+    if (!selectedPlaylistId || !hasIds) {
       error = $t('playlist.selectPlaylist');
       return;
     }
@@ -454,7 +462,7 @@
       // Check if this is a pending playlist (negative ID)
       if (selectedPlaylistId < 0) {
         const pendingId = -selectedPlaylistId; // Convert back to positive
-        const qobuzTrackIds = isLocalTracks ? [] : trackIds;
+        const qobuzTrackIds = isLocalTracks || isPlexTracks ? [] : trackIds;
 
         // For local tracks, fetch file paths instead of using IDs
         let localTrackPaths: string[] = [];
@@ -471,6 +479,22 @@
           qobuzTrackIds,
           localTrackPaths
         });
+      } else if (isPlexTracks) {
+        // Regular playlist with Plex tracks — route through the dedicated
+        // plex command which stores the rating key in playlist_plex_tracks.
+        // Never hits the Qobuz API.
+        const playlist = userPlaylists.find(p => p.id === selectedPlaylistId);
+        const qobuzCount = playlist?.tracks_count ?? 0;
+        const localCount = localTrackCounts.get(selectedPlaylistId!) ?? 0;
+        const startPosition = qobuzCount + localCount;
+
+        for (let i = 0; i < plexRatingKeys.length; i++) {
+          await invoke('v2_playlist_add_plex_track', {
+            playlistId: selectedPlaylistId,
+            ratingKey: plexRatingKeys[i],
+            position: startPosition + i
+          });
+        }
       } else if (isLocalTracks) {
         // Regular playlist with local tracks
         // Get current total count (Qobuz + local) to append at correct position
@@ -596,7 +620,16 @@
       });
 
       // Then add tracks
-      if (trackIds.length > 0) {
+      if (isPlexTracks && plexRatingKeys.length > 0) {
+        // Plex tracks — dedicated command, never hits Qobuz API
+        for (let i = 0; i < plexRatingKeys.length; i++) {
+          await invoke('v2_playlist_add_plex_track', {
+            playlistId: newPlaylist.id,
+            ratingKey: plexRatingKeys[i],
+            position: i
+          });
+        }
+      } else if (trackIds.length > 0) {
         if (isLocalTracks) {
           // Add local tracks one by one
           for (let i = 0; i < trackIds.length; i++) {
@@ -614,7 +647,9 @@
           void logPlaylistAdd(trackIds, newPlaylist.id);
         }
         // Update tracks_count to reflect added tracks (API returns 0 at creation)
-        newPlaylist.tracks_count = isLocalTracks ? 0 : trackIds.length;
+        // Local and Plex tracks live outside the Qobuz playlist, so the Qobuz
+        // count stays at 0 — they're surfaced via localTrackCounts separately.
+        newPlaylist.tracks_count = isLocalTracks || isPlexTracks ? 0 : trackIds.length;
       }
 
       onSuccess?.(newPlaylist);

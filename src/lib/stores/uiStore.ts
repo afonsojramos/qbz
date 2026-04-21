@@ -53,6 +53,12 @@ let isPlaylistModalOpen = false;
 let playlistModalMode: 'create' | 'edit' | 'addTrack' = 'create';
 let playlistModalTrackIds: number[] = [];
 let playlistModalTracksAreLocal = false;
+// Parallel identifier list for Plex tracks. Plex's native id is the
+// rating key (TEXT), not the numeric id used by Qobuz / local tracks,
+// so it lives in its own array. When non-empty the modal routes adds
+// through v2_playlist_add_plex_track instead of the local / Qobuz
+// paths.
+let playlistModalPlexRatingKeys: string[] = [];
 let isPlaylistImportOpen = false;
 
 // Listeners
@@ -282,11 +288,21 @@ export function getPlaylistModalTracksAreLocal(): boolean {
   return playlistModalTracksAreLocal;
 }
 
-export function openPlaylistModal(mode: 'create' | 'edit' | 'addTrack', trackIds: number[] = [], isLocal = false): void {
+export function getPlaylistModalPlexRatingKeys(): string[] {
+  return playlistModalPlexRatingKeys;
+}
+
+export function openPlaylistModal(
+  mode: 'create' | 'edit' | 'addTrack',
+  trackIds: number[] = [],
+  isLocal = false,
+  plexRatingKeys: string[] = [],
+): void {
   isPlaylistModalOpen = true;
   playlistModalMode = mode;
   playlistModalTrackIds = trackIds;
   playlistModalTracksAreLocal = isLocal;
+  playlistModalPlexRatingKeys = plexRatingKeys;
   notifyListeners();
 }
 
@@ -294,6 +310,7 @@ export function closePlaylistModal(): void {
   isPlaylistModalOpen = false;
   playlistModalTrackIds = [];
   playlistModalTracksAreLocal = false;
+  playlistModalPlexRatingKeys = [];
   notifyListeners();
 }
 
@@ -367,6 +384,7 @@ export interface UIState {
   playlistModalMode: 'create' | 'edit' | 'addTrack';
   playlistModalTrackIds: number[];
   playlistModalTracksAreLocal: boolean;
+  playlistModalPlexRatingKeys: string[];
   isPlaylistImportOpen: boolean;
   miniPlayer: MiniPlayerState;
 }
@@ -382,6 +400,7 @@ export function getUIState(): UIState {
     playlistModalMode,
     playlistModalTrackIds,
     playlistModalTracksAreLocal,
+    playlistModalPlexRatingKeys,
     isPlaylistImportOpen,
     miniPlayer: getMiniPlayerState()
   };

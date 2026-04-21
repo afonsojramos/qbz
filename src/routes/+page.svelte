@@ -965,6 +965,7 @@
   let playlistModalMode = $state<'create' | 'edit' | 'addTrack'>('create');
   let playlistModalTrackIds = $state<number[]>([]);
   let playlistModalTracksAreLocal = $state(false);
+  let playlistModalPlexRatingKeys = $state<string[]>([]);
   let playlistModalEditPlaylist = $state<{ id: number; name: string; tracks_count: number } | undefined>(undefined);
   let playlistModalEditIsHidden = $state(false);
   let playlistModalEditCurrentFolderId = $state<string | null>(null);
@@ -3799,6 +3800,12 @@
     openPlaylistModal('addTrack', trackIds, isLocal);
   }
 
+  function openAddPlexToPlaylist(ratingKeys: string[]) {
+    clearPlaylistEditContext();
+    userPlaylists = sidebarRef?.getPlaylists() ?? [];
+    openPlaylistModal('addTrack', [], false, ratingKeys);
+  }
+
   function handlePlaylistCreated(playlist?: { id: number; name: string; tracks_count: number }) {
     const trackCount = playlistModalTrackIds.length;
     const isLocal = playlistModalTracksAreLocal;
@@ -4609,6 +4616,7 @@
       playlistModalMode = uiState.playlistModalMode;
       playlistModalTrackIds = uiState.playlistModalTrackIds;
       playlistModalTracksAreLocal = uiState.playlistModalTracksAreLocal;
+      playlistModalPlexRatingKeys = uiState.playlistModalPlexRatingKeys;
       if (wasPlaylistModalOpen && !uiState.isPlaylistModalOpen) {
         clearPlaylistEditContext();
       }
@@ -5878,6 +5886,8 @@
           onTrackPlayLater={queueLocalTrackLater}
           onTrackAddToPlaylist={(trackId) => openAddToPlaylist([trackId], true)}
           onBulkAddToPlaylist={(trackIds) => openAddToPlaylist(trackIds, true)}
+          onTrackAddPlexToPlaylist={(ratingKey) => openAddPlexToPlaylist([ratingKey])}
+          onBulkAddPlexToPlaylist={(ratingKeys) => openAddPlexToPlaylist(ratingKeys)}
           onSetLocalQueue={handleSetLocalQueue}
           onQobuzArtistClick={handleArtistClick}
           activeTrackId={currentTrack?.id ?? null}
@@ -6588,6 +6598,7 @@
       playlist={playlistModalMode === 'edit' ? playlistModalEditPlaylist : undefined}
       trackIds={playlistModalTrackIds}
       isLocalTracks={playlistModalTracksAreLocal}
+      plexRatingKeys={playlistModalPlexRatingKeys}
       isHidden={playlistModalMode === 'edit' ? playlistModalEditIsHidden : false}
       currentFolderId={playlistModalMode === 'edit' ? playlistModalEditCurrentFolderId : null}
       {userPlaylists}
