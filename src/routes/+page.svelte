@@ -5534,6 +5534,7 @@
       favoritesInTitlebar={tbNavFavorites && showTitleBar}
       libraryInTitlebar={tbNavLibrary && showTitleBar}
       purchasesInTitlebar={tbNavPurchases && showTitleBar}
+      myQbzInTitlebar={tbNavMyQbz && showTitleBar}
     />
 
     <!-- Content Area (main + lyrics sidebar) -->

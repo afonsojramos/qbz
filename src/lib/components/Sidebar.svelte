@@ -108,6 +108,7 @@
     favoritesInTitlebar?: boolean;
     libraryInTitlebar?: boolean;
     purchasesInTitlebar?: boolean;
+    myQbzInTitlebar?: boolean;
   }
 
   let {
@@ -133,7 +134,8 @@
     discoverInTitlebar = false,
     favoritesInTitlebar = false,
     libraryInTitlebar = false,
-    purchasesInTitlebar = false
+    purchasesInTitlebar = false,
+    myQbzInTitlebar = false
   }: Props = $props();
 
   let userPlaylists = $state<Playlist[]>([]);
@@ -1670,8 +1672,8 @@
       </nav>
     {/if}
 
-    <!-- My QBZ collapsible section -->
-    {#if isExpanded}
+    <!-- My QBZ collapsible section (hidden when My QBZ is in titlebar) -->
+    {#if isExpanded && !myQbzInTitlebar}
     <nav class="nav-section my-qbz-section">
       <!-- Parent row: click toggles expand, right-click opens context menu -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
