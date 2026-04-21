@@ -84,9 +84,24 @@
   let isDraggingProgress = $state(false);
   let isDraggingVolume = $state(false);
   let dragPreviewTime = $state<number | null>(null);
+  // Pin thumb to target while backend finishes the seek (see NowPlayingBar).
+  let pendingSeekTime = $state<number | null>(null);
+  let pendingSeekTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-  const effectiveTime = $derived(dragPreviewTime ?? currentTime);
+  const effectiveTime = $derived(dragPreviewTime ?? pendingSeekTime ?? currentTime);
   const progress = $derived((effectiveTime / duration) * 100 || 0);
+  const isSeekingPending = $derived(pendingSeekTime !== null && !isDraggingProgress);
+
+  $effect(() => {
+    if (pendingSeekTime === null) return;
+    if (Math.abs(currentTime - pendingSeekTime) < 2) {
+      pendingSeekTime = null;
+      if (pendingSeekTimeoutId !== null) {
+        clearTimeout(pendingSeekTimeoutId);
+        pendingSeekTimeoutId = null;
+      }
+    }
+  });
 
   function formatTime(seconds: number): string {
     if (!seconds || !isFinite(seconds)) return '0:00';
@@ -129,7 +144,13 @@
 
   function handleMouseUp() {
     if (isDraggingProgress && dragPreviewTime !== null) {
+      pendingSeekTime = dragPreviewTime;
       onSeek(dragPreviewTime);
+      if (pendingSeekTimeoutId !== null) clearTimeout(pendingSeekTimeoutId);
+      pendingSeekTimeoutId = setTimeout(() => {
+        pendingSeekTime = null;
+        pendingSeekTimeoutId = null;
+      }, 8000);
     }
     isDraggingProgress = false;
     isDraggingVolume = false;
@@ -374,6 +395,9 @@
       <div class="progress-track">
         <div class="progress-fill" style="width: {progress}%"></div>
       </div>
+      {#if isSeekingPending}
+        <div class="progress-thumb seeking" style="left: {progress}%"></div>
+      {/if}
     </div>
   </div>
 </div>
@@ -572,6 +596,28 @@
     background: white;
     border-radius: 1px;
     transition: width 100ms linear;
+  }
+
+  .progress-thumb.seeking {
+    position: absolute;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    background: transparent;
+    border: 2px solid white;
+    border-top-color: transparent;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    animation: progress-thumb-spin 0.7s linear infinite;
+  }
+
+  @keyframes progress-thumb-spin {
+    from {
+      transform: translate(-50%, -50%) rotate(0deg);
+    }
+    to {
+      transform: translate(-50%, -50%) rotate(360deg);
+    }
   }
 
   /* Window Controls Menu */
