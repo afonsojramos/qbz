@@ -2102,6 +2102,8 @@
       "language": "Idioma",
       "fontFamily": "Fonte",
       "uiScale": "Escala da Interface",
+      "sidebarPlaylistCollage": "Mostrar colagens de capas das playlists na barra lateral",
+      "sidebarPlaylistCollageDesc": "Renderiza uma miniatura 2×2 das capas das faixas ao lado de cada playlist. Desative em máquinas modestas para poupar as imagens extras.",
       "inAppToasts": "Notificações internas do app",
       "systemNotifications": "Notificações do Sistema",
       "windowTitleShow": "Mostrar faixa no título",

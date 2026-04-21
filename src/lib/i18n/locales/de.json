@@ -2102,6 +2102,8 @@
       "language": "Sprache",
       "fontFamily": "Schriftart",
       "uiScale": "UI-Skalierung",
+      "sidebarPlaylistCollage": "Playlist-Cover-Collagen in der Seitenleiste anzeigen",
+      "sidebarPlaylistCollageDesc": "Zeigt eine 2×2-Miniaturansicht der Titel-Cover neben jeder Playlist. Auf leistungsschwachen Geräten deaktivieren, um zusätzliche Bilder zu überspringen.",
       "inAppToasts": "In-App-Benachrichtigungen",
       "systemNotifications": "Systembenachrichtigungen",
       "windowTitleShow": "Titel im Fenstertitel anzeigen",

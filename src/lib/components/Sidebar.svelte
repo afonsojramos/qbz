@@ -6,6 +6,7 @@
   import { onMount } from 'svelte';
   import NavigationItem from './NavigationItem.svelte';
   import PlaylistCoverCollage from './PlaylistCoverCollage.svelte';
+  import { getShowPlaylistCollage, subscribePlaylistCollage } from '$lib/stores/sidebarStore';
   import UserCard from './UserCard.svelte';
   import MyQbzNavEditModal from './MyQbzNavEditModal.svelte';
   import {
@@ -140,6 +141,7 @@
   let pendingPlaylistsMap = $state<Map<number, import('$lib/stores/offlineStore').PendingPlaylist>>(new Map());
   let playlistsLoading = $state(false);
   let playlistsCollapsed = $state(false);
+  let showPlaylistCollage = $state(getShowPlaylistCollage());
   let localLibraryCollapsed = $state(false);
 
   // Favorites section state
@@ -1056,6 +1058,10 @@
   }
 
   onMount(() => {
+    const unsubCollage = subscribePlaylistCollage(() => {
+      showPlaylistCollage = getShowPlaylistCollage();
+    });
+
     loadSortPreference();
     loadFolders(); // Load playlist folders
     loadFavoritesPreferences(); // Load favorites tab order
@@ -1094,6 +1100,7 @@
       unsubscribeOffline();
       unsubscribeFolders();
       unsubscribeSearch();
+      unsubCollage();
     };
   });
 
@@ -1963,11 +1970,11 @@
                         oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, item.folderId)}
                         showLabel={true}
                         indented={true}
-                        iconSize={22}
+                        iconSize={showPlaylistCollage ? 22 : 14}
                       >
                         {#snippet icon()}
                           {@const collage = item.playlist.images150 ?? item.playlist.images300 ?? item.playlist.images ?? []}
-                          {#if collage.length > 0}
+                          {#if showPlaylistCollage && collage.length > 0}
                             <PlaylistCoverCollage images={collage} size={22} />
                           {:else}
                             <ListMusic size={14} />
@@ -1996,11 +2003,11 @@
                         onHover={() => loadPlaylistTooltip(item.playlist)}
                         oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, null)}
                         showLabel={isExpanded}
-                        iconSize={22}
+                        iconSize={showPlaylistCollage ? 22 : 14}
                       >
                         {#snippet icon()}
                           {@const collage = item.playlist.images150 ?? item.playlist.images300 ?? item.playlist.images ?? []}
-                          {#if collage.length > 0}
+                          {#if showPlaylistCollage && collage.length > 0}
                             <PlaylistCoverCollage images={collage} size={22} />
                           {:else}
                             <ListMusic size={14} />

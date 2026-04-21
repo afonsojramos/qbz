@@ -2102,6 +2102,8 @@
       "language": "Language",
       "fontFamily": "Font",
       "uiScale": "UI Scale",
+      "sidebarPlaylistCollage": "Show playlist cover collages in sidebar",
+      "sidebarPlaylistCollageDesc": "Render a 2×2 thumbnail of track covers next to each playlist. Disable on low-end machines to skip the extra images.",
       "inAppToasts": "In-app toasts notifications",
       "systemNotifications": "System Notifications",
       "windowTitleShow": "Show track in window title",

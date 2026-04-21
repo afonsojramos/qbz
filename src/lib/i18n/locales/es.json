@@ -2102,6 +2102,8 @@
       "language": "Idioma",
       "fontFamily": "Fuente",
       "uiScale": "Escala de UI",
+      "sidebarPlaylistCollage": "Mostrar collage de portadas en playlists del sidebar",
+      "sidebarPlaylistCollageDesc": "Muestra una miniatura 2×2 con portadas de las pistas junto a cada playlist. Desactívalo en equipos con recursos limitados para omitir las imágenes extra.",
       "inAppToasts": "Notificaciones en App",
       "systemNotifications": "Notificaciones del Sistema",
       "windowTitleShow": "Mostrar pista en título de ventana",
