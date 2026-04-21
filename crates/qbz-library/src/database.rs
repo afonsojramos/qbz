@@ -155,6 +155,24 @@ impl LibraryDatabase {
             CREATE INDEX IF NOT EXISTS idx_playlist_local_tracks_playlist
                 ON playlist_local_tracks(qobuz_playlist_id);
 
+            -- Plex tracks added to playlists. Kept in its own table because
+            -- Plex tracks live on a remote server and have a TEXT rating key,
+            -- not the i64 filesystem id used by local_tracks. No foreign key
+            -- to plex_cache_tracks: that cache can be purged without losing
+            -- the user's intent (the rows gray out in the UI until Plex is
+            -- reachable again).
+            CREATE TABLE IF NOT EXISTS playlist_plex_tracks (
+                id INTEGER PRIMARY KEY,
+                qobuz_playlist_id INTEGER NOT NULL,
+                plex_rating_key TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                added_at INTEGER NOT NULL,
+                UNIQUE(qobuz_playlist_id, plex_rating_key)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_playlist_plex_tracks_playlist
+                ON playlist_plex_tracks(qobuz_playlist_id);
+
             -- Custom track order per playlist (user-defined arrangement)
             CREATE TABLE IF NOT EXISTS playlist_track_custom_order (
                 id INTEGER PRIMARY KEY,
@@ -2782,6 +2800,107 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    // === Playlist Plex Tracks ===
+
+    /// Add a Plex track to a playlist, identified by its Plex rating key.
+    /// The rating key is stored verbatim so the pairing survives Plex
+    /// cache rebuilds.
+    pub fn add_plex_track_to_playlist(
+        &self,
+        qobuz_playlist_id: u64,
+        plex_rating_key: &str,
+        position: i32,
+    ) -> Result<(), LibraryError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO playlist_plex_tracks
+                (qobuz_playlist_id, plex_rating_key, position, added_at)
+             VALUES (?1, ?2, ?3, ?4)",
+                params![qobuz_playlist_id as i64, plex_rating_key, position, now],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to add Plex track to playlist: {}", e))
+            })?;
+
+        Ok(())
+    }
+
+    /// Remove a Plex track from a playlist.
+    pub fn remove_plex_track_from_playlist(
+        &self,
+        qobuz_playlist_id: u64,
+        plex_rating_key: &str,
+    ) -> Result<(), LibraryError> {
+        self.conn
+            .execute(
+                "DELETE FROM playlist_plex_tracks
+             WHERE qobuz_playlist_id = ?1 AND plex_rating_key = ?2",
+                params![qobuz_playlist_id as i64, plex_rating_key],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to remove Plex track from playlist: {}", e))
+            })?;
+
+        Ok(())
+    }
+
+    /// Get all Plex tracks in a playlist with their stored position.
+    /// Returns (rating_key, position) pairs. The caller is responsible
+    /// for hydrating metadata from the Plex cache.
+    pub fn get_playlist_plex_tracks_with_position(
+        &self,
+        qobuz_playlist_id: u64,
+    ) -> Result<Vec<(String, i32)>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT plex_rating_key, position
+                 FROM playlist_plex_tracks
+                 WHERE qobuz_playlist_id = ?1
+                 ORDER BY position ASC",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare query: {}", e)))?;
+
+        let rows = stmt
+            .query_map(params![qobuz_playlist_id as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+            })
+            .map_err(|e| {
+                LibraryError::Database(format!(
+                    "Failed to query playlist plex tracks: {}",
+                    e
+                ))
+            })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+            LibraryError::Database(format!("Failed to collect playlist plex tracks: {}", e))
+        })
+    }
+
+    /// Get count of Plex tracks in a playlist
+    pub fn get_playlist_plex_track_count(
+        &self,
+        qobuz_playlist_id: u64,
+    ) -> Result<u32, LibraryError> {
+        let count: u32 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_plex_tracks WHERE qobuz_playlist_id = ?1",
+                params![qobuz_playlist_id as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to count playlist plex tracks: {}", e))
+            })?;
+
+        Ok(count)
+    }
+
     /// Get all local tracks in a playlist
     pub fn get_playlist_local_tracks(
         &self,
@@ -2934,10 +3053,19 @@ impl LibraryDatabase {
         Ok(count)
     }
 
-    /// Get local track counts for all playlists
+    /// Get local track counts for all playlists.
+    ///
+    /// "Local" here is the user-facing sense — anything that isn't a Qobuz
+    /// server track. That includes file-system local tracks (user / qobuz
+    /// purchases / offline-cached downloads, all in local_tracks) plus
+    /// Plex tracks (in a parallel playlist_plex_tracks table). The two
+    /// sums are merged per playlist so the sidebar's hasLocalContent
+    /// indicator picks up Plex content too.
     pub fn get_all_playlist_local_track_counts(
         &self,
     ) -> Result<std::collections::HashMap<u64, u32>, LibraryError> {
+        let mut result: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
+
         let mut stmt = self
             .conn
             .prepare(
@@ -2955,11 +3083,33 @@ impl LibraryDatabase {
             })
             .map_err(|e| LibraryError::Database(format!("Failed to query: {}", e)))?;
 
-        let mut result = std::collections::HashMap::new();
         for row in rows {
             let (playlist_id, count) =
                 row.map_err(|e| LibraryError::Database(format!("Failed to read row: {}", e)))?;
             result.insert(playlist_id, count);
+        }
+
+        let mut plex_stmt = self
+            .conn
+            .prepare(
+                "SELECT qobuz_playlist_id, COUNT(*) as count
+             FROM playlist_plex_tracks
+             GROUP BY qobuz_playlist_id",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare query: {}", e)))?;
+
+        let plex_rows = plex_stmt
+            .query_map([], |row| {
+                let playlist_id: i64 = row.get(0)?;
+                let count: u32 = row.get(1)?;
+                Ok((playlist_id as u64, count))
+            })
+            .map_err(|e| LibraryError::Database(format!("Failed to query: {}", e)))?;
+
+        for row in plex_rows {
+            let (playlist_id, count) =
+                row.map_err(|e| LibraryError::Database(format!("Failed to read row: {}", e)))?;
+            *result.entry(playlist_id).or_insert(0) += count;
         }
 
         Ok(result)
