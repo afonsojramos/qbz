@@ -1480,6 +1480,20 @@
     return PLEX_DISPLAY_ID_OFFSET - Math.abs(hash);
   }
 
+  // Plex artwork is served by the Plex server itself — the stored path
+  // is a library-relative URI like /library/metadata/123/thumb/…,
+  // which only resolves when combined with the configured base URL +
+  // X-Plex-Token. Matches LocalLibraryView's buildPlexArtworkUrl.
+  function buildPlexArtworkUrl(path: string): string {
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    const baseUrl = getUserItem('qbz-plex-poc-base-url') || '';
+    const token = getUserItem('qbz-plex-poc-token') || '';
+    if (!baseUrl || !token) return path;
+    const base = baseUrl.replace(/\/+$/, '');
+    const separator = path.includes('?') ? '&' : '?';
+    return `${base}${path}${separator}X-Plex-Token=${encodeURIComponent(token)}`;
+  }
+
   // Convert plex tracks to DisplayTrack format
   function plexTrackToDisplay(track: PlaylistPlexTrack, index: number): DisplayTrack {
     return {
@@ -1488,9 +1502,7 @@
       title: track.title,
       artist: track.artist,
       album: track.album,
-      albumArt: track.artwork_path
-        ? (track.artwork_path.startsWith('http') ? track.artwork_path : `asset://localhost/${encodeURIComponent(track.artwork_path)}`)
-        : undefined,
+      albumArt: track.artwork_path ? buildPlexArtworkUrl(track.artwork_path) : undefined,
       duration: formatDuration(track.duration_secs),
       durationSeconds: track.duration_secs,
       hires: (track.bit_depth && track.bit_depth >= 24) || track.sample_rate > 48000,
