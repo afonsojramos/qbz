@@ -163,6 +163,52 @@ async function handoffPlayTrackToRemoteRenderer(trackId: number): Promise<boolea
 // ============ Core Playback ============
 
 /**
+ * Pull the next track from the queue and play it, applying the correct
+ * source / isLocal / samplingRate derivation. Used by the
+ * unavailable-track recovery paths (Qobuz track removed, track not
+ * cached offline, etc.) so the queue keeps moving instead of stalling
+ * on one bad row. Returns true when a next track was dispatched,
+ * false when the queue is empty.
+ */
+async function autoSkipToNext(): Promise<boolean> {
+  const next = await nextTrack();
+  if (!next) return false;
+  console.log('Auto-skipping to next track:', next.title);
+  // Brief delay so the "unavailable" toast is readable before we
+  // replace it with the next track's loading toast.
+  setTimeout(() => {
+    const nextSource = resolvePlaybackSource(next);
+    const nextIsLocal = isPlaybackSourceLocal(nextSource, next.is_local ?? false);
+    const nextSamplingRate = next.sample_rate == null
+      ? undefined
+      : nextIsLocal
+        ? next.sample_rate / 1000
+        : next.sample_rate;
+    playTrack({
+      id: next.id,
+      title: next.title,
+      artist: next.artist,
+      album: next.album,
+      duration: next.duration_secs,
+      artwork: resolveQueueTrackArtwork(next.artwork_url),
+      quality: next.hires ? 'Hi-Res' : 'CD Quality',
+      albumId: next.album_id || undefined,
+      artistId: next.artist_id || undefined,
+      bitDepth: next.bit_depth || undefined,
+      samplingRate: nextSamplingRate,
+      source: nextSource,
+      isLocal: nextIsLocal
+    }, {
+      isLocal: nextIsLocal,
+      source: nextSource,
+      showLoadingToast: true,
+      showSuccessToast: true
+    });
+  }, 500);
+  return true;
+}
+
+/**
  * Play a track and handle all related side effects
  */
 export async function playTrack(
@@ -379,7 +425,11 @@ export async function playTrack(
       const { t } = await import('$lib/i18n');
       const msg = get(t)('offline.trackNotAvailableOffline', { values: { title: track.title } });
       showToast(msg, 'error');
-      setIsPlaying(false);
+      // Auto-skip to the next track. In offline mode the user still
+      // wants the queue to keep moving — nextTrack will keep pulling
+      // until it finds something playable (or runs out).
+      const advanced = await autoSkipToNext();
+      if (!advanced) setIsPlaying(false);
       return false;
     }
 
@@ -389,43 +439,8 @@ export async function playTrack(
       markTrackUnavailable(track.id);
       showToast(`"${track.title}" is no longer available`, 'error');
 
-      // Auto-skip to next track
-      const next = await nextTrack();
-      if (next) {
-        console.log('Auto-skipping to next track:', next.title);
-        // Small delay to let the toast be visible
-        setTimeout(() => {
-          const nextSource = resolvePlaybackSource(next);
-          const nextIsLocal = isPlaybackSourceLocal(nextSource, next.is_local ?? false);
-          const nextSamplingRate = next.sample_rate == null
-            ? undefined
-            : nextIsLocal
-              ? next.sample_rate / 1000
-              : next.sample_rate;
-          playTrack({
-            id: next.id,
-            title: next.title,
-            artist: next.artist,
-            album: next.album,
-            duration: next.duration_secs,
-            artwork: resolveQueueTrackArtwork(next.artwork_url),
-            quality: next.hires ? 'Hi-Res' : 'CD Quality',
-            albumId: next.album_id || undefined,
-            artistId: next.artist_id || undefined,
-            bitDepth: next.bit_depth || undefined,
-            samplingRate: nextSamplingRate,
-            source: nextSource,
-            isLocal: nextIsLocal
-          }, {
-            isLocal: nextIsLocal,
-            source: nextSource,
-            showLoadingToast: true,
-            showSuccessToast: true
-          });
-        }, 500);
-      } else {
-        setIsPlaying(false);
-      }
+      const advanced = await autoSkipToNext();
+      if (!advanced) setIsPlaying(false);
       return false;
     }
 
