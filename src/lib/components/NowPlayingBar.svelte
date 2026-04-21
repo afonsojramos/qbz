@@ -166,6 +166,7 @@
   let isDraggingVolume = $state(false);
   let showArtworkPreview = $state(false);
   let dragPreviewTime = $state<number | null>(null);
+  let isOverUnbuffered = $state(false);
 
   // Narrow-layout detection (issue #303): below this width the right-section
   // collapses into a hamburger popup and the quality/qconnect badges switch
@@ -298,6 +299,20 @@
     }
   }
 
+  function handleProgressHover(e: MouseEvent) {
+    if (bufferProgress == null || bufferProgress >= 1 || !progressRef) {
+      if (isOverUnbuffered) isOverUnbuffered = false;
+      return;
+    }
+    const rect = progressRef.getBoundingClientRect();
+    const percentage = ((e.clientX - rect.left) / rect.width) * 100;
+    isOverUnbuffered = percentage > bufferProgress * 0.9 * 100;
+  }
+
+  function handleProgressLeave() {
+    isOverUnbuffered = false;
+  }
+
   function handleVolumeMouseDown(e: MouseEvent) {
     isDraggingVolume = true;
     updateVolume(e);
@@ -356,8 +371,11 @@
     <span class="time current">{formatTime(currentTime)}</span>
     <div
       class="seekbar"
+      class:unseekable={isOverUnbuffered}
       bind:this={progressRef}
       onmousedown={handleProgressMouseDown}
+      onmousemove={handleProgressHover}
+      onmouseleave={handleProgressLeave}
       role="slider"
       tabindex="0"
       aria-valuenow={currentTime}
@@ -938,6 +956,10 @@
     align-items: center;
     cursor: pointer;
     position: relative;
+  }
+
+  .seekbar.unseekable {
+    cursor: not-allowed;
   }
 
   .seekbar-track {
