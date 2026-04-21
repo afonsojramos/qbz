@@ -1326,7 +1326,7 @@
         <div class="header-cover">
           <CollectionMosaic
             items={collection.items}
-            size={240}
+            size={186}
             kind={collection.kind}
             customCoverUrl={collection.custom_artwork_path
               ? convertFileSrc(collection.custom_artwork_path)
@@ -2114,9 +2114,13 @@
     margin-bottom: 32px;
   }
 
+  /* Hero sizing homologated to PlaylistDetailView so Collection / Mixtape
+     detail views share the same visual weight as the other detail
+     views (playlist, album). Cover 186×186, title 24px, uppercase tag
+     12px, 32px gap between cover and metadata. */
   .header-content {
     display: flex;
-    gap: 24px;
+    gap: 32px;
     align-items: flex-end;
   }
 
@@ -2129,6 +2133,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
+    justify-content: flex-end;
     gap: 8px;
   }
 
@@ -2139,18 +2144,18 @@
   }
 
   .kind-tag {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
-    letter-spacing: 1.2px;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: var(--accent-primary);
+    color: var(--text-muted);
   }
 
   .title {
     margin: 0;
-    font-size: 40px;
+    font-size: 24px;
     font-weight: 700;
-    line-height: 1.1;
+    line-height: 1.2;
     word-wrap: break-word;
   }
 
@@ -2158,6 +2163,7 @@
     margin: 0;
     color: var(--text-secondary);
     font-size: 14px;
+    line-height: 1.4;
     max-width: 720px;
   }
 
