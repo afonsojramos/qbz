@@ -6,7 +6,20 @@
 
   let { images = [], size = 22 }: Props = $props();
 
-  const tiles = $derived((images ?? []).filter((u) => !!u));
+  // At 22x22 total (each tile ~11x11), the _150 variant that Qobuz
+  // returns is 13× oversized. Swap to the _50 variant when the URL
+  // matches Qobuz's `_<size>.jpg` pattern so each tile is ~2 KB
+  // instead of ~8 KB. Non-Qobuz URLs (local library covers, data:,
+  // etc.) pass through untouched.
+  function downscaleQobuzCover(url: string): string {
+    return url.replace(/_(150|300|600)\.jpg(\?.*)?$/i, '_50.jpg$2');
+  }
+
+  const tiles = $derived(
+    (images ?? [])
+      .filter((u) => !!u)
+      .map(downscaleQobuzCover),
+  );
 </script>
 
 {#if tiles.length === 0}
