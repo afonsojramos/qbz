@@ -731,10 +731,10 @@
     "topTracksBy": "De {artist}",
     "andMore": "y más",
     "playlistLabel": "PLAYLIST",
-    "continueTracks": "Continuar escuchando",
+    "continueTracks": "Pistas reproducidas recientemente",
     "mostStreamed": "Álbumes populares",
     "favoriteAlbums": "Más de tu Biblioteca",
-    "recentAlbums": "Jugado recientemente",
+    "recentAlbums": "Álbumes reproducidos recientemente",
     "topArtists": "Tus mejores artistas",
     "releaseWatch": "Radar de Novedades",
     "qobuzMixes": "Mixes de Qobuz"
