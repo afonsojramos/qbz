@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, Folder, FolderPlus, X, User, Disc, Disc3, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
+  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, X, User, Disc, Disc3, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
+  import FolderGlyph from './icons/FolderGlyph.svelte';
   import type { FavoritesPreferences } from '$lib/types';
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
@@ -1889,7 +1890,7 @@
           {/if}
 
           <button class="menu-item" onclick={openCreateFolderModal}>
-            <FolderPlus size={14} />
+            <FolderGlyph variant="new" size={14} />
             <span>{$t('playlist.newFolder', { default: 'New Folder' })}</span>
           </button>
 
@@ -1941,7 +1942,7 @@
                       ondragleave={() => handleFolderDragLeave(item.folder.id)}
                       ondrop={(e) => handleFolderDrop(e, item.folder.id)}
                     >
-                      <Folder size={14} />
+                      <FolderGlyph variant={isFolderExp ? 'open' : 'closed'} size={14} />
                       <span class="folder-name">{item.folder.name}</span>
                       <span class="folder-count">{folderPlaylists.length}</span>
                       <span class="folder-chevron" class:expanded={isFolderExp}>
@@ -2027,7 +2028,7 @@
                       ondragleave={() => handleFolderDragLeave(item.folder.id)}
                       ondrop={(e) => handleFolderDrop(e, item.folder.id)}
                     >
-                      <Folder size={14} />
+                      <FolderGlyph variant="closed" size={14} />
                     </button>
                   {/if}
                 </div>
@@ -2203,7 +2204,7 @@
                 class="context-menu-item"
                 onclick={() => handleMoveToFolder(folder.id)}
               >
-                <Folder size={14} />
+                <FolderGlyph variant="closed" size={14} />
                 {folder.name}
               </button>
             {/each}
@@ -2246,7 +2247,7 @@
     tabindex="-1"
   >
     <div class="folder-popover-header">
-      <Folder size={14} />
+      <FolderGlyph variant="open" size={14} />
       <span>{folderPopover.folderName}</span>
     </div>
     {#if folderPopoverPlaylists.length > 0}
