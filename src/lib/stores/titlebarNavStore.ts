@@ -21,12 +21,16 @@ export interface TitlebarNavConfig {
   position: TitlebarNavPosition;
 }
 
-// State
+// State — defaults to all core nav items in the titlebar for NEW
+// installs. Existing users are unaffected because initTitlebarNavStore
+// reads qbz-titlebar-nav from localStorage and overlays persisted
+// values on top of these defaults. Purchases stays off because the
+// feature is opt-in (not every Qobuz account has purchase history).
 let config: TitlebarNavConfig = {
-  discover: false,
-  favorites: false,
-  library: false,
-  myQbz: false,
+  discover: true,
+  favorites: true,   // shown as "Library" in the UI per i18n
+  library: true,     // shown as "Local Library" in the UI
+  myQbz: true,
   purchases: false,
   position: 'auto',
 };
