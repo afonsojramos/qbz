@@ -626,8 +626,27 @@
     };
   });
 
+  // Expanded mode has variable row heights (base ~56px for the item row
+  // plus whatever height the loaded TrackRows occupy below it). The
+  // fixed-height virtualization math can't express that, so spacers
+  // come out shorter than the real content and the scrollbar tops out
+  // before the last row — that's the "scroll snaps back / can't reach
+  // the end" regression. In expanded mode we render every item and
+  // skip spacer clipping entirely; the auto-fetch gate still uses
+  // virtualWindow.{firstIdx,lastIdx} to cap backend calls to the
+  // visible viewport, so the only DOM cost of rendering all items is
+  // the item-row shell (the 56px row) — tracks still mount on demand.
   const windowedItems = $derived(
-    visibleItems.slice(virtualWindow.firstIdx, virtualWindow.lastIdx),
+    viewMode === 'expanded'
+      ? visibleItems
+      : visibleItems.slice(virtualWindow.firstIdx, virtualWindow.lastIdx),
+  );
+
+  const activeTopSpacer = $derived(
+    viewMode === 'expanded' ? 0 : virtualWindow.topSpacer,
+  );
+  const activeBottomSpacer = $derived(
+    viewMode === 'expanded' ? 0 : virtualWindow.bottomSpacer,
   );
 
   // Qobuz artwork URLs follow `<cdn>/.../<hash>_<size>.jpg` where size is
@@ -1557,7 +1576,7 @@
         bind:clientWidth={listContainerWidth}
       >
       {#if viewMode === 'grid'}
-        <div class="virtual-spacer" style:height="{virtualWindow.topSpacer}px"></div>
+        <div class="virtual-spacer" style:height="{activeTopSpacer}px"></div>
         <div class="item-grid">
           {#each windowedItems as item (item.position)}
             {@const resolved = resolvedFor(item)}
@@ -1630,7 +1649,7 @@
             </div>
           {/each}
         </div>
-        <div class="virtual-spacer" style:height="{virtualWindow.bottomSpacer}px"></div>
+        <div class="virtual-spacer" style:height="{activeBottomSpacer}px"></div>
       {:else}
       <div class="item-list">
         <div class="item-list-header">
@@ -1644,7 +1663,7 @@
           <div class="col-menu"></div>
         </div>
 
-        <div class="virtual-spacer" style:height="{virtualWindow.topSpacer}px"></div>
+        <div class="virtual-spacer" style:height="{activeTopSpacer}px"></div>
         {#each windowedItems as item (item.position)}
           {@const resolved = resolvedFor(item)}
           {@const artworkSrc = item.artwork_url || resolved.artworkUrl}
@@ -1906,7 +1925,7 @@
             </div>
           {/if}
         {/each}
-        <div class="virtual-spacer" style:height="{virtualWindow.bottomSpacer}px"></div>
+        <div class="virtual-spacer" style:height="{activeBottomSpacer}px"></div>
       </div>
       {/if}
       </div>
