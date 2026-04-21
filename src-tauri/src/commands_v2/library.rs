@@ -122,6 +122,69 @@ pub async fn v2_cast_play_track(
         .map_err(|e| e.to_string())
 }
 
+/// Play a LOCAL library track on a Chromecast device. Companion to
+/// v2_dlna_play_local_track — same routing problem, same solution pattern.
+/// Reads the file from disk, infers content_type, registers bytes with the
+/// media server, loads the URL on Chromecast.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_cast_play_local_track(
+    trackId: i64,
+    metadata: MediaMetadata,
+    cast_state: State<'_, CastState>,
+    library_state: State<'_, LibraryState>,
+) -> Result<(), String> {
+    log::info!("Chromecast: cast_play_local_track called for track_id={}", trackId);
+
+    let track = {
+        let guard = library_state.db.lock().await;
+        let db = guard.as_ref().ok_or("No active session")?;
+        db.get_track(trackId)
+            .map_err(|e| format!("Library lookup failed: {}", e))?
+            .ok_or_else(|| format!("Track {} not found in library", trackId))?
+    };
+
+    let audio_data = std::fs::read(&track.file_path)
+        .map_err(|e| format!("Failed to read {}: {}", track.file_path, e))?;
+    let content_type = local_track_content_type(&track);
+
+    let target_ip = {
+        let connected = cast_state.connected_device_ip.lock().await;
+        connected.clone()
+    };
+
+    cast_state
+        .get_or_create_media_server()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let media_key = trackId as u64;
+    let url = {
+        let mut server_guard = cast_state.media_server.lock().await;
+        let server = server_guard
+            .as_mut()
+            .ok_or("Media server not initialized")?;
+        server.register_audio(media_key, audio_data, &content_type);
+        match target_ip.as_deref() {
+            Some(ip) => server.get_audio_url_for_target(media_key, ip),
+            None => server.get_audio_url(media_key),
+        }
+        .ok_or_else(|| "Failed to build media URL".to_string())?
+    };
+
+    log::info!(
+        "Chromecast: Playing local track {} ({}) via MediaServer URL: {}",
+        trackId,
+        content_type,
+        url
+    );
+
+    cast_state
+        .chromecast
+        .load_media(url, content_type, metadata)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn v2_cast_play(state: State<'_, CastState>) -> Result<(), String> {
     state.chromecast.play().map_err(|e| e.to_string())

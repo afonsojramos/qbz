@@ -1397,6 +1397,7 @@ pub fn run() {
             commands_v2::v2_cast_connect,
             commands_v2::v2_cast_disconnect,
             commands_v2::v2_cast_play_track,
+            commands_v2::v2_cast_play_local_track,
             commands_v2::v2_cast_play,
             commands_v2::v2_cast_pause,
             commands_v2::v2_cast_stop,
