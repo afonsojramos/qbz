@@ -74,6 +74,7 @@
     play_count?: number;
     hasLocalContent?: LocalContentStatus;
     folder_id?: string | null;
+    custom_artwork_path?: string | null;
   }
 
   type SortOption = 'name' | 'recent' | 'tracks' | 'playcount' | 'custom';
@@ -145,6 +146,12 @@
   let playlistsLoading = $state(false);
   let playlistsCollapsed = $state(false);
   let showPlaylistCollage = $state(getShowPlaylistCollage());
+  // Cache of thumb URLs (asset://localhost/…) keyed by playlist id for
+  // custom covers that live on disk. Generated via the existing
+  // v2_library_get_thumbnail command (500×500 JPEG @ 85% quality) so
+  // a 20×20 sidebar slot doesn't decode a multi-MB original every time.
+  // URLs (http/https) skip the thumb pipeline — they're passed through.
+  let customCoverThumbs = $state<Map<number, string>>(new Map());
 
   // Favorites section state
   let favoritesExpanded = $state(false);
@@ -339,6 +346,42 @@
   function getTotalTrackCount(playlist: Playlist): number {
     const localCount = localTrackCounts.get(playlist.id) ?? 0;
     return playlist.tracks_count + localCount;
+  }
+
+  // Resolve the user's custom cover for a playlist (if any). Prefers a
+  // pre-generated 500×500 thumb when available; falls back to the
+  // original path while the thumb is being generated or for remote URLs
+  // (which skip the thumb pipeline).
+  function resolveCustomCover(playlistId: number): string | null {
+    const thumb = customCoverThumbs.get(playlistId);
+    if (thumb) return thumb;
+
+    const path = playlistSettings.get(playlistId)?.custom_artwork_path;
+    if (!path) return null;
+    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('asset://')) {
+      return path;
+    }
+    return `asset://localhost/${encodeURIComponent(path)}`;
+  }
+
+  // Kick off thumb generation for any playlist whose custom cover is a
+  // local file. Runs through the existing v2_library_get_thumbnail
+  // command so results are cached on disk across sessions.
+  async function ensureCustomCoverThumbs(settings: PlaylistSettings[]): Promise<void> {
+    for (const s of settings) {
+      const path = s.custom_artwork_path;
+      if (!path) continue;
+      if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('asset://')) continue;
+      if (customCoverThumbs.has(s.qobuz_playlist_id)) continue;
+      try {
+        const thumbPath = await invoke<string>('v2_library_get_thumbnail', { artworkPath: path });
+        const next = new Map(customCoverThumbs);
+        next.set(s.qobuz_playlist_id, `asset://localhost/${encodeURIComponent(thumbPath)}`);
+        customCoverThumbs = next;
+      } catch (err) {
+        console.debug('[Sidebar] custom cover thumb generation failed', s.qobuz_playlist_id, err);
+      }
+    }
   }
 
   // Fetch playlist artists for tooltip
@@ -1188,6 +1231,7 @@
       settingsMap.set(s.qobuz_playlist_id, s);
     }
     playlistSettings = settingsMap;
+    void ensureCustomCoverThumbs(cached.playlistSettings as PlaylistSettings[]);
 
     const countsMap = new Map<number, number>();
     for (const [id, count] of Object.entries(cached.localTrackCounts)) {
@@ -1259,6 +1303,7 @@
         map.set(s.qobuz_playlist_id, s);
       }
       playlistSettings = map;
+      void ensureCustomCoverThumbs(settings);
     } catch (err) {
       // Command might not exist yet, that's ok
       console.debug('Failed to load playlist settings:', err);
@@ -1973,8 +2018,11 @@
                         indented={true}
                       >
                         {#snippet icon()}
+                          {@const custom = resolveCustomCover(item.playlist.id)}
                           {@const collage = item.playlist.images150 ?? item.playlist.images300 ?? item.playlist.images ?? []}
-                          {#if showPlaylistCollage && collage.length > 0}
+                          {#if custom}
+                            <PlaylistCoverCollage images={[custom]} size={20} />
+                          {:else if showPlaylistCollage && collage.length > 0}
                             <PlaylistCoverCollage images={collage} size={20} />
                           {:else}
                             <ListMusic size={14} />
@@ -2005,8 +2053,11 @@
                         showLabel={isExpanded}
                       >
                         {#snippet icon()}
+                          {@const custom = resolveCustomCover(item.playlist.id)}
                           {@const collage = item.playlist.images150 ?? item.playlist.images300 ?? item.playlist.images ?? []}
-                          {#if showPlaylistCollage && collage.length > 0}
+                          {#if custom}
+                            <PlaylistCoverCollage images={[custom]} size={20} />
+                          {:else if showPlaylistCollage && collage.length > 0}
                             <PlaylistCoverCollage images={collage} size={20} />
                           {:else}
                             <ListMusic size={14} />
