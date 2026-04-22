@@ -15,10 +15,10 @@
         # VERSION BUMP: update version, rev, and hashes
         # when tagging a new release.
         # ──────────────────────────────────────────────
-        qbzVersion = "1.2.7";
+        qbzVersion = "1.2.8";
         qbzRev     = "v${qbzVersion}";
-        srcHash    = "sha256-/7gYjCfMJ1TmjogGQWkRDgDaUZ8o03hVNxZ21w4xniU=";
-        npmHash    = "sha256-xBad4Ms5dlE0jHZ5iKLS2dEujgIZahfNfcknJH9qoXM=";
+        srcHash    = "sha256-I5j1rpcAT7NNG/KtHwUUwvHjLIJB/+PAfPZJUvTsZTE=";
+        npmHash    = "sha256-0J86UrIoTL735I/7plyCfU2WxBcFXBt6g1tLXO+6JMI=";
       in
       {
         packages.default = pkgs.rustPlatform.buildRustPackage rec {
