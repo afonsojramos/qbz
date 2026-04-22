@@ -234,6 +234,8 @@
     onTrackPlayLater?: (track: LocalTrack) => void;
     onTrackAddToPlaylist?: (trackId: number) => void;
     onBulkAddToPlaylist?: (trackIds: number[]) => void;
+    onTrackAddPlexToPlaylist?: (ratingKey: string) => void;
+    onBulkAddPlexToPlaylist?: (ratingKeys: string[]) => void;
     onSetLocalQueue?: (trackIds: number[]) => void;
     activeTrackId?: number | null;
     isPlaybackActive?: boolean;
@@ -249,6 +251,8 @@
     onTrackPlayLater,
     onTrackAddToPlaylist,
     onBulkAddToPlaylist,
+    onTrackAddPlexToPlaylist,
+    onBulkAddPlexToPlaylist,
     onSetLocalQueue,
     activeTrackId = null,
     isPlaybackActive = false
@@ -575,12 +579,17 @@
   }
 
   function handleBulkAddToPlaylist() {
-    // Plex tracks can't be added to playlists (matches per-row guard at line ~3306)
-    const ids = selectedLocalTracks()
-      .filter(trk => trk.source !== 'plex')
-      .map(trk => trk.id);
-    if (ids.length === 0) return;
-    onBulkAddToPlaylist?.(ids);
+    // Split selection by source: local_tracks-backed rows (user / qobuz
+    // purchases / qobuz downloads) route through v2_playlist_add_local_track;
+    // Plex rows route through v2_playlist_add_plex_track with their
+    // rating key (stored in file_path at map time). Each path stays within
+    // its own namespace so nothing bleeds into the Qobuz playlist API.
+    const selected = selectedLocalTracks();
+    const localIds = selected.filter(trk => trk.source !== 'plex').map(trk => trk.id);
+    const plexRatingKeys = selected.filter(trk => trk.source === 'plex').map(trk => trk.file_path);
+    if (localIds.length === 0 && plexRatingKeys.length === 0) return;
+    if (localIds.length > 0) onBulkAddToPlaylist?.(localIds);
+    if (plexRatingKeys.length > 0) onBulkAddPlexToPlaylist?.(plexRatingKeys);
     trackSelectMode = false;
     selectedTrackIds = new Set();
   }
@@ -669,15 +678,20 @@
     selectedAlbumIds = new Set();
   }
 
-  /** Bulk-add selected albums' tracks to a playlist. Albums → tracks →
-   *  playlist flow, skipping Plex tracks (mirrors per-row guard). */
+  /** Bulk-add selected albums' tracks to a playlist. Splits local rows
+   *  from Plex rows so each goes through the right backend path — see
+   *  handleBulkAddToPlaylist for the same split on the tracks-tab side. */
   async function handleAlbumBulkAddToPlaylist() {
     const picked = selectedAlbums();
     if (picked.length === 0) return;
     const tracksFlat = await resolveAlbumsTracks(picked);
-    const ids = tracksFlat.filter((trk) => trk.source !== 'plex').map((trk) => trk.id);
-    if (ids.length === 0) return;
-    onBulkAddToPlaylist?.(ids);
+    const localIds = tracksFlat.filter((trk) => trk.source !== 'plex').map((trk) => trk.id);
+    const plexRatingKeys = tracksFlat
+      .filter((trk) => trk.source === 'plex')
+      .map((trk) => trk.file_path);
+    if (localIds.length === 0 && plexRatingKeys.length === 0) return;
+    if (localIds.length > 0) onBulkAddToPlaylist?.(localIds);
+    if (plexRatingKeys.length > 0) onBulkAddPlexToPlaylist?.(plexRatingKeys);
     albumSelectMode = false;
     selectedAlbumIds = new Set();
   }
@@ -3506,7 +3520,9 @@
                 onPlayNow: () => handleTrackPlay(track),
                 onPlayNext: onTrackPlayNext ? () => onTrackPlayNext(track) : undefined,
                 onPlayLater: onTrackPlayLater ? () => onTrackPlayLater(track) : undefined,
-                onAddToPlaylist: onTrackAddToPlaylist && track.source !== 'plex' ? () => onTrackAddToPlaylist(track.id) : undefined
+                onAddToPlaylist: track.source === 'plex'
+                  ? (onTrackAddPlexToPlaylist ? () => onTrackAddPlexToPlaylist(track.file_path) : undefined)
+                  : (onTrackAddToPlaylist ? () => onTrackAddToPlaylist(track.id) : undefined)
               }}
             />
           {/each}

@@ -94,7 +94,16 @@
     samplingRate?: number;
     isrc?: string;
     isLocal?: boolean;
+    /** True when the underlying source is a remote Plex server. */
+    isPlex?: boolean;
     localTrackId?: number;
+    /** Raw audio file path — used by the offline heuristic to detect
+     *  network-mounted local paths. */
+    filePath?: string;
+    /** Backend-provided flag: true when the file lives on a network
+     *  filesystem (NFS, CIFS, SSHFS, …). Authoritative when present;
+     *  the filePath heuristic is the fallback. */
+    isNetworkMount?: boolean;
     artworkPath?: string;
     playlistTrackId?: number; // Qobuz playlist-specific ID for removal
     label?: string;           // Record label name from Qobuz
@@ -129,6 +138,36 @@
     bit_depth?: number;
     sample_rate: number;
     artwork_path?: string;
+    is_network_mount?: boolean;
+    playlist_position: number;
+  }
+
+  // Plex track metadata from plex_cache_tracks (serialized camelCase)
+  interface PlexTrackMeta {
+    ratingKey: string;
+    title: string;
+    artist?: string;
+    album?: string;
+    durationMs?: number;
+    artworkPath?: string;
+    bitDepth?: number;
+    samplingRateHz?: number;
+    container?: string;
+    trackNumber?: number;
+    discNumber?: number;
+  }
+
+  // Plex track with resolved playlist position
+  interface PlaylistPlexTrack {
+    ratingKey: string;
+    title: string;
+    artist: string;
+    album: string;
+    duration_secs: number;
+    artwork_path?: string;
+    bit_depth?: number;
+    sample_rate: number;
+    format: string;
     playlist_position: number;
   }
 
@@ -178,6 +217,14 @@
     onLocalTrackPlay?: (track: LocalLibraryTrack) => void;
     onLocalTrackPlayNext?: (track: LocalLibraryTrack) => void;
     onLocalTrackPlayLater?: (track: LocalLibraryTrack) => void;
+    /**
+     * Play a Plex track from the playlist. Fired when the user clicks
+     * a row whose isPlex flag is set. The track argument carries the
+     * DisplayTrack shape (including title/artist/album/artwork) plus
+     * id = Number(ratingKey) — the +page.svelte handler routes to
+     * v2_plex_play_track via playTrack with source='plex'.
+     */
+    onPlexTrackPlay?: (track: DisplayTrack) => void;
     onSetLocalQueue?: (trackIds: number[]) => void;
     onPlaylistCountUpdate?: (playlistId: number, qobuzCount: number, localCount: number) => void;
     onPlaylistUpdated?: () => void;
@@ -210,6 +257,7 @@
     onLocalTrackPlay,
     onLocalTrackPlayNext,
     onLocalTrackPlayLater,
+    onPlexTrackPlay,
     onSetLocalQueue,
     onPlaylistCountUpdate,
     onPlaylistUpdated,
@@ -222,12 +270,24 @@
   let tracks = $state.raw<DisplayTrack[]>([]);
   let localTracks = $state<PlaylistLocalTrack[]>([]);
   let localTracksMap = $state<Map<number, PlaylistLocalTrack>>(new Map());
-  let hasLocalTracks = $derived(localTracks.length > 0);
+  let plexTracks = $state<PlaylistPlexTrack[]>([]);
+  let hasLocalTracks = $derived(localTracks.length > 0 || plexTracks.length > 0);
 
-  // Total counts including local tracks
-  let totalTrackCount = $derived((playlist?.tracks_count ?? 0) + localTracks.length);
-  let localTracksDuration = $derived(localTracks.reduce((sum, track) => sum + track.duration_secs, 0));
-  let totalDuration = $derived((playlist?.duration ?? 0) + localTracksDuration);
+  // Total counts including local + plex tracks. Both live outside the
+  // Qobuz playlist on the server side, so we sum them with the Qobuz
+  // count to get the real track total the user sees.
+  let totalTrackCount = $derived(
+    (playlist?.tracks_count ?? 0) + localTracks.length + plexTracks.length,
+  );
+  let localTracksDuration = $derived(
+    localTracks.reduce((sum, track) => sum + track.duration_secs, 0),
+  );
+  let plexTracksDuration = $derived(
+    plexTracks.reduce((sum, track) => sum + track.duration_secs, 0),
+  );
+  let totalDuration = $derived(
+    (playlist?.duration ?? 0) + localTracksDuration + plexTracksDuration,
+  );
 
   // Suggestions computation gating: ALL playlists require manual activation.
   // >=2000 tracks: never compute (Qobuz limit, can't add more)
@@ -435,16 +495,59 @@
     return isTrackUnavailable(track.id);
   }
 
-  // Check if a track is available (has local copy when offline, always available when online, unless removed from Qobuz)
+  // Check if a track is available.
+  // Rules:
+  //   * Tracks removed from Qobuz → never available.
+  //   * Online → always available.
+  //   * Forced offline (no_network / not_logged_in) → only on-disk
+  //     local tracks are available. Plex and network-mounted local
+  //     paths need the network just as much as Qobuz does.
+  //   * Manual offline (user toggle) → the network is actually up,
+  //     so Plex and network drives still work; Qobuz is blocked only
+  //     because the user asked to be offline.
   function isTrackAvailable(track: DisplayTrack): boolean {
-    // Tracks removed from Qobuz are never available
     if (isTrackRemovedFromQobuz(track)) return false;
-    // When online, Qobuz tracks are available
     if (!offlineStatus.isOffline) return true;
-    // Local tracks are always available
-    if (track.isLocal) return true;
-    // When offline, check if we have a local copy
+
+    const isForced = offlineStatus.reason === 'no_network'
+      || offlineStatus.reason === 'not_logged_in';
+
+    if (track.isPlex) {
+      // Plex always goes through the Plex server — need real network.
+      return !isForced;
+    }
+    if (track.isLocal) {
+      // Network-mounted local paths behave like Plex when the wire is
+      // cut. Prefer the backend flag (authoritative, populated by the
+      // library scanner from /proc/mounts). Fall back to the string
+      // heuristic on platforms without a flag (pre-migration rows on
+      // first run after upgrade, macOS, Windows).
+      if (isForced) {
+        if (track.isNetworkMount === true) return false;
+        if (track.filePath && isNetworkPath(track.filePath)) return false;
+      }
+      return true;
+    }
+    // Qobuz track: need an offline copy.
     return tracksWithLocalCopies.has(track.id);
+  }
+
+  /**
+   * Heuristic for "this file lives on a network mount". Covers the
+   * common paths exposed by Linux automount and Windows UNC. Best-
+   * effort — a path that looks local (/home/user/music) but is
+   * actually a SMB mount will miss this check, but that's the
+   * tradeoff of doing detection in userspace without querying
+   * /proc/mounts.
+   */
+  function isNetworkPath(filePath: string): boolean {
+    const p = filePath.replace(/^file:\/\//, '');
+    if (p.startsWith('//') || p.startsWith('\\\\')) return true; // UNC
+    if (p.startsWith('/mnt/')) return true;
+    if (p.startsWith('/media/')) return true;
+    if (p.startsWith('/run/media/')) return true;
+    if (p.startsWith('/net/')) return true; // Solaris / macOS autofs
+    return false;
   }
 
   // Check which tracks have local copies (for offline mode)
@@ -503,7 +606,7 @@
     // Load all data and notify parent when done
     const loadStart = performance.now();
     (async () => {
-      await Promise.all([loadPlaylist(), loadLocalTracks()]);
+      await Promise.all([loadPlaylist(), loadLocalTracks(), loadPlexTracks()]);
       console.log(`[Perf] all loads resolved: ${(performance.now() - t0).toFixed(1)}ms (network: ${(performance.now() - loadStart).toFixed(1)}ms)`);
       notifyParentOfCounts();
     })();
@@ -558,6 +661,55 @@
       localTracksMap = new Map();
     } finally {
       console.log(`[Perf] loadLocalTracks() done: ${(performance.now() - _lt0).toFixed(1)}ms`);
+    }
+  }
+
+  /**
+   * Load Plex tracks for this playlist. Two-step hydrate:
+   *   1. v2_playlist_get_plex_tracks_with_position → [(ratingKey, position)]
+   *   2. v2_plex_cache_get_tracks_by_keys → metadata for each ratingKey
+   * Missing tracks (cache purged, never hydrated) are silently dropped.
+   */
+  async function loadPlexTracks() {
+    if (playlistId < 0) {
+      plexTracks = [];
+      return;
+    }
+    try {
+      const pairs = await invoke<Array<[string, number]>>(
+        'v2_playlist_get_plex_tracks_with_position',
+        { playlistId },
+      );
+      if (pairs.length === 0) {
+        plexTracks = [];
+        return;
+      }
+      const ratingKeys = pairs.map(([rk]) => rk);
+      const metas = await invoke<PlexTrackMeta[]>('v2_plex_cache_get_tracks_by_keys', {
+        ratingKeys,
+      });
+      const metaByKey = new Map(metas.map((m) => [m.ratingKey, m]));
+      const hydrated: PlaylistPlexTrack[] = [];
+      for (const [ratingKey, position] of pairs) {
+        const m = metaByKey.get(ratingKey);
+        if (!m) continue;
+        hydrated.push({
+          ratingKey,
+          title: m.title,
+          artist: m.artist ?? 'Unknown Artist',
+          album: m.album ?? 'Unknown Album',
+          duration_secs: Math.floor((m.durationMs ?? 0) / 1000),
+          artwork_path: m.artworkPath,
+          bit_depth: m.bitDepth,
+          sample_rate: m.samplingRateHz ?? 44100,
+          format: m.container ?? 'flac',
+          playlist_position: position,
+        });
+      }
+      plexTracks = hydrated;
+    } catch (err) {
+      console.error('Failed to load plex tracks:', err);
+      plexTracks = [];
     }
   }
 
@@ -1237,7 +1389,7 @@
     multiSelectedKeys = new Set();
     multiSelectMode = false;
     await loadPlaylist();
-    if (localTrackIds.length > 0) await loadLocalTracks();
+    if (localTrackIds.length > 0) await Promise.all([loadLocalTracks(), loadPlexTracks()]);
     notifyParentOfCounts();
     onPlaylistUpdated?.();
   }
@@ -1368,39 +1520,123 @@
       samplingRate: track.sample_rate / 1000, // Convert Hz to kHz for display
       isLocal: true,
       localTrackId: track.id,
+      filePath: track.file_path,
+      isNetworkMount: track.is_network_mount === true,
       artworkPath: track.artwork_path
     };
   }
 
-  // Filtered and sorted tracks (merged Qobuz + local by position)
+  // Stable numeric id for a Plex track in the DisplayTrack shape.
+  // Offset into a negative range far from local track ids (which use
+  // -track.id, bounded by the local_tracks table size) so UI equality
+  // checks can't collide. For non-numeric rating keys we fall back to
+  // a djb2 hash.
+  const PLEX_DISPLAY_ID_OFFSET = -1_000_000_000;
+  function plexDisplayId(ratingKey: string): number {
+    const asNum = Number(ratingKey);
+    if (Number.isFinite(asNum) && asNum > 0) {
+      return PLEX_DISPLAY_ID_OFFSET - asNum;
+    }
+    let hash = 5381;
+    for (let i = 0; i < ratingKey.length; i++) {
+      hash = ((hash << 5) + hash + ratingKey.charCodeAt(i)) | 0;
+    }
+    return PLEX_DISPLAY_ID_OFFSET - Math.abs(hash);
+  }
+
+  // Plex artwork is served by the Plex server itself — the stored path
+  // is a library-relative URI like /library/metadata/123/thumb/…,
+  // which only resolves when combined with the configured base URL +
+  // X-Plex-Token. Matches LocalLibraryView's buildPlexArtworkUrl.
+  function buildPlexArtworkUrl(path: string): string {
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    const baseUrl = getUserItem('qbz-plex-poc-base-url') || '';
+    const token = getUserItem('qbz-plex-poc-token') || '';
+    if (!baseUrl || !token) return path;
+    const base = baseUrl.replace(/\/+$/, '');
+    const separator = path.includes('?') ? '&' : '?';
+    return `${base}${path}${separator}X-Plex-Token=${encodeURIComponent(token)}`;
+  }
+
+  // Convert plex tracks to DisplayTrack format.
+  // id: parse the ratingKey to a Number when possible — this matches
+  // the LocalLibraryView.PlexCachedTrack.id shape (playback_track_id
+  // on the backend) and is what v2_plex_play_track expects as its
+  // ratingKey arg (via String(track.id)). The negative-offset fallback
+  // is only used for non-numeric rating keys, which are rare and only
+  // need frontend uniqueness.
+  function plexTrackToDisplay(track: PlaylistPlexTrack, index: number): DisplayTrack {
+    const numericId = Number(track.ratingKey);
+    const idForUi =
+      Number.isFinite(numericId) && numericId > 0
+        ? numericId
+        : plexDisplayId(track.ratingKey);
+    return {
+      id: idForUi,
+      number: index + 1,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      albumArt: track.artwork_path ? buildPlexArtworkUrl(track.artwork_path) : undefined,
+      duration: formatDuration(track.duration_secs),
+      durationSeconds: track.duration_secs,
+      hires: (track.bit_depth && track.bit_depth >= 24) || track.sample_rate > 48000,
+      bitDepth: track.bit_depth,
+      samplingRate: track.sample_rate / 1000,
+      isLocal: true, // kept for context-builder / blacklist filters
+      isPlex: true,  // drives plex-specific playback routing
+      artworkPath: track.artwork_path,
+    };
+  }
+
+  // Filtered and sorted tracks (merged Qobuz + local + plex by position)
   let displayTracks = $derived.by(() => {
-    // Fast path: no local tracks, no search, default sort → skip copy entirely
-    if (localTracks.length === 0 && !searchQuery.trim() && sortBy === 'default') {
+    // Fast path: no local/plex tracks, no search, default sort → skip copy entirely
+    if (
+      localTracks.length === 0
+      && plexTracks.length === 0
+      && !searchQuery.trim()
+      && sortBy === 'default'
+    ) {
       return tracks;
     }
 
-    // Full path: interleave with local tracks, filter, sort
+    // Full path: interleave with local + plex tracks, filter, sort
     const result: DisplayTrack[] = [];
 
-    // Create a map of local track positions
+    // Create maps of local / plex track positions. Local and plex use
+    // separate namespaces so there's no collision risk even at the same
+    // numeric position.
     const localByPosition = new Map<number, PlaylistLocalTrack>();
     for (const lt of localTracks) {
       localByPosition.set(lt.playlist_position, lt);
     }
+    const plexByPosition = new Map<number, PlaylistPlexTrack>();
+    for (const pt of plexTracks) {
+      plexByPosition.set(pt.playlist_position, pt);
+    }
 
-    // Calculate total count: must reach the highest local position
+    // Calculate total count: must reach the highest non-qobuz position
     const maxLocalPosition = localTracks.length > 0
       ? Math.max(...localTracks.map(lt => lt.playlist_position))
       : -1;
-    const minTotalCount = tracks.length + localTracks.length;
-    const totalCount = Math.max(minTotalCount, maxLocalPosition + 1);
+    const maxPlexPosition = plexTracks.length > 0
+      ? Math.max(...plexTracks.map(pt => pt.playlist_position))
+      : -1;
+    const maxExternalPosition = Math.max(maxLocalPosition, maxPlexPosition);
+    const minTotalCount = tracks.length + localTracks.length + plexTracks.length;
+    const totalCount = Math.max(minTotalCount, maxExternalPosition + 1);
 
-    // Interleave: iterate through positions, use local if exists, else use next Qobuz track
+    // Interleave: iterate through positions, use local/plex if exists,
+    // else use next Qobuz track
     let qobuzIdx = 0;
     for (let pos = 0; pos < totalCount; pos++) {
       const localTrack = localByPosition.get(pos);
+      const plexTrack = plexByPosition.get(pos);
       if (localTrack) {
         result.push(localTrackToDisplay(localTrack, result.length));
+      } else if (plexTrack) {
+        result.push(plexTrackToDisplay(plexTrack, result.length));
       } else if (qobuzIdx < tracks.length) {
         // Use Qobuz track
         result.push({ ...tracks[qobuzIdx], number: result.length + 1 });
@@ -1567,9 +1803,15 @@
   }
 
   function buildQueueTracks(tracks: DisplayTrack[]) {
-    // Filter out blacklisted artists before building queue
+    // Filter out blacklisted artists before building queue. Plex
+    // tracks now ride in the queue alongside local / Qobuz rows with
+    // `source: 'plex'` set — resolvePlaybackSource reads that on
+    // auto-advance and routes through playTrack's plex branch, which
+    // hits v2_plex_play_track. No backend queue changes needed because
+    // the backend queue is a dumb data structure — the frontend's
+    // onTrackEnded callback is what actually dispatches playback.
     const filteredTracks = tracks.filter(trk => {
-      if (trk.isLocal) return true; // Local tracks are never blacklisted
+      if (trk.isLocal) return true; // Local / plex tracks are never blacklisted
       if (!trk.artistId) return true; // No artist ID, can't check blacklist
       return !isArtistBlacklisted(trk.artistId);
     });
@@ -1585,12 +1827,20 @@
       bit_depth: trk.bitDepth ?? null,
       sample_rate: trk.samplingRate != null ? (trk.isLocal ? trk.samplingRate * 1000 : trk.samplingRate) : null,
       is_local: trk.isLocal ?? false,
+      // Explicit source marker drives auto-advance routing. Without
+      // this, plex tracks would fall into the "local" branch and
+      // crash with "Track not found" when the backend's local-track
+      // playback path can't find the ratingKey in local_tracks.
+      source: trk.isPlex ? 'plex' : (trk.isLocal ? 'local' : 'qobuz'),
       album_id: trk.isLocal ? null : (trk.albumId || null),
       artist_id: trk.isLocal ? null : (trk.artistId ?? null),
     }));
 
+    // Only filesystem-local tracks (NOT plex) populate localTrackIds —
+    // that Set is used by the offline-mode availability check and
+    // assumes ids exist in local_tracks. Plex playback bypasses it.
     const localIds = filteredTracks
-      .filter(trk => trk.isLocal)
+      .filter(trk => trk.isLocal && !trk.isPlex)
       .map(trk => Math.abs(trk.id));
 
     return { queueTracks, localIds };
@@ -1614,7 +1864,7 @@
         .map(trk => trk.id);
 
       const contextIndex = trackIds.indexOf(track.id);
-      
+
       if (contextIndex >= 0 && trackIds.length > 0) {
         await setPlaybackContext(
           'playlist',
@@ -1635,7 +1885,12 @@
       console.error('Failed to set queue:', err);
     }
 
-    if (track.isLocal && track.localTrackId) {
+    if (track.isPlex) {
+      // Plex tracks go through the dedicated plex handler — parent
+      // routes to playTrack with source='plex', which hits
+      // v2_plex_play_track(ratingKey=String(track.id)).
+      onPlexTrackPlay?.(track);
+    } else if (track.isLocal && track.localTrackId) {
       // Handle local track play
       const localTrack = localTracksMap.get(track.localTrackId);
       if (localTrack && onLocalTrackPlay) {
@@ -1647,6 +1902,11 @@
   }
 
   function handleTrackPlayNext(track: DisplayTrack) {
+    // Plex Play Next / Later aren't wired on the backend queue yet —
+    // the queue's local-track path looks ids up in local_tracks, which
+    // doesn't cover plex rating keys. Drop silently so the menu item
+    // is effectively a no-op for plex until queue support lands.
+    if (track.isPlex) return;
     if (track.isLocal && track.localTrackId) {
       const localTrack = localTracksMap.get(track.localTrackId);
       if (localTrack && onLocalTrackPlayNext) {
@@ -1658,6 +1918,7 @@
   }
 
   function handleTrackPlayLater(track: DisplayTrack) {
+    if (track.isPlex) return;
     if (track.isLocal && track.localTrackId) {
       const localTrack = localTracksMap.get(track.localTrackId);
       if (localTrack && onLocalTrackPlayLater) {
@@ -1670,10 +1931,19 @@
 
   async function removeTrackFromPlaylist(track: DisplayTrack) {
     try {
-      if (track.isLocal && track.localTrackId) {
+      if (track.isPlex) {
+        // Plex tracks live in playlist_plex_tracks, keyed by ratingKey
+        // (string). track.id is Number(ratingKey) — stringify it back.
+        await invoke('v2_playlist_remove_plex_track', {
+          playlistId,
+          ratingKey: String(track.id),
+        });
+        await Promise.all([loadLocalTracks(), loadPlexTracks()]);
+        notifyParentOfCounts();
+      } else if (track.isLocal && track.localTrackId) {
         // Remove local track
         await invoke('v2_playlist_remove_local_track', { playlistId, localTrackId: track.localTrackId });
-        await loadLocalTracks();
+        await Promise.all([loadLocalTracks(), loadPlexTracks()]);
         notifyParentOfCounts();
       } else if (track.playlistTrackId) {
         // Remove Qobuz track using playlist_track_id (available from full playlist load)
@@ -1858,19 +2128,34 @@
     onTrackPlay(displayTrack);
   }
 
-  async function handlePlayAll() {
+  /** Default `startIndex = 0` preserves Play-All semantics (first track of the
+   *  canonical playlist order). The shuffle-all entry point passes a random
+   *  index to make the first track actually random — matching the pattern
+   *  ArtistDetailView / LabelView / LocalLibraryView / +page.handleShuffleAlbum
+   *  already use. Backend (qbz-player/queue.rs::set_queue) moves the passed
+   *  start_index to shuffle_order[0] when shuffle is on, so the remaining
+   *  tracks still cover the full playlist in shuffled order. Fixes #333. */
+  async function handlePlayAll(startIndex: number = 0) {
     // Get all display tracks (Qobuz + local, respecting search/sort)
     const allTracks = displayTracks;
     if (allTracks.length === 0) return;
 
-    // Filter out blacklisted tracks
+    // Filter out blacklisted tracks and tracks that aren't reachable.
+    // isTrackAvailable already handles "removed from Qobuz" (always
+    // unplayable) and "offline + no local copy" (unplayable until we're
+    // online again). Dropping them at enqueue time means the queue
+    // never hits the fail-then-auto-skip loop and the "playing N of M"
+    // count reflects what's actually going to play.
     const playableTracks = allTracks.filter(trk => {
+      if (!isTrackAvailable(trk)) return false;
       if (trk.isLocal) return true;
       if (!trk.artistId) return true;
       return !isArtistBlacklisted(trk.artistId);
     });
 
     if (playableTracks.length === 0) return;
+
+    const safeStart = Math.max(0, Math.min(startIndex, playableTracks.length - 1));
 
     // Set playback context for playlist
     if (playlist) {
@@ -1879,23 +2164,26 @@
         .map(trk => trk.id);
 
       if (trackIds.length > 0) {
+        // Context position: clamp against the Qobuz-only subset so we don't
+        // point past its end if the random pick landed on a local track.
+        const ctxPosition = Math.min(safeStart, trackIds.length - 1);
         await setPlaybackContext(
           'playlist',
           playlist.id.toString(),
           playlist.name,
           'qobuz',
           trackIds,
-          0
+          ctxPosition
         );
-        console.log(`[Playlist] Context created via Play All: "${playlist.name}", ${trackIds.length} tracks`);
+        console.log(`[Playlist] Context created via Play All: "${playlist.name}", ${trackIds.length} tracks, starting at ${ctxPosition}`);
       }
     }
 
     try {
-      await setPlaylistQueue(0);
+      await setPlaylistQueue(safeStart);
 
-      // Play first playable track (handle local vs Qobuz)
-      const firstTrack = playableTracks[0];
+      // Play the chosen starting track (handle local vs Qobuz)
+      const firstTrack = playableTracks[safeStart];
       if (firstTrack.isLocal && onLocalTrackPlay) {
         const localTrack = localTracks.find(trk => trk.id === Math.abs(firstTrack.id));
         if (localTrack) onLocalTrackPlay(localTrack);
@@ -1929,7 +2217,19 @@
     if (tracks.length > 0 && onTrackPlay) {
       try {
         await invoke('v2_set_shuffle', { enabled: true });
-        await handlePlayAll();
+        // Pick a random starting index so the first track played is actually
+        // random instead of the canonical tracks[0]. Without this, clicking
+        // Shuffle always landed on the first playlist track because
+        // handlePlayAll defaults startIndex to 0 (issue #333).
+        const pool = displayTracks.filter(trk => {
+          if (trk.isLocal) return true;
+          if (!trk.artistId) return true;
+          return !isArtistBlacklisted(trk.artistId);
+        });
+        const randomIndex = pool.length > 0
+          ? Math.floor(Math.random() * pool.length)
+          : 0;
+        await handlePlayAll(randomIndex);
       } catch (err) {
         console.error('Failed to shuffle:', err);
       }
@@ -1940,8 +2240,14 @@
     const allTracks = displayTracks;
     if (allTracks.length === 0) return;
 
-    // Filter out blacklisted tracks
+    // Filter out blacklisted tracks and tracks that aren't reachable.
+    // isTrackAvailable already handles "removed from Qobuz" (always
+    // unplayable) and "offline + no local copy" (unplayable until we're
+    // online again). Dropping them at enqueue time means the queue
+    // never hits the fail-then-auto-skip loop and the "playing N of M"
+    // count reflects what's actually going to play.
     const playableTracks = allTracks.filter(trk => {
+      if (!isTrackAvailable(trk)) return false;
       if (trk.isLocal) return true;
       if (!trk.artistId) return true;
       return !isArtistBlacklisted(trk.artistId);
@@ -1986,8 +2292,14 @@
     const allTracks = displayTracks;
     if (allTracks.length === 0) return;
 
-    // Filter out blacklisted tracks
+    // Filter out blacklisted tracks and tracks that aren't reachable.
+    // isTrackAvailable already handles "removed from Qobuz" (always
+    // unplayable) and "offline + no local copy" (unplayable until we're
+    // online again). Dropping them at enqueue time means the queue
+    // never hits the fail-then-auto-skip loop and the "playing N of M"
+    // count reflects what's actually going to play.
     const playableTracks = allTracks.filter(trk => {
+      if (!isTrackAvailable(trk)) return false;
       if (trk.isLocal) return true;
       if (!trk.artistId) return true;
       return !isArtistBlacklisted(trk.artistId);
@@ -2168,7 +2480,7 @@
         <div class="actions">
           <button
             class="action-btn-circle primary"
-            onclick={handlePlayAll}
+            onclick={() => handlePlayAll()}
             title={$t('actions.play')}
           >
             <Play size={20} fill="currentColor" color="currentColor" />
@@ -2444,8 +2756,10 @@
               isPlaying={isTrackPlaying}
               isActiveTrack={isActiveTrack}
               isLocal={track.isLocal}
-              isUnavailable={removedFromQobuz && isOwnPlaylist}
-              unavailableTooltip={removedFromQobuz ? $t('player.trackUnavailable') : undefined}
+              isUnavailable={(removedFromQobuz && isOwnPlaylist) || !available}
+              unavailableTooltip={removedFromQobuz
+                ? $t('player.trackUnavailable')
+                : (!available ? $t('offline.trackNotAvailable') : undefined)}
               isBlacklisted={trackBlacklisted}
               dragTrackIds={multiSelectMode && multiSelectedKeys.has(getTrackKey(track))
                 ? displayTracks.filter(trk => multiSelectedKeys.has(getTrackKey(trk)) && !trk.isLocal).map(trk => trk.id)
@@ -2460,7 +2774,16 @@
               menuActions={removedFromQobuz ? (isOwnPlaylist ? {
                 onRemoveFromPlaylist: () => removeTrackFromPlaylist(track),
                 onFindReplacement: () => openReplacementModal(track)
-              } : {}) : trackBlacklisted ? {
+              } : {}) : !available ? {
+                // Offline-unavailable: navigation + remove only.
+                // Playback / download / add-to-playlist all require
+                // network. "Find Replacement" is intentionally absent
+                // — going offline isn't a reason to replace a track.
+                onGoToAlbum: !track.isLocal && track.albumId && onTrackGoToAlbum ? () => onTrackGoToAlbum(track.albumId!) : undefined,
+                onGoToArtist: !track.isLocal && track.artistId && onTrackGoToArtist ? () => onTrackGoToArtist(track.artistId!) : undefined,
+                onShowInfo: !track.isLocal && onTrackShowInfo ? () => onTrackShowInfo(track.id) : undefined,
+                onRemoveFromPlaylist: isOwnPlaylist ? () => removeTrackFromPlaylist(track) : undefined
+              } : trackBlacklisted ? {
                 onGoToAlbum: !track.isLocal && track.albumId && onTrackGoToAlbum ? () => onTrackGoToAlbum(track.albumId!) : undefined,
                 onGoToArtist: !track.isLocal && track.artistId && onTrackGoToArtist ? () => onTrackGoToArtist(track.artistId!) : undefined,
                 onShowInfo: !track.isLocal && onTrackShowInfo ? () => onTrackShowInfo(track.id) : undefined
@@ -3147,10 +3470,14 @@
     flex: 1;
   }
 
-  /* Unavailable track styles (offline mode) */
+  /* Unavailable track styles (offline mode). Keep wrapper
+     interactive so the user can still right-click for navigation
+     context (go to album / artist / show info). The .track-row
+     itself drops grayscale and its onPlay is already gated on
+     `available` in the template, so clicking does nothing. */
   .track-row-wrapper.unavailable {
-    opacity: 0.4;
-    pointer-events: none;
+    opacity: 0.5;
+    pointer-events: auto;
     user-select: none;
   }
 

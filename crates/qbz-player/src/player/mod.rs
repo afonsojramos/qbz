@@ -14,7 +14,7 @@ mod playback_engine;
 mod streaming_source;
 
 pub use streaming_source::{
-    BufferWriter, BufferedMediaSource, IncrementalStreamingSource, StreamingConfig,
+    BufferWriter, BufferedMediaSource, InMemorySource, IncrementalStreamingSource, StreamingConfig,
 };
 
 use rodio::buffer::SamplesBuffer;
@@ -2123,10 +2123,64 @@ impl Player {
                             *gapless_request_armed = false;
                             thread_state.set_gapless_ready(false);
                             thread_state.set_gapless_next_track_id(0);
-                            let Some(ref audio_data) = *current_audio_data else {
-                                log::warn!("Audio thread: cannot seek - no audio data available");
+
+                            // Three cases reach this handler:
+                            //   * full-file playback (current_audio_data set)
+                            //   * CMAF streaming, download complete (buffered
+                            //     source holds the full file)
+                            //   * CMAF streaming, download IN PROGRESS — only
+                            //     allowed if the target position falls inside
+                            //     the already-buffered region. skip_duration
+                            //     reads samples sequentially, so seeking past
+                            //     the watermark would block the audio thread
+                            //     waiting for the rest of the download.
+                            //     Cache, offline-cache, and local-library
+                            //     playback reach this handler with
+                            //     current_audio_data Some and skip the
+                            //     streaming branch entirely (issue #335).
+                            if current_audio_data.is_none()
+                                && current_streaming_source.is_none()
+                            {
+                                log::warn!(
+                                    "Audio thread: cannot seek - no audio data available"
+                                );
                                 return;
-                            };
+                            }
+                            if let Some(ref stream_src) = *current_streaming_source {
+                                if !stream_src.is_complete() {
+                                    // Approximate bytes-to-seconds mapping via
+                                    // download fraction × total duration. Exact
+                                    // for CBR, close-enough for FLAC/VBR; the
+                                    // 0.90 margin covers the error band so the
+                                    // decoder never reads past the watermark.
+                                    let duration_secs = thread_state.duration();
+                                    let progress = stream_src.progress().unwrap_or(0.0);
+                                    if duration_secs == 0 || progress <= 0.0 {
+                                        log::warn!(
+                                            "Audio thread: seek to {}s ignored — streaming progress unknown",
+                                            position_secs
+                                        );
+                                        return;
+                                    }
+                                    let max_seekable_secs =
+                                        (progress * 0.90 * duration_secs as f32) as u64;
+                                    if position_secs > max_seekable_secs {
+                                        log::warn!(
+                                            "Audio thread: seek to {}s ignored — past buffered watermark ({}s, progress {:.1}%)",
+                                            position_secs,
+                                            max_seekable_secs,
+                                            progress * 100.0
+                                        );
+                                        return;
+                                    }
+                                    log::info!(
+                                        "Audio thread: seek to {}s within buffered zone (watermark {}s, progress {:.1}%)",
+                                        position_secs,
+                                        max_seekable_secs,
+                                        progress * 100.0
+                                    );
+                                }
+                            }
 
                             let Some(ref stream) = *stream_opt else {
                                 log::error!(
@@ -2171,17 +2225,81 @@ impl Player {
                             let volume = thread_state.volume.load(Ordering::SeqCst) as f32 / 100.0;
                             engine.set_volume(volume);
 
-                            let source = match decode_with_fallback(audio_data) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    log::error!("Failed to decode audio for seek: {}", e);
-                                    return;
-                                }
-                            };
-
+                            // Build the decoded source for the seek. Both
+                            // streaming and cached paths use Symphonia's native
+                            // seek — FLAC seek table / MP3 TOC jumps straight
+                            // to the target byte, then decodes forward to the
+                            // exact sample. Avoids skip_duration's
+                            // decode-every-sample-from-zero loop, which stalls
+                            // the audio thread on long seeks (especially FLAC
+                            // Hi-Res). Cached path falls back to decode_with_
+                            // fallback + skip_duration if Symphonia can't
+                            // probe the format (e.g., rodio-only MP4/AAC),
+                            // preserving existing behavior for those cases.
                             let skip_duration = Duration::from_secs(position_secs);
                             let skipped_source: Box<dyn Source<Item = f32> + Send> =
-                                Box::new(source.skip_duration(skip_duration));
+                                if let Some(ref stream_src) = *current_streaming_source {
+                                    match IncrementalStreamingSource::new(stream_src.clone()) {
+                                        Ok(mut s) => {
+                                            if let Err(e) = s.seek_to(skip_duration) {
+                                                log::error!(
+                                                    "Failed to native-seek streaming source: {}",
+                                                    e
+                                                );
+                                                return;
+                                            }
+                                            Box::new(s)
+                                        }
+                                        Err(e) => {
+                                            log::error!(
+                                                "Failed to create streaming source for seek: {}",
+                                                e
+                                            );
+                                            return;
+                                        }
+                                    }
+                                } else {
+                                    let audio_data = current_audio_data
+                                        .as_ref()
+                                        .expect("current_audio_data was checked Some above");
+                                    match InMemorySource::new(audio_data.clone()) {
+                                        Ok(mut s) => match s.seek_to(skip_duration) {
+                                            Ok(()) => Box::new(s),
+                                            Err(e) => {
+                                                log::warn!(
+                                                    "Native seek on cached source failed ({}); falling back to skip_duration",
+                                                    e
+                                                );
+                                                match decode_with_fallback(audio_data) {
+                                                    Ok(fb) => Box::new(fb.skip_duration(skip_duration)),
+                                                    Err(e) => {
+                                                        log::error!(
+                                                            "Failed to decode audio for seek: {}",
+                                                            e
+                                                        );
+                                                        return;
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        Err(e) => {
+                                            log::warn!(
+                                                "InMemorySource probe failed ({}); falling back to skip_duration",
+                                                e
+                                            );
+                                            match decode_with_fallback(audio_data) {
+                                                Ok(fb) => Box::new(fb.skip_duration(skip_duration)),
+                                                Err(e) => {
+                                                    log::error!(
+                                                        "Failed to decode audio for seek: {}",
+                                                        e
+                                                    );
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                    }
+                                };
 
                             // Send Reset to analyzer (seek invalidates accumulated samples)
                             let _ = analyzer_tx.try_send(AnalyzerMessage::Reset);

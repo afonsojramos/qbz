@@ -10,8 +10,11 @@ const STORAGE_KEY = 'qbz-search-bar-location';
 
 export type SearchBarLocation = 'sidebar' | 'titlebar';
 
-// State
-let location: SearchBarLocation = 'sidebar';
+// State — new installs default to the titlebar so search is visible
+// alongside the other core nav items. Existing users keep their
+// persisted choice: initSearchBarLocation() overwrites this when the
+// localStorage key is set.
+let location: SearchBarLocation = 'titlebar';
 
 // Listeners
 const listeners = new Set<() => void>();

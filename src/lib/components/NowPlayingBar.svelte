@@ -166,6 +166,13 @@
   let isDraggingVolume = $state(false);
   let showArtworkPreview = $state(false);
   let dragPreviewTime = $state<number | null>(null);
+  let isOverUnbuffered = $state(false);
+  // After the user releases the seekbar, keep showing the target position
+  // until the backend actually lands there. Decoder reinit + format seek +
+  // engine restart can take 1–2s on long jumps; without this, the thumb
+  // would snap back to the pre-seek position while the audio catches up.
+  let pendingSeekTime = $state<number | null>(null);
+  let pendingSeekTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   // Narrow-layout detection (issue #303): below this width the right-section
   // collapses into a hamburger popup and the quality/qconnect badges switch
@@ -265,10 +272,27 @@
     await refreshStatus();
   }
 
-  const effectiveTime = $derived(dragPreviewTime ?? currentTime);
+  const effectiveTime = $derived(dragPreviewTime ?? pendingSeekTime ?? currentTime);
   const progress = $derived(duration > 0 ? (effectiveTime / duration) * 100 : 0);
   const hasTrack = $derived(trackTitle !== '');
   const remainingTime = $derived(Math.max(0, duration - effectiveTime));
+  // Spinner shows only while waiting for the backend to land — not while
+  // the user is actively dragging (that uses the normal thumb).
+  const isSeekingPending = $derived(pendingSeekTime !== null && !isDraggingProgress);
+
+  // Clear the pending target once currentTime gets close enough to it.
+  // Backend emits position updates at ~500ms cadence, so this usually
+  // fires within one tick after the seek completes.
+  $effect(() => {
+    if (pendingSeekTime === null) return;
+    if (Math.abs(currentTime - pendingSeekTime) < 2) {
+      pendingSeekTime = null;
+      if (pendingSeekTimeoutId !== null) {
+        clearTimeout(pendingSeekTimeoutId);
+        pendingSeekTimeoutId = null;
+      }
+    }
+  });
 
   function formatTime(seconds: number): string {
     const mins = Math.floor(seconds / 60);
@@ -284,10 +308,32 @@
   function updateProgress(e: MouseEvent) {
     if (progressRef) {
       const rect = progressRef.getBoundingClientRect();
-      const percentage = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+      let percentage = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+      // While a CMAF stream is still downloading, the backend rejects
+      // seeks past the buffered watermark (with a 10% safety margin —
+      // see qbz-player Seek handler). Clamp the drag visually so the
+      // user can't aim past that ceiling. The same 0.90 factor keeps
+      // frontend and backend in sync.
+      if (bufferProgress != null && bufferProgress < 1) {
+        percentage = Math.min(percentage, bufferProgress * 0.9 * 100);
+      }
       const newTime = Math.round((percentage / 100) * duration);
       dragPreviewTime = newTime;
     }
+  }
+
+  function handleProgressHover(e: MouseEvent) {
+    if (bufferProgress == null || bufferProgress >= 1 || !progressRef) {
+      if (isOverUnbuffered) isOverUnbuffered = false;
+      return;
+    }
+    const rect = progressRef.getBoundingClientRect();
+    const percentage = ((e.clientX - rect.left) / rect.width) * 100;
+    isOverUnbuffered = percentage > bufferProgress * 0.9 * 100;
+  }
+
+  function handleProgressLeave() {
+    isOverUnbuffered = false;
   }
 
   function handleVolumeMouseDown(e: MouseEvent) {
@@ -310,7 +356,16 @@
 
   function handleMouseUp() {
     if (isDraggingProgress && dragPreviewTime !== null) {
+      pendingSeekTime = dragPreviewTime;
       onSeek?.(dragPreviewTime);
+      // Safety timeout in case the seek fails or the backend never lands
+      // near the target (e.g., track ended, device lost). Keeps the UI
+      // from being stuck in the "seeking" state indefinitely.
+      if (pendingSeekTimeoutId !== null) clearTimeout(pendingSeekTimeoutId);
+      pendingSeekTimeoutId = setTimeout(() => {
+        pendingSeekTime = null;
+        pendingSeekTimeoutId = null;
+      }, 8000);
     }
     isDraggingProgress = false;
     isDraggingVolume = false;
@@ -348,8 +403,11 @@
     <span class="time current">{formatTime(currentTime)}</span>
     <div
       class="seekbar"
+      class:unseekable={isOverUnbuffered}
       bind:this={progressRef}
       onmousedown={handleProgressMouseDown}
+      onmousemove={handleProgressHover}
+      onmouseleave={handleProgressLeave}
       role="slider"
       tabindex="0"
       aria-valuenow={currentTime}
@@ -362,7 +420,7 @@
         {/if}
         <div class="seekbar-fill" style="width: {progress}%"></div>
       </div>
-      <div class="seekbar-thumb" style="left: {progress}%"></div>
+      <div class="seekbar-thumb" class:seeking={isSeekingPending} style="left: {progress}%"></div>
     </div>
     <span class="time remaining">-{formatTime(remainingTime)}</span>
   </div>
@@ -932,6 +990,10 @@
     position: relative;
   }
 
+  .seekbar.unseekable {
+    cursor: not-allowed;
+  }
+
   .seekbar-track {
     position: relative;
     width: 100%;
@@ -973,6 +1035,26 @@
 
   .seekbar:hover .seekbar-thumb {
     opacity: 1;
+  }
+
+  .seekbar-thumb.seeking {
+    opacity: 1;
+    width: 14px;
+    height: 14px;
+    background: transparent;
+    border: 2px solid var(--accent-primary, #6366f1);
+    border-top-color: transparent;
+    box-shadow: none;
+    animation: seekbar-thumb-spin 0.7s linear infinite;
+  }
+
+  @keyframes seekbar-thumb-spin {
+    from {
+      transform: translate(-50%, -50%) rotate(0deg);
+    }
+    to {
+      transform: translate(-50%, -50%) rotate(360deg);
+    }
   }
 
   .seekbar:hover .seekbar-track {

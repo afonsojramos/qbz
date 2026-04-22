@@ -7,8 +7,8 @@ use crate::config::download_settings::DownloadSettingsState;
 use crate::core_bridge::CoreBridgeState;
 use crate::integrations_v2::MusicBrainzV2State;
 use crate::library::{
-    get_artwork_cache_dir, thumbnails, LibraryState, LocalAlbum, LocalTrack, MetadataExtractor,
-    PlaylistLocalTrack, PlaylistSettings, PlaylistStats, ScanProgress,
+    get_artwork_cache_dir, thumbnails, AudioFormat, LibraryState, LocalAlbum, LocalTrack,
+    MetadataExtractor, PlaylistLocalTrack, PlaylistSettings, PlaylistStats, ScanProgress,
 };
 use crate::lyrics::LyricsState;
 use crate::offline::OfflineState;
@@ -115,6 +115,69 @@ pub async fn v2_cast_play_track(
         }
         .ok_or_else(|| "Failed to build media URL".to_string())?
     };
+
+    cast_state
+        .chromecast
+        .load_media(url, content_type, metadata)
+        .map_err(|e| e.to_string())
+}
+
+/// Play a LOCAL library track on a Chromecast device. Companion to
+/// v2_dlna_play_local_track — same routing problem, same solution pattern.
+/// Reads the file from disk, infers content_type, registers bytes with the
+/// media server, loads the URL on Chromecast.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_cast_play_local_track(
+    trackId: i64,
+    metadata: MediaMetadata,
+    cast_state: State<'_, CastState>,
+    library_state: State<'_, LibraryState>,
+) -> Result<(), String> {
+    log::info!("Chromecast: cast_play_local_track called for track_id={}", trackId);
+
+    let track = {
+        let guard = library_state.db.lock().await;
+        let db = guard.as_ref().ok_or("No active session")?;
+        db.get_track(trackId)
+            .map_err(|e| format!("Library lookup failed: {}", e))?
+            .ok_or_else(|| format!("Track {} not found in library", trackId))?
+    };
+
+    let audio_data = std::fs::read(&track.file_path)
+        .map_err(|e| format!("Failed to read {}: {}", track.file_path, e))?;
+    let content_type = local_track_content_type(&track);
+
+    let target_ip = {
+        let connected = cast_state.connected_device_ip.lock().await;
+        connected.clone()
+    };
+
+    cast_state
+        .get_or_create_media_server()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let media_key = trackId as u64;
+    let url = {
+        let mut server_guard = cast_state.media_server.lock().await;
+        let server = server_guard
+            .as_mut()
+            .ok_or("Media server not initialized")?;
+        server.register_audio(media_key, audio_data, &content_type);
+        match target_ip.as_deref() {
+            Some(ip) => server.get_audio_url_for_target(media_key, ip),
+            None => server.get_audio_url(media_key),
+        }
+        .ok_or_else(|| "Failed to build media URL".to_string())?
+    };
+
+    log::info!(
+        "Chromecast: Playing local track {} ({}) via MediaServer URL: {}",
+        trackId,
+        content_type,
+        url
+    );
 
     cast_state
         .chromecast
@@ -272,6 +335,260 @@ pub async fn v2_dlna_play_track(
         conn.play().await.map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Play a LOCAL library track on a DLNA renderer. Reads the file from disk,
+/// infers content_type from the track's format, registers bytes with the
+/// media server, and sends AVTransport URI + Play to the renderer.
+///
+/// Mirrors `v2_dlna_play_track` but for local-source tracks — that command
+/// resolves a Qobuz stream URL and would fail for a library row id. Without
+/// this command, casting any local-library track silently falls back to the
+/// app's local audio backend (issue #332).
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_dlna_play_local_track(
+    trackId: i64,
+    metadata: DlnaMetadata,
+    dlna_state: State<'_, DlnaState>,
+    library_state: State<'_, LibraryState>,
+) -> Result<(), String> {
+    log::info!("DLNA: dlna_play_local_track called for track_id={}", trackId);
+
+    let track = {
+        let guard = library_state.db.lock().await;
+        let db = guard.as_ref().ok_or("No active session")?;
+        db.get_track(trackId)
+            .map_err(|e| format!("Library lookup failed: {}", e))?
+            .ok_or_else(|| format!("Track {} not found in library", trackId))?
+    };
+
+    let audio_data = std::fs::read(&track.file_path)
+        .map_err(|e| format!("Failed to read {}: {}", track.file_path, e))?;
+    let content_type = local_track_content_type(&track);
+
+    let target_ip = {
+        let connection = dlna_state.connection.lock().await;
+        connection.as_ref().map(|conn| conn.device_ip().to_string())
+    };
+
+    dlna_state
+        .ensure_media_server()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Library row ids are small positive autoincrement integers; using them
+    // directly as MediaServer keys won't collide with Qobuz track ids within
+    // a single cast session (the server is ephemeral per cast connection).
+    let media_key = trackId as u64;
+    let url = {
+        let mut server_guard = dlna_state.media_server.lock().await;
+        let server = server_guard
+            .as_mut()
+            .ok_or("Media server not initialized")?;
+        server.register_audio(media_key, audio_data, &content_type);
+        match target_ip.as_deref() {
+            Some(ip) => server.get_audio_url_for_target(media_key, ip),
+            None => server.get_audio_url(media_key),
+        }
+        .ok_or_else(|| "Failed to build media URL".to_string())?
+    };
+
+    log::info!(
+        "DLNA: Playing local track {} ({}) via MediaServer URL: {}",
+        trackId,
+        content_type,
+        url
+    );
+
+    {
+        let mut connection = dlna_state.connection.lock().await;
+        let conn = connection.as_mut().ok_or("Not connected")?;
+        conn.load_media(&url, &metadata, &content_type)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    {
+        let mut connection = dlna_state.connection.lock().await;
+        let conn = connection.as_mut().ok_or("Not connected")?;
+        conn.play().await.map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn local_track_content_type(track: &LocalTrack) -> String {
+    match track.format {
+        AudioFormat::Flac => "audio/flac".to_string(),
+        AudioFormat::Alac => "audio/mp4".to_string(),
+        AudioFormat::Wav => "audio/wav".to_string(),
+        AudioFormat::Aiff => "audio/aiff".to_string(),
+        AudioFormat::Ape => "audio/x-ape".to_string(),
+        AudioFormat::Mp3 => "audio/mpeg".to_string(),
+        AudioFormat::Unknown => {
+            let ext = std::path::Path::new(&track.file_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            match ext.as_str() {
+                "flac" => "audio/flac",
+                "mp3" => "audio/mpeg",
+                "wav" => "audio/wav",
+                "m4a" | "mp4" | "aac" => "audio/mp4",
+                "aiff" | "aif" => "audio/aiff",
+                "ogg" | "oga" => "audio/ogg",
+                "opus" => "audio/opus",
+                _ => "audio/octet-stream",
+            }
+            .to_string()
+        }
+    }
+}
+
+/// Play a PLEX track on a DLNA renderer. Plex serves audio via its own HTTP
+/// server, but streaming directly from Plex to the DLNA renderer would
+/// require the renderer to present the user's Plex token — we proxy the
+/// bytes through our local media server instead so auth stays ours.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_dlna_play_plex_track(
+    baseUrl: String,
+    token: String,
+    ratingKey: String,
+    metadata: DlnaMetadata,
+    dlna_state: State<'_, DlnaState>,
+) -> Result<(), String> {
+    log::info!("DLNA: dlna_play_plex_track called for rating_key={}", ratingKey);
+
+    let resolved =
+        crate::plex::plex_resolve_track_media(baseUrl, token, ratingKey.clone()).await?;
+    // Plex sometimes omits content-type on transcoded streams; audio/mpeg is
+    // the most common transcode target and a safe DLNA fallback.
+    let content_type = resolved
+        .content_type
+        .clone()
+        .unwrap_or_else(|| "audio/mpeg".to_string());
+
+    let target_ip = {
+        let connection = dlna_state.connection.lock().await;
+        connection.as_ref().map(|conn| conn.device_ip().to_string())
+    };
+
+    dlna_state
+        .ensure_media_server()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let media_key = plex_key_to_u64(&ratingKey);
+    let url = {
+        let mut server_guard = dlna_state.media_server.lock().await;
+        let server = server_guard
+            .as_mut()
+            .ok_or("Media server not initialized")?;
+        server.register_audio(media_key, resolved.bytes.clone(), &content_type);
+        match target_ip.as_deref() {
+            Some(ip) => server.get_audio_url_for_target(media_key, ip),
+            None => server.get_audio_url(media_key),
+        }
+        .ok_or_else(|| "Failed to build media URL".to_string())?
+    };
+
+    log::info!(
+        "DLNA: Playing plex track {} ({}) via MediaServer URL: {}",
+        ratingKey,
+        content_type,
+        url
+    );
+
+    {
+        let mut connection = dlna_state.connection.lock().await;
+        let conn = connection.as_mut().ok_or("Not connected")?;
+        conn.load_media(&url, &metadata, &content_type)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    {
+        let mut connection = dlna_state.connection.lock().await;
+        let conn = connection.as_mut().ok_or("Not connected")?;
+        conn.play().await.map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Play a PLEX track on a Chromecast device. Companion to v2_dlna_play_plex_track.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_cast_play_plex_track(
+    baseUrl: String,
+    token: String,
+    ratingKey: String,
+    metadata: MediaMetadata,
+    cast_state: State<'_, CastState>,
+) -> Result<(), String> {
+    log::info!("Chromecast: cast_play_plex_track called for rating_key={}", ratingKey);
+
+    let resolved =
+        crate::plex::plex_resolve_track_media(baseUrl, token, ratingKey.clone()).await?;
+    // Plex sometimes omits content-type on transcoded streams; audio/mpeg is
+    // the most common transcode target and a safe DLNA fallback.
+    let content_type = resolved
+        .content_type
+        .clone()
+        .unwrap_or_else(|| "audio/mpeg".to_string());
+
+    let target_ip = {
+        let connected = cast_state.connected_device_ip.lock().await;
+        connected.clone()
+    };
+
+    cast_state
+        .get_or_create_media_server()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let media_key = plex_key_to_u64(&ratingKey);
+    let url = {
+        let mut server_guard = cast_state.media_server.lock().await;
+        let server = server_guard
+            .as_mut()
+            .ok_or("Media server not initialized")?;
+        server.register_audio(media_key, resolved.bytes.clone(), &content_type);
+        match target_ip.as_deref() {
+            Some(ip) => server.get_audio_url_for_target(media_key, ip),
+            None => server.get_audio_url(media_key),
+        }
+        .ok_or_else(|| "Failed to build media URL".to_string())?
+    };
+
+    log::info!(
+        "Chromecast: Playing plex track {} ({}) via MediaServer URL: {}",
+        ratingKey,
+        content_type,
+        url
+    );
+
+    cast_state
+        .chromecast
+        .load_media(url, content_type, metadata)
+        .map_err(|e| e.to_string())
+}
+
+/// Namespace a Plex rating key into u64 for the MediaServer. Most Plex
+/// ratingKey strings parse as numeric; fall back to a stable hash so
+/// non-numeric keys still route correctly and don't collide with library
+/// ids in the low u64 range. High bit set to separate from Qobuz/library.
+fn plex_key_to_u64(rating_key: &str) -> u64 {
+    const PLEX_NAMESPACE: u64 = 0x4000_0000_0000_0000;
+    if let Ok(n) = rating_key.parse::<u64>() {
+        return PLEX_NAMESPACE | (n & !PLEX_NAMESPACE);
+    }
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    rating_key.hash(&mut hasher);
+    PLEX_NAMESPACE | (hasher.finish() & !PLEX_NAMESPACE)
 }
 
 #[tauri::command]
@@ -1535,6 +1852,52 @@ pub async fn v2_playlist_get_local_tracks_with_position(
         .as_ref()
         .ok_or("No active session - please log in")?;
     db.get_playlist_local_tracks_with_position(playlistId)
+        .map_err(|e| e.to_string())
+}
+
+/// Add a Plex track (identified by its Plex ratingKey string) to a
+/// Qobuz playlist. Plex tracks live in a parallel playlist_plex_tracks
+/// table and never hit the Qobuz playlist API, so there's no risk of
+/// the remote playlist getting polluted with unreachable ids.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_playlist_add_plex_track(
+    playlistId: u64,
+    ratingKey: String,
+    position: i32,
+    state: State<'_, LibraryState>,
+) -> Result<(), String> {
+    let guard = state.db.lock().await;
+    let db = guard.as_ref().ok_or("No active session - please log in")?;
+    db.add_plex_track_to_playlist(playlistId, &ratingKey, position)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_playlist_remove_plex_track(
+    playlistId: u64,
+    ratingKey: String,
+    state: State<'_, LibraryState>,
+) -> Result<(), String> {
+    let guard = state.db.lock().await;
+    let db = guard.as_ref().ok_or("No active session - please log in")?;
+    db.remove_plex_track_from_playlist(playlistId, &ratingKey)
+        .map_err(|e| e.to_string())
+}
+
+/// Return the (ratingKey, position) pairs for every Plex track in a
+/// playlist. Caller hydrates metadata (title, artist, cover) from the
+/// Plex cache.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_playlist_get_plex_tracks_with_position(
+    playlistId: u64,
+    state: State<'_, LibraryState>,
+) -> Result<Vec<(String, i32)>, String> {
+    let guard = state.db.lock().await;
+    let db = guard.as_ref().ok_or("No active session - please log in")?;
+    db.get_playlist_plex_tracks_with_position(playlistId)
         .map_err(|e| e.to_string())
 }
 

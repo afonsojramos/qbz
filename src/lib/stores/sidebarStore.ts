@@ -5,12 +5,15 @@
  */
 
 const STORAGE_KEY = 'qbz-sidebar-expanded';
+const PLAYLIST_COLLAGE_KEY = 'qbz-sidebar-playlist-collage';
 
 // State
 let isExpanded = true;
+let showPlaylistCollage = true;
 
 // Listeners
 const listeners = new Set<() => void>();
+const playlistCollageListeners = new Set<() => void>();
 
 function notifyListeners(): void {
   for (const listener of listeners) {
@@ -26,6 +29,10 @@ export function initSidebarStore(): void {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved !== null) {
       isExpanded = saved === 'true';
+    }
+    const collage = localStorage.getItem(PLAYLIST_COLLAGE_KEY);
+    if (collage !== null) {
+      showPlaylistCollage = collage !== 'false';
     }
   } catch (e) {
     // localStorage not available
@@ -80,6 +87,33 @@ export function collapseSidebar(): void {
  */
 export function toggleSidebar(): void {
   setExpanded(!isExpanded);
+}
+
+// ============================================
+// Playlist cover collage toggle (opt-out for
+// low-end machines — see Settings > Appearance)
+// ============================================
+
+export function subscribePlaylistCollage(listener: () => void): () => void {
+  playlistCollageListeners.add(listener);
+  listener();
+  return () => playlistCollageListeners.delete(listener);
+}
+
+export function getShowPlaylistCollage(): boolean {
+  return showPlaylistCollage;
+}
+
+export function setShowPlaylistCollage(value: boolean): void {
+  showPlaylistCollage = value;
+  try {
+    localStorage.setItem(PLAYLIST_COLLAGE_KEY, String(value));
+  } catch (e) {
+    // localStorage not available
+  }
+  for (const listener of playlistCollageListeners) {
+    listener();
+  }
 }
 
 // ============================================

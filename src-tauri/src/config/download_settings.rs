@@ -24,7 +24,12 @@ impl Default for DownloadSettings {
 
         Self {
             download_root: default_root,
-            show_in_library: false,
+            // New installs surface offline-cached Qobuz tracks in the
+            // Local Library by default — most users want them visible.
+            // Existing users with a persisted value aren't affected:
+            // INSERT OR IGNORE in open_at() only sets the default on
+            // first-ever row creation.
+            show_in_library: true,
         }
     }
 }
@@ -51,15 +56,18 @@ impl DownloadSettingsStore {
             "CREATE TABLE IF NOT EXISTS download_settings (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 download_root TEXT NOT NULL,
-                show_in_library INTEGER NOT NULL DEFAULT 0
+                show_in_library INTEGER NOT NULL DEFAULT 1
             );",
         )
         .map_err(|e| format!("Failed to create download settings table: {}", e))?;
 
         conn.execute(
             "INSERT OR IGNORE INTO download_settings (id, download_root, show_in_library)
-             VALUES (1, ?1, 0)",
-            params![default_settings.download_root],
+             VALUES (1, ?1, ?2)",
+            params![
+                default_settings.download_root,
+                default_settings.show_in_library as i64,
+            ],
         )
         .map_err(|e| format!("Failed to initialize download settings: {}", e))?;
 

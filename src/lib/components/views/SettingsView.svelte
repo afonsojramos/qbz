@@ -8,6 +8,7 @@
   import { ask, open as openFileDialog } from '@tauri-apps/plugin-dialog';
   import { ArrowLeft, ChevronRight, ChevronDown, ChevronUp, LoaderCircle, Sun, Moon, SunMoon, Ban, TriangleAlert, RefreshCw } from 'lucide-svelte';
   import Toggle from '../Toggle.svelte';
+  import { getShowPlaylistCollage, setShowPlaylistCollage, subscribePlaylistCollage } from '$lib/stores/sidebarStore';
   import Dropdown from '../Dropdown.svelte';
   import DeviceDropdown from '../DeviceDropdown.svelte';
   import DACSetupWizard from '../DACSetupWizard.svelte';
@@ -996,6 +997,7 @@
   let toastsEnabled = $state(true);
   let systemNotificationsEnabled = $state(true);
   let language = $state('Auto');
+  let sidebarPlaylistCollage = $state(getShowPlaylistCollage());
 
   // Window title (OS title bar) preference — opt-in track metadata
   let windowTitleEnabled = $state(false);
@@ -1674,6 +1676,11 @@
       blacklistEnabled = isBlacklistEnabled();
     });
 
+    // Subscribe to sidebar playlist collage toggle
+    const unsubscribePlaylistCollage = subscribePlaylistCollage(() => {
+      sidebarPlaylistCollage = getShowPlaylistCollage();
+    });
+
     return () => {
       if (plexAuthPollTimer) {
         clearInterval(plexAuthPollTimer);
@@ -1689,6 +1696,7 @@
       unsubscribeWindowControls();
       unsubscribeUpdates();
       unsubscribeBlacklist();
+      unsubscribePlaylistCollage();
     };
   });
 
@@ -4498,6 +4506,13 @@
         options={zoomOptions}
         onchange={handleZoomChange}
       />
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.sidebarPlaylistCollage')}</span>
+        <small class="setting-note">{$t('settings.appearance.sidebarPlaylistCollageDesc')}</small>
+      </div>
+      <Toggle enabled={sidebarPlaylistCollage} onchange={(v) => { sidebarPlaylistCollage = v; setShowPlaylistCollage(v); }} />
     </div>
     <div class="setting-row">
       <span class="setting-label">{$t('settings.appearance.inAppToasts')}</span>

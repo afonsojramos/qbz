@@ -13,9 +13,10 @@
     class?: string;
     showLabel?: boolean;
     indented?: boolean;
+    iconSize?: number;
   }
 
-  let { icon, label, badge, tooltip, active = false, onclick, onHover, oncontextmenu, class: className = '', showLabel = true, indented = false }: Props = $props();
+  let { icon, label, badge, tooltip, active = false, onclick, onHover, oncontextmenu, class: className = '', showLabel = true, indented = false, iconSize = 20 }: Props = $props();
 
   // Show custom tooltip in both expanded and collapsed sidebar.
   // Collapsed mode falls back to label when explicit tooltip is missing.
@@ -83,7 +84,7 @@
   onmouseenter={handleMouseEnter}
   onmouseleave={handleMouseLeave}
 >
-  <div class="icon-container">
+  <div class="icon-container" style="width: {iconSize}px; height: {iconSize}px;">
     {@render icon()}
   </div>
   {#if showLabel}
@@ -112,7 +113,7 @@
     border-radius: 6px;
     border: none;
     background: transparent;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     text-align: left;
@@ -129,7 +130,6 @@
 
   .nav-item.active {
     background-color: var(--bg-tertiary);
-    color: var(--text-primary);
   }
 
   .nav-item.indented {
@@ -143,11 +143,13 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    color: var(--accent-primary);
   }
 
   .label {
     font-size: 13px;
     font-weight: 400;
+    color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

@@ -30,6 +30,7 @@
   import BulkActionBar from '../BulkActionBar.svelte';
   import TrackRow from '../TrackRow.svelte';
   import { cachedSrc } from '$lib/actions/cachedImage';
+  import { preloadImages } from '$lib/services/imageCacheService';
   import { showToast } from '$lib/stores/toastStore';
   import { getUserItem, setUserItem, removeUserItem } from '$lib/utils/userStorage';
   import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
@@ -520,14 +521,27 @@
   // the scrollbar can't reach the true bottom. Fixing CSS + constant together
   // is the cheapest path to smooth scroll without variable-height windowing.
   const LIST_ROW_HEIGHT = 56;
-  const GRID_CARD_MIN_W = 170; // px — matches grid-template-columns minmax
+  const GRID_CARD_MIN_W = 150; // px — matches grid-template-columns minmax
   const GRID_GAP = 20; // px — matches .item-grid gap
-  const GRID_ROW_HEIGHT = 240; // px — card (170 art + title + subtitle + padding) + gap
+  // Chrome beyond the square artwork per grid card: the 8px gap between
+  // artwork and title, title line (~16px), optional subtitle line
+  // (~14px), plus 8px top+bottom padding on .grid-card. Tuned by
+  // inspection so the dynamic row height lines up with real cards; the
+  // old fixed 240 constant drifted on wide containers where cards grow
+  // past 170 and the unaccounted height piled up per row until the
+  // scrollbar couldn't reach the last row.
+  const GRID_CARD_CHROME_H = 62;
   const WINDOW_BUFFER = 4; // extra rows above/below viewport
 
   let scrollEl = $state<HTMLDivElement | null>(null);
   let listAnchorEl = $state<HTMLDivElement | null>(null);
-  let viewportHeight = $state(0);
+  // Seed viewportHeight with something reasonable so the very first
+  // virtualWindow computation returns a small slice instead of the
+  // `viewportHeight <= 0` fallback (which returned all items and
+  // caused every card's cachedSrc action to fire a backend invoke on
+  // mount — the main cause of "slow to open" on large collections).
+  // bind:clientHeight replaces this with the real value a tick later.
+  let viewportHeight = $state(typeof window !== 'undefined' ? window.innerHeight : 800);
   let listScrollTop = $state(0); // scrollTop of scrollEl, 0 when hero in view
   let listAnchorOffsetTop = $state(0); // distance from scroller top to list start
   let listContainerWidth = $state(0);
@@ -585,6 +599,21 @@
     );
   });
 
+  // Actual card width given current column count, accounting for gaps.
+  // Cards are 1:1 aspect-ratio for artwork, so card_width also drives
+  // artwork height. Row height = artwork (= card_width) + chrome + gap.
+  // Tracked as a single $derived so the virtualWindow math picks up
+  // container-resize changes automatically.
+  const gridRowHeight = $derived.by(() => {
+    if (viewMode !== 'grid' || listContainerWidth <= 0 || gridColumns <= 0) {
+      return GRID_CARD_MIN_W + GRID_CARD_CHROME_H + GRID_GAP;
+    }
+    const cardWidth = Math.floor(
+      (listContainerWidth - GRID_GAP * (gridColumns - 1)) / gridColumns,
+    );
+    return cardWidth + GRID_CARD_CHROME_H + GRID_GAP;
+  });
+
   // Compute [firstIdx, lastIdx) of items to render + top/bottom spacer heights.
   const virtualWindow = $derived.by(() => {
     const total = visibleItems.length;
@@ -595,17 +624,18 @@
 
     if (viewMode === 'grid') {
       const cols = Math.max(1, gridColumns);
+      const rowH = gridRowHeight;
       const totalRows = Math.ceil(total / cols);
-      const firstRow = Math.max(0, Math.floor(localScroll / GRID_ROW_HEIGHT) - WINDOW_BUFFER);
+      const firstRow = Math.max(0, Math.floor(localScroll / rowH) - WINDOW_BUFFER);
       const lastRow = Math.min(
         totalRows,
-        Math.ceil((localScroll + viewportHeight) / GRID_ROW_HEIGHT) + WINDOW_BUFFER,
+        Math.ceil((localScroll + viewportHeight) / rowH) + WINDOW_BUFFER,
       );
       return {
         firstIdx: firstRow * cols,
         lastIdx: Math.min(total, lastRow * cols),
-        topSpacer: firstRow * GRID_ROW_HEIGHT,
-        bottomSpacer: Math.max(0, (totalRows - lastRow) * GRID_ROW_HEIGHT),
+        topSpacer: firstRow * rowH,
+        bottomSpacer: Math.max(0, (totalRows - lastRow) * rowH),
       };
     }
 
@@ -626,8 +656,27 @@
     };
   });
 
+  // Expanded mode has variable row heights (base ~56px for the item row
+  // plus whatever height the loaded TrackRows occupy below it). The
+  // fixed-height virtualization math can't express that, so spacers
+  // come out shorter than the real content and the scrollbar tops out
+  // before the last row — that's the "scroll snaps back / can't reach
+  // the end" regression. In expanded mode we render every item and
+  // skip spacer clipping entirely; the auto-fetch gate still uses
+  // virtualWindow.{firstIdx,lastIdx} to cap backend calls to the
+  // visible viewport, so the only DOM cost of rendering all items is
+  // the item-row shell (the 56px row) — tracks still mount on demand.
   const windowedItems = $derived(
-    visibleItems.slice(virtualWindow.firstIdx, virtualWindow.lastIdx),
+    viewMode === 'expanded'
+      ? visibleItems
+      : visibleItems.slice(virtualWindow.firstIdx, virtualWindow.lastIdx),
+  );
+
+  const activeTopSpacer = $derived(
+    viewMode === 'expanded' ? 0 : virtualWindow.topSpacer,
+  );
+  const activeBottomSpacer = $derived(
+    viewMode === 'expanded' ? 0 : virtualWindow.bottomSpacer,
   );
 
   // Qobuz artwork URLs follow `<cdn>/.../<hash>_<size>.jpg` where size is
@@ -637,7 +686,7 @@
   // (local file:// / tauri asset URLs / Plex) are returned as-is.
   function smallQobuzArtwork(
     url: string | null | undefined,
-    target: 50 | 150 = 50,
+    target: 50 | 150 | 230 = 50,
   ): string | null {
     if (!url) return null;
     return url.replace(/_(50|100|150|230|300|600|max|org)\.jpg/i, `_${target}.jpg`);
@@ -728,6 +777,23 @@
       collection = await getCollection(collectionId);
       if (collection) {
         void resolveItems(collection.items);
+        // Prime the image cache for every item up front. preloadImages
+        // fires getCachedImageUrl in the background for each URL so by
+        // the time the user scrolls to a card, its resolved asset://
+        // URL is already in the in-memory map and cachedSrc can set
+        // src without awaiting a backend round trip — that round trip
+        // was the visible "dark placeholder flash" per card during
+        // scroll on large collections.
+        // Request the 150px variant (matches the grid card display
+        // size) so the backend caches the right asset.
+        const urls = collection.items
+          .map((it) => {
+            const raw = it.artwork_url;
+            if (!raw) return null;
+            return smallQobuzArtwork(raw, 150) ?? raw;
+          })
+          .filter((u): u is string => !!u);
+        preloadImages(urls);
       }
     } catch (err) {
       console.error('[MixtapeCollectionDetailView] load failed:', err);
@@ -1260,7 +1326,7 @@
         <div class="header-cover">
           <CollectionMosaic
             items={collection.items}
-            size={240}
+            size={186}
             kind={collection.kind}
             customCoverUrl={collection.custom_artwork_path
               ? convertFileSrc(collection.custom_artwork_path)
@@ -1557,7 +1623,7 @@
         bind:clientWidth={listContainerWidth}
       >
       {#if viewMode === 'grid'}
-        <div class="virtual-spacer" style:height="{virtualWindow.topSpacer}px"></div>
+        <div class="virtual-spacer" style:height="{activeTopSpacer}px"></div>
         <div class="item-grid">
           {#each windowedItems as item (item.position)}
             {@const resolved = resolvedFor(item)}
@@ -1630,7 +1696,7 @@
             </div>
           {/each}
         </div>
-        <div class="virtual-spacer" style:height="{virtualWindow.bottomSpacer}px"></div>
+        <div class="virtual-spacer" style:height="{activeBottomSpacer}px"></div>
       {:else}
       <div class="item-list">
         <div class="item-list-header">
@@ -1644,7 +1710,7 @@
           <div class="col-menu"></div>
         </div>
 
-        <div class="virtual-spacer" style:height="{virtualWindow.topSpacer}px"></div>
+        <div class="virtual-spacer" style:height="{activeTopSpacer}px"></div>
         {#each windowedItems as item (item.position)}
           {@const resolved = resolvedFor(item)}
           {@const artworkSrc = item.artwork_url || resolved.artworkUrl}
@@ -1652,6 +1718,13 @@
           {@const key = itemKey(item)}
           {@const isExpandLoading = expandLoading.has(key)}
           {@const showTracks = viewMode === 'expanded' && canExpand(item)}
+          <!-- .item-block wraps the row and its (optional) expanded track
+               list so `content-visibility: auto` can skip rendering the
+               whole unit when it's scrolled off-screen. With virtualization
+               disabled in expanded mode the item-row count is the full
+               visibleItems count, so this is how we keep layout cost
+               bounded to the viewport. -->
+          <div class="item-block">
           <div class="item-row" class:is-selected={isSelected} class:is-expanded={showTracks}>
             <div class="col-idx">
               {#if selectMode}
@@ -1905,8 +1978,9 @@
               {/if}
             </div>
           {/if}
+          </div>
         {/each}
-        <div class="virtual-spacer" style:height="{virtualWindow.bottomSpacer}px"></div>
+        <div class="virtual-spacer" style:height="{activeBottomSpacer}px"></div>
       </div>
       {/if}
       </div>
@@ -2040,9 +2114,13 @@
     margin-bottom: 32px;
   }
 
+  /* Hero sizing homologated to PlaylistDetailView so Collection / Mixtape
+     detail views share the same visual weight as the other detail
+     views (playlist, album). Cover 186×186, title 24px, uppercase tag
+     12px, 32px gap between cover and metadata. */
   .header-content {
     display: flex;
-    gap: 24px;
+    gap: 32px;
     align-items: flex-end;
   }
 
@@ -2055,6 +2133,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
+    justify-content: flex-end;
     gap: 8px;
   }
 
@@ -2065,18 +2144,18 @@
   }
 
   .kind-tag {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
-    letter-spacing: 1.2px;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: var(--accent-primary);
+    color: var(--text-muted);
   }
 
   .title {
     margin: 0;
-    font-size: 40px;
+    font-size: 24px;
     font-weight: 700;
-    line-height: 1.1;
+    line-height: 1.2;
     word-wrap: break-word;
   }
 
@@ -2084,6 +2163,7 @@
     margin: 0;
     color: var(--text-secondary);
     font-size: 14px;
+    line-height: 1.4;
     max-width: 720px;
   }
 
@@ -2351,7 +2431,7 @@
   /* Grid view — auto-fill tiles mirroring AlbumCard proportions. */
   .item-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 20px;
     padding: 0 12px;
   }
@@ -2364,6 +2444,10 @@
     cursor: pointer;
     transition: background 120ms ease;
     background: transparent;
+    /* Virtualization already clips the rendered slice to viewport +
+       buffer; doubling up with content-visibility:auto caused cards
+       to re-eject and re-paint on scroll-back, which read as a black
+       flash over already-seen content. */
   }
   .grid-card:hover {
     background: var(--bg-hover);
@@ -2380,6 +2464,31 @@
     overflow: hidden;
     background: var(--bg-tertiary);
   }
+  /* Loading spinner behind the <img>. The wrap has overflow:hidden +
+     dark background; while the img is still fetching (src set, no
+     bytes yet) the img is transparent and the spinner shows through.
+     As soon as the image paints, its opaque pixels cover the pseudo-
+     element — no JS state, no onload handler, no per-card re-render. */
+  .grid-artwork-wrap::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 24px;
+    height: 24px;
+    margin: -12px 0 0 -12px;
+    border: 2px solid var(--border-subtle);
+    border-top-color: var(--accent-primary);
+    border-radius: 50%;
+    animation: grid-artwork-spin 0.8s linear infinite;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .grid-artwork,
+  .grid-artwork-placeholder {
+    position: relative;
+    z-index: 1;
+  }
   .grid-artwork {
     width: 100%;
     height: 100%;
@@ -2387,10 +2496,22 @@
     display: block;
   }
   .grid-artwork-placeholder {
+    width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
+    background: var(--bg-tertiary);
+  }
+
+  @keyframes grid-artwork-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
   .grid-play-overlay {
     position: absolute;
@@ -2587,6 +2708,20 @@
   /* ── Item list — matches existing track-list vocabulary ── */
   .item-list {
     border-top: 1px solid var(--bg-tertiary);
+  }
+
+  /* Wrapper around each item-row + expanded-tracks block.
+     content-visibility: auto tells the engine to skip rendering the
+     whole unit when it's off-screen. For expanded mode (where we
+     render every item so the scrollbar reaches the real end) this
+     substitutes manual virtualization with native skipping, so even
+     a 50-item collection fully expanded stays fluid.
+     The intrinsic hint is the collapsed row height (56px) — when
+     a row becomes visible and gets expanded, the browser measures
+     the real height and the scrollbar adjusts. */
+  .item-block {
+    content-visibility: auto;
+    contain-intrinsic-size: 100% 56px;
   }
 
   .item-list-header,

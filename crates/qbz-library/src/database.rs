@@ -88,6 +88,7 @@ impl LibraryDatabase {
                 indexed_at INTEGER NOT NULL,
                 album_group_key TEXT,
                 album_group_title TEXT,
+                is_network_mount INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(file_path, cue_start_secs)
             );
 
@@ -154,6 +155,24 @@ impl LibraryDatabase {
 
             CREATE INDEX IF NOT EXISTS idx_playlist_local_tracks_playlist
                 ON playlist_local_tracks(qobuz_playlist_id);
+
+            -- Plex tracks added to playlists. Kept in its own table because
+            -- Plex tracks live on a remote server and have a TEXT rating key,
+            -- not the i64 filesystem id used by local_tracks. No foreign key
+            -- to plex_cache_tracks: that cache can be purged without losing
+            -- the user's intent (the rows gray out in the UI until Plex is
+            -- reachable again).
+            CREATE TABLE IF NOT EXISTS playlist_plex_tracks (
+                id INTEGER PRIMARY KEY,
+                qobuz_playlist_id INTEGER NOT NULL,
+                plex_rating_key TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                added_at INTEGER NOT NULL,
+                UNIQUE(qobuz_playlist_id, plex_rating_key)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_playlist_plex_tracks_playlist
+                ON playlist_plex_tracks(qobuz_playlist_id);
 
             -- Custom track order per playlist (user-defined arrangement)
             CREATE TABLE IF NOT EXISTS playlist_track_custom_order (
@@ -638,6 +657,27 @@ impl LibraryDatabase {
             log::info!("Migration completed: sample_rate is now REAL");
         }
 
+        // Migration: Add is_network_mount flag to local_tracks. Default
+        // 0; callers can re-scan folders to populate real values for
+        // existing rows.
+        let has_network_mount: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_tracks') WHERE name = 'is_network_mount'",
+                [],
+                |row| row.get::<_, i32>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+
+        if !has_network_mount {
+            log::info!("Running migration: adding is_network_mount to local_tracks");
+            self.conn
+                .execute_batch(
+                    "ALTER TABLE local_tracks ADD COLUMN is_network_mount INTEGER NOT NULL DEFAULT 0;",
+                )
+                .map_err(|e| LibraryError::Database(format!("Migration failed: {}", e)))?;
+        }
+
         // Migration: Add canonical_name column to artist_images for artist name normalization
         let has_canonical_name: bool = self.conn
             .query_row(
@@ -1031,6 +1071,15 @@ impl LibraryDatabase {
             "user"
         };
 
+        // Detect whether the audio file sits on a network-backed
+        // filesystem. Done per-insert instead of per-scan-start because
+        // mount topology can change between folder scans; the cost is
+        // negligible (one /proc/mounts read, cached by the kernel
+        // page cache).
+        let is_network_mount = crate::mount_info::is_network_path(
+            std::path::Path::new(&track.file_path),
+        );
+
         self.conn
             .execute(
                 r#"INSERT OR REPLACE INTO local_tracks
@@ -1038,8 +1087,8 @@ impl LibraryDatabase {
                 disc_number, year, genre, catalog_number, duration_secs, format, bit_depth,
                 sample_rate, channels, file_size_bytes, cue_file_path,
                 cue_start_secs, cue_end_secs, artwork_path, last_modified, indexed_at,
-                album_group_key, album_group_title, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                album_group_key, album_group_title, source, is_network_mount)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
                 params![
                     track.file_path,
                     track.title,
@@ -1065,7 +1114,8 @@ impl LibraryDatabase {
                     track.indexed_at,
                     track.album_group_key,
                     track.album_group_title,
-                    source
+                    source,
+                    is_network_mount as i64,
                 ],
             )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
@@ -1798,7 +1848,7 @@ impl LibraryDatabase {
          bit_depth, sample_rate, channels, file_size_bytes, \
          cue_file_path, cue_start_secs, cue_end_secs, artwork_path, \
          last_modified, indexed_at, album_group_key, album_group_title, \
-         source, qobuz_track_id, catalog_number";
+         source, qobuz_track_id, catalog_number, is_network_mount";
 
     fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<LocalTrack> {
         Ok(LocalTrack {
@@ -1829,6 +1879,12 @@ impl LibraryDatabase {
             source: row.get(24).ok().flatten(),                                       // source
             qobuz_track_id: row.get(25).ok().flatten(), // qobuz_track_id
             catalog_number: row.get(26).ok().flatten(), // catalog_number
+            is_network_mount: row
+                .get::<_, Option<i64>>(27)
+                .ok()
+                .flatten()
+                .map(|v| v != 0)
+                .unwrap_or(false),
         })
     }
 
@@ -2782,6 +2838,107 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    // === Playlist Plex Tracks ===
+
+    /// Add a Plex track to a playlist, identified by its Plex rating key.
+    /// The rating key is stored verbatim so the pairing survives Plex
+    /// cache rebuilds.
+    pub fn add_plex_track_to_playlist(
+        &self,
+        qobuz_playlist_id: u64,
+        plex_rating_key: &str,
+        position: i32,
+    ) -> Result<(), LibraryError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO playlist_plex_tracks
+                (qobuz_playlist_id, plex_rating_key, position, added_at)
+             VALUES (?1, ?2, ?3, ?4)",
+                params![qobuz_playlist_id as i64, plex_rating_key, position, now],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to add Plex track to playlist: {}", e))
+            })?;
+
+        Ok(())
+    }
+
+    /// Remove a Plex track from a playlist.
+    pub fn remove_plex_track_from_playlist(
+        &self,
+        qobuz_playlist_id: u64,
+        plex_rating_key: &str,
+    ) -> Result<(), LibraryError> {
+        self.conn
+            .execute(
+                "DELETE FROM playlist_plex_tracks
+             WHERE qobuz_playlist_id = ?1 AND plex_rating_key = ?2",
+                params![qobuz_playlist_id as i64, plex_rating_key],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to remove Plex track from playlist: {}", e))
+            })?;
+
+        Ok(())
+    }
+
+    /// Get all Plex tracks in a playlist with their stored position.
+    /// Returns (rating_key, position) pairs. The caller is responsible
+    /// for hydrating metadata from the Plex cache.
+    pub fn get_playlist_plex_tracks_with_position(
+        &self,
+        qobuz_playlist_id: u64,
+    ) -> Result<Vec<(String, i32)>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT plex_rating_key, position
+                 FROM playlist_plex_tracks
+                 WHERE qobuz_playlist_id = ?1
+                 ORDER BY position ASC",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare query: {}", e)))?;
+
+        let rows = stmt
+            .query_map(params![qobuz_playlist_id as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+            })
+            .map_err(|e| {
+                LibraryError::Database(format!(
+                    "Failed to query playlist plex tracks: {}",
+                    e
+                ))
+            })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+            LibraryError::Database(format!("Failed to collect playlist plex tracks: {}", e))
+        })
+    }
+
+    /// Get count of Plex tracks in a playlist
+    pub fn get_playlist_plex_track_count(
+        &self,
+        qobuz_playlist_id: u64,
+    ) -> Result<u32, LibraryError> {
+        let count: u32 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_plex_tracks WHERE qobuz_playlist_id = ?1",
+                params![qobuz_playlist_id as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to count playlist plex tracks: {}", e))
+            })?;
+
+        Ok(count)
+    }
+
     /// Get all local tracks in a playlist
     pub fn get_playlist_local_tracks(
         &self,
@@ -2795,7 +2952,7 @@ impl LibraryDatabase {
                     t.year, t.genre, t.duration_secs, t.format, t.bit_depth, t.sample_rate,
                     t.channels, t.file_size_bytes, t.cue_file_path, t.cue_start_secs,
                     t.cue_end_secs, t.artwork_path, t.last_modified, t.indexed_at, t.source,
-                    t.qobuz_track_id, plt.position
+                    t.qobuz_track_id, t.is_network_mount, plt.position
              FROM playlist_local_tracks plt
              JOIN local_tracks t ON plt.local_track_id = t.id
              WHERE plt.qobuz_playlist_id = ?1
@@ -2833,6 +2990,7 @@ impl LibraryDatabase {
                     indexed_at: row.get(23)?,
                     source: row.get(24)?,
                     qobuz_track_id: row.get(25)?,
+                    is_network_mount: row.get::<_, i64>(26)? != 0,
                 })
             })
             .map_err(|e| {
@@ -2857,7 +3015,7 @@ impl LibraryDatabase {
                     t.year, t.genre, t.duration_secs, t.format, t.bit_depth, t.sample_rate,
                     t.channels, t.file_size_bytes, t.cue_file_path, t.cue_start_secs,
                     t.cue_end_secs, t.artwork_path, t.last_modified, t.indexed_at, t.source,
-                    t.qobuz_track_id, plt.position
+                    t.qobuz_track_id, t.is_network_mount, plt.position
              FROM playlist_local_tracks plt
              JOIN local_tracks t ON plt.local_track_id = t.id
              WHERE plt.qobuz_playlist_id = ?1
@@ -2896,8 +3054,9 @@ impl LibraryDatabase {
                         indexed_at: row.get(23)?,
                         source: row.get(24)?,
                         qobuz_track_id: row.get(25)?,
+                        is_network_mount: row.get::<_, i64>(26)? != 0,
                     },
-                    playlist_position: row.get(26)?,
+                    playlist_position: row.get(27)?,
                 })
             })
             .map_err(|e| {
@@ -2934,10 +3093,19 @@ impl LibraryDatabase {
         Ok(count)
     }
 
-    /// Get local track counts for all playlists
+    /// Get local track counts for all playlists.
+    ///
+    /// "Local" here is the user-facing sense — anything that isn't a Qobuz
+    /// server track. That includes file-system local tracks (user / qobuz
+    /// purchases / offline-cached downloads, all in local_tracks) plus
+    /// Plex tracks (in a parallel playlist_plex_tracks table). The two
+    /// sums are merged per playlist so the sidebar's hasLocalContent
+    /// indicator picks up Plex content too.
     pub fn get_all_playlist_local_track_counts(
         &self,
     ) -> Result<std::collections::HashMap<u64, u32>, LibraryError> {
+        let mut result: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
+
         let mut stmt = self
             .conn
             .prepare(
@@ -2955,11 +3123,33 @@ impl LibraryDatabase {
             })
             .map_err(|e| LibraryError::Database(format!("Failed to query: {}", e)))?;
 
-        let mut result = std::collections::HashMap::new();
         for row in rows {
             let (playlist_id, count) =
                 row.map_err(|e| LibraryError::Database(format!("Failed to read row: {}", e)))?;
             result.insert(playlist_id, count);
+        }
+
+        let mut plex_stmt = self
+            .conn
+            .prepare(
+                "SELECT qobuz_playlist_id, COUNT(*) as count
+             FROM playlist_plex_tracks
+             GROUP BY qobuz_playlist_id",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare query: {}", e)))?;
+
+        let plex_rows = plex_stmt
+            .query_map([], |row| {
+                let playlist_id: i64 = row.get(0)?;
+                let count: u32 = row.get(1)?;
+                Ok((playlist_id as u64, count))
+            })
+            .map_err(|e| LibraryError::Database(format!("Failed to query: {}", e)))?;
+
+        for row in plex_rows {
+            let (playlist_id, count) =
+                row.map_err(|e| LibraryError::Database(format!("Failed to read row: {}", e)))?;
+            *result.entry(playlist_id).or_insert(0) += count;
         }
 
         Ok(result)

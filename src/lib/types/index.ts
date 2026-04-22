@@ -387,7 +387,22 @@ export interface DisplayTrack {
   isrc?: string;
   parental_warning?: boolean;
   isLocal?: boolean;
+  /** True when the underlying source is a remote Plex server. Used to
+   *  gate network-dependent operations (playback, add-to-playlist,
+   *  etc.) when forced offline — the track is isLocal:true in the UI
+   *  sense (not Qobuz) but still needs network to reach the server. */
+  isPlex?: boolean;
   localTrackId?: number;
+  /** Raw audio file path for local-library tracks. Used by the
+   *  offline heuristic to decide whether a "local" track actually
+   *  sits on a network mount (/mnt, /media, UNC, etc.) and is
+   *  therefore unreachable when the wire is cut. */
+  filePath?: string;
+  /** Backend-provided flag: true when the track's file_path lives on
+   *  a network filesystem (NFS / CIFS / SSHFS / etc.). Authoritative
+   *  — read from local_tracks.is_network_mount, set by the library
+   *  scanner on index. Fallback when unset: the filePath heuristic. */
+  isNetworkMount?: boolean;
   artworkPath?: string;
 }
 

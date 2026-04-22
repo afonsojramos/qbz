@@ -1,10 +1,13 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Search, HardDrive, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, Folder, FolderPlus, X, User, Disc, Disc3, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
+  import { Search, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, LibraryBig, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, X, User, Disc, Disc3, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
+  import FolderGlyph from './icons/FolderGlyph.svelte';
   import type { FavoritesPreferences } from '$lib/types';
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import NavigationItem from './NavigationItem.svelte';
+  import PlaylistCoverCollage from './PlaylistCoverCollage.svelte';
+  import { getShowPlaylistCollage, subscribePlaylistCollage } from '$lib/stores/sidebarStore';
   import UserCard from './UserCard.svelte';
   import MyQbzNavEditModal from './MyQbzNavEditModal.svelte';
   import {
@@ -57,6 +60,8 @@
     name: string;
     tracks_count: number;
     images?: string[];
+    images150?: string[];
+    images300?: string[];
     duration?: number;
   }
 
@@ -69,6 +74,7 @@
     play_count?: number;
     hasLocalContent?: LocalContentStatus;
     folder_id?: string | null;
+    custom_artwork_path?: string | null;
   }
 
   type SortOption = 'name' | 'recent' | 'tracks' | 'playcount' | 'custom';
@@ -103,6 +109,7 @@
     favoritesInTitlebar?: boolean;
     libraryInTitlebar?: boolean;
     purchasesInTitlebar?: boolean;
+    myQbzInTitlebar?: boolean;
   }
 
   let {
@@ -128,7 +135,8 @@
     discoverInTitlebar = false,
     favoritesInTitlebar = false,
     libraryInTitlebar = false,
-    purchasesInTitlebar = false
+    purchasesInTitlebar = false,
+    myQbzInTitlebar = false
   }: Props = $props();
 
   let userPlaylists = $state<Playlist[]>([]);
@@ -137,7 +145,13 @@
   let pendingPlaylistsMap = $state<Map<number, import('$lib/stores/offlineStore').PendingPlaylist>>(new Map());
   let playlistsLoading = $state(false);
   let playlistsCollapsed = $state(false);
-  let localLibraryCollapsed = $state(false);
+  let showPlaylistCollage = $state(getShowPlaylistCollage());
+  // Cache of thumb URLs (asset://localhost/…) keyed by playlist id for
+  // custom covers that live on disk. Generated via the existing
+  // v2_library_get_thumbnail command (500×500 JPEG @ 85% quality) so
+  // a 20×20 sidebar slot doesn't decode a multi-MB original every time.
+  // URLs (http/https) skip the thumb pipeline — they're passed through.
+  let customCoverThumbs = $state<Map<number, string>>(new Map());
 
   // Favorites section state
   let favoritesExpanded = $state(false);
@@ -332,6 +346,42 @@
   function getTotalTrackCount(playlist: Playlist): number {
     const localCount = localTrackCounts.get(playlist.id) ?? 0;
     return playlist.tracks_count + localCount;
+  }
+
+  // Resolve the user's custom cover for a playlist (if any). Prefers a
+  // pre-generated 500×500 thumb when available; falls back to the
+  // original path while the thumb is being generated or for remote URLs
+  // (which skip the thumb pipeline).
+  function resolveCustomCover(playlistId: number): string | null {
+    const thumb = customCoverThumbs.get(playlistId);
+    if (thumb) return thumb;
+
+    const path = playlistSettings.get(playlistId)?.custom_artwork_path;
+    if (!path) return null;
+    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('asset://')) {
+      return path;
+    }
+    return `asset://localhost/${encodeURIComponent(path)}`;
+  }
+
+  // Kick off thumb generation for any playlist whose custom cover is a
+  // local file. Runs through the existing v2_library_get_thumbnail
+  // command so results are cached on disk across sessions.
+  async function ensureCustomCoverThumbs(settings: PlaylistSettings[]): Promise<void> {
+    for (const s of settings) {
+      const path = s.custom_artwork_path;
+      if (!path) continue;
+      if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('asset://')) continue;
+      if (customCoverThumbs.has(s.qobuz_playlist_id)) continue;
+      try {
+        const thumbPath = await invoke<string>('v2_library_get_thumbnail', { artworkPath: path });
+        const next = new Map(customCoverThumbs);
+        next.set(s.qobuz_playlist_id, `asset://localhost/${encodeURIComponent(thumbPath)}`);
+        customCoverThumbs = next;
+      } catch (err) {
+        console.debug('[Sidebar] custom cover thumb generation failed', s.qobuz_playlist_id, err);
+      }
+    }
   }
 
   // Fetch playlist artists for tooltip
@@ -1013,7 +1063,6 @@
   interface SidebarCollapseState {
     favoritesExpanded: boolean;
     playlistsCollapsed: boolean;
-    localLibraryCollapsed: boolean;
   }
 
   function loadSidebarCollapseState() {
@@ -1023,7 +1072,6 @@
         const state: SidebarCollapseState = JSON.parse(stored);
         favoritesExpanded = state.favoritesExpanded ?? false;
         playlistsCollapsed = state.playlistsCollapsed ?? false;
-        localLibraryCollapsed = state.localLibraryCollapsed ?? false;
       }
     } catch (err) {
       console.debug('[Sidebar] Failed to load collapse state:', err);
@@ -1034,8 +1082,7 @@
     try {
       const state: SidebarCollapseState = {
         favoritesExpanded,
-        playlistsCollapsed,
-        localLibraryCollapsed
+        playlistsCollapsed
       };
       localStorage.setItem(SIDEBAR_COLLAPSE_KEY, JSON.stringify(state));
     } catch (err) {
@@ -1053,6 +1100,10 @@
   }
 
   onMount(() => {
+    const unsubCollage = subscribePlaylistCollage(() => {
+      showPlaylistCollage = getShowPlaylistCollage();
+    });
+
     loadSortPreference();
     loadFolders(); // Load playlist folders
     loadFavoritesPreferences(); // Load favorites tab order
@@ -1091,6 +1142,7 @@
       unsubscribeOffline();
       unsubscribeFolders();
       unsubscribeSearch();
+      unsubCollage();
     };
   });
 
@@ -1179,6 +1231,7 @@
       settingsMap.set(s.qobuz_playlist_id, s);
     }
     playlistSettings = settingsMap;
+    void ensureCustomCoverThumbs(cached.playlistSettings as PlaylistSettings[]);
 
     const countsMap = new Map<number, number>();
     for (const [id, count] of Object.entries(cached.localTrackCounts)) {
@@ -1194,19 +1247,23 @@
     playlistsLoading = true;
     try {
       if (isOffline) {
-        // In offline mode, show only pending playlists (created offline)
+        // In offline mode, keep whatever regular (id >= 0) playlists the
+        // SWR cache restored from the previous online session so they
+        // stay browsable — playback falls back to cached/offline/local
+        // content per track. Add pending playlists (created offline) on
+        // top.
         console.log('[Sidebar] Loading pending playlists in offline mode');
         const pendingPlaylists = await invoke<import('$lib/stores/offlineStore').PendingPlaylist[]>('v2_get_pending_playlists');
 
-        // Store pending playlists metadata and populate localTrackCounts
         const newPendingMap = new Map<number, import('$lib/stores/offlineStore').PendingPlaylist>();
-        const newLocalTrackCounts = new Map<number, number>();
+        // Preserve local track counts already loaded for cached playlists;
+        // we'll layer pending counts on top.
+        const newLocalTrackCounts = new Map<number, number>(localTrackCounts);
 
-        // Convert pending playlists to Playlist format for UI compatibility
-        userPlaylists = pendingPlaylists.map(p => {
+        const pendingAsPlaylists = pendingPlaylists.map(p => {
           const negativeId = -p.id;
           newPendingMap.set(negativeId, p);
-          newLocalTrackCounts.set(negativeId, p.localTrackIds.length); // Populate local track count
+          newLocalTrackCounts.set(negativeId, p.localTrackIds.length);
 
           return {
             id: negativeId, // Negative ID to distinguish from real playlists
@@ -1226,6 +1283,12 @@
             }
           };
         });
+
+        // Keep cached regular playlists (positive ids) visible alongside
+        // the pending ones. Pending appear first — they're the user's most
+        // recent intent.
+        const cachedRegular = userPlaylists.filter(p => p.id >= 0);
+        userPlaylists = [...pendingAsPlaylists, ...cachedRegular];
 
         pendingPlaylistsMap = newPendingMap;
         localTrackCounts = newLocalTrackCounts;
@@ -1250,6 +1313,7 @@
         map.set(s.qobuz_playlist_id, s);
       }
       playlistSettings = map;
+      void ensureCustomCoverThumbs(settings);
     } catch (err) {
       // Command might not exist yet, that's ok
       console.debug('Failed to load playlist settings:', err);
@@ -1663,8 +1727,8 @@
       </nav>
     {/if}
 
-    <!-- My QBZ collapsible section -->
-    {#if isExpanded}
+    <!-- My QBZ collapsible section (hidden when My QBZ is in titlebar) -->
+    {#if isExpanded && !myQbzInTitlebar}
     <nav class="nav-section my-qbz-section">
       <!-- Parent row: click toggles expand, right-click opens context menu -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1752,8 +1816,12 @@
     />
     {/if}
 
-    <!-- Playlists Section (hidden in offline mode) -->
-    {#if !isOffline}
+    <!-- Playlists Section.
+         Always rendered, including in offline mode — the SWR cache holds
+         the regular playlists from the last online session, and playback
+         of each track falls back to offline cache / local library / Plex
+         per track. Controls that require network (import, create, drag)
+         are individually gated on isOffline inside this block. -->
     <div class="section playlists-section">
       {#if isExpanded}
         <div class="playlists-header">
@@ -1879,7 +1947,7 @@
           {/if}
 
           <button class="menu-item" onclick={openCreateFolderModal}>
-            <FolderPlus size={14} />
+            <FolderGlyph variant="new" size={14} />
             <span>{$t('playlist.newFolder', { default: 'New Folder' })}</span>
           </button>
 
@@ -1931,7 +1999,9 @@
                       ondragleave={() => handleFolderDragLeave(item.folder.id)}
                       ondrop={(e) => handleFolderDrop(e, item.folder.id)}
                     >
-                      <Folder size={14} />
+                      <div class="icon-container">
+                        <FolderGlyph variant={isFolderExp ? 'open' : 'closed'} size={14} />
+                      </div>
                       <span class="folder-name">{item.folder.name}</span>
                       <span class="folder-count">{folderPlaylists.length}</span>
                       <span class="folder-chevron" class:expanded={isFolderExp}>
@@ -1961,7 +2031,17 @@
                         showLabel={true}
                         indented={true}
                       >
-                        {#snippet icon()}<ListMusic size={14} />{/snippet}
+                        {#snippet icon()}
+                          {@const custom = resolveCustomCover(item.playlist.id)}
+                          {@const collage = item.playlist.images150 ?? item.playlist.images300 ?? item.playlist.images ?? []}
+                          {#if custom}
+                            <PlaylistCoverCollage images={[custom]} size={20} />
+                          {:else if showPlaylistCollage && collage.length > 0}
+                            <PlaylistCoverCollage images={collage} size={20} />
+                          {:else}
+                            <ListMusic size={14} />
+                          {/if}
+                        {/snippet}
                       </NavigationItem>
                     </div>
                   {:else if item.type === 'root-playlist'}
@@ -1986,7 +2066,17 @@
                         oncontextmenu={(e) => handlePlaylistContextMenu(e, item.playlist, null)}
                         showLabel={isExpanded}
                       >
-                        {#snippet icon()}<ListMusic size={14} />{/snippet}
+                        {#snippet icon()}
+                          {@const custom = resolveCustomCover(item.playlist.id)}
+                          {@const collage = item.playlist.images150 ?? item.playlist.images300 ?? item.playlist.images ?? []}
+                          {#if custom}
+                            <PlaylistCoverCollage images={[custom]} size={20} />
+                          {:else if showPlaylistCollage && collage.length > 0}
+                            <PlaylistCoverCollage images={collage} size={20} />
+                          {:else}
+                            <ListMusic size={14} />
+                          {/if}
+                        {/snippet}
                       </NavigationItem>
                     </div>
                   {:else if item.type === 'collapsed-folder'}
@@ -2001,7 +2091,7 @@
                       ondragleave={() => handleFolderDragLeave(item.folder.id)}
                       ondrop={(e) => handleFolderDrop(e, item.folder.id)}
                     >
-                      <Folder size={14} />
+                      <FolderGlyph variant="closed" size={14} />
                     </button>
                   {/if}
                 </div>
@@ -2019,32 +2109,19 @@
         </div>
       {/if}
     </div>
-    {/if}
 
-    <!-- Local Library Section (hidden when Library is in titlebar) -->
+    <!-- Local Library (hidden when Library is in titlebar) -->
     {#if !libraryInTitlebar}
-    <div class="section local-library-section">
-      {#if isExpanded}
-        <button class="section-header-btn" onclick={() => { localLibraryCollapsed = !localLibraryCollapsed; saveSidebarCollapseState(); }}>
-          <span class="section-header">{$t('library.title')}</span>
-          {#if localLibraryCollapsed}
-            <ChevronDown size={12} />
-          {:else}
-            <ChevronUp size={12} />
-          {/if}
-        </button>
-      {/if}
-      {#if !localLibraryCollapsed || !isExpanded}
-        <NavigationItem
-          label={$t('library.browse')}
-          active={activeView === 'library'}
-          onclick={() => handleViewChange('library')}
-          showLabel={isExpanded}
-        >
-          {#snippet icon()}<HardDrive size={14} />{/snippet}
-        </NavigationItem>
-      {/if}
-    </div>
+    <nav class="nav-section local-library-section">
+      <NavigationItem
+        label={$t('library.title')}
+        active={activeView === 'library'}
+        onclick={() => handleViewChange('library')}
+        showLabel={isExpanded}
+      >
+        {#snippet icon()}<LibraryBig size={14} />{/snippet}
+      </NavigationItem>
+    </nav>
     {/if}
   </div>
 
@@ -2177,7 +2254,9 @@
                 class="context-menu-item"
                 onclick={() => handleMoveToFolder(folder.id)}
               >
-                <Folder size={14} />
+                <div class="icon-container">
+                  <FolderGlyph variant="closed" size={14} />
+                </div>
                 {folder.name}
               </button>
             {/each}
@@ -2220,7 +2299,9 @@
     tabindex="-1"
   >
     <div class="folder-popover-header">
-      <Folder size={14} />
+      <div class="icon-container">
+        <FolderGlyph variant="open" size={14} />
+      </div>
       <span>{folderPopover.folderName}</span>
     </div>
     {#if folderPopoverPlaylists.length > 0}
@@ -2610,15 +2691,25 @@
   .folder-header {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     width: 100%;
-    padding: 6px 8px;
+    padding: 0 8px;
+    height: 32px;
     background: transparent;
     border: none;
     border-radius: 6px;
     cursor: pointer;
-    color: var(--text-muted);
+    color: var(--accent-primary);
     transition: background-color 150ms ease;
+  }
+
+  .folder-header .icon-container {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
   }
 
   .folder-header:hover {
@@ -2646,7 +2737,7 @@
     flex: 1;
     font-size: 13px;
     font-weight: 400;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2674,7 +2765,7 @@
     border: none;
     border-radius: 6px;
     cursor: pointer;
-    color: var(--text-muted);
+    color: var(--accent-primary);
     transition: background-color 150ms ease, color 150ms ease;
   }
 
@@ -2707,11 +2798,24 @@
     padding: 8px;
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--accent-primary);
     text-transform: uppercase;
     letter-spacing: 0.03em;
     border-bottom: 1px solid var(--border-subtle);
     margin-bottom: 4px;
+  }
+
+  .folder-popover-header .icon-container {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .folder-popover-header > span {
+    color: var(--text-secondary);
   }
 
   .folder-popover-list {
@@ -3054,7 +3158,7 @@
   .context-menu-item {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     width: 100%;
     padding: 8px 10px;
     background: none;
@@ -3065,6 +3169,16 @@
     cursor: pointer;
     text-align: left;
     transition: background-color 150ms ease;
+  }
+
+  .context-menu-item .icon-container {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--accent-primary);
   }
 
   .context-menu-item:hover {
@@ -3109,7 +3223,7 @@
     border-radius: 6px;
     border: none;
     background: transparent;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     text-align: left;
@@ -3121,16 +3235,16 @@
 
   .favorites-nav-item.active {
     background-color: var(--bg-tertiary);
-    color: var(--text-primary);
   }
 
   .favorites-nav-item .icon-container {
-    width: 14px;
-    height: 14px;
+    width: 20px;
+    height: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    color: var(--accent-primary);
   }
 
   .favorites-nav-item .label {
@@ -3261,7 +3375,7 @@
     padding: 0 8px;
     border-radius: 6px;
     background: transparent;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease;
     user-select: none;
@@ -3273,16 +3387,16 @@
 
   .my-qbz-parent.active {
     background-color: var(--bg-tertiary);
-    color: var(--text-primary);
   }
 
   .my-qbz-parent .icon-container {
-    width: 14px;
-    height: 14px;
+    width: 20px;
+    height: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    color: var(--accent-primary);
   }
 
   .my-qbz-parent .label {

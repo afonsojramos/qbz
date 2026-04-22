@@ -72,7 +72,7 @@ const DEFAULT_SETTINGS: HomeSettings = {
   },
   limits: {
     recentAlbums: 20,
-    continueTracks: 10,
+    continueTracks: 24,
     topArtists: 20,
     favoriteAlbums: 12,
     favoriteTracks: 10,
