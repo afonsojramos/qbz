@@ -6,14 +6,19 @@
 # clears 400+ MB/s. For HiRes (200 MB+ tracks) this is the difference
 # between a 20-second gap and a sub-second one.
 #
-# Two things needed on x86_64:
-# 1. `target-cpu=x86-64-v3` = Haswell microarchitecture baseline
-#    (2013+). Every CPU QBZ realistically runs on supports it. This
-#    gives AVX2, BMI2, etc. for general codegen.
-# 2. `target-feature=+aes,+ssse3` to explicitly enable the AES-NI
-#    instruction set — which is NOT included in x86-64-v3 as a
-#    microarch level. Without this flag the `aes` crate's hardware
-#    dispatch never gets compiled in, no matter how capable the CPU.
+# We enable `+aes,+ssse3` as target-features so the `aes` crate's
+# hardware dispatch compiles in the AES-NI code path. The `aes` crate
+# uses `cpufeatures` at runtime to pick the hardware path only when
+# the CPU actually supports it, so enabling the feature at build time
+# is safe on older CPUs — they fall through to the software path.
+#
+# We deliberately do NOT set `target-cpu=x86-64-v3`. That microarch
+# level (Haswell, 2013+) makes LLVM emit AVX2/BMI2/FMA across all
+# codegen, which traps with SIGILL on pre-Haswell hardware (e.g.
+# 2012 Ivy Bridge Macs: GitHub discussion #343). QBZ has no hand-written SIMD
+# or autovectorizable hot loops that benefit materially from v3, so
+# the compatibility cost outweighs the win. AES-NI — the one
+# measurable perf improvement — is preserved by `+aes` on its own.
 #
 # IMPORTANT: these flags MUST be scoped to x86_64 targets. Using
 # `[build] rustflags = ...` applies them to every target, which on
@@ -23,4 +28,4 @@
 # get their own AES/crypto extensions automatically via `aes` crate's
 # armv8 path — we don't need to force anything there.
 [target.'cfg(target_arch = "x86_64")']
-rustflags = ["-C", "target-cpu=x86-64-v3", "-C", "target-feature=+aes,+ssse3"]
+rustflags = ["-C", "target-feature=+aes,+ssse3"]
