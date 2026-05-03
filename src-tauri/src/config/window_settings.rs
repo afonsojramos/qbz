@@ -430,3 +430,43 @@ pub fn set_match_system_window_chrome(
     );
     state.set_match_system_window_chrome(value)
 }
+
+/// Returns the titlebar modes valid for the current platform/session.
+/// `Plasma` is only included on KDE Plasma + Wayland — on other environments
+/// the Xwayland trick is unnecessary or non-applicable.
+pub fn available_titlebar_modes() -> Vec<TitlebarMode> {
+    let mut modes = vec![
+        TitlebarMode::Qbz,
+        TitlebarMode::System,
+        TitlebarMode::Hidden,
+    ];
+
+    #[cfg(target_os = "linux")]
+    {
+        let kde = std::env::var("XDG_CURRENT_DESKTOP")
+            .map(|d| d.split(':').any(|s| s.eq_ignore_ascii_case("KDE")))
+            .unwrap_or(false);
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+            || std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland");
+        if kde && wayland {
+            modes.push(TitlebarMode::Plasma);
+        }
+    }
+
+    modes
+}
+
+/// Whether the current process is running inside a Linux sandbox
+/// (Flatpak or Snap). Used by the frontend to display a sandbox-caveat
+/// hint when the user selects Plasma mode in those builds.
+pub fn is_sandboxed() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::path::Path::new("/.flatpak-info").exists()
+            || std::env::var_os("SNAP").is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
