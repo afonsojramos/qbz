@@ -123,7 +123,7 @@
   import {
     subscribe as subscribeSearchBarLocation,
     initSearchBarLocation,
-    getSearchBarLocation
+    getEffectiveSearchBarLocation
   } from '$lib/stores/searchBarLocationStore';
 
   // Window controls customization store
@@ -549,8 +549,8 @@
   let windowTransparent = $state(getWindowIsTransparent());
   let showWindowControls = $state(getShowWindowControls());
 
-  // Search Bar Location State
-  let searchBarLocationPref = $state(getSearchBarLocation());
+  // Search Bar Location State (effective: respects mode, falls back to sidebar in system/hidden)
+  let searchBarLocationPref = $state(getEffectiveSearchBarLocation());
   let titlebarSearchQuery = $state(getSearchQuery());
 
   // Window Controls State
@@ -4810,6 +4810,9 @@
     const unsubscribeTitleBar = subscribeTitleBar(() => {
       showTitleBar = shouldShowTitleBar();
       showWindowControls = getShowWindowControls();
+      // Recompute the effective search location: mode changes can flip
+      // search from titlebar to sidebar even when the user pref is unchanged.
+      searchBarLocationPref = getEffectiveSearchBarLocation();
       applyChromeClass();
     });
 
@@ -4844,7 +4847,7 @@
     // Initialize and subscribe to search bar location
     initSearchBarLocation();
     const unsubscribeSearchBarLocation = subscribeSearchBarLocation(() => {
-      searchBarLocationPref = getSearchBarLocation();
+      searchBarLocationPref = getEffectiveSearchBarLocation();
     });
 
     // Initialize and subscribe to window controls customization
