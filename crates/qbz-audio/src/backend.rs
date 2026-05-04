@@ -236,6 +236,19 @@ pub trait AudioBackend: Send + Sync {
     /// Create an output stream for the given configuration
     fn create_output_stream(&self, config: &BackendConfig) -> BackendResult<MixerDeviceSink>;
 
+    /// Create an output stream and optionally return a platform exclusive-mode guard.
+    /// Most backends do not need a guard; macOS CoreAudio uses this to keep Hog Mode
+    /// owned for the lifetime of the stream.
+    fn create_output_stream_with_exclusive_guard(
+        &self,
+        config: &BackendConfig,
+    ) -> BackendResult<(
+        MixerDeviceSink,
+        Option<crate::coreaudio_direct::CoreAudioExclusiveGuard>,
+    )> {
+        self.create_output_stream(config).map(|sink| (sink, None))
+    }
+
     /// Check if this backend is available on the current system
     fn is_available(&self) -> bool;
 
@@ -294,7 +307,9 @@ impl BackendManager {
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    log::info!("PipeWire not available on this platform, using system default audio");
+                    log::info!(
+                        "PipeWire not available on this platform, using system default audio"
+                    );
                     Ok(Box::new(CpalDefaultBackend::new()?))
                 }
             }
@@ -403,9 +418,7 @@ impl AudioBackend for CpalDefaultBackend {
 
             // On macOS, probe device capabilities via CoreAudio
             #[cfg(target_os = "macos")]
-            let (supported_rates, max_rate, bus_type, is_hw) = {
-                Self::probe_macos_device(&name)
-            };
+            let (supported_rates, max_rate, bus_type, is_hw) = { Self::probe_macos_device(&name) };
             #[cfg(not(target_os = "macos"))]
             let (supported_rates, max_rate, bus_type, is_hw): (
                 Option<Vec<u32>>,
@@ -430,14 +443,16 @@ impl AudioBackend for CpalDefaultBackend {
     }
 
     fn create_output_stream(&self, config: &BackendConfig) -> BackendResult<MixerDeviceSink> {
-        // On macOS, switch device sample rate to match the requested rate
+        // On macOS, only exclusive mode takes ownership of the device rate.
+        // Shared mode must leave the user's current CoreAudio device rate alone.
         #[cfg(target_os = "macos")]
         {
-            if let Some(ref device_id) = config.device_id {
-                Self::switch_sample_rate_if_needed(device_id, config.sample_rate);
-            } else {
-                // Switch default device rate
-                Self::switch_default_device_rate_if_needed(config.sample_rate);
+            if config.exclusive_mode {
+                if let Some(ref device_id) = config.device_id {
+                    Self::switch_sample_rate_if_needed(device_id, config.sample_rate);
+                } else {
+                    Self::switch_default_device_rate_if_needed(config.sample_rate);
+                }
             }
         }
 
@@ -463,6 +478,30 @@ impl AudioBackend for CpalDefaultBackend {
             .map_err(|e| format!("Failed to create output stream: {}", e))?;
 
         Ok(mixer_sink)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn create_output_stream_with_exclusive_guard(
+        &self,
+        config: &BackendConfig,
+    ) -> BackendResult<(
+        MixerDeviceSink,
+        Option<crate::coreaudio_direct::CoreAudioExclusiveGuard>,
+    )> {
+        let guard = if config.exclusive_mode {
+            let device_id =
+                crate::coreaudio_direct::resolve_output_device_id(config.device_id.as_deref())?;
+            Some(crate::coreaudio_direct::CoreAudioExclusiveGuard::acquire(
+                device_id,
+            )?)
+        } else {
+            None
+        };
+
+        match self.create_output_stream(config) {
+            Ok(sink) => Ok((sink, guard)),
+            Err(e) => Err(e),
+        }
     }
 
     fn is_available(&self) -> bool {
@@ -493,7 +532,10 @@ impl CpalDefaultBackend {
                 id
             }
             Ok(None) => {
-                log::debug!("[CoreAudio] Device '{}' not found via CoreAudio", device_name);
+                log::debug!(
+                    "[CoreAudio] Device '{}' not found via CoreAudio",
+                    device_name
+                );
                 return (None, None, None, false);
             }
             Err(e) => {
@@ -503,17 +545,29 @@ impl CpalDefaultBackend {
         };
 
         let supported_rates = coreaudio_direct::query_supported_sample_rates(device_id)
-            .inspect(|rates| log::info!("[CoreAudio] Device '{}' supported rates: {:?}", device_name, rates))
-            .inspect_err(|e| log::warn!("[CoreAudio] Failed to query rates for '{}': {}", device_name, e))
+            .inspect(|rates| {
+                log::info!(
+                    "[CoreAudio] Device '{}' supported rates: {:?}",
+                    device_name,
+                    rates
+                )
+            })
+            .inspect_err(|e| {
+                log::warn!(
+                    "[CoreAudio] Failed to query rates for '{}': {}",
+                    device_name,
+                    e
+                )
+            })
             .ok()
             .filter(|r| !r.is_empty());
         let max_rate = supported_rates
             .as_ref()
             .and_then(|rates| rates.iter().max().copied());
         let bus_type = coreaudio_direct::get_device_transport_type(device_id);
-        let is_hardware = bus_type
-            .as_deref()
-            .is_some_and(|t| t == "usb" || t == "built-in" || t == "thunderbolt" || t == "firewire");
+        let is_hardware = bus_type.as_deref().is_some_and(|t| {
+            t == "usb" || t == "built-in" || t == "thunderbolt" || t == "firewire"
+        });
 
         (supported_rates, max_rate, bus_type, is_hardware)
     }
@@ -522,12 +576,19 @@ impl CpalDefaultBackend {
     fn switch_sample_rate_if_needed(device_name: &str, target_rate: u32) {
         use crate::coreaudio_direct;
 
-        log::info!("[CoreAudio] Rate switch requested: device='{}' target={}Hz", device_name, target_rate);
+        log::info!(
+            "[CoreAudio] Rate switch requested: device='{}' target={}Hz",
+            device_name,
+            target_rate
+        );
 
         let device_id = match coreaudio_direct::find_device_by_name(device_name) {
             Ok(Some(id)) => id,
             Ok(None) => {
-                log::warn!("[CoreAudio] Cannot switch rate: device '{}' not found", device_name);
+                log::warn!(
+                    "[CoreAudio] Cannot switch rate: device '{}' not found",
+                    device_name
+                );
                 return;
             }
             Err(e) => {
@@ -560,7 +621,10 @@ impl CpalDefaultBackend {
         let device_id = match coreaudio_direct::get_default_output_device() {
             Ok(id) => id,
             Err(e) => {
-                log::debug!("[CoreAudio] Could not get default device for rate switch: {}", e);
+                log::debug!(
+                    "[CoreAudio] Could not get default device for rate switch: {}",
+                    e
+                );
                 return;
             }
         };
@@ -576,7 +640,10 @@ impl CpalDefaultBackend {
         }
 
         if let Err(e) = coreaudio_direct::set_nominal_sample_rate(device_id, target_rate) {
-            log::warn!("[CoreAudio] Failed to switch default device sample rate: {}", e);
+            log::warn!(
+                "[CoreAudio] Failed to switch default device sample rate: {}",
+                e
+            );
         }
     }
 }

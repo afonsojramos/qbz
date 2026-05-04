@@ -61,6 +61,7 @@ pub use backend::{
     AlsaDirectError, AlsaPlugin, AudioBackend, AudioBackendType, AudioDevice, BackendConfig,
     BackendManager, BackendResult, BitPerfectMode,
 };
+pub use coreaudio_direct::CoreAudioExclusiveGuard;
 pub use diagnostic::{AudioDiagnostic, BitDepthResult, DiagnosticSource};
 pub use dynamic_amplify::DynamicAmplify;
 pub use loudness::{calculate_gain_factor, db_to_linear, extract_replaygain, ReplayGainData};

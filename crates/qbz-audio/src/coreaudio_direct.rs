@@ -6,10 +6,22 @@
 //! Phase 1: Device probing + nominal sample rate switching (shared mode)
 //! Phase 2 (future): Hog mode + integer mode + IO proc for bit-perfect playback
 
+#![cfg_attr(target_os = "macos", allow(deprecated))]
+
 #[cfg(target_os = "macos")]
-use coreaudio::audio_unit::macos_helpers;
+use coreaudio::audio_unit::{macos_helpers, Scope};
 #[cfg(target_os = "macos")]
-use coreaudio::audio_unit::Scope;
+use coreaudio::Error;
+#[cfg(target_os = "macos")]
+use objc2_core_audio::{
+    kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyElementMaster,
+    kAudioObjectPropertyScopeGlobal, AudioObjectGetPropertyData, AudioObjectPropertyAddress,
+};
+#[cfg(target_os = "macos")]
+use std::{
+    mem,
+    ptr::{null, NonNull},
+};
 
 /// CoreAudio device ID (re-exported so callers don't need objc2_core_audio)
 #[cfg(target_os = "macos")]
@@ -18,16 +30,16 @@ pub type AudioDeviceID = u32;
 // CoreAudio transport type constants (FourCC values from AudioHardware.h)
 #[cfg(target_os = "macos")]
 mod transport_types {
-    pub const BUILT_IN: u32 = 0x626c746e;    // 'bltn'
-    pub const USB: u32 = 0x75736220;          // 'usb '
-    pub const BLUETOOTH: u32 = 0x626c7565;    // 'blue'
+    pub const BUILT_IN: u32 = 0x626c746e; // 'bltn'
+    pub const USB: u32 = 0x75736220; // 'usb '
+    pub const BLUETOOTH: u32 = 0x626c7565; // 'blue'
     pub const BLUETOOTH_LE: u32 = 0x626c6561; // 'blea'
-    pub const HDMI: u32 = 0x68646d69;         // 'hdmi'
+    pub const HDMI: u32 = 0x68646d69; // 'hdmi'
     pub const DISPLAY_PORT: u32 = 0x64707274; // 'dprt'
-    pub const THUNDERBOLT: u32 = 0x7468756e;  // 'thun'
-    pub const FIREWIRE: u32 = 0x31333934;     // '1394'
-    pub const VIRTUAL: u32 = 0x76697274;      // 'virt'
-    pub const AGGREGATE: u32 = 0x67727570;    // 'grup'
+    pub const THUNDERBOLT: u32 = 0x7468756e; // 'thun'
+    pub const FIREWIRE: u32 = 0x31333934; // '1394'
+    pub const VIRTUAL: u32 = 0x76697274; // 'virt'
+    pub const AGGREGATE: u32 = 0x67727570; // 'grup'
 }
 
 /// Common audio sample rates to check against device capabilities
@@ -81,6 +93,34 @@ pub fn set_nominal_sample_rate(device_id: AudioDeviceID, target_rate: u32) -> Re
     Ok(())
 }
 
+/// Get the current nominal sample rate of a CoreAudio device.
+#[cfg(target_os = "macos")]
+pub fn get_nominal_sample_rate(device_id: AudioDeviceID) -> Result<u32, String> {
+    unsafe {
+        let property_address = AudioObjectPropertyAddress {
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMaster,
+        };
+        let mut rate = 0.0_f64;
+        let data_size = mem::size_of::<f64>() as u32;
+        let status = AudioObjectGetPropertyData(
+            device_id,
+            NonNull::from(&property_address),
+            0,
+            null(),
+            NonNull::from(&data_size),
+            NonNull::from(&mut rate).cast(),
+        );
+        Error::from_os_status(status)
+            .map_err(|e| format!("Failed to query CoreAudio nominal sample rate: {:?}", e))?;
+        if !rate.is_finite() || rate <= 0.0 {
+            return Err(format!("Invalid CoreAudio nominal sample rate: {}", rate));
+        }
+        Ok(rate.round() as u32)
+    }
+}
+
 /// Get the default output device ID.
 #[cfg(target_os = "macos")]
 pub fn get_default_output_device() -> Result<AudioDeviceID, String> {
@@ -109,6 +149,119 @@ pub fn find_device_by_name(name: &str) -> Result<Option<AudioDeviceID>, String> 
     Ok(macos_helpers::get_device_id_from_name(name, false))
 }
 
+/// Resolve an optional QBZ output device name to a CoreAudio output device ID.
+/// `None` means the current system default output device.
+#[cfg(target_os = "macos")]
+pub fn resolve_output_device_id(device_name: Option<&str>) -> Result<AudioDeviceID, String> {
+    match device_name {
+        Some(name) => find_device_by_name(name)?
+            .ok_or_else(|| format!("CoreAudio output device '{}' not found", name)),
+        None => get_default_output_device(),
+    }
+}
+
+/// Return the PID currently owning CoreAudio Hog Mode for this device.
+/// CoreAudio uses -1 when no process owns the device.
+#[cfg(target_os = "macos")]
+pub fn get_hogging_pid(device_id: AudioDeviceID) -> Result<i32, String> {
+    macos_helpers::get_hogging_pid(device_id)
+        .map(|pid| pid as i32)
+        .map_err(|e| format!("Failed to query CoreAudio Hog Mode owner: {:?}", e))
+}
+
+/// Enable or disable CoreAudio Hog Mode for a device.
+#[cfg(target_os = "macos")]
+pub fn set_hog_mode(device_id: AudioDeviceID, enabled: bool) -> Result<(), String> {
+    let current_pid = get_hogging_pid(device_id)?;
+    let our_pid = std::process::id() as i32;
+
+    if enabled {
+        if current_pid == our_pid {
+            log::info!(
+                "[CoreAudio] Hog Mode already owned by QBZ for device {}",
+                device_id
+            );
+            return Ok(());
+        }
+        if current_pid != -1 && current_pid != 0 {
+            return Err(format!(
+                "CoreAudio device {} is already hogged by pid {}",
+                device_id, current_pid
+            ));
+        }
+
+        let new_pid = macos_helpers::toggle_hog_mode(device_id)
+            .map(|pid| pid as i32)
+            .map_err(|e| format!("Failed to enable CoreAudio Hog Mode: {:?}", e))?;
+        if new_pid != our_pid {
+            return Err(format!(
+                "CoreAudio Hog Mode was not acquired for device {} (owner pid: {})",
+                device_id, new_pid
+            ));
+        }
+
+        log::info!("[CoreAudio] Hog Mode acquired for device {}", device_id);
+        return Ok(());
+    }
+
+    if current_pid == our_pid {
+        let new_pid = macos_helpers::toggle_hog_mode(device_id)
+            .map(|pid| pid as i32)
+            .map_err(|e| format!("Failed to release CoreAudio Hog Mode: {:?}", e))?;
+        log::info!(
+            "[CoreAudio] Hog Mode released for device {} (owner pid now {})",
+            device_id,
+            new_pid
+        );
+    } else {
+        log::debug!(
+            "[CoreAudio] Hog Mode release skipped for device {} (owner pid: {})",
+            device_id,
+            current_pid
+        );
+    }
+
+    Ok(())
+}
+
+/// RAII owner for CoreAudio Hog Mode.
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+pub struct CoreAudioExclusiveGuard {
+    device_id: AudioDeviceID,
+    active: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl CoreAudioExclusiveGuard {
+    pub fn acquire(device_id: AudioDeviceID) -> Result<Self, String> {
+        set_hog_mode(device_id, true)?;
+        Ok(Self {
+            device_id,
+            active: true,
+        })
+    }
+
+    pub fn release(&mut self) -> Result<(), String> {
+        if !self.active {
+            return Ok(());
+        }
+
+        set_hog_mode(self.device_id, false)?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for CoreAudioExclusiveGuard {
+    fn drop(&mut self) {
+        if let Err(e) = self.release() {
+            log::warn!("[CoreAudio] Failed to release Hog Mode on drop: {}", e);
+        }
+    }
+}
+
 /// Get the transport type of a device (USB, built-in, Bluetooth, etc.)
 #[cfg(target_os = "macos")]
 pub fn get_device_transport_type(device_id: AudioDeviceID) -> Option<String> {
@@ -118,13 +271,10 @@ pub fn get_device_transport_type(device_id: AudioDeviceID) -> Option<String> {
         "built-in"
     } else if transport == transport_types::USB {
         "usb"
-    } else if transport == transport_types::BLUETOOTH
-        || transport == transport_types::BLUETOOTH_LE
+    } else if transport == transport_types::BLUETOOTH || transport == transport_types::BLUETOOTH_LE
     {
         "bluetooth"
-    } else if transport == transport_types::HDMI
-        || transport == transport_types::DISPLAY_PORT
-    {
+    } else if transport == transport_types::HDMI || transport == transport_types::DISPLAY_PORT {
         "hdmi"
     } else if transport == transport_types::THUNDERBOLT {
         "thunderbolt"
@@ -163,3 +313,8 @@ pub fn set_nominal_sample_rate_by_name(
 ) -> Result<(), String> {
     Err("CoreAudio is only available on macOS".to_string())
 }
+
+/// Non-macOS placeholder so shared backend/player signatures can mention the type.
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug)]
+pub struct CoreAudioExclusiveGuard;
