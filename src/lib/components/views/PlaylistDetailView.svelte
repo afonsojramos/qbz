@@ -2749,25 +2749,6 @@
             ondragend={handleDragEnd}
             ondrop={(e) => handleDrop(e, idx)}
           >
-            {#if multiSelectMode && !isCustomOrderMode}
-              {@const trackKey = getTrackKey(track, idx)}
-              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-              <label
-                class="track-checkbox"
-                onclick={(e: MouseEvent) => {
-                  e.stopPropagation();
-                  toggleMultiSelect(track, idx, e);
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={multiSelectedKeys.has(trackKey)}
-                  tabindex={-1}
-                  onclick={(e) => e.preventDefault()}
-                  aria-label={$t('actions.select')}
-                />
-              </label>
-            {/if}
             {#if isCustomOrderMode}
               {@const trackKey = getTrackKey(track, idx)}
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -2823,6 +2804,9 @@
                 ? $t('player.trackUnavailable')
                 : (!available ? $t('offline.trackNotAvailable') : undefined)}
               isBlacklisted={trackBlacklisted}
+              selectable={multiSelectMode && !isCustomOrderMode}
+              selected={multiSelectedKeys.has(getTrackKey(track, idx))}
+              onToggleSelect={(e) => toggleMultiSelect(track, idx, e)}
               dragTrackIds={multiSelectMode && multiSelectedKeys.has(getTrackKey(track, idx))
                 ? displayTracks.filter((trk, i) => multiSelectedKeys.has(getTrackKey(trk, i)) && !trk.isLocal).map(trk => trk.id)
                 : undefined}
