@@ -3,7 +3,7 @@ runtime: org.gnome.Platform
 runtime-version: '49'
 sdk: org.gnome.Sdk
 sdk-extensions:
-  - org.freedesktop.Sdk.Extension.node20
+  - org.freedesktop.Sdk.Extension.node24
   - org.freedesktop.Sdk.Extension.rust-stable
   - org.freedesktop.Sdk.Extension.llvm20
 command: qbz
@@ -138,11 +138,11 @@ modules:
   - name: qbz
     buildsystem: simple
     build-options:
-      append-path: /usr/lib/sdk/node20/bin:/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
+      append-path: /usr/lib/sdk/node24/bin:/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
       build-args:
         - --share=network
       env:
-        npm_config_nodedir: /usr/lib/sdk/node20
+        npm_config_nodedir: /usr/lib/sdk/node24
         LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
     build-commands:
       - npm ci
