@@ -90,12 +90,11 @@
   } from '$lib/stores/consoleLogStore';
   import {
     subscribe as subscribeTitleBar,
-    getHideTitleBar,
-    setHideTitleBar,
-    getUseSystemTitleBar,
-    setUseSystemTitleBar,
+    getMode,
+    setMode,
     getShowWindowControls,
-    setShowWindowControls
+    setShowWindowControls,
+    type TitlebarMode
   } from '$lib/stores/titleBarStore';
   import {
     subscribe as subscribeWindowChrome,
@@ -1006,10 +1005,41 @@
   let windowTitleTemplate = $state(DEFAULT_WINDOW_TITLE_TEMPLATE);
 
   // Title bar settings
-  let hideTitleBar = $state(getHideTitleBar());
-  let useSystemTitleBar = $state(getUseSystemTitleBar());
+  let titlebarMode = $state<TitlebarMode>(getMode());
+  // Fallback list before v2_available_titlebar_modes resolves. Always include
+  // the currently active mode so the dropdown shows the user's selected value
+  // even when the backend invoke fails.
+  let availableModes = $state<TitlebarMode[]>(
+    titlebarMode === 'plasma' ? ['qbz', 'system', 'plasma', 'hidden'] : ['qbz', 'system', 'hidden']
+  );
+  let isSandboxed = $state(false);
   let matchSystemWindowChromeState = $state(getMatchSystemWindowChrome());
   let windowControlsVisible = $state(getShowWindowControls());
+
+  $effect(() => {
+    invoke<{ modes: TitlebarMode[]; sandboxed: boolean }>('v2_available_titlebar_modes')
+      .then((result) => {
+        availableModes = result.modes;
+        isSandboxed = result.sandboxed;
+      })
+      .catch((e) => console.error('[SettingsView] available_titlebar_modes failed:', e));
+  });
+
+  // Per ADR-001: do NOT call $t() inside $derived(). Translate in markup.
+  function getModeLabel(m: TitlebarMode): string {
+    return $t(`settings.titlebar.mode.${m}`);
+  }
+  function getModeFromLabel(label: string): TitlebarMode | null {
+    const found = availableModes.find((m) => getModeLabel(m) === label);
+    return found ?? null;
+  }
+  function getDisabledHint(setting: 'windowControls' | 'matchSystemChrome' | 'searchLocation' | 'titlebarNav'): string {
+    return $t(`settings.titlebar.disabledHint.${setting}`);
+  }
+
+  // Applicability helpers (orthogonal toggles)
+  const isQbzMode = $derived(titlebarMode === 'qbz');
+  const supportsTitlebarFeatures = $derived(titlebarMode !== 'hidden');
 
   // Desktop theme detection (Plasma / Klassy → adaptive preset visibility).
   // `null` until the first detect call returns. `isKlassy=true` means a
@@ -1701,8 +1731,7 @@
 
     // Subscribe to title bar state changes
     const unsubscribeTitleBar = subscribeTitleBar(() => {
-      hideTitleBar = getHideTitleBar();
-      useSystemTitleBar = getUseSystemTitleBar();
+      titlebarMode = getMode();
       windowControlsVisible = getShowWindowControls();
     });
     const unsubscribeWindowChrome = subscribeWindowChrome(() => {
@@ -4643,49 +4672,55 @@
         />
       </div>
     {/if}
-    <!-- Title bar toggles: hidden on macOS (always uses native overlay title bar) -->
+    <!-- Title bar mode: hidden on macOS (always uses native overlay title bar) -->
     {#if platform !== 'macos'}
     <div class="setting-row">
       <div class="setting-info">
-        <span class="setting-label">{$t('settings.appearance.useSystemTitleBar')}</span>
-        <span class="setting-desc">{$t('settings.appearance.useSystemTitleBarDesc')}</span>
+        <span class="setting-label">{$t('settings.titlebar.mode.label')}</span>
       </div>
-      <Toggle enabled={useSystemTitleBar} onchange={(v) => setUseSystemTitleBar(v)} />
+      <Dropdown
+        value={getModeLabel(titlebarMode)}
+        options={availableModes.map((m) => getModeLabel(m))}
+        onchange={(label) => {
+          const next = getModeFromLabel(label);
+          if (next) setMode(next);
+        }}
+      />
     </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <span class="setting-label">{$t('settings.appearance.hideTitleBar')}</span>
-        <span class="setting-desc">{$t('settings.appearance.hideTitleBarDesc')}</span>
-      </div>
-      <Toggle enabled={hideTitleBar} onchange={(v) => setHideTitleBar(v)} disabled={useSystemTitleBar} />
-    </div>
-    <div class="setting-row">
+    {#if titlebarMode === 'plasma' && isSandboxed}
+      <p class="hint">{$t('settings.titlebar.sandboxCaveat')}</p>
+    {/if}
+    <div class="setting-row" class:disabled-section={!isQbzMode}>
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.matchSystemChrome')}</span>
         <span class="setting-desc">{$t('settings.appearance.matchSystemChromeDesc')}</span>
       </div>
-      <Toggle
-        enabled={matchSystemWindowChromeState}
-        onchange={(v) => {
-          setMatchSystemWindowChrome(v);
-          showToast($t('settings.appearance.matchSystemChromeRestart'), 'info');
-        }}
-        disabled={hideTitleBar || useSystemTitleBar}
-      />
+      <span title={!isQbzMode ? getDisabledHint('matchSystemChrome') : ''}>
+        <Toggle
+          enabled={matchSystemWindowChromeState}
+          onchange={(v) => {
+            setMatchSystemWindowChrome(v);
+            showToast($t('settings.appearance.matchSystemChromeRestart'), 'info');
+          }}
+          disabled={!isQbzMode}
+        />
+      </span>
     </div>
     {/if}
     <!-- Title bar customization: hidden on macOS (uses native overlay title bar) -->
     {#if platform !== 'macos'}
-    <div class="setting-row">
+    <div class="setting-row" class:disabled-section={!supportsTitlebarFeatures}>
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.searchInTitleBar')}</span>
         <span class="setting-desc">{$t('settings.appearance.searchInTitleBarDesc')}</span>
       </div>
-      <Toggle
-        enabled={searchInTitlebar}
-        onchange={(v) => setSearchBarLocation(v ? 'titlebar' : 'sidebar')}
-        disabled={hideTitleBar || useSystemTitleBar}
-      />
+      <span title={!supportsTitlebarFeatures ? getDisabledHint('searchLocation') : ''}>
+        <Toggle
+          enabled={searchInTitlebar}
+          onchange={(v) => setSearchBarLocation(v ? 'titlebar' : 'sidebar')}
+          disabled={!supportsTitlebarFeatures}
+        />
+      </span>
     </div>
     <div class="setting-row">
       <div class="setting-info">
@@ -4693,47 +4728,57 @@
         <span class="setting-desc">{$t('settings.appearance.navInTitleBarDesc')}</span>
       </div>
     </div>
-    <div class="setting-row indented-setting">
+    <div class="setting-row indented-setting" class:disabled-section={!supportsTitlebarFeatures}>
       <span class="setting-label">{$t('nav.home')}</span>
-      <Toggle
-        enabled={tbNavConfig.discover}
-        onchange={(v) => setDiscoverInTitlebar(v)}
-        disabled={hideTitleBar || useSystemTitleBar}
-      />
+      <span title={!supportsTitlebarFeatures ? getDisabledHint('titlebarNav') : ''}>
+        <Toggle
+          enabled={tbNavConfig.discover}
+          onchange={(v) => setDiscoverInTitlebar(v)}
+          disabled={!supportsTitlebarFeatures}
+        />
+      </span>
     </div>
-    <div class="setting-row indented-setting">
+    <div class="setting-row indented-setting" class:disabled-section={!supportsTitlebarFeatures}>
       <span class="setting-label">{$t('nav.favorites')}</span>
-      <Toggle
-        enabled={tbNavConfig.favorites}
-        onchange={(v) => setFavoritesInTitlebar(v)}
-        disabled={hideTitleBar || useSystemTitleBar}
-      />
+      <span title={!supportsTitlebarFeatures ? getDisabledHint('titlebarNav') : ''}>
+        <Toggle
+          enabled={tbNavConfig.favorites}
+          onchange={(v) => setFavoritesInTitlebar(v)}
+          disabled={!supportsTitlebarFeatures}
+        />
+      </span>
     </div>
-    <div class="setting-row indented-setting">
+    <div class="setting-row indented-setting" class:disabled-section={!supportsTitlebarFeatures}>
       <span class="setting-label">{$t('library.title')}</span>
-      <Toggle
-        enabled={tbNavConfig.library}
-        onchange={(v) => setLibraryInTitlebar(v)}
-        disabled={hideTitleBar || useSystemTitleBar}
-      />
+      <span title={!supportsTitlebarFeatures ? getDisabledHint('titlebarNav') : ''}>
+        <Toggle
+          enabled={tbNavConfig.library}
+          onchange={(v) => setLibraryInTitlebar(v)}
+          disabled={!supportsTitlebarFeatures}
+        />
+      </span>
     </div>
-    <div class="setting-row indented-setting">
+    <div class="setting-row indented-setting" class:disabled-section={!supportsTitlebarFeatures}>
       <span class="setting-label">{$t('nav.myQbz')}</span>
-      <Toggle
-        enabled={tbNavConfig.myQbz}
-        onchange={(v) => setMyQbzInTitlebar(v)}
-        disabled={hideTitleBar || useSystemTitleBar}
-      />
+      <span title={!supportsTitlebarFeatures ? getDisabledHint('titlebarNav') : ''}>
+        <Toggle
+          enabled={tbNavConfig.myQbz}
+          onchange={(v) => setMyQbzInTitlebar(v)}
+          disabled={!supportsTitlebarFeatures}
+        />
+      </span>
     </div>
-    <div class="setting-row indented-setting">
+    <div class="setting-row indented-setting" class:disabled-section={!supportsTitlebarFeatures}>
       <span class="setting-label">{$t('nav.purchases')}</span>
-      <Toggle
-        enabled={tbNavConfig.purchases}
-        onchange={(v) => setPurchasesInTitlebar(v)}
-        disabled={hideTitleBar || useSystemTitleBar}
-      />
+      <span title={!supportsTitlebarFeatures ? getDisabledHint('titlebarNav') : ''}>
+        <Toggle
+          enabled={tbNavConfig.purchases}
+          onchange={(v) => setPurchasesInTitlebar(v)}
+          disabled={!supportsTitlebarFeatures}
+        />
+      </span>
     </div>
-    {#if titlebarNavAnyEnabled && !hideTitleBar && !useSystemTitleBar}
+    {#if titlebarNavAnyEnabled && supportsTitlebarFeatures}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.navInTitleBarPosition')}</span>
@@ -4756,7 +4801,7 @@
       />
     </div>
     {/if}
-    <div class="setting-row" class:disabled-section={hideTitleBar || useSystemTitleBar}>
+    <div class="setting-row" class:disabled-section={!isQbzMode}>
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.windowControlsPosition')}</span>
         <span class="setting-desc">{$t('settings.appearance.windowControlsPositionDesc')}</span>
@@ -4767,7 +4812,7 @@
         onchange={handleWcPositionChange}
       />
     </div>
-    <div class="setting-row" class:disabled-section={hideTitleBar || useSystemTitleBar}>
+    <div class="setting-row" class:disabled-section={!isQbzMode}>
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.windowControlsStyle')}</span>
         <span class="setting-desc">{$t('settings.appearance.windowControlsStyleDesc')}</span>
@@ -4778,7 +4823,7 @@
         onchange={handleWcShapeChange}
       />
     </div>
-    <div class="setting-row" class:disabled-section={hideTitleBar || useSystemTitleBar}>
+    <div class="setting-row" class:disabled-section={!isQbzMode}>
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.windowControlsSize')}</span>
         <span class="setting-desc">{$t('settings.appearance.windowControlsSizeDesc')}</span>
@@ -4789,7 +4834,7 @@
         onchange={handleWcSizeChange}
       />
     </div>
-    <div class="setting-row" class:disabled-section={hideTitleBar || useSystemTitleBar}>
+    <div class="setting-row" class:disabled-section={!isQbzMode}>
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.windowControlsColorPreset')}</span>
         <span class="setting-desc">{$t('settings.appearance.windowControlsColorPresetDesc')}</span>
@@ -4801,7 +4846,7 @@
       />
     </div>
     {#if wcConfig.preset === 'custom'}
-      <div class="wc-custom-panel" class:disabled-section={hideTitleBar || useSystemTitleBar}>
+      <div class="wc-custom-panel" class:disabled-section={!isQbzMode}>
         <span class="wc-custom-panel-title">{$t('settings.appearance.windowControlsCustomColors')}</span>
         {#each WC_BUTTONS as btn}
           <div class="wc-color-group">
@@ -4829,16 +4874,18 @@
         {/each}
       </div>
     {/if}
-    <div class="setting-row">
+    <div class="setting-row" class:disabled-section={!isQbzMode}>
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.showWindowControls')}</span>
         <span class="setting-desc">{$t('settings.appearance.showWindowControlsDesc')}</span>
       </div>
-      <Toggle
-        enabled={windowControlsVisible}
-        onchange={(v) => setShowWindowControls(v)}
-        disabled={hideTitleBar || useSystemTitleBar}
-      />
+      <span title={!isQbzMode ? getDisabledHint('windowControls') : ''}>
+        <Toggle
+          enabled={windowControlsVisible}
+          onchange={(v) => setShowWindowControls(v)}
+          disabled={!isQbzMode}
+        />
+      </span>
     </div>
     {/if}
     <div class="setting-row">
@@ -7595,6 +7642,14 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
   .disabled-section {
     opacity: 0.5;
     pointer-events: none;
+  }
+
+  /* Inline hint paragraph (e.g. sandbox caveat under titlebar mode dropdown) */
+  .hint {
+    margin: 0 0 12px 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    line-height: 1.4;
   }
 
   /* Window Controls Custom Colors Panel */

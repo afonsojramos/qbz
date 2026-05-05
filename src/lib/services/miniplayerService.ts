@@ -17,7 +17,7 @@ import {
   setMiniPlayerSurface,
   type MiniPlayerSurface
 } from '$lib/stores/uiStore';
-import { getUseSystemTitleBar } from '$lib/stores/titleBarStore';
+import { getMode } from '$lib/stores/titleBarStore';
 import { getUserItem } from '$lib/utils/userStorage';
 
 const MINI_PLAYER_LABEL = 'miniplayer';
@@ -93,7 +93,10 @@ async function getOrCreateMiniPlayerWindow(): Promise<Window> {
     minWidth: 340,
     minHeight: 57,
     resizable: true,
-    decorations: getUseSystemTitleBar(),
+    decorations: (() => {
+      const mode = getMode();
+      return mode === 'system' || mode === 'plasma';
+    })(),
     alwaysOnTop: miniState.alwaysOnTop,
     transparent: true,
     focus: true
