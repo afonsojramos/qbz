@@ -599,6 +599,41 @@ impl OfflineCacheDb {
             Err(e) => Err(format!("Failed to read CMAF bundle: {}", e)),
         }
     }
+
+    /// Deletes all rows for the given album_id in a single transaction.
+    /// Returns (deleted track_ids, total file_size_bytes freed).
+    pub fn delete_album_tracks(&self, album_id: &str) -> Result<(Vec<u64>, u64), String> {
+        let tx = self
+            .conn()
+            .unchecked_transaction()
+            .map_err(|e| format!("Failed to begin tx: {}", e))?;
+
+        let ids: Vec<u64> = {
+            let mut stmt = tx
+                .prepare("SELECT track_id FROM cached_tracks WHERE album_id = ?1")
+                .map_err(|e| format!("Prepare failed: {}", e))?;
+            let rows = stmt
+                .query_map([album_id], |row| row.get::<_, i64>(0).map(|v| v as u64))
+                .map_err(|e| format!("Query failed: {}", e))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        let bytes: i64 = tx
+            .query_row(
+                "SELECT COALESCE(SUM(file_size_bytes), 0) FROM cached_tracks WHERE album_id = ?1",
+                [album_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Sum failed: {}", e))?;
+
+        tx.execute("DELETE FROM cached_tracks WHERE album_id = ?1", [album_id])
+            .map_err(|e| format!("Delete failed: {}", e))?;
+
+        tx.commit()
+            .map_err(|e| format!("Commit failed: {}", e))?;
+
+        Ok((ids, bytes as u64))
+    }
 }
 
 /// Raw snapshot of the v2 bundle columns for a cached track.
@@ -615,4 +650,52 @@ pub struct CmafBundleRow {
     pub infos_wrapped: Option<Vec<u8>>,
     pub format_id: Option<u32>,
     pub n_segments: Option<u32>,
+}
+
+#[cfg(test)]
+mod maintenance_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fresh_db() -> (TempDir, OfflineCacheDb) {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("idx.db");
+        let db = OfflineCacheDb::new(&path).unwrap();
+        (tmp, db)
+    }
+
+    fn sample_track(id: u64, album_id: Option<&str>) -> TrackCacheInfo {
+        TrackCacheInfo {
+            track_id: id,
+            title: format!("t{}", id),
+            artist: "A".into(),
+            album: Some("Alb".into()),
+            album_id: album_id.map(String::from),
+            duration_secs: 100,
+            quality: "lossless".into(),
+            bit_depth: Some(16),
+            sample_rate: Some(44100.0),
+        }
+    }
+
+    #[test]
+    fn delete_album_tracks_returns_deleted_ids_and_freed_bytes() {
+        let (_tmp, db) = fresh_db();
+        db.insert_track(&sample_track(1, Some("alb1")), "/p/1").unwrap();
+        db.insert_track(&sample_track(2, Some("alb1")), "/p/2").unwrap();
+        db.insert_track(&sample_track(3, Some("alb2")), "/p/3").unwrap();
+        db.mark_complete(1, 1000).unwrap();
+        db.mark_complete(2, 2000).unwrap();
+        db.mark_complete(3, 9999).unwrap();
+
+        let (ids, bytes) = db.delete_album_tracks("alb1").unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&1) && ids.contains(&2));
+        assert_eq!(bytes, 3000);
+
+        // alb2 untouched
+        let remaining = db.get_all_tracks().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].track_id, 3);
+    }
 }
