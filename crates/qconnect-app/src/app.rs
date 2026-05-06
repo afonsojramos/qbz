@@ -373,17 +373,29 @@ where
         };
 
         // Detect echo SET_STATE commands: the server echoes every state report
-        // as a SET_STATE with only next_track (playing_state=None, current_track=None).
-        // These echoes must NOT trigger CoreBridge actions (align cursor, load track,
-        // resume/pause) or state reports, otherwise they destroy the local queue
-        // and cause feedback loops.
+        // as a SET_STATE with only next_track (playing_state=None,
+        // current_track=None, current_position_ms=None). These echoes must
+        // NOT trigger CoreBridge actions (align cursor, load track,
+        // resume/pause) or state reports, otherwise they destroy the local
+        // queue and cause feedback loops.
+        //
+        // Issue #387: a peer controller (e.g. official Qobuz mobile app)
+        // sends a SEEK as SET_STATE with only current_position_ms set
+        // (playing_state=None, current_track=None). The previous filter
+        // matched that shape and silently swallowed the command, so qbz
+        // never moved its audio thread when an external controller seeked.
+        // Treat current_position_ms.is_some() as the signal that the
+        // command carries real intent and must be propagated.
         let is_echo = matches!(
             &renderer_command,
             RendererCommand::SetState {
                 playing_state,
                 current_track,
+                current_position_ms,
                 ..
-            } if playing_state.is_none() && current_track.is_none()
+            } if playing_state.is_none()
+                && current_track.is_none()
+                && current_position_ms.is_none()
         );
 
         let (snapshot, queue_version) = {

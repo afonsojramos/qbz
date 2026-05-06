@@ -15,7 +15,6 @@ use crate::core_bridge::CoreBridge;
 use super::queue_resolution::{
     dedupe_track_ids, resolve_core_shuffle_order, resolve_remote_start_index,
 };
-use super::session::is_peer_renderer_active;
 use super::track_loading::ensure_remote_track_loaded;
 use super::{
     model_track_to_core_queue_track, normalize_volume_to_fraction,
@@ -84,10 +83,6 @@ pub(super) async fn apply_renderer_command_to_corebridge(
                 projection_renderer_state.next_track = next_track.clone();
             }
             let resolved_current_track = projection_renderer_state.current_track.as_ref();
-            let peer_renderer_active = {
-                let state = sync_state.lock().await;
-                is_peer_renderer_active(&state.session)
-            };
             if let Some(projected_track) = resolved_current_track {
                 let queue_state = {
                     let state = sync_state.lock().await;
@@ -197,10 +192,19 @@ pub(super) async fn apply_renderer_command_to_corebridge(
                     .unwrap_or(false)
                     && target_secs <= 1
                     && current_pos_secs > 2;
-                if peer_renderer_active
-                    && !is_echo_reset
-                    && current_pos_secs.abs_diff(target_secs) > 2
-                {
+                // Issue #387: honor seeks regardless of which device is the
+                // active renderer. The previous gate (`peer_renderer_active`)
+                // skipped seeks entirely when local was the active renderer,
+                // breaking the case where a peer controller (e.g. official
+                // Qobuz mobile app) sends a real seek to qbz acting as the
+                // renderer — the audio thread never moved while the cloud
+                // state advanced, so the controller's progress bar locked.
+                // The is_echo_reset + abs_diff > 2 gates already filter the
+                // cloud-echo case the peer_renderer_active check was added
+                // to defend against in commit 147bcbd7. If hiccups return,
+                // revert this change and reintroduce a more targeted echo
+                // detector (UUID-based) instead of the all-or-nothing gate.
+                if !is_echo_reset && current_pos_secs.abs_diff(target_secs) > 2 {
                     log::info!(
                         "[QConnect] SetState seek: current={}s target={}s",
                         current_pos_secs,
