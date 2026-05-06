@@ -259,4 +259,40 @@ impl OfflineCacheState {
         let dir = self.cache_dir.read().unwrap();
         dir.to_string_lossy().to_string()
     }
+
+    /// Seed the in-memory `limit_bytes` from the persisted offline_settings DB.
+    ///
+    /// Called at session activation (after `init_at`) so the user's previously
+    /// chosen limit survives across restarts. When the persisted value is
+    /// missing (legacy installs with NULL column), the default 5 GB seeded by
+    /// `init_at`/`new` is preserved.
+    pub async fn apply_persisted_limit(
+        &self,
+        offline_state: &crate::offline::OfflineState,
+    ) -> Result<(), String> {
+        let persisted: Option<u64> = {
+            let guard = offline_state
+                .store
+                .lock()
+                .map_err(|e| format!("Lock error: {}", e))?;
+            match guard.as_ref() {
+                Some(store) => store.get_cache_limit_bytes()?,
+                None => return Ok(()),
+            }
+        };
+
+        if let Some(bytes) = persisted {
+            let mut limit = self.limit_bytes.lock().await;
+            *limit = Some(bytes);
+            log::info!(
+                "Offline cache: applied persisted size limit ({} bytes)",
+                bytes
+            );
+        } else {
+            log::info!(
+                "Offline cache: no persisted size limit, keeping in-memory default"
+            );
+        }
+        Ok(())
+    }
 }
