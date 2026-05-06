@@ -16,6 +16,8 @@
   import { cmdAddTracksToQueue, cmdAddTracksToQueueNext } from '$lib/services/commandRouter';
   import FolderSettingsModal from '../FolderSettingsModal.svelte';
   import LocalLibraryTagEditorModal from '../LocalLibraryTagEditorModal.svelte';
+  import LibraryEditModal from '../LibraryEditModal.svelte';
+  import type { LibraryPreferences } from '$lib/types';
   import ViewTransition from '../ViewTransition.svelte';
   import { t } from '$lib/i18n';
   import { getUserItem } from '$lib/utils/userStorage';
@@ -261,8 +263,67 @@
   }: Props = $props();
 
   // View state
-  type TabType = 'albums' | 'artists' | 'tracks';
-  let activeTab = $state<TabType>('albums');
+  type TabType = 'tracks' | 'folders' | 'artists';
+  let activeTab = $state<TabType>('tracks');
+
+  // Library tab preferences (persisted per-user via v2_*_library_preferences)
+  const DEFAULT_TAB_ORDER: TabType[] = ['tracks', 'folders', 'artists'];
+  let libraryPreferences = $state<LibraryPreferences>({
+    tab_order: [...DEFAULT_TAB_ORDER],
+    hidden_tabs: [],
+  });
+  let isEditTabsModalOpen = $state(false);
+
+  function isKnownTab(tab: string): tab is TabType {
+    return (DEFAULT_TAB_ORDER as readonly string[]).includes(tab);
+  }
+
+  function sanitizeLibraryPreferences(prefs: LibraryPreferences): LibraryPreferences {
+    // Keep only known tabs; backfill any missing ones at the end so users
+    // with older preferences still surface tabs added in future releases.
+    const validOrder: TabType[] = (prefs.tab_order ?? []).filter(isKnownTab);
+    for (const tab of DEFAULT_TAB_ORDER) {
+      if (!validOrder.includes(tab)) validOrder.push(tab);
+    }
+    const validHidden: TabType[] = (prefs.hidden_tabs ?? []).filter(isKnownTab);
+    return { tab_order: validOrder, hidden_tabs: validHidden };
+  }
+
+  const visibleTabs = $derived(
+    libraryPreferences.tab_order.filter(
+      (tab): tab is TabType => isKnownTab(tab) && !libraryPreferences.hidden_tabs.includes(tab),
+    ),
+  );
+
+  async function loadLibraryPreferences() {
+    try {
+      const prefs = await invoke<LibraryPreferences>('v2_get_library_preferences');
+      libraryPreferences = sanitizeLibraryPreferences(prefs);
+      // If the active tab is no longer visible (e.g. user hid it on another
+      // device), fall back to the first visible tab.
+      const currentVisible = libraryPreferences.tab_order.filter(
+        (tab): tab is TabType =>
+          isKnownTab(tab) && !libraryPreferences.hidden_tabs.includes(tab),
+      );
+      if (!currentVisible.includes(activeTab)) {
+        activeTab = currentVisible[0] ?? 'tracks';
+      }
+    } catch (err) {
+      console.warn('[LocalLibrary] Failed to load preferences, using defaults:', err);
+    }
+  }
+
+  function handleLibraryPreferencesSaved(prefs: LibraryPreferences) {
+    libraryPreferences = sanitizeLibraryPreferences(prefs);
+    const currentVisible = libraryPreferences.tab_order.filter(
+      (tab): tab is TabType =>
+        isKnownTab(tab) && !libraryPreferences.hidden_tabs.includes(tab),
+    );
+    if (!currentVisible.includes(activeTab)) {
+      activeTab = currentVisible[0] ?? 'tracks';
+    }
+    isEditTabsModalOpen = false;
+  }
   let showSettings = $state(false);
   let showHiddenAlbums = $state(false);
   let albumSearch = $state('');
@@ -787,8 +848,8 @@
     if (activeTab === 'tracks' && tracks.length > 0) {
       return tracks.length;
     }
-    // When in albums view, calculate from filtered albums
-    if (activeTab === 'albums') {
+    // When in folders (album-by-folder) view, calculate from filtered albums
+    if (activeTab === 'folders') {
       return albums.reduce((sum, album) => sum + album.track_count, 0);
     }
     // When in artists view, calculate from filtered artists
@@ -1313,6 +1374,8 @@
   });
 
   onMount(async () => {
+    // Load tab preferences first so the initial render uses the saved order.
+    await loadLibraryPreferences();
     await loadLibraryData();
     // Load folders (now safe in offline mode - uses library_get_folders instead)
     loadFolders(); // Load in background - doesn't block UI
@@ -3020,7 +3083,7 @@
       setTimeout(() => searchInputEl?.focus(), 50);
     } else {
       // Clear search when closing
-      if (activeTab === 'albums') {
+      if (activeTab === 'folders') {
         albumSearch = '';
         debouncedAlbumSearch = '';
         if (albumSearchTimer) clearTimeout(albumSearchTimer);
@@ -3036,20 +3099,20 @@
   }
 
   function getCurrentSearchValue(): string {
-    if (activeTab === 'albums') return albumSearch;
+    if (activeTab === 'folders') return albumSearch;
     if (activeTab === 'artists') return artistSearch;
     return trackSearch;
   }
 
   function getCurrentSearchPlaceholder(): string {
-    if (activeTab === 'albums') return 'Search albums or artists...';
+    if (activeTab === 'folders') return 'Search albums or artists...';
     if (activeTab === 'artists') return 'Search artists...';
     return 'Search tracks, albums, artists...';
   }
 
   function handleSearchInput(e: Event) {
     const value = (e.target as HTMLInputElement).value;
-    if (activeTab === 'albums') {
+    if (activeTab === 'folders') {
       albumSearch = value;
       scheduleAlbumSearch();
     } else if (activeTab === 'artists') {
@@ -3479,7 +3542,7 @@
 </script>
 
 <ViewTransition duration={200} distance={12} direction="down">
-<div class="library-view" class:virtualized-active={!selectedAlbum && ((activeTab === 'albums' && !showHiddenAlbums && albums.length > 0) || (activeTab === 'artists' && artists.length > 0) || (activeTab === 'tracks' && tracks.length > 0))}>
+<div class="library-view" class:virtualized-active={!selectedAlbum && ((activeTab === 'folders' && !showHiddenAlbums && albums.length > 0) || (activeTab === 'artists' && artists.length > 0) || (activeTab === 'tracks' && tracks.length > 0))}>
   {#if selectedAlbum}
     {@const filteredAlbumTracks = albumTrackSearch.trim()
       ? albumTracks.filter(track =>
@@ -3757,7 +3820,7 @@
     {#if showSettings}
       <div class="settings-panel">
         <div class="settings-header">
-          <h3>{$t('library.folders')}</h3>
+          <h3>{$t('library.folderListTitle')}</h3>
           <div class="folder-actions">
             <div class="folder-search">
               <Search size={14} />
@@ -3901,26 +3964,24 @@
     <div class="jump-nav">
       <div class="jump-nav-left">
         <div class="jump-links">
+          {#each visibleTabs as tab (tab)}
+            <button
+              type="button"
+              class="jump-link"
+              class:active={activeTab === tab}
+              onclick={() => handleTabChange(tab)}
+            >
+              {$t(`library.${tab}`)}
+            </button>
+          {/each}
           <button
-            class="jump-link"
-            class:active={activeTab === 'albums'}
-            onclick={() => handleTabChange('albums')}
+            type="button"
+            class="jump-link tab-edit-btn"
+            onclick={() => (isEditTabsModalOpen = true)}
+            aria-label={$t('library.editTabs.title')}
+            title={$t('library.editTabs.title')}
           >
-            {$t('library.albums')}
-          </button>
-          <button
-            class="jump-link"
-            class:active={activeTab === 'artists'}
-            onclick={() => handleTabChange('artists')}
-          >
-            {$t('library.artists')}
-          </button>
-          <button
-            class="jump-link"
-            class:active={activeTab === 'tracks'}
-            onclick={() => handleTabChange('tracks')}
-          >
-            {$t('library.tracks')}
+            <Settings size={14} />
           </button>
         </div>
       </div>
@@ -3966,7 +4027,7 @@
           <p class="error-detail">{error}</p>
           <button class="retry-btn" onclick={() => loadLibraryData()}>{$t('actions.retry')}</button>
         </div>
-      {:else if activeTab === 'albums'}
+      {:else if activeTab === 'folders'}
         {#key activeTab}
         <ViewTransition duration={200} distance={12} direction="up">
         {#if showHiddenAlbums}
@@ -4756,6 +4817,14 @@
   onScanFolder={handleScanSingleFolder}
 />
 
+<!-- Library Edit Tabs Modal -->
+<LibraryEditModal
+  isOpen={isEditTabsModalOpen}
+  initialPreferences={libraryPreferences}
+  onClose={() => (isEditTabsModalOpen = false)}
+  onSave={handleLibraryPreferencesSaved}
+/>
+
 <style>
   .library-view {
     padding: 8px 8px 100px 18px;
@@ -5310,6 +5379,18 @@
   .jump-link.active {
     color: var(--text-primary);
     border-bottom-color: var(--accent-primary);
+  }
+
+  .jump-link.tab-edit-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    padding: 4px 6px;
+  }
+
+  .jump-link.tab-edit-btn:hover {
+    color: var(--text-primary);
   }
 
   /* Page Search in Nav */
