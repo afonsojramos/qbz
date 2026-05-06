@@ -2,7 +2,7 @@
 //!
 //! Extracted from `commands_v2/mod.rs` — no functional changes.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -1147,6 +1147,9 @@ async fn library_process_cue_file(
     }
 
     if let (Some(path), false) = (artwork_path.as_ref(), group_key.is_empty()) {
+        // CUE = single album; propagating one cover to all CUE tracks is
+        // semantically correct (they all share the same physical disc).
+        #[allow(deprecated)]
         let _ = db.update_album_group_artwork(&group_key, path);
     }
 
@@ -1314,6 +1317,13 @@ pub async fn v2_library_scan(
             })
             .collect();
 
+        // Cache `find_folder_artwork` results per folder for this scan run.
+        // Avoids re-walking the same album folder for every track without
+        // embedded art. Replaces the destructive `update_album_group_artwork`
+        // shortcut that previously propagated one track's artwork to all
+        // tracks in the group, destroying per-track embedded covers.
+        let mut folder_artwork_cache: HashMap<PathBuf, Option<String>> = HashMap::new();
+
         for audio_path in &scan_result.audio_files {
             // Check for cancellation
             if state.scan_cancel.load(Ordering::Relaxed) {
@@ -1351,9 +1361,17 @@ pub async fn v2_library_scan(
                         } else {
                             Some(track.album.as_str())
                         };
-                        if let Some(folder_art) =
-                            MetadataExtractor::find_folder_artwork(&canonical_path, album_hint)
-                        {
+                        let folder = canonical_path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| canonical_path.clone());
+                        let cached = folder_artwork_cache
+                            .entry(folder)
+                            .or_insert_with(|| {
+                                MetadataExtractor::find_folder_artwork(&canonical_path, album_hint)
+                            })
+                            .clone();
+                        if let Some(folder_art) = cached {
                             artwork_path = MetadataExtractor::cache_artwork_file(
                                 std::path::Path::new(&folder_art),
                                 &artwork_cache,
@@ -1371,11 +1389,6 @@ pub async fn v2_library_scan(
                             file_path: path_str,
                             error: e.to_string(),
                         });
-                    } else if let (Some(artwork_path), false) = (
-                        track.artwork_path.as_ref(),
-                        track.album_group_key.is_empty(),
-                    ) {
-                        let _ = db.update_album_group_artwork(&track.album_group_key, artwork_path);
                     }
                 }
                 Err(e) => {
@@ -1592,6 +1605,11 @@ pub async fn v2_library_scan_folder(
         })
         .collect();
 
+    // Per-folder cache for find_folder_artwork (same pattern as the main
+    // scan loop above; replaces the destructive update_album_group_artwork
+    // shortcut that destroyed unique embedded covers).
+    let mut folder_artwork_cache: HashMap<PathBuf, Option<String>> = HashMap::new();
+
     for audio_path in &scan_result.audio_files {
         if state.scan_cancel.load(Ordering::Relaxed) {
             let mut progress = state.scan_progress.lock().await;
@@ -1621,32 +1639,37 @@ pub async fn v2_library_scan_folder(
                 let mut artwork_path =
                     MetadataExtractor::extract_artwork(&canonical_path, &artwork_cache);
                 if artwork_path.is_none() {
-                    if let Some(folder_art) = MetadataExtractor::find_folder_artwork(
-                        canonical_path.as_path(),
-                        Some(&track.album),
-                    ) {
+                    let folder = canonical_path
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| canonical_path.clone());
+                    let cached = folder_artwork_cache
+                        .entry(folder)
+                        .or_insert_with(|| {
+                            MetadataExtractor::find_folder_artwork(
+                                canonical_path.as_path(),
+                                Some(&track.album),
+                            )
+                        })
+                        .clone();
+                    if let Some(folder_art) = cached {
                         artwork_path = MetadataExtractor::cache_artwork_file(
                             std::path::Path::new(&folder_art),
                             &artwork_cache,
                         );
                     }
                 }
-                track.artwork_path = artwork_path.clone();
+                track.artwork_path = artwork_path;
 
                 let guard__ = state.db.lock().await;
                 let db = guard__
                     .as_ref()
                     .ok_or("No active session - please log in")?;
-                let group_key = track.album_group_key.clone();
                 if let Err(e) = db.insert_track(&track) {
                     all_errors.push(ScanError {
                         file_path: path_str,
                         error: e.to_string(),
                     });
-                } else if let Some(path) = artwork_path.as_ref() {
-                    if !group_key.is_empty() {
-                        let _ = db.update_album_group_artwork(&group_key, path);
-                    }
                 }
             }
             Err(e) => {
