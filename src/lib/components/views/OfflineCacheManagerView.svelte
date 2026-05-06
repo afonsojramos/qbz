@@ -2,8 +2,10 @@
   import { onMount, onDestroy } from 'svelte';
   import { t } from 'svelte-i18n';
   import { ArrowLeft } from 'lucide-svelte';
+  import { ask } from '@tauri-apps/plugin-dialog';
   import Dropdown from '$lib/components/Dropdown.svelte';
   import { offlineCacheManagerStore } from '$lib/stores/offlineCacheManagerStore.svelte';
+  import { showToast } from '$lib/stores/toastStore';
 
   type Props = {
     onBack: () => void;
@@ -81,6 +83,92 @@
   function jumpToLetter(letter: string) {
     const target = railEl?.querySelector<HTMLElement>(`[data-letter="${letter}"]`);
     target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  const selectedArtist = $derived(store.selectedArtist());
+  const visibleAlbums = $derived(store.visibleAlbumGroups());
+
+  type AlbumActionTarget = {
+    albumId: string | null;
+    title: string;
+    totalSizeBytes: number;
+    cachedTracks: Array<{ trackId: number }>;
+  };
+
+  async function onAlbumAction(album: AlbumActionTarget, action: 'redownload' | 'retryFailed' | 'remove' | 'goToAlbum') {
+    switch (action) {
+      case 'redownload': {
+        if (!album.albumId) return;
+        const { queuedTrackIds } = await store.redownloadAlbum(album.albumId, false);
+        showToast(
+          $t('offlineManager.toast.redownloadingAlbum', { values: { count: queuedTrackIds.length } }),
+          'info',
+        );
+        break;
+      }
+      case 'retryFailed': {
+        if (!album.albumId) return;
+        const { queuedTrackIds } = await store.redownloadAlbum(album.albumId, true);
+        showToast(
+          $t('offlineManager.toast.redownloadingAlbum', { values: { count: queuedTrackIds.length } }),
+          'info',
+        );
+        break;
+      }
+      case 'remove': {
+        const confirmed = await ask(
+          $t('offlineManager.confirmRemoveAlbum.body', {
+            values: { album: album.title, size: formatBytes(album.totalSizeBytes) },
+          }),
+          { title: $t('offlineManager.confirmRemoveAlbum.title'), kind: 'warning' },
+        );
+        if (!confirmed) return;
+        if (album.albumId) {
+          const result = await store.removeAlbum(album.albumId);
+          showToast(
+            $t('offlineManager.toast.removedAlbum', {
+              values: { album: album.title, size: formatBytes(result.freedBytes) },
+            }),
+            'success',
+          );
+        } else {
+          // Singles bucket: iterate per-track removal.
+          for (const track of album.cachedTracks) {
+            await store.removeTrack(track.trackId);
+          }
+          showToast(
+            $t('offlineManager.toast.removedAlbum', {
+              values: { album: album.title, size: formatBytes(album.totalSizeBytes) },
+            }),
+            'success',
+          );
+        }
+        break;
+      }
+      case 'goToAlbum': {
+        if (album.albumId) onGoToAlbum(album.albumId);
+        break;
+      }
+    }
+  }
+
+  async function onTrackAction(track: { trackId: number; title: string }, action: 'redownload' | 'remove') {
+    switch (action) {
+      case 'redownload':
+        await store.redownloadTrack(track.trackId);
+        showToast($t('offlineManager.toast.redownloadingTrack'), 'info');
+        break;
+      case 'remove': {
+        const confirmed = await ask(
+          $t('offlineManager.confirmRemoveTrack.body', { values: { title: track.title } }),
+          { title: $t('offlineManager.confirmRemoveTrack.title'), kind: 'warning' },
+        );
+        if (!confirmed) return;
+        await store.removeTrack(track.trackId);
+        showToast($t('offlineManager.toast.removedTrack'), 'success');
+        break;
+      }
+    }
   }
 </script>
 
@@ -186,7 +274,102 @@
       </aside>
 
       <main class="ocm-pane">
-        <!-- right pane goes here in Task 6.3 -->
+        {#if selectedArtist}
+          <div class="pane-heading">
+            <h2>{$t('offlineManager.discographyHeading')}</h2>
+            <span class="pane-subhead">
+              {$t('offlineManager.albumsCount', { values: { count: visibleAlbums.length } })}
+            </span>
+          </div>
+
+          {#each visibleAlbums as album (album.albumId ?? '__singles__')}
+            {@const isExpanded = album.albumId ? store.expandedAlbums.has(album.albumId) : false}
+            <div class="album-row" class:expanded={isExpanded}>
+              <button
+                type="button"
+                class="album-summary"
+                onclick={() => album.albumId && store.toggleExpand(album.albumId)}
+              >
+                <span class="chevron">{isExpanded ? '⌄' : '▸'}</span>
+                <div class="album-cover-placeholder"></div>
+                <div class="album-meta">
+                  <div class="album-title">{album.title}</div>
+                  <div class="album-subtitle">{album.artistLabel}</div>
+                </div>
+                <span class="album-cached-ratio">
+                  {#if album.isFullyCached}
+                    {$t('offlineManager.row.completeNTracks', { values: { count: album.cachedTracks.length } })}
+                  {:else}
+                    {$t('offlineManager.row.partialNCached', { values: { count: album.cachedTracks.length } })}
+                  {/if}
+                </span>
+                <span class="album-quality">{album.dominantQuality}</span>
+                <span class="album-size">{formatBytes(album.totalSizeBytes)}</span>
+                <span class="album-status status-{album.worstStatus}">
+                  {#if album.failedCount > 0}
+                    {$t('offlineManager.row.nFailed', { values: { count: album.failedCount } })}
+                  {:else if album.worstStatus === 'downloading'}
+                    ⟳
+                  {:else}
+                    ✓
+                  {/if}
+                </span>
+              </button>
+
+              <div class="album-menu">
+                {#if album.albumId}
+                  <button type="button" onclick={() => onAlbumAction(album, 'redownload')}>
+                    {$t('offlineManager.row.actions.redownloadAlbum')}
+                  </button>
+                {/if}
+                {#if album.failedCount > 0 && album.albumId}
+                  <button type="button" onclick={() => onAlbumAction(album, 'retryFailed')}>
+                    {$t('offlineManager.row.actions.retryFailed')}
+                  </button>
+                {/if}
+                <button type="button" onclick={() => onAlbumAction(album, 'remove')}>
+                  {$t('offlineManager.row.actions.removeAlbum')}
+                </button>
+                {#if album.albumId}
+                  <button type="button" onclick={() => onAlbumAction(album, 'goToAlbum')}>
+                    {$t('offlineManager.row.actions.goToAlbum')}
+                  </button>
+                {/if}
+              </div>
+
+              {#if isExpanded}
+                <div class="track-list">
+                  {#each album.cachedTracks as track (track.trackId)}
+                    <div class="track-row status-{track.status}">
+                      <span class="track-title">{track.title}</span>
+                      <span class="track-quality">{track.quality}</span>
+                      <span class="track-size">{formatBytes(track.fileSizeBytes)}</span>
+                      <span class="track-status">
+                        {#if track.status === 'failed'}
+                          <span title={track.errorMessage ?? ''}>⚠</span>
+                        {:else if track.status === 'downloading'}
+                          ⟳
+                        {:else if track.status === 'ready'}
+                          ✓
+                        {:else}
+                          …
+                        {/if}
+                      </span>
+                      <div class="track-menu">
+                        <button type="button" onclick={() => onTrackAction(track, 'redownload')}>
+                          {$t('offlineManager.track.actions.redownloadTrack')}
+                        </button>
+                        <button type="button" onclick={() => onTrackAction(track, 'remove')}>
+                          {$t('offlineManager.track.actions.removeTrack')}
+                        </button>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        {/if}
       </main>
     </div>
   {/if}
@@ -278,4 +461,73 @@
   .rail-artist-name { font-weight: 500; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rail-artist-meta { font-size: 0.7rem; color: var(--text-muted); }
   .ocm-pane { flex: 1; overflow-y: auto; padding: 16px 24px; min-width: 0; }
+
+  .pane-heading { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+  .pane-heading h2 { margin: 0; font-size: 1.125rem; font-weight: 600; }
+  .pane-subhead { color: var(--text-muted); font-size: 0.85rem; }
+  .album-row { display: flex; flex-direction: column; gap: 0; padding: 0; border-bottom: 1px solid var(--border-subtle); }
+  .album-summary {
+    display: grid;
+    grid-template-columns: 24px 40px 1fr 160px 100px 80px 80px;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 8px;
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+  }
+  .album-summary:hover { background: var(--bg-hover); }
+  .chevron { width: 16px; color: var(--text-muted); }
+  .album-cover-placeholder { width: 40px; height: 40px; background: var(--bg-tertiary); border-radius: 4px; }
+  .album-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .album-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .album-subtitle { font-size: 0.8rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .album-cached-ratio, .album-quality, .album-size { font-size: 0.85rem; color: var(--text-muted); }
+  .album-status { font-size: 0.85rem; }
+  .album-status.status-ready { color: var(--success, #4ade80); }
+  .album-status.status-failed { color: var(--danger, #f87171); }
+  .album-status.status-downloading { color: var(--accent-primary); }
+  .album-menu { display: flex; gap: 8px; padding: 0 8px 8px 36px; }
+  .album-menu button {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  .album-menu button:hover { background: var(--bg-hover); }
+  .track-list {
+    padding: 4px 8px 12px 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .track-row {
+    display: grid;
+    grid-template-columns: 1fr 100px 80px 30px auto;
+    gap: 12px;
+    align-items: center;
+    padding: 6px 8px;
+    font-size: 0.85rem;
+  }
+  .track-row:hover { background: var(--bg-hover); }
+  .track-status { color: var(--text-muted); }
+  .track-row.status-failed .track-status { color: var(--danger, #f87171); }
+  .track-menu { display: flex; gap: 4px; }
+  .track-menu button {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 6px;
+    font-size: 0.75rem;
+    border-radius: 3px;
+  }
+  .track-menu button:hover { background: var(--bg-hover); color: var(--text-primary); }
 </style>
