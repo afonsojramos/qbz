@@ -704,6 +704,8 @@ pub fn run(qconnect_cli_override: Option<bool>) {
     let playback_prefs_state = config::playback_preferences::PlaybackPreferencesState::new_empty();
     let favorites_prefs_state =
         config::favorites_preferences::FavoritesPreferencesState::new_empty();
+    let library_prefs_state =
+        config::library_preferences::LibraryPreferencesState::new_empty();
     let favorites_cache_state = config::favorites_cache::FavoritesCacheState::new_empty();
     let tray_settings_state = config::tray_settings::TraySettingsState::new_empty();
     let remote_control_settings_state =
@@ -1352,6 +1354,7 @@ pub fn run(qconnect_cli_override: Option<bool>) {
         .manage(offline_state)
         .manage(playback_prefs_state)
         .manage(favorites_prefs_state)
+        .manage(library_prefs_state)
         .manage(favorites_cache_state)
         .manage(tray_settings_state)
         .manage(remote_control_settings_state)
@@ -1452,6 +1455,8 @@ pub fn run(qconnect_cli_override: Option<bool>) {
             commands_v2::v2_get_playback_preferences,
             commands_v2::v2_get_favorites_preferences,
             commands_v2::v2_save_favorites_preferences,
+            commands_v2::v2_get_library_preferences,
+            commands_v2::v2_save_library_preferences,
             commands_v2::v2_get_cache_stats,
             commands_v2::v2_get_available_backends,
             commands_v2::v2_get_devices_for_backend,
