@@ -100,6 +100,15 @@
     bit_depth?: number;
     sample_rate: number;
     directory_path: string;
+    /**
+     * Comma-separated list of folder keys that contributed tracks to this
+     * album. Populated only by the metadata-grouped Albums query
+     * (`v2_library_get_albums_metadata`); `null`/`undefined` for folder-
+     * grouped rows from `v2_library_get_albums`. The Albums tab uses
+     * presence of this field to detect a "metadata row" and renders a
+     * tooltip when more than one folder contributed.
+     */
+    source_folders?: string | null;
     source?: string; // 'user' | 'qobuz_download' | 'plex'
     likely_single_file_album?: boolean;
   }
@@ -263,11 +272,11 @@
   }: Props = $props();
 
   // View state
-  type TabType = 'tracks' | 'folders' | 'artists';
+  type TabType = 'tracks' | 'folders' | 'albums' | 'artists';
   let activeTab = $state<TabType>('tracks');
 
   // Library tab preferences (persisted per-user via v2_*_library_preferences)
-  const DEFAULT_TAB_ORDER: TabType[] = ['tracks', 'folders', 'artists'];
+  const DEFAULT_TAB_ORDER: TabType[] = ['tracks', 'folders', 'albums', 'artists'];
   let libraryPreferences = $state<LibraryPreferences>({
     tab_order: [...DEFAULT_TAB_ORDER],
     hidden_tabs: [],
@@ -1244,6 +1253,14 @@
   let selectedAlbum = $state<LocalAlbum | null>(null);
   let albumTracks = $state<LocalTrack[]>([]);
 
+  // Metadata-grouped Albums tab data — parallel to `albums` (folder-grouped).
+  // The selected album carries its own discriminator via `source_folders`,
+  // so `fetchAlbumTracks` knows which V2 command to call without needing a
+  // separate viewMode state on this view.
+  let metadataAlbums = $state<LocalAlbum[]>([]);
+  let metadataAlbumsLoading = $state(false);
+  let metadataAlbumsLoaded = $state(false);
+
   // Album-detail multi-select helpers — shift-click anchor + select-all
   // state derived against the open album's track list. selectedTrackIds
   // is the same Set the tracks tab uses, so selections compose cleanly
@@ -1704,6 +1721,9 @@
     const background = options.background === true;
     const startedAt = performance.now();
     console.log('[LocalLibrary] loadLibraryData START, isOffline:', isOffline, 'background:', background);
+    // Library data was just refreshed (or is about to be) — drop the
+    // cached metadata-grouped Albums list so the next visit re-fetches.
+    metadataAlbumsLoaded = false;
     if (!background) {
       loading = true;
       error = null;
@@ -1783,6 +1803,23 @@
         console.log('[LocalLibrary] Setting loading = false');
         loading = false;
       }
+    }
+  }
+
+  async function loadMetadataAlbums() {
+    if (metadataAlbumsLoaded || metadataAlbumsLoading) return;
+    try {
+      metadataAlbumsLoading = true;
+      metadataAlbums = await invoke<LocalAlbum[]>('v2_library_get_albums_metadata', {
+        includeHidden: false,
+        excludeNetworkFolders: shouldExcludeNetworkFolders(),
+      });
+      metadataAlbumsLoaded = true;
+    } catch (err) {
+      console.error('[LocalLibrary] Failed to load metadata albums:', err);
+      metadataAlbums = [];
+    } finally {
+      metadataAlbumsLoading = false;
     }
   }
 
@@ -1965,6 +2002,8 @@
       loadArtists();
     } else if (tab === 'tracks' && tracks.length === 0) {
       loadTracks(trackSearch.trim());
+    } else if (tab === 'albums' && !metadataAlbumsLoaded) {
+      loadMetadataAlbums();
     }
   }
 
@@ -2105,6 +2144,7 @@
           await loadLibraryData();
           if (activeTab === 'artists') await loadArtists();
           if (activeTab === 'tracks') await loadTracks();
+          if (activeTab === 'albums') await loadMetadataAlbums();
         }
       } catch (err) {
         console.error('Failed to get scan progress:', err);
@@ -2211,6 +2251,8 @@
       albums = [];
       artists = [];
       tracks = [];
+      metadataAlbums = [];
+      metadataAlbumsLoaded = false;
     } catch (err) {
       console.error('Failed to clear library:', err);
       alert(`Failed to clear library: ${err}`);
@@ -2414,6 +2456,17 @@
         });
         const mappedTracks = plexTracks.map(mapPlexTrack);
         return await hydratePlexTrackQuality(mappedTracks);
+      }
+
+      // Detect a metadata-grouped album row: the metadata Albums query
+      // emits an empty `directory_path` and populates `source_folders`.
+      // Use `v2_library_get_album_tracks_metadata` for those; folder-
+      // grouped rows keep the original `v2_library_get_album_tracks`.
+      const isMetadataAlbum = album.source_folders != null;
+      if (isMetadataAlbum) {
+        return await invoke<LocalTrack[]>('v2_library_get_album_tracks_metadata', {
+          metadataKey: album.id
+        });
       }
 
       return await invoke<LocalTrack[]>('v2_library_get_album_tracks', {
@@ -3542,7 +3595,7 @@
 </script>
 
 <ViewTransition duration={200} distance={12} direction="down">
-<div class="library-view" class:virtualized-active={!selectedAlbum && ((activeTab === 'folders' && !showHiddenAlbums && albums.length > 0) || (activeTab === 'artists' && artists.length > 0) || (activeTab === 'tracks' && tracks.length > 0))}>
+<div class="library-view" class:virtualized-active={!selectedAlbum && ((activeTab === 'folders' && !showHiddenAlbums && albums.length > 0) || (activeTab === 'albums' && metadataAlbums.length > 0) || (activeTab === 'artists' && artists.length > 0) || (activeTab === 'tracks' && tracks.length > 0))}>
   {#if selectedAlbum}
     {@const filteredAlbumTracks = albumTrackSearch.trim()
       ? albumTracks.filter(track =>
@@ -4372,6 +4425,42 @@
           onAddToMixtape={handleAlbumBulkAddToMixtape}
           onClearSelection={() => { albumSelectMode = false; selectedAlbumIds = new Set(); }}
         />
+        </ViewTransition>
+        {/key}
+      {:else if activeTab === 'albums'}
+        {#key activeTab}
+        <ViewTransition duration={200} distance={12} direction="up">
+          {#if metadataAlbumsLoading && metadataAlbums.length === 0}
+            <div class="loading">
+              <div class="spinner"></div>
+              <p>{$t('library.loadingLibrary')}</p>
+            </div>
+          {:else if metadataAlbums.length === 0}
+            <div class="empty">
+              <Disc3 size={48} />
+              <p>{$t('library.noAlbumsInLibrary')}</p>
+              <p class="empty-hint">{$t('library.addFoldersHint')}</p>
+            </div>
+          {:else}
+            <div class="album-sections virtualized">
+              <div class="virtualized-container">
+                <VirtualizedAlbumList
+                  groups={[{ key: '', id: 'metadata-ungrouped', albums: metadataAlbums }]}
+                  viewMode={albumViewMode}
+                  showGroupHeaders={false}
+                  {getArtworkUrl}
+                  getQualityBadge={getAlbumQualityBadge}
+                  isHiRes={isAlbumHiRes}
+                  formatDuration={formatTotalDuration}
+                  onAlbumClick={handleAlbumClick}
+                  onAlbumPlay={handleAlbumPlayFromGrid}
+                  onAlbumQueueNext={handleAlbumQueueNextFromGrid}
+                  onAlbumQueueLater={handleAlbumQueueLaterFromGrid}
+                  showSourceBadge={true}
+                />
+              </div>
+            </div>
+          {/if}
         </ViewTransition>
         {/key}
       {:else if activeTab === 'artists'}

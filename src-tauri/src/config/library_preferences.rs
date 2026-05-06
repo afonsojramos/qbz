@@ -19,6 +19,7 @@ impl Default for LibraryPreferences {
             tab_order: vec![
                 "tracks".to_string(),
                 "folders".to_string(),
+                "albums".to_string(),
                 "artists".to_string(),
             ],
             hidden_tabs: vec![],
