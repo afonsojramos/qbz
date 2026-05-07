@@ -218,6 +218,8 @@ export interface AlbumDetail {
    *  metadata row. The pre-formatted `duration` string is kept for
    *  back-compat with callers that still rely on it. */
   durationSeconds?: number;
+  /** HTML/plain-text album description from Qobuz (label-supplied). */
+  description?: string;
   tracks: Track[];
   upc?: string; // Universal Product Code for album.link sharing
   goodies?: QobuzGoody[];

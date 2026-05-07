@@ -375,6 +375,7 @@ export function convertQobuzAlbum(album: QobuzAlbum): AlbumDetail {
     trackCount: album.tracks_count || album.tracks?.items?.length || 0,
     duration: formatDuration(album.duration || 0),
     durationSeconds: album.duration ?? 0,
+    description: album.description,
     tracks: album.tracks?.items?.map((track, index) => ({
       id: track.id,
       number: index + 1,

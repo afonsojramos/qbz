@@ -35,6 +35,7 @@
   import type { QobuzGoody } from '$lib/types';
   import { applyShiftRange, isSelectAllShortcut } from '$lib/utils/multiSelect';
   import { extractPalette, pickHeaderColor, type ArtworkPalette } from '$lib/utils/artworkPalette';
+  import { sanitizeHtml } from '$lib/utils/sanitize';
   import {
     subscribe as subscribeAppearance,
     isAlbumHeaderGradientEnabled,
@@ -92,6 +93,7 @@
       trackCount: number;
       duration: string;
       durationSeconds?: number;
+      description?: string;
       tracks: Track[];
       goodies?: QobuzGoody[];
       awards?: Award[];
@@ -197,6 +199,7 @@
   let isFavoriteLoading = $state(false);
   let lightboxOpen = $state(false);
   let bookletOpen = $state(false);
+  let descriptionExpanded = $state(false);
 
   // Booklet: find first PDF goody
   const bookletGoody = $derived(
@@ -638,6 +641,19 @@
          • {album.genre} • {album.trackCount} {$t('album.tracks')} • {formatAlbumDuration(album.durationSeconds ?? 0)}
       </div>
 
+      {#if album.description}
+        <div class="album-description" class:expanded={descriptionExpanded}>
+          <div class="album-description-text">{@html sanitizeHtml(album.description)}</div>
+          <button
+            type="button"
+            class="description-toggle"
+            onclick={() => descriptionExpanded = !descriptionExpanded}
+          >
+            {descriptionExpanded ? $t('album.readLess') : $t('album.readMore')}
+          </button>
+        </div>
+      {/if}
+
       <!-- Action Buttons -->
       <div class="actions">
         <button
@@ -1049,6 +1065,18 @@
     text-decoration: underline;
   }
 
+  .album-detail.has-art-bg .album-description {
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  .album-detail.has-art-bg .description-toggle {
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  .album-detail.has-art-bg .description-toggle:hover {
+    color: #fff;
+  }
+
   /* Custom scrollbar */
   .album-detail::-webkit-scrollbar {
     width: 6px;
@@ -1111,7 +1139,8 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
+    padding-top: 4px;
   }
 
   .album-title {
@@ -1162,7 +1191,51 @@
   .album-info {
     font-size: 14px;
     color: var(--text-muted);
-    margin-bottom: 24px;
+    margin-bottom: 12px;
+  }
+
+  .album-description {
+    margin: 0 0 16px 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    max-width: 720px;
+  }
+
+  .album-description-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .album-description-text :global(p) {
+    margin: 0;
+  }
+
+  .album-description-text :global(p + p) {
+    margin-top: 8px;
+  }
+
+  .album-description.expanded .album-description-text {
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    overflow: visible;
+  }
+
+  .description-toggle {
+    background: none;
+    border: none;
+    padding: 4px 0 0 0;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .description-toggle:hover {
+    color: var(--text-secondary);
   }
 
   .actions {
