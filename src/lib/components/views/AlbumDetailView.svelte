@@ -87,8 +87,11 @@
       labelId?: number;
       genre: string;
       quality: string;
+      bitDepth?: number;
+      samplingRate?: number;
       trackCount: number;
       duration: string;
+      durationSeconds?: number;
       tracks: Track[];
       goodies?: QobuzGoody[];
       awards?: Award[];
@@ -399,6 +402,19 @@
     album.artist?.trim().toLowerCase() === 'various artists'
   );
 
+  /** Render a track-count duration as `Xh Ym Zs`, dropping leading zero
+   *  units (so `1h 4m 12s`, not `01h 04m 12s`). Empty input returns `0s`
+   *  as the safe fallback. */
+  function formatAlbumDuration(seconds: number): string {
+    const total = Math.max(0, Math.floor(seconds || 0));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+
   // Format release date nicely, fallback to year
   const formattedReleaseDate = $derived.by(() => {
     if (album.releaseDate) {
@@ -619,10 +635,8 @@
         {:else}
           {album.label}
         {/if}
-         • {album.genre}
+         • {album.genre} • {album.trackCount} {$t('album.tracks')} • {formatAlbumDuration(album.durationSeconds ?? 0)}
       </div>
-      <div class="album-quality">{album.quality}</div>
-      <div class="album-stats">{album.trackCount} {$t('album.tracks')} • {album.duration}</div>
 
       <!-- Action Buttons -->
       <div class="actions">
@@ -1019,9 +1033,7 @@
 
   /* Lift secondary text contrast over the colored backdrop. */
   .album-detail.has-art-bg .back-btn,
-  .album-detail.has-art-bg .album-info,
-  .album-detail.has-art-bg .album-quality,
-  .album-detail.has-art-bg .album-stats {
+  .album-detail.has-art-bg .album-info {
     color: rgba(255, 255, 255, 0.78);
   }
 
@@ -1148,18 +1160,6 @@
   }
 
   .album-info {
-    font-size: 14px;
-    color: var(--text-muted);
-    margin-bottom: 4px;
-  }
-
-  .album-quality {
-    font-size: 14px;
-    color: var(--text-muted);
-    margin-bottom: 4px;
-  }
-
-  .album-stats {
     font-size: 14px;
     color: var(--text-muted);
     margin-bottom: 24px;

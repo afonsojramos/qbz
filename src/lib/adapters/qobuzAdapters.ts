@@ -370,8 +370,11 @@ export function convertQobuzAlbum(album: QobuzAlbum): AlbumDetail {
     labelId: album.label?.id,
     genre: album.genre?.name || '',
     quality,
+    bitDepth: album.maximum_bit_depth,
+    samplingRate: album.maximum_sampling_rate,
     trackCount: album.tracks_count || album.tracks?.items?.length || 0,
     duration: formatDuration(album.duration || 0),
+    durationSeconds: album.duration ?? 0,
     tracks: album.tracks?.items?.map((track, index) => ({
       id: track.id,
       number: index + 1,

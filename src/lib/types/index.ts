@@ -208,8 +208,16 @@ export interface AlbumDetail {
   labelId?: number;
   genre: string;
   quality: string;
+  /** Numeric audio quality fields, used by inline QualityBadgeStatic in
+   *  the album-detail tracklist toolbar. */
+  bitDepth?: number;
+  samplingRate?: number;
   trackCount: number;
   duration: string;
+  /** Total duration in seconds, used to render Xh Ym Zs inline in the
+   *  metadata row. The pre-formatted `duration` string is kept for
+   *  back-compat with callers that still rely on it. */
+  durationSeconds?: number;
   tracks: Track[];
   upc?: string; // Universal Product Code for album.link sharing
   goodies?: QobuzGoody[];
