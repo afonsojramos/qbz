@@ -46,6 +46,15 @@ pub struct AlsaDirectStream {
     device_id: String,
 }
 
+/// Defensive settle delay between reservation acquisition and PCM open.
+///
+/// Only applied when the reservation actually transitioned ownership (i.e.
+/// `DeviceReservation::is_active()` is `true`). Sized conservatively; do not
+/// reduce without revisiting the Lifetime-A safety contract in
+/// `qbz-nix-docs/specs/2026-05-07-alsa-exclusive-hardening-design.md`.
+#[cfg(target_os = "linux")]
+const PIPEWIRE_VACATE_MARGIN: std::time::Duration = std::time::Duration::from_millis(50);
+
 #[cfg(target_os = "linux")]
 impl AlsaDirectStream {
     /// Create new ALSA direct stream
@@ -66,9 +75,8 @@ impl AlsaDirectStream {
         // This is the canonical Lifetime-A consumer the `acquire` doc-comment's
         // tight-coupling rule allows: a `DeviceReservation` is created
         // immediately before a real `PCM::new()` and held for as long as that
-        // PCM is open. The 50 ms sleep below gives PipeWire a defensive margin
-        // to vacate the device after releasing the reservation; observed ~2-4 ms
-        // in practice on the dev box but kept conservative.
+        // PCM is open.
+        // TODO(Task 5): replace second arg with user-facing DAC name from settings.
         let reservation =
             crate::DeviceReservation::acquire(device_id, device_id).map_err(|e| {
                 format!(
@@ -77,9 +85,16 @@ impl AlsaDirectStream {
                 )
             })?;
 
-        // Defensive margin between reservation acquisition and PCM open. Do not
-        // reduce or remove without an explicit instruction from the user.
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Defensive margin only matters when the reservation actually displaced
+        // a holder (or could have). On the degraded D-Bus path the bus name is
+        // not held at all, so PipeWire's view of the device hasn't changed and
+        // no settle delay is needed. PIPEWIRE_VACATE_MARGIN is conservative;
+        // PipeWire-side release latency is typically much shorter, but this
+        // margin is part of the design spec's Lifetime-A safety contract — do
+        // not reduce without revisiting the spec.
+        if reservation.is_active() {
+            std::thread::sleep(PIPEWIRE_VACATE_MARGIN);
+        }
 
         // Open PCM device
         let pcm = PCM::new(device_id, Direction::Playback, false)
