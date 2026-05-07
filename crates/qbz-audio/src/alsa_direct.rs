@@ -13,6 +13,16 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 /// Direct ALSA PCM stream for hw: devices
+///
+/// Field order is significant: Rust drops struct fields top-to-bottom, so the
+/// `PCM` is dropped first (releasing the kernel-level exclusive grip on the
+/// `hw:` device) BEFORE `_reservation` drops (releasing the
+/// `org.freedesktop.ReserveDevice1.Audio<N>` bus name back to PipeWire).
+///
+/// Reversing this order would tell PipeWire "go ahead, take the device" while
+/// the kernel still has the FD open — guaranteed `EBUSY` ping-pong on the next
+/// stream open. `_reservation` is intentionally the last field for that
+/// reason; do not rearrange.
 #[cfg(target_os = "linux")]
 pub struct AlsaDirectStream {
     pcm: Arc<Mutex<PCM>>,
@@ -22,6 +32,11 @@ pub struct AlsaDirectStream {
     channels: u16,
     format: Format,
     device_id: String,
+    /// D-Bus device reservation held for the entire stream lifetime
+    /// (Lifetime A per the design spec). Acquired before `PCM::new()` in
+    /// `Self::new()`; released on `Drop` *after* the PCM closes (see field-order
+    /// note on the struct above).
+    _reservation: crate::DeviceReservation,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -41,6 +56,30 @@ impl AlsaDirectStream {
             sample_rate,
             channels
         );
+
+        // Acquire D-Bus device reservation BEFORE opening the PCM. This signals
+        // PipeWire/WirePlumber to release the device first if it currently
+        // holds it. Held for the entire `AlsaDirectStream` lifetime
+        // (Lifetime A per the design spec) and released on `Drop` after the
+        // PCM closes — see the field-order comment on the struct.
+        //
+        // This is the canonical Lifetime-A consumer the `acquire` doc-comment's
+        // tight-coupling rule allows: a `DeviceReservation` is created
+        // immediately before a real `PCM::new()` and held for as long as that
+        // PCM is open. The 50 ms sleep below gives PipeWire a defensive margin
+        // to vacate the device after releasing the reservation; observed ~2-4 ms
+        // in practice on the dev box but kept conservative.
+        let reservation =
+            crate::DeviceReservation::acquire(device_id, device_id).map_err(|e| {
+                format!(
+                    "Cannot acquire exclusive device '{}': {}",
+                    device_id, e
+                )
+            })?;
+
+        // Defensive margin between reservation acquisition and PCM open. Do not
+        // reduce or remove without an explicit instruction from the user.
+        std::thread::sleep(std::time::Duration::from_millis(50));
 
         // Open PCM device
         let pcm = PCM::new(device_id, Direction::Playback, false)
@@ -133,6 +172,9 @@ impl AlsaDirectStream {
             channels,
             format: selected_format,
             device_id: device_id.to_string(),
+            // Last field: drops after `pcm` so the kernel-level exclusive
+            // grip is released before the D-Bus bus name is freed.
+            _reservation: reservation,
         })
     }
 
