@@ -5922,6 +5922,7 @@
           isPlaybackActive={isPlaying}
           onBack={navGoBack}
           onArtistClick={() => selectedAlbum?.artistId && handleArtistClick(selectedAlbum.artistId)}
+          onFeaturedArtistClick={(artistId) => handleArtistClick(artistId)}
           onLabelClick={handleLabelClick}
           onAwardClick={handleAwardClick}
           onTrackPlay={handleAlbumTrackPlay}

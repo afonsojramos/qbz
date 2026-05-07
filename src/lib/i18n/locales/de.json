@@ -155,6 +155,8 @@
     "bookletDownload": "Booklet speichern",
     "sameArtist": "Vom selben Künstler",
     "seeFullDiscography": "Vollständige Diskografie ansehen",
+    "readMore": "Mehr anzeigen",
+    "readLess": "Weniger anzeigen",
     "loadError": "Albumtitel konnten nicht geladen werden. Bitte versuchen Sie es erneut.",
     "releasedOn": "am",
     "releasedBy": "Erschienen bei",
@@ -2132,6 +2134,8 @@
     "appearance": {
       "title": "Darstellung",
       "theme": "Thema",
+      "albumHeaderGradient": "Farbverlauf im Album-Header",
+      "albumHeaderGradientDesc": "Verwende die dominante Farbe des Albumcovers als Hintergrund in der Albumdetailansicht.",
       "themes": {
         "dark": "Dunkel",
         "light": "Hell",
@@ -2892,7 +2896,9 @@
     "album": "Album",
     "duration": "Laufzeit",
     "quality": "Qualität",
-    "title": "Titel"
+    "title": "Titel",
+    "searchPlaceholder": "Titel suchen…",
+    "noMatches": "Keine Titel entsprechen deiner Suche."
   },
   "updates": {
     "snap": {

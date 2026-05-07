@@ -156,6 +156,8 @@
     "bookletDownload": "Guardar booklet",
     "sameArtist": "Del mismo artista...",
     "seeFullDiscography": "Ver discografía completa",
+    "readMore": "Leer más",
+    "readLess": "Mostrar menos",
     "releasedOn": "el",
     "releasedBy": "Publicado en",
     "sidebar": {
@@ -2132,6 +2134,8 @@
     "appearance": {
       "title": "Apariencia",
       "theme": "Tema",
+      "albumHeaderGradient": "Degradado en el encabezado del álbum",
+      "albumHeaderGradientDesc": "Usa el color dominante de la portada como fondo en la vista de detalle del álbum.",
       "themes": {
         "dark": "Oscuro",
         "light": "Claro",
@@ -2898,7 +2902,9 @@
     "title": "Título",
     "album": "Album",
     "duration": "Duración",
-    "quality": "Calidad"
+    "quality": "Calidad",
+    "searchPlaceholder": "Buscar pistas…",
+    "noMatches": "Ninguna pista coincide con tu búsqueda."
   },
   "updates": {
     "snap": {

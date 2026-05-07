@@ -358,20 +358,35 @@ export function convertQobuzAlbum(album: QobuzAlbum): AlbumDetail {
     album.maximum_sampling_rate
   );
 
+  const mainArtistId = album.artist?.id;
+  const featuredArtists = (album.artists ?? [])
+    .filter((entry) => {
+      const isMain = entry.roles?.some((role) => role === 'main-artist');
+      const isMainById = mainArtistId !== undefined && entry.id === mainArtistId;
+      return !isMain && !isMainById;
+    })
+    .map((entry) => ({ id: entry.id, name: entry.name }));
+
   return {
     id: album.id,
     artwork,
     title: album.title,
     artist: album.artist?.name || 'Unknown Artist',
     artistId: album.artist?.id,
+    featuredArtists: featuredArtists.length > 0 ? featuredArtists : undefined,
+    parentalWarning: album.parental_warning ?? false,
     year: album.release_date_original?.split('-')[0] || '',
     releaseDate: album.release_date_original,
     label: album.label?.name || '',
     labelId: album.label?.id,
     genre: album.genre?.name || '',
     quality,
+    bitDepth: album.maximum_bit_depth,
+    samplingRate: album.maximum_sampling_rate,
     trackCount: album.tracks_count || album.tracks?.items?.length || 0,
     duration: formatDuration(album.duration || 0),
+    durationSeconds: album.duration ?? 0,
+    description: album.description,
     tracks: album.tracks?.items?.map((track, index) => ({
       id: track.id,
       number: index + 1,

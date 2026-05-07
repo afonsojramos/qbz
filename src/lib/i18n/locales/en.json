@@ -158,6 +158,8 @@
     "bookletDownload": "Save booklet",
     "sameArtist": "By the same artist",
     "seeFullDiscography": "See full discography",
+    "readMore": "Read more",
+    "readLess": "Show less",
     "sidebar": {
       "label": "Label",
       "awards": "Awards"
@@ -2132,6 +2134,8 @@
     "appearance": {
       "title": "Appearance",
       "theme": "Theme",
+      "albumHeaderGradient": "Album header gradient",
+      "albumHeaderGradientDesc": "Use the album cover's dominant color as a backdrop in album detail views.",
       "themes": {
         "dark": "Dark",
         "light": "Light",
@@ -2898,7 +2902,9 @@
     "title": "Title",
     "album": "Album",
     "duration": "Duration",
-    "quality": "Quality"
+    "quality": "Quality",
+    "searchPlaceholder": "Search tracks…",
+    "noMatches": "No tracks match your search."
   },
   "updates": {
     "runningIn": "Running in {env}",
