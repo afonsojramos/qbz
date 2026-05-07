@@ -7,7 +7,7 @@
   import { onMount, onDestroy, tick, untrack } from 'svelte';
   import {
     HardDrive, Music, Disc3, MicVocal, FolderPlus, Trash2, RefreshCw,
-    Settings, ArrowLeft, X, Play, CircleAlert, ImageDown, Upload, Search, LayoutGrid, List, PenLine,
+    Settings, ArrowLeft, X, Play, CircleAlert, ImageDown, Upload, Search, LayoutGrid, List, ListOrdered, PenLine,
     Network, Power, PowerOff, ChevronLeft, ChevronRight, Shuffle, SlidersHorizontal, ArrowUpDown, ChevronDown, Check, SquareCheckBig, CassetteTape
   } from 'lucide-svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
@@ -599,6 +599,12 @@
 
   // Data state
   let albums = $state<LocalAlbum[]>([]);
+  // Metadata-grouped Albums tab data — parallel to `albums` (folder-grouped).
+  // Declared early so the album-selection derivations below can reference it
+  // when the active tab is 'albums'. Hydrated lazily by loadMetadataAlbums.
+  let metadataAlbums = $state<LocalAlbum[]>([]);
+  let metadataAlbumsLoading = $state(false);
+  let metadataAlbumsLoaded = $state(false);
   let hiddenAlbums = $state<LocalAlbum[]>([]);
   let artists = $state<LocalArtist[]>([]);
   let tracks = $state<LocalTrack[]>([]);
@@ -748,10 +754,17 @@
     selectedAlbumIds = next;
   }
 
+  /** The album list driving Select All / Bulk Action behaviour for the
+   *  current tab. Folders-tab uses folder-grouped `albums`; the Albums-tab
+   *  uses metadata-grouped `metadataAlbums`. */
+  const currentAlbumsSource = $derived(
+    activeTab === 'albums' ? metadataAlbums : albums
+  );
+
   const albumSelectAllState = $derived(
-    albums.length === 0 ? 'none' as const
+    currentAlbumsSource.length === 0 ? 'none' as const
     : selectedAlbumIds.size === 0 ? 'none' as const
-    : selectedAlbumIds.size >= albums.length ? 'all' as const
+    : selectedAlbumIds.size >= currentAlbumsSource.length ? 'all' as const
     : 'partial' as const
   );
 
@@ -759,7 +772,7 @@
     if (albumSelectAllState === 'all') {
       selectedAlbumIds = new Set();
     } else {
-      selectedAlbumIds = new Set(albums.map((a) => a.id));
+      selectedAlbumIds = new Set(currentAlbumsSource.map((a) => a.id));
     }
   }
 
@@ -768,14 +781,27 @@
     const handler = (e: KeyboardEvent) => {
       if (!isSelectAllShortcut(e)) return;
       e.preventDefault();
-      selectedAlbumIds = new Set(albums.map((a) => a.id));
+      selectedAlbumIds = new Set(currentAlbumsSource.map((a) => a.id));
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   });
 
   function selectedAlbums(): LocalAlbum[] {
-    return albums.filter((a) => selectedAlbumIds.has(a.id));
+    // Look up across both album sources so bulk actions work whether the
+    // current tab is Folders (folder-grouped) or Albums (metadata-grouped).
+    // IDs differ between the two pipelines, so a union lookup is safe.
+    const byId = new Map<string, LocalAlbum>();
+    for (const a of albums) byId.set(a.id, a);
+    for (const a of metadataAlbums) {
+      if (!byId.has(a.id)) byId.set(a.id, a);
+    }
+    const result: LocalAlbum[] = [];
+    for (const id of selectedAlbumIds) {
+      const album = byId.get(id);
+      if (album) result.push(album);
+    }
+    return result;
   }
 
   /** Resolve tracks for a list of albums, concatenated in list order.
@@ -1061,10 +1087,14 @@
     };
   });
 
-  // Memoized filtered and grouped albums
-  let filteredAndGroupedAlbums = $derived.by(() => {
-    // Filter albums by search and quality
-    let filtered = albums;
+  /** Apply search/quality filters, sorting, and grouping to a list of
+   *  albums. Used by both the Folders tab (folder-grouped `albums`) and the
+   *  Albums tab (metadata-grouped `metadataAlbums`) so the action bar
+   *  controls behave identically across both surfaces. Do not call $t() or
+   *  any svelte-i18n store inside this helper — it runs from $derived.by
+   *  and would break Svelte CSS extraction (ADR-001). */
+  function buildFilteredAndGroupedAlbums(source: LocalAlbum[]) {
+    let filtered = source;
 
     // Apply search filter
     if (debouncedAlbumSearch) {
@@ -1094,7 +1124,13 @@
       : new Set<string>();
 
     return { filtered, grouped, alphaGroups };
-  });
+  }
+
+  // Memoized filtered and grouped albums (folder-grouped source)
+  let filteredAndGroupedAlbums = $derived.by(() => buildFilteredAndGroupedAlbums(albums));
+
+  // Same pipeline for the metadata-grouped Albums tab
+  let filteredAndGroupedMetadataAlbums = $derived.by(() => buildFilteredAndGroupedAlbums(metadataAlbums));
 
   // Albums for the selected artist (used in artist view two-column layout)
   // Includes multi-artist albums where the selected artist appears
@@ -1253,14 +1289,6 @@
   let selectedAlbum = $state<LocalAlbum | null>(null);
   let albumTracks = $state<LocalTrack[]>([]);
 
-  // Metadata-grouped Albums tab data — parallel to `albums` (folder-grouped).
-  // The selected album carries its own discriminator via `source_folders`,
-  // so `fetchAlbumTracks` knows which V2 command to call without needing a
-  // separate viewMode state on this view.
-  let metadataAlbums = $state<LocalAlbum[]>([]);
-  let metadataAlbumsLoading = $state(false);
-  let metadataAlbumsLoaded = $state(false);
-
   // Album-detail multi-select helpers — shift-click anchor + select-all
   // state derived against the open album's track list. selectedTrackIds
   // is the same Set the tracks tab uses, so selections compose cleanly
@@ -1394,6 +1422,10 @@
     // Load tab preferences first so the initial render uses the saved order.
     await loadLibraryPreferences();
     await loadLibraryData();
+    // Trigger the active tab's loader now that activeTab reflects user prefs.
+    // Without this, a user whose first visible tab is e.g. 'tracks' lands on
+    // an empty list because loadLibraryData only populates albums/folders.
+    ensureActiveTabDataLoaded();
     // Load folders (now safe in offline mode - uses library_get_folders instead)
     loadFolders(); // Load in background - doesn't block UI
     checkDiscogsCredentials();
@@ -1810,10 +1842,18 @@
     if (metadataAlbumsLoaded || metadataAlbumsLoading) return;
     try {
       metadataAlbumsLoading = true;
-      metadataAlbums = await invoke<LocalAlbum[]>('v2_library_get_albums_metadata', {
-        includeHidden: false,
-        excludeNetworkFolders: shouldExcludeNetworkFolders(),
-      });
+      const includePlex = isPlexLibraryEnabled();
+      const [localResult, plexAlbumsRaw] = await Promise.all([
+        invoke<LocalAlbum[]>('v2_library_get_albums_metadata', {
+          includeHidden: false,
+          excludeNetworkFolders: shouldExcludeNetworkFolders(),
+        }),
+        includePlex
+          ? invoke<PlexCachedAlbum[]>('v2_plex_cache_get_albums').catch(() => [])
+          : Promise.resolve([]),
+      ]);
+      const plexAlbums = plexAlbumsRaw.map(mapPlexAlbum);
+      metadataAlbums = [...localResult, ...plexAlbums];
       metadataAlbumsLoaded = true;
     } catch (err) {
       console.error('[LocalLibrary] Failed to load metadata albums:', err);
@@ -1984,7 +2024,26 @@
     }
   }
 
+  /**
+   * Trigger the lazy loader for whichever tab is currently active. Used by
+   * `handleTabChange` and from `onMount` after preferences settle so the
+   * initial visible tab always fetches its data — otherwise users can land
+   * on Tracks (or any other configured first tab) and see an empty list.
+   * `'folders'` doesn't need a branch because `loadLibraryData()` already
+   * fetches the folder-grouped albums during mount/refresh.
+   */
+  function ensureActiveTabDataLoaded() {
+    if (activeTab === 'artists' && artists.length === 0) {
+      loadArtists();
+    } else if (activeTab === 'tracks' && tracks.length === 0) {
+      loadTracks(trackSearch.trim());
+    } else if (activeTab === 'albums' && !metadataAlbumsLoaded) {
+      loadMetadataAlbums();
+    }
+  }
+
   function handleTabChange(tab: TabType) {
+    const previous = activeTab;
     activeTab = tab;
 
     // If we're viewing an album, navigate back to library
@@ -1998,13 +2057,15 @@
     selectedAlbum = null;
     albumTracks = [];
 
-    if (tab === 'artists' && artists.length === 0) {
-      loadArtists();
-    } else if (tab === 'tracks' && tracks.length === 0) {
-      loadTracks(trackSearch.trim());
-    } else if (tab === 'albums' && !metadataAlbumsLoaded) {
-      loadMetadataAlbums();
+    // Folders and Albums share the album-selection state but their album
+    // ID spaces don't overlap. Clear any in-flight selection when crossing
+    // tabs so the bulk-action bar doesn't show stale counts.
+    if (previous !== tab && (albumSelectMode || selectedAlbumIds.size > 0)) {
+      albumSelectMode = false;
+      selectedAlbumIds = new Set();
     }
+
+    ensureActiveTabDataLoaded();
   }
 
   async function handleAddFolder() {
@@ -3596,6 +3657,247 @@
 
 <ViewTransition duration={200} distance={12} direction="down">
 <div class="library-view" class:virtualized-active={!selectedAlbum && ((activeTab === 'folders' && !showHiddenAlbums && albums.length > 0) || (activeTab === 'albums' && metadataAlbums.length > 0) || (activeTab === 'artists' && artists.length > 0) || (activeTab === 'tracks' && tracks.length > 0))}>
+  {#snippet albumControls(alphaGroups: Set<string>)}
+    <div class="album-controls">
+      <div class="dropdown-container">
+        <button
+          class="control-btn"
+          onclick={() => (showGroupMenu = !showGroupMenu)}
+          title="Group albums"
+        >
+          <span>{!albumGroupingEnabled
+            ? $t('purchases.group.off')
+            : albumGroupMode === 'alpha'
+              ? $t('purchases.group.alpha')
+              : $t('purchases.group.artist')}</span>
+        </button>
+        {#if showGroupMenu}
+          <div class="dropdown-menu">
+            <button
+              class="dropdown-item"
+              class:selected={!albumGroupingEnabled}
+              onclick={() => { albumGroupingEnabled = false; showGroupMenu = false; }}
+            >
+              {$t('purchases.group.optionOff')}
+            </button>
+            <button
+              class="dropdown-item"
+              class:selected={albumGroupingEnabled && albumGroupMode === 'alpha'}
+              onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; showGroupMenu = false; }}
+            >
+              {$t('purchases.group.optionAlpha')}
+            </button>
+            <button
+              class="dropdown-item"
+              class:selected={albumGroupingEnabled && albumGroupMode === 'artist'}
+              onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; showGroupMenu = false; }}
+            >
+              {$t('purchases.group.optionArtist')}
+            </button>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Quality/Format Filter -->
+      <div class="dropdown-container" bind:this={filterPanelRef}>
+        <button
+          class="control-btn icon-only"
+          class:active={hasActiveFilters}
+          onclick={() => (showFilterPanel = !showFilterPanel)}
+          title="Filter by quality/format"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M4.22657 2C2.50087 2 1.58526 4.03892 2.73175 5.32873L8.99972 12.3802V19C8.99972 19.3788 9.21373 19.725 9.55251 19.8944L13.5525 21.8944C13.8625 22.0494 14.2306 22.0329 14.5255 21.8507C14.8203 21.6684 14.9997 21.3466 14.9997 21V12.3802L21.2677 5.32873C22.4142 4.03893 21.4986 2 19.7729 2H4.22657Z"/>
+          </svg>
+          {#if activeFilterCount > 0}
+            <span class="filter-badge">{activeFilterCount}</span>
+          {/if}
+        </button>
+        {#if showFilterPanel}
+          <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+          <div
+            class="filter-panel"
+            role="region"
+            onmouseenter={clearFilterPanelTimer}
+            onmouseleave={startFilterPanelTimer}
+            onclick={handleFilterPanelActivity}
+          >
+            <div class="filter-panel-header">
+              <span>{$t('library.filters')}</span>
+              {#if hasActiveFilters}
+                <button class="clear-filters-btn" onclick={clearAllFilters}>{$t('library.clearAllFilters')}</button>
+              {/if}
+            </div>
+
+            <div class="filter-section">
+              <div class="filter-section-label">{$t('library.quality')}</div>
+              <div class="filter-checkboxes">
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterHiRes} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">Hi-Res</span>
+                  <span class="label-hint">24bit+</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterCdQuality} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">{$t('quality.cdQuality')}</span>
+                  <span class="label-hint">16bit</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterLossy} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">Lossy</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="filter-section">
+              <div class="filter-section-label">Format</div>
+              <div class="filter-checkboxes format-grid">
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterFlac} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">FLAC</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterAlac} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">ALAC</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterApe} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">APE</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterWav} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">WAV</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterMp3} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">MP3</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterAac} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">AAC</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterOther} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">Other</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="filter-section">
+              <div class="filter-section-label">{$t('library.source')}</div>
+              <div class="filter-checkboxes source-row">
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterLocalFiles} />
+                  <span class="checkmark"></span>
+                  <HardDrive size={14} class="filter-icon" />
+                  <span class="label-text">{$t('library.localFiles')}</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterOfflineCache} />
+                  <span class="checkmark"></span>
+                  <img src="/qobuz-logo-filled.svg" alt="" class="filter-icon qobuz-icon" />
+                  <span class="label-text">{$t('library.offlineCache')}</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterPlexLibrary} />
+                  <span class="checkmark"></span>
+                  <Network size={14} class="filter-icon" />
+                  <span class="label-text">{$t('library.plexLibrary')}</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Sort dropdown -->
+      <div class="dropdown-container">
+        <button
+          class="control-btn icon-only"
+          onclick={() => (showSortMenu = !showSortMenu)}
+          title="Sort albums"
+        >
+          <ArrowUpDown size={14} />
+        </button>
+        {#if showSortMenu}
+          <div class="sort-menu">
+            {#each sortOptions as option}
+              <button
+                class="dropdown-item"
+                class:selected={sortBy === option.value}
+                onclick={() => selectSort(option.value)}
+              >
+                <span>{option.label}</span>
+                {#if sortBy === option.value}
+                  <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <button
+        class="control-btn icon-only"
+        onclick={() => (albumViewMode = albumViewMode === 'list' ? 'grid' : 'list')}
+        title={albumViewMode === 'list' ? $t('purchases.view.grid') : $t('purchases.view.list')}
+      >
+        {#if albumViewMode === 'list'}
+          <LayoutGrid size={16} />
+        {:else}
+          <List size={16} />
+        {/if}
+      </button>
+
+      <button
+        class="control-btn icon-only"
+        class:active={albumSelectMode}
+        onclick={toggleAlbumSelectMode}
+        title={albumSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+      >
+        <SquareCheckBig size={16} />
+      </button>
+
+      {#if albumSelectMode}
+        <label class="select-all-checkbox" title={$t('actions.selectAll')}>
+          <input
+            type="checkbox"
+            checked={albumSelectAllState === 'all'}
+            indeterminate={albumSelectAllState === 'partial'}
+            onchange={toggleAlbumSelectAll}
+          />
+          <span>{$t('actions.selectAll')}</span>
+        </label>
+      {/if}
+
+      {#if albumGroupingEnabled && albumGroupMode === 'alpha'}
+        <div class="alpha-index-inline">
+          {#each alphaIndexLetters as letter}
+            <button
+              class="alpha-letter"
+              class:disabled={!alphaGroups.has(letter)}
+              onclick={() => {
+                const groupId = groupIdForKey('album-alpha', letter);
+                virtualizedScrollTarget = alphaGroups.has(letter) ? groupId : undefined;
+              }}
+            >
+              {letter}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/snippet}
   {#if selectedAlbum}
     {@const filteredAlbumTracks = albumTrackSearch.trim()
       ? albumTracks.filter(track =>
@@ -3902,6 +4204,14 @@
             >
               <Trash2 size={16} />
             </button>
+            <button
+              class="icon-btn"
+              onclick={() => (isEditTabsModalOpen = true)}
+              aria-label={$t('library.editTabs.title')}
+              title={$t('library.editTabs.title')}
+            >
+              <ListOrdered size={16} />
+            </button>
           </div>
         </div>
 
@@ -4027,15 +4337,6 @@
               {$t(`library.${tab}`)}
             </button>
           {/each}
-          <button
-            type="button"
-            class="jump-link tab-edit-btn"
-            onclick={() => (isEditTabsModalOpen = true)}
-            aria-label={$t('library.editTabs.title')}
-            title={$t('library.editTabs.title')}
-          >
-            <Settings size={14} />
-          </button>
         </div>
       </div>
       <div class="page-search" class:open={searchOpen}>
@@ -4142,245 +4443,7 @@
           <!-- Use memoized filtered and grouped albums -->
           {@const { filtered: filteredAlbums, grouped: groupedAlbums, alphaGroups } = filteredAndGroupedAlbums}
 
-          <div class="album-controls">
-            <div class="dropdown-container">
-              <button
-                class="control-btn"
-                onclick={() => (showGroupMenu = !showGroupMenu)}
-                title="Group albums"
-              >
-                <span>{!albumGroupingEnabled
-                  ? $t('purchases.group.off')
-                  : albumGroupMode === 'alpha'
-                    ? $t('purchases.group.alpha')
-                    : $t('purchases.group.artist')}</span>
-              </button>
-              {#if showGroupMenu}
-                <div class="dropdown-menu">
-                  <button
-                    class="dropdown-item"
-                    class:selected={!albumGroupingEnabled}
-                    onclick={() => { albumGroupingEnabled = false; showGroupMenu = false; }}
-                  >
-                    {$t('purchases.group.optionOff')}
-                  </button>
-                  <button
-                    class="dropdown-item"
-                    class:selected={albumGroupingEnabled && albumGroupMode === 'alpha'}
-                    onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; showGroupMenu = false; }}
-                  >
-                    {$t('purchases.group.optionAlpha')}
-                  </button>
-                  <button
-                    class="dropdown-item"
-                    class:selected={albumGroupingEnabled && albumGroupMode === 'artist'}
-                    onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; showGroupMenu = false; }}
-                  >
-                    {$t('purchases.group.optionArtist')}
-                  </button>
-                </div>
-              {/if}
-            </div>
-
-            <!-- Quality/Format Filter -->
-            <div class="dropdown-container" bind:this={filterPanelRef}>
-              <button
-                class="control-btn icon-only"
-                class:active={hasActiveFilters}
-                onclick={() => (showFilterPanel = !showFilterPanel)}
-                title="Filter by quality/format"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M4.22657 2C2.50087 2 1.58526 4.03892 2.73175 5.32873L8.99972 12.3802V19C8.99972 19.3788 9.21373 19.725 9.55251 19.8944L13.5525 21.8944C13.8625 22.0494 14.2306 22.0329 14.5255 21.8507C14.8203 21.6684 14.9997 21.3466 14.9997 21V12.3802L21.2677 5.32873C22.4142 4.03893 21.4986 2 19.7729 2H4.22657Z"/>
-                </svg>
-                {#if activeFilterCount > 0}
-                  <span class="filter-badge">{activeFilterCount}</span>
-                {/if}
-              </button>
-              {#if showFilterPanel}
-                <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-                <div
-                  class="filter-panel"
-                  role="region"
-                  onmouseenter={clearFilterPanelTimer}
-                  onmouseleave={startFilterPanelTimer}
-                  onclick={handleFilterPanelActivity}
-                >
-                  <div class="filter-panel-header">
-                    <span>{$t('library.filters')}</span>
-                    {#if hasActiveFilters}
-                      <button class="clear-filters-btn" onclick={clearAllFilters}>{$t('library.clearAllFilters')}</button>
-                    {/if}
-                  </div>
-
-                  <div class="filter-section">
-                    <div class="filter-section-label">{$t('library.quality')}</div>
-                    <div class="filter-checkboxes">
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterHiRes} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">Hi-Res</span>
-                        <span class="label-hint">24bit+</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterCdQuality} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">{$t('quality.cdQuality')}</span>
-                        <span class="label-hint">16bit</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterLossy} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">Lossy</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div class="filter-section">
-                    <div class="filter-section-label">Format</div>
-                    <div class="filter-checkboxes format-grid">
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterFlac} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">FLAC</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterAlac} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">ALAC</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterApe} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">APE</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterWav} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">WAV</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterMp3} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">MP3</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterAac} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">AAC</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterOther} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">Other</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div class="filter-section">
-                    <div class="filter-section-label">{$t('library.source')}</div>
-                    <div class="filter-checkboxes source-row">
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterLocalFiles} />
-                        <span class="checkmark"></span>
-                        <HardDrive size={14} class="filter-icon" />
-                        <span class="label-text">{$t('library.localFiles')}</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterOfflineCache} />
-                        <span class="checkmark"></span>
-                        <img src="/qobuz-logo-filled.svg" alt="" class="filter-icon qobuz-icon" />
-                        <span class="label-text">{$t('library.offlineCache')}</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterPlexLibrary} />
-                        <span class="checkmark"></span>
-                        <Network size={14} class="filter-icon" />
-                        <span class="label-text">{$t('library.plexLibrary')}</span>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              {/if}
-            </div>
-
-            <!-- Sort dropdown -->
-            <div class="dropdown-container">
-              <button
-                class="control-btn icon-only"
-                onclick={() => (showSortMenu = !showSortMenu)}
-                title="Sort albums"
-              >
-                <ArrowUpDown size={14} />
-              </button>
-              {#if showSortMenu}
-                <div class="sort-menu">
-                  {#each sortOptions as option}
-                    <button
-                      class="dropdown-item"
-                      class:selected={sortBy === option.value}
-                      onclick={() => selectSort(option.value)}
-                    >
-                      <span>{option.label}</span>
-                      {#if sortBy === option.value}
-                        <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
-                      {/if}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-
-            <button
-              class="control-btn icon-only"
-              onclick={() => (albumViewMode = albumViewMode === 'list' ? 'grid' : 'list')}
-              title={albumViewMode === 'list' ? $t('purchases.view.grid') : $t('purchases.view.list')}
-            >
-              {#if albumViewMode === 'list'}
-                <LayoutGrid size={16} />
-              {:else}
-                <List size={16} />
-              {/if}
-            </button>
-
-            <button
-              class="control-btn icon-only"
-              class:active={albumSelectMode}
-              onclick={toggleAlbumSelectMode}
-              title={albumSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
-            >
-              <SquareCheckBig size={16} />
-            </button>
-
-            {#if albumSelectMode}
-              <label class="select-all-checkbox" title={$t('actions.selectAll')}>
-                <input
-                  type="checkbox"
-                  checked={albumSelectAllState === 'all'}
-                  indeterminate={albumSelectAllState === 'partial'}
-                  onchange={toggleAlbumSelectAll}
-                />
-                <span>{$t('actions.selectAll')}</span>
-              </label>
-            {/if}
-
-            {#if albumGroupingEnabled && albumGroupMode === 'alpha'}
-              <div class="alpha-index-inline">
-                {#each alphaIndexLetters as letter}
-                  <button
-                    class="alpha-letter"
-                    class:disabled={!alphaGroups.has(letter)}
-                    onclick={() => {
-                      const groupId = groupIdForKey('album-alpha', letter);
-                      virtualizedScrollTarget = alphaGroups.has(letter) ? groupId : undefined;
-                    }}
-                  >
-                    {letter}
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
+          {@render albumControls(alphaGroups)}
 
           {#if filteredAlbums.length === 0}
             <div class="empty">
@@ -4416,15 +4479,6 @@
           {/if}
         {/if}
         {/if}
-
-        <BulkActionBar
-          count={selectedAlbumIds.size}
-          onPlayNext={handleAlbumBulkPlayNext}
-          onPlayLater={handleAlbumBulkPlayLater}
-          onAddToPlaylist={handleAlbumBulkAddToPlaylist}
-          onAddToMixtape={handleAlbumBulkAddToMixtape}
-          onClearSelection={() => { albumSelectMode = false; selectedAlbumIds = new Set(); }}
-        />
         </ViewTransition>
         {/key}
       {:else if activeTab === 'albums'}
@@ -4442,24 +4496,41 @@
               <p class="empty-hint">{$t('library.addFoldersHint')}</p>
             </div>
           {:else}
-            <div class="album-sections virtualized">
-              <div class="virtualized-container">
-                <VirtualizedAlbumList
-                  groups={[{ key: '', id: 'metadata-ungrouped', albums: metadataAlbums }]}
-                  viewMode={albumViewMode}
-                  showGroupHeaders={false}
-                  {getArtworkUrl}
-                  getQualityBadge={getAlbumQualityBadge}
-                  isHiRes={isAlbumHiRes}
-                  formatDuration={formatTotalDuration}
-                  onAlbumClick={handleAlbumClick}
-                  onAlbumPlay={handleAlbumPlayFromGrid}
-                  onAlbumQueueNext={handleAlbumQueueNextFromGrid}
-                  onAlbumQueueLater={handleAlbumQueueLaterFromGrid}
-                  showSourceBadge={true}
-                />
+            {@const { filtered: filteredMetadataAlbums, grouped: groupedMetadataAlbums, alphaGroups: metadataAlphaGroups } = filteredAndGroupedMetadataAlbums}
+
+            {@render albumControls(metadataAlphaGroups)}
+
+            {#if filteredMetadataAlbums.length === 0}
+              <div class="empty">
+                <Disc3 size={48} />
+                <p>{$t('library.noAlbumsMatch')}</p>
+                <p class="empty-hint">{$t('library.tryDifferentSearch')}</p>
               </div>
-            </div>
+            {:else}
+              <div class="album-sections virtualized">
+                <div class="virtualized-container">
+                  <VirtualizedAlbumList
+                    groups={groupedMetadataAlbums}
+                    viewMode={albumViewMode}
+                    showGroupHeaders={albumGroupingEnabled}
+                    {getArtworkUrl}
+                    getQualityBadge={getAlbumQualityBadge}
+                    isHiRes={isAlbumHiRes}
+                    formatDuration={formatTotalDuration}
+                    onAlbumClick={handleAlbumClick}
+                    onAlbumPlay={handleAlbumPlayFromGrid}
+                    onAlbumQueueNext={handleAlbumQueueNextFromGrid}
+                    onAlbumQueueLater={handleAlbumQueueLaterFromGrid}
+                    scrollToGroupId={virtualizedScrollTarget}
+                    showSourceBadge={true}
+                    selectable={albumSelectMode}
+                    selectedAlbumIds={selectedAlbumIds}
+                    onAlbumToggleSelect={toggleAlbumSelect}
+                    onAlbumToggleSelectRange={addAlbumsToSelection}
+                  />
+                </div>
+              </div>
+            {/if}
           {/if}
         </ViewTransition>
         {/key}
@@ -4726,6 +4797,17 @@
         {/if}
         </ViewTransition>
         {/key}
+      {/if}
+
+      {#if activeTab === 'folders' || activeTab === 'albums'}
+        <BulkActionBar
+          count={selectedAlbumIds.size}
+          onPlayNext={handleAlbumBulkPlayNext}
+          onPlayLater={handleAlbumBulkPlayLater}
+          onAddToPlaylist={handleAlbumBulkAddToPlaylist}
+          onAddToMixtape={handleAlbumBulkAddToMixtape}
+          onClearSelection={() => { albumSelectMode = false; selectedAlbumIds = new Set(); }}
+        />
       {/if}
     </div>
   {/if}
@@ -5468,18 +5550,6 @@
   .jump-link.active {
     color: var(--text-primary);
     border-bottom-color: var(--accent-primary);
-  }
-
-  .jump-link.tab-edit-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-    padding: 4px 6px;
-  }
-
-  .jump-link.tab-edit-btn:hover {
-    color: var(--text-primary);
   }
 
   /* Page Search in Nav */
