@@ -355,16 +355,19 @@
   let customOrderMap = $state<Map<string, number>>(new Map());  // "trackId:isLocal" -> position
   let customOrderLoading = $state(false);
   let isCustomOrderMode = $derived(sortBy === 'custom');
+  // Reorder while in Custom mode is handled by drag-and-drop on each row
+  // (single tracks) and by drag-and-drop on multi-selected tracks (group
+  // moves via dragTrackIds). The previous "selection mode" with its own
+  // checkbox column and floating up/down buttons was a parallel system
+  // that competed with the toolbar's multi-select; consolidating onto
+  // multiSelectMode keeps one selection model across the view.
 
   // Drag and drop state
   let draggedTrackIdx = $state<number | null>(null);
   let dragOverIdx = $state<number | null>(null);
 
-  // Batch selection state (for custom order mode)
-  let selectedTrackKeys = $state<Set<string>>(new Set());  // Set of "trackId:isLocal" keys
-  let isSelectionMode = $derived(isCustomOrderMode && selectedTrackKeys.size > 0);
-
-  // Multi-select state (bulk actions, works in all sort modes)
+  // Multi-select state (bulk actions; works in every sort mode including
+  // Custom — drag-drop on selected rows reorders the group as a unit).
   let multiSelectMode = $state(false);
   let multiSelectedKeys = $state(new Set<string>());
   let lastSelectedIndex = $state<number | null>(null);
@@ -1320,29 +1323,6 @@
     return `${trackId}:${isLocal}:${index}`;
   }
 
-  function toggleTrackSelection(track: DisplayTrack, index: number) {
-    const key = getTrackKey(track, index);
-    const newSet = new Set(selectedTrackKeys);
-    if (newSet.has(key)) {
-      newSet.delete(key);
-    } else {
-      newSet.add(key);
-    }
-    selectedTrackKeys = newSet;
-  }
-
-  function clearSelection() {
-    selectedTrackKeys = new Set();
-  }
-
-  function selectAllTracks() {
-    const newSet = new Set<string>();
-    displayTracks.forEach((track, index) => {
-      newSet.add(getTrackKey(track, index));
-    });
-    selectedTrackKeys = newSet;
-  }
-
   function toggleMultiSelectMode() {
     multiSelectMode = !multiSelectMode;
     if (!multiSelectMode) {
@@ -1450,91 +1430,6 @@
   }
 
   // Move all selected tracks up one position (as a group)
-  async function moveSelectedUp() {
-    if (selectedTrackKeys.size === 0) return;
-
-    // Get indices of selected tracks (sorted)
-    const selectedIndices: number[] = [];
-    displayTracks.forEach((track, idx) => {
-      if (selectedTrackKeys.has(getTrackKey(track, idx))) {
-        selectedIndices.push(idx);
-      }
-    });
-    selectedIndices.sort((a, b) => a - b);
-
-    // Can't move up if first selected is already at top
-    if (selectedIndices[0] === 0) return;
-
-    // Build new order: swap each selected with the one above
-    const currentOrder = displayTracks.map(trk => ({
-      id: trk.isLocal ? Math.abs(trk.id) : trk.id,
-      isLocal: trk.isLocal ?? false
-    }));
-
-    // Move from top to bottom to avoid conflicts
-    for (const idx of selectedIndices) {
-      const newIdx = idx - 1;
-      [currentOrder[newIdx], currentOrder[idx]] = [currentOrder[idx], currentOrder[newIdx]];
-    }
-
-    // Save new order
-    const orders: [number, boolean, number][] = currentOrder.map((item, pos) => [item.id, item.isLocal, pos]);
-    try {
-      await invoke('v2_playlist_set_custom_order', { playlistId, orders });
-      // Update local map
-      const newMap = new Map<string, number>();
-      orders.forEach(([id, isLocal, pos]) => {
-        newMap.set(`${id}:${isLocal}`, pos);
-      });
-      customOrderMap = newMap;
-    } catch (err) {
-      console.error('Failed to move selected tracks:', err);
-    }
-  }
-
-  // Move all selected tracks down one position (as a group)
-  async function moveSelectedDown() {
-    if (selectedTrackKeys.size === 0) return;
-
-    // Get indices of selected tracks (sorted descending for moving down)
-    const selectedIndices: number[] = [];
-    displayTracks.forEach((track, idx) => {
-      if (selectedTrackKeys.has(getTrackKey(track, idx))) {
-        selectedIndices.push(idx);
-      }
-    });
-    selectedIndices.sort((a, b) => b - a);  // Descending
-
-    // Can't move down if last selected is already at bottom
-    if (selectedIndices[0] === displayTracks.length - 1) return;
-
-    // Build new order: swap each selected with the one below
-    const currentOrder = displayTracks.map(trk => ({
-      id: trk.isLocal ? Math.abs(trk.id) : trk.id,
-      isLocal: trk.isLocal ?? false
-    }));
-
-    // Move from bottom to top to avoid conflicts
-    for (const idx of selectedIndices) {
-      const newIdx = idx + 1;
-      [currentOrder[idx], currentOrder[newIdx]] = [currentOrder[newIdx], currentOrder[idx]];
-    }
-
-    // Save new order
-    const orders: [number, boolean, number][] = currentOrder.map((item, pos) => [item.id, item.isLocal, pos]);
-    try {
-      await invoke('v2_playlist_set_custom_order', { playlistId, orders });
-      // Update local map
-      const newMap = new Map<string, number>();
-      orders.forEach(([id, isLocal, pos]) => {
-        newMap.set(`${id}:${isLocal}`, pos);
-      });
-      customOrderMap = newMap;
-    } catch (err) {
-      console.error('Failed to move selected tracks:', err);
-    }
-  }
-
   async function selectCustomArtwork() {
     try {
       const selected = await open({
@@ -2668,43 +2563,17 @@
           </button>
         </div>
 
-        {#if isCustomOrderMode}
-          <div class="batch-controls">
-            <div class="batch-left">
-              {#if selectedTrackKeys.size > 0}
-                <span class="selection-count">{selectedTrackKeys.size} selected</span>
-                <button class="batch-btn" onclick={clearSelection}>{ $t('actions.clear') }</button>
-              {:else}
-                <button class="batch-btn" onclick={selectAllTracks}>{ $t('actions.selectAll') }</button>
-              {/if}
-            </div>
-            {#if selectedTrackKeys.size > 0}
-              <div class="batch-right">
-                <button class="batch-btn" onclick={moveSelectedUp} title="Move selected up">
-                  <ChevronUp size={14} /> { $t('favorites.moveUp') }
-                </button>
-                <button class="batch-btn" onclick={moveSelectedDown} title="Move selected down">
-                  <ChevronDown size={14} /> { $t('favorites.moveDown') }
-                </button>
-              </div>
-            {/if}
-          </div>
-        {/if}
-
         <div class="track-list-header">
-        {#if multiSelectMode}
-          <div class="col-select-all">
-            <input
-              type="checkbox"
-              checked={selectAllState === 'all'}
-              indeterminate={selectAllState === 'partial'}
-              onchange={toggleSelectAll}
-              title={$t('actions.selectAll')}
-            />
-          </div>
-        {:else if isCustomOrderMode}
-          <div class="col-checkbox"></div>
-        {/if}
+        <div class="col-select-all" class:active={multiSelectMode}>
+          <input
+            type="checkbox"
+            checked={selectAllState === 'all'}
+            indeterminate={selectAllState === 'partial'}
+            onchange={toggleSelectAll}
+            title={$t('actions.selectAll')}
+            tabindex={multiSelectMode ? 0 : -1}
+          />
+        </div>
         <div class="col-number">#</div>
         <div class="col-artwork"></div>
         <div class="col-title">{$t('tracklist.title')}</div>
@@ -2718,7 +2587,16 @@
       </div>
 
       <div class="virtual-track-content" style="height: {trackListTotalHeight}px;">
-        {#each visibleDisplayTracks as track, loopIdx (`${visibleTrackRange.start + loopIdx}-${track.id}`)}
+        <!-- Each-key is built from track identity ONLY (id + namespace + the
+             `number` field that displayTracks assigns during construction).
+             Earlier this used `${visibleTrackRange.start + loopIdx}-${track.id}`,
+             which mixed scroll state into the key — when a re-render shifted
+             `visibleTrackRange.start` mid-frame (e.g. the multi-select toggle
+             reflowed the sticky header and bumped trackListScrollTop), Svelte
+             reused virtualized row instances against new data and we ended up
+             with rows showing # 18 / "Sombras en Tiempos Perdidos" stamped
+             onto the visual position of row 2. -->
+        {#each visibleDisplayTracks as track, loopIdx (`${track.isLocal ? 'l' : 'q'}-${track.id}-${track.number ?? loopIdx}`)}
           {@const idx = visibleTrackRange.start + loopIdx}
           {@const downloadInfo = track.isLocal ? { status: 'none' as const, progress: 0 } : (getTrackOfflineCacheStatus?.(track.id) ?? { status: 'none' as const, progress: 0 })}
           {@const isActiveTrack = (
@@ -2749,17 +2627,28 @@
             ondragend={handleDragEnd}
             ondrop={(e) => handleDrop(e, idx)}
           >
+            <!-- External multi-select checkbox — first column. TrackRow's
+                 internal checkbox is suppressed via :global so the wrapper
+                 owns ordering: [checkbox][reorder-controls?][TrackRow]. -->
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+            <div
+              class="row-checkbox"
+              class:active={multiSelectMode}
+              onclick={(e) => {
+                if (!multiSelectMode) return;
+                e.stopPropagation();
+                toggleMultiSelect(track, idx, e);
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={multiSelectedKeys.has(getTrackKey(track, idx))}
+                tabindex={-1}
+                aria-label={$t('actions.select')}
+                style="pointer-events: none;"
+              />
+            </div>
             {#if isCustomOrderMode}
-              {@const trackKey = getTrackKey(track, idx)}
-              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-              <label class="track-checkbox" onclick={(e: MouseEvent) => e.stopPropagation()}>
-                <input
-                  type="checkbox"
-                  checked={selectedTrackKeys.has(trackKey)}
-                  onchange={() => toggleTrackSelection(track, idx)}
-                  aria-label={$t('actions.select')}
-                />
-              </label>
               <div class="reorder-controls">
                 <button
                   class="reorder-btn"
@@ -2804,7 +2693,7 @@
                 ? $t('player.trackUnavailable')
                 : (!available ? $t('offline.trackNotAvailable') : undefined)}
               isBlacklisted={trackBlacklisted}
-              selectable={multiSelectMode && !isCustomOrderMode}
+              selectable={multiSelectMode}
               selected={multiSelectedKeys.has(getTrackKey(track, idx))}
               onToggleSelect={(e) => toggleMultiSelect(track, idx, e)}
               dragTrackIds={multiSelectMode && multiSelectedKeys.has(getTrackKey(track, idx))
@@ -3292,15 +3181,24 @@
   }
 
   .col-select-all {
-    width: 32px;
+    width: 24px;
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 180ms ease;
+  }
+
+  .col-select-all.active {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .col-select-all input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
+    width: 15px;
+    height: 15px;
     accent-color: var(--accent-primary);
     cursor: pointer;
   }
@@ -3576,6 +3474,39 @@
     padding-left: 0;
   }
 
+  /* External multi-select checkbox living in the row wrapper. Width is
+     ALWAYS reserved (24px) so toggling select mode never reflows columns
+     to the right of it; we only fade the checkbox itself in/out. The
+     internal TrackRow checkbox is hidden via the :global rule below
+     (TrackRow still receives selectable=true so its click + keyboard
+     handlers stay wired up). */
+  .row-checkbox {
+    width: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 180ms ease;
+  }
+
+  .row-checkbox.active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .row-checkbox input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+    accent-color: var(--accent-primary);
+  }
+
+  .track-list :global(.track-row > .track-checkbox) {
+    display: none;
+  }
+
   .reorder-controls {
     display: flex;
     flex-direction: row;
@@ -3640,67 +3571,6 @@
     cursor: grabbing;
   }
 
-  /* Batch selection controls */
-  .batch-controls {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 16px;
-    background: var(--bg-tertiary);
-    border-radius: 8px;
-    margin-bottom: 8px;
-  }
-
-  .batch-left, .batch-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .selection-count {
-    font-size: 13px;
-    color: var(--text-secondary);
-  }
-
-  .batch-btn {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 6px 12px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
-    border-radius: 6px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    cursor: pointer;
-    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
-  }
-
-  .batch-btn:hover {
-    background: var(--hover-bg, rgba(255, 255, 255, 0.1));
-    color: var(--text-primary);
-  }
-
-  .col-checkbox {
-    width: 24px;
-    flex-shrink: 0;
-  }
-
-  .track-checkbox {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    flex-shrink: 0;
-    cursor: pointer;
-  }
-
-  .track-checkbox input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    cursor: pointer;
-    accent-color: var(--accent-color, #6366f1);
-  }
 
   .suggestions-manual-launch {
     display: flex;
