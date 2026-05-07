@@ -199,6 +199,10 @@ impl AudioSettingsStore {
             "ALTER TABLE audio_settings ADD COLUMN allow_quality_fallback INTEGER DEFAULT 0",
             [],
         );
+        let _ = conn.execute(
+            "ALTER TABLE audio_settings ADD COLUMN reserve_dac_while_running INTEGER DEFAULT 0",
+            [],
+        );
 
         Ok(Self { conn })
     }
@@ -217,7 +221,7 @@ impl AudioSettingsStore {
     pub fn get_settings(&self) -> Result<AudioSettings, String> {
         self.conn
             .query_row(
-                "SELECT output_device, exclusive_mode, dac_passthrough, preferred_sample_rate, backend_type, alsa_plugin, alsa_hardware_volume, stream_first_track, stream_buffer_seconds, streaming_only, limit_quality_to_device, device_max_sample_rate, normalization_enabled, normalization_target_lufs, gapless_enabled, device_sample_rate_limits, pw_force_bitperfect, sync_audio_on_startup, quality_fallback_behavior, skip_sink_switch, allow_quality_fallback FROM audio_settings WHERE id = 1",
+                "SELECT output_device, exclusive_mode, dac_passthrough, preferred_sample_rate, backend_type, alsa_plugin, alsa_hardware_volume, stream_first_track, stream_buffer_seconds, streaming_only, limit_quality_to_device, device_max_sample_rate, normalization_enabled, normalization_target_lufs, gapless_enabled, device_sample_rate_limits, pw_force_bitperfect, sync_audio_on_startup, quality_fallback_behavior, skip_sink_switch, allow_quality_fallback, reserve_dac_while_running FROM audio_settings WHERE id = 1",
                 [],
                 |row| {
                     // Parse backend_type from JSON string
@@ -260,9 +264,10 @@ impl AudioSettingsStore {
                             .unwrap_or_else(|| "ask".to_string()),
                         skip_sink_switch: row.get::<_, Option<i64>>(19)?.unwrap_or(0) != 0,
                         allow_quality_fallback: row.get::<_, Option<i64>>(20)?.unwrap_or(0) != 0,
-                        // Persisted in Task 5 (Lifetime B). Default to false until the
-                        // DB column + setter exist; serde_default keeps JSON round-trips clean.
-                        reserve_dac_while_running: false,
+                        reserve_dac_while_running: row
+                            .get::<_, Option<i64>>(21)?
+                            .unwrap_or(0)
+                            != 0,
                     })
                 },
             )
@@ -514,6 +519,21 @@ impl AudioSettingsStore {
         Ok(())
     }
 
+    /// Persist the `reserve_dac_while_running` flag (Lifetime B from the
+    /// ALSA exclusive-hardening design spec). Toggling this only updates
+    /// the DB row; applying the change to the live `DeviceReservation`
+    /// guard is the caller's responsibility — see
+    /// `AppState::apply_dac_reservation`.
+    pub fn set_reserve_dac_while_running(&self, enabled: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET reserve_dac_while_running = ?1 WHERE id = 1",
+                params![enabled as i64],
+            )
+            .map_err(|e| format!("Failed to set reserve_dac_while_running: {}", e))?;
+        Ok(())
+    }
+
     pub fn set_pw_force_bitperfect(&self, enabled: bool) -> Result<(), String> {
         self.conn
             .execute(
@@ -612,7 +632,8 @@ impl AudioSettingsStore {
                     pw_force_bitperfect = ?17,
                     sync_audio_on_startup = ?18,
                     skip_sink_switch = ?19,
-                    allow_quality_fallback = ?20
+                    allow_quality_fallback = ?20,
+                    reserve_dac_while_running = ?21
                 WHERE id = 1",
                 params![
                     defaults.output_device,
@@ -635,6 +656,7 @@ impl AudioSettingsStore {
                     defaults.sync_audio_on_startup as i64,
                     defaults.skip_sink_switch as i64,
                     defaults.allow_quality_fallback as i64,
+                    defaults.reserve_dac_while_running as i64,
                 ],
             )
             .map_err(|e| format!("Failed to reset audio settings: {}", e))?;

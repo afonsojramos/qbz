@@ -77,7 +77,7 @@ pub mod visualizer;
 pub mod qbzd_discovery;
 
 use rustls::crypto::{aws_lc_rs, CryptoProvider};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
@@ -87,6 +87,7 @@ use lastfm::LastFmClient;
 use media_controls::{MediaControlsManager, TrackInfo};
 use playback_context::ContextManager;
 use player::Player;
+use qbz_audio::DeviceReservation;
 use queue::QueueManager;
 use share::SongLinkClient;
 use visualizer::Visualizer;
@@ -104,6 +105,14 @@ pub struct AppState {
     pub visualizer: Visualizer,
     #[cfg(target_os = "linux")]
     pub idle_inhibitor: idle_inhibit::IdleInhibitor,
+    /// Long-lived per-process DAC reservation (Lifetime B from the
+    /// ALSA exclusive-hardening design spec). Held while the
+    /// `reserve_dac_while_running` audio setting is true and the
+    /// selected output device targets a single ALSA card.
+    /// Acquired at startup or via `v2_set_reserve_dac_while_running`,
+    /// dropped on toggle-off, DAC change to a non-card device, or
+    /// `AppState` drop.
+    pub dac_reservation: StdMutex<Option<DeviceReservation>>,
 }
 
 impl AppState {
@@ -166,6 +175,83 @@ impl AppState {
             visualizer,
             #[cfg(target_os = "linux")]
             idle_inhibitor: idle_inhibit::IdleInhibitor::new(),
+            dac_reservation: StdMutex::new(None),
+        }
+    }
+
+    /// Apply the `reserve_dac_while_running` setting (Lifetime B from the
+    /// ALSA exclusive-hardening design spec).
+    ///
+    /// Idempotent: drops any currently-held guard, then re-acquires for the
+    /// new device when both arguments make sense (Some + targets a single
+    /// ALSA card via a recognized plugin prefix). Passing `None` for
+    /// `hw_device`, or a device string the parser can't tie to one card
+    /// (`default`, `pulse`, etc.), releases the existing guard without
+    /// reacquiring.
+    ///
+    /// `app_device_name` is the user-facing DAC label that will be advertised
+    /// over D-Bus once QBZ publishes the `ReserveDevice1` interface as a
+    /// server (see the design spec's "Note on `ApplicationName`" — that path
+    /// is deferred). Today the value is captured for logging only; pass the
+    /// same `hw_device` string if no friendlier name is at hand.
+    ///
+    /// On acquisition failure (higher-priority holder, D-Bus error) the
+    /// guard is left as `None` and a warning is logged. Status is surfaced
+    /// to the UI via `v2_get_dac_reservation_status`.
+    pub fn apply_dac_reservation(
+        &self,
+        hw_device: Option<&str>,
+        app_device_name: Option<&str>,
+    ) {
+        let mut guard = match self.dac_reservation.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                log::warn!(
+                    "[reservation] dac_reservation mutex poisoned, recovering: {}",
+                    poisoned
+                );
+                poisoned.into_inner()
+            }
+        };
+        // Drop any existing guard FIRST so the bus name is released before
+        // we attempt to reacquire (idempotent re-apply). This matters when
+        // the user changes DACs: the old card's bus name must release
+        // before the new card's bus name is requested, otherwise PipeWire
+        // may not have moved off the old card yet.
+        *guard = None;
+
+        let Some(hw) = hw_device else {
+            return;
+        };
+        if !is_card_specific_device(hw) {
+            return;
+        }
+
+        let app_name = app_device_name.unwrap_or(hw);
+        match DeviceReservation::acquire(hw, app_name) {
+            Ok(r) => {
+                if r.is_active() {
+                    log::info!(
+                        "[reservation] persistent DAC reservation acquired for {}",
+                        hw
+                    );
+                } else {
+                    log::info!(
+                        "[reservation] persistent DAC reservation degraded for {} (D-Bus unavailable or non-card device)",
+                        hw
+                    );
+                }
+                *guard = Some(r);
+            }
+            Err(e) => {
+                log::warn!(
+                    "[reservation] persistent reservation failed for {}: {}",
+                    hw,
+                    e
+                );
+                // Leave guard as None; the v2_get_dac_reservation_status
+                // command surfaces the contended state to the UI.
+            }
         }
     }
 }
@@ -174,6 +260,24 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Whether an ALSA device id targets a single card (so its `ReserveDevice1`
+/// bus name has well-defined per-card semantics). Used by
+/// `AppState::apply_dac_reservation` and `v2_get_dac_reservation_status` to
+/// gate Lifetime-B reservation on devices the parser can map to one card.
+///
+/// Conservative allow-list: prefixes whose ALSA configurations all expand
+/// to a single card. `default`, `pulse`, `null`, etc. are intentionally
+/// excluded — they don't map to a single piece of hardware and a
+/// per-card reservation has no defined meaning.
+fn is_card_specific_device(s: &str) -> bool {
+    s.starts_with("hw:")
+        || s.starts_with("plughw:")
+        || s.starts_with("front:")
+        || s.starts_with("surround")
+        || s.starts_with("iec958:")
+        || s.starts_with("hdmi:")
 }
 
 /// Update MPRIS metadata when track changes
@@ -808,11 +912,34 @@ pub fn run(qconnect_cli_override: Option<bool>) {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
+    // Capture the bits we need to apply Lifetime-B DAC reservation before
+    // moving `audio_settings` into AppState. Reservation is opt-in via
+    // `reserve_dac_while_running` and only meaningful when the saved
+    // output device targets a single ALSA card (hw:/plughw:/front:/...).
+    let lifetime_b_enabled = audio_settings.reserve_dac_while_running;
+    let lifetime_b_device = if lifetime_b_enabled {
+        audio_settings.output_device.clone()
+    } else {
+        None
+    };
+
+    let app_state = AppState::with_device_and_settings(saved_device, audio_settings);
+    if lifetime_b_enabled {
+        if let Some(ref dev) = lifetime_b_device {
+            log::info!(
+                "[reservation] applying persisted Lifetime-B reservation at startup for {}",
+                dev
+            );
+            app_state.apply_dac_reservation(Some(dev), Some(dev));
+        } else {
+            log::info!(
+                "[reservation] reserve_dac_while_running is true but no output device is set; skipping startup reservation"
+            );
+        }
+    }
+
     builder
-        .manage(AppState::with_device_and_settings(
-            saved_device,
-            audio_settings,
-        ))
+        .manage(app_state)
         .manage(core_bridge::CoreBridgeState::new())
         .manage(commands_v2::OAuthCancelState::new())
         .manage(qbzd_discovery::QbzdDiscoveryState::new())
@@ -1806,6 +1933,8 @@ pub fn run(qconnect_cli_override: Option<bool>) {
             commands_v2::v2_set_audio_stream_first_track,
             commands_v2::v2_set_audio_stream_buffer_seconds,
             commands_v2::v2_set_audio_alsa_hardware_volume,
+            commands_v2::v2_set_reserve_dac_while_running,
+            commands_v2::v2_get_dac_reservation_status,
             commands_v2::v2_listenbrainz_get_status,
             commands_v2::v2_listenbrainz_is_enabled,
             commands_v2::v2_listenbrainz_set_enabled,
