@@ -4888,6 +4888,7 @@ dependencies = [
  "symphonia",
  "thiserror 2.0.18",
  "tokio",
+ "zbus 4.4.0",
 ]
 
 [[package]]
@@ -9293,6 +9294,7 @@ dependencies = [
  "serde_repr",
  "sha1",
  "static_assertions",
+ "tokio",
  "tracing",
  "uds_windows",
  "windows-sys 0.52.0",

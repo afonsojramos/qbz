@@ -41,6 +41,10 @@ dirs = "6"
 alsa = "0.10"
 # alsa-sys: direct FFI for snd_lib_error_set_handler (custom error routing)
 alsa-sys = "0.3"
+# zbus for org.freedesktop.ReserveDevice1 D-Bus client (device reservation).
+# Pinned to v4 to share the transitive copy already pulled in by
+# secret-service/souvlaki and avoid duplicate zbus compiles.
+zbus = { version = "4", default-features = false, features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # CoreAudio for device probing, sample rate switching, and (future) hog mode / exclusive mode

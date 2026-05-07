@@ -39,6 +39,7 @@ pub mod alsa_direct;
 pub mod coreaudio_direct;
 pub mod analysis;
 pub mod analyzer_tap;
+pub mod device_reservation;
 pub mod diagnostic;
 pub mod dynamic_amplify;
 pub mod loudness;
@@ -61,6 +62,7 @@ pub use backend::{
     AlsaDirectError, AlsaPlugin, AudioBackend, AudioBackendType, AudioDevice, BackendConfig,
     BackendManager, BackendResult, BitPerfectMode,
 };
+pub use device_reservation::{DeviceReservation, ReservationError};
 pub use diagnostic::{AudioDiagnostic, BitDepthResult, DiagnosticSource};
 pub use dynamic_amplify::DynamicAmplify;
 pub use loudness::{calculate_gain_factor, db_to_linear, extract_replaygain, ReplayGainData};

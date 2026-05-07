@@ -2921,6 +2921,7 @@ dependencies = [
  "symphonia",
  "thiserror 2.0.18",
  "tokio",
+ "zbus",
 ]
 
 [[package]]
@@ -4387,6 +4388,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2 0.6.3",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -5664,6 +5666,7 @@ dependencies = [
  "serde_repr",
  "sha1",
  "static_assertions",
+ "tokio",
  "tracing",
  "uds_windows",
  "windows-sys 0.52.0",
