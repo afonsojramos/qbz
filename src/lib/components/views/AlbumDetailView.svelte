@@ -750,18 +750,6 @@
             <BookOpen size={18} />
           </button>
         {/if}
-        <AlbumMenu
-          onPlayNext={onPlayAllNext}
-          onPlayLater={onPlayAllLater}
-          onAddToPlaylist={onAddAlbumToPlaylist ? handleAddAlbumToPlaylist : undefined}
-          onAddToMixtape={handleAddToMixtape}
-          onShareQobuz={onShareAlbumQobuz}
-          onShareSonglink={onShareAlbumSonglink}
-          onDownload={onDownloadAlbum}
-          isAlbumFullyDownloaded={albumFullyDownloaded}
-          onOpenContainingFolder={onOpenAlbumFolder}
-          onReDownloadAlbum={onReDownloadAlbum}
-        />
         <button
           class="action-btn-circle"
           onclick={handleAddToMixtape}
@@ -777,6 +765,18 @@
         >
           <SquareCheckBig size={18} />
         </button>
+        <AlbumMenu
+          onPlayNext={onPlayAllNext}
+          onPlayLater={onPlayAllLater}
+          onAddToPlaylist={onAddAlbumToPlaylist ? handleAddAlbumToPlaylist : undefined}
+          onAddToMixtape={handleAddToMixtape}
+          onShareQobuz={onShareAlbumQobuz}
+          onShareSonglink={onShareAlbumSonglink}
+          onDownload={onDownloadAlbum}
+          isAlbumFullyDownloaded={albumFullyDownloaded}
+          onOpenContainingFolder={onOpenAlbumFolder}
+          onReDownloadAlbum={onReDownloadAlbum}
+        />
       </div>
     </div>
   </div>
@@ -821,17 +821,16 @@
     </div>
 
     <div class="table-header">
-      {#if multiSelectMode}
-        <div class="col-select-all">
-          <input
-            type="checkbox"
-            checked={selectAllState === 'all'}
-            indeterminate={selectAllState === 'partial'}
-            onchange={toggleSelectAll}
-            title={$t('actions.selectAll')}
-          />
-        </div>
-      {/if}
+      <div class="col-select-all" class:active={multiSelectMode}>
+        <input
+          type="checkbox"
+          checked={selectAllState === 'all'}
+          indeterminate={selectAllState === 'partial'}
+          onchange={toggleSelectAll}
+          title={$t('actions.selectAll')}
+          tabindex={multiSelectMode ? 0 : -1}
+        />
+      </div>
       <div class="col-number">#</div>
       <div class="col-title">{$t('tracklist.title')}</div>
       <div class="col-duration">{$t('tracklist.duration')}</div>
@@ -1486,7 +1485,7 @@
   .table-header {
     width: 100%;
     height: 40px;
-    padding: 0 16px;
+    padding: 0 16px 0 4px;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -1498,23 +1497,44 @@
     box-sizing: border-box;
   }
 
+  /* Match the track-row's left padding (overridden below) so the # column
+     and the quality badge above sit at the same x. */
+  .track-list :global(.track-row) {
+    padding-left: 4px;
+  }
+
+  .track-list :global(.track-row .track-number) {
+    justify-content: flex-start;
+  }
+
   .col-select-all {
-    width: 32px;
+    width: 0;
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: width 180ms ease, opacity 180ms ease;
+  }
+
+  .col-select-all.active {
+    width: 24px;
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .col-select-all input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
+    width: 15px;
+    height: 15px;
     accent-color: var(--accent-primary);
     cursor: pointer;
   }
 
   .col-number {
     width: 48px;
-    text-align: center;
+    text-align: left;
   }
 
   .col-title {

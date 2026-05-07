@@ -274,25 +274,26 @@
   tabindex={isBlacklisted ? -1 : 0}
   onkeydown={(e) => e.key === 'Enter' && !isBlacklisted && (selectable ? onToggleSelect?.(e as unknown as MouseEvent) : onPlay?.())}
 >
-  <!-- Checkbox (select mode) -->
-  {#if selectable}
-    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div
-      class="track-checkbox"
-      onclick={(e) => {
-        e.stopPropagation();
-        onToggleSelect?.(e);
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={selected}
-        tabindex={-1}
-        aria-label="Select track"
-        style="pointer-events: none;"
-      />
-    </div>
-  {/if}
+  <!-- Checkbox (select mode) — always rendered, animates in/out so the
+       column doesn't pop when select mode toggles. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div
+    class="track-checkbox"
+    class:active={selectable}
+    onclick={(e) => {
+      if (!selectable) return;
+      e.stopPropagation();
+      onToggleSelect?.(e);
+    }}
+  >
+    <input
+      type="checkbox"
+      checked={selected}
+      tabindex={-1}
+      aria-label="Select track"
+      style="pointer-events: none;"
+    />
+  </div>
 
   <!-- Track Number / Play Button / Unavailable Indicator -->
   <div class="track-number" class:unavailable={isUnavailable} class:blacklisted={isBlacklisted}>
@@ -523,11 +524,21 @@
   }
 
   .track-checkbox {
-    width: 24px;
+    width: 0;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: width 180ms ease, opacity 180ms ease;
+  }
+
+  .track-checkbox.active {
+    width: 24px;
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .track-checkbox input[type='checkbox'] {
