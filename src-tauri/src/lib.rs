@@ -237,7 +237,7 @@ impl AppState {
                     );
                 } else {
                     log::info!(
-                        "[reservation] persistent DAC reservation degraded for {} (D-Bus unavailable or non-card device)",
+                        "[reservation] persistent DAC reservation degraded for {} (D-Bus session bus unavailable)",
                         hw
                     );
                 }
@@ -271,7 +271,7 @@ impl Default for AppState {
 /// to a single card. `default`, `pulse`, `null`, etc. are intentionally
 /// excluded — they don't map to a single piece of hardware and a
 /// per-card reservation has no defined meaning.
-fn is_card_specific_device(s: &str) -> bool {
+pub(crate) fn is_card_specific_device(s: &str) -> bool {
     s.starts_with("hw:")
         || s.starts_with("plughw:")
         || s.starts_with("front:")

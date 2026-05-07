@@ -698,6 +698,21 @@ pub async fn v2_set_audio_alsa_hardware_volume(
 pub enum DacReservationStatus {
     Inactive,
     Active,
+    /// Reservation could not be acquired and the guard is currently None.
+    ///
+    /// **Known limitation (2026-05-07):** this variant is reported whenever
+    /// `apply_dac_reservation` failed to set the guard, regardless of why.
+    /// In practice it most commonly means another app holds the DAC at
+    /// higher priority (the spec's intended `Contested` semantic). It also
+    /// fires for transient D-Bus protocol errors (`DbusError`) and ALSA
+    /// enumeration errors (`AlsaError`) — those should ideally surface as
+    /// `Unavailable`, but distinguishing them at this layer requires
+    /// stashing the last `ReservationError` alongside the guard. Deferred
+    /// until Tasks 7-8 confirm the UI needs the distinction.
+    ///
+    /// `holder` and `holder_priority` are currently always `"unknown"` and
+    /// `0`. The real values come from `ReservationError::HigherPriorityHolder`
+    /// and require the same stash refactor to surface here.
     Contested {
         holder: String,
         holder_priority: i32,
@@ -778,7 +793,7 @@ pub fn v2_get_dac_reservation_status(
     }
     match snapshot.output_device.as_deref() {
         None => return Ok(DacReservationStatus::Inactive),
-        Some(d) if !is_card_specific_device(d) => {
+        Some(d) if !crate::is_card_specific_device(d) => {
             return Ok(DacReservationStatus::Inactive);
         }
         _ => {}
@@ -793,21 +808,13 @@ pub fn v2_get_dac_reservation_status(
         Some(_) => DacReservationStatus::Unavailable {
             reason: "D-Bus session bus unreachable or device not card-specific".to_string(),
         },
-        None => DacReservationStatus::Contested {
-            holder: "unknown".to_string(),
-            holder_priority: 0,
-        },
+        None => {
+            // See DacReservationStatus::Contested for the known limitation
+            // about D-Bus / ALSA errors being misclassified as Contested.
+            DacReservationStatus::Contested {
+                holder: "unknown".to_string(),
+                holder_priority: 0,
+            }
+        }
     })
-}
-
-/// Local mirror of `crate::is_card_specific_device` so the status
-/// command's gating matches `apply_dac_reservation`'s gating without
-/// crossing a module boundary just for one private helper.
-fn is_card_specific_device(s: &str) -> bool {
-    s.starts_with("hw:")
-        || s.starts_with("plughw:")
-        || s.starts_with("front:")
-        || s.starts_with("surround")
-        || s.starts_with("iec958:")
-        || s.starts_with("hdmi:")
 }
