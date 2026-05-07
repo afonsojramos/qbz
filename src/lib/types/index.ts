@@ -96,6 +96,7 @@ export interface QobuzAlbum {
   title: string;
   description?: string;
   artist: { id?: number; name: string };
+  artists?: { id: number; name: string; roles?: string[] }[];
   image: QobuzImage;
   release_date_original?: string;
   hires_streamable?: boolean;
@@ -202,6 +203,10 @@ export interface AlbumDetail {
   title: string;
   artist: string;
   artistId?: number;
+  /** Featured artists (excluding the main artist), in API order. */
+  featuredArtists?: { id: number; name: string }[];
+  /** Parental advisory marker — show explicit badge next to artist line. */
+  parentalWarning?: boolean;
   year: string;
   releaseDate?: string; // Full date in YYYY-MM-DD format
   label: string;

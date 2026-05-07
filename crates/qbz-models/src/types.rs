@@ -273,6 +273,23 @@ pub struct Album {
     /// Editorial awards (Qobuzissime, Album of the Week, press accolades).
     #[serde(default)]
     pub awards: Option<Vec<AlbumAward>>,
+    /// Parental advisory / explicit content marker.
+    #[serde(default)]
+    pub parental_warning: Option<bool>,
+    /// Full artist contributor list including roles. The primary artist is
+    /// duplicated here as `roles: ["main-artist"]`; non-main entries are
+    /// the album's featured artists.
+    #[serde(default)]
+    pub artists: Option<Vec<AlbumArtist>>,
+}
+
+/// Album artist contributor entry (main artist + featured artists).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumArtist {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub roles: Option<Vec<String>>,
 }
 
 /// A downloadable extra bundled with an album (e.g. PDF booklet)
