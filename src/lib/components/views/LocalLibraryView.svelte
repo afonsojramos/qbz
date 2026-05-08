@@ -967,16 +967,17 @@
     const queueTracks = selectedLocalTracks().map(buildQueueTrackFromLocalTrack);
     if (queueTracks.length === 0) return;
     await cmdAddTracksToQueueNext(queueTracks);
-    trackSelectMode = false;
-    selectedTrackIds = new Set();
+    // Use resetMultiSelect so tree-mode state (treeSelectMode +
+    // treeSelectedTracksById) is cleared too; otherwise the
+    // BulkActionBar lingers with count 0 after firing from tree mode.
+    resetMultiSelect();
   }
 
   async function handleBulkPlayLater() {
     const queueTracks = selectedLocalTracks().map(buildQueueTrackFromLocalTrack);
     if (queueTracks.length === 0) return;
     await cmdAddTracksToQueue(queueTracks);
-    trackSelectMode = false;
-    selectedTrackIds = new Set();
+    resetMultiSelect();
   }
 
   function handleBulkAddToPlaylist() {
@@ -991,8 +992,7 @@
     if (localIds.length === 0 && plexRatingKeys.length === 0) return;
     if (localIds.length > 0) onBulkAddToPlaylist?.(localIds);
     if (plexRatingKeys.length > 0) onBulkAddPlexToPlaylist?.(plexRatingKeys);
-    trackSelectMode = false;
-    selectedTrackIds = new Set();
+    resetMultiSelect();
   }
 
   function resetMultiSelect() {
@@ -1750,7 +1750,13 @@
       // Cache miss — fetch the parent folder's recursive listing to
       // populate the cache, then retry. Defensive fallback.
       const lastSlash = trackPath.lastIndexOf('/');
-      if (lastSlash <= 0) return;
+      if (lastSlash <= 0) {
+        console.warn(
+          '[LocalLibrary] Cannot resolve track path with no parent folder:',
+          trackPath,
+        );
+        return;
+      }
       const parent = trackPath.substring(0, lastSlash);
       try {
         const fetched = await invoke<LocalTrack[]>(
@@ -4932,7 +4938,7 @@
               onPlayNext={handleBulkPlayNext}
               onPlayLater={handleBulkPlayLater}
               onAddToPlaylist={handleBulkAddToPlaylist}
-              onClearSelection={() => { selectedTrackIds = new Set(); treeSelectedTracksById = new SvelteMap(); }}
+              onClearSelection={() => { resetMultiSelect(); }}
             />
           {/if}
         {:else}
