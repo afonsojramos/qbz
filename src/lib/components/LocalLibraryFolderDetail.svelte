@@ -79,15 +79,18 @@
       invoke<LocalTrack[]>('v2_library_list_folder_tracks', { folderPath: path }),
     ])
       .then(([children, tracks]) => {
+        if (path !== folderPath) return;
         subfolders = children.filter((c): c is FolderEntry => c.kind === 'folder');
         directTracks = tracks;
       })
       .catch((e: unknown) => {
+        if (path !== folderPath) return;
         loadError = String(e);
         // eslint-disable-next-line no-console
         console.error('[FolderDetail] load failed', e);
       })
       .finally(() => {
+        if (path !== folderPath) return;
         loading = false;
       });
   });
