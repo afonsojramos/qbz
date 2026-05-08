@@ -77,7 +77,15 @@ impl Default for AudioSettings {
             exclusive_mode: false,
             dac_passthrough: false,
             preferred_sample_rate: None,
-            backend_type: None, // Auto-detect (PipeWire if available, else ALSA)
+            // Default to a per-OS-correct backend (PipeWire on Linux, SystemDefault
+            // elsewhere) instead of None. None used to mean "auto-detect" but it
+            // actually fell through to the legacy CPAL path in init_device, which
+            // has a known race against rodio's DeviceSink drop on resume — visible
+            // as "audio doesn't come back after pause" (#375). Picking a concrete
+            // backend here puts new installs on the proper backend init path; the
+            // runtime still degrades gracefully if the chosen backend isn't
+            // available on the host.
+            backend_type: Some(AudioBackendType::default()),
             alsa_plugin: Some(AlsaPlugin::Hw), // Default to hw (bit-perfect)
             alsa_hardware_volume: false, // Disabled by default (maximum compatibility)
             stream_first_track: false, // Disabled by default — user opts in
@@ -202,6 +210,30 @@ impl AudioSettingsStore {
         let _ = conn.execute(
             "ALTER TABLE audio_settings ADD COLUMN reserve_dac_while_running INTEGER DEFAULT 0",
             [],
+        );
+
+        // Migration (#375): existing installs persisted backend_type = NULL when
+        // the user never explicitly picked a backend. NULL fell through to the
+        // legacy CPAL path in the player, which has a race against rodio's
+        // DeviceSink drop on resume that produces silent streams after pause.
+        // Backfill NULL rows with the per-OS default so those installs move onto
+        // the proper backend init path. set_backend_type is the canonical writer
+        // (it serialises via serde_json), so we go through the same JSON shape
+        // here for the row read path to round-trip cleanly.
+        let default_backend_json = serde_json::to_string(&AudioBackendType::default())
+            .unwrap_or_else(|_| {
+                // Fallback only matters if serde_json::to_string fails for a
+                // unit-variant enum, which it can't — but keep a sane string in
+                // case the enum gains a non-trivial variant in the future.
+                if cfg!(target_os = "linux") {
+                    "\"PipeWire\"".to_string()
+                } else {
+                    "\"SystemDefault\"".to_string()
+                }
+            });
+        let _ = conn.execute(
+            "UPDATE audio_settings SET backend_type = ?1 WHERE id = 1 AND backend_type IS NULL",
+            params![default_backend_json],
         );
 
         Ok(Self { conn })
