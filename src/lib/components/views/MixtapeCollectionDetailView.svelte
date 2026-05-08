@@ -645,11 +645,17 @@
       const cols = Math.max(1, gridColumns);
       const rowH = gridRowHeight;
       const totalRows = Math.ceil(total / cols);
-      const firstRow = Math.max(0, Math.floor(localScroll / rowH) - WINDOW_BUFFER);
+      const rawFirstRow = Math.max(0, Math.floor(localScroll / rowH) - WINDOW_BUFFER);
       const lastRow = Math.min(
         totalRows,
         Math.ceil((localScroll + viewportHeight) / rowH) + WINDOW_BUFFER,
       );
+      // Clamp firstRow to keep at least one row in view when localScroll
+      // overshoots the content (briefly possible during rapid scroll, when
+      // listScrollTop updates ahead of spacer-height layout). Without this,
+      // rawFirstRow * cols >= total would slice an empty window and the
+      // user sees a blank container until scroll settles.
+      const firstRow = Math.min(rawFirstRow, Math.max(0, totalRows - 1));
       return {
         firstIdx: firstRow * cols,
         lastIdx: Math.min(total, lastRow * cols),
@@ -662,11 +668,13 @@
     // using the base row height still correctly windows the top-level items;
     // the loaded tracks just overflow the reserved spacer. Good enough for
     // the 60+ item case this is actually trying to fix.
-    const firstIdx = Math.max(0, Math.floor(localScroll / LIST_ROW_HEIGHT) - WINDOW_BUFFER);
+    const rawFirstIdx = Math.max(0, Math.floor(localScroll / LIST_ROW_HEIGHT) - WINDOW_BUFFER);
     const lastIdx = Math.min(
       total,
       Math.ceil((localScroll + viewportHeight) / LIST_ROW_HEIGHT) + WINDOW_BUFFER,
     );
+    // Same overscroll clamp as the grid branch above.
+    const firstIdx = Math.min(rawFirstIdx, Math.max(0, total - 1));
     return {
       firstIdx,
       lastIdx,
@@ -1795,8 +1803,17 @@
                whole unit when it's scrolled off-screen. With virtualization
                disabled in expanded mode the item-row count is the full
                visibleItems count, so this is how we keep layout cost
-               bounded to the viewport. -->
-          <div class="item-block">
+               bounded to the viewport.
+
+               In list mode the manual virtualizer already restricts which
+               items are rendered, and stacking content-visibility on top
+               of that produces visible glitches during fast scroll: the
+               browser's intersection check intermittently treats rows as
+               off-screen and collapses them to the intrinsic-size hint
+               for a frame, which our spacer math doesn't predict. The
+               `lazy` class gates content-visibility to expanded mode where
+               it's actually load-bearing. -->
+          <div class="item-block" class:lazy={viewMode === 'expanded'}>
           <div class="item-row" class:is-selected={isSelected} class:is-expanded={showTracks}>
             <div class="col-idx">
               {#if selectMode}
@@ -2161,7 +2178,16 @@
     padding: 8px 8px 100px 18px;
     color: var(--text-primary);
     box-sizing: border-box;
+    overflow-x: hidden;
     overflow-y: auto;
+    /* Disable browser scroll-anchoring: the virtualizer manages its own
+       top/bottom spacer heights, and as those resize during scroll the
+       browser's auto-anchoring tries to "preserve visual position" by
+       nudging scrollTop in the opposite direction of user input. The net
+       effect is the user can't reach scrollTop=0 by scrolling up (the
+       Top button still works because it sets scrollTop programmatically
+       in a single frame, no spacer-driven correction). */
+    overflow-anchor: none;
     position: relative;
   }
 
@@ -2795,15 +2821,19 @@
   }
 
   /* Wrapper around each item-row + expanded-tracks block.
-     content-visibility: auto tells the engine to skip rendering the
-     whole unit when it's off-screen. For expanded mode (where we
-     render every item so the scrollbar reaches the real end) this
-     substitutes manual virtualization with native skipping, so even
-     a 50-item collection fully expanded stays fluid.
-     The intrinsic hint is the collapsed row height (56px) — when
-     a row becomes visible and gets expanded, the browser measures
-     the real height and the scrollbar adjusts. */
-  .item-block {
+     content-visibility: auto is gated by the .lazy class — applied only
+     in expanded mode (script binds it via `class:lazy`). In expanded
+     mode virtualization is OFF (we render every item so the scrollbar
+     reaches the real end of variable-height content), and native
+     content-visibility skipping keeps layout cost bounded.
+     In list/grid mode the manual virtualizer already controls which
+     items are rendered; layering content-visibility on top of that
+     causes intermittent frame-level collapses to the intrinsic-size
+     during fast scroll (the browser briefly treats rows as off-screen
+     and our spacer math doesn't predict the collapse). The intrinsic
+     hint is the collapsed row height (56px) — when a row gets expanded
+     the browser measures the real height and the scrollbar adjusts. */
+  .item-block.lazy {
     content-visibility: auto;
     contain-intrinsic-size: 100% 56px;
   }
