@@ -278,6 +278,12 @@
   // View state
   type TabType = 'tracks' | 'folders' | 'albums' | 'artists';
   let activeTab = $state<TabType>('tracks');
+  // One-shot guard: on initial mount, after preferences load, jump to the
+  // user's first-visible tab. Subsequent visibility changes (e.g. user
+  // hides their current tab) are handled separately in
+  // `loadLibraryPreferences` / `handleLibraryPreferencesSaved` and must NOT
+  // override an explicit user click.
+  let initialTabSet = $state(false);
 
   // Library tab preferences (persisted per-user via v2_*_library_preferences)
   const DEFAULT_TAB_ORDER: TabType[] = ['tracks', 'folders', 'albums', 'artists'];
@@ -315,13 +321,23 @@
       // Hydrate Folders tab view-mode from the same payload. Defaults to
       // 'flat' when the field is absent (legacy installs).
       foldersViewMode = prefs.folders_view_mode === 'tree' ? 'tree' : 'flat';
-      // If the active tab is no longer visible (e.g. user hid it on another
-      // device), fall back to the first visible tab.
+      // On initial mount, always honour the user's configured tab order and
+      // open whichever tab is first in their visible list — opening on
+      // 'tracks' by default freezes startup on large libraries (16K+ tracks).
+      // Afterwards (e.g. user hid their current tab on another device),
+      // fall back to the first visible tab only when the active one
+      // disappeared. The `initialTabSet` flag is one-shot so explicit user
+      // clicks are never overridden.
       const currentVisible = libraryPreferences.tab_order.filter(
         (tab): tab is TabType =>
           isKnownTab(tab) && !libraryPreferences.hidden_tabs.includes(tab),
       );
-      if (!currentVisible.includes(activeTab)) {
+      if (!initialTabSet) {
+        if (currentVisible.length > 0) {
+          activeTab = currentVisible[0];
+        }
+        initialTabSet = true;
+      } else if (!currentVisible.includes(activeTab)) {
         activeTab = currentVisible[0] ?? 'tracks';
       }
     } catch (err) {
