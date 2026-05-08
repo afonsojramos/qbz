@@ -764,6 +764,120 @@
     selectedFolderPath ? (albumByGroupKey.get(selectedFolderPath) ?? null) : null,
   );
 
+  // ───────── Folders tab tree-mode search state ─────────
+  // Tree-mode search piggybacks on the existing folders-tab search input
+  // (`albumSearch`), but maintains its own visible-path filter and
+  // expand-state snapshot so the user gets path-context preserved while
+  // typing. In-memory matching over the loaded `albums` array — the
+  // matcher walks each album_group_key and checks if any segment contains
+  // the query (case-insensitive). For libraries above ~50k tracks a
+  // backend search command would be a follow-up (see Task 10 notes).
+  // `searchVisiblePaths === null` means "no active filter, render
+  // everything" — that's the steady-state when the input is empty or the
+  // user is not on the folders tree tab.
+  let searchVisiblePaths = $state<SvelteSet<string> | null>(null);
+  // Snapshot of `treeExpandedPaths` taken on the FIRST non-empty keystroke
+  // and restored when the query is cleared. Null while no search is active.
+  let preSearchExpandedSnapshot = $state<SvelteSet<string> | null>(null);
+  // Trimmed-lowercase copy of the current tree-search query, exposed to
+  // the tree component for the matched-segment highlight. Empty string
+  // when there is no active filter.
+  let treeSearchQuery = $state('');
+  // Debounce timer for the tree-mode search compute. The flat-mode search
+  // already has its own 150ms debounce on `debouncedAlbumSearch`; we add
+  // a separate timer here because the tree match-set computation is
+  // heavier (walks ancestors) and we don't want to thrash on every key.
+  let treeSearchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function applyFolderTreeSearch(rawQuery: string) {
+    const query = rawQuery.trim().toLowerCase();
+    treeSearchQuery = query;
+    if (!query) {
+      // Cleared — restore the user's pre-search expand state.
+      if (preSearchExpandedSnapshot !== null) {
+        treeExpandedPaths = preSearchExpandedSnapshot;
+        preSearchExpandedSnapshot = null;
+      }
+      searchVisiblePaths = null;
+      return;
+    }
+    // Snapshot prior expand state on first non-empty search keystroke so
+    // we can restore it verbatim on clear.
+    if (preSearchExpandedSnapshot === null) {
+      preSearchExpandedSnapshot = new SvelteSet(treeExpandedPaths);
+    }
+    const matches = new Set<string>();
+    const ancestors = new Set<string>();
+    for (const album of albums) {
+      // Folder-grouped albums use `id === directory_path === album_group_key`
+      // (see comment on `albumByGroupKey`). That's the path we match against.
+      const path = album.id;
+      if (!path) continue;
+      const segments = path.split('/').filter(Boolean);
+      const hasMatch = segments.some((seg) => seg.toLowerCase().includes(query));
+      if (!hasMatch) continue;
+      matches.add(path);
+      let walker = path;
+      while (true) {
+        const idx = walker.lastIndexOf('/');
+        if (idx <= 0) break;
+        walker = walker.substring(0, idx);
+        ancestors.add(walker);
+      }
+    }
+    // Also surface registered scan roots whose label/path contains the
+    // query so the user can drill into a top-level match.
+    for (const scanRoot of treeScanRoots) {
+      const label = scanRoot.segment.toLowerCase();
+      const rootPath = scanRoot.path.toLowerCase();
+      if (label.includes(query) || rootPath.includes(query)) {
+        matches.add(scanRoot.path);
+      }
+    }
+    const visible = new SvelteSet<string>();
+    for (const p of matches) visible.add(p);
+    for (const p of ancestors) visible.add(p);
+    searchVisiblePaths = visible;
+    // Auto-expand every ancestor so the matches are reachable. Keep any
+    // paths the user already had expanded (union, not replace), so when
+    // they clear the search the snapshot still reflects their state.
+    const nextExpanded = new SvelteSet(treeExpandedPaths);
+    for (const p of ancestors) nextExpanded.add(p);
+    treeExpandedPaths = nextExpanded;
+  }
+
+  function scheduleFolderTreeSearch(query: string) {
+    if (treeSearchTimer) clearTimeout(treeSearchTimer);
+    treeSearchTimer = setTimeout(() => {
+      applyFolderTreeSearch(query);
+    }, 200);
+  }
+
+  // Drive the tree-mode search effect off the existing `albumSearch`
+  // input + tab/mode state. When the user leaves the folders tree (tab
+  // switch or mode toggle) we wipe the active filter so nothing is
+  // hidden when they come back. The flat-mode search already handles
+  // the album list filtering via `debouncedAlbumSearch`.
+  $effect(() => {
+    if (activeTab !== 'folders' || foldersViewMode !== 'tree') {
+      // Leaving tree mode — clear filter and any pending debounce.
+      if (treeSearchTimer) {
+        clearTimeout(treeSearchTimer);
+        treeSearchTimer = null;
+      }
+      if (searchVisiblePaths !== null || preSearchExpandedSnapshot !== null) {
+        if (preSearchExpandedSnapshot !== null) {
+          treeExpandedPaths = preSearchExpandedSnapshot;
+          preSearchExpandedSnapshot = null;
+        }
+        searchVisiblePaths = null;
+        treeSearchQuery = '';
+      }
+      return;
+    }
+    scheduleFolderTreeSearch(albumSearch);
+  });
+
   // Multi-select (tracks tab) — mirrors FavoritesView pattern
   let trackSelectMode = $state(false);
   let selectedTrackIds = $state(new Set<number>());
@@ -4585,6 +4699,8 @@
                         depth={0}
                         selectedPath={selectedFolderPath}
                         expandedPaths={treeExpandedPaths}
+                        visiblePaths={searchVisiblePaths}
+                        searchQuery={treeSearchQuery}
                         onSelect={handleFolderTreeSelect}
                         onToggleExpand={toggleFolderExpand}
                         onPlayRecursive={handlePlayRecursive}

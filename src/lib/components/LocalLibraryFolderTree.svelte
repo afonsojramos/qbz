@@ -14,6 +14,20 @@
     depth?: number;
     selectedPath: string | null;
     expandedPaths: SvelteSet<string>;
+    /**
+     * When non-null, only folder children whose path is in this set are
+     * rendered (track-kind children always render under a visible parent).
+     * Drives the tree-mode search filter — caller computes the set of
+     * matching folders + their ancestors. Null means "no active filter,
+     * render everything" (steady state).
+     */
+    visiblePaths?: SvelteSet<string> | null;
+    /**
+     * Active tree-mode search query (lowercased, trimmed). When non-empty
+     * and the row's segment contains a match, the matched substring is
+     * highlighted. Empty string disables highlighting.
+     */
+    searchQuery?: string;
     onSelect: (path: string) => void;
     onToggleExpand: (path: string) => void;
     onPlayRecursive: (path: string) => void;
@@ -24,6 +38,8 @@
     depth = 0,
     selectedPath,
     expandedPaths,
+    visiblePaths = null,
+    searchQuery = '',
     onSelect,
     onToggleExpand,
     onPlayRecursive,
@@ -86,6 +102,28 @@
     e.stopPropagation();
     if (isFolder) onPlayRecursive(node.path);
   }
+
+  // Compute the highlight slice for the current row's segment. Returns
+  // null when there is no active query or the segment doesn't match —
+  // the template falls back to plain text. Keeping this as a regular
+  // function (not $derived) because it returns objects with strings and
+  // we want to avoid any chance of confusing the Svelte CSS extractor
+  // (cf. ADR-001). The function is cheap (single .toLowerCase + indexOf
+  // per call) and only runs once per row render.
+  function getSegmentHighlight(
+    segment: string,
+    query: string,
+  ): { before: string; match: string; after: string } | null {
+    if (!query) return null;
+    const lower = segment.toLowerCase();
+    const idx = lower.indexOf(query);
+    if (idx < 0) return null;
+    return {
+      before: segment.substring(0, idx),
+      match: segment.substring(idx, idx + query.length),
+      after: segment.substring(idx + query.length),
+    };
+  }
 </script>
 
 <div
@@ -131,7 +169,18 @@
   {/if}
 
   <div class="row-meta">
-    <span class="row-name" title={node.segment}>{node.segment}</span>
+    <span class="row-name" title={node.segment}>
+      {#if searchQuery}
+        {@const highlight = getSegmentHighlight(node.segment, searchQuery)}
+        {#if highlight}
+          {highlight.before}<mark class="row-name-highlight">{highlight.match}</mark>{highlight.after}
+        {:else}
+          {node.segment}
+        {/if}
+      {:else}
+        {node.segment}
+      {/if}
+    </span>
     {#if isFolder}
       <span class="row-subtitle">
         {$t('library.foldersTree.treeFolderTracks', { values: { count: trackCount } })}
@@ -172,15 +221,19 @@
       </div>
     {:else}
       {#each children as child (child.path)}
-        <Self
-          node={child}
-          depth={depth + 1}
-          {selectedPath}
-          {expandedPaths}
-          {onSelect}
-          {onToggleExpand}
-          {onPlayRecursive}
-        />
+        {#if visiblePaths === null || child.kind === 'track' || visiblePaths.has(child.path)}
+          <Self
+            node={child}
+            depth={depth + 1}
+            {selectedPath}
+            {expandedPaths}
+            {visiblePaths}
+            {searchQuery}
+            {onSelect}
+            {onToggleExpand}
+            {onPlayRecursive}
+          />
+        {/if}
       {/each}
     {/if}
   {/if}
@@ -264,6 +317,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .row-name-highlight {
+    background: var(--accent-soft, var(--bg-tertiary));
+    color: var(--text-primary);
+    font-weight: 600;
+    padding: 0 1px;
+    border-radius: 2px;
   }
   .row-subtitle {
     font-size: 11px;
