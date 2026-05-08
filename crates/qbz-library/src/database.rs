@@ -1700,6 +1700,49 @@ impl LibraryDatabase {
         Ok(tracks)
     }
 
+    /// Lightweight `COUNT(*)` of every user track whose `file_path` lives
+    /// recursively under `folder_path`. Used by the tree-mode rail to
+    /// populate the recursive descendant count on top-level scan-root
+    /// rows (which are synthesized client-side and don't go through
+    /// [`Self::list_folder_children`], so they don't carry their own
+    /// precomputed `track_count_under`).
+    ///
+    /// Source filter (`COALESCE(source, 'user') = 'user'`) and the
+    /// optional network-folder NOT EXISTS predicate match the listing
+    /// primitives byte-for-byte so the count, the rail visibility, and
+    /// recursive playback all agree on the same boundary.
+    pub fn count_folder_tracks_recursive(
+        &self,
+        folder_path: &str,
+        exclude_network_folders: bool,
+    ) -> Result<u32, LibraryError> {
+        let escaped_prefix = escape_like_pattern(folder_path);
+
+        let network_filter = if exclude_network_folders {
+            "AND NOT EXISTS ( \
+                SELECT 1 FROM library_folders nf \
+                WHERE nf.is_network = 1 \
+                AND local_tracks.file_path LIKE nf.path || '%' \
+            )"
+        } else {
+            ""
+        };
+
+        let sql = format!(
+            "SELECT COUNT(*) FROM local_tracks \
+             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
+               AND COALESCE(source, 'user') = 'user' \
+               {network_filter}",
+            network_filter = network_filter,
+        );
+
+        let count: i64 = self
+            .conn
+            .query_row(&sql, params![escaped_prefix], |row| row.get(0))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        Ok(count.try_into().unwrap_or(0))
+    }
+
     /// Get all albums grouped by metadata (album + album_artist OR
     /// artist), with fallback to folder grouping for tracks with no
     /// usable album tag, and a single 'Unknown Album' bucket for total
@@ -5288,5 +5331,71 @@ mod folder_tree_tests {
             .list_folder_tracks_recursive("/m/local", true)
             .unwrap();
         assert_eq!(recursive_local.len(), 2);
+    }
+
+    /// `count_folder_tracks_recursive` mirrors
+    /// `list_folder_tracks_recursive` row-for-row: same source filter
+    /// (qobuz_download excluded), same network-folder NOT EXISTS
+    /// predicate, same prefix-with-slash boundary. The count is what
+    /// the tree-mode rail uses for top-level scan-root rows that don't
+    /// come back through `list_folder_children`.
+    #[test]
+    fn count_folder_tracks_recursive_matches_listing_primitive() {
+        let (_tmp, db) = fresh_db();
+        seed_standard_fixture(&db);
+
+        // /m/A/album1 has 3 user descendants (t1, t2, Disc 1/t3) and one
+        // qobuz_download (qcache.flac) under the same parent. Recursive
+        // count must include the deeper subfolder track AND exclude the
+        // qobuz row.
+        let count = db
+            .count_folder_tracks_recursive("/m/A/album1", false)
+            .unwrap();
+        assert_eq!(count, 3);
+
+        // /m as the root catches every user track in the fixture.
+        let total = db.count_folder_tracks_recursive("/m", false).unwrap();
+        assert_eq!(total, 5);
+
+        // Unknown path returns 0 (no rows match the LIKE prefix).
+        let empty = db
+            .count_folder_tracks_recursive("/m/does/not/exist", false)
+            .unwrap();
+        assert_eq!(empty, 0);
+    }
+
+    /// Network-folder filter must apply to the count primitive too —
+    /// otherwise the rail would advertise tracks that don't show up in
+    /// the listing, recursive playback, or flat-mode search.
+    #[test]
+    fn count_folder_tracks_recursive_honors_network_exclude() {
+        let (_tmp, db) = fresh_db();
+
+        db.add_folder_with_network_info("/m/local", false, None)
+            .unwrap();
+        db.add_folder_with_network_info("/m/net", true, Some("nfs"))
+            .unwrap();
+
+        insert_at(&db, "/m/local/album/local1.flac", Some(1), Some(1), "L1");
+        insert_at(&db, "/m/local/album/local2.flac", Some(1), Some(2), "L2");
+        insert_at(&db, "/m/net/album/net1.flac", Some(1), Some(1), "N1");
+        insert_at(&db, "/m/net/album/sub/net2.flac", Some(1), Some(1), "N2");
+
+        // Without filter: every descendant counts.
+        assert_eq!(
+            db.count_folder_tracks_recursive("/m/net", false).unwrap(),
+            2
+        );
+        assert_eq!(
+            db.count_folder_tracks_recursive("/m/local", false).unwrap(),
+            2
+        );
+
+        // With filter: network root collapses to 0, local stays.
+        assert_eq!(db.count_folder_tracks_recursive("/m/net", true).unwrap(), 0);
+        assert_eq!(
+            db.count_folder_tracks_recursive("/m/local", true).unwrap(),
+            2
+        );
     }
 }
