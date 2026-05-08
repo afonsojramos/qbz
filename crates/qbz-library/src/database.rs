@@ -5139,4 +5139,14 @@ mod folder_tree_tests {
         assert!(titles.contains(&"TwoHundred".to_string()));
         assert!(!titles.contains(&"Decoy".to_string()));
     }
+
+    #[test]
+    fn list_folder_tracks_recursive_returns_empty_for_unknown_path() {
+        // A folder path with no matching descendants must yield an empty
+        // Vec rather than an error — frontend treats empty as "nothing
+        // to play/queue" and skips the toast.
+        let (_tmp, db) = fresh_db();
+        let tracks = db.list_folder_tracks_recursive("/m/does/not/exist").unwrap();
+        assert!(tracks.is_empty());
+    }
 }
