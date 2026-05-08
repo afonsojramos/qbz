@@ -1603,6 +1603,51 @@ impl LibraryDatabase {
         Ok(tracks)
     }
 
+    /// List ALL tracks recursively under a folder (every descendant, at
+    /// any depth). Mirrors the source filter and LIKE-escape strategy
+    /// from [`Self::list_folder_tracks`] but does NOT require the
+    /// `file_path` to live directly inside `folder_path` — every row
+    /// matching `file_path LIKE folder_path || '/%'` is included.
+    ///
+    /// Used by the tree-mode multi-select to populate the union of
+    /// `selectedTrackIds` when the user ticks a folder-row checkbox.
+    /// Returns the full track records (not just IDs) so the frontend
+    /// can build queue items for "Play Next" / "Add to Queue" without
+    /// a second round-trip.
+    ///
+    /// Ordering: by `file_path` ASC. This produces a stable, on-disk
+    /// reading order for cross-album / cross-disc subtrees, matching
+    /// the way `handlePlayRecursive` sorts before queuing.
+    pub fn list_folder_tracks_recursive(
+        &self,
+        folder_path: &str,
+    ) -> Result<Vec<LocalTrack>, LibraryError> {
+        let escaped_prefix = escape_like_pattern(folder_path);
+
+        let sql = format!(
+            "SELECT {cols} FROM local_tracks \
+             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
+               AND COALESCE(source, 'user') = 'user' \
+             ORDER BY file_path ASC",
+            cols = Self::TRACK_COLUMNS,
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![escaped_prefix], |row| Self::row_to_track(row))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let mut tracks = Vec::new();
+        for track in rows {
+            tracks.push(track.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(tracks)
+    }
+
     /// Get all albums grouped by metadata (album + album_artist OR
     /// artist), with fallback to folder grouping for tracks with no
     /// usable album tag, and a single 'Unknown Album' bucket for total
@@ -5030,7 +5075,68 @@ mod folder_tree_tests {
         );
 
         let tracks = db.list_folder_tracks("/m/order").unwrap();
-        let titles: Vec<_> = tracks.iter().map(|t| t.title.clone()).collect();
+        let titles: Vec<_> = tracks.iter().map(|track| track.title.clone()).collect();
         assert_eq!(titles, vec!["ant", "Bee", "D1T2", "D2T1"]);
+    }
+
+    #[test]
+    fn list_folder_tracks_recursive_includes_all_descendants() {
+        let (_tmp, db) = fresh_db();
+        seed_standard_fixture(&db);
+
+        // /m/A/album1 has direct tracks t1.flac, t2.flac AND a deeper
+        // file at /m/A/album1/Disc 1/t3.flac. The recursive listing
+        // must return all three.
+        let tracks = db.list_folder_tracks_recursive("/m/A/album1").unwrap();
+        let titles: Vec<_> = tracks.iter().map(|track| track.title.clone()).collect();
+        assert_eq!(tracks.len(), 3, "recursive listing must include subfolder tracks");
+        assert!(titles.contains(&"Alpha".to_string()));
+        assert!(titles.contains(&"Beta".to_string()));
+        assert!(titles.contains(&"Gamma".to_string()));
+
+        // Qobuz download under the same parent must NOT appear.
+        assert!(
+            !titles.contains(&"QobuzCache".to_string()),
+            "qobuz_download row leaked into recursive listing"
+        );
+    }
+
+    #[test]
+    fn list_folder_tracks_recursive_orders_by_file_path() {
+        let (_tmp, db) = fresh_db();
+        // Insert files deliberately out of file_path order — recursive
+        // listing must return them sorted ASC by file_path.
+        insert_at(&db, "/m/r/zeta.flac", Some(1), Some(1), "Z");
+        insert_at(&db, "/m/r/alpha.flac", Some(1), Some(1), "A");
+        insert_at(&db, "/m/r/sub/middle.flac", Some(1), Some(1), "M");
+
+        let tracks = db.list_folder_tracks_recursive("/m/r").unwrap();
+        let paths: Vec<_> = tracks.iter().map(|track| track.file_path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/m/r/alpha.flac".to_string(),
+                "/m/r/sub/middle.flac".to_string(),
+                "/m/r/zeta.flac".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn list_folder_tracks_recursive_handles_special_chars_in_path() {
+        let (_tmp, db) = fresh_db();
+        // Folder containing literal '_' that LIKE would otherwise treat
+        // as a single-character wildcard. With escape_like_pattern, the
+        // sibling /m/percentXtest must not contaminate the result set.
+        insert_at(&db, "/m/percent_test/100%.flac", Some(1), Some(1), "Hundred");
+        insert_at(&db, "/m/percent_test/inner/200.flac", Some(1), Some(1), "TwoHundred");
+        insert_at(&db, "/m/percentXtest/decoy.flac", Some(1), Some(1), "Decoy");
+
+        let tracks = db.list_folder_tracks_recursive("/m/percent_test").unwrap();
+        let titles: Vec<_> = tracks.iter().map(|track| track.title.clone()).collect();
+        assert_eq!(tracks.len(), 2, "underscore in parent path must be escaped");
+        assert!(titles.contains(&"Hundred".to_string()));
+        assert!(titles.contains(&"TwoHundred".to_string()));
+        assert!(!titles.contains(&"Decoy".to_string()));
     }
 }
