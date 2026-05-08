@@ -2632,15 +2632,20 @@ pub async fn v2_library_get_folders_with_metadata(
 #[allow(non_snake_case)]
 pub async fn v2_library_list_folder_children(
     parentPath: String,
+    excludeNetworkFolders: Option<bool>,
     state: State<'_, LibraryState>,
 ) -> Result<Vec<FolderTreeEntry>, String> {
-    log::info!("Command: v2_library_list_folder_children {}", parentPath);
+    log::info!(
+        "Command: v2_library_list_folder_children {} (exclude_network={:?})",
+        parentPath,
+        excludeNetworkFolders
+    );
 
     let guard__ = state.db.lock().await;
     let db = guard__
         .as_ref()
         .ok_or("No active session - please log in")?;
-    db.list_folder_children(&parentPath)
+    db.list_folder_children(&parentPath, excludeNetworkFolders.unwrap_or(false))
         .map_err(|e| e.to_string())
 }
 
@@ -2648,15 +2653,20 @@ pub async fn v2_library_list_folder_children(
 #[allow(non_snake_case)]
 pub async fn v2_library_list_folder_tracks(
     folderPath: String,
+    excludeNetworkFolders: Option<bool>,
     state: State<'_, LibraryState>,
 ) -> Result<Vec<LocalTrack>, String> {
-    log::info!("Command: v2_library_list_folder_tracks {}", folderPath);
+    log::info!(
+        "Command: v2_library_list_folder_tracks {} (exclude_network={:?})",
+        folderPath,
+        excludeNetworkFolders
+    );
 
     let guard__ = state.db.lock().await;
     let db = guard__
         .as_ref()
         .ok_or("No active session - please log in")?;
-    db.list_folder_tracks(&folderPath)
+    db.list_folder_tracks(&folderPath, excludeNetworkFolders.unwrap_or(false))
         .map_err(|e| e.to_string())
 }
 
@@ -2664,18 +2674,20 @@ pub async fn v2_library_list_folder_tracks(
 #[allow(non_snake_case)]
 pub async fn v2_library_list_folder_tracks_recursive(
     folderPath: String,
+    excludeNetworkFolders: Option<bool>,
     state: State<'_, LibraryState>,
 ) -> Result<Vec<LocalTrack>, String> {
     log::info!(
-        "Command: v2_library_list_folder_tracks_recursive {}",
-        folderPath
+        "Command: v2_library_list_folder_tracks_recursive {} (exclude_network={:?})",
+        folderPath,
+        excludeNetworkFolders
     );
 
     let guard__ = state.db.lock().await;
     let db = guard__
         .as_ref()
         .ok_or("No active session - please log in")?;
-    db.list_folder_tracks_recursive(&folderPath)
+    db.list_folder_tracks_recursive(&folderPath, excludeNetworkFolders.unwrap_or(false))
         .map_err(|e| e.to_string())
 }
 
