@@ -226,6 +226,19 @@ pub fn v2_set_library_folders_view_mode(
 }
 
 #[tauri::command]
+pub fn v2_set_library_folders_tree_sidebar_width(
+    width: u32,
+    state: State<'_, crate::config::library_preferences::LibraryPreferencesState>,
+) -> Result<(), String> {
+    let guard = state
+        .store
+        .lock()
+        .map_err(|_| "Failed to lock library preferences store".to_string())?;
+    let store = guard.as_ref().ok_or("No active session - please log in")?;
+    store.set_folders_tree_sidebar_width(width)
+}
+
+#[tauri::command]
 pub fn v2_get_cache_stats(state: State<'_, AppState>) -> CacheStats {
     state.audio_cache.stats()
 }
