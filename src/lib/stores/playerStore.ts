@@ -686,11 +686,23 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
   // Skip when remote control mode is active — external service controls transitions.
   // Requires gaplessAttemptedForCurrent so external track changes fall through
   // to the "track changed externally" block (which actually updates currentTrack).
+  //
+  // Ephemeral tracks (id >= 2^48) skip the `event.is_playing` requirement.
+  // The audio engine briefly reports `is_playing=false` during the swap
+  // between two ephemeral file-data buffers, and that transient state
+  // arrives BEFORE the player can flip is_playing back to true. Without
+  // this carve-out the event misclassifies as an external change, the
+  // queue's current_index hasn't advanced (it's a separate state machine),
+  // and the UI freezes on the previous track. Qobuz/Plex tracks don't
+  // see this race because their playback path keeps is_playing pinned
+  // through the streaming buffer transition.
+  const EPHEMERAL_ID_FLOOR = 1 << 48;
+  const isEphemeralTransition = event.track_id >= EPHEMERAL_ID_FLOOR;
   const isGaplessTransition = !remoteControlMode
     && event.track_id !== 0
     && currentTrack
     && event.track_id !== currentTrack.id
-    && event.is_playing
+    && (event.is_playing || isEphemeralTransition)
     && event.gapless_next_track_id === 0
     && gaplessAttemptedForCurrent
     && onGaplessTransition;

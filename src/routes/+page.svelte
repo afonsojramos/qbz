@@ -4377,30 +4377,51 @@
       const tracks = snapshot.tracks;
       const currentIndex = snapshot.current_index;
 
-      const allTracks: PersistedQueueTrack[] = tracks.map(track => ({
-        id: track.id,
-        title: track.title,
-        version: track.version ?? null,
-        artist: track.artist,
-        album: track.album,
-        duration_secs: track.duration_secs,
-        artwork_url: track.artwork_url,
-        hires: track.hires,
-        bit_depth: track.bit_depth ?? null,
-        sample_rate: track.sample_rate ?? null,
-        is_local: track.is_local ?? false,
-        album_id: track.album_id ?? null,
-        artist_id: track.artist_id ?? null,
-        // Preserve source (qobuz | local | plex). Dropping this on save meant
-        // local/plex queues came back as Qobuz after session restore, and
-        // auto-advance routed to v2_play_track with library row ids — which
-        // Qobuz then "resolved" to whatever track happened to share the id.
-        source: track.source ?? (track.is_local ? 'local' : null),
-      }));
+      // Ephemeral tracks (id >= 2^48) live in an in-memory cache that's
+      // rebuilt from scratch on every launch. The IDs aren't stable
+      // across processes, and even if they were, the playback path
+      // would 404 if session restore fired before the folder rehydrates.
+      // Strip them from the persisted queue and clear the current-index
+      // pointer if it was sitting on one — the ephemeral pane comes back
+      // via folder-path persistence and the user re-clicks play.
+      const EPHEMERAL_ID_FLOOR = 1 << 48;
+      const persistedTracks: PersistedQueueTrack[] = [];
+      let persistedCurrentIndex: number | null = null;
+      for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        if (Number(track.id) >= EPHEMERAL_ID_FLOOR) {
+          if (currentIndex !== null && i === currentIndex) {
+            persistedCurrentIndex = null;
+          }
+          continue;
+        }
+        if (currentIndex !== null && i === currentIndex) {
+          persistedCurrentIndex = persistedTracks.length;
+        }
+        persistedTracks.push({
+          id: track.id,
+          title: track.title,
+          artist: track.artist,
+          album: track.album,
+          duration_secs: track.duration_secs,
+          artwork_url: track.artwork_url,
+          hires: track.hires,
+          bit_depth: track.bit_depth ?? null,
+          sample_rate: track.sample_rate ?? null,
+          is_local: track.is_local ?? false,
+          album_id: track.album_id ?? null,
+          artist_id: track.artist_id ?? null,
+          // Preserve source (qobuz | local | plex). Dropping this on save meant
+          // local/plex queues came back as Qobuz after session restore, and
+          // auto-advance routed to v2_play_track with library row ids — which
+          // Qobuz then "resolved" to whatever track happened to share the id.
+          source: track.source ?? (track.is_local ? 'local' : null),
+        });
+      }
 
       await saveSessionState(
-        allTracks,
-        currentIndex,
+        persistedTracks,
+        persistedCurrentIndex,
         currentTrack ? Math.floor(currentTime) : 0,
         volume / 100,
         isShuffle,
@@ -5279,12 +5300,32 @@
       console.log('[Gapless] Handling transition to track', trackId);
       // Advance the queue to match backend state
       const advanced = await nextTrackGuarded();
+      console.log(
+        '[Gapless] nextTrackGuarded returned:',
+        advanced?.id,
+        'expected:',
+        trackId,
+        'match:',
+        advanced?.id === trackId
+      );
       if (advanced && advanced.id === trackId) {
         // Queue advanced successfully — update UI metadata
         await playQueueTrack(advanced, undefined, true);
+        // Defensive sync: belt-and-suspenders for paths (e.g. ephemeral
+        // tracks) where the queue's view of "current" can lag the
+        // player's gapless transition. The cost is one cheap getter
+        // call to the backend; in exchange the queue panel highlight
+        // and now-playing slot stay coherent with what's actually
+        // playing.
+        await syncQueueState();
       } else {
         // Queue mismatch — sync from backend
-        console.warn('[Gapless] Queue mismatch, syncing state');
+        console.warn(
+          '[Gapless] Queue mismatch, syncing state. advanced=',
+          advanced?.id,
+          'trackId=',
+          trackId
+        );
         await syncQueueState();
       }
     });
