@@ -5514,7 +5514,13 @@
                 <!-- Drag handle anchored to the column's right edge.
                      Mouse drag is the primary affordance; arrow keys
                      (with Shift for big steps) and Home/End provide
-                     keyboard parity for accessibility. -->
+                     keyboard parity for accessibility.
+                     role="separator" with aria-orientation + aria-valuenow
+                     is the WAI-ARIA splitter pattern; Svelte's a11y linter
+                     doesn't recognize it as interactive, so silence the
+                     two rules that misfire here. -->
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                 <div
                   class="tree-sidebar-resize-handle"
                   class:resizing={isResizingTreeSidebar}
