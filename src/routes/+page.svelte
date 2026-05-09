@@ -184,7 +184,6 @@
   import { loadAwardFavorites } from '$lib/stores/awardFavoritesStore';
   import { resolveAwardIdByName } from '$lib/stores/awardCatalogStore';
   import { getDefaultFavoritesTab } from '$lib/utils/favorites';
-  import { platform } from '$lib/utils/platform';
   import { formatTrackTitle } from '$lib/utils/trackTitle';
   import type { FavoritesPreferences, ResolvedMusician } from '$lib/types';
 
@@ -5725,10 +5724,6 @@
     class:match-chrome={matchSystemChrome && showTitleBar && windowTransparent}
     style="--chrome-radius: {chromeRadiusPx}px;"
   >
-    <!-- macOS: drag region for window movement (overlay title bar has no native drag area) -->
-    {#if !showTitleBar && platform === 'macos'}
-      <div class="macos-drag-region" data-tauri-drag-region></div>
-    {/if}
     <!-- Custom Title Bar (CSD) -->
     {#if showTitleBar}
       <TitleBar
@@ -7166,28 +7161,6 @@
   .app.no-titlebar .content-area,
   .app.no-titlebar .main-content {
     height: calc(100vh - var(--player-bar-height, 104px));
-  }
-
-  /* macOS: pad main content to clear native overlay title bar */
-  :global(html.macos) .main-content {
-    padding-top: 16px;
-    height: calc(100vh - 104px - 16px);
-  }
-
-  /* macOS: home view handles its own spacing */
-  :global(html.macos) .main-content :global(.home-view) {
-    margin-top: -16px;
-  }
-
-  /* macOS: invisible drag region for window movement (overlay title bar) */
-  :global(html.macos) .macos-drag-region {
-    height: 28px;
-    width: 100%;
-    position: absolute;
-    top: 0;
-    left: 0;
-    z-index: 9999;
-    -webkit-app-region: drag;
   }
 
   .view-error {
