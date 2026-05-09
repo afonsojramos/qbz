@@ -912,7 +912,8 @@
       "searchAlbumsLabel": "Search albums in this folder",
       "viewModeLabel": "View mode",
       "gridView": "Grid",
-      "listView": "List"
+      "listView": "List",
+      "viewArtwork": "View album art"
     },
     "explicit": "Explicit",
     "folderListTitle": "Library Folders",

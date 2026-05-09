@@ -912,7 +912,8 @@
       "searchAlbumsLabel": "Buscar álbuns nesta pasta",
       "viewModeLabel": "Modo de visualização",
       "gridView": "Grade",
-      "listView": "Lista"
+      "listView": "Lista",
+      "viewArtwork": "Ver capa do álbum"
     },
     "folderListTitle": "Pastas da Biblioteca",
     "editTabs": {

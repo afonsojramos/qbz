@@ -912,7 +912,8 @@
       "searchAlbumsLabel": "Alben in diesem Ordner suchen",
       "viewModeLabel": "Ansichtsmodus",
       "gridView": "Raster",
-      "listView": "Liste"
+      "listView": "Liste",
+      "viewArtwork": "Albumcover ansehen"
     },
     "folderListTitle": "Bibliotheksordner",
     "editTabs": {

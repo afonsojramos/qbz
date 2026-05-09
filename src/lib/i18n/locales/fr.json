@@ -912,7 +912,8 @@
       "searchAlbumsLabel": "Rechercher des albums dans ce dossier",
       "viewModeLabel": "Mode d'affichage",
       "gridView": "Grille",
-      "listView": "Liste"
+      "listView": "Liste",
+      "viewArtwork": "Voir la pochette de l'album"
     },
     "folderListTitle": "Dossiers de la bibliothèque",
     "editTabs": {
