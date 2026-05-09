@@ -101,7 +101,7 @@ Welcome to **@Vudgekek** and **@DoubleGate** as new contributors — thanks for 
   - **Playback** — uniform 250 ms state polling cadence eliminates seekbar cold-start latency
   - **Playlist** — track-selection key includes the row index for duplicate tracks (#386); multi-select is now aligned with the TrackRow checkbox pattern; the checkbox input is pointer-transparent so the row click handler always fires
   - **Sidebar** — `isOffline` `$effect` skips its initial subscription so a stale value doesn't flip the offline indicator on mount (@DoubleGate, PR #384)
-  - **Home** — sticky tab header pop-in animation unified across the macOS and Linux paths (@afonsojramos, PR #406)
+  - **Home** — sticky tab header pop-in animation unified across the macOS and Linux paths (@afonsojramos, PR #407)
   - **Theme** — WCAG-aware `btn-primary-text` token across all themes (the previous fixed value failed contrast on a couple of light themes)
 
 ---
