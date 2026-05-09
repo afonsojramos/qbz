@@ -60,6 +60,8 @@
   import LocalLibraryFolderAlbumView from '$lib/components/LocalLibraryFolderAlbumView.svelte';
   import type { FolderEntry, FolderTreeEntry } from '$lib/types/folderTree';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+  import { setLibraryPreferences as setLibraryPreferencesStore } from '$lib/stores/libraryPreferencesStore';
+  import { libraryTargetTab } from '$lib/stores/libraryTargetTabStore';
 
   // Backend types matching Rust models
   interface LocalTrack {
@@ -320,6 +322,10 @@
     try {
       const prefs = await invoke<LibraryPreferences>('v2_get_library_preferences');
       libraryPreferences = sanitizeLibraryPreferences(prefs);
+      // Mirror the sanitized prefs into the shared store so TitleBarNav and
+      // Sidebar dropdowns see the same tab_order / hidden_tabs without each
+      // refetching from the backend.
+      setLibraryPreferencesStore(libraryPreferences);
       // Hydrate Folders tab view-mode from the same payload. Defaults to
       // 'flat' when the field is absent (legacy installs).
       foldersViewMode = prefs.folders_view_mode === 'tree' ? 'tree' : 'flat';
@@ -344,7 +350,15 @@
           isKnownTab(tab) && !libraryPreferences.hidden_tabs.includes(tab),
       );
       if (!initialTabSet) {
-        if (currentVisible.length > 0) {
+        // If the user clicked a tab in the title-bar / sidebar dropdown
+        // before the view mounted, honour that target instead of defaulting
+        // to the first visible tab.
+        let target: string | null = null;
+        libraryTargetTab.subscribe((value) => { target = value; })();
+        if (target && isKnownTab(target) && currentVisible.includes(target)) {
+          activeTab = target;
+          libraryTargetTab.set(null);
+        } else if (currentVisible.length > 0) {
           activeTab = currentVisible[0];
         }
         initialTabSet = true;
@@ -551,6 +565,9 @@
 
   function handleLibraryPreferencesSaved(prefs: LibraryPreferences) {
     libraryPreferences = sanitizeLibraryPreferences(prefs);
+    // Keep the shared store in sync so the title-bar / sidebar dropdowns
+    // immediately reflect the user's new tab_order / hidden_tabs.
+    setLibraryPreferencesStore(libraryPreferences);
     const currentVisible = libraryPreferences.tab_order.filter(
       (tab): tab is TabType =>
         isKnownTab(tab) && !libraryPreferences.hidden_tabs.includes(tab),
@@ -2267,6 +2284,21 @@
   $effect(() => {
     const itemCount = Math.max(albums.length, tracks.length);
     useVirtualization = isVirtualizationEnabled() && shouldUsePerformanceMode(itemCount);
+  });
+
+  // React to navigation requests from the title-bar / sidebar Local Library
+  // dropdowns while the view is already mounted. The initial-mount path is
+  // handled inside `loadLibraryPreferences` so this guard avoids racing it.
+  $effect(() => {
+    const target = $libraryTargetTab;
+    if (!target) return;
+    if (!initialTabSet) return;
+    if (visibleTabs.includes(target as TabType)) {
+      activeTab = target as TabType;
+      libraryTargetTab.set(null);
+      // Ensure the newly-activated tab fetches its data if it hasn't yet.
+      ensureActiveTabDataLoaded();
+    }
   });
 
   onMount(async () => {
