@@ -184,6 +184,7 @@
   import { loadAwardFavorites } from '$lib/stores/awardFavoritesStore';
   import { resolveAwardIdByName } from '$lib/stores/awardCatalogStore';
   import { getDefaultFavoritesTab } from '$lib/utils/favorites';
+  import { platform } from '$lib/utils/platform';
   import { formatTrackTitle } from '$lib/utils/trackTitle';
   import type { FavoritesPreferences, ResolvedMusician } from '$lib/types';
 
@@ -5724,6 +5725,14 @@
     class:match-chrome={matchSystemChrome && showTitleBar && windowTransparent}
     style="--chrome-radius: {chromeRadiusPx}px;"
   >
+    <!-- macOS: when the user hides the qbz strip (mode='hidden'), the OS
+         still draws traffic lights via TitleBarStyle::Overlay on top of
+         the sidebar. This invisible band gives the window something to
+         drag and reserves the same vertical real estate the strip would
+         have. -->
+    {#if !showTitleBar && platform === 'macos'}
+      <div class="macos-drag-region" data-tauri-drag-region></div>
+    {/if}
     <!-- Custom Title Bar (CSD) -->
     {#if showTitleBar}
       <TitleBar
@@ -7161,6 +7170,29 @@
   .app.no-titlebar .content-area,
   .app.no-titlebar .main-content {
     height: calc(100vh - var(--player-bar-height, 104px));
+  }
+
+  /* macOS hidden mode: pad main content to clear native overlay traffic
+     lights. Only fires when the qbz strip isn't mounted. */
+  :global(html.macos) .app.no-titlebar .main-content {
+    padding-top: 16px;
+    height: calc(100vh - 104px - 16px);
+  }
+
+  :global(html.macos) .app.no-titlebar .main-content :global(.home-view) {
+    margin-top: -16px;
+  }
+
+  /* macOS hidden mode: invisible drag region for window movement, mirrors
+     the band the qbz strip would otherwise occupy. */
+  :global(html.macos) .macos-drag-region {
+    height: 28px;
+    width: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 9999;
+    -webkit-app-region: drag;
   }
 
   .view-error {

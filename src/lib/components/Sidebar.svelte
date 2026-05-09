@@ -2430,6 +2430,12 @@
     height: calc(100vh - 104px); /* Only 104px NowPlayingBar, no title bar */
   }
 
+  /* macOS hidden mode: pad sidebar top so search clears the traffic lights
+     that the OS still draws via TitleBarStyle::Overlay. */
+  :global(html.macos) .sidebar.no-titlebar {
+    padding-top: 36px;
+  }
+
   .content {
     flex: 1;
     overflow: hidden;

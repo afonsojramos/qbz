@@ -4711,9 +4711,21 @@
         />
       </div>
     {/if}
-    <!-- Title bar mode: Linux-only. macOS stays pinned at 'qbz' since the
-         other modes ('system', 'plasma', 'hidden') describe Linux WM
-         behaviors that don't apply on Darwin. -->
+    <!-- macOS: only the 'qbz' ↔ 'hidden' axis is meaningful. 'system' /
+         'plasma' describe Linux WM behaviors that don't apply on Darwin,
+         so we expose a single Toggle instead of the full mode dropdown. -->
+    {#if platform === 'macos'}
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.hideTitleBar')}</span>
+        <span class="setting-desc">{$t('settings.appearance.hideTitleBarDesc')}</span>
+      </div>
+      <Toggle
+        enabled={titlebarMode === 'hidden'}
+        onchange={(v) => setMode(v ? 'hidden' : 'qbz')}
+      />
+    </div>
+    {/if}
     {#if platform !== 'macos'}
     <div class="setting-row">
       <div class="setting-info">
