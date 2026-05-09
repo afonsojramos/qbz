@@ -7,7 +7,7 @@ import { writable, derived, get } from 'svelte/store';
 import { cmdPause } from '$lib/services/commandRouter';
 
 export const SLEEP_TIMER_PRESETS_MIN = [30, 60, 120, 180, 300] as const;
-export const SLEEP_TIMER_CUSTOM_MIN_LIMIT = 15;
+export const SLEEP_TIMER_CUSTOM_MIN_LIMIT = 1;
 export const SLEEP_TIMER_CUSTOM_MAX_LIMIT = 24 * 60;
 
 interface SleepTimerInternalState {
