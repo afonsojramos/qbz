@@ -826,6 +826,7 @@ pub async fn v2_library_get_tracks_by_ids(
 pub async fn v2_library_play_track(
     track_id: i64,
     library_state: State<'_, LibraryState>,
+    ephemeral_state: State<'_, crate::ephemeral_library::EphemeralLibraryState>,
     bridge: State<'_, CoreBridgeState>,
     offline_cache: State<'_, crate::offline_cache::OfflineCacheState>,
     app_state: State<'_, AppState>,
@@ -837,6 +838,46 @@ pub async fn v2_library_play_track(
         .check_requirements(CommandRequirement::RequiresUserSession)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Track ids at or above EPHEMERAL_ID_FLOOR belong to the ephemeral
+    // library (an ad-hoc folder the user opened without persisting it
+    // to local_tracks). Resolve to the in-memory cache and skip every
+    // DB-bound branch below — ephemeral tracks are never qobuz_download,
+    // never offline-cached, never have a CUE pointer. Just read the
+    // file and hand it to the player. The high-positive id range keeps
+    // the existing u64-typed queue/context commands happy while still
+    // being unambiguous (DB autoincrement ids never reach 2^48).
+    if track_id >= crate::ephemeral_library::EPHEMERAL_ID_FLOOR {
+        let track = ephemeral_state
+            .get_track(track_id)
+            .ok_or_else(|| format!("Ephemeral track {} not found (session may have been cleared)", track_id))?;
+        let file_path = std::path::Path::new(&track.file_path);
+        if !file_path.exists() {
+            return Err(format!("Ephemeral file not found: {}", track.file_path));
+        }
+        let audio_data =
+            std::fs::read(file_path).map_err(|e| format!("Failed to read ephemeral file: {}", e))?;
+        let bridge = bridge.get().await;
+        bridge
+            .player()
+            .play_data(audio_data, track_id as u64)
+            .map_err(|e| format!("Failed to play ephemeral track: {}", e))?;
+        // CUE-derived tracks share a single audio file (e.g. one big
+        // FLAC for the whole album); per-track playback works by
+        // seeking into the right offset after handing the data to the
+        // player. Mirrors the regular local-file branch below.
+        if let Some(start_secs) = track.cue_start_secs {
+            let start_pos = start_secs as u64;
+            if start_pos > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                bridge
+                    .player()
+                    .seek(start_pos)
+                    .map_err(|e| format!("Failed to seek into CUE track: {}", e))?;
+            }
+        }
+        return Ok(());
+    }
 
     let track = {
         let guard = library_state.db.lock().await;

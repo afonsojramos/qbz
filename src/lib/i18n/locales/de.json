@@ -39,6 +39,7 @@
     "addToPlaylist": "Zur Playlist hinzufügen",
     "addToFavorites": "Zur Bibliothek hinzufügen",
     "removeFromFavorites": "Aus Bibliothek entfernen",
+    "unavailableForEphemeral": "Nicht verfügbar für temporäre Ordner",
     "removeFromPlaylist": "Aus Playlist entfernen",
     "selectedTracks": "{count, plural, one {# Titel ausgewählt} other {# Titel ausgewählt}}",
     "select": "Auswählen",
@@ -914,6 +915,24 @@
       "gridView": "Raster",
       "listView": "Liste",
       "viewArtwork": "Albumcover ansehen"
+    },
+    "ephemeralFolder": {
+      "buttonLabel": "Ordner öffnen",
+      "tooltip": "Öffnet einen Ordner ad-hoc — die Titel erscheinen im Inhaltsbereich und bleiben verfügbar, bis die App geschlossen wird. Es wird nichts zur Bibliothek hinzugefügt.",
+      "dialogTitle": "Ordner zum Abspielen auswählen",
+      "contextLabel": "Geöffneter Ordner",
+      "subtitle": "{count, plural, one {# Titel} other {# Titel}} · {path}",
+      "playAll": "Alle abspielen",
+      "playAlbum": "Album abspielen",
+      "trackCount": "{count, plural, one {# Titel} other {# Titel}}",
+      "scanning": "Ordner wird gescannt…",
+      "close": "Sitzung beenden",
+      "empty": "Keine unterstützten Audiodateien in diesem Ordner gefunden.",
+      "opened": "{count, plural, one {# Titel} other {# Titel}} geöffnet",
+      "openedWithSkips": "{count, plural, one {# Titel} other {# Titel}} geöffnet, {skipped, plural, one {# Datei} other {# Dateien}} übersprungen",
+      "openFailed": "Ordner konnte nicht geöffnet werden: {error}",
+      "playFailed": "Wiedergabe fehlgeschlagen: {error}",
+      "gone": "Ordner nicht mehr verfügbar — Sitzung beendet."
     },
     "folderListTitle": "Bibliotheksordner",
     "editTabs": {

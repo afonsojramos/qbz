@@ -7,24 +7,32 @@
   import { onMount, onDestroy, tick, untrack } from 'svelte';
   import { fade } from 'svelte/transition';
   import {
-    HardDrive, Music, Disc3, MicVocal, FolderPlus, Trash2, RefreshCw,
+    HardDrive, Music, Disc3, MicVocal, FolderPlus, FolderOpen, Trash2, RefreshCw,
     Settings, ArrowLeft, X, Play, CircleAlert, ImageDown, Upload, Search, LayoutGrid, List, ListOrdered, PenLine,
-    Network, Power, PowerOff, ChevronLeft, ChevronRight, Shuffle, SlidersHorizontal, ArrowUpDown, ChevronDown, Check, SquareCheckBig, CassetteTape, ChevronsDownUp
+    Network, Power, PowerOff, ChevronLeft, ChevronRight, Shuffle, SlidersHorizontal, ArrowUpDown, ChevronDown, Check, SquareCheckBig, CassetteTape, ChevronsDownUp, BrushCleaning
   } from 'lucide-svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
   import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { buildQueueTrackFromLocalTrack } from '$lib/services/trackActions';
   import { cmdAddTracksToQueue, cmdAddTracksToQueueNext } from '$lib/services/commandRouter';
+  import { clearQueue } from '$lib/stores/queueStore';
+  import {
+    setCurrentTrack as setPlayerCurrentTrack,
+    getCurrentTrack as getPlayerCurrentTrack,
+    patchCurrentTrackCueInfo,
+  } from '$lib/stores/playerStore';
+  import { syncQueueState } from '$lib/stores/queueStore';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import FolderSettingsModal from '../FolderSettingsModal.svelte';
   import LocalLibraryTagEditorModal from '../LocalLibraryTagEditorModal.svelte';
   import LibraryEditModal from '../LibraryEditModal.svelte';
   import type { LibraryPreferences } from '$lib/types';
   import ViewTransition from '../ViewTransition.svelte';
   import { t } from '$lib/i18n';
-  import { getUserItem } from '$lib/utils/userStorage';
+  import { getUserItem, setUserItem } from '$lib/utils/userStorage';
   import { applyShiftRange, isSelectAllShortcut } from '$lib/utils/multiSelect';
   import { downloadSettingsVersion } from '$lib/stores/downloadSettingsStore';
-  import { showToast } from '$lib/stores/toastStore';
+  import { showToast, dismissBuffering } from '$lib/stores/toastStore';
   import AlbumCard from '../AlbumCard.svelte';
   import VirtualizedAlbumList from '../VirtualizedAlbumList.svelte';
   import VirtualizedArtistGrid from '../VirtualizedArtistGrid.svelte';
@@ -513,6 +521,12 @@
   // line ~4563, hiding the tree rail. Tree mode keeps the navigation
   // visible by loading album tracks into a separate state.
   function handleFolderTreeSelect(path: string) {
+    // Navigating to a tree folder ends the ephemeral session — the user
+    // is moving back into the library proper, so the in-memory cache and
+    // the right-pane override both get dropped.
+    if (ephemeralFolder) {
+      void closeEphemeralFolder();
+    }
     selectedFolderPath = path;
   }
 
@@ -561,6 +575,405 @@
   // using the existing handler (which also wires playback context).
   async function handleFolderTreeTrackPlay(track: LocalTrack) {
     await handleTrackPlay(track);
+  }
+
+  // Open an ad-hoc folder via the OS file picker. The backend scans the
+  // folder, extracts metadata for every supported audio file and stashes
+  // the result in EphemeralLibraryState (in-memory, negative ids). The
+  // tree itself is untouched — the right pane shows the result instead
+  // of the regular folder/album views. Replaces any prior ephemeral
+  // session.
+  async function openEphemeralFolder(): Promise<void> {
+    if (openingEphemeralFolder) return;
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: $t('library.ephemeralFolder.dialogTitle')
+      });
+      if (typeof selected !== 'string' || selected.length === 0) return;
+
+      openingEphemeralFolder = true;
+      // Clear the existing folder/album selection BEFORE assigning the
+      // ephemeral result. The $effect that closes ephemeral on
+      // selection-change reacts to either field becoming non-null while
+      // ephemeral is set; doing the reset first means we never enter the
+      // racy intermediate state where both ephemeral and a real
+      // selection are non-null at the same time.
+      selectedFolderPath = null;
+      selectedAlbum = null;
+      // Wipe any prior ephemeral playback state before the new scan
+      // overwrites the backend cache — otherwise stale ids from the
+      // previous folder linger in the queue / now-playing.
+      await wipeEphemeralPlaybackArtifacts();
+      const result = await invoke<EphemeralFolderState>('v2_ephemeral_open_folder', {
+        path: selected
+      });
+      ephemeralFolder = result;
+      setUserItem(EPHEMERAL_PATH_STORAGE_KEY, selected);
+      if (result.tracks.length === 0) {
+        showToast($t('library.ephemeralFolder.empty'), 'info');
+      } else if (result.skipped_files > 0) {
+        showToast(
+          $t('library.ephemeralFolder.openedWithSkips', {
+            values: { count: result.tracks.length, skipped: result.skipped_files }
+          }),
+          'success'
+        );
+      } else {
+        showToast(
+          $t('library.ephemeralFolder.opened', { values: { count: result.tracks.length } }),
+          'success'
+        );
+      }
+    } catch (err) {
+      console.error('[LocalLibrary] Failed to open ephemeral folder:', err);
+      showToast(
+        $t('library.ephemeralFolder.openFailed', { values: { error: String(err) } }),
+        'error'
+      );
+    } finally {
+      openingEphemeralFolder = false;
+    }
+  }
+
+  async function closeEphemeralFolder(): Promise<void> {
+    ephemeralFolder = null;
+    setUserItem(EPHEMERAL_PATH_STORAGE_KEY, '');
+    await wipeEphemeralPlaybackArtifacts();
+    try {
+      await invoke('v2_ephemeral_clear');
+    } catch (err) {
+      console.warn('[LocalLibrary] Failed to clear ephemeral state:', err);
+    }
+  }
+
+  // Wipe queue + now-playing if either is currently bound to ephemeral
+  // tracks. Detection is by id range — an id at or above the floor came
+  // from EphemeralLibraryState, so referencing it after the session is
+  // gone would 404 anyway. Regular library tracks are left alone;
+  // closing an ephemeral folder shouldn't interrupt unrelated playback
+  // the user started elsewhere.
+  //
+  // We check both `activeTrackId` (the actively-playing track) and the
+  // playerStore's currentTrack — sometimes an ephemeral track was
+  // restored visually from session without playback being active, in
+  // which case activeTrackId is null but the now-playing chrome is
+  // pinned to the stale ephemeral row. Without consulting both, the
+  // broom would clear the queue but leave the NowPlayingBar showing
+  // a track that can't actually be played.
+  async function wipeEphemeralPlaybackArtifacts(): Promise<void> {
+    const playerTrack = getPlayerCurrentTrack();
+    const playerTrackId = playerTrack?.id ?? null;
+    const activeIsEphemeral =
+      activeTrackId != null && activeTrackId >= EPHEMERAL_ID_FLOOR;
+    const playerIsEphemeral =
+      playerTrackId != null && playerTrackId >= EPHEMERAL_ID_FLOOR;
+    if (!activeIsEphemeral && !playerIsEphemeral) return;
+    try {
+      await clearQueue({ includeCurrent: true });
+    } catch (err) {
+      console.warn('[LocalLibrary] Failed to clear queue on ephemeral close:', err);
+    }
+    // The backend's stop+clear path doesn't reset current_track_id at the
+    // player level (it only flips is_playing=false), so the playback:state
+    // event keeps the old track_id and the frontend never nulls
+    // currentTrack on its own. Force-clear the NowPlayingBar slot here so
+    // the broom truly wipes the chrome.
+    if (playerIsEphemeral) {
+      setPlayerCurrentTrack(null);
+    }
+  }
+
+  // Flatten an album group's section structure into a linear track list
+  // honouring disc + track-number order. Used when the queue scope is a
+  // single album.
+  function flattenEphemeralAlbumGroup(group: EphemeralAlbumGroup): LocalTrack[] {
+    if (group.sections.length === 0) return [...group.tracks];
+    const out: LocalTrack[] = [];
+    for (const section of group.sections) {
+      out.push(...section.tracks);
+    }
+    return out;
+  }
+
+  // Build the full folder queue in album-then-disc-then-track order so
+  // "Play all" plays album 1 in order, then album 2, etc — instead of
+  // whatever the scanner happened to walk.
+  function flattenEphemeralFolder(): LocalTrack[] {
+    const out: LocalTrack[] = [];
+    for (const group of ephemeralAlbumGroups) {
+      out.push(...flattenEphemeralAlbumGroup(group));
+    }
+    return out;
+  }
+
+  function findEphemeralAlbumGroup(track: LocalTrack): EphemeralAlbumGroup | null {
+    for (const group of ephemeralAlbumGroups) {
+      if (group.tracks.some((item) => item.id === track.id)) return group;
+    }
+    return null;
+  }
+
+  async function playEphemeralTrackWithQueue(
+    track: LocalTrack,
+    queueTracks: LocalTrack[]
+  ): Promise<void> {
+    if (queueTracks.length === 0) return;
+    // Reading the source file (potentially a multi-GB CUE-mounted FLAC
+    // off a NAS) blocks for several seconds before audio actually starts.
+    // Without this toast the user sees no feedback and clicks Play again,
+    // queueing duplicate playback attempts. Toast is dismissed after the
+    // play_track invoke resolves (audio is then guaranteed to be
+    // initialising on the player side).
+    showToast(formatTrackTitle(track), 'buffering');
+    try {
+      const startIndex = queueTracks.findIndex((item) => item.id === track.id);
+      const safeIndex = Math.max(0, startIndex);
+      await setPlaybackContext(
+        'local_library',
+        'ephemeral',
+        $t('library.ephemeralFolder.contextLabel'),
+        'local',
+        queueTracks.map((item) => item.id),
+        safeIndex
+      );
+      await setQueueForLocalTracks(queueTracks, safeIndex);
+      await invoke('v2_library_play_track', { trackId: track.id });
+      dismissBuffering();
+    } catch (err) {
+      dismissBuffering();
+      const message = String(err);
+      console.error('[LocalLibrary] Failed to play ephemeral track:', err);
+      // Backend returns "Ephemeral file not found" / "Ephemeral track not found"
+      // when the folder or files have been moved/deleted/unmounted while the
+      // session was open. Treat that as the "directory or files no longer
+      // exist" cleanup trigger from the spec — drop the whole session so
+      // the user gets a clean slate instead of a half-broken pane.
+      if (message.includes('Ephemeral file not found')
+          || message.includes('Ephemeral track not found')) {
+        await closeEphemeralFolder();
+        showToast($t('library.ephemeralFolder.gone'), 'info');
+        return;
+      }
+      showToast(
+        $t('library.ephemeralFolder.playFailed', { values: { error: message } }),
+        'error'
+      );
+    }
+  }
+
+  // Single track click. Queue scope = the album the track belongs to,
+  // so playback flows through that album's tracks (and stops at the
+  // album boundary), not the whole folder. Mirrors how clicking a
+  // track inside album-detail in the regular library queues only the
+  // album's tracks.
+  async function playEphemeralTrack(track: LocalTrack): Promise<void> {
+    if (!ephemeralFolder) return;
+    const group = findEphemeralAlbumGroup(track);
+    const queue = group
+      ? flattenEphemeralAlbumGroup(group)
+      : ephemeralFolder.tracks;
+    await playEphemeralTrackWithQueue(track, queue);
+  }
+
+  // Patch the player's currentTrack with CUE virtual-track boundaries
+  // every time the active track changes to an ephemeral row. The
+  // playback service builds PlayingTrack from BackendQueueTrack which
+  // doesn't carry cue_start_secs / cue_end_secs, so without this hook
+  // the seekbar would report absolute FLAC time (e.g. 7:26 from frame
+  // zero of a virtual track that lives at offset 446s) instead of
+  // virtual time. Non-CUE ephemeral and non-ephemeral tracks pass
+  // through harmlessly with `null` boundaries.
+  $effect(() => {
+    if (!ephemeralFolder) {
+      patchCurrentTrackCueInfo(null, null);
+      return;
+    }
+    if (activeTrackId == null || activeTrackId < EPHEMERAL_ID_FLOOR) {
+      patchCurrentTrackCueInfo(null, null);
+      return;
+    }
+    const ephemTrack = ephemeralFolder.tracks.find((item) => item.id === activeTrackId);
+    if (!ephemTrack) return;
+    patchCurrentTrackCueInfo(
+      ephemTrack.cue_start_secs ?? null,
+      ephemTrack.cue_end_secs ?? null
+    );
+  });
+
+  // Spec rule: an ephemeral session "survives until a different album is
+  // loaded, the Clear/Close button is pressed, or the directory/files are
+  // gone". This effect handles the first trigger — anything that points
+  // the right pane at a real album or tree folder ends the session. The
+  // Close button handles the second trigger directly via closeEphemeralFolder;
+  // the playEphemeralTrack error path handles the third.
+  $effect(() => {
+    if (!ephemeralFolder) return;
+    // Rehydration on mount may set ephemeralFolder while other init
+    // settles; rehydrateEphemeralFolder checks for selection collisions
+    // itself, so suppress the effect during that window to avoid an
+    // unwanted close on the same tick the result lands.
+    if (rehydratingEphemeralFolder) return;
+    if (selectedAlbum != null || selectedFolderPath != null) {
+      untrack(() => {
+        void closeEphemeralFolder();
+      });
+    }
+  });
+
+  // Folder-level "Play all": queue scope = whole folder, in album order.
+  // CUE virtual-track boundary advance.
+  //
+  // Backend story: a CUE-derived ephemeral album is one big FLAC played
+  // through `play_data` with the FIRST virtual track's id. The player
+  // never changes `current_track_id` mid-album (the audio buffer is
+  // continuous), so neither the gapless transition path nor the regular
+  // queue auto-advance fires. The frontend has to detect the virtual
+  // boundary and update UI metadata itself.
+  //
+  // We listen to the raw playback:state event (not playerStore.currentTime)
+  // because once we virtually advance, playerStore filters out position
+  // updates whose track_id doesn't match the displayed track — but the
+  // RAW position keeps incrementing in the FLAC, which is exactly what
+  // we need to detect the next boundary.
+  let cueBoundaryUnlisten: UnlistenFn | null = null;
+  let cueAdvanceInProgress = false;
+  type RawPlaybackEvent = { track_id: number; position: number; is_playing: boolean };
+
+  async function startEphemeralCueBoundaryWatcher(): Promise<void> {
+    if (cueBoundaryUnlisten) return;
+    cueBoundaryUnlisten = await listen<RawPlaybackEvent>('playback:state', (event) => {
+      handleEphemeralCueBoundary(event.payload);
+    });
+  }
+
+  function handleEphemeralCueBoundary(event: RawPlaybackEvent): void {
+    if (cueAdvanceInProgress) return;
+    if (!ephemeralFolder) return;
+    if (!event.is_playing) return;
+
+    const playerTrack = getPlayerCurrentTrack();
+    if (!playerTrack || playerTrack.id < EPHEMERAL_ID_FLOOR) return;
+
+    const ephemTrack = ephemeralFolder.tracks.find((item) => item.id === playerTrack.id);
+    if (!ephemTrack || ephemTrack.cue_end_secs == null) return;
+
+    // Fire slightly before the boundary so the visible track flips at
+    // the natural transition point rather than a beat after.
+    const fireAt = ephemTrack.cue_end_secs - 0.5;
+    if (event.position < fireAt) return;
+
+    cueAdvanceInProgress = true;
+    void advanceCueEphemeralVirtualTrack(ephemTrack)
+      .finally(() => {
+        cueAdvanceInProgress = false;
+      });
+  }
+
+  async function advanceCueEphemeralVirtualTrack(currentTrack: LocalTrack): Promise<void> {
+    if (!ephemeralFolder) return;
+
+    // Mirror the queue scope used at playback start (same album group)
+    // so the boundary advance respects the user's "play this album"
+    // intent rather than bleeding into other albums in the folder.
+    const group = findEphemeralAlbumGroup(currentTrack);
+    const queue = group
+      ? flattenEphemeralAlbumGroup(group)
+      : ephemeralFolder.tracks;
+    const idx = queue.findIndex((item) => item.id === currentTrack.id);
+    if (idx < 0 || idx + 1 >= queue.length) return;
+    const next = queue[idx + 1];
+
+    // Advance the queue's current_index server-side so the queue panel
+    // and the bridge stay coherent. Failures here are non-fatal — we
+    // still want to update the displayed metadata.
+    try {
+      await invoke('v2_next_track');
+    } catch (err) {
+      console.warn('[Ephemeral] CUE boundary advance: v2_next_track failed:', err);
+    }
+
+    // Swap the displayed track. The audio is unchanged (continuous CUE
+    // FLAC); we're only updating chrome. Seekbar will reset to 0 and
+    // stop progressing — a known limitation while the underlying
+    // player.track_id is still the FIRST virtual track. Acceptable
+    // tradeoff in exchange for a coherent NowPlayingBar + queue panel.
+    setPlayerCurrentTrack({
+      id: next.id,
+      title: formatTrackTitle(next),
+      artist: next.artist,
+      album: next.album,
+      artwork: next.artwork_path ? getFullArtworkUrl(next.artwork_path) : '',
+      duration: next.duration_secs,
+      quality: getQualityBadge(next),
+      bitDepth: next.bit_depth ?? undefined,
+      // LocalTrack stores sample_rate in Hz; PlayingTrack expects kHz so
+      // the NowPlayingBar's "FLAC 16/44.1" badge formats correctly.
+      // Without /1000 the chrome reads as the raw 44100 number and
+      // looks like a quality downgrade vs. the badge in the album list.
+      samplingRate: next.sample_rate ? next.sample_rate / 1000 : undefined,
+      isLocal: true,
+      source: 'ephemeral',
+    });
+
+    await syncQueueState().catch(() => {});
+  }
+
+  async function playAllEphemeral(): Promise<void> {
+    if (!ephemeralFolder || ephemeralFolder.tracks.length === 0) return;
+    const queue = flattenEphemeralFolder();
+    if (queue.length === 0) return;
+    await playEphemeralTrackWithQueue(queue[0], queue);
+  }
+
+  // Rehydrate the ephemeral session from a persisted folder path. Called
+  // once during onMount: if the user closed the app without explicitly
+  // clearing the ephemeral pane, the folder reopens automatically as
+  // long as it's still accessible. The data itself isn't persisted —
+  // only the path — so we re-scan + re-extract metadata + re-load
+  // artwork on every restore.
+  async function rehydrateEphemeralFolder(): Promise<void> {
+    const stored = getUserItem(EPHEMERAL_PATH_STORAGE_KEY);
+    if (!stored || !stored.trim()) return;
+    // If something else (nav state, user click) has already pointed the
+    // right pane at a folder/album, defer to that rather than fighting
+    // for the slot.
+    if (selectedFolderPath != null || selectedAlbum != null) return;
+    openingEphemeralFolder = true;
+    rehydratingEphemeralFolder = true;
+    try {
+      const result = await invoke<EphemeralFolderState>('v2_ephemeral_open_folder', {
+        path: stored
+      });
+      // Re-check after the await: the user could have navigated during
+      // the scan. If so, drop the result (and tear down the backend
+      // cache) so we don't visually steal their selection.
+      if (selectedFolderPath != null || selectedAlbum != null) {
+        void invoke('v2_ephemeral_clear').catch(() => {});
+        return;
+      }
+      ephemeralFolder = result;
+    } catch (err) {
+      // Folder gone (USB unplugged, NAS unreachable, directory deleted).
+      // Drop the stored path so the next launch starts clean instead
+      // of failing the same way.
+      console.info('[LocalLibrary] Ephemeral folder no longer accessible:', err);
+      setUserItem(EPHEMERAL_PATH_STORAGE_KEY, '');
+    } finally {
+      openingEphemeralFolder = false;
+      rehydratingEphemeralFolder = false;
+    }
+  }
+
+  // Per-album play button (only rendered when there's >1 album group).
+  // Queue scope = just this album, so playback stops at the album
+  // boundary instead of bleeding into the next album in the folder.
+  async function playEphemeralAlbum(group: EphemeralAlbumGroup): Promise<void> {
+    if (!group || group.tracks.length === 0) return;
+    const queue = flattenEphemeralAlbumGroup(group);
+    if (queue.length === 0) return;
+    await playEphemeralTrackWithQueue(queue[0], queue);
   }
 
   function handleLibraryPreferencesSaved(prefs: LibraryPreferences) {
@@ -878,6 +1291,93 @@
   // Path of the folder currently selected in the tree; drives the
   // right-pane routing (album-detail vs FolderDetail vs empty-state).
   let selectedFolderPath = $state<string | null>(null);
+
+  // Ephemeral folder session: when set, the right pane shows the contents
+  // of an ad-hoc folder the user opened via the "Open Folder" button. The
+  // tracks here have synthetic ids in the high-positive range that route
+  // to the in-memory EphemeralLibraryState on the backend (see
+  // v2_library_play_track). The data itself is rebuilt on every app
+  // launch — what survives the restart is just the folder path (saved to
+  // userStorage), so a re-scan on mount restores the same listing if
+  // the folder is still accessible.
+  // Field names are snake_case to match the Rust struct serde-serializes
+  // (consistent with LocalTrack, which is also snake_case across the FFI).
+  type EphemeralFolderState = {
+    folder_path: string;
+    tracks: LocalTrack[];
+    skipped_files: number;
+  };
+  // Mirror of EPHEMERAL_ID_FLOOR in the Rust ephemeral_library module:
+  // any track id at or above this value is an ephemeral synthetic id,
+  // not a DB row. Used for "did the user just close a folder whose
+  // tracks are still playing?" checks so we know whether to wipe the
+  // queue + now-playing slot when an ephemeral session ends.
+  const EPHEMERAL_ID_FLOOR = 1 << 48;
+  const EPHEMERAL_PATH_STORAGE_KEY = 'qbz-ephemeral-folder-path';
+  let ephemeralFolder = $state<EphemeralFolderState | null>(null);
+  let openingEphemeralFolder = $state(false);
+  let rehydratingEphemeralFolder = false;
+
+  const ephemeralFolderName = $derived.by(() => {
+    if (!ephemeralFolder) return '';
+    const segments = ephemeralFolder.folder_path.split('/').filter(Boolean);
+    return segments.length > 0 ? segments[segments.length - 1] : ephemeralFolder.folder_path;
+  });
+
+  // Group ephemeral tracks by album. The scanner walks recursively, so a
+  // single ephemeral session can hold tracks from multiple albums (e.g.
+  // a parent folder containing several discography subfolders). We use
+  // album_group_key from the metadata extractor as the canonical key
+  // and fall back to "album|album_artist" when it's empty (rare, but
+  // happens for files with no tags). Each group is then split into disc
+  // sections via buildAlbumSections so multi-disc albums get the same
+  // disc-header treatment as the regular library views.
+  type EphemeralAlbumGroup = {
+    key: string;
+    title: string;
+    artist: string;
+    year: number | null;
+    artworkPath: string | null;
+    qualityBadge: string;
+    isHiRes: boolean;
+    tracks: LocalTrack[];
+    sections: ReturnType<typeof buildAlbumSections>;
+  };
+
+  const ephemeralAlbumGroups = $derived.by((): EphemeralAlbumGroup[] => {
+    if (!ephemeralFolder) return [];
+    const map = new Map<string, EphemeralAlbumGroup>();
+    for (const track of ephemeralFolder.tracks) {
+      const key = (track.album_group_key && track.album_group_key.trim())
+        || `${track.album}|||${track.album_artist || track.artist}`;
+      let group = map.get(key);
+      if (!group) {
+        group = {
+          key,
+          title: track.album_group_title?.trim() || normalizeAlbumTitle(track.album),
+          artist: track.album_artist?.trim() || track.artist || 'Unknown Artist',
+          year: track.year ?? null,
+          artworkPath: track.artwork_path ?? null,
+          qualityBadge: getQualityBadge(track),
+          isHiRes: isHiRes(track),
+          tracks: [],
+          sections: []
+        };
+        map.set(key, group);
+      } else {
+        if (!group.artworkPath && track.artwork_path) group.artworkPath = track.artwork_path;
+        if (group.year == null && track.year != null) group.year = track.year;
+      }
+      group.tracks.push(track);
+    }
+    const groups = [...map.values()];
+    for (const group of groups) {
+      group.sections = buildAlbumSections(group.tracks);
+    }
+    // Sort groups by title for stable ordering across opens.
+    groups.sort((a, b) => a.title.localeCompare(b.title));
+    return groups;
+  });
   // Set of paths the user has expanded in the tree. Each top-level
   // <LocalLibraryFolderTree> shares this set so siblings stay in sync.
   let treeExpandedPaths = $state(new SvelteSet<string>());
@@ -901,8 +1401,8 @@
   // forcing the rail wider). Bounds: 200px floor; 40% of the live content
   // area as ceiling. Persisted on drag-end via
   // v2_set_library_folders_tree_sidebar_width.
-  const FOLDER_TREE_SIDEBAR_DEFAULT_WIDTH = 302;
-  const FOLDER_TREE_SIDEBAR_MIN_WIDTH = 200;
+  const FOLDER_TREE_SIDEBAR_DEFAULT_WIDTH = 290;
+  const FOLDER_TREE_SIDEBAR_MIN_WIDTH = 290;
   let folderTreeSidebarWidth = $state<number>(FOLDER_TREE_SIDEBAR_DEFAULT_WIDTH);
   let isResizingTreeSidebar = $state(false);
   let folderTreeContentAreaWidth = $state<number>(0);
@@ -2363,6 +2863,18 @@
     if (initialNavState.activeView === 'library-album' && initialNavState.selectedLocalAlbumId) {
       loadAlbumById(initialNavState.selectedLocalAlbumId);
     }
+
+    // Restore the ephemeral folder pane if the user left one open last
+    // session. Runs in the background (void) so it doesn't block the
+    // initial render — the user can navigate freely while the rescan
+    // happens; rehydrateEphemeralFolder bails gracefully if so.
+    void rehydrateEphemeralFolder();
+
+    // Watch raw playback events so we can advance the displayed track
+    // when CUE virtual-track boundaries are crossed (the audio engine
+    // can't help here — one FLAC, one track_id, multiple virtual
+    // tracks). Watcher self-no-ops outside ephemeral sessions.
+    void startEphemeralCueBoundaryWatcher();
   });
 
   onDestroy(() => {
@@ -2377,6 +2889,10 @@
     }
     if (unsubscribePerformance) {
       unsubscribePerformance();
+    }
+    if (cueBoundaryUnlisten) {
+      cueBoundaryUnlisten();
+      cueBoundaryUnlisten = null;
     }
   });
 
@@ -5476,6 +5992,16 @@
                   >
                     <ChevronsDownUp size={14} />
                   </button>
+                  <button
+                    type="button"
+                    class="tree-toolbar-btn"
+                    onclick={openEphemeralFolder}
+                    disabled={openingEphemeralFolder}
+                    title={$t('library.ephemeralFolder.tooltip')}
+                    aria-label={$t('library.ephemeralFolder.buttonLabel')}
+                  >
+                    <FolderOpen size={14} />
+                  </button>
                   <input
                     type="search"
                     class="tree-search-input"
@@ -5538,7 +6064,164 @@
                 </div>
               </div>
               <div class="folder-content-column">
-                {#if selectedAlbumForTree}
+                {#if openingEphemeralFolder && !ephemeralFolder}
+                  <!-- Scanning indicator: shown while the backend is
+                       walking the selected folder, extracting metadata
+                       and building thumbnails. Large folders on slow
+                       network shares (NAS) take real time, so this is
+                       a hard requirement for perceived responsiveness. -->
+                  <div class="ephemeral-loading">
+                    <div class="spinner"></div>
+                    <div class="ephemeral-loading-text">
+                      {$t('library.ephemeralFolder.scanning')}
+                    </div>
+                  </div>
+                {:else if ephemeralFolder}
+                  <!-- Ephemeral session: an ad-hoc folder the user opened
+                       without persisting it to local_tracks. The track
+                       ids are in the high-positive range (>= 2^48);
+                       playback through them lands in the ephemeral branch
+                       of v2_library_play_track. The pane mirrors the
+                       regular folder/album views — cover art header per
+                       album group, disc sections for multi-disc rips —
+                       so it reads as part of the app even though the
+                       data is transient. -->
+                  <div class="ephemeral-pane">
+                    <div class="ephemeral-header">
+                      <div class="ephemeral-header-info">
+                        <FolderOpen size={20} class="ephemeral-icon" />
+                        <div class="ephemeral-titles">
+                          <div class="ephemeral-title">{ephemeralFolderName}</div>
+                          <div class="ephemeral-subtitle">
+                            {$t('library.ephemeralFolder.subtitle', {
+                              values: {
+                                count: ephemeralFolder.tracks.length,
+                                path: ephemeralFolder.folder_path
+                              }
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                      <div class="ephemeral-actions">
+                        <button
+                          type="button"
+                          class="ephemeral-play-btn"
+                          onclick={playAllEphemeral}
+                          disabled={ephemeralFolder.tracks.length === 0}
+                          title={$t('library.ephemeralFolder.playAll')}
+                        >
+                          <Play size={14} />
+                          <span>{$t('library.ephemeralFolder.playAll')}</span>
+                        </button>
+                        <button
+                          type="button"
+                          class="ephemeral-close-btn"
+                          onclick={closeEphemeralFolder}
+                          title={$t('library.ephemeralFolder.close')}
+                          aria-label={$t('library.ephemeralFolder.close')}
+                        >
+                          <BrushCleaning size={16} />
+                        </button>
+                      </div>
+                    </div>
+                    {#if ephemeralFolder.tracks.length === 0}
+                      <div class="ephemeral-empty">
+                        {$t('library.ephemeralFolder.empty')}
+                      </div>
+                    {:else}
+                      <div class="ephemeral-album-list">
+                        {#each ephemeralAlbumGroups as group (group.key)}
+                          <section class="ephemeral-album-block">
+                            <header class="ephemeral-album-header">
+                              <div class="ephemeral-album-cover">
+                                {#if group.artworkPath}
+                                  <img
+                                    src={getFullArtworkUrl(group.artworkPath)}
+                                    alt=""
+                                    loading="lazy"
+                                  />
+                                {:else}
+                                  <div class="ephemeral-album-cover-placeholder" aria-hidden="true">
+                                    <Disc3 size={36} />
+                                  </div>
+                                {/if}
+                              </div>
+                              <div class="ephemeral-album-meta">
+                                <div class="ephemeral-album-title">{group.title}</div>
+                                <div class="ephemeral-album-artist">{group.artist}</div>
+                                <div class="ephemeral-album-info">
+                                  {#if group.year}
+                                    <span>{group.year}</span>
+                                    <span class="ephemeral-album-info-sep">·</span>
+                                  {/if}
+                                  <span class="ephemeral-album-quality" class:hires={group.isHiRes}>
+                                    {group.qualityBadge}
+                                  </span>
+                                  <span class="ephemeral-album-info-sep">·</span>
+                                  <span>
+                                    {$t('library.ephemeralFolder.trackCount', {
+                                      values: { count: group.tracks.length }
+                                    })}
+                                  </span>
+                                </div>
+                              </div>
+                              {#if ephemeralAlbumGroups.length > 1}
+                                <!-- The per-album play button is redundant
+                                     when there's only one group: the folder-
+                                     level "Play all" already plays the same
+                                     thing. Hide it in single-album sessions
+                                     (most common case — opening one album
+                                     folder) and surface only when the user
+                                     opened a parent folder containing
+                                     multiple albums and needs per-album
+                                     playback affordances. -->
+                                <button
+                                  type="button"
+                                  class="ephemeral-album-play-btn"
+                                  onclick={() => playEphemeralAlbum(group)}
+                                  title={$t('library.ephemeralFolder.playAlbum')}
+                                  aria-label={$t('library.ephemeralFolder.playAlbum')}
+                                >
+                                  <Play size={14} />
+                                </button>
+                              {/if}
+                            </header>
+                            <div class="ephemeral-album-tracks">
+                              {#each group.sections as section, sectionIdx (section.disc + '-' + sectionIdx)}
+                                {#if group.sections.length > 1 && section.label}
+                                  <div class="ephemeral-disc-header">{section.label}</div>
+                                {/if}
+                                {#each section.tracks as track, trackIdx (track.id)}
+                                  <button
+                                    type="button"
+                                    class="ephemeral-track-row"
+                                    class:active={activeTrackId === track.id}
+                                    onclick={() => playEphemeralTrack(track)}
+                                  >
+                                    <span class="ephemeral-track-num">
+                                      {section.useIndexNumbering
+                                        ? trackIdx + 1
+                                        : (track.track_number ?? '—')}
+                                    </span>
+                                    <span class="ephemeral-track-meta">
+                                      <span class="ephemeral-track-title">{formatTrackTitle(track)}</span>
+                                      {#if track.artist && track.artist !== group.artist}
+                                        <span class="ephemeral-track-secondary">{track.artist}</span>
+                                      {/if}
+                                    </span>
+                                    <span class="ephemeral-track-duration">
+                                      {formatDuration(track.duration_secs)}
+                                    </span>
+                                  </button>
+                                {/each}
+                              {/each}
+                            </div>
+                          </section>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {:else if selectedAlbumForTree}
                   <!-- Compact album view: artwork + metadata + play +
                        track list, sized for the right pane so the tree
                        rail stays visible. The full-page album-detail
@@ -8370,12 +9053,13 @@
 
   /* Dedicated tree-mode search input. Decoupled from the global
      `albumSearch` input — driving its own filter via `treeSearchInput`
-     in the script. Pinned to a moderate fixed width (~140px) so the
-     toolbar items stay left-aligned and the search input doesn't
-     stretch across the whole column. */
+     in the script. Pinned to a moderate fixed width (~140px) and
+     pushed to the right edge of the toolbar via `margin-left: auto`
+     so the action icons stay anchored on the left. */
   .tree-search-input {
     flex: 0 0 auto;
     width: 140px;
+    margin-left: auto;
     padding: 4px 8px;
     border: 1px solid var(--border-color);
     border-radius: 3px;
@@ -8390,9 +9074,9 @@
 
   .folder-tree-column {
     /* Width is set inline via style:width — see folderTreeSidebarWidth in
-       LocalLibraryView.svelte. The 302px fallback only kicks in if the
+       LocalLibraryView.svelte. The 290px fallback only kicks in if the
        inline style fails to attach (defensive). */
-    width: 302px;
+    width: 290px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -8496,6 +9180,331 @@
     font-size: 14px;
     padding: 24px;
     text-align: center;
+  }
+
+  /* Ephemeral folder pane: full content area showing the contents of an
+     ad-hoc folder the user opened without persisting to the library. The
+     header carries a Play All affordance and a close button; below it a
+     simple track list (no virtualization needed — ephemeral sessions are
+     bounded to one folder at a time and rarely exceed a few hundred
+     rows). Visually marked as transient via the "Session" eyebrow color
+     so it doesn't read as part of the persistent library. */
+  .ephemeral-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 16px 0 0 0;
+  }
+
+  .ephemeral-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 4px 12px 4px;
+    border-bottom: 1px solid var(--bg-tertiary);
+  }
+
+  .ephemeral-header-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .ephemeral-titles {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .ephemeral-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .ephemeral-play-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 14px;
+    background: var(--accent-primary);
+    color: var(--bg-primary);
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+  }
+
+  .ephemeral-play-btn:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+
+  .ephemeral-play-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .ephemeral-close-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+
+  .ephemeral-close-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  .ephemeral-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 24px;
+  }
+
+  .ephemeral-loading {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 24px;
+    color: var(--text-secondary);
+  }
+
+  .ephemeral-loading-text {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .ephemeral-album-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 0 24px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .ephemeral-album-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .ephemeral-album-header {
+    display: grid;
+    grid-template-columns: 96px 1fr auto;
+    gap: 16px;
+    align-items: center;
+    padding: 4px;
+  }
+
+  .ephemeral-album-cover {
+    width: 96px;
+    height: 96px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+  }
+
+  .ephemeral-album-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .ephemeral-album-cover-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+  }
+
+  .ephemeral-album-meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .ephemeral-album-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-album-artist {
+    font-size: 13px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-album-info {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .ephemeral-album-info-sep {
+    opacity: 0.6;
+  }
+
+  .ephemeral-album-quality {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ephemeral-album-quality.hires {
+    color: var(--color-success, #22c55e);
+    font-weight: 600;
+  }
+
+  .ephemeral-album-play-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent-primary);
+    color: var(--bg-primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 120ms ease, transform 120ms ease;
+    flex-shrink: 0;
+  }
+
+  .ephemeral-album-play-btn:hover {
+    background: var(--accent-hover);
+    transform: scale(1.05);
+  }
+
+  .ephemeral-album-tracks {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ephemeral-disc-header {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 8px 8px 6px 8px;
+    border-bottom: 1px solid var(--bg-tertiary);
+    margin-top: 4px;
+  }
+
+  .ephemeral-track-row {
+    display: grid;
+    grid-template-columns: 32px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 8px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+    transition: background-color 100ms ease;
+  }
+
+  .ephemeral-track-row:hover {
+    background: var(--bg-tertiary);
+  }
+
+  .ephemeral-track-row.active {
+    color: var(--accent-primary);
+  }
+
+  .ephemeral-track-num {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  .ephemeral-track-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .ephemeral-track-title {
+    font-size: 13px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-track-secondary {
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-track-duration {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 40px;
+    text-align: right;
   }
 
   /* Inline Flat / Tree toggle in the jumpnav row.

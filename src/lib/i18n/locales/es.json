@@ -39,6 +39,7 @@
     "addToPlaylist": "Agregar a Lista",
     "addToFavorites": "Agregar a Biblioteca",
     "removeFromFavorites": "Quitar de Biblioteca",
+    "unavailableForEphemeral": "No disponible para carpetas efímeras",
     "removeFromPlaylist": "Quitar del Playlist",
     "selectedTracks": "{count, plural, one {# canción seleccionada} other {# canciones seleccionadas}}",
     "select": "Seleccionar",
@@ -914,6 +915,24 @@
       "gridView": "Cuadrícula",
       "listView": "Lista",
       "viewArtwork": "Ver portada del álbum"
+    },
+    "ephemeralFolder": {
+      "buttonLabel": "Abrir carpeta",
+      "tooltip": "Abre una carpeta ad-hoc — sus pistas se cargan en el panel y permanecen disponibles hasta cerrar la app. No se agrega nada a tu biblioteca.",
+      "dialogTitle": "Selecciona una carpeta para reproducir",
+      "contextLabel": "Carpeta abierta",
+      "subtitle": "{count, plural, one {# pista} other {# pistas}} · {path}",
+      "playAll": "Reproducir todo",
+      "playAlbum": "Reproducir álbum",
+      "trackCount": "{count, plural, one {# pista} other {# pistas}}",
+      "scanning": "Escaneando carpeta…",
+      "close": "Limpiar sesión",
+      "empty": "No se encontraron archivos de audio compatibles en esta carpeta.",
+      "opened": "Cargada {count, plural, one {# pista} other {# pistas}}",
+      "openedWithSkips": "Cargadas {count, plural, one {# pista} other {# pistas}}, omitidos {skipped, plural, one {# archivo} other {# archivos}}",
+      "openFailed": "No se pudo abrir la carpeta: {error}",
+      "playFailed": "Falló la reproducción: {error}",
+      "gone": "La carpeta ya no está disponible — sesión cerrada."
     },
     "folderListTitle": "Carpetas de la Biblioteca",
     "editTabs": {
