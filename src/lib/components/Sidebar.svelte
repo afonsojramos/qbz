@@ -2515,9 +2515,10 @@
     height: calc(100vh - 104px); /* Only 104px NowPlayingBar, no title bar */
   }
 
-  /* macOS: pad top of sidebar to clear native traffic light buttons */
+  /* macOS hidden mode: pad sidebar top so search clears the traffic lights
+     that the OS still draws via TitleBarStyle::Overlay. */
   :global(html.macos) .sidebar.no-titlebar {
-    padding-top: 32px;
+    padding-top: 36px;
   }
 
   .content {
