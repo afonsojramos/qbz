@@ -907,7 +907,12 @@
       "searchNoResults": "No tracks match your search.",
       "collapseAll": "Collapse all folders",
       "searchPlaceholder": "Search folders…",
-      "searchAriaLabel": "Search folders in tree"
+      "searchAriaLabel": "Search folders in tree",
+      "searchAlbumsPlaceholder": "Search albums…",
+      "searchAlbumsLabel": "Search albums in this folder",
+      "viewModeLabel": "View mode",
+      "gridView": "Grid",
+      "listView": "List"
     },
     "explicit": "Explicit",
     "folderListTitle": "Library Folders",

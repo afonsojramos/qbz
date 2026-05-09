@@ -907,7 +907,12 @@
       "searchNoResults": "Keine Titel entsprechen deiner Suche.",
       "collapseAll": "Alle Ordner einklappen",
       "searchPlaceholder": "Ordner suchen…",
-      "searchAriaLabel": "Ordner im Baum suchen"
+      "searchAriaLabel": "Ordner im Baum suchen",
+      "searchAlbumsPlaceholder": "Alben suchen…",
+      "searchAlbumsLabel": "Alben in diesem Ordner suchen",
+      "viewModeLabel": "Ansichtsmodus",
+      "gridView": "Raster",
+      "listView": "Liste"
     },
     "folderListTitle": "Bibliotheksordner",
     "editTabs": {

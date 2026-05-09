@@ -907,7 +907,12 @@
       "searchNoResults": "Ninguna pista coincide con la búsqueda.",
       "collapseAll": "Contraer todas las carpetas",
       "searchPlaceholder": "Buscar carpetas…",
-      "searchAriaLabel": "Buscar carpetas en el árbol"
+      "searchAriaLabel": "Buscar carpetas en el árbol",
+      "searchAlbumsPlaceholder": "Buscar álbumes…",
+      "searchAlbumsLabel": "Buscar álbumes en esta carpeta",
+      "viewModeLabel": "Modo de vista",
+      "gridView": "Cuadrícula",
+      "listView": "Lista"
     },
     "folderListTitle": "Carpetas de la Biblioteca",
     "editTabs": {

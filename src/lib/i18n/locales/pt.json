@@ -907,7 +907,12 @@
       "searchNoResults": "Nenhuma faixa corresponde à sua busca.",
       "collapseAll": "Recolher todas as pastas",
       "searchPlaceholder": "Buscar pastas…",
-      "searchAriaLabel": "Buscar pastas na árvore"
+      "searchAriaLabel": "Buscar pastas na árvore",
+      "searchAlbumsPlaceholder": "Buscar álbuns…",
+      "searchAlbumsLabel": "Buscar álbuns nesta pasta",
+      "viewModeLabel": "Modo de visualização",
+      "gridView": "Grade",
+      "listView": "Lista"
     },
     "folderListTitle": "Pastas da Biblioteca",
     "editTabs": {

@@ -907,7 +907,12 @@
       "searchNoResults": "Aucun titre ne correspond à votre recherche.",
       "collapseAll": "Réduire tous les dossiers",
       "searchPlaceholder": "Rechercher des dossiers…",
-      "searchAriaLabel": "Rechercher des dossiers dans l'arborescence"
+      "searchAriaLabel": "Rechercher des dossiers dans l'arborescence",
+      "searchAlbumsPlaceholder": "Rechercher des albums…",
+      "searchAlbumsLabel": "Rechercher des albums dans ce dossier",
+      "viewModeLabel": "Mode d'affichage",
+      "gridView": "Grille",
+      "listView": "Liste"
     },
     "folderListTitle": "Dossiers de la bibliothèque",
     "editTabs": {
