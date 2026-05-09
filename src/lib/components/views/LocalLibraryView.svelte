@@ -4552,38 +4552,40 @@
 
   function groupTracks(items: LocalTrack[], mode: TrackGroupMode) {
     const prefix = `track-${mode}`;
-    const sorted = [...items].sort((a, b) => {
+    // Decorate-sort-undecorate: precompute one composite key per track and
+    // sort by string compare. localeCompare creates an Intl.Collator on
+    // every call, which costs seconds across 16K-66K rows; padded-numeric
+    // ASCII keys with `<`/`>` are 10-100× faster and good enough for
+    // library browsing.
+    const SEP = '';
+    const padDisc = (d: number) => String(d).padStart(4, '0');
+    const padTrack = (n: number) => String(n).padStart(6, '0');
+    const decorated = items.map((track) => {
+      let key: string;
       if (mode === 'album') {
-        const albumCmp = a.album.localeCompare(b.album);
-        if (albumCmp !== 0) return albumCmp;
-        const artistCmp = a.artist.localeCompare(b.artist);
-        if (artistCmp !== 0) return artistCmp;
-        const aOrder = trackSortValue(a);
-        const bOrder = trackSortValue(b);
-        if (aOrder.disc !== bOrder.disc) return aOrder.disc - bOrder.disc;
-        if (aOrder.trackNumber !== bOrder.trackNumber) return aOrder.trackNumber - bOrder.trackNumber;
-        return a.title.localeCompare(b.title);
+        const order = trackSortValue(track);
+        key = (track.album || '').toLowerCase() + SEP +
+              (track.artist || '').toLowerCase() + SEP +
+              padDisc(order.disc) + SEP +
+              padTrack(order.trackNumber) + SEP +
+              (track.title || '').toLowerCase();
+      } else if (mode === 'artist') {
+        const canonical = (allCanonicalNames.get(track.artist) || track.artist || '').toLowerCase();
+        const order = trackSortValue(track);
+        key = canonical + SEP +
+              (track.album || '').toLowerCase() + SEP +
+              padDisc(order.disc) + SEP +
+              padTrack(order.trackNumber) + SEP +
+              (track.title || '').toLowerCase();
+      } else {
+        key = (track.title || '').toLowerCase() + SEP +
+              (track.artist || '').toLowerCase() + SEP +
+              (track.album || '').toLowerCase();
       }
-      if (mode === 'artist') {
-        // Use canonical names for sorting to keep variants together
-        const aArtist = allCanonicalNames.get(a.artist) || a.artist;
-        const bArtist = allCanonicalNames.get(b.artist) || b.artist;
-        const artistCmp = aArtist.localeCompare(bArtist);
-        if (artistCmp !== 0) return artistCmp;
-        const albumCmp = a.album.localeCompare(b.album);
-        if (albumCmp !== 0) return albumCmp;
-        const aOrder = trackSortValue(a);
-        const bOrder = trackSortValue(b);
-        if (aOrder.disc !== bOrder.disc) return aOrder.disc - bOrder.disc;
-        if (aOrder.trackNumber !== bOrder.trackNumber) return aOrder.trackNumber - bOrder.trackNumber;
-        return a.title.localeCompare(b.title);
-      }
-      const titleCmp = a.title.localeCompare(b.title);
-      if (titleCmp !== 0) return titleCmp;
-      const artistCmp = a.artist.localeCompare(b.artist);
-      if (artistCmp !== 0) return artistCmp;
-      return a.album.localeCompare(b.album);
+      return { track, key };
     });
+    decorated.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    const sorted = decorated.map((d) => d.track);
 
     const groups = new Map<string, { title: string; subtitle?: string; tracks: LocalTrack[]; artists: Set<string> }>();
     for (const track of sorted) {
