@@ -4,6 +4,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { t } from '$lib/i18n';
+  import { platform } from '$lib/utils/platform';
   import type { ButtonColorSet } from '$lib/stores/windowControlsStore';
   import type { Snippet } from 'svelte';
   import {
@@ -239,6 +240,7 @@
   class:controls-left={controlsPosition === 'left'}
   class:variant-full={variant === 'full'}
   class:variant-stripped={variant === 'stripped'}
+  class:macos={platform === 'macos'}
   {...variant === 'full' ? { 'data-tauri-drag-region': '' } : {}}
 >
   <!-- Left zone -->
@@ -328,6 +330,14 @@
     box-shadow: none;
     -webkit-app-region: no-drag;
     app-region: no-drag;
+  }
+
+  /* macOS: TitleBarStyle::Overlay paints the traffic lights at the top-left of
+     the window, on top of our content. Reserve ~84px on the left zone so the
+     lights don't collide with nav/search. The reserved area stays a drag
+     region (it's part of zone-left). */
+  .titlebar.macos .zone-left {
+    padding-left: 84px;
   }
 
   /* 3-zone layout: left and right zones are equal width, center is fixed */

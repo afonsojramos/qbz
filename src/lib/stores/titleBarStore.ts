@@ -90,8 +90,10 @@ export function getMode(): TitlebarMode {
 
 /**
  * Whether the custom TitleBar.svelte component should mount.
- * - macOS always uses native overlay → false.
- * - 'qbz' → true (full variant).
+ * - 'qbz' → true (full variant). macOS always falls here: mode selection
+ *   is hidden in settings on macOS, so it stays at the 'qbz' default and
+ *   the strip mounts with native traffic lights overlaid on its left zone
+ *   (see TitleBar.svelte's `.titlebar.macos` rule).
  * - 'plasma' or 'system' → true ONLY if the stripped strip would carry
  *   content (search-in-titlebar OR at least one nav item). Both render
  *   the strip below their respective OS chrome (KWin SSD via Xwayland
@@ -99,7 +101,6 @@ export function getMode(): TitlebarMode {
  * - 'hidden' → false.
  */
 export function shouldShowTitleBar(): boolean {
-  if (platform === 'macos') return false;
   if (mode === 'hidden') return false;
   if (mode === 'qbz') return true;
   // mode === 'plasma' or 'system' — both render the stripped strip below
@@ -142,6 +143,9 @@ export function setShowWindowControls(value: boolean): void {
  * controls are forced off regardless of the user pref.
  */
 export function getEffectiveShowWindowControls(): boolean {
+  // macOS draws native traffic lights via TitleBarStyle::Overlay, so the
+  // custom controls would visually collide with them.
+  if (platform === 'macos') return false;
   if (mode !== 'qbz') return false;
   return showWindowControls;
 }
