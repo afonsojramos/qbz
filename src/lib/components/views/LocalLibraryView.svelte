@@ -323,7 +323,7 @@
       // 'flat' when the field is absent (legacy installs).
       foldersViewMode = prefs.folders_view_mode === 'tree' ? 'tree' : 'flat';
       // Hydrate the tree-mode sidebar width. NULL/missing → frontend
-      // default (432px). Anything non-positive is treated as missing so a
+      // default (302px). Anything non-positive is treated as missing so a
       // corrupt/zeroed value can't collapse the rail at startup.
       const persistedTreeWidth = prefs.folders_tree_sidebar_width;
       if (typeof persistedTreeWidth === 'number' && persistedTreeWidth > 0) {
@@ -855,10 +855,12 @@
 
   // ───────── Folders tab tree-mode sidebar resize ─────────
   // The left rail is user-resizable via a thin handle on its right edge.
-  // Default = 432px (1.8x the original 240px the spec called out as too
-  // narrow). Bounds: 200px floor; 40% of the live content area as ceiling.
-  // Persisted on drag-end via v2_set_library_folders_tree_sidebar_width.
-  const FOLDER_TREE_SIDEBAR_DEFAULT_WIDTH = 432;
+  // Default = 302px (~30% smaller than the previous 432px; long folder
+  // names that overflow scroll horizontally inside the rail rather than
+  // forcing the rail wider). Bounds: 200px floor; 40% of the live content
+  // area as ceiling. Persisted on drag-end via
+  // v2_set_library_folders_tree_sidebar_width.
+  const FOLDER_TREE_SIDEBAR_DEFAULT_WIDTH = 302;
   const FOLDER_TREE_SIDEBAR_MIN_WIDTH = 200;
   let folderTreeSidebarWidth = $state<number>(FOLDER_TREE_SIDEBAR_DEFAULT_WIDTH);
   let isResizingTreeSidebar = $state(false);
@@ -8061,9 +8063,9 @@
 
   .folder-tree-column {
     /* Width is set inline via style:width — see folderTreeSidebarWidth in
-       LocalLibraryView.svelte. The 432px fallback only kicks in if the
+       LocalLibraryView.svelte. The 302px fallback only kicks in if the
        inline style fails to attach (defensive). */
-    width: 432px;
+    width: 302px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -8098,6 +8100,11 @@
   .folder-tree-scroll {
     flex: 1;
     overflow-y: auto;
+    /* Long folder names extend past the column width and scroll
+       horizontally inside the rail (Plex/foobar2000 pattern). The
+       resize handle stays anchored to .folder-tree-column (a sibling
+       of this scroll wrapper), so it doesn't drift with content. */
+    overflow-x: auto;
     padding: 4px 12px 4px 0;
     -webkit-overflow-scrolling: touch;
     scroll-behavior: smooth;

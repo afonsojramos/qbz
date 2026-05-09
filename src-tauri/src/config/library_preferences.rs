@@ -39,7 +39,7 @@ pub struct LibraryPreferences {
     #[serde(default)]
     pub folders_view_mode: FoldersViewMode,
     /// Width (in CSS pixels) of the tree-mode left sidebar in the Folders
-    /// tab. `None` means "use the frontend default" (currently 432px).
+    /// tab. `None` means "use the frontend default" (currently 302px).
     /// Persisted on drag-end so the choice survives restarts. Bounds are
     /// enforced on the frontend (min 200px, max 40% of content area).
     #[serde(default)]

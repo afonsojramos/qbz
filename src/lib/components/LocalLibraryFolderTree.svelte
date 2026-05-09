@@ -333,6 +333,12 @@
     user-select: none;
     color: var(--text-primary);
     transition: background 100ms ease;
+    /* Extend to natural content width when names are long; fill the
+       rail when names are short. Combined with overflow-x: auto on
+       .folder-tree-scroll, this gives Plex-style horizontal scroll
+       inside the rail instead of clipping or ellipsizing names. */
+    width: max-content;
+    min-width: 100%;
   }
   .folder-tree-row:hover {
     background: var(--bg-hover);
@@ -396,12 +402,12 @@
   }
 
   .row-name {
-    flex: 1;
-    min-width: 0;
+    /* No flex:1 / min-width:0 / overflow:hidden / text-overflow:ellipsis
+       here — the row container (.folder-tree-row) extends to natural
+       content width and the rail scrolls horizontally instead of
+       truncating long names. Single-line is preserved via nowrap. */
     font-size: 0.78rem;
     line-height: 1.3;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .row-name-highlight {
