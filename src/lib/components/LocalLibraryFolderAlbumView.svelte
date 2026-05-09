@@ -99,6 +99,15 @@
     onBulkPlayLater?: (trackIds: number[]) => void;
     onBulkAddToPlaylist?: (trackIds: number[]) => void;
     onBulkAddPlexToPlaylist?: (ratingKeys: string[]) => void;
+    /**
+     * Right-click on the artwork opens the album-edit modal — same target
+     * as the pencil button in the page-level album view. Wired by the
+     * parent so the modal state (which lives in `LocalLibraryView`) stays
+     * out of this compact view. Single-action context menu: no popover,
+     * direct open. Plex write-protection is enforced inside the parent's
+     * handler.
+     */
+    onEditAlbum?: () => void;
     formatDuration: (seconds: number) => string;
     formatTotalDuration: (seconds: number) => string;
     formatBitDepth: (bits?: number) => string;
@@ -127,6 +136,7 @@
     onBulkPlayLater,
     onBulkAddToPlaylist,
     onBulkAddPlexToPlaylist,
+    onEditAlbum,
     formatDuration,
     formatTotalDuration,
     formatBitDepth,
@@ -267,7 +277,13 @@
        navigation), no edit / search / select chrome — those belong to the
        full-page album-detail view. -->
   <div class="folder-album-header">
-    <div class="folder-album-artwork">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="folder-album-artwork"
+      oncontextmenu={onEditAlbum
+        ? (e) => { e.preventDefault(); e.stopPropagation(); onEditAlbum?.(); }
+        : undefined}
+    >
       {#if album.artwork_path}
         <img src={getFullArtworkUrl(album.artwork_path)} alt={album.title} />
       {:else}

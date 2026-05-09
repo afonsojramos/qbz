@@ -2199,6 +2199,17 @@
   let refreshingAlbumMetadata = $state(false);
   let albumMetadataRefreshed = $state(false);
   let editingAlbumHidden = $state(false);
+  // Tree-mode edit flag: set when the album-edit modal is opened from the
+  // compact tree-mode album view. Two responsibilities:
+  //   1. Suppresses the page-level album-detail takeover (gate at the
+  //      `{#if selectedAlbum}` block) so the tree rail stays visible while
+  //      the modal is open. The takeover is the default for flat mode and
+  //      direct nav, so we keep the gate scoped to tree-mode edits only.
+  //   2. Drives an $effect-based cleanup that clears `selectedAlbum` /
+  //      `albumTracks` once both album-edit and tag-editor modals close,
+  //      so the tree-mode-set `selectedAlbum` doesn't leak into a later
+  //      flat-mode tab switch.
+  let treeAlbumEditMode = $state(false);
   let discogsImageOptions = $state<DiscogsImageOption[]>([]);
   let selectedDiscogsImage = $state<string | null>(null);
   let fetchingDiscogsImages = $state(false);
@@ -3614,6 +3625,44 @@
     showAlbumEditModal = true;
   }
 
+  // Tree-mode counterpart: opens the same album-edit modal against the
+  // tree-selected album without triggering the page-level album-detail
+  // takeover. Bridges the modal's `selectedAlbum` dependency to
+  // `selectedAlbumForTree`, mirrors `albumTracks` from `treeAlbumTracks`
+  // (TagEditorModal reads `albumTracks`), and sets `treeAlbumEditMode` so
+  // the takeover gate stays suppressed and the cleanup effect knows to
+  // clear `selectedAlbum` when both modals close.
+  function openTreeAlbumEditModal() {
+    const album = selectedAlbumForTree;
+    if (!album) return;
+    if (album.source === 'plex' && getUserItem(PLEX_METADATA_WRITE_KEY) !== 'true') {
+      showToast($t('settings.integrations.plexWriteDisabledNotice'), 'info');
+      return;
+    }
+    treeAlbumEditMode = true;
+    selectedAlbum = album;
+    albumTracks = treeAlbumTracks;
+    editingAlbumHidden = false;
+    albumMetadataRefreshed = false;
+    discogsImageOptions = [];
+    selectedDiscogsImage = null;
+    discogsFetchSuccessful = false;
+    showAlbumEditModal = true;
+  }
+
+  // Cleanup effect for tree-mode edits. Fires when both album-edit and
+  // tag-editor modals are closed AND we entered through the tree path.
+  // We can't blindly clear on `!showAlbumEditModal` alone because
+  // `openTagEditorFromAlbumSettings` closes the album-edit modal to hand
+  // off to the tag editor — the tag editor still needs `selectedAlbum`.
+  $effect(() => {
+    if (treeAlbumEditMode && !showAlbumEditModal && !showTagEditorModal) {
+      treeAlbumEditMode = false;
+      selectedAlbum = null;
+      albumTracks = [];
+    }
+  });
+
   function openTagEditorFromAlbumSettings() {
     if (!selectedAlbum) return;
     showAlbumEditModal = false;
@@ -4738,7 +4787,7 @@
       {/if}
     </div>
   {/snippet}
-  {#if selectedAlbum}
+  {#if selectedAlbum && !treeAlbumEditMode}
     {@const filteredAlbumTracks = albumTrackSearch.trim()
       ? albumTracks.filter(track =>
           track.title.toLowerCase().includes(albumTrackSearch.toLowerCase()) ||
@@ -5374,6 +5423,7 @@
                     onBulkPlayLater={handleFolderAlbumBulkPlayLater}
                     onBulkAddToPlaylist={handleFolderAlbumBulkAddToPlaylist}
                     onBulkAddPlexToPlaylist={handleFolderAlbumBulkAddPlexToPlaylist}
+                    onEditAlbum={openTreeAlbumEditModal}
                     onArtistClick={handleLocalArtistClick}
                     {formatDuration}
                     {formatTotalDuration}
