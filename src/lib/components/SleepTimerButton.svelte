@@ -17,6 +17,48 @@
   let popoverOpen = $state(false);
   let popoverEl: HTMLDivElement | null = $state(null);
   let wrapEl: HTMLDivElement | null = $state(null);
+  let popoverPos = $state<{ top: number; left: number } | null>(null);
+
+  // Width is fixed; height is estimated for the worst case (active timer
+  // and the Custom row both fit comfortably under it). Used only to decide
+  // whether the popover fits above the trigger; final size is determined
+  // by content.
+  const POPOVER_WIDTH = 232;
+  const POPOVER_HEIGHT_ESTIMATE = 180;
+  const POPOVER_GAP = 8;
+  const VIEWPORT_PAD = 12;
+
+  function computePopoverPos() {
+    if (!wrapEl) return;
+    const rect = wrapEl.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // Vertical: prefer above. If there's not enough headroom, flip below.
+    // If neither side fits, anchor to whichever has more space and clamp.
+    const spaceAbove = rect.top - VIEWPORT_PAD;
+    const spaceBelow = vh - rect.bottom - VIEWPORT_PAD;
+    let top: number;
+    if (spaceAbove >= POPOVER_HEIGHT_ESTIMATE + POPOVER_GAP) {
+      top = rect.top - POPOVER_HEIGHT_ESTIMATE - POPOVER_GAP;
+    } else if (spaceBelow >= POPOVER_HEIGHT_ESTIMATE + POPOVER_GAP) {
+      top = rect.bottom + POPOVER_GAP;
+    } else if (spaceAbove >= spaceBelow) {
+      top = Math.max(VIEWPORT_PAD, rect.top - POPOVER_HEIGHT_ESTIMATE - POPOVER_GAP);
+    } else {
+      top = Math.min(vh - POPOVER_HEIGHT_ESTIMATE - VIEWPORT_PAD, rect.bottom + POPOVER_GAP);
+    }
+
+    // Horizontal: prefer left-aligned to the trigger. Shift inward if it
+    // would overflow either edge.
+    let left = rect.left;
+    if (left + POPOVER_WIDTH > vw - VIEWPORT_PAD) {
+      left = vw - POPOVER_WIDTH - VIEWPORT_PAD;
+    }
+    if (left < VIEWPORT_PAD) left = VIEWPORT_PAD;
+
+    popoverPos = { top, left };
+  }
 
   const CUSTOM_KEY = 'custom';
 
@@ -96,6 +138,9 @@
   }
 
   function togglePopover() {
+    if (!popoverOpen) {
+      computePopoverPos();
+    }
     popoverOpen = !popoverOpen;
   }
 
@@ -115,13 +160,24 @@
     }
   }
 
+  function handleViewportChange() {
+    if (!popoverOpen) return;
+    computePopoverPos();
+  }
+
   $effect(() => {
     if (!popoverOpen) return;
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleKeydown);
+    window.addEventListener('resize', handleViewportChange);
+    // Capture-phase scroll catches scroll on any ancestor (queue list,
+    // page body, etc) so the popover stays anchored to its trigger.
+    window.addEventListener('scroll', handleViewportChange, true);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleKeydown);
+      window.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('scroll', handleViewportChange, true);
     };
   });
 
@@ -155,17 +211,18 @@
     <span class="countdown" aria-live="polite">{remainingLabel}</span>
   {/if}
 
-  {#if popoverOpen}
+  {#if popoverOpen && popoverPos}
     <div
       class="popover"
       bind:this={popoverEl}
       role="dialog"
       aria-label={$t('player.sleepTimer.title')}
+      style="top: {popoverPos.top}px; left: {popoverPos.left}px;"
       transition:fade={{ duration: 120 }}
     >
       {#if isActive}
-        <div class="popover-row">
-          <span class="popover-label">{$t('player.sleepTimer.activeLabel')}</span>
+        <div class="popover-section">
+          <span class="popover-eyebrow">{$t('player.sleepTimer.activeLabel')}</span>
           <span class="popover-countdown">{remainingLabel}</span>
         </div>
         <div class="popover-actions">
@@ -177,19 +234,19 @@
           </button>
         </div>
       {:else}
-        <div class="popover-row">
-          <span class="popover-label">{$t('player.sleepTimer.stopAfter')}</span>
+        <div class="popover-section">
+          <span class="popover-eyebrow">{$t('player.sleepTimer.stopAfter')}</span>
+          <Dropdown
+            value={currentPresetLabel}
+            options={presetOptions}
+            onchange={handlePresetChange}
+            expandLeft
+            compact
+          />
         </div>
-        <Dropdown
-          value={currentPresetLabel}
-          options={presetOptions}
-          onchange={handlePresetChange}
-          expandLeft
-          compact
-        />
         {#if selectedKey === CUSTOM_KEY}
-          <label class="custom-row">
-            <span class="popover-label custom-label">
+          <label class="popover-section custom-section">
+            <span class="popover-eyebrow">
               {$t('player.sleepTimer.customMinutes')}
             </span>
             <input
@@ -253,54 +310,51 @@
   }
 
   .popover {
-    position: absolute;
-    bottom: calc(100% + 8px);
-    left: 0;
+    position: fixed;
     z-index: 100;
-    width: 220px;
-    padding: 12px;
+    width: 232px;
+    padding: 14px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
     background: var(--bg-primary);
     border: 1px solid var(--bg-tertiary);
     border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
   }
 
-  .popover-row {
+  /* Stacked label-above-control rhythm; both rows share the same scale so
+     no single element dominates. Eyebrow (small caps-ish, muted) marks
+     section context, control sits underneath at body size. */
+  .popover-section {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+    flex-direction: column;
+    gap: 6px;
   }
 
-  .popover-label {
-    font-size: 12px;
+  .popover-eyebrow {
+    font-size: 11px;
+    font-weight: 500;
     color: var(--text-secondary);
+    letter-spacing: 0.02em;
+    line-height: 1.2;
   }
 
   .popover-countdown {
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
     color: var(--color-success, #22c55e);
     font-variant-numeric: tabular-nums;
+    line-height: 1.2;
   }
 
-  .custom-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .custom-label {
-    flex: 1;
+  .custom-section {
+    align-items: stretch;
   }
 
   .custom-input {
-    width: 80px;
-    padding: 6px 8px;
+    height: 30px;
+    padding: 0 10px;
     background: var(--bg-secondary);
     border: 1px solid var(--bg-tertiary);
     border-radius: 4px;
@@ -308,6 +362,8 @@
     font-size: 13px;
     font-variant-numeric: tabular-nums;
     text-align: right;
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .custom-input:focus {
@@ -319,21 +375,21 @@
     display: flex;
     gap: 8px;
     justify-content: flex-end;
-  }
-
-  .popover-actions.single {
-    justify-content: flex-end;
+    margin-top: 2px;
   }
 
   .action-primary,
   .action-secondary {
-    padding: 6px 12px;
+    height: 28px;
+    padding: 0 12px;
     border-radius: 4px;
     border: 1px solid transparent;
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
-    transition: background-color 120ms ease, border-color 120ms ease;
+    display: inline-flex;
+    align-items: center;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
   }
 
   .action-primary {
@@ -354,5 +410,32 @@
   .action-secondary:hover {
     background: var(--bg-secondary);
     color: var(--text-primary);
+  }
+
+  /* Bring the Dropdown trigger down to the popover's body scale so it
+     stops being the visual peak of the stack. The default Dropdown is
+     designed for settings pages where it's the primary control; here it
+     shares space with eyebrow labels and a primary button. */
+  .popover :global(.dropdown .trigger) {
+    width: 100%;
+    height: 30px;
+    padding: 0 10px;
+    font-size: 13px;
+    font-weight: 500;
+    background: var(--bg-secondary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 4px;
+  }
+
+  .popover :global(.dropdown .trigger:hover) {
+    background: var(--bg-tertiary);
+  }
+
+  .popover :global(.dropdown.wide .trigger) {
+    width: 100%;
+  }
+
+  .popover :global(.dropdown .value-text) {
+    font-weight: 500;
   }
 </style>
