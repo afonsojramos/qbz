@@ -7184,9 +7184,10 @@
   }
 
   /* macOS hidden mode: invisible drag region for window movement, mirrors
-     the band the qbz strip would otherwise occupy. */
+     the band the qbz strip would otherwise occupy. Height matches the
+     sidebar's top padding so the entire traffic-light row is draggable. */
   :global(html.macos) .macos-drag-region {
-    height: 28px;
+    height: 36px;
     width: 100%;
     position: absolute;
     top: 0;
