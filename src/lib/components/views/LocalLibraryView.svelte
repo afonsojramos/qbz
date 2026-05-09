@@ -5250,7 +5250,7 @@
                     title={treeSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
                     aria-pressed={treeSelectMode}
                   >
-                    <SquareCheckBig size={16} />
+                    <SquareCheckBig size={14} />
                   </button>
                   <button
                     type="button"
@@ -5259,7 +5259,7 @@
                     title={$t('library.foldersTree.collapseAll')}
                     aria-label={$t('library.foldersTree.collapseAll')}
                   >
-                    <ChevronsDownUp size={16} />
+                    <ChevronsDownUp size={14} />
                   </button>
                   <input
                     type="search"
@@ -8135,7 +8135,7 @@
   .tree-toolbar-btn {
     background: transparent;
     border: none;
-    padding: 4px;
+    padding: 3px;
     cursor: pointer;
     color: var(--text-secondary);
     border-radius: 3px;
@@ -8154,12 +8154,12 @@
 
   /* Dedicated tree-mode search input. Decoupled from the global
      `albumSearch` input — driving its own filter via `treeSearchInput`
-     in the script. Expands to fill the toolbar's remaining width so
-     the two icon buttons sit at the start and the search input takes
-     the rest. */
+     in the script. Pinned to a moderate fixed width (~140px) so the
+     toolbar items stay left-aligned and the search input doesn't
+     stretch across the whole column. */
   .tree-search-input {
-    flex: 1;
-    min-width: 0;
+    flex: 0 0 auto;
+    width: 140px;
     padding: 4px 8px;
     border: 1px solid var(--border-color);
     border-radius: 3px;
