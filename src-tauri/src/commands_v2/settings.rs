@@ -10,7 +10,6 @@ use crate::config::playback_preferences::{
 use crate::config::tray_settings::TraySettings;
 use crate::config::tray_settings::TraySettingsState;
 use crate::config::window_settings::WindowSettingsState;
-use crate::config::window_settings::{available_titlebar_modes, is_sandboxed, TitlebarMode};
 use crate::core_bridge::CoreBridgeState;
 use crate::AppState;
 
@@ -24,32 +23,11 @@ pub async fn v2_set_api_locale(locale: String, state: State<'_, AppState>) -> Re
 }
 
 #[tauri::command]
-pub fn v2_get_titlebar_mode(
-    state: State<'_, WindowSettingsState>,
-) -> Result<TitlebarMode, String> {
-    state.get_titlebar_mode()
-}
-
-#[tauri::command]
-pub fn v2_set_titlebar_mode(
-    mode: TitlebarMode,
+pub fn v2_set_use_system_titlebar(
+    value: bool,
     state: State<'_, WindowSettingsState>,
 ) -> Result<(), String> {
-    state.set_titlebar_mode(mode)
-}
-
-#[derive(serde::Serialize)]
-pub struct TitlebarModeAvailability {
-    pub modes: Vec<TitlebarMode>,
-    pub sandboxed: bool,
-}
-
-#[tauri::command]
-pub fn v2_available_titlebar_modes() -> TitlebarModeAvailability {
-    TitlebarModeAvailability {
-        modes: available_titlebar_modes(),
-        sandboxed: is_sandboxed(),
-    }
+    state.set_use_system_titlebar(value)
 }
 
 #[tauri::command]
@@ -96,13 +74,12 @@ pub fn v2_set_close_to_tray(
 }
 
 /// Update the tray icon variant ("auto" / "light" / "dark"). Persists
-/// the setting and pushes the change to the live SNI tray on Linux so
-/// it takes effect immediately — no restart required.
+/// the setting and pushes the change to the live tray handle when one is
+/// active, so it takes effect immediately — no restart required.
 #[tauri::command]
 pub fn v2_set_tray_icon_theme(
     value: String,
     state: State<'_, TraySettingsState>,
-    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let normalized = crate::config::tray_settings::normalize_tray_icon_theme(&value);
@@ -121,6 +98,14 @@ pub fn v2_set_tray_icon_theme(
         if let Some(tray) =
             app_handle.try_state::<crate::tray_linux_ksni::LinuxTrayHandle>()
         {
+            tray.set_icon_theme(normalized);
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        use tauri::Manager;
+        if let Some(tray) = app_handle.try_state::<crate::tray::NativeTrayHandle>() {
             tray.set_icon_theme(normalized);
         }
     }
