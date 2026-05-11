@@ -636,29 +636,30 @@ impl CpalDefaultBackend {
             let output_rate = mixer_sink.config().sample_rate().get();
             match nominal_rate {
                 Some(nominal) if nominal != output_rate => {
-                    let msg = format!(
-                        "CoreAudio shared stream opened at {}Hz while device nominal rate is {}Hz",
-                        output_rate, nominal
-                    );
                     drop(mixer_sink);
                     if attempt + 1 < max_attempts {
                         log::warn!(
-                            "[CoreAudio] {} — retrying open (attempt {}/{})",
-                            msg,
+                            "[CoreAudio] System audio rate changed during stream open (stream {}Hz, device now {}Hz). Retrying open ({}/{})",
+                            output_rate,
+                            nominal,
                             attempt + 2,
                             max_attempts
                         );
                         std::thread::sleep(MACOS_SHARED_OPEN_RETRY_DELAY);
                     }
-                    last_err = Some(msg);
+                    last_err = Some(format!(
+                        "macOS audio device changed its sample rate during stream open (opened at {}Hz, device is now {}Hz). This usually self-corrects — try playing again.",
+                        output_rate, nominal
+                    ));
                     continue;
                 }
                 _ => return Ok(mixer_sink),
             }
         }
 
-        Err(last_err
-            .unwrap_or_else(|| "Failed to open CoreAudio shared stream after retries".to_string()))
+        Err(last_err.unwrap_or_else(|| {
+            "Could not open the macOS audio output stream after multiple attempts. Try selecting the device again or restarting playback.".to_string()
+        }))
     }
 
     fn current_macos_nominal_rate(effective_device_name: Option<&str>) -> Option<u32> {

@@ -1251,7 +1251,7 @@ impl Player {
                                     == AudioBackendType::SystemDefault
                                 {
                                     log::error!(
-                                        "macOS CoreAudio init failed: {} — refusing unsafe legacy CPAL fallback",
+                                        "Could not start macOS audio output — {}. Not falling back to the legacy CPAL path because it would either play at the wrong speed (shared mode) or silently drop Exclusive Mode.",
                                         e
                                     );
                                     state.set_current_device(None);
