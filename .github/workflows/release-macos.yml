@@ -18,8 +18,10 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             artifact: qbz-macos-aarch64
+            arch: aarch64
           - target: x86_64-apple-darwin
             artifact: qbz-macos-x86_64
+            arch: x86_64
     runs-on: macos-latest
     permissions:
       contents: write
@@ -102,13 +104,20 @@ jobs:
         run: npm run tauri build -- --target ${{ matrix.target }}
 
       - name: Collect artifacts
+        env:
+          BUNDLE_DIR: src-tauri/target/${{ matrix.target }}/release/bundle
+          ARCH: ${{ matrix.arch }}
         run: |
+          set -euo pipefail
           mkdir -p dist
-          # DMG for manual distribution
-          cp -v src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg dist/ || true
-          # .app.tar.gz + .sig for auto-updater
-          cp -v src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.tar.gz dist/ || true
-          cp -v src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.tar.gz.sig dist/ || true
+          # DMG for manual distribution (filename already includes arch).
+          cp -v "$BUNDLE_DIR"/dmg/*.dmg dist/
+          # .app.tar.gz + .sig for auto-updater. Rename with arch suffix so the
+          # two matrix jobs don't overwrite each other on the GitHub Release,
+          # and so release-updater-manifest.yml's regex picks them up
+          # ("aarch64.app.tar.gz$" / "(x64|x86_64).app.tar.gz$").
+          cp -v "$BUNDLE_DIR/macos/QBZ.app.tar.gz"     "dist/QBZ_${ARCH}.app.tar.gz"
+          cp -v "$BUNDLE_DIR/macos/QBZ.app.tar.gz.sig" "dist/QBZ_${ARCH}.app.tar.gz.sig"
           ls -la dist
 
       - name: Upload artifacts
