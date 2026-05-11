@@ -578,6 +578,98 @@ fn coreaudio_shared_rate_mismatch(
     (stream_rate != nominal_rate).then_some((stream_rate, nominal_rate))
 }
 
+/// Inputs needed by both `Play` and `Stream` handlers to decide whether the
+/// current output stream must be torn down and recreated.
+struct StreamRecreateDecision {
+    needs_new_stream: bool,
+    format_changed: bool,
+    dac_passthrough: bool,
+    using_alsa_direct: bool,
+    using_coreaudio_exclusive: bool,
+    coreaudio_shared_rate_mismatch: Option<(u32, u32)>,
+}
+
+/// Read settings once and evaluate every condition that forces a stream
+/// rebuild: format change on backends that demand bit-perfect output (DAC
+/// passthrough, ALSA Direct, CoreAudio Exclusive) and CoreAudio shared-mode
+/// rate drift (CPAL caches the device rate at open time, so when the OS
+/// nominal rate moves we must rebuild or playback runs at the wrong speed).
+///
+/// `current_track_sample_rate` / `current_track_channels` describe the last
+/// *decoded source* format and are compared to the incoming `sample_rate` /
+/// `channels` — never to the output stream's hardware rate, which on macOS
+/// shared mode may differ and is tracked separately via Rodio's sink config.
+fn evaluate_stream_recreate(
+    thread_settings: &Arc<Mutex<AudioSettings>>,
+    stream_opt: &Option<StreamType>,
+    current_track_sample_rate: Option<u32>,
+    current_track_channels: Option<u16>,
+    sample_rate: u32,
+    channels: u16,
+    context: &str,
+) -> StreamRecreateDecision {
+    let format_changed =
+        current_track_sample_rate != Some(sample_rate) || current_track_channels != Some(channels);
+
+    let settings_guard = thread_settings.lock().ok();
+
+    let dac_passthrough = settings_guard
+        .as_ref()
+        .map(|s| cfg!(target_os = "linux") && s.dac_passthrough)
+        .unwrap_or(false);
+
+    let using_alsa_direct = settings_guard
+        .as_ref()
+        .and_then(|s| s.backend_type)
+        .map(|b| b == AudioBackendType::Alsa)
+        .unwrap_or(false);
+
+    let using_coreaudio_exclusive = settings_guard
+        .as_ref()
+        .map(|s| {
+            cfg!(target_os = "macos")
+                && s.backend_type.unwrap_or(AudioBackendType::SystemDefault)
+                    == AudioBackendType::SystemDefault
+                && s.exclusive_mode
+        })
+        .unwrap_or(false);
+
+    #[cfg(target_os = "macos")]
+    let coreaudio_shared_rate_mismatch = settings_guard
+        .as_ref()
+        .and_then(|s| coreaudio_shared_rate_mismatch(s, stream_opt))
+        .inspect(|(stream_rate, nominal_rate)| {
+            log::warn!(
+                "[CoreAudio] {} shared-mode output rate changed: stream {}Hz, device nominal {}Hz. Recreating stream to avoid wrong-speed playback.",
+                context,
+                stream_rate,
+                nominal_rate
+            );
+        });
+    #[cfg(not(target_os = "macos"))]
+    let coreaudio_shared_rate_mismatch: Option<(u32, u32)> = {
+        let _ = (stream_opt, context);
+        None
+    };
+
+    drop(settings_guard);
+
+    let needs_new_stream = stream_opt.is_none()
+        || (dac_passthrough && format_changed)
+        || (using_alsa_direct && format_changed)
+        || (using_coreaudio_exclusive && format_changed)
+        || coreaudio_shared_rate_mismatch.is_some();
+
+    StreamRecreateDecision {
+        needs_new_stream,
+        format_changed,
+        dac_passthrough,
+        using_alsa_direct,
+        using_coreaudio_exclusive,
+        coreaudio_shared_rate_mismatch,
+    }
+}
+
 /// Try to create output stream using the backend system (if configured)
 /// Returns None if backend system is not configured (backend_type = None)
 ///
@@ -1296,74 +1388,32 @@ impl Player {
                             thread_state.set_gapless_ready(false);
                             thread_state.set_gapless_next_track_id(0);
 
-                            // Get DAC passthrough setting
-                            let dac_passthrough = thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| cfg!(target_os = "linux") && s.dac_passthrough)
-                                .unwrap_or(false);
-
-                            // Check if we need to recreate the stream
-                            // Recreate on format change if DAC passthrough OR ALSA Direct is enabled (both require bit-perfect)
-                            let format_changed = *current_track_sample_rate != Some(sample_rate)
-                                || *current_track_channels != Some(channels);
-
-                            // Check if using a backend where the output stream's
-                            // format/rate must be actively managed.
-                            let using_alsa_direct = thread_settings
-                                .lock()
-                                .ok()
-                                .and_then(|s| s.backend_type)
-                                .map(|b| b == AudioBackendType::Alsa)
-                                .unwrap_or(false);
-                            let using_coreaudio_exclusive = thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| {
-                                    cfg!(target_os = "macos")
-                                        && s.backend_type.unwrap_or(AudioBackendType::SystemDefault)
-                                            == AudioBackendType::SystemDefault
-                                        && s.exclusive_mode
-                                })
-                                .unwrap_or(false);
-                            #[cfg(target_os = "macos")]
-                            let coreaudio_shared_rate_mismatch = thread_settings
-                                .lock()
-                                .ok()
-                                .and_then(|s| {
-                                    coreaudio_shared_rate_mismatch(&s, stream_opt).map(
-                                        |(stream_rate, nominal_rate)| {
-                                            log::warn!(
-                                                "[CoreAudio] Shared-mode output rate changed: stream {}Hz, device nominal {}Hz. Recreating stream to avoid wrong-speed playback.",
-                                                stream_rate,
-                                                nominal_rate
-                                            );
-                                            (stream_rate, nominal_rate)
-                                        },
-                                    )
-                                });
-                            #[cfg(not(target_os = "macos"))]
-                            let coreaudio_shared_rate_mismatch: Option<(u32, u32)> = None;
-
-                            let needs_new_stream = stream_opt.is_none()
-                                || (dac_passthrough && format_changed)
-                                || (using_alsa_direct && format_changed)
-                                || (using_coreaudio_exclusive && format_changed)
-                                || coreaudio_shared_rate_mismatch.is_some();
+                            let StreamRecreateDecision {
+                                needs_new_stream,
+                                format_changed,
+                                dac_passthrough,
+                                using_alsa_direct,
+                                using_coreaudio_exclusive,
+                                coreaudio_shared_rate_mismatch,
+                            } = evaluate_stream_recreate(
+                                &thread_settings,
+                                stream_opt,
+                                *current_track_sample_rate,
+                                *current_track_channels,
+                                sample_rate,
+                                channels,
+                                "Play",
+                            );
 
                             if needs_new_stream {
                                 if stream_opt.is_some() {
-                                    if let Some((stream_rate, nominal_rate)) =
-                                        coreaudio_shared_rate_mismatch
-                                    {
-                                        log::info!(
-                                            "CoreAudio shared output rate changed from {}Hz to {}Hz - recreating audio stream",
-                                            stream_rate,
-                                            nominal_rate
-                                        );
-                                    } else if (dac_passthrough
-                                        || using_alsa_direct
-                                        || using_coreaudio_exclusive)
+                                    // CoreAudio rate-mismatch case already
+                                    // logged at warn level by
+                                    // `evaluate_stream_recreate`.
+                                    if coreaudio_shared_rate_mismatch.is_none()
+                                        && (dac_passthrough
+                                            || using_alsa_direct
+                                            || using_coreaudio_exclusive)
                                         && format_changed
                                     {
                                         let mode = if using_coreaudio_exclusive {
@@ -1381,8 +1431,6 @@ impl Player {
                                         channels,
                                         mode
                                     );
-                                    } else {
-                                        log::info!("Creating initial audio stream");
                                     }
                                     // Stop engine FIRST so its writer thread releases its
                                     // Arc<AlsaDirectStream> reference before we drop the stream.
@@ -1807,71 +1855,32 @@ impl Player {
                             *current_audio_data = None; // Clear regular audio data
                             thread_state.set_loaded_audio(true);
 
-                            // Get DAC passthrough setting
-                            let dac_passthrough = thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| cfg!(target_os = "linux") && s.dac_passthrough)
-                                .unwrap_or(false);
-
-                            // Check if we need to recreate the stream
-                            let format_changed = *current_track_sample_rate != Some(sample_rate)
-                                || *current_track_channels != Some(channels);
-
-                            let using_alsa_direct = thread_settings
-                                .lock()
-                                .ok()
-                                .and_then(|s| s.backend_type)
-                                .map(|b| b == AudioBackendType::Alsa)
-                                .unwrap_or(false);
-                            let using_coreaudio_exclusive = thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| {
-                                    cfg!(target_os = "macos")
-                                        && s.backend_type.unwrap_or(AudioBackendType::SystemDefault)
-                                            == AudioBackendType::SystemDefault
-                                        && s.exclusive_mode
-                                })
-                                .unwrap_or(false);
-                            #[cfg(target_os = "macos")]
-                            let coreaudio_shared_rate_mismatch = thread_settings
-                                .lock()
-                                .ok()
-                                .and_then(|s| {
-                                    coreaudio_shared_rate_mismatch(&s, stream_opt).map(
-                                        |(stream_rate, nominal_rate)| {
-                                            log::warn!(
-                                                "[CoreAudio] Streaming shared-mode output rate changed: stream {}Hz, device nominal {}Hz. Recreating stream to avoid wrong-speed playback.",
-                                                stream_rate,
-                                                nominal_rate
-                                            );
-                                            (stream_rate, nominal_rate)
-                                        },
-                                    )
-                                });
-                            #[cfg(not(target_os = "macos"))]
-                            let coreaudio_shared_rate_mismatch: Option<(u32, u32)> = None;
-
-                            let needs_new_stream = stream_opt.is_none()
-                                || (dac_passthrough && format_changed)
-                                || (using_alsa_direct && format_changed)
-                                || (using_coreaudio_exclusive && format_changed)
-                                || coreaudio_shared_rate_mismatch.is_some();
+                            let StreamRecreateDecision {
+                                needs_new_stream,
+                                format_changed,
+                                dac_passthrough,
+                                using_alsa_direct,
+                                using_coreaudio_exclusive,
+                                coreaudio_shared_rate_mismatch,
+                            } = evaluate_stream_recreate(
+                                &thread_settings,
+                                stream_opt,
+                                *current_track_sample_rate,
+                                *current_track_channels,
+                                sample_rate,
+                                channels,
+                                "Streaming",
+                            );
 
                             if needs_new_stream {
                                 if stream_opt.is_some() {
-                                    if let Some((stream_rate, nominal_rate)) =
-                                        coreaudio_shared_rate_mismatch
-                                    {
-                                        log::info!(
-                                            "Streaming: CoreAudio shared output rate changed from {}Hz to {}Hz - recreating audio stream",
-                                            stream_rate,
-                                            nominal_rate
-                                        );
-                                    } else if (dac_passthrough
-                                        || using_alsa_direct
-                                        || using_coreaudio_exclusive)
+                                    // CoreAudio rate-mismatch case already
+                                    // logged at warn level by
+                                    // `evaluate_stream_recreate`.
+                                    if coreaudio_shared_rate_mismatch.is_none()
+                                        && (dac_passthrough
+                                            || using_alsa_direct
+                                            || using_coreaudio_exclusive)
                                         && format_changed
                                     {
                                         let mode = if using_coreaudio_exclusive {
