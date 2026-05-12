@@ -7,7 +7,7 @@
     Disc,
     User,
     Share2,
-    Download,
+    CloudOff,
     Plus,
     Link as LinkIcon,
     Library,
@@ -118,17 +118,25 @@
     onClose();
   }
 
-  /** Each menu item only renders if its callback is provided. */
+  /** Each menu item only renders if its callback is provided.
+   *  Order is intentional: queue actions first (the most common use),
+   *  then library/navigation, then sharing, then offline. The
+   *  `onPlayLater` callback is wired but labelled "Add to queue" — the
+   *  internal name kept for backwards compat with the parent's existing
+   *  per-album / per-playlist handlers; the user-facing copy is what
+   *  changes. Same idea for `onDownload` → "Make available offline":
+   *  the qbz product doesn't speak in terms of "Download", everything
+   *  user-facing is "offline available". */
   const items = $derived([
+    onPlayLater ? { labelKey: 'actions.addToQueue', icon: ListEnd, run: () => fire(onPlayLater) } : null,
     onPlayNext ? { labelKey: 'actions.playNext', icon: ListPlus, run: () => fire(onPlayNext) } : null,
-    onPlayLater ? { labelKey: 'actions.playLater', icon: ListEnd, run: () => fire(onPlayLater) } : null,
     onAddToPlaylist ? { labelKey: 'actions.addToPlaylist', icon: Plus, run: () => fire(onAddToPlaylist) } : null,
     onCopyToLibrary ? { labelKey: 'playlist.copyToLibrary', icon: Library, run: () => fire(onCopyToLibrary) } : null,
     onGoToAlbum ? { labelKey: 'actions.goToAlbum', icon: Disc, run: () => fire(onGoToAlbum) } : null,
     onGoToArtist ? { labelKey: 'actions.goToArtist', icon: User, run: () => fire(onGoToArtist) } : null,
     onShareQobuz ? { labelKey: 'actions.shareQobuz', icon: Share2, run: () => fire(onShareQobuz) } : null,
     onShareSonglink ? { labelKey: 'actions.shareSonglink', icon: LinkIcon, run: () => fire(onShareSonglink) } : null,
-    onDownload ? { labelKey: 'actions.download', icon: Download, run: () => fire(onDownload) } : null,
+    onDownload ? { labelKey: 'actions.makeAvailableOffline', icon: CloudOff, run: () => fire(onDownload) } : null,
   ].filter((item): item is NonNullable<typeof item> => item !== null));
 </script>
 
