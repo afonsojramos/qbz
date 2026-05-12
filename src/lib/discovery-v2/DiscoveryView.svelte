@@ -117,6 +117,10 @@
     onTrackGoToArtist,
     onPlaylistClick,
     onPlaylistPlay,
+    onPlaylistPlayNext,
+    onPlaylistPlayLater,
+    onPlaylistCopyToLibrary,
+    onPlaylistShareQobuz,
     onNavigateNewReleases,
     onNavigateReleaseWatch,
     onNavigateTopAlbums,
@@ -334,6 +338,10 @@
       image={playlist.image}
       onClick={() => onPlaylistClick?.(playlist.playlistId)}
       onPlay={() => onPlaylistPlay?.(playlist.playlistId)}
+      onPlayNext={onPlaylistPlayNext ? () => onPlaylistPlayNext?.(playlist.playlistId) : undefined}
+      onPlayLater={onPlaylistPlayLater ? () => onPlaylistPlayLater?.(playlist.playlistId) : undefined}
+      onCopyToLibrary={onPlaylistCopyToLibrary ? () => onPlaylistCopyToLibrary?.(playlist.playlistId) : undefined}
+      onShareQobuz={onPlaylistShareQobuz ? () => onPlaylistShareQobuz?.(playlist.playlistId) : undefined}
     />
   {/snippet}
 

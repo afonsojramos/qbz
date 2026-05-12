@@ -10,6 +10,7 @@
     Download,
     Plus,
     Link as LinkIcon,
+    Library,
   } from 'lucide-svelte';
   import {
     openMenu as openGlobalMenu,
@@ -26,6 +27,7 @@
     onPlayNext?: () => void;
     onPlayLater?: () => void;
     onAddToPlaylist?: () => void;
+    onCopyToLibrary?: () => void;
     onGoToAlbum?: () => void;
     onGoToArtist?: () => void;
     onShareQobuz?: () => void;
@@ -40,6 +42,7 @@
     onPlayNext,
     onPlayLater,
     onAddToPlaylist,
+    onCopyToLibrary,
     onGoToAlbum,
     onGoToArtist,
     onShareQobuz,
@@ -120,6 +123,7 @@
     onPlayNext ? { labelKey: 'actions.playNext', icon: ListPlus, run: () => fire(onPlayNext) } : null,
     onPlayLater ? { labelKey: 'actions.playLater', icon: ListEnd, run: () => fire(onPlayLater) } : null,
     onAddToPlaylist ? { labelKey: 'actions.addToPlaylist', icon: Plus, run: () => fire(onAddToPlaylist) } : null,
+    onCopyToLibrary ? { labelKey: 'playlist.copyToLibrary', icon: Library, run: () => fire(onCopyToLibrary) } : null,
     onGoToAlbum ? { labelKey: 'actions.goToAlbum', icon: Disc, run: () => fire(onGoToAlbum) } : null,
     onGoToArtist ? { labelKey: 'actions.goToArtist', icon: User, run: () => fire(onGoToArtist) } : null,
     onShareQobuz ? { labelKey: 'actions.shareQobuz', icon: Share2, run: () => fire(onShareQobuz) } : null,

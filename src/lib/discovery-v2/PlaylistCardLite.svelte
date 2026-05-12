@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { Play, ListMusic } from 'lucide-svelte';
+  import { Play, ListMusic, MoreHorizontal } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import { extractPalette } from '$lib/utils/artworkPalette';
+  import AlbumQuickMenu from './AlbumQuickMenu.svelte';
 
   interface Props {
     playlistId: number;
@@ -10,9 +11,23 @@
     image?: string;
     onClick?: () => void;
     onPlay?: () => void;
+    onPlayNext?: () => void;
+    onPlayLater?: () => void;
+    onCopyToLibrary?: () => void;
+    onShareQobuz?: () => void;
   }
 
-  let { playlistId, name, image, onClick, onPlay }: Props = $props();
+  let {
+    playlistId,
+    name,
+    image,
+    onClick,
+    onPlay,
+    onPlayNext,
+    onPlayLater,
+    onCopyToLibrary,
+    onShareQobuz,
+  }: Props = $props();
 
   // Playlist covers are often non-square (rectangle). object-fit:contain
   // keeps the full image visible; we letterbox the gaps with the cover's
@@ -36,14 +51,24 @@
     };
   });
 
+  let menuOpen = $state(false);
+  let menuAnchor = $state<{ x: number; y: number } | null>(null);
+
   function handleCardClick(e: MouseEvent) {
-    if ((e.target as HTMLElement).closest('.play-btn')) return;
+    if ((e.target as HTMLElement).closest('.overlay-btn')) return;
     onClick?.();
   }
 
   function handlePlay(e: MouseEvent) {
     e.stopPropagation();
     onPlay?.();
+  }
+
+  function handleMenu(e: MouseEvent) {
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    menuAnchor = { x: rect.left, y: rect.bottom + 4 };
+    menuOpen = true;
   }
 </script>
 
@@ -66,20 +91,50 @@
         <ListMusic size={48} />
       </div>
     {/if}
-    <button
-      class="play-btn"
-      type="button"
-      aria-label={$t('actions.play')}
-      onclick={handlePlay}
-    >
-      <Play size={16} fill="currentColor" />
-    </button>
+    <div class="actions">
+      <button
+        class="overlay-btn overlay-btn-primary"
+        type="button"
+        aria-label={$t('actions.play')}
+        onclick={handlePlay}
+      >
+        <Play size={18} fill="currentColor" />
+      </button>
+      <button
+        class="overlay-btn"
+        type="button"
+        aria-label={$t('actions.moreActions')}
+        onclick={handleMenu}
+      >
+        <MoreHorizontal size={16} />
+      </button>
+    </div>
   </div>
   <div class="title">{name}</div>
 </div>
 
+<AlbumQuickMenu
+  isOpen={menuOpen}
+  anchor={menuAnchor}
+  onClose={() => (menuOpen = false)}
+  onPlayNext={onPlayNext ? () => onPlayNext?.() : undefined}
+  onPlayLater={onPlayLater ? () => onPlayLater?.() : undefined}
+  onCopyToLibrary={onCopyToLibrary ? () => onCopyToLibrary?.() : undefined}
+  onShareQobuz={onShareQobuz ? () => onShareQobuz?.() : undefined}
+/>
+
 <style>
-  /* Cero efectos. Same dimensions as AlbumCardLite for grid alignment. */
+  /* PlaylistCardLite — mirrors AlbumCardLite's hover overlay pattern:
+     dark scrim + slide-up centered actions. Playlist-specific shape
+     differences:
+       - object-fit: contain on the cover (rectangles + portraits common
+         for Qobuz/AppleMusic-styled playlists; cropping butchers them).
+       - Dominant-color background fills letterbox space (extractPalette
+         via the shared artworkPalette utility).
+       - Two actions instead of three (no heart for V1; no playlist
+         favorites store on the frontend yet — copy-to-library lives in
+         the kebab menu instead).
+  */
   .card {
     display: flex;
     flex-direction: column;
@@ -92,11 +147,6 @@
     text-align: left;
   }
 
-  /* Background-color is set inline from the cover's dominant color (palette
-     extraction in artworkPalette.ts). object-fit: contain preserves aspect
-     ratio so non-square playlist art (Apple-Music-style rectangles, Qobuz
-     vertical covers, etc.) doesn't get cropped; the dominant-color
-     background fills the letterbox. */
   .cover-wrap {
     position: relative;
     width: 220px;
@@ -126,21 +176,77 @@
     color: var(--text-muted);
   }
 
-  .play-btn {
+  /* Solid scrim covering the cover on hover. Single ::after with opacity
+     transition — same cheap pattern as AlbumCardLite. */
+  .cover-wrap::after {
+    content: '';
     position: absolute;
-    bottom: 8px;
-    right: 8px;
-    width: 32px;
-    height: 32px;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    opacity: 0;
+    transition: opacity 150ms ease;
+    pointer-events: none;
+  }
+
+  .card:hover .cover-wrap::after {
+    opacity: 1;
+  }
+
+  /* Centered action group with slide-up entrance. No ribbon on playlists,
+     so we can keep the actions vertically centered (no 44px clearance
+     needed like on album cards). */
+  .actions {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) translateY(10px);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    opacity: 0;
+    transition: opacity 150ms ease, transform 150ms ease;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .card:hover .actions {
+    opacity: 1;
+    transform: translate(-50%, -50%) translateY(0);
+    pointer-events: auto;
+  }
+
+  .overlay-btn {
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
-    border: none;
-    background: var(--accent-primary);
-    color: var(--btn-primary-text, #000);
+    border: 1.5px solid rgba(255, 255, 255, 0.9);
+    background: transparent;
+    color: #fff;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     padding: 0;
+    transition: background-color 120ms ease, transform 120ms ease;
+  }
+
+  .overlay-btn:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+    transform: scale(1.08);
+  }
+
+  .overlay-btn-primary {
+    width: 44px;
+    height: 44px;
+    background: #fff;
+    color: #000;
+    border-color: #fff;
+  }
+
+  .overlay-btn-primary:hover {
+    background: #fff;
+    color: #000;
+    transform: scale(1.08);
   }
 
   .title {
