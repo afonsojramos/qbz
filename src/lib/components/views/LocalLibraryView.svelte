@@ -2359,6 +2359,11 @@
     if (albumViewMode !== 'grid') return;
     if (albumGroupingEnabled) return;
     if (hasActiveFilters) return;
+    // Plex cache lives in a separate SQLite DB; until ATTACH + UNION is
+    // implemented in `v2_library_get_albums_page`, the chunked path
+    // would silently hide every Plex album. Fall back to the legacy
+    // virtualizer when Plex is enabled so users keep seeing them.
+    if (isPlexLibraryEnabled()) return;
     const mappedSortBy: 'artist' | 'title' | 'year' =
       sortBy === 'title' || sortBy === 'year' ? sortBy : 'artist';
     void metadataAlbumsChunked.setParams({
@@ -6441,7 +6446,7 @@
             {:else}
               <div class="album-sections virtualized">
                 <div class="virtualized-container">
-                  {#if albumViewMode === 'grid' && !albumGroupingEnabled && !hasActiveFilters}
+                  {#if albumViewMode === 'grid' && !albumGroupingEnabled && !hasActiveFilters && !isPlexLibraryEnabled()}
                     <!-- Chunked path: on-demand fetch via Tauri command
                          per chunk, recycling-pool render. The pool
                          binds to the chunked store's reactive
