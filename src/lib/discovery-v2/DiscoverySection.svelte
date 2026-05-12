@@ -10,7 +10,7 @@
     items: T[];
     /** Approximate card width in CSS px including its own gap allowance. Drives
      *  `itemsPerPage = floor((containerWidth + gap) / (cardWidth + gap))`. Pass
-     *  140 for circular artist tiles, 180 (default) for album/track/playlist. */
+     *  170 for circular artist tiles, 220 (default) for album/track/playlist. */
     cardWidth?: number;
     onSeeAll?: () => void;
     renderItem: Snippet<[T]>;
@@ -19,7 +19,7 @@
   let {
     title,
     items,
-    cardWidth = 180,
+    cardWidth = 220,
     onSeeAll,
     renderItem,
   }: Props<T> = $props();

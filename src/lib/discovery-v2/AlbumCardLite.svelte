@@ -81,7 +81,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    width: 180px;
+    width: 220px;
     cursor: pointer;
     background: transparent;
     border: none;
@@ -91,8 +91,8 @@
 
   .cover-wrap {
     position: relative;
-    width: 180px;
-    height: 180px;
+    width: 220px;
+    height: 220px;
     background: var(--bg-tertiary);
     border-radius: 6px;
     overflow: hidden;

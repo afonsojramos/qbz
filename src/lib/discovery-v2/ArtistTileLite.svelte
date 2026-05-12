@@ -37,7 +37,7 @@
     flex-direction: column;
     align-items: center;
     gap: 8px;
-    width: 140px;
+    width: 170px;
     cursor: pointer;
     background: transparent;
     border: none;
@@ -46,8 +46,8 @@
   }
 
   .avatar {
-    width: 140px;
-    height: 140px;
+    width: 170px;
+    height: 170px;
     border-radius: 50%;
     overflow: hidden;
     background: var(--bg-tertiary);

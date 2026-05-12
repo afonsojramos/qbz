@@ -366,7 +366,7 @@
         title={$t('home.yourTopArtists')}
         items={topArtists}
         renderItem={artistTile}
-        cardWidth={140}
+        cardWidth={170}
       />
     {/if}
 
