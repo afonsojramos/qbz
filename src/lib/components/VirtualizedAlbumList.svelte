@@ -113,8 +113,8 @@
   // Constants
   const HEADER_HEIGHT = 44; // px
   const LIST_ROW_HEIGHT = 76; // px (52px art + padding + gap)
-  const GRID_ROW_HEIGHT = 320; // px (210px artwork + 8px margin + ~64px info + 24px gap + buffer)
-  const GRID_MIN_CARD_WIDTH = 210; // px - matches AlbumCard size="large"
+  const GRID_ROW_HEIGHT = 330; // px (220px artwork + 8px margin + ~64px info + 32px gap + buffer)
+  const GRID_MIN_CARD_WIDTH = 220; // px - matches Discovery V2 AlbumCardLite for visual consistency across Home + Library
   const GRID_GAP = 22; // px (horizontal gap between cards)
   const BUFFER_ITEMS = 5; // Extra items to render above/below viewport
   const BOTTOM_PADDING = 100; // px - extra space at bottom for player bar

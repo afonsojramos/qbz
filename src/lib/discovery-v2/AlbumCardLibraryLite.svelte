@@ -66,9 +66,10 @@
    *   - Quality string rendered as a full pill (not gated on Hi-Res-only
    *     like Discovery's variant). Library users care about "16bit/44.1kHz"
    *     as much as "24bit/192kHz".
-   *   - 210px wide to match the legacy AlbumCard `size="large"` so the
-   *     VirtualizedAlbumList grid math (`GRID_MIN_CARD_WIDTH = 210`) stays
-   *     valid without changes.
+   *   - 220px wide to match Discovery V2 `AlbumCardLite` so Home and
+   *     Library share the same visual rhythm (per 2026-05-12 user call).
+   *     The legacy `VirtualizedAlbumList` grid math is updated in lock-
+   *     step (`GRID_MIN_CARD_WIDTH` 210 → 220).
    *
    * Inherited from AlbumCardLite philosophy:
    *   - Cero efectos: opacity-only transitions, no marquee, no
@@ -256,12 +257,11 @@
 />
 
 <style>
-  /* 210px fixed width to match the legacy AlbumCard `size="large"`
-     dimensions the virtualized grid math depends on. The cover-wrap is
-     1:1 (210x210) so total card height is ~210 + ~110 info = ~320,
-     same as `GRID_ROW_HEIGHT` in VirtualizedAlbumList. */
+  /* 220px fixed width to match Discovery V2 `AlbumCardLite` so Home
+     and Library share the same column step. The cover-wrap is 1:1
+     (220x220) so total card height is ~220 + ~110 info = ~330. */
   .card {
-    width: 210px;
+    width: 220px;
     flex-shrink: 0;
     cursor: pointer;
     display: flex;
@@ -280,8 +280,8 @@
 
   .cover-wrap {
     position: relative;
-    width: 210px;
-    height: 210px;
+    width: 220px;
+    height: 220px;
     border-radius: 8px;
     overflow: hidden;
     background: var(--bg-tertiary);
@@ -297,6 +297,16 @@
        opt-out the hit surface drops to just `.card` outers + the
        buttons themselves. */
     pointer-events: none;
+  }
+
+  /* Hover indicator. Outline doesn't trigger layout (it paints outside
+     the element's box, doesn't reflow siblings) and we don't animate
+     it with a transition, so the cost is one paint when hover starts
+     and another when it ends — orders of magnitude cheaper than the
+     full-cover opacity transition this card used to have. */
+  .card:hover .cover-wrap {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: -2px;
   }
 
   .cover-placeholder {
