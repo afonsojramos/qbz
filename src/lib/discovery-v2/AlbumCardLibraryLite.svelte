@@ -299,14 +299,18 @@
     pointer-events: none;
   }
 
-  /* Hover indicator. Outline doesn't trigger layout (it paints outside
-     the element's box, doesn't reflow siblings) and we don't animate
-     it with a transition, so the cost is one paint when hover starts
-     and another when it ends — orders of magnitude cheaper than the
-     full-cover opacity transition this card used to have. */
+  /* Hover indicator. Inset box-shadow paints the ring INSIDE the
+     cover (no layout reflow, no risk of being clipped by parent
+     padding the way an outer outline was — the leftmost column has
+     no horizontal slack and the outer outline got eaten). Title
+     text shifts to the accent colour as a second cue. No transition,
+     single instant paint on hover entry/exit. */
   .card:hover .cover-wrap {
-    outline: 2px solid var(--accent-primary);
-    outline-offset: -2px;
+    box-shadow: inset 0 0 0 3px var(--accent-primary);
+  }
+
+  .card:hover .title {
+    color: var(--accent-primary);
   }
 
   .cover-placeholder {
