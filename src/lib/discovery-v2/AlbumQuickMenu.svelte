@@ -135,6 +135,25 @@
     onClose();
   }
 
+  /** Portal the menu to body so it's not constrained by ancestors
+   *  that create a containing block (`transform`, `filter`,
+   *  `contain`, etc.). The SearchView Albums virtual scroller wraps
+   *  every row in a `transform: translateY(...)` div, which makes
+   *  `position: fixed` resolve relative to that transformed row
+   *  instead of the viewport — the menu would open way off where
+   *  the user clicked. Mounting at body level keeps the menu in the
+   *  viewport's coordinate system. */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        if (node.parentNode === document.body) {
+          document.body.removeChild(node);
+        }
+      },
+    };
+  }
+
   /** Each menu item only renders if its callback is provided.
    *  Order is intentional: queue actions first (the most common use),
    *  then library/navigation, then sharing, then offline. The
@@ -169,7 +188,7 @@
 </script>
 
 {#if isOpen}
-  <div class="menu" style={menuStyle} bind:this={menuEl} role="menu">
+  <div class="menu" style={menuStyle} bind:this={menuEl} use:portal role="menu">
     {#each items as item}
       <button class="menu-item" type="button" role="menuitem" onclick={item.run}>
         <item.icon size={14} />

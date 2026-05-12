@@ -196,16 +196,6 @@
     background: var(--bg-tertiary);
     border-radius: 6px;
     overflow: hidden;
-    /* `overflow: hidden` + `position: absolute; inset: 0` on the img
-       wasn't enough to keep some portrait-aspect Plex/Qobuz artwork
-       inside the box — the cachedSrc action applies
-       `transform: translateZ(0)` to the img under HW acceleration,
-       which can promote it to its own composited layer and (per a
-       known WebKit quirk) sometimes escape the parent's clip rect.
-       `contain: paint` forces the parent to be a paint containment
-       boundary, so any painted output from children — composited or
-       not — gets clipped to this box. */
-    contain: paint;
   }
 
   /* Qobuz-style hover overlay: solid dark scrim covers the whole cover,

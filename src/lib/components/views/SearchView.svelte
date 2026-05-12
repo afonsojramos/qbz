@@ -867,7 +867,13 @@
   }
 
   // --- Albums tab virtualization ---
-  const ALBUM_CARD_WIDTH = 210;
+  // Width/height match the AlbumCardLite dimensions (cover 220px +
+  // info area ~90px). Before the 2026-05-12 migration to AlbumCardLite
+  // the cards were 210px wide; that stale value let `albumGridCols`
+  // over-compute the column count, the last card per row wrap-around
+  // to a visual second line inside the same virtual-scroll-item and
+  // visually overlapped the next virtual row.
+  const ALBUM_CARD_WIDTH = 220;
   const ALBUM_CARD_HEIGHT = 310;
   const ALBUM_GAP_X = 22;
   const ALBUM_GAP_Y = 24;
