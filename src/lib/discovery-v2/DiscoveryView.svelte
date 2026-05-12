@@ -13,8 +13,9 @@
     type DiscoveryPlaylistCard,
   } from './data';
   import DiscoverySection from './DiscoverySection.svelte';
+  import DiscoveryGridSection from './DiscoveryGridSection.svelte';
   import AlbumCardLite from './AlbumCardLite.svelte';
-  import TrackCardLite from './TrackCardLite.svelte';
+  import TrackRowLite from './TrackRowLite.svelte';
   import ArtistTileLite from './ArtistTileLite.svelte';
   import PlaylistCardLite from './PlaylistCardLite.svelte';
   import GenreFilterButton from '$lib/components/GenreFilterButton.svelte';
@@ -244,14 +245,14 @@
     />
   {/snippet}
 
-  {#snippet trackCard(track: DiscoveryTrackCard)}
-    <TrackCardLite
+  {#snippet trackRow(track: DiscoveryTrackCard)}
+    <TrackRowLite
       trackId={track.trackId}
       title={track.title}
       artist={track.artist}
       artwork={track.artwork}
       isPlaying={track.trackId === activeTrackId && isPlaybackActive === true}
-      onPlay={() => onTrackPlay?.({
+      onClick={() => onTrackPlay?.({
         id: track.trackId,
         title: track.title,
         artist: track.artist,
@@ -260,9 +261,6 @@
         artistId: track.artistId,
         albumArt: track.artwork,
       } as DisplayTrack)}
-      onAlbumClick={track.albumId
-        ? () => onTrackGoToAlbum?.(track.albumId!)
-        : undefined}
       onArtistClick={track.artistId !== undefined
         ? () => onTrackGoToArtist?.(track.artistId!)
         : undefined}
@@ -322,10 +320,10 @@
             renderItem={albumCard}
           />
         {:else if pref.id === 'continueListening' && continueListening.length > 0}
-          <DiscoverySection
+          <DiscoveryGridSection
             title={$t('home.continueListening')}
             items={continueListening}
-            renderItem={trackCard}
+            renderItem={trackRow}
           />
         {:else if pref.id === 'idealDiscography' && idealDiscography.length > 0}
           <DiscoverySection
