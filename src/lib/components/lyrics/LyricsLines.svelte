@@ -139,11 +139,20 @@
   // Inline style for the (single) active line. Computed reactively so any
   // change to lookahead / measurement state updates the karaoke position
   // without restarting any animations.
+  //
+  // Always uses activeProgress as the floor — lookahead just adds a small
+  // measured offset on top. Earlier this forced 0 on first paint, but if
+  // lookaheadEnabled ever fails to flip on (e.g. the line gets only a
+  // single notification before audio stops or a seek lands directly at
+  // p=1) the gradient would stay at 0 forever (= the line never goes
+  // through). Tracking activeProgress directly makes that failure mode
+  // graceful: even with no lookahead, the playhead still reflects audio.
   const activeLineStyle = $derived.by(() => {
     if (!isSynced || activeIndex < 0) return '';
+    const base = Math.max(0, Math.min(1, activeProgress));
     const prog = lookaheadEnabled
-      ? Math.max(0, Math.min(1, activeProgress + measuredBlockDelta))
-      : 0;
+      ? Math.max(0, Math.min(1, base + measuredBlockDelta))
+      : base;
     return `--line-progress: ${prog}; --block-interval: ${measuredBlockMs}ms`;
   });
 
