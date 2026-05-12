@@ -3,6 +3,7 @@
   import { t } from '$lib/i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
   import type { AlbumRibbon } from './data';
+  import AlbumQuickMenu from './AlbumQuickMenu.svelte';
 
   interface Props {
     albumId: string;
@@ -19,7 +20,10 @@
     onArtistClick?: () => void;
     onPlay?: () => void;
     onFavorite?: () => void;
-    onMenu?: (event: MouseEvent) => void;
+    onPlayNext?: () => void;
+    onPlayLater?: () => void;
+    onShareQobuz?: () => void;
+    onDownload?: () => void;
   }
 
   let {
@@ -37,8 +41,16 @@
     onArtistClick,
     onPlay,
     onFavorite,
-    onMenu,
+    onPlayNext,
+    onPlayLater,
+    onShareQobuz,
+    onDownload,
   }: Props = $props();
+
+  // Quick-menu state. Position carries the click coordinates so the
+  // portaled popover anchors near the kebab button.
+  let menuOpen = $state(false);
+  let menuAnchor = $state<{ x: number; y: number } | null>(null);
 
   function handleCardClick(e: MouseEvent) {
     if ((e.target as HTMLElement).closest('.overlay-btn, .artist-link')) return;
@@ -57,7 +69,9 @@
 
   function handleMenu(e: MouseEvent) {
     e.stopPropagation();
-    onMenu?.(e);
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    menuAnchor = { x: rect.left, y: rect.bottom + 4 };
+    menuOpen = true;
   }
 
   function handleArtist(e: MouseEvent) {
@@ -128,6 +142,18 @@
     <div class="quality">{quality}</div>
   {/if}
 </div>
+
+<AlbumQuickMenu
+  isOpen={menuOpen}
+  anchor={menuAnchor}
+  onClose={() => (menuOpen = false)}
+  onPlayNext={onPlayNext ? () => onPlayNext?.() : undefined}
+  onPlayLater={onPlayLater ? () => onPlayLater?.() : undefined}
+  onGoToAlbum={onClick ? () => onClick?.() : undefined}
+  onGoToArtist={onArtistClick ? () => onArtistClick?.() : undefined}
+  onShareQobuz={onShareQobuz ? () => onShareQobuz?.() : undefined}
+  onDownload={onDownload ? () => onDownload?.() : undefined}
+/>
 
 <style>
   /* Discovery V2 — zero effects.

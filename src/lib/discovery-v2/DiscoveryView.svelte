@@ -105,6 +105,10 @@
     onTabChange,
     onAlbumClick,
     onAlbumPlay,
+    onAlbumPlayNext,
+    onAlbumPlayLater,
+    onAlbumShareQobuz,
+    onAlbumDownload,
     onArtistClick,
     onTrackPlay,
     onTrackGoToAlbum,
@@ -268,6 +272,10 @@
       onArtistClick={album.artistId !== undefined
         ? () => onArtistClick?.(album.artistId!)
         : undefined}
+      onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext?.(album.albumId) : undefined}
+      onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater?.(album.albumId) : undefined}
+      onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz?.(album.albumId) : undefined}
+      onDownload={onAlbumDownload ? () => onAlbumDownload?.(album.albumId) : undefined}
     />
   {/snippet}
 
