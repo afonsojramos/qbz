@@ -218,17 +218,17 @@
     height: 100%;
   }
 
-  /* Hover meta (genre + year). Anchored top-right and pushed down enough
-     to clear any award ribbon at the top-left edge — ribbons sit at
-     `top: 8px` with ~24px height + padding, so 44px keeps the genre off
-     the ribbon even on cards where the ribbon wraps to a second line. */
+  /* Hover meta (genre + year). Anchored top-LEFT now that the award
+     ribbon moved to the bottom-left edge — they no longer compete for
+     the same corner. Left-aligned so genre + year read naturally as a
+     top-of-cover annotation. */
   .meta {
     position: absolute;
-    top: 44px;
-    right: 12px;
+    top: 12px;
+    left: 12px;
     display: flex;
     flex-direction: column;
-    align-items: flex-end;
+    align-items: flex-start;
     gap: 2px;
     opacity: 0;
     transition: opacity 150ms ease;
@@ -236,7 +236,7 @@
     z-index: 1;
     color: rgba(255, 255, 255, 0.92);
     font-size: 14px;
-    text-align: right;
+    text-align: left;
     max-width: 70%;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
   }
@@ -262,9 +262,12 @@
      Slide-up entrance (translateY 10px → 0) layered with opacity transition.
      Transform-only animation on a single element; no layout reflow, no
      paint propagation to siblings. */
+  /* Action buttons raised so they sit above the bottom-anchored ribbon
+     (ribbon height ~24px including padding). 20px base + 24px ribbon
+     clearance = 44px. */
   .actions {
     position: absolute;
-    bottom: 20px;
+    bottom: 44px;
     left: 50%;
     transform: translateX(-50%) translateY(10px);
     display: flex;
@@ -358,10 +361,12 @@
   /* Press / award ribbon. Three variants from the original AlbumCard:
      - press: solid gold gradient with dark readable text (most common)
      - qobuzissime: dark scrim with purple accent border
-     - albumOfTheWeek: dark scrim with yellow accent border. */
+     - albumOfTheWeek: dark scrim with yellow accent border.
+     Anchored bottom-left so the top of the artwork (often the most
+     important part of cover art) stays uncovered. */
   .ribbon {
     position: absolute;
-    top: 8px;
+    bottom: 8px;
     left: 0;
     padding: 4px 10px;
     font-size: 10px;
