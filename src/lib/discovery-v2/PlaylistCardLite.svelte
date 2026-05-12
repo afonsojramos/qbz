@@ -2,6 +2,7 @@
   import { Play, ListMusic } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
+  import { extractPalette } from '$lib/utils/artworkPalette';
 
   interface Props {
     playlistId: number;
@@ -12,6 +13,28 @@
   }
 
   let { playlistId, name, image, onClick, onPlay }: Props = $props();
+
+  // Playlist covers are often non-square (rectangle). object-fit:contain
+  // keeps the full image visible; we letterbox the gaps with the cover's
+  // dominant color so the card doesn't look like an island floating in
+  // theme-grey. Palette extraction is cached in artworkPalette.ts so
+  // repeated playlists across sections re-use the result.
+  let dominantBg = $state<string | undefined>(undefined);
+
+  $effect(() => {
+    if (!image) {
+      dominantBg = undefined;
+      return;
+    }
+    let cancelled = false;
+    void extractPalette(image).then((palette) => {
+      if (cancelled) return;
+      dominantBg = palette.dominant?.hex ?? undefined;
+    });
+    return () => {
+      cancelled = true;
+    };
+  });
 
   function handleCardClick(e: MouseEvent) {
     if ((e.target as HTMLElement).closest('.play-btn')) return;
@@ -32,7 +55,10 @@
   onclick={handleCardClick}
   onkeydown={(e) => e.key === 'Enter' && onClick?.()}
 >
-  <div class="cover-wrap">
+  <div
+    class="cover-wrap"
+    style:background-color={dominantBg ?? 'var(--bg-tertiary)'}
+  >
     {#if image}
       <img class="cover" use:cachedSrc={image} alt={name} loading="lazy" decoding="async" />
     {:else}
@@ -66,19 +92,28 @@
     text-align: left;
   }
 
+  /* Background-color is set inline from the cover's dominant color (palette
+     extraction in artworkPalette.ts). object-fit: contain preserves aspect
+     ratio so non-square playlist art (Apple-Music-style rectangles, Qobuz
+     vertical covers, etc.) doesn't get cropped; the dominant-color
+     background fills the letterbox. */
   .cover-wrap {
     position: relative;
     width: 220px;
     height: 220px;
-    background: var(--bg-tertiary);
     border-radius: 6px;
     overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .cover {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
     display: block;
   }
 
