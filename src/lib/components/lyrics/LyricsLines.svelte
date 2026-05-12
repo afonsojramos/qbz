@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { t } from 'svelte-i18n';
   import type {
     LyricsFont,
@@ -62,6 +62,90 @@
     const duration = bound - currentLine.timeMs;
     return Math.max(1000, Math.min(10000, duration));
   }
+
+  // Dynamic block measurement.
+  //   measuredBlockMs    — wall-clock gap between two notifications. Drives
+  //                        the CSS transition duration so each block's
+  //                        animation matches its real audio duration (no
+  //                        pauses, no accumulated lag).
+  //   measuredBlockDelta — progress increment per notification. Used as a
+  //                        lookahead so the visual leads the audio by one
+  //                        block — by the time the transition completes,
+  //                        audio has caught up to where we transitioned
+  //                        to. Net: zero visible lag, while still
+  //                        correcting against actual audio on every tick.
+  let measuredBlockMs = $state(175);
+  let measuredBlockDelta = $state(0);
+  // Lookahead is suppressed on the first notification of a new line: at
+  // that point we have no measurement of this line's cadence yet, and
+  // adding a stale prior-line delta would push the visual into the line
+  // before it should be. Flipped on as soon as we've observed one block.
+  let lookaheadEnabled = $state(false);
+  let prevBlockTime = 0;
+  let prevBlockProgress = 0;
+  let prevBlockIndex = -1;
+
+  // $effect.pre — runs BEFORE the DOM update for the prop change that
+  // triggered it. With a plain $effect, on a line transition the derived
+  // below would first paint with stale (previous-line) lookahead state,
+  // and only then the effect would reset it — causing a brief flash at the
+  // stale position followed by a backward transition to 0. Running pre-DOM
+  // means the first paint of the new line already sees lookaheadEnabled =
+  // false and the snapshot is correct.
+  $effect.pre(() => {
+    const idx = activeIndex;
+    const progress = activeProgress;
+
+    if (!isSynced || idx < 0) {
+      prevBlockTime = 0;
+      prevBlockIndex = -1;
+      lookaheadEnabled = false;
+      return;
+    }
+
+    const now = performance.now();
+
+    if (idx !== prevBlockIndex) {
+      // Line transition: seed transition duration from line duration
+      // (we don't have a real block-time measurement yet), and clear the
+      // lookahead so the first paint of the new line is exactly at the
+      // store's reported progress (no early/late drift across boundaries).
+      const dur = untrack(() => getLineDuration(idx));
+      measuredBlockMs = Math.max(80, Math.round(dur * 0.035));
+      measuredBlockDelta = 0;
+      lookaheadEnabled = false;
+      prevBlockIndex = idx;
+      prevBlockTime = now;
+      prevBlockProgress = progress;
+      return;
+    }
+
+    if (prevBlockTime > 0) {
+      const dt = now - prevBlockTime;
+      const dp = progress - prevBlockProgress;
+      if (dt >= 50 && dt <= 1500) {
+        measuredBlockMs = Math.round(measuredBlockMs * 0.3 + dt * 0.7);
+      }
+      // Forward-only progress deltas (backward = seek, not a tick we'd predict)
+      if (dp > 0 && dp < 0.2) {
+        measuredBlockDelta = measuredBlockDelta * 0.3 + dp * 0.7;
+        lookaheadEnabled = true;
+      }
+    }
+    prevBlockTime = now;
+    prevBlockProgress = progress;
+  });
+
+  // Inline style for the (single) active line. Computed reactively so any
+  // change to lookahead / measurement state updates the karaoke position
+  // without restarting any animations.
+  const activeLineStyle = $derived.by(() => {
+    if (!isSynced || activeIndex < 0) return '';
+    const prog = lookaheadEnabled
+      ? Math.max(0, Math.min(1, activeProgress + measuredBlockDelta))
+      : 0;
+    return `--line-progress: ${prog}; --block-interval: ${measuredBlockMs}ms`;
+  });
 
   let container: HTMLDivElement | null = null;
   let lastScrolledIndex = -1;
@@ -178,11 +262,9 @@
         class="lyrics-line {immersive && isSynced ? getDistanceClass(index, activeIndex) : ''}"
         class:active={isActive}
         class:past={isSynced && index < activeIndex}
-        style={immersive
-          ? ''
-          : isActive
-            ? `--line-progress: ${Math.max(0, Math.min(1, activeProgress))}`
-            : `--line-opacity: ${isSynced ? getLineOpacity(index, activeIndex) : 1}`}
+        style={isActive
+          ? activeLineStyle
+          : (immersive ? '' : `--line-opacity: ${isSynced ? getLineOpacity(index, activeIndex) : 1}`)}
         data-line-index={index}
       >
         <span class="line-text">{line.text}</span>
@@ -308,9 +390,13 @@
     opacity: 1;
   }
 
-  /* Immersive mode: simple bright white text, no animation */
+  /* Immersive mode: simple bright white text.
+     Also overrides the sidebar's karaoke gradient + transparent fill so the
+     active line stays solid white instead of gradient-clipped. */
   .lyrics-lines.immersive .lyrics-line.active .line-text {
+    background: none;
     color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff;
   }
 
   /* Past lines in immersive should be clearly dimmer than active */
@@ -342,16 +428,26 @@
     overflow-wrap: break-word;
   }
 
-  /* Active line: mirror the base transitions. `transition` is shorthand
-     so it must be re-declared in full here, otherwise the size/scale/
-     color animations would be dropped on activation. */
+  /* Register --line-progress as an animatable number so CSS can interpolate
+     the gradient stop position between block notifications. */
+  @property --line-progress {
+    syntax: '<number>';
+    inherits: true;
+    initial-value: 0;
+  }
+
+  /* Active line: mirror the base transitions and add --line-progress
+     (interpolated over --block-interval, set per-line in JS to match audio
+     speed). Re-declaring the full list because `transition` is shorthand
+     and would otherwise drop the size/scale/color animations on activation. */
   .lyrics-line.active {
     transition:
       opacity 220ms ease-out,
       color 220ms ease-out,
       font-size 220ms cubic-bezier(0.4, 0, 0.2, 1),
       font-weight 220ms ease-out,
-      transform 220ms cubic-bezier(0.4, 0, 0.2, 1);
+      transform 220ms cubic-bezier(0.4, 0, 0.2, 1),
+      --line-progress var(--block-interval, 175ms) linear;
   }
 
   .lyrics-lines.center .lyrics-line {
@@ -368,35 +464,43 @@
     font-weight: 700;
     opacity: 1;
     transform: scale(1.02);
-    /* Use filter: drop-shadow on the parent — text-shadow inherits into the
-       background-clipped span and tints the gradient on WebKit (macOS). */
-    filter:
-      drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6))
-      drop-shadow(0 0 12px color-mix(in srgb, var(--lyrics-active-color, var(--accent-primary)) 35%, transparent));
+    /* No text-shadow or filter on the active line — text-shadow inherits
+       into the background-clipped span and tints the gradient on WebKit
+       (macOS), while filter: drop-shadow rasterizes the line at its
+       layout box and clips descenders (g, y, p). Bold + scale + colored
+       gradient is enough emphasis without either. */
   }
 
   .lyrics-lines.center .lyrics-line.active {
     transform: scale(1.05);
   }
 
-  /* Shimmer karaoke effect on active line */
+  /* Karaoke effect on active line — hard cut at the playhead.
+     Visual smoothness comes from --line-progress transitioning over
+     --block-interval; the gradient is a sharp two-color split moving
+     with that transition. The +1% bias on the playhead stops pushes the
+     cut just past 100% at p=1, guaranteeing the rightmost text pixels
+     are in the active color (so the last line of a song reliably fills
+     during the trailing instrumental coda). */
   .lyrics-line.active .line-text {
     --progress-pos: calc(var(--line-progress, 0) * 100%);
     background: linear-gradient(
       90deg,
       var(--lyrics-active-color, var(--accent-primary)) 0%,
-      var(--lyrics-active-color, var(--accent-primary)) var(--progress-pos),
-      var(--text-primary) var(--progress-pos),
+      var(--lyrics-active-color, var(--accent-primary)) calc(var(--progress-pos) + 1%),
+      var(--text-primary) calc(var(--progress-pos) + 1%),
       var(--text-primary) 100%
     );
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
-    /* Suppress inherited text-shadow — on WebKit (macOS) shadows render in
-       the text-glyph shape and tint the gradient-clipped fill, making the
-       active line look dim/red instead of crisp. */
-    text-shadow: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lyrics-line.active {
+      transition: none;
+    }
   }
 
   .lyrics-empty {
