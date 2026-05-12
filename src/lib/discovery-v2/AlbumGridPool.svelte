@@ -97,9 +97,10 @@
    *  paint into blank slots before the bindings update. Lower means
    *  fewer cards mounted per frame (cheaper paint/layout) but more
    *  chance the user sees a slot rebind during continuous scroll.
-   *  Two rows balances the two; under SW comp the per-card cost is
-   *  the dominant frame budget, so trimming buffer is a direct win. */
-  const bufferRows = 2;
+   *  One row keeps pool size around ~50 cards (cols×7 at typical
+   *  widths) which is where SW compositing starts to feel snappy
+   *  per the 2026-05-12 CPU-mode measurements. */
+  const bufferRows = 1;
 
   /** Rows that fit on screen at once (rounded up). */
   const visibleRows = $derived(
@@ -182,7 +183,7 @@
       {@const item = inRange ? (void dataVersion, getItem(albumIdx)) : null}
       <div
         class="grid-slot"
-        style="transform: translate({slotLeftPx(slotIdx)}px, {slotTopPx(slotIdx)}px); width: {cardWidth}px; display: {inRange ? 'block' : 'none'};"
+        style="top: {slotTopPx(slotIdx)}px; left: {slotLeftPx(slotIdx)}px; width: {cardWidth}px; display: {inRange ? 'block' : 'none'};"
       >
         {#if inRange}
           {#if item !== null}
@@ -214,29 +215,16 @@
 
   .grid-slot {
     position: absolute;
-    top: 0;
-    left: 0;
-    /* CSS containment is the load-bearing perf fix for the scroll
-       experience under software compositing. Without it, WebKit's
-       hit-testing on every pointermove (and pointermove fires
-       continuously while the user mouse-wheels because the cursor
-       traverses cards as they pass under it) re-evaluates layout
-       across the whole grid. With ~80 slots that meant ~1s layout
-       spikes per pointer-burst — visible on the 2026-05-12 perf
-       trace. `contain: layout paint` tells WebKit each slot's layout
-       and paint are independent of every other slot's, so a hover-
-       state change in one slot can no longer invalidate its
-       neighbours. We don't add `size` containment because the slot's
-       height comes from its child card — that's still fine since
-       layout/paint isolation is the part that matters here. */
-    contain: layout paint;
-    /* Positioning is done with `transform: translate(...)` inline (set
-       by the script) instead of `top`/`left`. Reason: changing top/left
-       on an absolutely-positioned element triggers layout, and with
-       ~80 slots all repositioned per scroll tick the layout cascade
-       was ~1s/frame under software compositing — visible as the giant
-       layout spikes on the perf trace. `transform` goes straight to
-       paint/composite without invalidating layout, eliminating the
-       cost regardless of HW or SW comp. */
+    /* Positioned via inline `top`/`left` set by the script. We tried
+       `transform: translate(...)` instead (the standard high-perf
+       virtualization trick) and `contain: layout paint` to isolate
+       hit-testing — both REGRESSED under software compositing per
+       the 2026-05-12 CPU-mode CSV. Theory: each "layer hint" forces
+       WebKit's SW compositor to allocate a per-slot framebuffer,
+       and 50+ framebuffers cost more to composite per frame than
+       the layout work they were supposed to skip. Under HW comp
+       these would be GPU layers (cheap); under SW they are CPU
+       framebuffers (expensive). top/left is the boring-but-fast
+       choice here. */
   }
 </style>
