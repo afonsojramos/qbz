@@ -2292,6 +2292,7 @@
       "useSystemTitleBarDesc": "Remplacer la barre de titre personnalisée de QBZ par les décorations natives de votre système. Ce changement redémarrera l'application.",
       "hideTitleBar": "Masquer la barre de titre",
       "hideTitleBarDesc": "Masquer complètement la barre de titre (pour les utilisateurs de gestionnaires de fenêtres en mosaïque)",
+      "matchSystemChromeCpuOverride": "Actuellement désactivé parce que l'accélération matérielle est éteinte. Le chrome transparent force GTK à repeindre les décorations de fenêtre à chaque image, ce qui fait perdre des images en rendu CPU. Votre préférence est sauvegardée et se réactive automatiquement quand l'accélération matérielle est réactivée.",
       "searchInTitleBar": "Recherche dans la barre de titre",
       "searchInTitleBarDesc": "Afficher le champ de recherche dans la barre de titre au lieu de la barre latérale",
       "navInTitleBar": "Navigation dans la barre de titre",
