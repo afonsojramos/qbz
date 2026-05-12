@@ -1,6 +1,7 @@
 <script lang="ts" generics="T">
   import type { Snippet } from 'svelte';
   import { onMount } from 'svelte';
+  import { fade } from 'svelte/transition';
   import { t } from '$lib/i18n';
   import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-svelte';
 
@@ -37,6 +38,19 @@
   let itemsPerPage = $state(1);
   const gap = 16;
 
+  // Drag-to-paginate. We commit a page change on pointerup if the cursor
+  // moved past PAGE_COMMIT_PX. The OS-native click that would otherwise
+  // fire on a card under the cursor gets swallowed in capture phase when
+  // a real drag happened (dragDistance > DRAG_THRESHOLD_PX). Cero efecto
+  // visual durante el drag — no transform, no scrollLeft animation; the
+  // page swap on release carries the smoothness via the fade transition.
+  const DRAG_THRESHOLD_PX = 5;
+  const PAGE_COMMIT_PX = 60;
+  let pointerIsDown = false;
+  let activePointerId = -1;
+  let dragStartX = 0;
+  let dragDistance = 0;
+
   function recompute() {
     if (!containerEl) return;
     const width = containerEl.clientWidth;
@@ -66,6 +80,39 @@
   const visibleItems = $derived(
     items.slice(page * itemsPerPage, (page + 1) * itemsPerPage)
   );
+
+  function onPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    pointerIsDown = true;
+    activePointerId = e.pointerId;
+    dragStartX = e.clientX;
+    dragDistance = 0;
+  }
+
+  function onPointerMove(e: PointerEvent) {
+    if (!pointerIsDown || e.pointerId !== activePointerId) return;
+    dragDistance = e.clientX - dragStartX;
+  }
+
+  function onPointerUp(e: PointerEvent) {
+    if (!pointerIsDown) return;
+    pointerIsDown = false;
+    activePointerId = -1;
+    if (Math.abs(dragDistance) >= PAGE_COMMIT_PX) {
+      if (dragDistance < 0 && canNext) page = page + 1;
+      else if (dragDistance > 0 && canPrev) page = page - 1;
+    }
+  }
+
+  function onClickCapture(e: MouseEvent) {
+    // A drag-then-release should not also click a card. Swallow the click
+    // in capture phase before the card's onclick handler sees it.
+    if (Math.abs(dragDistance) > DRAG_THRESHOLD_PX) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    dragDistance = 0;
+  }
 </script>
 
 <section class="section">
@@ -98,10 +145,23 @@
       </button>
     </div>
   </header>
-  <div class="row" bind:this={containerEl}>
-    {#each visibleItems as item, idx (idx)}
-      {@render renderItem(item)}
-    {/each}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="row-outer"
+    bind:this={containerEl}
+    onpointerdown={onPointerDown}
+    onpointermove={onPointerMove}
+    onpointerup={onPointerUp}
+    onpointercancel={onPointerUp}
+    onclickcapture={onClickCapture}
+  >
+    {#key page}
+      <div class="row" in:fade={{ duration: 120 }}>
+        {#each visibleItems as item, idx (idx)}
+          {@render renderItem(item)}
+        {/each}
+      </div>
+    {/key}
   </div>
 </section>
 
@@ -168,8 +228,26 @@
     color: var(--text-muted);
   }
 
+  /* Outer wraps the row + receives the ResizeObserver and the pointer
+     handlers. The inner .row holds the actual cards and gets fresh DOM
+     on every page change via `{#key page}`, with a brief opacity fade-in
+     for smoothness. The fade is opacity-only (no transform, no filter)
+     so its paint cost stays trivial under software compositing. */
+  .row-outer {
+    position: relative;
+    width: 100%;
+    touch-action: pan-y;
+    cursor: grab;
+  }
+
+  .row-outer:active {
+    cursor: grabbing;
+  }
+
   .row {
     display: flex;
     gap: 16px;
+    user-select: none;
+    -webkit-user-select: none;
   }
 </style>
