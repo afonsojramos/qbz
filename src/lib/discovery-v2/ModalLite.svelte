@@ -9,6 +9,18 @@
     title?: string;
     showCloseButton?: boolean;
     maxWidth?: string;
+    /** When true, renders a full-viewport dim scrim under the modal so
+     *  the background reads as inert. The dim is a plain `rgba(0,0,0,0.7)`
+     *  paint — no `backdrop-filter: blur(...)` which is the actual perf
+     *  cost the original ModalLite was trying to avoid. Now that HW
+     *  acceleration is on by default (ADR-004) this is cheap again, so
+     *  default-on matches the legacy `Modal.svelte` UX. Pass `false` to
+     *  drop the scrim for an overlay-less floating modal. */
+    withScrim?: boolean;
+    /** Footer button alignment. Defaults to `'start'` so modals migrated
+     *  from `Modal.svelte` keep their visual layout unchanged. Use `'end'`
+     *  for the modern dialog convention (Cancel | Save on the right). */
+    footerAlign?: 'start' | 'end';
     children: Snippet;
     footer?: Snippet;
   }
@@ -19,62 +31,34 @@
     title,
     showCloseButton = true,
     maxWidth = '480px',
+    withScrim = true,
+    footerAlign = 'start',
     children,
     footer,
   }: Props = $props();
 
   /**
-   * Discovery V2 modal — overlay-less variant.
+   * Discovery V2 modal — drop-in replacement for `Modal.svelte`.
    *
-   * Earlier attempts kept a full-viewport `rgba(0,0,0,0.7)` scrim under
-   * the modal for visual focus. The shared `Modal.svelte` does the same.
-   * On WebKitGTK under software compositing (any non-maximized window),
-   * adding that fixed-position scrim forced an extra paint pass against
-   * the underlying DiscoveryView every frame — the user reported 2-3s
-   * to render even with no animation. `will-change: opacity` + GPU layer
-   * hint helped some (3s → 2s) but didn't fix it.
-   *
-   * This variant drops the scrim entirely. The modal floats above the
-   * page with a heavy border + box-shadow doing the focus work that the
-   * scrim used to. Click-outside-to-close is bound on `document` so it
-   * still works even without an overlay element to absorb the click.
-   * ESC still closes via window keydown.
-   *
-   * Trade-off: less visual emphasis on the modal (background isn't
-   * darkened). Gain: instant mount under software compositing because
-   * there's no full-viewport rect to paint against.
+   * Key differences from the legacy shared modal:
+   *  - No `backdrop-filter: blur(...)`. The dim is an opaque rgba paint
+   *    only — the blur was the dominant cost on WebKitGTK under software
+   *    compositing.
+   *  - No slide-up / fade-in animations on mount. Modal appears instantly.
+   *  - Backdrop click handled via an overlay div (same as legacy). An
+   *    earlier draft used `document.mousedown` instead which caused
+   *    portaled descendants (Dropdown.svelte) to close the modal when
+   *    clicked. The overlay approach restores the legacy behaviour while
+   *    keeping the rest of the perf wins.
    */
 
-  let modalEl = $state<HTMLDivElement | null>(null);
+  function handleBackdropClick(e: MouseEvent) {
+    if (e.target === e.currentTarget) onClose();
+  }
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && isOpen) onClose();
   }
-
-  function handleDocumentClick(e: MouseEvent) {
-    if (!isOpen) return;
-    if (modalEl && !modalEl.contains(e.target as Node)) onClose();
-  }
-
-  // Document-level outside-click only attaches while the modal is open.
-  // The mousedown phase fires before click, so we use it to avoid the
-  // race where opening the modal via a button-click also fires this
-  // handler (the click event that opened the modal would already have
-  // bubbled to document by the time mousedown registers next).
-  $effect(() => {
-    if (!isOpen) return;
-    // Defer registering until the next frame so the click that opened
-    // the modal doesn't immediately close it on the same event loop.
-    let cancelled = false;
-    requestAnimationFrame(() => {
-      if (cancelled) return;
-      document.addEventListener('mousedown', handleDocumentClick);
-    });
-    return () => {
-      cancelled = true;
-      document.removeEventListener('mousedown', handleDocumentClick);
-    };
-  });
 
   function portal(node: HTMLElement) {
     document.body.appendChild(node);
@@ -89,52 +73,65 @@
 <svelte:window onkeydown={handleKeydown} />
 
 {#if isOpen}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div
-    class="modal"
+    class="overlay"
+    class:scrim={withScrim}
     use:portal
-    bind:this={modalEl}
+    onclick={handleBackdropClick}
     role="dialog"
     aria-modal="true"
     tabindex="-1"
-    style="max-width: {maxWidth}"
   >
-    {#if title || showCloseButton}
-      <div class="modal-header">
-        {#if title}
-          <h2>{title}</h2>
-        {:else}
-          <div></div>
-        {/if}
-        {#if showCloseButton}
-          <button class="close-btn" type="button" aria-label={$t('actions.close')} onclick={onClose}>
-            <X size={18} />
-          </button>
-        {/if}
+    <div class="modal" style="max-width: {maxWidth}">
+      {#if title || showCloseButton}
+        <div class="modal-header">
+          {#if title}
+            <h2>{title}</h2>
+          {:else}
+            <div></div>
+          {/if}
+          {#if showCloseButton}
+            <button class="close-btn" type="button" aria-label={$t('actions.close')} onclick={onClose}>
+              <X size={18} />
+            </button>
+          {/if}
+        </div>
+      {/if}
+      <div class="modal-body">
+        {@render children()}
       </div>
-    {/if}
-    <div class="modal-body">
-      {@render children()}
+      {#if footer}
+        <div class="modal-footer" class:align-end={footerAlign === 'end'}>
+          {@render footer()}
+        </div>
+      {/if}
     </div>
-    {#if footer}
-      <div class="modal-footer">
-        {@render footer()}
-      </div>
-    {/if}
   </div>
 {/if}
 
 <style>
-  /* Overlay-less floating modal. Centered via fixed positioning + 50/50
-     translate. Border + box-shadow give the modal "lift" without
-     darkening the rest of the viewport. No scrim element means no
-     full-viewport paint pass when the modal mounts — that was the
-     dominant cost on non-maximized windows. */
-  .modal {
+  /* Full-viewport overlay. The `.scrim` modifier paints the dim background
+     when `withScrim` is true; without it the overlay is fully transparent
+     and only exists to catch backdrop clicks. Either way it sits above the
+     app and centers its modal child. Cero blur — the rgba alpha alone
+     carries the dim. */
+  .overlay {
     position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: calc(100% - 40px);
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 200000;
+  }
+
+  .overlay.scrim {
+    background: rgba(0, 0, 0, 0.7);
+  }
+
+  .modal {
+    width: 100%;
     max-height: calc(100dvh - 40px);
     background: var(--bg-primary);
     border: 1px solid var(--bg-tertiary);
@@ -142,12 +139,9 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    z-index: 200000;
-    /* Flat shadow stack instead of a 64px Gaussian — under software
+    /* Flat shadow stack instead of a Gaussian blur — under software
        compositing the blur radius dominates paint cost and re-rasterizes
-       whenever anything beneath the modal repaints. A composite of a
-       hairline edge shadow + a small offset shadow reads as "floating"
-       without the expensive blur. */
+       whenever anything beneath the modal repaints. */
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6),
       0 8px 16px rgba(0, 0, 0, 0.5);
   }
@@ -193,12 +187,19 @@
     flex: 1;
   }
 
+  /* Default footer aligns left (matches legacy `Modal.svelte` so migrated
+     modals keep their layout). Opt into `align-end` for the modern
+     Cancel | Save right-aligned convention. */
   .modal-footer {
-    padding: 12px 20px;
+    padding: 16px 20px;
     border-top: 1px solid var(--bg-tertiary);
     display: flex;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: 8px;
     flex-shrink: 0;
+  }
+
+  .modal-footer.align-end {
+    justify-content: flex-end;
   }
 </style>
