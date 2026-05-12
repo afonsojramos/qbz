@@ -208,6 +208,9 @@
   {/snippet}
 
   <div class="scroll-area">
+    {#if homeTab !== 'home'}
+      <p class="placeholder">{$t('discovery.comingSoon')}</p>
+    {:else}
     {#if recentlyPlayedAlbums.length > 0}
       <DiscoverySection title={$t('home.recentlyPlayed')}>
         {#snippet children()}{@render albumGrid(recentlyPlayedAlbums)}{/snippet}
@@ -340,6 +343,7 @@
 
     {#if releaseWatch.length === 0 && newReleases.length === 0 && recentlyPlayedAlbums.length === 0}
       <p class="placeholder">{$t('discovery.comingSoon')}</p>
+    {/if}
     {/if}
   </div>
 </div>
