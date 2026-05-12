@@ -60,20 +60,29 @@ function parseYear(value: string | undefined): number | undefined {
 }
 
 /**
- * Map a Qobuz `awards` array onto a single ribbon. The original HomeView
- * used award id strings — '88' = Qobuzissime, '151' = Album of the Week,
- * everything else falls into the press-accolade bucket. Picks the *last*
- * award in the array (the most recent one).
+ * Map a Qobuz `awards` array onto a single ribbon. An album can carry
+ * multiple awards simultaneously (e.g. "Album of the Week" alongside a
+ * press accolade). We pick by priority rather than by array position:
+ *
+ *   1. Album of the Week  (id '151') — Qobuz's flagship editorial pick
+ *   2. Qobuzissime        (id '88')  — secondary editorial accolade
+ *   3. Press              (any other award) — third-party press awards
+ *
+ * The original HomeView simply took the last award in the array, which
+ * meant cards in New Releases / Press Accolades sections often hid an
+ * Album-of-the-Week badge under whatever press accolade Qobuz returned
+ * later in the same array. This explicit priority pick fixes that.
  */
 function pickAlbumRibbon(
   awards: { id?: string | number; name: string }[] | undefined
 ): AlbumRibbon | undefined {
   if (!awards || awards.length === 0) return undefined;
-  const last = awards[awards.length - 1];
-  const idStr = last.id !== undefined && last.id !== null ? String(last.id) : '';
-  if (idStr === '88') return { kind: 'qobuzissime', label: last.name };
-  if (idStr === '151') return { kind: 'albumOfTheWeek', label: last.name };
-  return { kind: 'press', label: last.name };
+  const aotw = awards.find((a) => String(a.id ?? '') === '151');
+  if (aotw) return { kind: 'albumOfTheWeek', label: aotw.name };
+  const qobuzissime = awards.find((a) => String(a.id ?? '') === '88');
+  if (qobuzissime) return { kind: 'qobuzissime', label: qobuzissime.name };
+  const lastPress = awards[awards.length - 1];
+  return { kind: 'press', label: lastPress.name };
 }
 
 function qobuzAlbumToCard(album: QobuzAlbum): DiscoveryAlbumCard {
