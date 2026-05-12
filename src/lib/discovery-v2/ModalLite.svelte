@@ -24,28 +24,57 @@
   }: Props = $props();
 
   /**
-   * Discovery V2 modal — clean-room replacement for `Modal.svelte`.
+   * Discovery V2 modal — overlay-less variant.
    *
-   * The shared modal's slide-up `transform: translateY+scale` animation
-   * is GPU-friendly at maximize (WebKitGTK promotes the modal to a GPU
-   * layer) but software-rasterized at smaller windows, where the user
-   * reported visible render delays. Scale animations under software comp
-   * require per-pixel interpolation every frame on a ~480x600 surface.
+   * Earlier attempts kept a full-viewport `rgba(0,0,0,0.7)` scrim under
+   * the modal for visual focus. The shared `Modal.svelte` does the same.
+   * On WebKitGTK under software compositing (any non-maximized window),
+   * adding that fixed-position scrim forced an extra paint pass against
+   * the underlying DiscoveryView every frame — the user reported 2-3s
+   * to render even with no animation. `will-change: opacity` + GPU layer
+   * hint helped some (3s → 2s) but didn't fix it.
    *
-   * This variant uses opacity-only animation (cheap in either path) and
-   * drops the scale + translate. Same `isOpen / onClose / title /
-   * maxWidth / children / footer` Props as the shared modal so it's a
-   * drop-in for callers. No backdrop-filter on the overlay (same
-   * decision as the perf cleanup we applied to the shared Modal).
+   * This variant drops the scrim entirely. The modal floats above the
+   * page with a heavy border + box-shadow doing the focus work that the
+   * scrim used to. Click-outside-to-close is bound on `document` so it
+   * still works even without an overlay element to absorb the click.
+   * ESC still closes via window keydown.
+   *
+   * Trade-off: less visual emphasis on the modal (background isn't
+   * darkened). Gain: instant mount under software compositing because
+   * there's no full-viewport rect to paint against.
    */
 
-  function handleBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) onClose();
-  }
+  let modalEl = $state<HTMLDivElement | null>(null);
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && isOpen) onClose();
   }
+
+  function handleDocumentClick(e: MouseEvent) {
+    if (!isOpen) return;
+    if (modalEl && !modalEl.contains(e.target as Node)) onClose();
+  }
+
+  // Document-level outside-click only attaches while the modal is open.
+  // The mousedown phase fires before click, so we use it to avoid the
+  // race where opening the modal via a button-click also fires this
+  // handler (the click event that opened the modal would already have
+  // bubbled to document by the time mousedown registers next).
+  $effect(() => {
+    if (!isOpen) return;
+    // Defer registering until the next frame so the click that opened
+    // the modal doesn't immediately close it on the same event loop.
+    let cancelled = false;
+    requestAnimationFrame(() => {
+      if (cancelled) return;
+      document.addEventListener('mousedown', handleDocumentClick);
+    });
+    return () => {
+      cancelled = true;
+      document.removeEventListener('mousedown', handleDocumentClick);
+    };
+  });
 
   function portal(node: HTMLElement) {
     document.body.appendChild(node);
@@ -60,74 +89,67 @@
 <svelte:window onkeydown={handleKeydown} />
 
 {#if isOpen}
-  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_interactive_supports_focus -->
   <div
-    class="modal-overlay"
+    class="modal"
     use:portal
-    onclick={handleBackdropClick}
+    bind:this={modalEl}
     role="dialog"
     aria-modal="true"
     tabindex="-1"
+    style="max-width: {maxWidth}"
   >
-    <div class="modal" style="max-width: {maxWidth}">
-      {#if title || showCloseButton}
-        <div class="modal-header">
-          {#if title}
-            <h2>{title}</h2>
-          {:else}
-            <div></div>
-          {/if}
-          {#if showCloseButton}
-            <button class="close-btn" type="button" aria-label={$t('actions.close')} onclick={onClose}>
-              <X size={18} />
-            </button>
-          {/if}
-        </div>
-      {/if}
-      <div class="modal-body">
-        {@render children()}
+    {#if title || showCloseButton}
+      <div class="modal-header">
+        {#if title}
+          <h2>{title}</h2>
+        {:else}
+          <div></div>
+        {/if}
+        {#if showCloseButton}
+          <button class="close-btn" type="button" aria-label={$t('actions.close')} onclick={onClose}>
+            <X size={18} />
+          </button>
+        {/if}
       </div>
-      {#if footer}
-        <div class="modal-footer">
-          {@render footer()}
-        </div>
-      {/if}
+    {/if}
+    <div class="modal-body">
+      {@render children()}
     </div>
+    {#if footer}
+      <div class="modal-footer">
+        {@render footer()}
+      </div>
+    {/if}
   </div>
 {/if}
 
 <style>
-  /* Opacity-only fade-in. No transform animation on the modal itself —
-     the shared Modal.svelte's `slide-up` keyframe uses scale + translate,
-     which forces per-frame pixel interpolation under software compositing
-     and made smaller-window modal opens feel slow. Opacity changes are
-     cheap on either path. */
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.7);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    z-index: 200000;
-    animation: modal-fade-in 120ms ease-out;
-  }
-
-  @keyframes modal-fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-
+  /* Overlay-less floating modal. Centered via fixed positioning + 50/50
+     translate. Border + box-shadow give the modal "lift" without
+     darkening the rest of the viewport. No scrim element means no
+     full-viewport paint pass when the modal mounts — that was the
+     dominant cost on non-maximized windows. */
   .modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: calc(100% - 40px);
+    max-height: calc(100dvh - 40px);
     background: var(--bg-primary);
     border: 1px solid var(--bg-tertiary);
     border-radius: 12px;
-    width: 100%;
-    max-height: calc(100dvh - 40px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    z-index: 200000;
+    /* Flat shadow stack instead of a 64px Gaussian — under software
+       compositing the blur radius dominates paint cost and re-rasterizes
+       whenever anything beneath the modal repaints. A composite of a
+       hairline edge shadow + a small offset shadow reads as "floating"
+       without the expensive blur. */
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6),
+      0 8px 16px rgba(0, 0, 0, 0.5);
   }
 
   .modal-header {

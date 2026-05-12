@@ -6898,75 +6898,89 @@
       />
     {/if}
 
-    <!-- Playlist Modal -->
-    <PlaylistModal
-      isOpen={isPlaylistModalOpen}
-      mode={playlistModalMode}
-      playlist={playlistModalMode === 'edit' ? playlistModalEditPlaylist : undefined}
-      trackIds={playlistModalTrackIds}
-      isLocalTracks={playlistModalTracksAreLocal}
-      plexRatingKeys={playlistModalPlexRatingKeys}
-      isHidden={playlistModalMode === 'edit' ? playlistModalEditIsHidden : false}
-      currentFolderId={playlistModalMode === 'edit' ? playlistModalEditCurrentFolderId : null}
-      {userPlaylists}
-      onClose={handlePlaylistModalClose}
-      onSuccess={handlePlaylistCreated}
-    />
+    <!-- Modals are gated by `{#if}` at the mount site so their <script>
+         blocks (and the reactive declarations within) don't execute when
+         the modal is closed. Previously each modal was always mounted with
+         only its template gated internally, which kept its full reactive
+         graph alive and re-evaluating on every parent tick — the dominant
+         cost of opening any new modal at non-maximized window sizes. -->
+    {#if isPlaylistModalOpen}
+      <PlaylistModal
+        isOpen={isPlaylistModalOpen}
+        mode={playlistModalMode}
+        playlist={playlistModalMode === 'edit' ? playlistModalEditPlaylist : undefined}
+        trackIds={playlistModalTrackIds}
+        isLocalTracks={playlistModalTracksAreLocal}
+        plexRatingKeys={playlistModalPlexRatingKeys}
+        isHidden={playlistModalMode === 'edit' ? playlistModalEditIsHidden : false}
+        currentFolderId={playlistModalMode === 'edit' ? playlistModalEditCurrentFolderId : null}
+        {userPlaylists}
+        onClose={handlePlaylistModalClose}
+        onSuccess={handlePlaylistCreated}
+      />
+    {/if}
 
-    <!-- Playlist Import Modal -->
-    <PlaylistImportModal
-      isOpen={isPlaylistImportOpen}
-      onClose={closePlaylistImport}
-      onSuccess={handlePlaylistImported}
-    />
+    {#if isPlaylistImportOpen}
+      <PlaylistImportModal
+        isOpen={isPlaylistImportOpen}
+        onClose={closePlaylistImport}
+        onSuccess={handlePlaylistImported}
+      />
+    {/if}
 
-    <!-- Folder Edit Modal (sidebar entry-point — issue #364) -->
-    <FolderEditModal
-      isOpen={isSidebarFolderEditOpen}
-      folder={editingSidebarFolder}
-      onClose={closeSidebarFolderEdit}
-      onSave={handleSidebarFolderSave}
-      onDelete={handleSidebarFolderDelete}
-    />
+    {#if isSidebarFolderEditOpen}
+      <FolderEditModal
+        isOpen={isSidebarFolderEditOpen}
+        folder={editingSidebarFolder}
+        onClose={closeSidebarFolderEdit}
+        onSave={handleSidebarFolderSave}
+        onDelete={handleSidebarFolderDelete}
+      />
+    {/if}
 
-    <!-- About Modal -->
-    <AboutModal
-      isOpen={isAboutModalOpen}
-      onClose={() => isAboutModalOpen = false}
-    />
+    {#if isAboutModalOpen}
+      <AboutModal
+        isOpen={isAboutModalOpen}
+        onClose={() => isAboutModalOpen = false}
+      />
+    {/if}
 
-    <!-- Quality Fallback Modal -->
-    <QualityFallbackModal
-      isOpen={isQualityFallbackOpen}
-      trackTitle={qualityFallbackTrackTitle}
-      onTryLower={handleQualityFallbackTryLower}
-      onSkip={handleQualityFallbackSkip}
-      onClose={() => isQualityFallbackOpen = false}
-    />
+    {#if isQualityFallbackOpen}
+      <QualityFallbackModal
+        isOpen={isQualityFallbackOpen}
+        trackTitle={qualityFallbackTrackTitle}
+        onTryLower={handleQualityFallbackTryLower}
+        onSkip={handleQualityFallbackSkip}
+        onClose={() => isQualityFallbackOpen = false}
+      />
+    {/if}
 
-    <!-- Keyboard Shortcuts Modal -->
-    <KeyboardShortcutsModal
-      isOpen={isShortcutsModalOpen}
-      onClose={() => isShortcutsModalOpen = false}
-      onOpenSettings={() => {
-        isShortcutsModalOpen = false;
-        isKeybindingsSettingsOpen = true;
-      }}
-    />
+    {#if isShortcutsModalOpen}
+      <KeyboardShortcutsModal
+        isOpen={isShortcutsModalOpen}
+        onClose={() => isShortcutsModalOpen = false}
+        onOpenSettings={() => {
+          isShortcutsModalOpen = false;
+          isKeybindingsSettingsOpen = true;
+        }}
+      />
+    {/if}
 
-    <!-- Keybindings Settings Modal -->
-    <KeybindingsSettings
-      isOpen={isKeybindingsSettingsOpen}
-      onClose={() => isKeybindingsSettingsOpen = false}
-    />
+    {#if isKeybindingsSettingsOpen}
+      <KeybindingsSettings
+        isOpen={isKeybindingsSettingsOpen}
+        onClose={() => isKeybindingsSettingsOpen = false}
+      />
+    {/if}
 
-    <!-- Link Resolver Modal -->
-    <LinkResolverModal
-      isOpen={isLinkResolverOpen}
-      onClose={() => isLinkResolverOpen = false}
-      onResolve={handleResolvedLink}
-      onOpenImporter={() => { isLinkResolverOpen = false; openPlaylistImport(); }}
-    />
+    {#if isLinkResolverOpen}
+      <LinkResolverModal
+        isOpen={isLinkResolverOpen}
+        onClose={() => isLinkResolverOpen = false}
+        onResolve={handleResolvedLink}
+        onOpenImporter={() => { isLinkResolverOpen = false; openPlaylistImport(); }}
+      />
+    {/if}
 
     {#if updateRelease}
       <UpdateAvailableModal
