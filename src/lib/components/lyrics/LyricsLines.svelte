@@ -63,17 +63,6 @@
     return Math.max(1000, Math.min(10000, duration));
   }
 
-  // Track active line changes for animation reset
-  let animationKey = $state(0);
-  let lastActiveIndex = $state(-1);
-
-  $effect(() => {
-    if (activeIndex !== lastActiveIndex && activeIndex >= 0) {
-      lastActiveIndex = activeIndex;
-      animationKey++; // Force animation restart
-    }
-  });
-
   let container: HTMLDivElement | null = null;
   let lastScrolledIndex = -1;
   let lastLyricsKey = '';
@@ -181,28 +170,23 @@
     {/if}
 
     {#each lines as line, index (index)}
-      {#if immersive && isSynced && index === activeIndex}
-        <!-- Active line in immersive mode: CSS animation with duration -->
-        {#key animationKey}
-          <div
-            class="lyrics-line active {getDistanceClass(index, activeIndex)}"
-            style="--line-duration: {getLineDuration(index)}ms"
-            data-line-index={index}
-          >
-            <span class="line-text">{line.text}</span>
-          </div>
-        {/key}
-      {:else}
-        <div
-          class="lyrics-line {immersive && isSynced ? getDistanceClass(index, activeIndex) : ''}"
-          class:active={isSynced && index === activeIndex}
-          class:past={isSynced && index < activeIndex}
-          style={immersive ? '' : `--line-opacity: ${isSynced ? getLineOpacity(index, activeIndex) : 1}; ${isSynced && index === activeIndex ? `--line-progress: ${Math.max(0, Math.min(1, activeProgress))}` : ''}`}
-          data-line-index={index}
-        >
-          <span class="line-text">{line.text}</span>
-        </div>
-      {/if}
+      <!-- Single <div> per line with class toggles, so CSS transitions can
+           animate state changes (active ↔ past, size/scale/color) instead
+           of being killed by destroy-and-recreate when activeIndex moves. -->
+      {@const isActive = isSynced && index === activeIndex}
+      <div
+        class="lyrics-line {immersive && isSynced ? getDistanceClass(index, activeIndex) : ''}"
+        class:active={isActive}
+        class:past={isSynced && index < activeIndex}
+        style={immersive
+          ? ''
+          : isActive
+            ? `--line-progress: ${Math.max(0, Math.min(1, activeProgress))}`
+            : `--line-opacity: ${isSynced ? getLineOpacity(index, activeIndex) : 1}`}
+        data-line-index={index}
+      >
+        <span class="line-text">{line.text}</span>
+      </div>
     {/each}
 
     <!-- Spacer at bottom to allow last lines to scroll to center (only for synced) -->
@@ -343,21 +327,31 @@
     line-height: 1.5;
     letter-spacing: 0.01em;
     opacity: var(--line-opacity, 1);
-    /* Minimal transitions for non-immersive mode */
-    transition: opacity 200ms ease-out, color 200ms ease-out;
+    /* Transitions on every property the active class swaps, so going
+       active ↔ past animates smoothly in both directions (the same DOM
+       element persists across state changes — see the each-block above). */
+    transition:
+      opacity 220ms ease-out,
+      color 220ms ease-out,
+      font-size 220ms cubic-bezier(0.4, 0, 0.2, 1),
+      font-weight 220ms ease-out,
+      transform 220ms cubic-bezier(0.4, 0, 0.2, 1);
     transform-origin: left center;
     /* Prevent horizontal overflow with long lyrics */
     word-wrap: break-word;
     overflow-wrap: break-word;
   }
 
-  /* Only active line gets full transitions */
+  /* Active line: mirror the base transitions. `transition` is shorthand
+     so it must be re-declared in full here, otherwise the size/scale/
+     color animations would be dropped on activation. */
   .lyrics-line.active {
     transition:
-      opacity 200ms ease-out,
-      transform 200ms ease-out,
-      font-size 150ms ease-out,
-      color 250ms ease-out;
+      opacity 220ms ease-out,
+      color 220ms ease-out,
+      font-size 220ms cubic-bezier(0.4, 0, 0.2, 1),
+      font-weight 220ms ease-out,
+      transform 220ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .lyrics-lines.center .lyrics-line {
