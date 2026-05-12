@@ -15,6 +15,7 @@
   import DiscoverySection from './DiscoverySection.svelte';
   import DiscoveryGridSection from './DiscoveryGridSection.svelte';
   import AlbumCardLite from './AlbumCardLite.svelte';
+  import AlbumRowLite from './AlbumRowLite.svelte';
   import TrackRowLite from './TrackRowLite.svelte';
   import ArtistTileLite from './ArtistTileLite.svelte';
   import PlaylistCardLite from './PlaylistCardLite.svelte';
@@ -245,6 +246,19 @@
     />
   {/snippet}
 
+  {#snippet albumRow(album: DiscoveryAlbumCard)}
+    <AlbumRowLite
+      albumId={album.albumId}
+      title={album.title}
+      artist={album.artist}
+      artwork={album.artwork}
+      onClick={() => onAlbumClick?.(album.albumId)}
+      onArtistClick={album.artistId !== undefined
+        ? () => onArtistClick?.(album.artistId!)
+        : undefined}
+    />
+  {/snippet}
+
   {#snippet trackRow(track: DiscoveryTrackCard)}
     <TrackRowLite
       trackId={track.trackId}
@@ -333,10 +347,10 @@
             onSeeAll={onNavigateIdealDiscography}
           />
         {:else if pref.id === 'mostStreamed' && mostStreamed.length > 0}
-          <DiscoverySection
+          <DiscoveryGridSection
             title={$t('home.mostStreamed')}
-            items={mostStreamed}
-            renderItem={albumCard}
+            items={mostStreamed.slice(0, 12)}
+            renderItem={albumRow}
             onSeeAll={onNavigateTopAlbums}
           />
         {:else if pref.id === 'releaseWatch' && releaseWatch.length > 0}

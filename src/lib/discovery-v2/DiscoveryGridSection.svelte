@@ -104,24 +104,26 @@
           <ArrowRight size={14} />
         </button>
       {/if}
-      <button
-        class="nav-btn"
-        type="button"
-        aria-label="Previous page"
-        disabled={!canPrev}
-        onclick={() => { if (canPrev) page = page - 1; }}
-      >
-        <ChevronLeft size={18} />
-      </button>
-      <button
-        class="nav-btn"
-        type="button"
-        aria-label="Next page"
-        disabled={!canNext}
-        onclick={() => { if (canNext) page = page + 1; }}
-      >
-        <ChevronRight size={18} />
-      </button>
+      {#if totalPages > 1}
+        <button
+          class="nav-btn"
+          type="button"
+          aria-label="Previous page"
+          disabled={!canPrev}
+          onclick={() => { if (canPrev) page = page - 1; }}
+        >
+          <ChevronLeft size={18} />
+        </button>
+        <button
+          class="nav-btn"
+          type="button"
+          aria-label="Next page"
+          disabled={!canNext}
+          onclick={() => { if (canNext) page = page + 1; }}
+        >
+          <ChevronRight size={18} />
+        </button>
+      {/if}
     </div>
   </header>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
