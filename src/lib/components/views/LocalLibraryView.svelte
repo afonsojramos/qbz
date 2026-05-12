@@ -35,6 +35,7 @@
   import { showToast, dismissBuffering } from '$lib/stores/toastStore';
   import AlbumCard from '$lib/discovery-v2/AlbumCardLibraryLite.svelte';
   import AlbumGridPool from '$lib/discovery-v2/AlbumGridPool.svelte';
+  import { LocalAlbumsChunkedStore } from '$lib/discovery-v2/localAlbumsChunkedStore.svelte';
   import VirtualizedAlbumList from '../VirtualizedAlbumList.svelte';
   import VirtualizedArtistGrid from '../VirtualizedArtistGrid.svelte';
   import VirtualizedArtistList from '../VirtualizedArtistList.svelte';
@@ -1276,6 +1277,14 @@
   let metadataAlbums = $state<LocalAlbum[]>([]);
   let metadataAlbumsLoading = $state(false);
   let metadataAlbumsLoaded = $state(false);
+
+  /** Chunked album store — backs the Plex-style recycling-grid pool on
+   *  the Albums tab when grouping is off and no quality filters are
+   *  active. Hydrated via `$effect` that mirrors search/sort/filter
+   *  state into `setParams`. Other paths (grouped grid, list mode,
+   *  quality-filtered) continue to read from `metadataAlbums` via the
+   *  legacy `VirtualizedAlbumList`. */
+  const metadataAlbumsChunked = new LocalAlbumsChunkedStore();
   let hiddenAlbums = $state<LocalAlbum[]>([]);
   let artists = $state<LocalArtist[]>([]);
   let tracks = $state<LocalTrack[]>([]);
@@ -2339,6 +2348,26 @@
 
   // Same pipeline for the metadata-grouped Albums tab
   let filteredAndGroupedMetadataAlbums = $derived.by(() => buildFilteredAndGroupedAlbums(metadataAlbums));
+
+  /** Push search/sort/filter state into the chunked store whenever any
+   *  of them change. The store no-ops if the params are unchanged, so
+   *  this is safe to run every reactive tick. We only feed the store
+   *  while the Albums tab is the active view — chunk 0 + total count
+   *  is one round-trip to the backend, cheap but not free. */
+  $effect(() => {
+    if (activeTab !== 'albums') return;
+    if (albumViewMode !== 'grid') return;
+    if (albumGroupingEnabled) return;
+    if (hasActiveFilters) return;
+    const mappedSortBy: 'artist' | 'title' | 'year' =
+      sortBy === 'title' || sortBy === 'year' ? sortBy : 'artist';
+    void metadataAlbumsChunked.setParams({
+      search: debouncedAlbumSearch,
+      sortBy: mappedSortBy,
+      sortDir: sortDirection,
+      excludeNetworkFolders: shouldExcludeNetworkFolders(),
+    });
+  });
 
   // Albums for the selected artist (used in artist view two-column layout)
   // Includes multi-artist albums where the selected artist appears
@@ -6412,11 +6441,13 @@
             {:else}
               <div class="album-sections virtualized">
                 <div class="virtualized-container">
-                  {#if albumViewMode === 'grid' && !albumGroupingEnabled}
-                    <!-- Recycling pool: 80-ish stable slots, scrolled-to
-                         indices update bindings in place. Headers aren't
-                         supported here yet, so we fall back to the
-                         legacy virtualizer when grouping is enabled. -->
+                  {#if albumViewMode === 'grid' && !albumGroupingEnabled && !hasActiveFilters}
+                    <!-- Chunked path: on-demand fetch via Tauri command
+                         per chunk, recycling-pool render. The pool
+                         binds to the chunked store's reactive
+                         `total` + `version`. Falls back to the legacy
+                         path below when grouping or quality filters
+                         are on (those don't have backend support yet). -->
                     {#snippet renderMetadataAlbumCell(album: LocalAlbum, _idx: number)}
                       <AlbumCard
                         albumId={album.id}
@@ -6437,8 +6468,10 @@
                       />
                     {/snippet}
                     <AlbumGridPool
-                      totalCount={filteredMetadataAlbums.length}
-                      getItem={(i) => filteredMetadataAlbums[i] ?? null}
+                      totalCount={metadataAlbumsChunked.total}
+                      getItem={(i) => metadataAlbumsChunked.getAlbum(i) as LocalAlbum | null}
+                      onNeedIndex={(i) => metadataAlbumsChunked.requestIndex(i)}
+                      dataVersion={metadataAlbumsChunked.version}
                       renderCell={renderMetadataAlbumCell}
                     />
                   {:else}
