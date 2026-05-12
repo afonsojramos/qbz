@@ -406,6 +406,11 @@
     flex-shrink: 0;
     cursor: pointer;
     transition: transform 150ms ease;
+    /* CSS-only virtualization: skip paint/render for cards offscreen.
+       Each card declares its own contain-intrinsic-size so layout doesn't
+       collapse when content is skipped. ~230px artwork + ~60px text area. */
+    content-visibility: auto;
+    contain-intrinsic-size: 230px 320px;
   }
 
   .artwork-container {
@@ -509,12 +514,10 @@
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: #fff;
-    background: rgba(0, 0, 0, 0.75);
+    background: rgba(0, 0, 0, 0.88);
     border-left: 3px solid var(--accent-primary);
     border-top-right-radius: 3px;
     border-bottom-right-radius: 3px;
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
     pointer-events: none;
     white-space: nowrap;
     max-width: calc(100% - 12px);
@@ -556,9 +559,7 @@
     justify-content: center;
     opacity: 0;
     transition: opacity 150ms ease;
-    background: rgba(10, 10, 10, 0.75);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    background: rgba(10, 10, 10, 0.92);
     pointer-events: auto;
     border-radius: inherit;
     z-index: 2;
@@ -748,24 +749,9 @@
     margin-bottom: 2px;
   }
 
-  .title.scrollable {
-    text-overflow: clip;
-  }
-
   .title-text {
     display: inline-block;
     white-space: nowrap;
-  }
-
-  .album-card:hover .title.scrollable .title-text {
-    animation: title-ticker var(--ticker-duration) linear infinite;
-    will-change: transform;
-  }
-
-  @keyframes title-ticker {
-    0%, 20% { transform: translateX(0); }
-    70%, 80% { transform: translateX(var(--ticker-offset)); }
-    90%, 100% { transform: translateX(0); }
   }
 
   .artist {
@@ -797,18 +783,8 @@
     color: var(--text-primary);
   }
 
-  .artist.scrollable {
-    text-overflow: clip;
-  }
-
   .artist-text {
     display: inline-block;
     white-space: nowrap;
-  }
-
-  .album-card:hover .artist.scrollable .artist-text,
-  .artist.artist-link.scrollable:hover .artist-text {
-    animation: title-ticker var(--ticker-duration) linear infinite;
-    will-change: transform;
   }
 </style>
