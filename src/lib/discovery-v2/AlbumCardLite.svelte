@@ -217,6 +217,15 @@
   }
 
   .cover {
+    /* Absolute-positioned + inset:0 strictly bounds the image to
+       cover-wrap's 220x220 box even when `cachedSrc` applies a
+       `transform: translateZ(0)` to it for the WebKit 2.50+ texture-
+       eviction workaround. Without absolute positioning, certain
+       portrait-aspect artwork was visually escaping the `overflow:
+       hidden` on cover-wrap and bleeding into the row above (user
+       report 2026-05-12, SearchView Albums grid). */
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -224,6 +233,8 @@
   }
 
   .cover-placeholder {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
   }
