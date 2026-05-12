@@ -490,6 +490,18 @@
     transform: scale(1.05);
   }
 
+  /* Make .line-text block-level so background-clip: text has a paint area
+     bounded by the full block box rather than the inline-fragment box.
+     On WebKit the inline-fragment paint area can be tight around the
+     font's ascent/descent metrics, so glyph parts that extend below
+     baseline (g, y, p, q, j descenders) end up outside the paint area
+     and render transparent against the parent background. A small
+     padding-bottom gives descenders a guaranteed paint margin. */
+  .lyrics-line .line-text {
+    display: block;
+    padding-bottom: 0.15em;
+  }
+
   /* Karaoke effect on active line — hard cut at the playhead.
      Visual smoothness comes from --line-progress transitioning over
      --block-interval; the gradient is a sharp two-color split moving
