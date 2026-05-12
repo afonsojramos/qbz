@@ -177,10 +177,11 @@
     void loadAll();
   }
 
-  // `activeTrackId` and `isPlaybackActive` are destructured but not yet read
-  // by V1 — the album-card level doesn't know the playing track's albumId
-  // without joining against the current playback context. They'll wire up
-  // once track-level sections (Continue Listening) land.
+  // `activeTrackId` + `isPlaybackActive` drive the playing indicator on
+  // TrackCardLite within Continue Listening (the only section where the
+  // card carries a trackId-level identity). Album/playlist cards stay
+  // un-highlighted until we surface a `currentAlbumId` from the parent
+  // playback context.
 </script>
 
 <div class="discovery">
@@ -242,6 +243,7 @@
               title={track.title}
               artist={track.artist}
               artwork={track.artwork}
+              isPlaying={track.trackId === activeTrackId && isPlaybackActive === true}
               onPlay={() => onTrackPlay?.({
                 id: track.trackId,
                 title: track.title,
