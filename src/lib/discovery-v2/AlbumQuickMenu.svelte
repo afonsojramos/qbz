@@ -11,6 +11,8 @@
     Plus,
     Link as LinkIcon,
     Library,
+    CassetteTape,
+    RefreshCw,
   } from 'lucide-svelte';
   import {
     openMenu as openGlobalMenu,
@@ -27,12 +29,23 @@
     onPlayNext?: () => void;
     onPlayLater?: () => void;
     onAddToPlaylist?: () => void;
+    onAddToMixtape?: () => void;
     onCopyToLibrary?: () => void;
     onGoToAlbum?: () => void;
     onGoToArtist?: () => void;
     onShareQobuz?: () => void;
     onShareSonglink?: () => void;
     onDownload?: () => void;
+    /** Local-side actions surfaced only when the album is already cached
+     *  offline. Both are optional; passing them without `isAlbumFullyDownloaded=true`
+     *  hides the items. */
+    onOpenContainingFolder?: () => void;
+    onReDownloadAlbum?: () => void;
+    /** Toggles the offline-related action surface:
+     *  - true  → render "Open containing folder" + "Refresh offline copy"
+     *  - false → render "Make available offline" (the onDownload action)
+     *  Pass the live download state so the menu always matches reality. */
+    isAlbumFullyDownloaded?: boolean;
   }
 
   let {
@@ -42,12 +55,16 @@
     onPlayNext,
     onPlayLater,
     onAddToPlaylist,
+    onAddToMixtape,
     onCopyToLibrary,
     onGoToAlbum,
     onGoToArtist,
     onShareQobuz,
     onShareSonglink,
     onDownload,
+    onOpenContainingFolder,
+    onReDownloadAlbum,
+    isAlbumFullyDownloaded = false,
   }: Props = $props();
 
   /**
@@ -131,12 +148,23 @@
     onPlayLater ? { labelKey: 'actions.addToQueue', icon: ListEnd, run: () => fire(onPlayLater) } : null,
     onPlayNext ? { labelKey: 'actions.playNext', icon: ListPlus, run: () => fire(onPlayNext) } : null,
     onAddToPlaylist ? { labelKey: 'actions.addToPlaylist', icon: Plus, run: () => fire(onAddToPlaylist) } : null,
+    onAddToMixtape ? { labelKey: 'common.addToMixtapeOrCollection', icon: CassetteTape, run: () => fire(onAddToMixtape) } : null,
     onCopyToLibrary ? { labelKey: 'playlist.copyToLibrary', icon: Library, run: () => fire(onCopyToLibrary) } : null,
     onGoToAlbum ? { labelKey: 'actions.goToAlbum', icon: Disc, run: () => fire(onGoToAlbum) } : null,
     onGoToArtist ? { labelKey: 'actions.goToArtist', icon: User, run: () => fire(onGoToArtist) } : null,
     onShareQobuz ? { labelKey: 'actions.shareQobuz', icon: Share2, run: () => fire(onShareQobuz) } : null,
     onShareSonglink ? { labelKey: 'actions.shareSonglink', icon: LinkIcon, run: () => fire(onShareSonglink) } : null,
-    onDownload ? { labelKey: 'actions.makeAvailableOffline', icon: CloudOff, run: () => fire(onDownload) } : null,
+    // Offline / download surface — matches legacy AlbumMenu behavior:
+    //  - downloaded + has onReDownloadAlbum → "Refresh offline copy"
+    //  - not downloaded + has onDownload    → "Make available offline"
+    // (Legacy declares `onOpenContainingFolder` for forward-compat but
+    //  never renders an item for it; we mirror that.)
+    isAlbumFullyDownloaded && onReDownloadAlbum
+      ? { labelKey: 'actions.refreshOfflineCopy', icon: RefreshCw, run: () => fire(onReDownloadAlbum) }
+      : null,
+    !isAlbumFullyDownloaded && onDownload
+      ? { labelKey: 'actions.makeAvailableOffline', icon: CloudOff, run: () => fire(onDownload) }
+      : null,
   ].filter((item): item is NonNullable<typeof item> => item !== null));
 </script>
 

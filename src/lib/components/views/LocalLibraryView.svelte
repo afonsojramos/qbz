@@ -33,7 +33,7 @@
   import { applyShiftRange, isSelectAllShortcut } from '$lib/utils/multiSelect';
   import { downloadSettingsVersion } from '$lib/stores/downloadSettingsStore';
   import { showToast, dismissBuffering } from '$lib/stores/toastStore';
-  import AlbumCard from '../AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLibraryLite.svelte';
   import VirtualizedAlbumList from '../VirtualizedAlbumList.svelte';
   import VirtualizedArtistGrid from '../VirtualizedArtistGrid.svelte';
   import VirtualizedArtistList from '../VirtualizedArtistList.svelte';
@@ -6536,13 +6536,10 @@
                         title={album.title}
                         artist={album.artist}
                         quality={getAlbumQualityBadge(album)}
-                        size="large"
-                        showFavorite={false}
-                        showGenre={false}
                         onPlay={() => handleAlbumPlayFromGrid(album)}
                         onPlayNext={() => handleAlbumQueueNextFromGrid(album)}
                         onPlayLater={() => handleAlbumQueueLaterFromGrid(album)}
-                        onclick={() => handleAlbumClick(album)}
+                        onClick={() => handleAlbumClick(album)}
                         sourceBadge={album.source === 'plex' ? 'plex' : album.source === 'qobuz_purchase' ? 'qobuz_purchase' : album.source === 'qobuz_download' ? 'qobuz_download' : 'user'}
                       />
                     {/each}

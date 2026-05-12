@@ -1,0 +1,441 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { Play, Disc3, MoreHorizontal, Check } from 'lucide-svelte';
+  import { t } from '$lib/i18n';
+  import { cachedSrc } from '$lib/actions/cachedImage';
+  import { resolveAlbumCover } from '$lib/stores/customAlbumCoverStore';
+  import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
+  import SourceBadge from '$lib/components/SourceBadge.svelte';
+  import AlbumQuickMenu from './AlbumQuickMenu.svelte';
+
+  interface Props {
+    albumId: string;
+    title: string;
+    artist: string;
+    artwork?: string;
+    quality?: string;
+    /** Local-library / purchases source identifier; mounts SourceBadge
+     *  bottom-right of the cover. */
+    sourceBadge?: 'user' | 'qobuz_download' | 'qobuz_purchase' | 'plex';
+    /** Year and track count are forwarded to AddToMixtape's payload so
+     *  the destination mixtape can pre-populate its metadata. */
+    year?: number;
+    trackCount?: number;
+    /** Multi-select state. When `selectable` is true the card renders a
+     *  top-left checkbox; the regular `onClick` is bypassed and the click
+     *  flows through `onToggleSelect` instead (the parent owns selection
+     *  state). Shift-click range support belongs to the parent — we just
+     *  forward the event. */
+    selectable?: boolean;
+    selected?: boolean;
+    onClick?: () => void;
+    onPlay?: () => void;
+    onPlayNext?: () => void;
+    onPlayLater?: () => void;
+    onToggleSelect?: (e: MouseEvent | KeyboardEvent) => void;
+  }
+
+  let {
+    albumId,
+    title,
+    artist,
+    artwork,
+    quality,
+    sourceBadge,
+    year,
+    trackCount,
+    selectable = false,
+    selected = false,
+    onClick,
+    onPlay,
+    onPlayNext,
+    onPlayLater,
+    onToggleSelect,
+  }: Props = $props();
+
+  /**
+   * Local-library / Purchases card variant of AlbumCardLite.
+   *
+   * Differences from the Discovery V2 base AlbumCardLite:
+   *   - No favorite button overlay (Library cards run `showFavorite=false`).
+   *   - No genre / release-date overlay on hover (Library cards run
+   *     `showGenre=false` — the user is already inside their library
+   *     view and doesn't need editorial copy on every card).
+   *   - SourceBadge anchored bottom-right of the cover.
+   *   - Optional multi-select checkbox top-left of the cover.
+   *   - Quality string rendered as a full pill (not gated on Hi-Res-only
+   *     like Discovery's variant). Library users care about "16bit/44.1kHz"
+   *     as much as "24bit/192kHz".
+   *   - 210px wide to match the legacy AlbumCard `size="large"` so the
+   *     VirtualizedAlbumList grid math (`GRID_MIN_CARD_WIDTH = 210`) stays
+   *     valid without changes.
+   *
+   * Inherited from AlbumCardLite philosophy:
+   *   - Cero efectos: opacity-only transitions, no marquee, no
+   *     ResizeObserver per card, no will-change, no backdrop-filter.
+   *   - `content-visibility: auto` so offscreen cards skip paint entirely
+   *     — important for libraries with thousands of albums.
+   */
+
+  let imageError = $state(false);
+  let menuOpen = $state(false);
+  let menuAnchor = $state<{ x: number; y: number } | null>(null);
+
+  function handleImageError() {
+    imageError = true;
+  }
+
+  function isOverlayAction(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    return !!target.closest('.action-buttons');
+  }
+
+  function handleCardClick(e: MouseEvent) {
+    if (isOverlayAction(e.target)) return;
+    if (selectable) {
+      onToggleSelect?.(e);
+      return;
+    }
+    onClick?.();
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    if (selectable) onToggleSelect?.(e);
+    else onClick?.();
+  }
+
+  function handlePlay(e: MouseEvent) {
+    e.stopPropagation();
+    onPlay?.();
+  }
+
+  function handleKebab(e: MouseEvent) {
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    menuAnchor = { x: rect.left, y: rect.bottom + 4 };
+    menuOpen = true;
+  }
+
+  function handleContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    menuAnchor = { x: e.clientX, y: e.clientY };
+    menuOpen = true;
+  }
+
+  function handleAddToMixtape() {
+    openAddToMixtape({
+      item_type: 'album',
+      // Library cards are always local-side; sourceBadge presence
+      // confirms it. Discovery V2 'safe' Library callers never mount
+      // this card for a Qobuz-only album.
+      source: 'local',
+      source_item_id: albumId,
+      title,
+      subtitle: artist,
+      artwork_url: artwork ?? '',
+      year,
+      track_count: trackCount,
+    });
+  }
+
+  // The quick-menu mounts only when the album has at least one
+  // applicable action. With just `albumId`, AddToMixtape is enough to
+  // justify a menu trigger; play-next/play-later optionally extend it.
+  const hasMenu = $derived(!!(onPlayNext || onPlayLater || albumId));
+
+  const coverSrc = $derived(
+    artwork ? resolveAlbumCover(albumId, artwork) : undefined
+  );
+</script>
+
+<div
+  class="card"
+  class:is-selectable={selectable}
+  class:is-selected={selectable && selected}
+  data-album-id={albumId}
+  role="button"
+  tabindex="0"
+  onclick={handleCardClick}
+  oncontextmenu={hasMenu ? handleContextMenu : undefined}
+  onkeydown={handleKeydown}
+>
+  <div class="cover-wrap">
+    <!-- Always-rendered placeholder behind the image so a broken / loading
+         image never shows a blank rectangle. -->
+    <div class="cover-placeholder"><Disc3 size={48} /></div>
+
+    {#if !imageError && coverSrc}
+      <img
+        class="cover"
+        src={coverSrc}
+        use:cachedSrc={coverSrc}
+        alt={title}
+        loading="lazy"
+        decoding="async"
+        onerror={handleImageError}
+      />
+    {/if}
+
+    {#if selectable}
+      <div class="select-checkbox" aria-hidden="true">
+        {#if selected}<Check size={14} />{/if}
+      </div>
+    {/if}
+
+    <!-- Hover overlay: opacity 0→1, dark scrim + centered action buttons.
+         No genre/date row (Library cards intentionally don't surface that). -->
+    <div class="overlay">
+      <div class="action-buttons">
+        {#if onPlay}
+          <button
+            class="overlay-btn primary"
+            type="button"
+            aria-label={$t('actions.play')}
+            onclick={handlePlay}
+          >
+            <Play size={18} fill="currentColor" />
+          </button>
+        {/if}
+        {#if hasMenu}
+          <button
+            class="overlay-btn"
+            type="button"
+            aria-label={$t('actions.moreActions')}
+            onclick={handleKebab}
+          >
+            <MoreHorizontal size={18} />
+          </button>
+        {/if}
+      </div>
+    </div>
+
+    {#if sourceBadge}
+      <div class="source-badge-slot">
+        <SourceBadge value={sourceBadge} />
+      </div>
+    {/if}
+  </div>
+
+  <div class="info">
+    <div class="title" title={title}>{title}</div>
+    <div class="artist" title={artist}>{artist}</div>
+    {#if quality}
+      <div class="quality-pill" title={quality}>{quality}</div>
+    {/if}
+  </div>
+</div>
+
+<AlbumQuickMenu
+  isOpen={menuOpen}
+  anchor={menuAnchor}
+  onClose={() => (menuOpen = false)}
+  onPlayNext={onPlayNext ? () => onPlayNext?.() : undefined}
+  onPlayLater={onPlayLater ? () => onPlayLater?.() : undefined}
+  onAddToMixtape={albumId ? handleAddToMixtape : undefined}
+/>
+
+<style>
+  /* 210px fixed width to match the legacy AlbumCard `size="large"`
+     dimensions the virtualized grid math depends on. The cover-wrap is
+     1:1 (210x210) so total card height is ~210 + ~110 info = ~320,
+     same as `GRID_ROW_HEIGHT` in VirtualizedAlbumList. */
+  .card {
+    width: 210px;
+    flex-shrink: 0;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    text-align: left;
+    /* Skip paint/render for offscreen cards. Important for libraries
+       with thousands of albums — without this every scroll forces every
+       card under the viewport to repaint. */
+    content-visibility: auto;
+    contain-intrinsic-size: 210px 320px;
+  }
+
+  .cover-wrap {
+    position: relative;
+    width: 210px;
+    height: 210px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-tertiary);
+  }
+
+  .cover-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(
+      135deg,
+      var(--bg-tertiary) 0%,
+      var(--bg-secondary) 100%
+    );
+    color: var(--text-muted);
+  }
+
+  .cover {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    z-index: 1;
+  }
+
+  /* Multi-select checkbox in the top-left corner of the cover. Same
+     geometry as the legacy AlbumCard so the visual is familiar to users
+     coming over from the old library views. */
+  .select-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 3;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.85);
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .card.is-selected .select-checkbox {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+  }
+
+  .card.is-selected {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+    border-radius: 10px;
+  }
+
+  /* Dark scrim + centered action buttons. Single opacity transition,
+     no transform, no blur, no per-child animation. */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(10, 10, 10, 0.85);
+    opacity: 0;
+    transition: opacity 150ms ease;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .card:hover .overlay {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .action-buttons {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .overlay-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255, 255, 255, 0.9);
+    background: transparent;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .overlay-btn:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .overlay-btn.primary {
+    width: 44px;
+    height: 44px;
+    background: #fff;
+    color: #000;
+    border-color: #fff;
+  }
+
+  .source-badge-slot {
+    position: absolute;
+    bottom: 6px;
+    right: 6px;
+    z-index: 3;
+  }
+
+  .info {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .artist {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Quality pill: always shown when caller passes a quality string.
+     Library users care about format/bit-depth on every album, not just
+     Hi-Res ones — different from the Discovery V2 variant which gates
+     the pill on `isHiRes`. */
+  .quality-pill {
+    align-self: flex-start;
+    margin-top: 2px;
+    font-family: 'LINE Seed JP', var(--font-sans);
+    font-size: 10px;
+    font-weight: 100;
+    color: var(--alpha-85);
+    background: var(--alpha-10);
+    border: 1px solid var(--alpha-15);
+    border-radius: 4px;
+    padding: 3px 6px;
+    min-width: 90px;
+    text-align: center;
+    box-sizing: border-box;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  :global([data-theme='light']) .quality-pill {
+    color: rgba(40, 42, 54, 0.85) !important;
+    background: #ffffff !important;
+    border: 1px solid rgba(40, 42, 54, 0.95) !important;
+  }
+</style>

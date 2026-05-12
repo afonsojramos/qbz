@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { Disc3 } from 'lucide-svelte';
-  import AlbumCard from './AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLibraryLite.svelte';
   import { restoreScrollOnBackForward } from '$lib/utils/scrollRestore';
 
   // Types
@@ -368,13 +368,10 @@
                 title={album.title}
                 artist={album.artist}
                 quality={getQualityBadge(album)}
-                size="large"
-                showFavorite={false}
-                showGenre={false}
                 onPlay={() => onAlbumPlay(album)}
                 onPlayNext={() => onAlbumQueueNext(album)}
                 onPlayLater={() => onAlbumQueueLater(album)}
-                onclick={() => onAlbumClick(album)}
+                onClick={() => onAlbumClick(album)}
                 sourceBadge={showSourceBadge ? (album.source === 'plex' ? 'plex' : album.source === 'qobuz_purchase' ? 'qobuz_purchase' : album.source === 'qobuz_download' ? 'qobuz_download' : 'user') : undefined}
                 selectable={selectable}
                 selected={selectedAlbumIds.has(album.id)}
