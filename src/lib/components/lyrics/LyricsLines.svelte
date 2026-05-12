@@ -372,11 +372,11 @@
     font-weight: 700;
     opacity: 1;
     transform: scale(1.02);
-    text-shadow:
-      0 1px 3px rgba(0, 0, 0, 0.6),
-      0 2px 10px rgba(0, 0, 0, 0.4),
-      0 0 40px color-mix(in srgb, var(--lyrics-active-color, var(--accent-primary)) 40%, transparent),
-      0 0 80px color-mix(in srgb, var(--lyrics-active-color, var(--accent-primary)) 20%, transparent);
+    /* Use filter: drop-shadow on the parent — text-shadow inherits into the
+       background-clipped span and tints the gradient on WebKit (macOS). */
+    filter:
+      drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6))
+      drop-shadow(0 0 12px color-mix(in srgb, var(--lyrics-active-color, var(--accent-primary)) 35%, transparent));
   }
 
   .lyrics-lines.center .lyrics-line.active {
@@ -396,6 +396,11 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+    -webkit-text-fill-color: transparent;
+    /* Suppress inherited text-shadow — on WebKit (macOS) shadows render in
+       the text-glyph shape and tint the gradient-clipped fill, making the
+       active line look dim/red instead of crisp. */
+    text-shadow: none;
   }
 
   .lyrics-empty {
