@@ -2,6 +2,7 @@
   import { Play, User, Radio } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
+  import RadioCardLite from './RadioCardLite.svelte';
   import type { SpotlightSection, SpotlightTopTrack } from './data';
 
   interface Props {
@@ -83,7 +84,7 @@
           onclick={() => onStartRadio?.(spotlight.artistId, spotlight.artistName)}
         >
           <Radio size={14} />
-          {$t('home.radio.startArtistRadio')}
+          {$t('actions.radio.startArtistRadio')}
         </button>
       {/if}
     </div>
@@ -91,7 +92,7 @@
 
   {#if spotlight.topTracks.length > 0}
     <div class="block">
-      <h3 class="block-title">{$t('home.popularTracks')}</h3>
+      <h3 class="block-title">{$t('artist.popularTracks')}</h3>
       <ul class="tracks">
         {#each spotlight.topTracks as track, idx (track.trackId)}
           <li>
@@ -109,10 +110,19 @@
     </div>
   {/if}
 
-  {#if spotlight.albums.length > 0}
+  {#if spotlight.albums.length > 0 || onStartRadio}
     <div class="block">
-      <h3 class="block-title">{$t('home.albums')}</h3>
+      <h3 class="block-title">{$t('artist.albums')}</h3>
       <div class="albums-row">
+        {#if onStartRadio}
+          <RadioCardLite
+            seedTitle={spotlight.artistName}
+            seedSubtitle={$t('discovery.qobuzRadioStation')}
+            artwork={spotlight.albums[0]?.artwork ?? spotlight.artistImage}
+            onPlay={() => onStartRadio?.(spotlight.artistId, spotlight.artistName)}
+            onClick={() => onStartRadio?.(spotlight.artistId, spotlight.artistName)}
+          />
+        {/if}
         {#each spotlight.albums as album (album.albumId)}
           <button
             class="album-tile"

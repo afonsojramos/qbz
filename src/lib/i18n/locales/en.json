@@ -704,6 +704,7 @@
     "essentialsIn": "Essentials in {genre}",
     "artistsToFollow": "Artists to follow",
     "artistSpotlight": "Artist spotlight",
+    "qobuzRadioStation": "Qobuz Radio Station",
     "customize": "Customize home",
     "perfWarning": "Each enabled section adds to the work done on every scroll. Turn on what you actually use; leave the rest off.",
     "enabledCount": "{count} of {total} sections enabled",

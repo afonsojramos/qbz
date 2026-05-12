@@ -29,6 +29,7 @@
   import PlaylistCardLite from './PlaylistCardLite.svelte';
   import QobuzMixesRow from './QobuzMixesRow.svelte';
   import SpotlightLite from './SpotlightLite.svelte';
+  import RadioCardLite from './RadioCardLite.svelte';
   import GenreFilterButton from '$lib/components/GenreFilterButton.svelte';
   import { getSelectedGenreIds } from '$lib/stores/genreFilterStore';
   import { sectionPrefs } from './sectionPrefs';
@@ -383,6 +384,16 @@
     />
   {/snippet}
 
+  {#snippet radioCard(album: DiscoveryAlbumCard)}
+    <RadioCardLite
+      seedTitle={album.title}
+      seedSubtitle={album.artist}
+      artwork={album.artwork}
+      onClick={() => onAlbumClick?.(album.albumId)}
+      onPlay={() => onAlbumPlay?.(album.albumId)}
+    />
+  {/snippet}
+
   {#snippet artistTile(artist: DiscoveryArtistTile)}
     <ArtistTileLite
       artistId={artist.artistId}
@@ -488,6 +499,14 @@
               onTopQ={onNavigateTopQ}
             />
           </section>
+        {:else if pref.id === 'radioStations' && (recentlyPlayedAlbums.length > 0 || favoriteAlbums.length > 0)}
+          <DiscoverySection
+            title={$t('home.radioStations')}
+            items={[...recentlyPlayedAlbums, ...favoriteAlbums]
+              .filter((a, idx, arr) => arr.findIndex((b) => b.albumId === a.albumId) === idx)
+              .slice(0, 12)}
+            renderItem={radioCard}
+          />
         {:else if pref.id === 'rediscoverLibrary' && rediscoverLibrary.length > 0}
           <DiscoverySection
             title={$t('discovery.rediscoverLibrary')}

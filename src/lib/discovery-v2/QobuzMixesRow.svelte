@@ -67,16 +67,21 @@
 </div>
 
 <style>
+  /* Fixed 220px tiles to match AlbumCardLite — earlier auto-fit minmax
+     made the mixes stretch across the row and visually outsize every
+     other card in the home view. Now they sit alongside album cards
+     at the same scale. */
   .mixes-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 32px;
   }
 
   .mix-card {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    width: 220px;
     background: none;
     border: none;
     padding: 0;
@@ -87,7 +92,8 @@
 
   .mix-artwork {
     position: relative;
-    aspect-ratio: 1;
+    width: 220px;
+    height: 220px;
     border-radius: 8px;
     overflow: hidden;
     display: flex;
