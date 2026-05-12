@@ -2372,6 +2372,13 @@
     display: flex;
     flex-wrap: wrap;
     gap: 24px 22px;
+    /* Cards have heterogeneous heights (Hi-Res badge optional). With
+       the default `align-items: stretch` the wrappers stretch to the
+       tallest card in each row, which under SW compositing can make
+       absolutely-positioned children paint at unexpected Y positions.
+       Pinning top alignment keeps every card's cover top-aligned at
+       the row start. */
+    align-items: flex-start;
   }
 
   .artists-grid-row {
@@ -3013,7 +3020,11 @@
   }
 
   .album-card-wrapper {
-    min-width: 160px;
+    /* AlbumCardLite is a fixed 220px wide. Pinning the wrapper to the
+       same width prevents flex from stretching it (which let some
+       cards' covers visually overlap their neighbours in the row
+       above when row heights were uneven). */
+    width: 220px;
     flex-shrink: 0;
   }
 
