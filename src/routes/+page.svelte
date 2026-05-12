@@ -1104,6 +1104,14 @@
   let lyricsActiveProgress = $state(0);
   let lyricsSidebarVisible = $state(false);
 
+  // Memoize the line projection so the LyricsSidebar's `lines` prop doesn't
+  // get a fresh array reference on every progress tick (which would
+  // re-render the entire <LyricsLines> subtree and thrash the karaoke
+  // animation snapshot).
+  const lyricsSidebarLines = $derived(
+    lyricsLines.map((l) => ({ text: l.text, timeMs: l.timeMs, endMs: l.endMs }))
+  );
+
   let favoritesDefaultTab = $state<FavoritesTab>('tracks');
 
   async function loadFavoritesDefaultTab(): Promise<void> {
@@ -6653,7 +6661,7 @@
       <LyricsSidebar
         title={currentTrack?.title}
         artist={currentTrack?.artist}
-        lines={lyricsLines.map(l => ({ text: l.text, timeMs: l.timeMs, endMs: l.endMs }))}
+        lines={lyricsSidebarLines}
         activeIndex={lyricsActiveIndex}
         activeProgress={lyricsActiveProgress}
         isSynced={lyricsIsSynced}
