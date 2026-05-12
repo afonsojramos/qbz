@@ -178,7 +178,7 @@
       {@const item = inRange ? (void dataVersion, getItem(albumIdx)) : null}
       <div
         class="grid-slot"
-        style="top: {slotTopPx(slotIdx)}px; left: {slotLeftPx(slotIdx)}px; width: {cardWidth}px; display: {inRange ? 'block' : 'none'};"
+        style="transform: translate({slotLeftPx(slotIdx)}px, {slotTopPx(slotIdx)}px); width: {cardWidth}px; display: {inRange ? 'block' : 'none'};"
       >
         {#if inRange}
           {#if item !== null}
@@ -210,7 +210,15 @@
 
   .grid-slot {
     position: absolute;
-    /* No `will-change: transform` — under software compositing the
-       extra GPU-layer hint costs more than it saves. */
+    top: 0;
+    left: 0;
+    /* Positioning is done with `transform: translate(...)` inline (set
+       by the script) instead of `top`/`left`. Reason: changing top/left
+       on an absolutely-positioned element triggers layout, and with
+       ~80 slots all repositioned per scroll tick the layout cascade
+       was ~1s/frame under software compositing — visible as the giant
+       layout spikes on the perf trace. `transform` goes straight to
+       paint/composite without invalidating layout, eliminating the
+       cost regardless of HW or SW comp. */
   }
 </style>
