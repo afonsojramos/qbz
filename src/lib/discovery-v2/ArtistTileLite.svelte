@@ -1,5 +1,6 @@
 <script lang="ts">
   import { User } from 'lucide-svelte';
+  import { cachedSrc } from '$lib/actions/cachedImage';
 
   interface Props {
     artistId: number;
@@ -21,7 +22,7 @@
 >
   <div class="avatar">
     {#if image}
-      <img class="img" src={image} alt={name} loading="lazy" decoding="async" />
+      <img class="img" use:cachedSrc={image} alt={name} loading="lazy" decoding="async" />
     {:else}
       <div class="placeholder"><User size={36} /></div>
     {/if}

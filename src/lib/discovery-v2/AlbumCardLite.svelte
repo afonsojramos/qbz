@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Play } from 'lucide-svelte';
   import { t } from '$lib/i18n';
+  import { cachedSrc } from '$lib/actions/cachedImage';
 
   interface Props {
     albumId: string;
@@ -51,7 +52,7 @@
 >
   <div class="cover-wrap">
     {#if artwork}
-      <img class="cover" src={artwork} alt={title} loading="lazy" decoding="async" />
+      <img class="cover" use:cachedSrc={artwork} alt={title} loading="lazy" decoding="async" />
     {:else}
       <div class="cover cover-placeholder"></div>
     {/if}

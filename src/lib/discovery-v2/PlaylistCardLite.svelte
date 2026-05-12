@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Play, ListMusic } from 'lucide-svelte';
   import { t } from '$lib/i18n';
+  import { cachedSrc } from '$lib/actions/cachedImage';
 
   interface Props {
     playlistId: number;
@@ -33,7 +34,7 @@
 >
   <div class="cover-wrap">
     {#if image}
-      <img class="cover" src={image} alt={name} loading="lazy" decoding="async" />
+      <img class="cover" use:cachedSrc={image} alt={name} loading="lazy" decoding="async" />
     {:else}
       <div class="cover cover-placeholder">
         <ListMusic size={48} />
