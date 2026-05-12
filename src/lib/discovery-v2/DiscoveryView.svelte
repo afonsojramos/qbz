@@ -1,7 +1,11 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { t } from '$lib/i18n';
   import type { OfflineCacheStatus } from '$lib/stores/offlineCacheState';
   import type { DisplayTrack } from '$lib/types';
+  import { fetchNewReleases, type DiscoveryAlbumCard } from './data';
+  import DiscoverySection from './DiscoverySection.svelte';
+  import AlbumCardLite from './AlbumCardLite.svelte';
 
   /**
    * Discovery V2 — clean-room rebuild of the home view.
@@ -70,10 +74,19 @@
   }
 
   // Props accepted for drop-in compatibility with HomeView. V1 of Discovery V2
-  // consumes only homeTab and onTabChange for the toolbar; the rest are kept
-  // in the Props interface so +page.svelte's mount site doesn't need changes
-  // when sections start consuming them.
-  let { homeTab = 'home', onTabChange }: Props = $props();
+  // consumes a small subset; the rest are kept in the Props interface so
+  // +page.svelte's mount site doesn't need changes when sections start
+  // consuming them.
+  let {
+    homeTab = 'home',
+    onTabChange,
+    onAlbumClick,
+    onAlbumPlay,
+    onArtistClick,
+    onNavigateNewReleases,
+    activeTrackId,
+    isPlaybackActive,
+  }: Props = $props();
 
   type Tab = 'home' | 'editorPicks' | 'forYou';
 
@@ -87,6 +100,19 @@
     if (id === homeTab) return;
     onTabChange?.(id);
   }
+
+  // Section state — minimal. No skeletons, no animated loaders. The grid
+  // is empty until data arrives, then cards appear.
+  let newReleases = $state<DiscoveryAlbumCard[]>([]);
+
+  onMount(async () => {
+    newReleases = await fetchNewReleases(8);
+  });
+
+  // `activeTrackId` and `isPlaybackActive` are destructured but not yet read
+  // by V1 — the album-card level doesn't know the playing track's albumId
+  // without joining against the current playback context. They'll wire up
+  // once track-level sections (Continue Listening) land.
 </script>
 
 <div class="discovery">
@@ -109,7 +135,30 @@
   </div>
 
   <div class="scroll-area">
-    <p class="placeholder">{$t('discovery.comingSoon')}</p>
+    {#if newReleases.length > 0}
+      <DiscoverySection
+        title={$t('home.newReleases')}
+        onSeeAll={onNavigateNewReleases}
+      >
+        {#snippet children()}
+          {#each newReleases as album (album.albumId)}
+            <AlbumCardLite
+              albumId={album.albumId}
+              title={album.title}
+              artist={album.artist}
+              artwork={album.artwork}
+              onClick={() => onAlbumClick?.(album.albumId)}
+              onPlay={() => onAlbumPlay?.(album.albumId)}
+              onArtistClick={album.artistId !== undefined
+                ? () => onArtistClick?.(album.artistId!)
+                : undefined}
+            />
+          {/each}
+        {/snippet}
+      </DiscoverySection>
+    {:else}
+      <p class="placeholder">{$t('discovery.comingSoon')}</p>
+    {/if}
   </div>
 </div>
 
