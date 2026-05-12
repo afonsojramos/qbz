@@ -157,9 +157,9 @@
     // Each is independent so they race without blocking.
     const genreIds = Array.from(getSelectedGenreIds('home'));
     const [watch, index, resolved] = await Promise.all([
-      fetchReleaseWatch(20),
-      fetchDiscoverIndex(20, genreIds),
-      fetchHomeResolved(20),
+      fetchReleaseWatch(18),
+      fetchDiscoverIndex(18, genreIds),
+      fetchHomeResolved(18),
     ]);
     releaseWatch = watch;
     newReleases = index.newReleases;
