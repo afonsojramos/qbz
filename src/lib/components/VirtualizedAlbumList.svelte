@@ -388,9 +388,28 @@
 <style>
   .virtual-container {
     height: 100%;
-    overflow-y: auto;
+    overflow-y: scroll;
     overflow-x: hidden;
     position: relative;
+    /* Force the scrollbar visible (some WebKitGTK builds default to
+       overlay scrollbars that only paint on active hover). Standard
+       `scrollbar-*` + pseudo-elements for cross-config safety. */
+    scrollbar-width: auto;
+    scrollbar-color: var(--text-muted) var(--bg-secondary);
+  }
+
+  .virtual-container::-webkit-scrollbar {
+    width: 10px;
+  }
+  .virtual-container::-webkit-scrollbar-track {
+    background: var(--bg-secondary);
+  }
+  .virtual-container::-webkit-scrollbar-thumb {
+    background: var(--text-muted);
+    border-radius: 5px;
+  }
+  .virtual-container::-webkit-scrollbar-thumb:hover {
+    background: var(--text-primary);
   }
 
   .virtual-content {

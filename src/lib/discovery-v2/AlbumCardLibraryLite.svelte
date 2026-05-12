@@ -299,14 +299,30 @@
     pointer-events: none;
   }
 
-  /* Hover indicator. Inset box-shadow paints the ring INSIDE the
-     cover (no layout reflow, no risk of being clipped by parent
-     padding the way an outer outline was — the leftmost column has
-     no horizontal slack and the outer outline got eaten). Title
-     text shifts to the accent colour as a second cue. No transition,
-     single instant paint on hover entry/exit. */
-  .card:hover .cover-wrap {
-    box-shadow: inset 0 0 0 3px var(--accent-primary);
+  /* Hover indicator. The first attempt used `box-shadow: inset` on
+     `.cover-wrap` but the absolutely-positioned `<img>` painted on
+     top of it, hiding the shadow under the artwork. The pseudo-
+     element approach below paints AFTER the image (DOM order +
+     stacking) so the ring stays visible:
+
+       .cover-wrap::after — transparent border by default,
+       `inset: 0` so it tracks the cover edges, `border-radius` to
+       follow the cover's rounded corners, `pointer-events: none`
+       so it doesn't enter hit-testing. On `.card:hover` the border
+       flips to the accent colour. Title also shifts to accent as a
+       second cue. */
+  .cover-wrap::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 3px solid transparent;
+    border-radius: 8px;
+    pointer-events: none;
+    box-sizing: border-box;
+  }
+
+  .card:hover .cover-wrap::after {
+    border-color: var(--accent-primary);
   }
 
   .card:hover .title {

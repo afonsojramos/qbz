@@ -203,8 +203,35 @@
   .grid-pool {
     width: 100%;
     height: 100%;
-    overflow-y: auto;
+    /* `scroll` (not `auto`) so the scrollbar is always visible. Under
+       some WebKitGTK configurations `auto` produces an overlay
+       scrollbar that only paints on active scroll/hover, which gave
+       the impression that the grid had no scrollbar at all. `scroll`
+       reserves a stable 8px gutter and keeps the bar present so the
+       user can see scroll position at a glance. */
+    overflow-y: scroll;
+    overflow-x: hidden;
     position: relative;
+    /* Belt-and-suspenders: the standard `scrollbar-*` properties +
+       the `::-webkit-scrollbar*` pseudo-elements below. Some
+       WebKitGTK builds honour one but not the other depending on
+       overlay-scrollbar settings, so we set both. */
+    scrollbar-width: auto;
+    scrollbar-color: var(--text-muted) var(--bg-secondary);
+  }
+
+  .grid-pool::-webkit-scrollbar {
+    width: 10px;
+  }
+  .grid-pool::-webkit-scrollbar-track {
+    background: var(--bg-secondary);
+  }
+  .grid-pool::-webkit-scrollbar-thumb {
+    background: var(--text-muted);
+    border-radius: 5px;
+  }
+  .grid-pool::-webkit-scrollbar-thumb:hover {
+    background: var(--text-primary);
   }
 
   .grid-spacer {

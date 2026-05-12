@@ -996,7 +996,11 @@
   let showHiddenAlbums = $state(false);
   let albumSearch = $state('');
   let folderSearch = $state('');
-  let albumViewMode = $state<'grid' | 'list'>('grid');
+  // Default to list view per 2026-05-12 user call: list mode runs
+  // acceptably under SW compositing and is the safer default. Users
+  // can toggle to grid via the controls; persistence is in-session
+  // only.
+  let albumViewMode = $state<'grid' | 'list'>('list');
   type AlbumGroupMode = 'alpha' | 'artist';
   let albumGroupMode = $state<AlbumGroupMode>('alpha');
   let albumGroupingEnabled = $state(false);
