@@ -366,13 +366,21 @@
      Theme-aware colours guarantee contrast on any cover art (dark or
      light) without needing the artwork-pixel sample work the legacy
      AlbumCard did. */
+  /* Buttons sit near the bottom of the cover (44px clearance above the
+     edge) to match the Y placement of AlbumCardLite on the Home view.
+     Using flex `flex-end` + `padding-bottom` instead of
+     `position: absolute; bottom: 44px; transform: translateX(-50%)`
+     avoids creating any transform on the child — the static transform
+     was tolerable under HW comp but `flex` is cleaner under SW
+     compositing where every layer-hint costs paint. */
   .overlay {
     position: absolute;
     inset: 0;
     z-index: 2;
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     justify-content: center;
+    padding-bottom: 44px;
     pointer-events: none;
   }
 
