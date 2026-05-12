@@ -14,7 +14,7 @@ import type {
   DiscoverAlbum,
   DiscoverPlaylist,
 } from '$lib/types';
-import { getQobuzImageForSize } from '$lib/adapters/qobuzAdapters';
+import { getQobuzImageForSize, formatQuality } from '$lib/adapters/qobuzAdapters';
 
 // Wire format from src-tauri/src/api/models.rs `SearchResultsPage<T>`.
 interface SearchResultsPage<T> {
@@ -30,12 +30,38 @@ interface SearchResultsPage<T> {
  * bitDepth, awards, parental_warning, etc. that V1 of Discovery doesn't
  * render).
  */
+export type AlbumRibbonKind = 'albumOfTheWeek' | 'qobuzissime' | 'press';
+
+export interface AlbumRibbon {
+  kind: AlbumRibbonKind;
+  label: string;
+}
+
 export interface DiscoveryAlbumCard {
   albumId: string;
   title: string;
   artist: string;
   artistId?: number;
   artwork?: string;
+  quality?: string;
+  ribbon?: AlbumRibbon;
+}
+
+/**
+ * Map a Qobuz `awards` array onto a single ribbon. The original HomeView
+ * used award id strings — '88' = Qobuzissime, '151' = Album of the Week,
+ * everything else falls into the press-accolade bucket. Picks the *last*
+ * award in the array (the most recent one).
+ */
+function pickAlbumRibbon(
+  awards: { id?: string | number; name: string }[] | undefined
+): AlbumRibbon | undefined {
+  if (!awards || awards.length === 0) return undefined;
+  const last = awards[awards.length - 1];
+  const idStr = last.id !== undefined && last.id !== null ? String(last.id) : '';
+  if (idStr === '88') return { kind: 'qobuzissime', label: last.name };
+  if (idStr === '151') return { kind: 'albumOfTheWeek', label: last.name };
+  return { kind: 'press', label: last.name };
 }
 
 function qobuzAlbumToCard(album: QobuzAlbum): DiscoveryAlbumCard {
@@ -45,6 +71,12 @@ function qobuzAlbumToCard(album: QobuzAlbum): DiscoveryAlbumCard {
     artist: album.artist.name,
     artistId: album.artist.id,
     artwork: getQobuzImageForSize(album.image, 'small'),
+    quality: formatQuality(
+      (album.maximum_bit_depth ?? 16) > 16,
+      album.maximum_bit_depth,
+      album.maximum_sampling_rate
+    ),
+    ribbon: pickAlbumRibbon(album.awards),
   };
 }
 
@@ -55,6 +87,12 @@ function discoverAlbumToCard(album: DiscoverAlbum): DiscoveryAlbumCard {
     artist: album.artists?.[0]?.name ?? 'Unknown Artist',
     artistId: album.artists?.[0]?.id,
     artwork: album.image?.small || album.image?.large || album.image?.thumbnail,
+    quality: formatQuality(
+      (album.audio_info?.maximum_bit_depth ?? 16) > 16,
+      album.audio_info?.maximum_bit_depth,
+      album.audio_info?.maximum_sampling_rate
+    ),
+    ribbon: pickAlbumRibbon(album.awards),
   };
 }
 
@@ -184,6 +222,7 @@ interface RecoAlbumCardMeta {
   title: string;
   artist: string;
   artistId?: number;
+  quality?: string;
 }
 
 interface RecoTrackDisplayMeta {
@@ -232,6 +271,7 @@ export async function fetchHomeResolved(
         artist: a.artist,
         artistId: a.artistId,
         artwork: a.artwork || undefined,
+        quality: a.quality || undefined,
       })),
       continueListening: resp.continueListeningTracks.slice(0, perSection).map((track) => ({
         trackId: track.id,
@@ -253,6 +293,7 @@ export async function fetchHomeResolved(
         artist: a.artist,
         artistId: a.artistId,
         artwork: a.artwork || undefined,
+        quality: a.quality || undefined,
       })),
     };
   } catch (err) {

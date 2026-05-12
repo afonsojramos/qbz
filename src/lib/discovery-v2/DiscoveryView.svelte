@@ -234,6 +234,8 @@
       title={album.title}
       artist={album.artist}
       artwork={album.artwork}
+      quality={album.quality}
+      ribbon={album.ribbon}
       onClick={() => onAlbumClick?.(album.albumId)}
       onPlay={() => onAlbumPlay?.(album.albumId)}
       onArtistClick={album.artistId !== undefined
