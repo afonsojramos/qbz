@@ -16,7 +16,9 @@
      *  change, chunk arrival, etc.). The pool re-reads via `getItem`
      *  for every slot when this changes. */
     dataVersion?: number;
-    /** Card layout. Defaults match `AlbumCardLibraryLite`. */
+    /** Card layout. Defaults match the visual rhythm of Discovery V2
+     *  Home sections — same 32px gap horizontally and vertically so
+     *  Library and Home don't read as different densities. */
     cardWidth?: number;
     cardHeight?: number;
     rowGap?: number;
@@ -41,8 +43,8 @@
     dataVersion = 0,
     cardWidth = 210,
     cardHeight = 320,
-    rowGap = 24,
-    colGap = 22,
+    rowGap = 32,
+    colGap = 32,
     bottomPadding = 100,
     renderCell,
     renderPlaceholder,
