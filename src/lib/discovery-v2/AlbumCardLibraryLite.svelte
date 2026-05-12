@@ -343,14 +343,20 @@
     border-radius: 10px;
   }
 
-  /* Dark scrim + centered action buttons. Single opacity transition,
-     no transform, no blur, no per-child animation. */
+  /* No full-cover scrim. Earlier versions had a 210x210
+     `rgba(0,0,0,0.85)` overlay with `opacity 0 → 1` on hover; that
+     was the single biggest scroll-time paint cost on WebKitGTK under
+     software compositing — every pointer-traversal of a card during
+     mouse-wheel scroll triggered a paint of the full overlay area.
+     Per the 2026-05-12 user call ("para localLibrary podría aceptar
+     quitarle el overlay y solo dejar los botones, que al final son
+     funcionalidad"), the buttons float directly on the artwork on
+     hover. Each button carries its own dark backdrop so they stay
+     readable on light covers; that's a 44x44 rect per button instead
+     of a 210x210 rect per card. */
   .overlay {
     position: absolute;
     inset: 0;
-    background: rgba(10, 10, 10, 0.85);
-    opacity: 0;
-    transition: opacity 150ms ease;
     z-index: 2;
     display: flex;
     align-items: center;
@@ -358,23 +364,26 @@
     pointer-events: none;
   }
 
-  .card:hover .overlay {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
   .action-buttons {
     display: flex;
     align-items: center;
     gap: 12px;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  .card:hover .action-buttons {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .overlay-btn {
     width: 36px;
     height: 36px;
     border-radius: 50%;
-    border: 1.5px solid rgba(255, 255, 255, 0.9);
-    background: transparent;
+    border: 1.5px solid rgba(255, 255, 255, 0.95);
+    /* Per-button backdrop replaces the full-cover scrim. */
+    background: rgba(0, 0, 0, 0.55);
     color: #fff;
     display: flex;
     align-items: center;
@@ -384,7 +393,7 @@
   }
 
   .overlay-btn:hover {
-    background-color: rgba(255, 255, 255, 0.15);
+    background-color: rgba(0, 0, 0, 0.8);
   }
 
   .overlay-btn.primary {
