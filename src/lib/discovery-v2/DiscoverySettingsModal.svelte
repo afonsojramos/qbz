@@ -36,6 +36,13 @@
     qobuzissimes: 'home.qobuzissimes',
     topArtists: 'home.yourTopArtists',
     favoriteAlbums: 'home.favoriteAlbums',
+    qobuzMixes: 'home.qobuzMixes',
+    radioStations: 'home.radioStations',
+    similarAlbums: 'discovery.similarAlbums',
+    rediscoverLibrary: 'discovery.rediscoverLibrary',
+    essentialsByGenre: 'discovery.essentialsByGenre',
+    artistsToFollow: 'discovery.artistsToFollow',
+    artistSpotlight: 'discovery.artistSpotlight',
   };
 
   const tabPrefs = $derived($sectionPrefs[tab]);

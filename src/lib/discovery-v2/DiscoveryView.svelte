@@ -7,10 +7,18 @@
     fetchReleaseWatch,
     fetchDiscoverIndex,
     fetchHomeResolved,
+    fetchRediscoverLibrary,
+    fetchArtistsToFollow,
+    fetchSimilarAlbums,
+    fetchEssentialsByGenre,
+    fetchArtistSpotlight,
     type DiscoveryAlbumCard,
     type DiscoveryTrackCard,
     type DiscoveryArtistTile,
     type DiscoveryPlaylistCard,
+    type SimilarAlbumsSection,
+    type EssentialsSection,
+    type SpotlightSection,
   } from './data';
   import DiscoverySection from './DiscoverySection.svelte';
   import DiscoveryGridSection from './DiscoveryGridSection.svelte';
@@ -19,6 +27,8 @@
   import TrackRowLite from './TrackRowLite.svelte';
   import ArtistTileLite from './ArtistTileLite.svelte';
   import PlaylistCardLite from './PlaylistCardLite.svelte';
+  import QobuzMixesRow from './QobuzMixesRow.svelte';
+  import SpotlightLite from './SpotlightLite.svelte';
   import GenreFilterButton from '$lib/components/GenreFilterButton.svelte';
   import { getSelectedGenreIds } from '$lib/stores/genreFilterStore';
   import { sectionPrefs } from './sectionPrefs';
@@ -129,6 +139,10 @@
     onNavigateAlbumsOfTheWeek,
     onNavigateQobuzPlaylists,
     onNavigateIdealDiscography,
+    onNavigateDailyQ,
+    onNavigateWeeklyQ,
+    onNavigateFavQ,
+    onNavigateTopQ,
     activeTrackId,
     isPlaybackActive,
   }: Props = $props();
@@ -165,6 +179,12 @@
   let continueListening = $state<DiscoveryTrackCard[]>([]);
   let topArtists = $state<DiscoveryArtistTile[]>([]);
   let favoriteAlbums = $state<DiscoveryAlbumCard[]>([]);
+  // For-You-exclusive section data
+  let rediscoverLibrary = $state<DiscoveryAlbumCard[]>([]);
+  let artistsToFollow = $state<DiscoveryArtistTile[]>([]);
+  let similarAlbums = $state<SimilarAlbumsSection>({ seedTitle: '', albums: [] });
+  let essentials = $state<EssentialsSection>({ genreName: '', albums: [] });
+  let spotlight = $state<SpotlightSection | null>(null);
 
   async function loadAll() {
     // Three parallel fetches:
@@ -190,6 +210,24 @@
     continueListening = resolved.continueListening;
     topArtists = resolved.topArtists;
     favoriteAlbums = resolved.favoriteAlbums;
+
+    // For-You-exclusive sections depend on the home-resolved seeds
+    // (top artists for spotlight/follow, recent albums for similar).
+    // Fired after the main fetches so the seeds are populated.
+    const topArtistIds = resolved.topArtists.map((a) => a.artistId);
+    void Promise.all([
+      fetchRediscoverLibrary(12),
+      fetchArtistsToFollow(topArtistIds, 10),
+      fetchSimilarAlbums(resolved.recentlyPlayedAlbums, 10),
+      fetchEssentialsByGenre(12),
+      fetchArtistSpotlight(resolved.topArtists),
+    ]).then(([rediscover, follow, similar, ess, spot]) => {
+      rediscoverLibrary = rediscover;
+      artistsToFollow = follow;
+      similarAlbums = similar;
+      essentials = ess;
+      spotlight = spot;
+    });
   }
 
   onMount(() => {
@@ -438,6 +476,63 @@
             items={favoriteAlbums}
             renderItem={albumCard}
           />
+        {:else if pref.id === 'qobuzMixes'}
+          <section class="mixes-section">
+            <header class="head">
+              <h2 class="title">{$t('home.qobuzMixes')}</h2>
+            </header>
+            <QobuzMixesRow
+              onDailyQ={onNavigateDailyQ}
+              onWeeklyQ={onNavigateWeeklyQ}
+              onFavQ={onNavigateFavQ}
+              onTopQ={onNavigateTopQ}
+            />
+          </section>
+        {:else if pref.id === 'rediscoverLibrary' && rediscoverLibrary.length > 0}
+          <DiscoverySection
+            title={$t('discovery.rediscoverLibrary')}
+            items={rediscoverLibrary}
+            renderItem={albumCard}
+          />
+        {:else if pref.id === 'artistsToFollow' && artistsToFollow.length > 0}
+          <DiscoverySection
+            title={$t('discovery.artistsToFollow')}
+            items={artistsToFollow}
+            renderItem={artistTile}
+            cardWidth={170}
+          />
+        {:else if pref.id === 'similarAlbums' && similarAlbums.albums.length > 0}
+          <DiscoverySection
+            title={$t('discovery.similarTo', { values: { seed: similarAlbums.seedTitle } })}
+            items={similarAlbums.albums}
+            renderItem={albumCard}
+          />
+        {:else if pref.id === 'essentialsByGenre' && essentials.albums.length > 0}
+          <DiscoverySection
+            title={$t('discovery.essentialsIn', { values: { genre: essentials.genreName } })}
+            items={essentials.albums}
+            renderItem={albumCard}
+          />
+        {:else if pref.id === 'artistSpotlight' && spotlight}
+          <section class="spotlight-section">
+            <header class="head">
+              <h2 class="title">{$t('discovery.artistSpotlight')}</h2>
+            </header>
+            <SpotlightLite
+              {spotlight}
+              onArtistClick={onArtistClick}
+              onAlbumClick={onAlbumClick}
+              onPlaylistClick={onPlaylistClick}
+              onPlayTrack={(track) => onTrackPlay?.({
+                id: track.trackId,
+                title: track.title,
+                artist: spotlight!.artistName,
+                album: track.albumTitle ?? '',
+                albumId: track.albumId,
+                albumArt: track.artwork,
+              } as DisplayTrack)}
+            />
+          </section>
         {/if}
       {/if}
     {/each}
@@ -530,6 +625,31 @@
   .placeholder {
     font-size: 14px;
     color: var(--text-muted);
+    margin: 0;
+  }
+
+  /* Custom sections (qobuzMixes, artistSpotlight) don't use the generic
+     DiscoverySection wrapper because their content isn't a paginated
+     items array. Match its outer spacing + header so they read as part
+     of the same scroll. */
+  .mixes-section,
+  .spotlight-section {
+    margin-bottom: 48px;
+  }
+
+  .mixes-section .head,
+  .spotlight-section .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .mixes-section .title,
+  .spotlight-section .title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
     margin: 0;
   }
 </style>

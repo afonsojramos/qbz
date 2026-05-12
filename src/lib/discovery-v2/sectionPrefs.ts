@@ -21,6 +21,7 @@ import { writable, get } from 'svelte/store';
 export type DiscoveryTab = 'home' | 'editorPicks' | 'forYou';
 
 export type DiscoverySectionId =
+  // Universal — can appear in any tab.
   | 'newReleases'
   | 'pressAwards'
   | 'qobuzPlaylists'
@@ -32,7 +33,16 @@ export type DiscoverySectionId =
   | 'editorPicks'
   | 'qobuzissimes'
   | 'topArtists'
-  | 'favoriteAlbums';
+  | 'favoriteAlbums'
+  // Home + For You (the legacy DailyQ/WeeklyQ/FavQ/TopQ mixes panel).
+  | 'qobuzMixes'
+  // For-You-exclusive.
+  | 'radioStations'
+  | 'similarAlbums'
+  | 'rediscoverLibrary'
+  | 'essentialsByGenre'
+  | 'artistsToFollow'
+  | 'artistSpotlight';
 
 export interface DiscoverySectionPref {
   id: DiscoverySectionId;
@@ -41,7 +51,15 @@ export interface DiscoverySectionPref {
 
 export type DiscoverySectionPrefsByTab = Record<DiscoveryTab, DiscoverySectionPref[]>;
 
+/**
+ * The set of section IDs each tab supports is defined by which IDs appear
+ * in its DEFAULT_PREFS list. The customize modal only shows the prefs for
+ * the active tab, so tab-exclusive sections (artistSpotlight, radioStations,
+ * etc. on For You) naturally hide on the other tabs' modals.
+ */
 const DEFAULT_PREFS: DiscoverySectionPrefsByTab = {
+  // Home: 12 universal sections + qobuzMixes. Editorial + personalized
+  // intermixed. User can customize order/enabled.
   home: [
     { id: 'newReleases', enabled: true },
     { id: 'pressAwards', enabled: true },
@@ -50,12 +68,15 @@ const DEFAULT_PREFS: DiscoverySectionPrefsByTab = {
     { id: 'continueListening', enabled: true },
     { id: 'idealDiscography', enabled: true },
     { id: 'mostStreamed', enabled: true },
+    { id: 'qobuzMixes', enabled: false },
     { id: 'releaseWatch', enabled: false },
     { id: 'editorPicks', enabled: false },
     { id: 'qobuzissimes', enabled: false },
     { id: 'topArtists', enabled: false },
     { id: 'favoriteAlbums', enabled: false },
   ],
+  // Editor's Picks: editorial-only. Personalized sections aren't even
+  // available — they don't belong in a curated tab.
   editorPicks: [
     { id: 'newReleases', enabled: true },
     { id: 'editorPicks', enabled: true },
@@ -64,25 +85,25 @@ const DEFAULT_PREFS: DiscoverySectionPrefsByTab = {
     { id: 'mostStreamed', enabled: true },
     { id: 'idealDiscography', enabled: true },
     { id: 'qobuzPlaylists', enabled: true },
-    { id: 'releaseWatch', enabled: false },
-    { id: 'recentlyPlayedAlbums', enabled: false },
-    { id: 'continueListening', enabled: false },
-    { id: 'topArtists', enabled: false },
-    { id: 'favoriteAlbums', enabled: false },
   ],
+  // For You: personalized base + the legacy ForYouTab exclusives
+  // (qobuzMixes, radioStations, similarAlbums, rediscoverLibrary,
+  // essentialsByGenre, artistsToFollow, artistSpotlight). The
+  // editorial sections (newReleases, etc.) are intentionally NOT in
+  // this tab's available list.
   forYou: [
+    { id: 'qobuzMixes', enabled: true },
     { id: 'releaseWatch', enabled: true },
-    { id: 'recentlyPlayedAlbums', enabled: true },
+    { id: 'radioStations', enabled: true },
     { id: 'continueListening', enabled: true },
+    { id: 'recentlyPlayedAlbums', enabled: true },
     { id: 'topArtists', enabled: true },
     { id: 'favoriteAlbums', enabled: true },
-    { id: 'newReleases', enabled: false },
-    { id: 'pressAwards', enabled: false },
-    { id: 'qobuzPlaylists', enabled: false },
-    { id: 'idealDiscography', enabled: false },
-    { id: 'mostStreamed', enabled: false },
-    { id: 'editorPicks', enabled: false },
-    { id: 'qobuzissimes', enabled: false },
+    { id: 'similarAlbums', enabled: true },
+    { id: 'rediscoverLibrary', enabled: true },
+    { id: 'essentialsByGenre', enabled: true },
+    { id: 'artistsToFollow', enabled: true },
+    { id: 'artistSpotlight', enabled: true },
   ],
 };
 

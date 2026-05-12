@@ -697,6 +697,13 @@
   "discovery": {
     "comingSoon": "Discovery V2 — under construction",
     "seeAll": "See all",
+    "similarAlbums": "Similar albums",
+    "similarTo": "Similar to {seed}",
+    "rediscoverLibrary": "Rediscover your library",
+    "essentialsByGenre": "Essentials",
+    "essentialsIn": "Essentials in {genre}",
+    "artistsToFollow": "Artists to follow",
+    "artistSpotlight": "Artist spotlight",
     "customize": "Customize home",
     "perfWarning": "Each enabled section adds to the work done on every scroll. Turn on what you actually use; leave the rest off.",
     "enabledCount": "{count} of {total} sections enabled",
