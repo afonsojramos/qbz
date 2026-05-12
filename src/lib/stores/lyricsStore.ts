@@ -300,9 +300,13 @@ export function updateActiveLine(): void {
     return;
   }
 
-  // Full tracking: notify if index changed or progress moved significantly (3% threshold)
-  // This reduces re-renders by ~60% while maintaining smooth karaoke visual
-  if (newIndex !== activeIndex || Math.abs(newProgress - activeProgress) > 0.03) {
+  // Full tracking: notify on any change. Threshold-based throttling made
+  // sense with setInterval ticks at 80–200ms, but our rAF tick gives us a
+  // natural 60Hz upper bound — and at any threshold > 0, a freshly-activated
+  // line freezes visually until the threshold is crossed (reads as a
+  // "hanging" pause at line start). Each notification is just an inline
+  // style update downstream, so per-tick cost is negligible.
+  if (newIndex !== activeIndex || newProgress !== activeProgress) {
     activeIndex = newIndex;
     activeProgress = newProgress;
     notifyListeners();
