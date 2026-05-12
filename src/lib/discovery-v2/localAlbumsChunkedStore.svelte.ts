@@ -58,6 +58,10 @@ export interface LocalAlbumsQueryParams {
   sortBy: 'artist' | 'title' | 'year';
   sortDir: 'asc' | 'desc';
   excludeNetworkFolders: boolean;
+  /** Include Plex cache albums in the union. The backend ATTACHes
+   *  `plex_cache.db` and UNIONs the aggregations so sort/filter/pagination
+   *  apply to both sources as a single result set. */
+  includePlex: boolean;
 }
 
 export const CHUNK_SIZE = 100;
@@ -152,6 +156,7 @@ export class LocalAlbumsChunkedStore {
         sortBy: params.sortBy,
         sortDir: params.sortDir,
         excludeNetworkFolders: params.excludeNetworkFolders,
+        includePlex: params.includePlex,
       });
       // Discard if filter changed mid-flight.
       if (generation !== this.latestGeneration) return;
@@ -175,7 +180,8 @@ export class LocalAlbumsChunkedStore {
       a.search === b.search &&
       a.sortBy === b.sortBy &&
       a.sortDir === b.sortDir &&
-      a.excludeNetworkFolders === b.excludeNetworkFolders
+      a.excludeNetworkFolders === b.excludeNetworkFolders &&
+      a.includePlex === b.includePlex
     );
   }
 }

@@ -1894,11 +1894,12 @@ impl LibraryDatabase {
     /// applied after aggregation against the album's title or artist
     /// (mirrors the legacy in-memory `matchesAlbumSearchFast`).
     ///
-    /// Source: Plex cache lives in a separate database and is NOT yet
-    /// merged here — caller orchestrates Plex separately for now. The
-    /// long-term plan is `ATTACH DATABASE 'plex_cache.db'` and a
-    /// `UNION ALL` from the same aggregation; deferring until the
-    /// local-only path is verified.
+    /// Source consolidation: when `plex_cache_path` is provided and
+    /// points to an existing file, the function `ATTACH`es that
+    /// database and unions plex_cache_tracks (aggregated by album_key)
+    /// with the local aggregation. Sort, filter, and pagination apply
+    /// to the union as a single result set, so a Plex-dominant library
+    /// behaves identically to a local-dominant one.
     pub fn get_albums_metadata_page(
         &self,
         offset: u64,
@@ -1908,6 +1909,55 @@ impl LibraryDatabase {
         sort_dir: &str,
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
+        plex_cache_path: Option<&std::path::Path>,
+    ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
+        // Best-effort ATTACH of the Plex cache so the union below can
+        // see `plex_cache.plex_cache_tracks`. DETACH first defensively
+        // so a stale attachment from a previous call (or another
+        // connection user) doesn't fail the new one. Failure to
+        // attach is non-fatal — we fall back to local-only.
+        let plex_attached = if let Some(path) = plex_cache_path {
+            if path.exists() {
+                let _ = self.conn.execute("DETACH DATABASE plex_cache", []);
+                let path_str = path.to_string_lossy().replace('\'', "''");
+                self.conn
+                    .execute(
+                        &format!("ATTACH DATABASE '{}' AS plex_cache", path_str),
+                        [],
+                    )
+                    .is_ok()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        let result = self.get_albums_metadata_page_inner(
+            offset,
+            limit,
+            search,
+            sort_by,
+            sort_dir,
+            include_qobuz_downloads,
+            exclude_network_folders,
+            plex_attached,
+        );
+        if plex_attached {
+            let _ = self.conn.execute("DETACH DATABASE plex_cache", []);
+        }
+        result
+    }
+
+    fn get_albums_metadata_page_inner(
+        &self,
+        offset: u64,
+        limit: u64,
+        search: Option<&str>,
+        sort_by: &str,
+        sort_dir: &str,
+        include_qobuz_downloads: bool,
+        exclude_network_folders: bool,
+        plex_attached: bool,
     ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
         let source_filter = if include_qobuz_downloads {
             ""
@@ -1943,6 +1993,47 @@ impl LibraryDatabase {
         let search_pattern = search.unwrap_or("").trim();
         let has_search: i64 = if search_pattern.is_empty() { 0 } else { 1 };
         let search_like = format!("%{}%", search_pattern);
+
+        // When Plex is attached, the plex_aggregated CTE is appended
+        // and the filtered set is built from the UNION of local + plex.
+        // Both CTEs produce the same column shape so the UNION ALL is
+        // straightforward; types are normalised via CAST in the plex
+        // arm (plex stores duration_ms / sampling_rate_hz as INTEGER
+        // while local uses REAL for sample_rate and seconds-INTEGER
+        // for duration).
+        let plex_cte = if plex_attached {
+            r#",
+            plex_aggregated AS (
+                SELECT
+                    'plex:' || COALESCE(album_key, rating_key) AS group_key,
+                    COALESCE(album, 'Unknown Album') AS title,
+                    CASE WHEN COUNT(DISTINCT artist) > 1
+                         THEN 'Various Artists'
+                         ELSE COALESCE(MIN(artist), 'Unknown Artist')
+                    END AS artist,
+                    GROUP_CONCAT(DISTINCT artist) AS all_artists,
+                    MIN(year) AS year,
+                    CAST(NULL AS TEXT) AS catalog_number,
+                    MAX(CASE WHEN artwork_path IS NOT NULL THEN artwork_path END) AS artwork,
+                    COUNT(*) AS track_count,
+                    CAST(SUM(COALESCE(duration_ms, 0)) / 1000 AS INTEGER) AS total_duration,
+                    MAX(codec) AS format,
+                    MAX(bit_depth) AS bit_depth,
+                    CAST(MAX(sampling_rate_hz) AS REAL) AS sample_rate,
+                    CAST(NULL AS TEXT) AS source_folders,
+                    'plex' AS source
+                FROM plex_cache.plex_cache_tracks
+                GROUP BY COALESCE(album_key, rating_key)
+            )"#
+        } else {
+            ""
+        };
+
+        let unioned_clause = if plex_attached {
+            "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated"
+        } else {
+            "SELECT * FROM aggregated"
+        };
 
         let query = format!(
             r#"
@@ -1988,9 +2079,9 @@ impl LibraryDatabase {
                     MAX(source) AS source
                 FROM grouped
                 GROUP BY group_key
-            ),
+            ){plex_cte},
             filtered AS (
-                SELECT * FROM aggregated
+                SELECT * FROM ({unioned_clause})
                 WHERE ?1 = 0 OR (title LIKE ?2 OR artist LIKE ?2)
             )
             SELECT
@@ -2005,6 +2096,8 @@ impl LibraryDatabase {
             group_key = group_key_expr,
             source_filter = source_filter,
             network_filter = network_filter,
+            plex_cte = plex_cte,
+            unioned_clause = unioned_clause,
             order_clause = order_clause,
         );
 
@@ -2070,6 +2163,7 @@ impl LibraryDatabase {
                 search,
                 include_qobuz_downloads,
                 exclude_network_folders,
+                plex_attached,
             )?;
         }
 
@@ -2080,11 +2174,13 @@ impl LibraryDatabase {
     /// matching the same filter. Used when the page is empty (so the
     /// window-function-derived total isn't available) or when the
     /// frontend wants to know the count before requesting any page.
+    /// Honours the same Plex attachment state as the caller used.
     fn count_albums_metadata_for_page(
         &self,
         search: Option<&str>,
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
+        plex_attached: bool,
     ) -> Result<u64, LibraryError> {
         let source_filter = if include_qobuz_downloads {
             ""
@@ -2104,6 +2200,25 @@ impl LibraryDatabase {
         let search_pattern = search.unwrap_or("").trim();
         let has_search: i64 = if search_pattern.is_empty() { 0 } else { 1 };
         let search_like = format!("%{}%", search_pattern);
+
+        let plex_cte = if plex_attached {
+            r#",
+            plex_aggregated AS (
+                SELECT
+                    'plex:' || COALESCE(album_key, rating_key) AS group_key,
+                    COALESCE(album, 'Unknown Album') AS title,
+                    COALESCE(MIN(artist), 'Unknown Artist') AS artist
+                FROM plex_cache.plex_cache_tracks
+                GROUP BY COALESCE(album_key, rating_key)
+            )"#
+        } else {
+            ""
+        };
+        let unioned_clause = if plex_attached {
+            "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated"
+        } else {
+            "SELECT * FROM aggregated"
+        };
 
         let query = format!(
             r#"
@@ -2129,14 +2244,16 @@ impl LibraryDatabase {
                     END AS artist
                 FROM grouped
                 GROUP BY group_key
-            )
+            ){plex_cte}
             SELECT COUNT(*)
-            FROM aggregated
+            FROM ({unioned_clause})
             WHERE ?1 = 0 OR (title LIKE ?2 OR artist LIKE ?2)
             "#,
             group_key = group_key_expr,
             source_filter = source_filter,
             network_filter = network_filter,
+            plex_cte = plex_cte,
+            unioned_clause = unioned_clause,
         );
 
         let total: i64 = self
