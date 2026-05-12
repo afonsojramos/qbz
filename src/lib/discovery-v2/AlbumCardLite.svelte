@@ -11,6 +11,8 @@
     artwork?: string;
     quality?: string;
     ribbon?: AlbumRibbon;
+    genre?: string;
+    releaseYear?: number;
     isPlaying?: boolean;
     isFavorite?: boolean;
     onClick?: () => void;
@@ -27,6 +29,8 @@
     artwork,
     quality,
     ribbon,
+    genre,
+    releaseYear,
     isPlaying = false,
     isFavorite = false,
     onClick,
@@ -79,6 +83,12 @@
     {/if}
     {#if ribbon}
       <div class="ribbon ribbon-{ribbon.kind}" title={ribbon.label}>{ribbon.label}</div>
+    {/if}
+    {#if genre || releaseYear}
+      <div class="meta">
+        {#if genre}<span class="meta-genre">{genre}</span>{/if}
+        {#if releaseYear}<span class="meta-year">{releaseYear}</span>{/if}
+      </div>
     {/if}
     <div class="actions">
       <button
@@ -174,26 +184,67 @@
     height: 100%;
   }
 
-  /* Action buttons centered on the cover; visible only on hover. The
-     container sits above the dark scrim (z-index: 1). Opacity 0 at rest,
-     opacity 1 on card hover. Same 150ms timing as the scrim so they
-     reveal together. */
+  /* Hover meta (genre + year), top-left of the cover. Shows opposite-corner
+     from the ribbon (top-left ribbon doesn't conflict since press/award
+     ribbons are visually distinct enough; if both are present they stack
+     vertically with the ribbon taking precedence at the very top). */
+  .meta {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 150ms ease;
+    pointer-events: none;
+    z-index: 1;
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 12px;
+    text-align: right;
+    max-width: 60%;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  }
+
+  .meta-genre {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  .meta-year {
+    font-size: 11px;
+    opacity: 0.8;
+  }
+
+  .card:hover .meta {
+    opacity: 1;
+  }
+
+  /* Action buttons — bottom-center of the cover, visible only on hover.
+     Slide-up entrance (translateY 10px → 0) layered with opacity transition.
+     Transform-only animation on a single element; no layout reflow, no
+     paint propagation to siblings. */
   .actions {
     position: absolute;
-    top: 50%;
+    bottom: 20px;
     left: 50%;
-    transform: translate(-50%, -50%);
+    transform: translateX(-50%) translateY(10px);
     display: flex;
     align-items: center;
     gap: 12px;
     opacity: 0;
-    transition: opacity 150ms ease;
+    transition: opacity 150ms ease, transform 150ms ease;
     pointer-events: none;
     z-index: 1;
   }
 
   .card:hover .actions {
     opacity: 1;
+    transform: translateX(-50%) translateY(0);
     pointer-events: auto;
   }
 

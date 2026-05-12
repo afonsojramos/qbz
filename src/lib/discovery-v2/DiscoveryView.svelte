@@ -259,6 +259,8 @@
       artwork={album.artwork}
       quality={album.quality}
       ribbon={album.ribbon}
+      genre={album.genre}
+      releaseYear={album.releaseYear}
       isFavorite={isFav(album.albumId)}
       onClick={() => onAlbumClick?.(album.albumId)}
       onPlay={() => onAlbumPlay?.(album.albumId)}

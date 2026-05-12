@@ -45,6 +45,14 @@ export interface DiscoveryAlbumCard {
   artwork?: string;
   quality?: string;
   ribbon?: AlbumRibbon;
+  genre?: string;
+  releaseYear?: number;
+}
+
+function parseYear(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const m = value.match(/^(\d{4})/);
+  return m ? parseInt(m[1], 10) : undefined;
 }
 
 /**
@@ -77,6 +85,8 @@ function qobuzAlbumToCard(album: QobuzAlbum): DiscoveryAlbumCard {
       album.maximum_sampling_rate
     ),
     ribbon: pickAlbumRibbon(album.awards),
+    genre: album.genre?.name,
+    releaseYear: parseYear(album.release_date_original),
   };
 }
 
@@ -93,6 +103,8 @@ function discoverAlbumToCard(album: DiscoverAlbum): DiscoveryAlbumCard {
       album.audio_info?.maximum_sampling_rate
     ),
     ribbon: pickAlbumRibbon(album.awards),
+    genre: album.genre?.name,
+    releaseYear: parseYear(album.dates?.original),
   };
 }
 
