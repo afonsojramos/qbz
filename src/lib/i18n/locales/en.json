@@ -2325,7 +2325,7 @@
       "matchSystemChrome": "Match system window chrome",
       "matchSystemChromeDesc": "Round the window corners and add a subtle edge so QBZ blends with your desktop theme. Takes effect after restarting the app (the window is rebuilt transparent so the corners don't show white).",
       "matchSystemChromeRestart": "Restart QBZ to apply the window chrome change.",
-      "matchSystemChromeCpuOverride": "Currently disabled because hardware acceleration is off. The transparent chrome forces GTK to repaint window decorations on every frame, which drops frames under CPU rendering. Your preference is saved and reactivates automatically when hardware acceleration comes back on.",
+      "matchSystemChromeCpuOverride": "Available only with GPU acceleration.",
       "windowControlsColorPresetCustom": "Custom",
       "windowControlsCustomColors": "Custom colors",
       "windowControlsClose": "Close",

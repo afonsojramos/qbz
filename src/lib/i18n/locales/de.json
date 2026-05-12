@@ -2292,7 +2292,7 @@
       "useSystemTitleBarDesc": "QBZ-eigene Titelleiste durch die native Fensterdekoration des Systems ersetzen. Änderung startet die App neu.",
       "hideTitleBar": "Titelleiste ausblenden",
       "hideTitleBarDesc": "Titelleiste komplett ausblenden (für Tiling-Window-Manager-Nutzer)",
-      "matchSystemChromeCpuOverride": "Derzeit deaktiviert, weil die Hardwarebeschleunigung ausgeschaltet ist. Das transparente Chrome zwingt GTK, die Fensterdekorationen in jedem Frame neu zu zeichnen, was unter CPU-Rendering Frames verliert. Deine Einstellung bleibt erhalten und aktiviert sich automatisch wieder, sobald die Hardwarebeschleunigung wieder eingeschaltet wird.",
+      "matchSystemChromeCpuOverride": "Nur mit GPU-Beschleunigung verfügbar.",
       "searchInTitleBar": "Suche in Titelleiste",
       "searchInTitleBarDesc": "Suchfeld in der Titelleiste statt in der Seitenleiste anzeigen",
       "navInTitleBar": "Navigation in Titelleiste",

@@ -4834,12 +4834,12 @@
         {/if}
       </div>
       <Toggle
-        enabled={matchSystemWindowChromeState}
+        enabled={matchSystemWindowChromeState && isHardwareAccelEnabled()}
         onchange={(v) => {
           setMatchSystemWindowChrome(v);
           showToast($t('settings.appearance.matchSystemChromeRestart'), 'info');
         }}
-        disabled={hideTitleBar || useSystemTitleBar}
+        disabled={hideTitleBar || useSystemTitleBar || !isHardwareAccelEnabled()}
       />
     </div>
     {/if}

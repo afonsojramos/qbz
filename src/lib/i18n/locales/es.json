@@ -2325,7 +2325,7 @@
       "matchSystemChrome": "Integrar con el tema del sistema",
       "matchSystemChromeDesc": "Redondea las esquinas de la ventana y agrega un borde sutil para que QBZ se integre con el tema del escritorio. Requiere reiniciar la app (la ventana se reconstruye transparente para que las esquinas no se vean blancas).",
       "matchSystemChromeRestart": "Reinicia QBZ para aplicar el cambio del chrome.",
-      "matchSystemChromeCpuOverride": "Actualmente deshabilitado porque la aceleración por hardware está apagada. El chrome transparente obliga a GTK a repintar las decoraciones de la ventana en cada frame, lo cual tira frames bajo renderizado por CPU. Tu preferencia se guarda y se reactiva automáticamente cuando vuelvas a encender la aceleración por hardware.",
+      "matchSystemChromeCpuOverride": "Disponible sólo con aceleración por GPU.",
       "windowControlsColorPresetCustom": "Personalizado",
       "windowControlsCustomColors": "Colores personalizados",
       "windowControlsClose": "Cerrar",
