@@ -212,6 +212,20 @@
     position: absolute;
     top: 0;
     left: 0;
+    /* CSS containment is the load-bearing perf fix for the scroll
+       experience under software compositing. Without it, WebKit's
+       hit-testing on every pointermove (and pointermove fires
+       continuously while the user mouse-wheels because the cursor
+       traverses cards as they pass under it) re-evaluates layout
+       across the whole grid. With ~80 slots that meant ~1s layout
+       spikes per pointer-burst — visible on the 2026-05-12 perf
+       trace. `contain: layout paint` tells WebKit each slot's layout
+       and paint are independent of every other slot's, so a hover-
+       state change in one slot can no longer invalidate its
+       neighbours. We don't add `size` containment because the slot's
+       height comes from its child card — that's still fine since
+       layout/paint isolation is the part that matters here. */
+    contain: layout paint;
     /* Positioning is done with `transform: translate(...)` inline (set
        by the script) instead of `top`/`left`. Reason: changing top/left
        on an absolutely-positioned element triggers layout, and with
