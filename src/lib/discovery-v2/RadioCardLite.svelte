@@ -10,11 +10,15 @@
     seedTitle: string;
     seedSubtitle?: string;
     artwork?: string;
+    /** Wordmark rendered under the artwork. Defaults to "RADIO" but the
+     *  same visual is reused for "TOP TRACKS" and "PLAYLIST" cards in
+     *  spotlight, matching the legacy ForYouTab horizontal row. */
+    label?: string;
     onPlay?: () => void;
     onClick?: () => void;
   }
 
-  let { seedTitle, seedSubtitle, artwork, onPlay, onClick }: Props = $props();
+  let { seedTitle, seedSubtitle, artwork, label = 'RADIO', onPlay, onClick }: Props = $props();
 
   /**
    * Qobuz-style radio card. Visual is a stylized stereo-component:
@@ -80,7 +84,7 @@
           </button>
         {/if}
       </div>
-      <div class="label">RADIO</div>
+      <div class="label">{label}</div>
     </div>
   </div>
   <div class="meta">

@@ -40,6 +40,11 @@
     toggleAlbumFavorite,
     subscribe as subscribeAlbumFavs,
   } from '$lib/stores/albumFavoritesStore';
+  import { toggleArtistFavorite } from '$lib/stores/artistFavoritesStore';
+  import { invoke } from '@tauri-apps/api/core';
+  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
+  import { playQueueIndex } from '$lib/stores/queueStore';
+  import type { BackendQueueTrack } from '$lib/stores/queueStore';
 
   /**
    * Discovery V2 — clean-room rebuild of the home view.
@@ -187,6 +192,13 @@
   let essentials = $state<EssentialsSection>({ genreName: '', albums: [] });
   let spotlight = $state<SpotlightSection | null>(null);
 
+  /** Cleared once the three main fetches (release-watch, discover-index,
+   *  home-resolved) have resolved. While true, the view renders a static
+   *  skeleton so the first paint reads as "loading" rather than as the
+   *  old "under construction" placeholder. Cero efectos — plain grey
+   *  blocks shaped like the real sections. */
+  let initialLoadComplete = $state(false);
+
   async function loadAll() {
     // Three parallel fetches:
     //  - release-watch (followed-artists radar, not genre-filtered)
@@ -211,6 +223,10 @@
     continueListening = resolved.continueListening;
     topArtists = resolved.topArtists;
     favoriteAlbums = resolved.favoriteAlbums;
+    // Three main fetches done — drop the skeleton even if for-you-exclusive
+    // sections (loaded below) are still pending; their absence reads as
+    // empty/skipped rather than as a "still loading" state.
+    initialLoadComplete = true;
 
     // For-You-exclusive sections depend on the home-resolved seeds
     // (top artists for spotlight/follow, recent albums for similar).
@@ -256,6 +272,88 @@
   function isFav(albumId: string): boolean {
     void favoritesVersion;
     return isAlbumFavorite(albumId);
+  }
+
+  /**
+   * Spotlight handlers, ported faithfully from the legacy ForYouTab
+   * (see src/lib/components/views/ForYouTab.svelte handleSpotlight*).
+   *
+   * handleSpotlightTopTracks: builds a queue from the spotlight artist's
+   *   top tracks and plays from index 0. We don't have full audio_info
+   *   in the trimmed SpotlightTopTrack shape, so we pass conservative
+   *   defaults (hires=false, 16/44100); the player resolves the real
+   *   format from the track id at stream-resolution time.
+   *
+   * handleSpotlightRadio: calls v2_create_qobuz_artist_radio to seed a
+   *   radio queue, then kicks off playback from index 0. Mirrors legacy
+   *   exactly.
+   */
+  let spotlightTopTracksLoading = $state(false);
+  let spotlightRadioLoading = $state(false);
+
+  async function handleSpotlightTopTracks() {
+    if (!spotlight || spotlightTopTracksLoading || spotlight.topTracks.length === 0) return;
+    spotlightTopTracksLoading = true;
+    try {
+      const artistName = spotlight.artistName;
+      const artistId = spotlight.artistId;
+      const queueTracks: BackendQueueTrack[] = spotlight.topTracks.map((track) => ({
+        id: track.trackId,
+        title: track.title,
+        version: null,
+        artist: artistName,
+        album: track.albumTitle ?? '',
+        duration_secs: track.durationSec ?? 0,
+        artwork_url: track.artwork ?? null,
+        hires: false,
+        bit_depth: null,
+        sample_rate: null,
+        is_local: false,
+        album_id: track.albumId ?? null,
+        artist_id: artistId,
+      }));
+      await replacePlaybackQueue(queueTracks, 0, { debugLabel: 'discovery-v2:spotlight-top-tracks' });
+      await playQueueIndex(0);
+    } catch (err) {
+      console.error('[discovery-v2] spotlight top tracks failed', err);
+    } finally {
+      spotlightTopTracksLoading = false;
+    }
+  }
+
+  async function handleSpotlightRadio() {
+    if (!spotlight || spotlightRadioLoading) return;
+    spotlightRadioLoading = true;
+    try {
+      await invoke('v2_create_qobuz_artist_radio', {
+        artistId: spotlight.artistId,
+        artistName: spotlight.artistName,
+      });
+      await playQueueIndex(0);
+    } catch (err) {
+      console.error('[discovery-v2] spotlight radio failed', err);
+    } finally {
+      spotlightRadioLoading = false;
+    }
+  }
+
+  // Per-artist follow state for the Artists-to-Follow tile button. Once
+  // an artist is favorited we strip them from the suggestion list, just
+  // like the legacy ForYouTab.handleFollowArtist did.
+  let followingArtistIds = $state<Set<number>>(new Set());
+  async function handleFollowArtist(artistId: number) {
+    if (followingArtistIds.has(artistId)) return;
+    followingArtistIds.add(artistId);
+    followingArtistIds = new Set(followingArtistIds);
+    try {
+      await toggleArtistFavorite(artistId);
+      artistsToFollow = artistsToFollow.filter((a) => a.artistId !== artistId);
+    } catch (err) {
+      console.error('[discovery-v2] follow artist failed', err);
+    } finally {
+      followingArtistIds.delete(artistId);
+      followingArtistIds = new Set(followingArtistIds);
+    }
   }
 
   // `activeTrackId` + `isPlaybackActive` drive the playing indicator on
@@ -403,7 +501,34 @@
     />
   {/snippet}
 
+  {#snippet artistTileFollowable(artist: DiscoveryArtistTile)}
+    <ArtistTileLite
+      artistId={artist.artistId}
+      name={artist.name}
+      image={artist.image}
+      onClick={() => onArtistClick?.(artist.artistId)}
+      onFollow={() => { void handleFollowArtist(artist.artistId); }}
+      isFollowing={followingArtistIds.has(artist.artistId)}
+    />
+  {/snippet}
+
   <div class="scroll-area">
+    {#if !initialLoadComplete}
+      <!-- Skeleton — three placeholder sections (title bar + a row of card
+           silhouettes). Cero efectos: no shimmer, no animation. The visible
+           shape immediately signals "loading" so users don't see the empty
+           state momentarily and read it as the final view. -->
+      {#each [0, 1, 2] as i (i)}
+        <section class="skel-section">
+          <div class="skel-title"></div>
+          <div class="skel-row">
+            {#each [0, 1, 2, 3, 4] as j (j)}
+              <div class="skel-card"></div>
+            {/each}
+          </div>
+        </section>
+      {/each}
+    {:else}
     {#each $sectionPrefs[homeTab] as pref (pref.id)}
       {#if pref.enabled}
         {#if pref.id === 'newReleases' && newReleases.length > 0}
@@ -517,7 +642,7 @@
           <DiscoverySection
             title={$t('discovery.artistsToFollow')}
             items={artistsToFollow}
-            renderItem={artistTile}
+            renderItem={artistTileFollowable}
             cardWidth={170}
           />
         {:else if pref.id === 'similarAlbums' && similarAlbums.albums.length > 0}
@@ -533,31 +658,28 @@
             renderItem={albumCard}
           />
         {:else if pref.id === 'artistSpotlight' && spotlight}
-          <section class="spotlight-section">
-            <header class="head">
-              <h2 class="title">{$t('discovery.artistSpotlight')}</h2>
-            </header>
-            <SpotlightLite
-              {spotlight}
-              onArtistClick={onArtistClick}
-              onAlbumClick={onAlbumClick}
-              onPlaylistClick={onPlaylistClick}
-              onPlayTrack={(track) => onTrackPlay?.({
-                id: track.trackId,
-                title: track.title,
-                artist: spotlight!.artistName,
-                album: track.albumTitle ?? '',
-                albumId: track.albumId,
-                albumArt: track.artwork,
-              } as DisplayTrack)}
-            />
-          </section>
+          <SpotlightLite
+            {spotlight}
+            onArtistClick={onArtistClick}
+            onAlbumClick={onAlbumClick}
+            onPlaylistClick={onPlaylistClick}
+            onPlayTopTracks={() => { void handleSpotlightTopTracks(); }}
+            onStartRadio={() => { void handleSpotlightRadio(); }}
+            onAlbumPlay={onAlbumPlay}
+            onAlbumPlayNext={onAlbumPlayNext}
+            onAlbumPlayLater={onAlbumPlayLater}
+            onAlbumAddToPlaylist={onAddAlbumToPlaylist}
+            onAlbumShareQobuz={onAlbumShareQobuz}
+            onAlbumShareSonglink={onAlbumShareSonglink}
+            onAlbumDownload={onAlbumDownload}
+          />
         {/if}
       {/if}
     {/each}
 
-    {#if releaseWatch.length === 0 && newReleases.length === 0 && recentlyPlayedAlbums.length === 0}
-      <p class="placeholder">{$t('discovery.comingSoon')}</p>
+      {#if releaseWatch.length === 0 && newReleases.length === 0 && recentlyPlayedAlbums.length === 0 && topArtists.length === 0 && favoriteAlbums.length === 0}
+        <p class="placeholder">{$t('empty.noContent')}</p>
+      {/if}
     {/if}
   </div>
 </div>
@@ -647,25 +769,51 @@
     margin: 0;
   }
 
-  /* Custom sections (qobuzMixes, artistSpotlight) don't use the generic
-     DiscoverySection wrapper because their content isn't a paginated
-     items array. Match its outer spacing + header so they read as part
-     of the same scroll. */
-  .mixes-section,
-  .spotlight-section {
+  /* Skeleton sections — static grey blocks mirroring the section layout
+     while the first fetch is in flight. Cero efectos: no shimmer keyframe,
+     no transition. The shape alone communicates "loading content here". */
+  .skel-section {
     margin-bottom: 48px;
   }
 
-  .mixes-section .head,
-  .spotlight-section .head {
+  .skel-title {
+    width: 180px;
+    height: 18px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    margin-bottom: 16px;
+  }
+
+  .skel-row {
+    display: flex;
+    gap: 32px;
+    overflow: hidden;
+  }
+
+  .skel-card {
+    flex: 0 0 220px;
+    width: 220px;
+    height: 220px;
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+  }
+
+  /* Qobuz Mixes section — doesn't use DiscoverySection since its content
+     isn't paginated. Match outer spacing + header so it reads as part of
+     the same scroll. Artist Spotlight has its own wrapper inside
+     SpotlightLite so it doesn't need styles here. */
+  .mixes-section {
+    margin-bottom: 48px;
+  }
+
+  .mixes-section .head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin-bottom: 12px;
   }
 
-  .mixes-section .title,
-  .spotlight-section .title {
+  .mixes-section .title {
     font-size: 18px;
     font-weight: 600;
     color: var(--text-primary);

@@ -695,7 +695,6 @@
     "clearFilter": "Limpiar filtro"
   },
   "discovery": {
-    "comingSoon": "Discovery V2 — en construcción",
     "seeAll": "Ver todo",
     "similarAlbums": "Álbumes similares",
     "similarTo": "Similar a {seed}",

@@ -1,15 +1,27 @@
 <script lang="ts">
-  import { Play, User, Radio } from 'lucide-svelte';
+  import { Play, User } from 'lucide-svelte';
+  import { onMount } from 'svelte';
+  import { fade } from 'svelte/transition';
   import { t } from '$lib/i18n';
   import { cachedSrc } from '$lib/actions/cachedImage';
+  import { ChevronLeft, ChevronRight } from 'lucide-svelte';
   import RadioCardLite from './RadioCardLite.svelte';
-  import type { SpotlightSection, SpotlightTopTrack } from './data';
+  import AlbumCardLite from './AlbumCardLite.svelte';
+  import type { SpotlightSection, SpotlightTopTrack, DiscoveryAlbumCard, DiscoveryPlaylistCard } from './data';
 
   interface Props {
     spotlight: SpotlightSection;
     onArtistClick?: (artistId: number) => void;
+    onPlayTopTracks?: () => void;
     onPlayTrack?: (track: SpotlightTopTrack) => void;
     onAlbumClick?: (albumId: string) => void;
+    onAlbumPlay?: (albumId: string) => void;
+    onAlbumPlayNext?: (albumId: string) => void;
+    onAlbumPlayLater?: (albumId: string) => void;
+    onAlbumAddToPlaylist?: (albumId: string) => void;
+    onAlbumShareQobuz?: (albumId: string) => void;
+    onAlbumShareSonglink?: (albumId: string) => void;
+    onAlbumDownload?: (albumId: string) => void;
     onPlaylistClick?: (playlistId: number) => void;
     onStartRadio?: (artistId: number, artistName: string) => void;
   }
@@ -17,42 +29,97 @@
   let {
     spotlight,
     onArtistClick,
-    onPlayTrack,
+    onPlayTopTracks,
     onAlbumClick,
+    onAlbumPlay,
+    onAlbumPlayNext,
+    onAlbumPlayLater,
+    onAlbumAddToPlaylist,
+    onAlbumShareQobuz,
+    onAlbumShareSonglink,
+    onAlbumDownload,
     onPlaylistClick,
     onStartRadio,
   }: Props = $props();
 
   /**
-   * Artist Spotlight hero — a featured-artist deep-dive section. Visual
-   * structure (matching the legacy ForYouTab spotlight, simplified):
+   * Artist Spotlight — faithful rewrite of the legacy ForYouTab spotlight
+   * (see `src/lib/components/views/ForYouTab.svelte:1397+`). Two-part
+   * layout: a hero (portrait + name + circle action buttons) and a single
+   * paginated row that mixes a TOP TRACKS card, a RADIO card, the artist's
+   * Qobuz playlists (as radio-styled cards labelled PLAYLIST), and the
+   * artist's albums (as regular AlbumCardLite tiles).
    *
-   *   ┌──────────────────────────────────────────────────────┐
-   *   │ [PORTRAIT]   Artist Name                             │
-   *   │              category                                │
-   *   │              [Top tracks] [Start radio]              │
-   *   ├──────────────────────────────────────────────────────┤
-   *   │ Top tracks (compact list, up to 5)                   │
-   *   │ Albums row (up to 6, AlbumCardLite-style minis)      │
-   *   │ Playlists row (if any)                               │
-   *   └──────────────────────────────────────────────────────┘
-   *
-   * Cero efectos beyond a static portrait and clickable rows. No
-   * background-color extraction (the legacy did it for the radio card —
-   * deferred for V1; the radio button uses theme accent).
+   * The legacy version used `HorizontalScrollRow` with overflow-x. We use
+   * DiscoverySection's pagination-by-slice pattern instead (no overflow,
+   * no transform) to keep paint cost flat under software compositing.
    */
 
-  function formatDuration(seconds?: number): string {
-    if (!seconds) return '';
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${String(s).padStart(2, '0')}`;
+  type SpotlightItem =
+    | { kind: 'topTracks' }
+    | { kind: 'radio' }
+    | { kind: 'playlist'; playlist: DiscoveryPlaylistCard }
+    | { kind: 'album'; album: DiscoveryAlbumCard };
+
+  const items = $derived<SpotlightItem[]>([
+    ...(spotlight.topTracks.length > 0 && onPlayTopTracks
+      ? [{ kind: 'topTracks' as const }]
+      : []),
+    ...(onStartRadio ? [{ kind: 'radio' as const }] : []),
+    ...spotlight.playlists.map((p) => ({ kind: 'playlist' as const, playlist: p })),
+    ...spotlight.albums.map((a) => ({ kind: 'album' as const, album: a })),
+  ]);
+
+  // Pagination — mirrors DiscoverySection so the heterogeneous mix of card
+  // types lives in the same visual rhythm as the rest of Discovery V2.
+  const CARD_WIDTH = 220;
+  const GAP = 32;
+  let containerEl: HTMLDivElement | undefined = $state();
+  let page = $state(0);
+  let itemsPerPage = $state(1);
+
+  function recompute() {
+    if (!containerEl) return;
+    const width = containerEl.clientWidth;
+    if (width <= 0) return;
+    itemsPerPage = Math.max(1, Math.floor((width + GAP) / (CARD_WIDTH + GAP)));
+    const maxPage = Math.max(0, Math.ceil(items.length / itemsPerPage) - 1);
+    if (page > maxPage) page = maxPage;
   }
+
+  onMount(() => {
+    recompute();
+    if (!containerEl) return;
+    const ro = new ResizeObserver(recompute);
+    ro.observe(containerEl);
+    return () => ro.disconnect();
+  });
+
+  $effect(() => {
+    void items.length;
+    recompute();
+  });
+
+  const totalPages = $derived(Math.max(1, Math.ceil(items.length / itemsPerPage)));
+  const canPrev = $derived(page > 0);
+  const canNext = $derived(page < totalPages - 1);
+  const visibleItems = $derived(items.slice(page * itemsPerPage, (page + 1) * itemsPerPage));
 </script>
 
 <section class="spotlight">
-  <header class="hero">
-    <div class="portrait">
+  <header class="header">
+    <h2 class="title">{$t('home.spotlight')}</h2>
+    <p class="subtitle">{$t('home.spotlightDesc')}</p>
+  </header>
+
+  <!-- Hero: portrait + ARTIST label + name + circle action buttons. -->
+  <div class="hero">
+    <button
+      class="hero-portrait"
+      type="button"
+      onclick={() => onArtistClick?.(spotlight.artistId)}
+      aria-label={spotlight.artistName}
+    >
       {#if spotlight.artistImage}
         <img
           use:cachedSrc={spotlight.artistImage}
@@ -61,350 +128,264 @@
           decoding="async"
         />
       {:else}
-        <div class="portrait-placeholder"><User size={48} /></div>
+        <div class="hero-placeholder"><User size={64} /></div>
       {/if}
-    </div>
-    <div class="hero-text">
-      <h2 class="artist-name">
+    </button>
+    <div class="hero-info">
+      {#if spotlight.category}
+        <span class="hero-category">{$t('home.spotlightArtist')}</span>
+      {/if}
+      <h3 class="hero-name">{spotlight.artistName}</h3>
+      <div class="hero-actions">
+        {#if onPlayTopTracks}
+          <button
+            class="circle-btn primary"
+            type="button"
+            aria-label={$t('home.topTracks')}
+            onclick={onPlayTopTracks}
+          >
+            <Play size={20} fill="currentColor" />
+          </button>
+        {/if}
         <button
+          class="circle-btn"
           type="button"
-          class="artist-link"
+          aria-label={spotlight.artistName}
           onclick={() => onArtistClick?.(spotlight.artistId)}
         >
-          {spotlight.artistName}
+          <User size={18} />
         </button>
-      </h2>
-      {#if spotlight.category}
-        <p class="category">{spotlight.category}</p>
-      {/if}
-      {#if onStartRadio}
-        <button
-          class="radio-btn"
-          type="button"
-          onclick={() => onStartRadio?.(spotlight.artistId, spotlight.artistName)}
-        >
-          <Radio size={14} />
-          {$t('actions.radio.startArtistRadio')}
-        </button>
-      {/if}
-    </div>
-  </header>
-
-  {#if spotlight.topTracks.length > 0}
-    <div class="block">
-      <h3 class="block-title">{$t('artist.popularTracks')}</h3>
-      <ul class="tracks">
-        {#each spotlight.topTracks as track, idx (track.trackId)}
-          <li>
-            <button class="track-row" type="button" onclick={() => onPlayTrack?.(track)}>
-              <span class="track-rank">{idx + 1}</span>
-              <span class="track-play"><Play size={14} fill="currentColor" /></span>
-              <span class="track-title">{track.title}</span>
-              {#if track.durationSec}
-                <span class="track-duration">{formatDuration(track.durationSec)}</span>
-              {/if}
-            </button>
-          </li>
-        {/each}
-      </ul>
-    </div>
-  {/if}
-
-  {#if spotlight.albums.length > 0 || onStartRadio}
-    <div class="block">
-      <h3 class="block-title">{$t('artist.albums')}</h3>
-      <div class="albums-row">
-        {#if onStartRadio}
-          <RadioCardLite
-            seedTitle={spotlight.artistName}
-            seedSubtitle={$t('discovery.qobuzRadioStation')}
-            artwork={spotlight.albums[0]?.artwork ?? spotlight.artistImage}
-            onPlay={() => onStartRadio?.(spotlight.artistId, spotlight.artistName)}
-            onClick={() => onStartRadio?.(spotlight.artistId, spotlight.artistName)}
-          />
-        {/if}
-        {#each spotlight.albums as album (album.albumId)}
-          <button
-            class="album-tile"
-            type="button"
-            onclick={() => onAlbumClick?.(album.albumId)}
-          >
-            {#if album.artwork}
-              <img
-                class="album-cover"
-                use:cachedSrc={album.artwork}
-                alt={album.title}
-                loading="lazy"
-                decoding="async"
-              />
-            {:else}
-              <div class="album-cover album-cover-placeholder"></div>
-            {/if}
-            <div class="album-title">{album.title}</div>
-            {#if album.releaseYear}<div class="album-year">{album.releaseYear}</div>{/if}
-          </button>
-        {/each}
       </div>
     </div>
-  {/if}
+  </div>
 
-  {#if spotlight.playlists.length > 0}
-    <div class="block">
-      <h3 class="block-title">{$t('home.qobuzPlaylists')}</h3>
-      <div class="playlists-row">
-        {#each spotlight.playlists as pl (pl.playlistId)}
-          <button
-            class="playlist-tile"
-            type="button"
-            onclick={() => onPlaylistClick?.(pl.playlistId)}
-          >
-            {#if pl.image}
-              <img
-                class="playlist-cover"
-                use:cachedSrc={pl.image}
-                alt={pl.name}
-                loading="lazy"
-                decoding="async"
+  <!-- Single paginated row mixing TopTracks card, Radio card, playlists,
+       and albums. Matches the legacy ForYouTab spotlight content row. -->
+  {#if items.length > 0}
+    <div class="row-controls">
+      <button
+        class="nav-btn"
+        type="button"
+        aria-label="Previous page"
+        disabled={!canPrev}
+        onclick={() => { if (canPrev) page = page - 1; }}
+      >
+        <ChevronLeft size={18} />
+      </button>
+      <button
+        class="nav-btn"
+        type="button"
+        aria-label="Next page"
+        disabled={!canNext}
+        onclick={() => { if (canNext) page = page + 1; }}
+      >
+        <ChevronRight size={18} />
+      </button>
+    </div>
+    <div class="row-outer" bind:this={containerEl}>
+      {#key page}
+        <div class="row" in:fade={{ duration: 120 }}>
+          {#each visibleItems as item, idx (idx)}
+            {#if item.kind === 'topTracks'}
+              <RadioCardLite
+                seedTitle={$t('home.topTracks')}
+                seedSubtitle={$t('home.topTracksBy', { values: { artist: spotlight.artistName } })}
+                artwork={spotlight.artistImage}
+                label={$t('home.topTracksLabel')}
+                onPlay={onPlayTopTracks}
+                onClick={onPlayTopTracks}
+              />
+            {:else if item.kind === 'radio'}
+              <RadioCardLite
+                seedTitle={spotlight.artistName}
+                seedSubtitle={$t('home.qobuzRadioStation')}
+                artwork={spotlight.artistImage}
+                label={$t('home.radioLabel')}
+                onPlay={() => onStartRadio?.(spotlight.artistId, spotlight.artistName)}
+                onClick={() => onStartRadio?.(spotlight.artistId, spotlight.artistName)}
+              />
+            {:else if item.kind === 'playlist'}
+              <RadioCardLite
+                seedTitle={item.playlist.name}
+                artwork={item.playlist.image}
+                label={$t('home.playlistLabel')}
+                onClick={() => onPlaylistClick?.(item.playlist.playlistId)}
               />
             {:else}
-              <div class="playlist-cover playlist-cover-placeholder"></div>
+              <AlbumCardLite
+                albumId={item.album.albumId}
+                title={item.album.title}
+                artist={item.album.artist}
+                artwork={item.album.artwork}
+                quality={item.album.quality}
+                isHiRes={item.album.isHiRes}
+                ribbon={item.album.ribbon}
+                genre={item.album.genre}
+                releaseYear={item.album.releaseYear}
+                onClick={() => onAlbumClick?.(item.album.albumId)}
+                onArtistClick={item.album.artistId ? () => onArtistClick?.(item.album.artistId!) : undefined}
+                onPlay={onAlbumPlay ? () => onAlbumPlay(item.album.albumId) : undefined}
+                onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(item.album.albumId) : undefined}
+                onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(item.album.albumId) : undefined}
+                onAddToPlaylist={onAlbumAddToPlaylist ? () => onAlbumAddToPlaylist(item.album.albumId) : undefined}
+                onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(item.album.albumId) : undefined}
+                onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(item.album.albumId) : undefined}
+                onDownload={onAlbumDownload ? () => onAlbumDownload(item.album.albumId) : undefined}
+              />
             {/if}
-            <div class="playlist-name">{pl.name}</div>
-          </button>
-        {/each}
-      </div>
+          {/each}
+        </div>
+      {/key}
     </div>
   {/if}
 </section>
 
 <style>
   .spotlight {
-    background: var(--bg-secondary);
-    border: 1px solid var(--bg-tertiary);
-    border-radius: 12px;
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 24px;
+    margin-bottom: 48px;
   }
 
+  .header {
+    margin-bottom: 16px;
+  }
+
+  .title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 4px;
+  }
+
+  .subtitle {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  /* Hero — portrait next to name + circle actions. Legacy proportions:
+     a sizable circular portrait (140px) flanked by an info column that
+     stacks category / name / action buttons. */
   .hero {
     display: flex;
     align-items: center;
     gap: 24px;
+    margin-bottom: 24px;
   }
 
-  .portrait {
+  .hero-portrait {
     width: 140px;
     height: 140px;
     flex: 0 0 140px;
     border-radius: 50%;
     overflow: hidden;
     background: var(--bg-tertiary);
+    border: none;
+    padding: 0;
+    cursor: pointer;
   }
 
-  .portrait img,
-  .portrait-placeholder {
+  .hero-portrait img {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    display: block;
+  }
+
+  .hero-placeholder {
+    width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
   }
 
-  .hero-text {
+  .hero-info {
     display: flex;
     flex-direction: column;
     gap: 8px;
     min-width: 0;
   }
 
-  .artist-name {
-    margin: 0;
-    font-size: 28px;
-    font-weight: 700;
-  }
-
-  .artist-link {
-    background: none;
-    border: none;
-    padding: 0;
-    color: var(--text-primary);
-    font: inherit;
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .category {
-    margin: 0;
-    font-size: 13px;
-    color: var(--text-muted);
+  .hero-category {
+    font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .radio-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--bg-tertiary);
-    border: none;
-    color: var(--text-primary);
-    padding: 8px 16px;
-    border-radius: 20px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    align-self: flex-start;
-    font-family: inherit;
-  }
-
-  .radio-btn:hover {
-    background: var(--bg-hover);
-  }
-
-  .block {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .block-title {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .tracks {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .track-row {
-    display: grid;
-    grid-template-columns: 24px 24px 1fr auto;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 12px;
-    background: none;
-    border: none;
-    border-radius: 6px;
-    color: var(--text-primary);
-    font-size: 13px;
-    cursor: pointer;
-    font-family: inherit;
-    text-align: left;
-    width: 100%;
-  }
-
-  .track-row:hover {
-    background: var(--bg-tertiary);
-  }
-
-  .track-rank {
+    letter-spacing: 0.08em;
     color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-    transition: opacity 120ms ease;
   }
 
-  .track-row:hover .track-rank {
-    opacity: 0;
+  .hero-name {
+    margin: 0;
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.15;
   }
 
-  .track-play {
-    grid-column: 2;
-    grid-row: 1;
-    color: var(--accent-primary);
-    opacity: 0;
-    transition: opacity 120ms ease;
+  .hero-actions {
     display: flex;
-    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
   }
 
-  .track-row:hover .track-play {
-    opacity: 1;
-  }
-
-  /* Stack rank + play in the same cell; only one is visible at a time. */
-  .track-row {
-    grid-template-columns: 24px 1fr auto;
-  }
-  .track-rank,
-  .track-play {
-    grid-column: 1;
-    grid-row: 1;
-    width: 24px;
+  .circle-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: none;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
     display: flex;
     align-items: center;
     justify-content: center;
-  }
-  .track-title {
-    grid-column: 2;
-    grid-row: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .track-duration {
-    grid-column: 3;
-    grid-row: 1;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-    font-size: 12px;
-  }
-
-  .albums-row,
-  .playlists-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 16px;
-  }
-
-  .album-tile,
-  .playlist-tile {
-    background: none;
-    border: none;
-    padding: 0;
     cursor: pointer;
-    text-align: left;
-    font-family: inherit;
+    padding: 0;
+  }
+
+  .circle-btn:hover {
+    background: var(--bg-hover, var(--bg-secondary));
+  }
+
+  .circle-btn.primary {
+    background: var(--accent-primary);
+    color: #fff;
+  }
+
+  /* Paginated row, mirroring DiscoverySection. */
+  .row-controls {
     display: flex;
-    flex-direction: column;
+    justify-content: flex-end;
     gap: 4px;
+    margin-bottom: 12px;
   }
 
-  .album-cover,
-  .playlist-cover {
-    width: 100%;
-    aspect-ratio: 1;
-    object-fit: cover;
+  .nav-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: none;
     background: var(--bg-tertiary);
-    border-radius: 6px;
-  }
-
-  .album-cover-placeholder,
-  .playlist-cover-placeholder {
-    display: block;
-  }
-
-  .album-title,
-  .playlist-name {
-    font-size: 13px;
     color: var(--text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
   }
 
-  .album-year {
-    font-size: 11px;
+  .nav-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
     color: var(--text-muted);
+  }
+
+  .row-outer {
+    position: relative;
+    width: 100%;
+  }
+
+  .row {
+    display: flex;
+    gap: 32px;
   }
 </style>
