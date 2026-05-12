@@ -8,9 +8,12 @@
   interface Props<T> {
     title: string;
     items: T[];
-    /** Number of columns at the default viewport. Used as the fixed
-     *  column count for the CSS grid template. */
-    columns?: number;
+    /** Minimum column count (narrow viewports). Default 3. */
+    minColumns?: number;
+    /** Maximum column count (wide viewports). Default 5. */
+    maxColumns?: number;
+    /** Approximate min width per cell in CSS px; drives the column breakpoints. */
+    cellMinWidth?: number;
     /** Number of rows per page. itemsPerPage = columns * rows. */
     rows?: number;
     onSeeAll?: () => void;
@@ -22,25 +25,47 @@
   let {
     title,
     items,
-    columns = 4,
+    minColumns = 3,
+    maxColumns = 5,
+    cellMinWidth = 280,
     rows = 3,
     onSeeAll,
     renderItem,
   }: Props<T> = $props();
 
   /**
-   * Compact-grid variant of DiscoverySection. Fixed-cell pagination:
-   *   itemsPerPage = columns × rows (default 4 × 3 = 12).
+   * Responsive grid section. Column count adapts to container width
+   * via a ResizeObserver:
+   *   columns = clamp(floor(width / cellMinWidth), minColumns, maxColumns)
    *
-   * Unlike the album row pagination (which adapts itemsPerPage to the
-   * viewport width), this grid is deliberately constant — the compact
-   * track entries don't benefit from wider viewports the way 220px
-   * album cards do, and a fixed 4×3 grid keeps the visual consistent
-   * across FullHD and 4K. CSS grid handles the layout via
-   * `grid-template-columns: repeat(N, 1fr)`.
+   * Default range 3-5 columns × 3 rows yields 9 / 12 / 15 items per
+   * page depending on viewport. Items beyond `columns × rows` are
+   * dropped from the current page (or move to next page if pagination
+   * is in play). Pagination chevrons still hide when totalPages === 1.
    */
   let containerEl: HTMLDivElement | undefined = $state();
   let page = $state(0);
+  // Starts at the default narrow value; ResizeObserver bumps it on mount.
+  // Reading `minColumns` here as the seed would only capture initial-prop
+  // value (Svelte warning), and recomputeColumns adjusts on first frame.
+  let columns = $state(3);
+
+  function recomputeColumns() {
+    if (!containerEl) return;
+    const width = containerEl.clientWidth;
+    if (width <= 0) return;
+    const raw = Math.floor(width / cellMinWidth);
+    const next = Math.max(minColumns, Math.min(maxColumns, raw));
+    if (next !== columns) columns = next;
+  }
+
+  onMount(() => {
+    recomputeColumns();
+    if (!containerEl) return;
+    const ro = new ResizeObserver(recomputeColumns);
+    ro.observe(containerEl);
+    return () => ro.disconnect();
+  });
 
   const itemsPerPage = $derived(columns * rows);
   const totalPages = $derived(Math.max(1, Math.ceil(items.length / itemsPerPage)));

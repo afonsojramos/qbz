@@ -44,6 +44,10 @@ export interface DiscoveryAlbumCard {
   artistId?: number;
   artwork?: string;
   quality?: string;
+  /** True when the album is > 16-bit; gates the yellow Hi-Res badge. The
+   *  Qobuz web player only renders the badge for Hi-Res albums and leaves
+   *  CD-quality ones uncluttered. */
+  isHiRes?: boolean;
   ribbon?: AlbumRibbon;
   genre?: string;
   releaseYear?: number;
@@ -73,17 +77,15 @@ function pickAlbumRibbon(
 }
 
 function qobuzAlbumToCard(album: QobuzAlbum): DiscoveryAlbumCard {
+  const hires = (album.maximum_bit_depth ?? 16) > 16;
   return {
     albumId: album.id,
     title: album.title,
     artist: album.artist.name,
     artistId: album.artist.id,
     artwork: getQobuzImageForSize(album.image, 'small'),
-    quality: formatQuality(
-      (album.maximum_bit_depth ?? 16) > 16,
-      album.maximum_bit_depth,
-      album.maximum_sampling_rate
-    ),
+    quality: formatQuality(hires, album.maximum_bit_depth, album.maximum_sampling_rate),
+    isHiRes: hires,
     ribbon: pickAlbumRibbon(album.awards),
     genre: album.genre?.name,
     releaseYear: parseYear(album.release_date_original),
@@ -91,6 +93,7 @@ function qobuzAlbumToCard(album: QobuzAlbum): DiscoveryAlbumCard {
 }
 
 function discoverAlbumToCard(album: DiscoverAlbum): DiscoveryAlbumCard {
+  const hires = (album.audio_info?.maximum_bit_depth ?? 16) > 16;
   return {
     albumId: album.id,
     title: album.title,
@@ -98,10 +101,11 @@ function discoverAlbumToCard(album: DiscoverAlbum): DiscoveryAlbumCard {
     artistId: album.artists?.[0]?.id,
     artwork: album.image?.small || album.image?.large || album.image?.thumbnail,
     quality: formatQuality(
-      (album.audio_info?.maximum_bit_depth ?? 16) > 16,
+      hires,
       album.audio_info?.maximum_bit_depth,
       album.audio_info?.maximum_sampling_rate
     ),
+    isHiRes: hires,
     ribbon: pickAlbumRibbon(album.awards),
     genre: album.genre?.name,
     releaseYear: parseYear(album.dates?.original),
@@ -284,6 +288,11 @@ export async function fetchHomeResolved(
         artistId: a.artistId,
         artwork: a.artwork || undefined,
         quality: a.quality || undefined,
+        // Backend home-resolved returns a pre-formatted string; "CD Quality"
+        // is the only non-Hi-Res variant produced by formatQuality(), so
+        // anything else implies > 16-bit. Keeps the i18n contract simple
+        // without round-tripping the bit depth.
+        isHiRes: !!a.quality && a.quality !== 'CD Quality',
       })),
       continueListening: resp.continueListeningTracks.slice(0, perSection).map((track) => ({
         trackId: track.id,
@@ -306,6 +315,7 @@ export async function fetchHomeResolved(
         artistId: a.artistId,
         artwork: a.artwork || undefined,
         quality: a.quality || undefined,
+        isHiRes: !!a.quality && a.quality !== 'CD Quality',
       })),
     };
   } catch (err) {

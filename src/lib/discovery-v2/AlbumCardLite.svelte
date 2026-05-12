@@ -11,6 +11,7 @@
     artist: string;
     artwork?: string;
     quality?: string;
+    isHiRes?: boolean;
     ribbon?: AlbumRibbon;
     genre?: string;
     releaseYear?: number;
@@ -34,6 +35,7 @@
     artist,
     artwork,
     quality,
+    isHiRes = false,
     ribbon,
     genre,
     releaseYear,
@@ -142,8 +144,8 @@
   {:else}
     <div class="artist">{artist}</div>
   {/if}
-  {#if quality}
-    <div class="quality">{quality}</div>
+  {#if isHiRes && quality}
+    <div class="quality quality-hires" title={quality}>Hi-Res</div>
   {/if}
 </div>
 
@@ -216,13 +218,13 @@
     height: 100%;
   }
 
-  /* Hover meta (genre + year), top-left of the cover. Shows opposite-corner
-     from the ribbon (top-left ribbon doesn't conflict since press/award
-     ribbons are visually distinct enough; if both are present they stack
-     vertically with the ribbon taking precedence at the very top). */
+  /* Hover meta (genre + year). Anchored top-right and pushed down enough
+     to clear any award ribbon at the top-left edge — ribbons sit at
+     `top: 8px` with ~24px height + padding, so 44px keeps the genre off
+     the ribbon even on cards where the ribbon wraps to a second line. */
   .meta {
     position: absolute;
-    top: 12px;
+    top: 44px;
     right: 12px;
     display: flex;
     flex-direction: column;
@@ -233,9 +235,9 @@
     pointer-events: none;
     z-index: 1;
     color: rgba(255, 255, 255, 0.92);
-    font-size: 12px;
+    font-size: 14px;
     text-align: right;
-    max-width: 60%;
+    max-width: 70%;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
   }
 
@@ -248,7 +250,7 @@
   }
 
   .meta-year {
-    font-size: 11px;
+    font-size: 13px;
     opacity: 0.8;
   }
 
@@ -394,17 +396,18 @@
     text-shadow: 0 1px 0 rgba(255, 255, 255, 0.15);
   }
 
-  /* Hi-Res / CD Quality badge. Sits at the bottom of the card, below the
-     artist line. Small, static, no animation. */
-  .quality {
+  /* Hi-Res badge. Only renders when isHiRes; CD-quality albums leave the
+     space empty, matching the Qobuz web pattern (no badge clutter). The
+     full quality string ("24bit/96kHz") is exposed via title attribute. */
+  .quality-hires {
     margin-top: 4px;
     font-family: 'LINE Seed JP', var(--font-sans);
     font-size: 10px;
-    font-weight: 400;
-    color: var(--alpha-85);
-    background: var(--alpha-10);
-    border: 1px solid var(--alpha-15);
-    border-radius: 4px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #1f1407;
+    background: linear-gradient(135deg, #f5c042 0%, #d49511 100%);
+    border-radius: 3px;
     padding: 3px 6px;
     align-self: flex-start;
     max-width: 100%;

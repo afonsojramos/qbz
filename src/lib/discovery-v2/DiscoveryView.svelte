@@ -395,7 +395,7 @@
         {:else if pref.id === 'mostStreamed' && mostStreamed.length > 0}
           <DiscoveryGridSection
             title={$t('home.mostStreamed')}
-            items={mostStreamed.slice(0, 12)}
+            items={mostStreamed.slice(0, 15)}
             renderItem={albumRow}
             onSeeAll={onNavigateTopAlbums}
           />
