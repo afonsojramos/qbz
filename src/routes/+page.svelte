@@ -448,7 +448,7 @@
 
   // Views
   import LoginView from '$lib/components/views/LoginView.svelte';
-  import HomeView from '$lib/components/views/HomeView.svelte';
+  import DiscoveryView from '$lib/discovery-v2/DiscoveryView.svelte';
   import SearchView from '$lib/components/views/SearchView.svelte';
   import SettingsView from '$lib/components/views/SettingsView.svelte';
   import AlbumDetailView from '$lib/components/views/AlbumDetailView.svelte';
@@ -5823,7 +5823,7 @@
             onGoToLibrary={() => navigateTo('library')}
           />
         {:else}
-          <HomeView
+          <DiscoveryView
             userName={userInfo?.userName}
             onAlbumClick={handleAlbumClick}
             onAlbumPlay={playAlbumById}

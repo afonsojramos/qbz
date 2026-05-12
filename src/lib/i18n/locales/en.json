@@ -689,6 +689,10 @@
     "expand": "Expand",
     "clearFilter": "Clear filter"
   },
+  "discovery": {
+    "comingSoon": "Discovery V2 — under construction",
+    "seeAll": "See all"
+  },
   "home": {
     "title": "Home",
     "featuredForYou": "Featured for you",
