@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import Modal from '$lib/components/Modal.svelte';
+  import Modal from './ModalLite.svelte';
   import { ChevronUp, ChevronDown, RotateCcw, TriangleAlert } from 'lucide-svelte';
   import {
     sectionPrefs,
