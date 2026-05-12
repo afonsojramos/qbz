@@ -109,6 +109,29 @@
     overflow: hidden;
   }
 
+  /* Cheap hover overlay: single ::after pseudo-element with a gradient
+     from transparent to dark, opacity 0 → 1 on hover. No blur, no filter,
+     no transform on parent — just an opacity transition on a static
+     gradient. Compositor-friendly under software rendering. */
+  .cover-wrap::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      180deg,
+      rgba(0, 0, 0, 0) 0%,
+      rgba(0, 0, 0, 0) 50%,
+      rgba(0, 0, 0, 0.55) 100%
+    );
+    opacity: 0;
+    transition: opacity 150ms ease;
+    pointer-events: none;
+  }
+
+  .card:hover .cover-wrap::after {
+    opacity: 1;
+  }
+
   .cover {
     width: 100%;
     height: 100%;
@@ -121,13 +144,15 @@
     height: 100%;
   }
 
-  /* Permanent play button. Bottom-right. Static — no hover/transition. */
+  /* Play button. Static at rest, slight scale + brighter background on
+     card hover. Transform-only animation (no layout reflow, no paint of
+     surrounding cards). z-index: 1 so it sits above the gradient overlay. */
   .play-btn {
     position: absolute;
     bottom: 8px;
     right: 8px;
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
     border: none;
     background: var(--accent-primary);
@@ -137,6 +162,16 @@
     justify-content: center;
     cursor: pointer;
     padding: 0;
+    z-index: 1;
+    transition: transform 150ms ease;
+  }
+
+  .card:hover .play-btn {
+    transform: scale(1.12);
+  }
+
+  .play-btn:hover {
+    transform: scale(1.18);
   }
 
   .title {
