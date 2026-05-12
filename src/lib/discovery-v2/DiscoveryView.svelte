@@ -3,7 +3,11 @@
   import { t } from '$lib/i18n';
   import type { OfflineCacheStatus } from '$lib/stores/offlineCacheState';
   import type { DisplayTrack } from '$lib/types';
-  import { fetchNewReleases, type DiscoveryAlbumCard } from './data';
+  import {
+    fetchReleaseWatch,
+    fetchDiscoverIndex,
+    type DiscoveryAlbumCard,
+  } from './data';
   import DiscoverySection from './DiscoverySection.svelte';
   import AlbumCardLite from './AlbumCardLite.svelte';
 
@@ -84,6 +88,11 @@
     onAlbumPlay,
     onArtistClick,
     onNavigateNewReleases,
+    onNavigateReleaseWatch,
+    onNavigateTopAlbums,
+    onNavigatePressAccolades,
+    onNavigateQobuzissimes,
+    onNavigateAlbumsOfTheWeek,
     activeTrackId,
     isPlaybackActive,
   }: Props = $props();
@@ -102,11 +111,33 @@
   }
 
   // Section state — minimal. No skeletons, no animated loaders. The grid
-  // is empty until data arrives, then cards appear.
+  // is empty until data arrives, then cards appear. Each section pulls
+  // from the smallest V2 invoke that returns the shape it needs:
+  //   - releaseWatch: `v2_get_release_watch` (personalized, followed artists)
+  //   - newReleases / pressAwards / mostStreamed / qobuzissimes /
+  //     editorPicks: a single `v2_get_discover_index` call returns all
+  //     five editorial containers in one round-trip.
+  let releaseWatch = $state<DiscoveryAlbumCard[]>([]);
   let newReleases = $state<DiscoveryAlbumCard[]>([]);
+  let pressAwards = $state<DiscoveryAlbumCard[]>([]);
+  let mostStreamed = $state<DiscoveryAlbumCard[]>([]);
+  let qobuzissimes = $state<DiscoveryAlbumCard[]>([]);
+  let editorPicks = $state<DiscoveryAlbumCard[]>([]);
 
   onMount(async () => {
-    newReleases = await fetchNewReleases(8);
+    // Two parallel fetches — release-watch is a separate endpoint from
+    // discover-index. The browser awaits both via Promise.all so neither
+    // blocks the other.
+    const [watch, index] = await Promise.all([
+      fetchReleaseWatch(8),
+      fetchDiscoverIndex(8),
+    ]);
+    releaseWatch = watch;
+    newReleases = index.newReleases;
+    pressAwards = index.pressAwards;
+    mostStreamed = index.mostStreamed;
+    qobuzissimes = index.qobuzissimes;
+    editorPicks = index.editorPicks;
   });
 
   // `activeTrackId` and `isPlaybackActive` are destructured but not yet read
@@ -134,29 +165,78 @@
     </div>
   </div>
 
+  {#snippet albumGrid(albums: DiscoveryAlbumCard[])}
+    {#each albums as album (album.albumId)}
+      <AlbumCardLite
+        albumId={album.albumId}
+        title={album.title}
+        artist={album.artist}
+        artwork={album.artwork}
+        onClick={() => onAlbumClick?.(album.albumId)}
+        onPlay={() => onAlbumPlay?.(album.albumId)}
+        onArtistClick={album.artistId !== undefined
+          ? () => onArtistClick?.(album.artistId!)
+          : undefined}
+      />
+    {/each}
+  {/snippet}
+
   <div class="scroll-area">
+    {#if releaseWatch.length > 0}
+      <DiscoverySection
+        title={$t('home.releaseWatch')}
+        onSeeAll={onNavigateReleaseWatch}
+      >
+        {#snippet children()}{@render albumGrid(releaseWatch)}{/snippet}
+      </DiscoverySection>
+    {/if}
+
     {#if newReleases.length > 0}
       <DiscoverySection
         title={$t('home.newReleases')}
         onSeeAll={onNavigateNewReleases}
       >
-        {#snippet children()}
-          {#each newReleases as album (album.albumId)}
-            <AlbumCardLite
-              albumId={album.albumId}
-              title={album.title}
-              artist={album.artist}
-              artwork={album.artwork}
-              onClick={() => onAlbumClick?.(album.albumId)}
-              onPlay={() => onAlbumPlay?.(album.albumId)}
-              onArtistClick={album.artistId !== undefined
-                ? () => onArtistClick?.(album.artistId!)
-                : undefined}
-            />
-          {/each}
-        {/snippet}
+        {#snippet children()}{@render albumGrid(newReleases)}{/snippet}
       </DiscoverySection>
-    {:else}
+    {/if}
+
+    {#if mostStreamed.length > 0}
+      <DiscoverySection
+        title={$t('home.mostStreamed')}
+        onSeeAll={onNavigateTopAlbums}
+      >
+        {#snippet children()}{@render albumGrid(mostStreamed)}{/snippet}
+      </DiscoverySection>
+    {/if}
+
+    {#if editorPicks.length > 0}
+      <DiscoverySection
+        title={$t('home.editorPicks')}
+        onSeeAll={onNavigateAlbumsOfTheWeek}
+      >
+        {#snippet children()}{@render albumGrid(editorPicks)}{/snippet}
+      </DiscoverySection>
+    {/if}
+
+    {#if qobuzissimes.length > 0}
+      <DiscoverySection
+        title={$t('home.qobuzissimes')}
+        onSeeAll={onNavigateQobuzissimes}
+      >
+        {#snippet children()}{@render albumGrid(qobuzissimes)}{/snippet}
+      </DiscoverySection>
+    {/if}
+
+    {#if pressAwards.length > 0}
+      <DiscoverySection
+        title={$t('home.pressAwards')}
+        onSeeAll={onNavigatePressAccolades}
+      >
+        {#snippet children()}{@render albumGrid(pressAwards)}{/snippet}
+      </DiscoverySection>
+    {/if}
+
+    {#if releaseWatch.length === 0 && newReleases.length === 0}
       <p class="placeholder">{$t('discovery.comingSoon')}</p>
     {/if}
   </div>
