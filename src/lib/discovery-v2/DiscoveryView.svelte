@@ -19,6 +19,7 @@
   import PlaylistCardLite from './PlaylistCardLite.svelte';
   import GenreFilterButton from '$lib/components/GenreFilterButton.svelte';
   import { getSelectedGenreIds } from '$lib/stores/genreFilterStore';
+  import { sectionPrefs } from './sectionPrefs';
 
   /**
    * Discovery V2 — clean-room rebuild of the home view.
@@ -273,110 +274,92 @@
     {#if homeTab !== 'home'}
       <p class="placeholder">{$t('discovery.comingSoon')}</p>
     {:else}
-    {#if recentlyPlayedAlbums.length > 0}
-      <DiscoverySection
-        title={$t('home.recentlyPlayed')}
-        items={recentlyPlayedAlbums}
-        renderItem={albumCard}
-      />
-    {/if}
-
-    {#if continueListening.length > 0}
-      <DiscoverySection
-        title={$t('home.continueListening')}
-        items={continueListening}
-        renderItem={trackCard}
-      />
-    {/if}
-
-    {#if releaseWatch.length > 0}
-      <DiscoverySection
-        title={$t('home.releaseWatch')}
-        items={releaseWatch}
-        renderItem={albumCard}
-        onSeeAll={onNavigateReleaseWatch}
-      />
-    {/if}
-
-    {#if newReleases.length > 0}
-      <DiscoverySection
-        title={$t('home.newReleases')}
-        items={newReleases}
-        renderItem={albumCard}
-        onSeeAll={onNavigateNewReleases}
-      />
-    {/if}
-
-    {#if mostStreamed.length > 0}
-      <DiscoverySection
-        title={$t('home.mostStreamed')}
-        items={mostStreamed}
-        renderItem={albumCard}
-        onSeeAll={onNavigateTopAlbums}
-      />
-    {/if}
-
-    {#if idealDiscography.length > 0}
-      <DiscoverySection
-        title={$t('discover.idealDiscography')}
-        items={idealDiscography}
-        renderItem={albumCard}
-        onSeeAll={onNavigateIdealDiscography}
-      />
-    {/if}
-
-    {#if editorPicks.length > 0}
-      <DiscoverySection
-        title={$t('home.editorPicks')}
-        items={editorPicks}
-        renderItem={albumCard}
-        onSeeAll={onNavigateAlbumsOfTheWeek}
-      />
-    {/if}
-
-    {#if qobuzissimes.length > 0}
-      <DiscoverySection
-        title={$t('home.qobuzissimes')}
-        items={qobuzissimes}
-        renderItem={albumCard}
-        onSeeAll={onNavigateQobuzissimes}
-      />
-    {/if}
-
-    {#if pressAwards.length > 0}
-      <DiscoverySection
-        title={$t('home.pressAwards')}
-        items={pressAwards}
-        renderItem={albumCard}
-        onSeeAll={onNavigatePressAccolades}
-      />
-    {/if}
-
-    {#if qobuzPlaylists.length > 0}
-      <DiscoverySection
-        title={$t('home.qobuzPlaylists')}
-        items={qobuzPlaylists}
-        renderItem={playlistCard}
-        onSeeAll={onNavigateQobuzPlaylists}
-      />
-    {/if}
-
-    {#if topArtists.length > 0}
-      <DiscoverySection
-        title={$t('home.yourTopArtists')}
-        items={topArtists}
-        renderItem={artistTile}
-        cardWidth={170}
-      />
-    {/if}
-
-    {#if favoriteAlbums.length > 0}
-      <DiscoverySection
-        title={$t('home.favoriteAlbums')}
-        items={favoriteAlbums}
-        renderItem={albumCard}
-      />
-    {/if}
+    {#each $sectionPrefs as pref (pref.id)}
+      {#if pref.enabled}
+        {#if pref.id === 'newReleases' && newReleases.length > 0}
+          <DiscoverySection
+            title={$t('home.newReleases')}
+            items={newReleases}
+            renderItem={albumCard}
+            onSeeAll={onNavigateNewReleases}
+          />
+        {:else if pref.id === 'pressAwards' && pressAwards.length > 0}
+          <DiscoverySection
+            title={$t('home.pressAwards')}
+            items={pressAwards}
+            renderItem={albumCard}
+            onSeeAll={onNavigatePressAccolades}
+          />
+        {:else if pref.id === 'qobuzPlaylists' && qobuzPlaylists.length > 0}
+          <DiscoverySection
+            title={$t('home.qobuzPlaylists')}
+            items={qobuzPlaylists}
+            renderItem={playlistCard}
+            onSeeAll={onNavigateQobuzPlaylists}
+          />
+        {:else if pref.id === 'recentlyPlayedAlbums' && recentlyPlayedAlbums.length > 0}
+          <DiscoverySection
+            title={$t('home.recentlyPlayed')}
+            items={recentlyPlayedAlbums}
+            renderItem={albumCard}
+          />
+        {:else if pref.id === 'continueListening' && continueListening.length > 0}
+          <DiscoverySection
+            title={$t('home.continueListening')}
+            items={continueListening}
+            renderItem={trackCard}
+          />
+        {:else if pref.id === 'idealDiscography' && idealDiscography.length > 0}
+          <DiscoverySection
+            title={$t('discover.idealDiscography')}
+            items={idealDiscography}
+            renderItem={albumCard}
+            onSeeAll={onNavigateIdealDiscography}
+          />
+        {:else if pref.id === 'mostStreamed' && mostStreamed.length > 0}
+          <DiscoverySection
+            title={$t('home.mostStreamed')}
+            items={mostStreamed}
+            renderItem={albumCard}
+            onSeeAll={onNavigateTopAlbums}
+          />
+        {:else if pref.id === 'releaseWatch' && releaseWatch.length > 0}
+          <DiscoverySection
+            title={$t('home.releaseWatch')}
+            items={releaseWatch}
+            renderItem={albumCard}
+            onSeeAll={onNavigateReleaseWatch}
+          />
+        {:else if pref.id === 'editorPicks' && editorPicks.length > 0}
+          <DiscoverySection
+            title={$t('home.editorPicks')}
+            items={editorPicks}
+            renderItem={albumCard}
+            onSeeAll={onNavigateAlbumsOfTheWeek}
+          />
+        {:else if pref.id === 'qobuzissimes' && qobuzissimes.length > 0}
+          <DiscoverySection
+            title={$t('home.qobuzissimes')}
+            items={qobuzissimes}
+            renderItem={albumCard}
+            onSeeAll={onNavigateQobuzissimes}
+          />
+        {:else if pref.id === 'topArtists' && topArtists.length > 0}
+          <DiscoverySection
+            title={$t('home.yourTopArtists')}
+            items={topArtists}
+            renderItem={artistTile}
+            cardWidth={170}
+          />
+        {:else if pref.id === 'favoriteAlbums' && favoriteAlbums.length > 0}
+          <DiscoverySection
+            title={$t('home.favoriteAlbums')}
+            items={favoriteAlbums}
+            renderItem={albumCard}
+          />
+        {/if}
+      {/if}
+    {/each}
 
     {#if releaseWatch.length === 0 && newReleases.length === 0 && recentlyPlayedAlbums.length === 0}
       <p class="placeholder">{$t('discovery.comingSoon')}</p>
