@@ -17,6 +17,8 @@
   import TrackCardLite from './TrackCardLite.svelte';
   import ArtistTileLite from './ArtistTileLite.svelte';
   import PlaylistCardLite from './PlaylistCardLite.svelte';
+  import GenreFilterButton from '$lib/components/GenreFilterButton.svelte';
+  import { getSelectedGenreIds } from '$lib/stores/genreFilterStore';
 
   /**
    * Discovery V2 — clean-room rebuild of the home view.
@@ -142,15 +144,16 @@
   let topArtists = $state<DiscoveryArtistTile[]>([]);
   let favoriteAlbums = $state<DiscoveryAlbumCard[]>([]);
 
-  onMount(async () => {
+  async function loadAll() {
     // Three parallel fetches:
-    //  - release-watch (followed-artists radar)
-    //  - discover-index (5 editorial album sections + playlists)
+    //  - release-watch (followed-artists radar, not genre-filtered)
+    //  - discover-index (5 editorial album sections + playlists; respects genre)
     //  - home-resolved (4 personalized sections from local reco DB)
     // Each is independent so they race without blocking.
+    const genreIds = Array.from(getSelectedGenreIds('home'));
     const [watch, index, resolved] = await Promise.all([
       fetchReleaseWatch(8),
-      fetchDiscoverIndex(8),
+      fetchDiscoverIndex(8, genreIds),
       fetchHomeResolved(8),
     ]);
     releaseWatch = watch;
@@ -164,7 +167,15 @@
     continueListening = resolved.continueListening;
     topArtists = resolved.topArtists;
     favoriteAlbums = resolved.favoriteAlbums;
+  }
+
+  onMount(() => {
+    void loadAll();
   });
+
+  function handleGenreFilterChange() {
+    void loadAll();
+  }
 
   // `activeTrackId` and `isPlaybackActive` are destructured but not yet read
   // by V1 — the album-card level doesn't know the playing track's albumId
@@ -187,7 +198,12 @@
       {/each}
     </div>
     <div class="genre-slot">
-      <!-- Genre filter button slot — wire actual selector after measure. -->
+      <GenreFilterButton
+        onFilterChange={handleGenreFilterChange}
+        context="home"
+        variant="default"
+        align="right"
+      />
     </div>
   </div>
 
