@@ -208,20 +208,62 @@
     </div>
   </div>
 
-  {#snippet albumGrid(albums: DiscoveryAlbumCard[])}
-    {#each albums as album (album.albumId)}
-      <AlbumCardLite
-        albumId={album.albumId}
-        title={album.title}
-        artist={album.artist}
-        artwork={album.artwork}
-        onClick={() => onAlbumClick?.(album.albumId)}
-        onPlay={() => onAlbumPlay?.(album.albumId)}
-        onArtistClick={album.artistId !== undefined
-          ? () => onArtistClick?.(album.artistId!)
-          : undefined}
-      />
-    {/each}
+  {#snippet albumCard(album: DiscoveryAlbumCard)}
+    <AlbumCardLite
+      albumId={album.albumId}
+      title={album.title}
+      artist={album.artist}
+      artwork={album.artwork}
+      onClick={() => onAlbumClick?.(album.albumId)}
+      onPlay={() => onAlbumPlay?.(album.albumId)}
+      onArtistClick={album.artistId !== undefined
+        ? () => onArtistClick?.(album.artistId!)
+        : undefined}
+    />
+  {/snippet}
+
+  {#snippet trackCard(track: DiscoveryTrackCard)}
+    <TrackCardLite
+      trackId={track.trackId}
+      title={track.title}
+      artist={track.artist}
+      artwork={track.artwork}
+      isPlaying={track.trackId === activeTrackId && isPlaybackActive === true}
+      onPlay={() => onTrackPlay?.({
+        id: track.trackId,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        albumId: track.albumId,
+        artistId: track.artistId,
+        albumArt: track.artwork,
+      } as DisplayTrack)}
+      onAlbumClick={track.albumId
+        ? () => onTrackGoToAlbum?.(track.albumId!)
+        : undefined}
+      onArtistClick={track.artistId !== undefined
+        ? () => onTrackGoToArtist?.(track.artistId!)
+        : undefined}
+    />
+  {/snippet}
+
+  {#snippet playlistCard(playlist: DiscoveryPlaylistCard)}
+    <PlaylistCardLite
+      playlistId={playlist.playlistId}
+      name={playlist.name}
+      image={playlist.image}
+      onClick={() => onPlaylistClick?.(playlist.playlistId)}
+      onPlay={() => onPlaylistPlay?.(playlist.playlistId)}
+    />
+  {/snippet}
+
+  {#snippet artistTile(artist: DiscoveryArtistTile)}
+    <ArtistTileLite
+      artistId={artist.artistId}
+      name={artist.name}
+      image={artist.image}
+      onClick={() => onArtistClick?.(artist.artistId)}
+    />
   {/snippet}
 
   <div class="scroll-area">
@@ -229,134 +271,99 @@
       <p class="placeholder">{$t('discovery.comingSoon')}</p>
     {:else}
     {#if recentlyPlayedAlbums.length > 0}
-      <DiscoverySection title={$t('home.recentlyPlayed')}>
-        {#snippet children()}{@render albumGrid(recentlyPlayedAlbums)}{/snippet}
-      </DiscoverySection>
+      <DiscoverySection
+        title={$t('home.recentlyPlayed')}
+        items={recentlyPlayedAlbums}
+        renderItem={albumCard}
+      />
     {/if}
 
     {#if continueListening.length > 0}
-      <DiscoverySection title={$t('home.continueListening')}>
-        {#snippet children()}
-          {#each continueListening as track (track.trackId)}
-            <TrackCardLite
-              trackId={track.trackId}
-              title={track.title}
-              artist={track.artist}
-              artwork={track.artwork}
-              isPlaying={track.trackId === activeTrackId && isPlaybackActive === true}
-              onPlay={() => onTrackPlay?.({
-                id: track.trackId,
-                title: track.title,
-                artist: track.artist,
-                album: track.album,
-                albumId: track.albumId,
-                artistId: track.artistId,
-                albumArt: track.artwork,
-              } as DisplayTrack)}
-              onAlbumClick={track.albumId
-                ? () => onTrackGoToAlbum?.(track.albumId!)
-                : undefined}
-              onArtistClick={track.artistId !== undefined
-                ? () => onTrackGoToArtist?.(track.artistId!)
-                : undefined}
-            />
-          {/each}
-        {/snippet}
-      </DiscoverySection>
+      <DiscoverySection
+        title={$t('home.continueListening')}
+        items={continueListening}
+        renderItem={trackCard}
+      />
     {/if}
 
     {#if releaseWatch.length > 0}
       <DiscoverySection
         title={$t('home.releaseWatch')}
+        items={releaseWatch}
+        renderItem={albumCard}
         onSeeAll={onNavigateReleaseWatch}
-      >
-        {#snippet children()}{@render albumGrid(releaseWatch)}{/snippet}
-      </DiscoverySection>
+      />
     {/if}
 
     {#if newReleases.length > 0}
       <DiscoverySection
         title={$t('home.newReleases')}
+        items={newReleases}
+        renderItem={albumCard}
         onSeeAll={onNavigateNewReleases}
-      >
-        {#snippet children()}{@render albumGrid(newReleases)}{/snippet}
-      </DiscoverySection>
+      />
     {/if}
 
     {#if mostStreamed.length > 0}
       <DiscoverySection
         title={$t('home.mostStreamed')}
+        items={mostStreamed}
+        renderItem={albumCard}
         onSeeAll={onNavigateTopAlbums}
-      >
-        {#snippet children()}{@render albumGrid(mostStreamed)}{/snippet}
-      </DiscoverySection>
+      />
     {/if}
 
     {#if editorPicks.length > 0}
       <DiscoverySection
         title={$t('home.editorPicks')}
+        items={editorPicks}
+        renderItem={albumCard}
         onSeeAll={onNavigateAlbumsOfTheWeek}
-      >
-        {#snippet children()}{@render albumGrid(editorPicks)}{/snippet}
-      </DiscoverySection>
+      />
     {/if}
 
     {#if qobuzissimes.length > 0}
       <DiscoverySection
         title={$t('home.qobuzissimes')}
+        items={qobuzissimes}
+        renderItem={albumCard}
         onSeeAll={onNavigateQobuzissimes}
-      >
-        {#snippet children()}{@render albumGrid(qobuzissimes)}{/snippet}
-      </DiscoverySection>
+      />
     {/if}
 
     {#if pressAwards.length > 0}
       <DiscoverySection
         title={$t('home.pressAwards')}
+        items={pressAwards}
+        renderItem={albumCard}
         onSeeAll={onNavigatePressAccolades}
-      >
-        {#snippet children()}{@render albumGrid(pressAwards)}{/snippet}
-      </DiscoverySection>
+      />
     {/if}
 
     {#if qobuzPlaylists.length > 0}
       <DiscoverySection
         title={$t('home.qobuzPlaylists')}
+        items={qobuzPlaylists}
+        renderItem={playlistCard}
         onSeeAll={onNavigateQobuzPlaylists}
-      >
-        {#snippet children()}
-          {#each qobuzPlaylists as playlist (playlist.playlistId)}
-            <PlaylistCardLite
-              playlistId={playlist.playlistId}
-              name={playlist.name}
-              image={playlist.image}
-              onClick={() => onPlaylistClick?.(playlist.playlistId)}
-              onPlay={() => onPlaylistPlay?.(playlist.playlistId)}
-            />
-          {/each}
-        {/snippet}
-      </DiscoverySection>
+      />
     {/if}
 
     {#if topArtists.length > 0}
-      <DiscoverySection title={$t('home.yourTopArtists')}>
-        {#snippet children()}
-          {#each topArtists as artist (artist.artistId)}
-            <ArtistTileLite
-              artistId={artist.artistId}
-              name={artist.name}
-              image={artist.image}
-              onClick={() => onArtistClick?.(artist.artistId)}
-            />
-          {/each}
-        {/snippet}
-      </DiscoverySection>
+      <DiscoverySection
+        title={$t('home.yourTopArtists')}
+        items={topArtists}
+        renderItem={artistTile}
+        cardWidth={140}
+      />
     {/if}
 
     {#if favoriteAlbums.length > 0}
-      <DiscoverySection title={$t('home.favoriteAlbums')}>
-        {#snippet children()}{@render albumGrid(favoriteAlbums)}{/snippet}
-      </DiscoverySection>
+      <DiscoverySection
+        title={$t('home.favoriteAlbums')}
+        items={favoriteAlbums}
+        renderItem={albumCard}
+      />
     {/if}
 
     {#if releaseWatch.length === 0 && newReleases.length === 0 && recentlyPlayedAlbums.length === 0}
