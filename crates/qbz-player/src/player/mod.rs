@@ -904,6 +904,10 @@ pub struct SharedState {
     current_device: Arc<std::sync::RwLock<Option<String>>>,
     /// Stream error flag (set when ALSA/audio errors are detected)
     stream_error: Arc<AtomicBool>,
+    /// Optional user-readable explanation paired with `stream_error`.
+    /// Drained by the Tauri polling loop to emit a frontend toast and then
+    /// cleared, so the UI fires the notification exactly once per error.
+    stream_error_message: Arc<std::sync::RwLock<Option<String>>>,
     /// Actual sample rate of the current stream (Hz)
     sample_rate: Arc<AtomicU32>,
     /// Actual bit depth of the current stream
@@ -941,6 +945,7 @@ impl SharedState {
             position_at_start: Arc::new(AtomicU64::new(0)),
             current_device: Arc::new(std::sync::RwLock::new(None)),
             stream_error: Arc::new(AtomicBool::new(false)),
+            stream_error_message: Arc::new(std::sync::RwLock::new(None)),
             sample_rate: Arc::new(AtomicU32::new(0)),
             bit_depth: Arc::new(AtomicU32::new(0)),
             normalization_gain: Arc::new(AtomicU32::new(0)),
@@ -953,10 +958,34 @@ impl SharedState {
 
     pub fn set_stream_error(&self, error: bool) {
         self.stream_error.store(error, Ordering::SeqCst);
+        if !error {
+            if let Ok(mut m) = self.stream_error_message.write() {
+                *m = None;
+            }
+        }
     }
 
     pub fn has_stream_error(&self) -> bool {
         self.stream_error.load(Ordering::SeqCst)
+    }
+
+    /// Record a user-readable error explanation alongside `stream_error=true`.
+    /// The message is drained once via `take_stream_error_message` so the UI
+    /// fires the toast exactly once per error.
+    pub fn record_stream_error(&self, message: impl Into<String>) {
+        self.stream_error.store(true, Ordering::SeqCst);
+        if let Ok(mut m) = self.stream_error_message.write() {
+            *m = Some(message.into());
+        }
+    }
+
+    /// Atomically take the pending stream-error message (if any). Returns
+    /// `None` when no message is pending or has already been read.
+    pub fn take_stream_error_message(&self) -> Option<String> {
+        self.stream_error_message
+            .write()
+            .ok()
+            .and_then(|mut m| m.take())
     }
 
     pub fn set_stream_quality(&self, sample_rate: u32, bit_depth: u32) {
@@ -1300,6 +1329,7 @@ impl Player {
                                         e
                                     );
                                     state.set_current_device(None);
+                                    state.record_stream_error(e.clone());
                                     return None;
                                 }
                                 log::warn!(
