@@ -36,7 +36,7 @@
 </script>
 
 <aside class="lyrics-sidebar">
-  <div class="header">
+  <div class="header" data-tauri-drag-region="deep">
     <div class="header-icon">
       <MicVocal size={18} />
     </div>
@@ -65,7 +65,7 @@
     />
   </div>
 
-  <div class="panel">
+  <div class="panel selectable">
     {#if isLoading}
       <div class="state">
         <div class="loading-spinner"></div>

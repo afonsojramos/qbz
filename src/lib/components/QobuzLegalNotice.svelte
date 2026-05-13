@@ -23,7 +23,7 @@
   const TERMS_URL = 'https://www.qobuz.com/us-en/legal/terms';
 </script>
 
-<div class={`qobuz-legal ${className}`}>
+<div class={`qobuz-legal selectable ${className}`}>
   {#if showBrandingLine}
     <p class="branding-line">
       {$t('legal.brandingLine')}
@@ -74,7 +74,6 @@
     font-size: 12px;
     color: var(--text-muted);
     line-height: 1.4;
-    user-select: none;
   }
 
   .tos-line input {

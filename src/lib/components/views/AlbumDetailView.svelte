@@ -664,7 +664,7 @@
     </div>
 
     <!-- Album Metadata -->
-    <div class="metadata" class:no-description={!album.description}>
+    <div class="metadata selectable" class:no-description={!album.description}>
       <h1 class="album-title">{album.title}</h1>
       <div class="artist-line">
         {#if album.parentalWarning}
@@ -819,8 +819,8 @@
   <!-- Track List -->
   <div class="track-list">
     <!-- Table Header -->
-    <div class="tracklist-toolbar">
-      <div class="tracklist-toolbar-left">
+    <div class="tracklist-toolbar" data-tauri-drag-region="deep">
+      <div class="tracklist-toolbar-left" data-tauri-drag-region="false">
         <QualityBadgeStatic
           bare
           quality={album.quality}
@@ -828,7 +828,7 @@
           samplingRate={album.samplingRate}
         />
       </div>
-      <div class="tracklist-toolbar-search">
+      <div class="tracklist-toolbar-search" data-tauri-drag-region="false">
         <Search size={14} />
         <input
           type="text"

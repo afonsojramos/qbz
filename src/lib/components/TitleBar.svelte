@@ -288,10 +288,6 @@
     display: flex;
     align-items: center;
     padding: 2px 0 0 0;
-    user-select: none;
-    -webkit-user-select: none;
-    -webkit-app-region: drag;
-    app-region: drag;
   }
 
   /* 3-zone layout: left and right zones are equal width, center is fixed */
@@ -321,7 +317,6 @@
   .drag-region {
     flex: 1;
     height: 100%;
-    cursor: default;
   }
 
   /* Search bar in titlebar */

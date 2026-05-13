@@ -2420,7 +2420,7 @@
         {#if playlist.description}
           <p class="playlist-description">{@html sanitizeHtml(playlist.description)}</p>
         {/if}
-        <div class="playlist-info">
+        <div class="playlist-info selectable">
           <span class="owner">{playlist.owner.name}</span>
           <span class="separator">•</span>
           <span>{totalTrackCount} {$t('playlist.tracks')}{#if hasLocalTracks} <span class="local-count">({localTracks.length} local)</span>{/if}</span>
@@ -2518,9 +2518,9 @@
          tall as the virtualized content, so the header pins for the whole
          scroll range. -->
     <div class="track-list" bind:this={trackListEl}>
-      <div class="tracks-sticky-header">
+      <div class="tracks-sticky-header" data-tauri-drag-region="deep">
         <!-- Track List Controls -->
-        <div class="track-controls">
+        <div class="track-controls" data-tauri-drag-region="false">
           <!-- Search -->
           <div class="search-container">
             <Search size={16} class="search-icon" />
@@ -3450,7 +3450,6 @@
   .track-row-wrapper.unavailable {
     opacity: 0.5;
     pointer-events: auto;
-    user-select: none;
   }
 
   .track-row-wrapper.unavailable :global(.track-row) {
