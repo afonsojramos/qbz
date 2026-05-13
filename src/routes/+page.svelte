@@ -280,6 +280,7 @@
     stopQueueEventListener,
     consumeStopAfterIf,
     stopAfterTrackId,
+    registerQueueMutationObserver,
     type QueueTrack,
     type BackendQueueTrack,
     type RepeatMode
@@ -4780,6 +4781,12 @@
     registerAction('ui.showShortcuts', () => { isShortcutsModalOpen = true; });
     registerAction('ui.openLink', () => { isLinkResolverOpen = true; });
 
+    // Persist the queue on every mutation (add / remove / reorder / set /
+    // clear / stop-after consume / remove-after). The store calls back into
+    // debouncedFullSessionSave so multiple rapid mutations coalesce into one
+    // SQLite write — same 2s debounce the track-change save already uses.
+    const unregisterQueueMutationObserver = registerQueueMutationObserver(debouncedFullSessionSave);
+
     // Session save on window close/hide
     const handleBeforeUnload = () => {
       saveSessionBeforeClose();
@@ -5699,6 +5706,7 @@
       unsubscribeNav();
       unsubscribePlayer();
       unsubscribeQueue();
+      unregisterQueueMutationObserver();
       unsubscribeLyrics();
       unsubscribeContentSidebar();
       unsubscribeCast();
