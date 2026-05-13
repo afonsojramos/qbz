@@ -1,17 +1,17 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
   import { t } from 'svelte-i18n';
+  import { prepareWithSegments, layoutWithLines, type LayoutLine } from '@chenglou/pretext';
   import type {
     LyricsFont,
     LyricsFontSize,
     LyricsDimming
   } from '$lib/stores/lyricsDisplayStore';
+  import type { LyricsLine as StoreLyricsLine } from '$lib/stores/lyricsStore';
 
-  interface LyricsLine {
-    text: string;
-    timeMs?: number; // Optional timing for synced lyrics
-    endMs?: number; // Optional end-of-vocal marker (LRC gap markers)
-  }
+  // Accept the canonical store shape, or a minimal projection for callers
+  // (e.g. unsynced lyrics surfaces) that only need text.
+  type LyricsLine = StoreLyricsLine | { text: string; timeMs?: number; endMs?: number };
 
   interface Props {
     lines: LyricsLine[];
@@ -92,74 +92,234 @@
   // stale position followed by a backward transition to 0. Running pre-DOM
   // means the first paint of the new line already sees lookaheadEnabled =
   // false and the snapshot is correct.
+  //
+  // Reads-and-writes of the same $state (measuredBlockMs feeding its own
+  // EMA, lookaheadEnabled / measuredBlockDelta written below) are wrapped
+  // in untrack so the effect doesn't self-trigger on its own writes — the
+  // only true dependencies are activeIndex and activeProgress.
   $effect.pre(() => {
     const idx = activeIndex;
     const progress = activeProgress;
 
-    if (!isSynced || idx < 0) {
-      prevBlockTime = 0;
-      prevBlockIndex = -1;
-      lookaheadEnabled = false;
-      return;
-    }
+    untrack(() => {
+      if (!isSynced || idx < 0) {
+        prevBlockTime = 0;
+        prevBlockIndex = -1;
+        lookaheadEnabled = false;
+        return;
+      }
 
-    const now = performance.now();
+      const now = performance.now();
 
-    if (idx !== prevBlockIndex) {
-      // Line transition: seed transition duration from line duration
-      // (we don't have a real block-time measurement yet), and clear the
-      // lookahead so the first paint of the new line is exactly at the
-      // store's reported progress (no early/late drift across boundaries).
-      const dur = untrack(() => getLineDuration(idx));
-      measuredBlockMs = Math.max(80, Math.round(dur * 0.035));
-      measuredBlockDelta = 0;
-      lookaheadEnabled = false;
-      prevBlockIndex = idx;
+      if (idx !== prevBlockIndex) {
+        // Line transition: seed transition duration close to display
+        // refresh (≥20ms). With playerStore-side extrapolation feeding
+        // us per-rAF progress samples, the EMA converges to ~16ms within
+        // 2-3 ticks — but the FIRST tick of a new line uses this seed,
+        // and an 80ms seed would visibly lag the gradient for that
+        // one frame. Clear the lookahead so the first paint of the new
+        // line is exactly at the store's reported progress.
+        const dur = getLineDuration(idx);
+        const seedMs = Math.max(20, Math.round(dur * 0.01));
+        if (measuredBlockMs !== seedMs) measuredBlockMs = seedMs;
+        if (measuredBlockDelta !== 0) measuredBlockDelta = 0;
+        if (lookaheadEnabled) lookaheadEnabled = false;
+        prevBlockIndex = idx;
+        prevBlockTime = now;
+        prevBlockProgress = progress;
+        return;
+      }
+
+      if (prevBlockTime > 0) {
+        const dt = now - prevBlockTime;
+        const dp = progress - prevBlockProgress;
+        // Backward progress within the same line = seek; flip lookahead off
+        // so the cut doesn't lead from a now-stale forward velocity.
+        if (dp < 0 && lookaheadEnabled) lookaheadEnabled = false;
+        // dt > 1500 = discontinuity (tab resume, pause+seek): keep the EMA
+        // unchanged AND reset the snapshot so the next tick measures from
+        // the post-discontinuity moment instead of absorbing a frame-sized
+        // dp built up over seconds.
+        // 5ms ≤ dt ≤ 1500: a real rAF-rate sample, update the EMA. The 5ms
+        // floor used to be 50ms (calibrated for setInterval) which silently
+        // rejected every rAF update.
+        if (dt >= 5 && dt <= 1500) {
+          const newMs = Math.round(measuredBlockMs * 0.3 + dt * 0.7);
+          if (newMs !== measuredBlockMs) measuredBlockMs = newMs;
+        }
+        // Forward-only progress deltas; clamp to 1/30 (~half a rAF tick at
+        // 60Hz on a slow line) so a single coarse audio-time jump can't
+        // poison the lookahead with a multi-frame lead.
+        if (dp > 0 && dp < 0.2) {
+          const clamped = Math.min(dp, 1 / 30);
+          measuredBlockDelta = measuredBlockDelta * 0.3 + clamped * 0.7;
+          if (!lookaheadEnabled) lookaheadEnabled = true;
+        }
+      }
       prevBlockTime = now;
       prevBlockProgress = progress;
-      return;
-    }
-
-    if (prevBlockTime > 0) {
-      const dt = now - prevBlockTime;
-      const dp = progress - prevBlockProgress;
-      // Floor of 5ms: previously was 50ms (calibrated for setInterval ticks
-      // at 80–200ms), which silently rejected every rAF-rate update — so
-      // measuredBlockMs stayed pinned at the seed value (~89ms for a 2.5s
-      // line) and the transition was always 89ms long even when ticks were
-      // arriving every 16ms. With the floor lowered, the EMA settles to
-      // the real notification interval and the playhead lag drops ~10x.
-      if (dt >= 5 && dt <= 1500) {
-        measuredBlockMs = Math.round(measuredBlockMs * 0.3 + dt * 0.7);
-      }
-      // Forward-only progress deltas (backward = seek, not a tick we'd predict)
-      if (dp > 0 && dp < 0.2) {
-        measuredBlockDelta = measuredBlockDelta * 0.3 + dp * 0.7;
-        lookaheadEnabled = true;
-      }
-    }
-    prevBlockTime = now;
-    prevBlockProgress = progress;
+    });
   });
 
-  // Inline style for the (single) active line. Computed reactively so any
-  // change to lookahead / measurement state updates the karaoke position
-  // without restarting any animations.
-  //
-  // Always uses activeProgress as the floor — lookahead just adds a small
-  // measured offset on top. Earlier this forced 0 on first paint, but if
-  // lookaheadEnabled ever fails to flip on (e.g. the line gets only a
-  // single notification before audio stops or a seek lands directly at
-  // p=1) the gradient would stay at 0 forever (= the line never goes
-  // through). Tracking activeProgress directly makes that failure mode
-  // graceful: even with no lookahead, the playhead still reflects audio.
-  const activeLineStyle = $derived.by(() => {
-    if (!isSynced || activeIndex < 0) return '';
+  // Active lyric layout via Pretext. For wrapped lyrics, the CSS gradient
+  // applied to a single span shares the same X cut across every visual
+  // line — visually wrong because line 2 hasn't been sung yet. Pretext
+  // gives us each visual line's text and width as a clean data structure;
+  // we then render each line as its own block-level <span> with its own
+  // simple 0→100% gradient. Each line owns a proportional share of the
+  // total karaoke progress, so line 1 fully fills before line 2 starts.
+  let activeLineSegments = $state<LayoutLine[]>([]);
+
+  function layoutActiveLine(): void {
+    if (!container || activeIndex < 0 || !isSynced) {
+      activeLineSegments = [];
+      return;
+    }
+    const text = lines[activeIndex]?.text;
+    if (!text) {
+      activeLineSegments = [];
+      return;
+    }
+    const div = container.querySelector<HTMLElement>(
+      `[data-line-index="${activeIndex}"]`
+    );
+    if (!div) {
+      activeLineSegments = [];
+      return;
+    }
+    const computed = getComputedStyle(div);
+    const fontSizePx = Number.parseFloat(computed.fontSize);
+    // line-height of `normal` resolves to "normal" (not a px string) → NaN.
+    // Anything else resolves to a positive px value; guard explicitly rather
+    // than relying on `|| fallback` (which would also swallow a legitimate 0).
+    const parsedLineHeight = Number.parseFloat(computed.lineHeight);
+    const lineHeightPx =
+      Number.isFinite(parsedLineHeight) && parsedLineHeight > 0
+        ? parsedLineHeight
+        : fontSizePx * 1.5;
+    // offsetWidth is the CSS layout width (pre-transform). The active line
+    // applies a CSS scale, so the visual rendering is wider than its
+    // layout box and would clip against the parent's overflow-x: hidden.
+    // 1.2 is empirical — it accounts for the visual scale plus a small
+    // safety margin for measurement variance between Pretext's canvas
+    // metrics and the browser's actual text layout.
+    const ACTIVE_SCALE = 1.2;
+    const maxWidth = div.offsetWidth / ACTIVE_SCALE;
+    if (!fontSizePx || maxWidth <= 0) {
+      activeLineSegments = [];
+      return;
+    }
+    // Canvas-style font string: "<weight> <size>px <family>"
+    const fontStr = `${computed.fontWeight} ${fontSizePx}px ${computed.fontFamily}`;
+    // Letter-spacing in CSS gets resolved to a pixel value (or "normal").
+    // Without it, Pretext underestimates width by ~spacing × char-count.
+    const lsStr = computed.letterSpacing;
+    const letterSpacing = lsStr && lsStr !== 'normal' ? Number.parseFloat(lsStr) || 0 : 0;
+
+    try {
+      const prepared = prepareWithSegments(text, fontStr, { letterSpacing });
+      const result = layoutWithLines(prepared, maxWidth, lineHeightPx);
+      activeLineSegments = result.lines;
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.warn('[Lyrics] Pretext layout failed:', e);
+      }
+      activeLineSegments = [];
+    }
+  }
+
+  // Schedule layout after Svelte's DOM flush, but cancel any in-flight
+  // schedule if activeIndex moves before the microtask resolves. Without
+  // the generation guard, rapid line transitions (seek-scrub, fast songs
+  // at 60Hz notifications) queue multiple `tick().then(layoutActiveLine)`
+  // promises; they resolve in order against the *current* activeIndex,
+  // measuring and re-measuring the same line and thrashing segment DOM.
+  $effect(() => {
+    const idx = activeIndex;
+    if (!isSynced || idx < 0) {
+      activeLineSegments = [];
+      return;
+    }
+    let canceled = false;
+    tick().then(() => {
+      if (!canceled && idx === activeIndex) layoutActiveLine();
+    });
+    return () => { canceled = true; };
+  });
+
+  // Re-layout on container resize (sidebar toggle, window resize, font
+  // size change). Coalesce bursts via rAF: a continuous window drag fires
+  // RO 60+ times/sec, and every callback would otherwise force layout +
+  // run Pretext measurement. Also gate on actual width change — the
+  // active-line scale animation (font-size, transform) changes container
+  // *height* mid-transition, which we don't care about.
+  $effect(() => {
+    if (!container) return;
+    let pending = false;
+    let prevWidth = container.clientWidth;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? prevWidth;
+      if (Math.abs(w - prevWidth) < 1) return;
+      prevWidth = w;
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(() => {
+        pending = false;
+        layoutActiveLine();
+      });
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  });
+
+  // Effective karaoke progress (with lookahead) — always uses
+  // activeProgress as a floor. Earlier the lookaheadEnabled flag gated
+  // this entirely; if it ever failed to flip on (e.g. the line gets only a
+  // single notification before audio stops, or a seek lands directly at
+  // p=1) the visual would stay at 0. Lookahead is a bonus, not a gate.
+  const effectiveProgress = $derived.by(() => {
     const base = Math.max(0, Math.min(1, activeProgress));
-    const prog = lookaheadEnabled
+    return lookaheadEnabled
       ? Math.max(0, Math.min(1, base + measuredBlockDelta))
       : base;
-    return `--line-progress: ${prog}; --block-interval: ${measuredBlockMs}ms`;
+  });
+
+  // Pre-compute cumulative-width prefix for the segments, so per-segment
+  // progress is O(1) lookup instead of O(i) summation inside the each-block.
+  // segmentBounds[i] = [start, end] in pixels for segment i across the
+  // full line; segmentTotal = total ink width.
+  const segmentBounds = $derived.by(() => {
+    const bounds: Array<[number, number]> = [];
+    let cumulative = 0;
+    for (const seg of activeLineSegments) {
+      bounds.push([cumulative, cumulative + seg.width]);
+      cumulative += seg.width;
+    }
+    return bounds;
+  });
+  const segmentTotalWidth = $derived(
+    segmentBounds.length > 0 ? segmentBounds[segmentBounds.length - 1][1] : 0
+  );
+
+  // Compute a single segment's local progress (0→1) given the global
+  // effectiveProgress and that segment's share of total width. Line 1
+  // fills first, line 2 only starts once line 1 is fully sung.
+  function getSegmentProgress(i: number): number {
+    if (segmentTotalWidth <= 0) return 0;
+    const progressPx = effectiveProgress * segmentTotalWidth;
+    const [start, end] = segmentBounds[i];
+    const width = end - start;
+    if (width <= 0) return 0;
+    const localPx = Math.max(0, Math.min(width, progressPx - start));
+    return localPx / width;
+  }
+
+  // Inline style for the active line's parent div. Now only carries
+  // --block-interval (shared transition timing for all segments) — the
+  // per-segment --line-progress is set on each segment span itself.
+  const activeLineStyle = $derived.by(() => {
+    if (!isSynced || activeIndex < 0) return '';
+    return `--block-interval: ${measuredBlockMs}ms`;
   });
 
   let container: HTMLDivElement | null = null;
@@ -271,7 +431,10 @@
     {#each lines as line, index (index)}
       <!-- Single <div> per line with class toggles, so CSS transitions can
            animate state changes (active ↔ past, size/scale/color) instead
-           of being killed by destroy-and-recreate when activeIndex moves. -->
+           of being killed by destroy-and-recreate when activeIndex moves.
+           Active line renders one .line-segment per Pretext-laid-out
+           visual line so each gets its own gradient and sequential fill;
+           non-active lines render a single .line-text. -->
       {@const isActive = isSynced && index === activeIndex}
       <div
         class="lyrics-line {immersive && isSynced ? getDistanceClass(index, activeIndex) : ''}"
@@ -282,7 +445,23 @@
           : (immersive ? '' : `--line-opacity: ${isSynced ? getLineOpacity(index, activeIndex) : 1}`)}
         data-line-index={index}
       >
-        <span class="line-text">{line.text}</span>
+        {#if isActive && activeLineSegments.length > 0}
+          <!-- Key includes activeIndex so a line transition forces fresh
+               DOM for each segment. Otherwise keying by `i` alone reuses
+               the previous line's segment-i element, and CSS transitions
+               on --line-progress fire from the prior line's final value
+               (e.g. 1.0 if that line was fully sung) down to the new
+               line's value — visible as a "ghost" partial-sung start
+               on the new line's segments. -->
+          {#each activeLineSegments as segment, i (`${activeIndex}-${i}`)}
+            <span
+              class="line-segment"
+              style="--line-progress: {getSegmentProgress(i)}"
+            >{segment.text}</span>
+          {/each}
+        {:else}
+          <span class="line-text">{line.text}</span>
+        {/if}
       </div>
     {/each}
 
@@ -502,26 +681,39 @@
     padding-bottom: 0.15em;
   }
 
-  /* Karaoke effect on active line — hard cut at the playhead.
-     Visual smoothness comes from --line-progress transitioning over
-     --block-interval; the gradient is a sharp two-color split moving
-     with that transition. The +1% bias on the playhead stops pushes the
-     cut just past 100% at p=1, guaranteeing the rightmost text pixels
-     are in the active color (so the last line of a song reliably fills
-     during the trailing instrumental coda). */
-  .lyrics-line.active .line-text {
+  /* One .line-segment per Pretext-laid-out visual line of the active
+     lyric. Each segment is its own block-level element with its own
+     simple 0→100% gradient driven by --line-progress (set inline per
+     segment in JS based on its share of total progress). Sequential
+     filling falls out naturally: line 1's segment owns the first portion
+     of progress, line 2's the next, etc.
+     white-space: nowrap because Pretext has already done the wrapping;
+     CSS shouldn't re-wrap within a segment. padding-bottom gives the
+     background-clip: text mask room for descenders (g/y/p/q). */
+  .lyrics-line.active .line-segment {
+    display: block;
+    white-space: nowrap;
+    padding-bottom: 0.15em;
     --progress-pos: calc(var(--line-progress, 0) * 100%);
     background: linear-gradient(
       90deg,
       var(--lyrics-active-color, var(--accent-primary)) 0%,
-      var(--lyrics-active-color, var(--accent-primary)) calc(var(--progress-pos) + 1%),
-      var(--text-primary) calc(var(--progress-pos) + 1%),
+      var(--lyrics-active-color, var(--accent-primary)) var(--progress-pos),
+      var(--text-primary) var(--progress-pos),
       var(--text-primary) 100%
     );
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
+    transition: --line-progress var(--block-interval, 175ms) linear;
+  }
+
+  /* Immersive mode overrides the gradient so the active line is solid white. */
+  .lyrics-lines.immersive .lyrics-line.active .line-segment {
+    background: none;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff;
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -26,6 +26,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@chenglou/pretext": "^0.0.7",
     "@icons-pack/svelte-simple-icons": "^7.2.0",
     "@kawarp/core": "^1.1.1",
     "@tauri-apps/api": "^2.11.0",

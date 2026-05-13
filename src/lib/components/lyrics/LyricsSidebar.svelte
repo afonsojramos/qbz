@@ -4,12 +4,7 @@
   import LyricsLines from './LyricsLines.svelte';
   import LyricsControlsPopover from './LyricsControlsPopover.svelte';
   import { lyricsDisplayStore } from '$lib/stores/lyricsDisplayStore';
-
-  interface LyricsLine {
-    text: string;
-    timeMs?: number;
-    endMs?: number;
-  }
+  import type { LyricsLine } from '$lib/stores/lyricsStore';
 
   interface Props {
     title?: string;
