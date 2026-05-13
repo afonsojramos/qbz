@@ -5808,10 +5808,15 @@
     class:match-chrome={matchSystemChrome && showTitleBar && windowTransparent}
     style="--chrome-radius: {chromeRadiusPx}px;"
   >
-    <!-- macOS: drag region for window movement (overlay title bar has no native drag area) -->
-    {#if !showTitleBar && platform === 'macos'}
-      <div class="macos-drag-region" data-tauri-drag-region></div>
-    {/if}
+    <!--
+      macOS overlay title bar: drag handling lives on the existing
+      .sidebar element. It already has a 32px top padding band (to
+      clear the traffic lights) — that's the area we reuse as the
+      window drag surface, by tagging the <aside> as a drag region
+      and tagging each of its direct children as no-drag. No new
+      elements added, no spacing added — just attributes.
+    -->
+
     <!-- Custom Title Bar (CSD) -->
     {#if showTitleBar}
       <TitleBar
@@ -7278,28 +7283,6 @@
   .app.no-titlebar .content-area,
   .app.no-titlebar .main-content {
     height: calc(100vh - var(--player-bar-height, 104px));
-  }
-
-  /* macOS: pad main content to clear native overlay title bar */
-  :global(html.macos) .main-content {
-    padding-top: 16px;
-    height: calc(100vh - 104px - 16px);
-  }
-
-  /* macOS: home view handles its own spacing */
-  :global(html.macos) .main-content :global(.home-view) {
-    margin-top: -16px;
-  }
-
-  /* macOS: invisible drag region for window movement (overlay title bar) */
-  :global(html.macos) .macos-drag-region {
-    height: 28px;
-    width: 100%;
-    position: absolute;
-    top: 0;
-    left: 0;
-    z-index: 9999;
-    -webkit-app-region: drag;
   }
 
   .view-error {
