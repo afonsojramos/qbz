@@ -165,6 +165,25 @@ let currentTrack: PlayingTrack | null = null;
 let isPlaying = false;
 let currentTime = 0;
 let duration = 0;
+
+// Wall-clock anchor for currentTime extrapolation. The Rust backend emits
+// position events at 250ms cadence — at 60Hz rAF, getCurrentTime() would
+// otherwise return a staircase that's frozen for ~15 frames between
+// updates, causing karaoke lyrics to start "midway" (detection lag) and
+// to end before the gradient reaches the end (final-segment cutoff).
+//
+// We anchor (audio position, wall clock) on every event-driven update,
+// then extrapolate forward at 1x while playing. Backend position is
+// already wall-clock-based on the Rust side (see lib.rs comment near the
+// 250ms emit loop), so JS extrapolation does the same math the backend
+// is doing — no semantic divergence, just finer time resolution.
+let positionAnchorWallClockMs = 0;
+let positionAnchorSecs = 0;
+
+function anchorPosition(secs: number): void {
+  positionAnchorSecs = secs;
+  positionAnchorWallClockMs = performance.now();
+}
 let volume = loadPersistedVolume();
 let preMuteVolume: number | null = null; // Volume before mute, null when not muted
 let isFavorite = false;
@@ -238,7 +257,15 @@ export function getIsPlaying(): boolean {
 }
 
 export function getCurrentTime(): number {
-  return currentTime;
+  // When paused or before the first anchor, return the stored value
+  // (which is what listeners last persisted). While playing, extrapolate
+  // from the anchor at 1x audio rate.
+  if (!isPlaying || positionAnchorWallClockMs === 0) return currentTime;
+  const elapsedSecs = (performance.now() - positionAnchorWallClockMs) / 1000;
+  // Cap extrapolation at 1s to bound drift if the backend stops emitting
+  // (network stall on cast, suspended audio thread). After the cap, we
+  // freeze at the last + cap rather than runway indefinitely.
+  return positionAnchorSecs + Math.min(elapsedSecs, 1);
 }
 
 export function getDuration(): number {
@@ -368,11 +395,13 @@ export function setCurrentTrack(track: PlayingTrack | null): void {
     };
     duration = track.duration;
     currentTime = 0;
+    anchorPosition(0);
     queueEnded = false;
   } else {
     currentTrack = null;
     duration = 0;
     currentTime = 0;
+    anchorPosition(0);
   }
   notifyListeners();
 }
@@ -553,6 +582,7 @@ export function setIsPlaying(playing: boolean): void {
 export async function seek(position: number): Promise<void> {
   const clampedPosition = Math.max(0, Math.min(duration, position));
   currentTime = clampedPosition;
+  anchorPosition(clampedPosition);
   notifyListeners();
 
   try {
@@ -649,6 +679,7 @@ export async function stop(): Promise<void> {
     isPlaying = false;
     currentTrack = null;
     currentTime = 0;
+    anchorPosition(0);
     duration = 0;
     gaplessAttemptTrackId = null;
     gaplessRequestInFlight = false;
@@ -803,6 +834,7 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
         duration = queueTrack.duration_secs;
         // Update playback state from event
         currentTime = event.position;
+        anchorPosition(event.position);
         isPlaying = event.is_playing;
         // Sync volume from backend
         volume = Math.round(event.volume * 100);
@@ -879,6 +911,7 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
       const target = seekTargetPosition;
       if (target === null) {
         currentTime = toDisplayed(event.position);
+        anchorPosition(currentTime);
         isPlaying = event.is_playing;
         return;
       }
@@ -887,6 +920,7 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
         seekTargetPosition = null;
         seekGuardUntilMs = 0;
         currentTime = toDisplayed(event.position);
+        anchorPosition(currentTime);
       } else {
         // Ignore stale position updates briefly after seek to avoid UI snap-back.
       }
@@ -896,6 +930,7 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
         seekGuardUntilMs = 0;
       }
       currentTime = toDisplayed(event.position);
+      anchorPosition(currentTime);
     }
     isPlaying = event.is_playing;
 
@@ -1017,6 +1052,7 @@ export async function startPolling(): Promise<void> {
         const castPos = getCastPosition();
         if (castPos.positionSecs !== currentTime) {
           currentTime = castPos.positionSecs;
+          anchorPosition(castPos.positionSecs);
           notifyListeners();
         }
       }
@@ -1067,6 +1103,7 @@ export function reset(): void {
   currentTrack = null;
   isPlaying = false;
   currentTime = 0;
+  anchorPosition(0);
   duration = 0;
   isFavorite = false;
   isAdvancingTrack = false;

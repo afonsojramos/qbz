@@ -1157,6 +1157,15 @@
   let lyricsActiveProgress = $state(0);
   let lyricsSidebarVisible = $state(false);
 
+  // Hoisted out of the LyricsSidebar template so the `lines` prop only
+  // re-computes when lyricsLines itself changes — not on every re-render
+  // of +page triggered by other reactive state (progress ticks, etc.).
+  // Note: $derived re-evaluates lazily on dep change; it does not deep-
+  // compare, so this is not a memoization in the React useMemo sense.
+  const lyricsSidebarLines = $derived(
+    lyricsLines.map((l) => ({ text: l.text, timeMs: l.timeMs, endMs: l.endMs }))
+  );
+
   let favoritesDefaultTab = $state<FavoritesTab>('tracks');
 
   async function loadFavoritesDefaultTab(): Promise<void> {
@@ -5106,15 +5115,19 @@
       repeatMode = queueState.repeatMode;
     });
 
-    // Subscribe to lyrics state changes
+    // Subscribe to lyrics state changes. Listener fires per progress tick
+    // (~12–30 Hz); guard each $state write with a reference/value check so
+    // we only fan out reactivity for fields that actually changed —
+    // critical for `lyricsLines`, which feeds a $derived `.map()` that
+    // would otherwise re-project N objects per tick.
     const unsubscribeLyrics = subscribeLyrics(() => {
       const state = getLyricsState();
-      lyricsStatus = state.status;
-      lyricsError = state.error;
-      lyricsLines = state.lines;
-      lyricsIsSynced = state.isSynced;
-      lyricsActiveIndex = state.activeIndex;
-      lyricsActiveProgress = state.activeProgress;
+      if (lyricsStatus !== state.status) lyricsStatus = state.status;
+      if (lyricsError !== state.error) lyricsError = state.error;
+      if (lyricsLines !== state.lines) lyricsLines = state.lines;
+      if (lyricsIsSynced !== state.isSynced) lyricsIsSynced = state.isSynced;
+      if (lyricsActiveIndex !== state.activeIndex) lyricsActiveIndex = state.activeIndex;
+      if (lyricsActiveProgress !== state.activeProgress) lyricsActiveProgress = state.activeProgress;
       // Close network sidebar and queue when lyrics opens; restore when it closes
       if (state.sidebarVisible && !lyricsSidebarVisible) {
         closeContentSidebar('network');
@@ -6714,7 +6727,7 @@
       <LyricsSidebar
         title={currentTrack?.title}
         artist={currentTrack?.artist}
-        lines={lyricsLines.map(l => ({ text: l.text }))}
+        lines={lyricsSidebarLines}
         activeIndex={lyricsActiveIndex}
         activeProgress={lyricsActiveProgress}
         isSynced={lyricsIsSynced}
