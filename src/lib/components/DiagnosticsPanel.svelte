@@ -461,7 +461,7 @@
   }
 </script>
 
-<div class="diagnostics-panel">
+<div class="diagnostics-panel selectable">
   <button class="section-toggle panel-toggle" onclick={togglePanel}>
     {#if panelOpen}<ChevronDown size={14} />{:else}<ChevronRight size={14} />{/if}
     <h4 class="subsection-title" style="margin:0">{$t('settings.developer.diagnostics.title')}</h4>
