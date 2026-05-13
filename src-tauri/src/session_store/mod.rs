@@ -31,6 +31,12 @@ pub struct PersistedQueueTrack {
     pub source: Option<String>,
     #[serde(default)]
     pub parental_warning: bool,
+    /// Opaque id of the Mixtape/Collection item that produced this track.
+    /// Persisted so a Mixtape-sourced queue restored from disk keeps the
+    /// item association the live queue would have (album_id is the safe
+    /// fallback for non-Mixtape paths; None reads fine downstream).
+    #[serde(default)]
+    pub source_item_id_hint: Option<String>,
 }
 
 /// Represents the full persisted session state
@@ -195,6 +201,30 @@ impl SessionStore {
             );
         }
 
+        // streamable / parental_warning / source_item_id_hint were hardcoded
+        // to defaults on load (streamable=true, parental_warning=false,
+        // source_item_id_hint=None) because the columns didn't exist.
+        // Persisting them round-trips the live QueueTrack faithfully so
+        // a restored queue matches what the user had open before close.
+        let has_streamable: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('queue_tracks') WHERE name = 'streamable'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        if !has_streamable {
+            let _ = conn.execute_batch(
+                "
+                ALTER TABLE queue_tracks ADD COLUMN streamable INTEGER NOT NULL DEFAULT 1;
+                ALTER TABLE queue_tracks ADD COLUMN parental_warning INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE queue_tracks ADD COLUMN source_item_id_hint TEXT;
+                ",
+            );
+        }
+
         // Add last_view, view_context_id, view_context_type columns to player_state
         let has_last_view: bool = conn
             .query_row(
@@ -239,8 +269,8 @@ impl SessionStore {
         // Insert queue tracks
         for (pos, track) in session.queue_tracks.iter().enumerate() {
             if let Err(e) = self.conn.execute(
-                "INSERT INTO queue_tracks (position, track_id, title, artist, album, duration_secs, artwork_url, hires, bit_depth, sample_rate, is_local, album_id, artist_id, source)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                "INSERT INTO queue_tracks (position, track_id, title, artist, album, duration_secs, artwork_url, hires, bit_depth, sample_rate, is_local, album_id, artist_id, source, streamable, parental_warning, source_item_id_hint)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                 params![
                     pos as i64,
                     track.id as i64,
@@ -256,6 +286,9 @@ impl SessionStore {
                     track.album_id,
                     track.artist_id.map(|v| v as i64),
                     track.source,
+                    track.streamable as i64,
+                    track.parental_warning as i64,
+                    track.source_item_id_hint,
                 ],
             ) {
                 let _ = self.conn.execute("ROLLBACK", []);
@@ -327,7 +360,7 @@ impl SessionStore {
 
         // Load queue tracks
         let mut stmt = self.conn
-            .prepare("SELECT track_id, title, artist, album, duration_secs, artwork_url, hires, bit_depth, sample_rate, is_local, album_id, artist_id, source FROM queue_tracks ORDER BY position")
+            .prepare("SELECT track_id, title, artist, album, duration_secs, artwork_url, hires, bit_depth, sample_rate, is_local, album_id, artist_id, source, streamable, parental_warning, source_item_id_hint FROM queue_tracks ORDER BY position")
             .map_err(|e| format!("Failed to prepare queue query: {}", e))?;
 
         let tracks: Vec<PersistedQueueTrack> = stmt
@@ -345,9 +378,10 @@ impl SessionStore {
                     is_local: row.get::<_, i64>(9).unwrap_or(0) != 0,
                     album_id: row.get(10)?,
                     artist_id: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
-                    streamable: true, // Default to true for persisted tracks
                     source: row.get(12)?,
-                    parental_warning: false, // Not persisted in DB
+                    streamable: row.get::<_, i64>(13).unwrap_or(1) != 0,
+                    parental_warning: row.get::<_, i64>(14).unwrap_or(0) != 0,
+                    source_item_id_hint: row.get(15)?,
                 })
             })
             .map_err(|e| format!("Failed to query queue tracks: {}", e))?

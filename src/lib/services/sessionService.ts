@@ -26,6 +26,12 @@ export interface PersistedQueueTrack {
   // v2_play_track (Qobuz) instead of v2_library_play_track. Backend also
   // keeps this in session_store; this interface just needs to carry it.
   source?: string | null;
+  // Round-tripped fields, previously hardcoded on load. Persisting them
+  // means a restored queue matches the live one for explicit-content
+  // badges, unstreamable visual state, and Mixtape source association.
+  streamable?: boolean;
+  parental_warning?: boolean;
+  source_item_id_hint?: string | null;
 }
 
 export interface PersistedSession {

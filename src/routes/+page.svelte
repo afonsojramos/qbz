@@ -4200,6 +4200,9 @@
             // older versions that didn't persist source. Without this, a
             // restored local queue routed next-track auto-advance to Qobuz.
             source: trk.source ?? (trk.is_local ? 'local' : undefined),
+            streamable: trk.streamable ?? true,
+            parental_warning: trk.parental_warning ?? false,
+            source_item_id_hint: trk.source_item_id_hint ?? null,
           }));
 
           await setQueue(tracks, session.current_index ?? 0, true);
@@ -4479,6 +4482,13 @@
           // auto-advance routed to v2_play_track with library row ids — which
           // Qobuz then "resolved" to whatever track happened to share the id.
           source: track.source ?? (track.is_local ? 'local' : null),
+          // Round-trip explicit-content + unstreamable visual state + the
+          // Mixtape/Collection source-item id so a restored queue mirrors
+          // the live one. Backend defaults streamable=true, parental=false
+          // and source_item_id_hint=null for tracks saved by older builds.
+          streamable: track.streamable ?? true,
+          parental_warning: track.parental_warning ?? false,
+          source_item_id_hint: track.source_item_id_hint ?? null,
         });
       }
 
