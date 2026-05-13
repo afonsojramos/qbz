@@ -1759,7 +1759,7 @@
   });
 </script>
 
-<div class="artist-detail" class:has-art-bg={!!headerColor} style={headerStyle} bind:this={artistDetailEl} onscroll={(e) => saveScrollPosition('artist', (e.target as HTMLElement).scrollTop, artist.id)}>
+<div class="artist-detail" class:has-art-bg={!!headerColor} style={headerStyle} bind:this={artistDetailEl} onscroll={(e) => saveScrollPosition('artist', (e.target as HTMLElement).scrollTop, artist.id)} data-tauri-drag-region>
   <!-- Back Navigation -->
   <button class="back-btn" onclick={onBack}>
     <ArrowLeft size={16} />
@@ -1796,7 +1796,7 @@
     </div>
 
     <!-- Artist Info -->
-    <div class="artist-info">
+    <div class="artist-info selectable">
       <h1 class="artist-name">{artist.name}</h1>
 
       <!-- Biography -->
@@ -2115,7 +2115,7 @@
   <!-- Top Tracks Section -->
   {#if topTracks.length > 0 || tracksLoading}
     <div class="top-tracks-section section-anchor" bind:this={topTracksSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.popularTracks')}</h2>
         </div>
@@ -2362,7 +2362,7 @@
 
   <!-- Discography Section -->
   <div class="discography section-anchor" bind:this={discographySection}>
-    <div class="section-header">
+    <div class="section-header" data-tauri-drag-region="deep">
       <div class="section-header-left">
         <h2 class="section-title">{$t('artist.discography')}</h2>
         {#if artist.albums.length > 0}
@@ -2464,7 +2464,7 @@
     <div class="divider"></div>
 
     <div class="discography section-anchor" bind:this={epsSinglesSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.epsSingles')}</h2>
           <span class="section-count">{artist.epsSingles.length}</span>
@@ -2528,7 +2528,7 @@
     <div class="divider"></div>
 
     <div class="discography section-anchor" bind:this={liveAlbumsSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.liveAlbums')}</h2>
           <span class="section-count">{artist.liveAlbums.length}</span>
@@ -2592,7 +2592,7 @@
     <div class="divider"></div>
 
     <div class="discography section-anchor" bind:this={compilationsSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.compilations')}</h2>
           <span class="section-count">{artist.compilations.length}</span>
@@ -2649,7 +2649,7 @@
     <div class="divider"></div>
 
     <div class="discography section-anchor" bind:this={othersSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.others')}</h2>
           <span class="section-count">{artist.others.length}</span>
@@ -2713,7 +2713,7 @@
     <div class="divider"></div>
 
     <div class="playlists-section section-anchor" bind:this={playlistsSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.playlists')}</h2>
           <span class="section-count">{artist.playlists.length}</span>
@@ -2760,7 +2760,7 @@
     <div class="divider"></div>
 
     <div class="discography section-anchor" bind:this={tributesSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.tributes')}</h2>
           <span class="section-count">{artist.tributes.length}</span>
