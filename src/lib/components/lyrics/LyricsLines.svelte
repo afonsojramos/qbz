@@ -737,6 +737,21 @@
     -webkit-text-fill-color: #ffffff;
   }
 
+  /* CPU mode: kill the karaoke gradient in non-immersive lyrics views too
+     (sidebar/static/compact). background-clip: text repaint + per-frame
+     --line-progress interpolation are both expensive under software
+     compositing. Drop to a solid accent color; emphasis still reads via
+     font-size + weight + scale from .lyrics-line.active. Immersive
+     already neutralizes the gradient above (.lyrics-lines.immersive
+     specificity 0,0,5,0 wins over our 0,0,4,1), so this rule only fires
+     in the non-immersive surfaces. */
+  :global(html.no-hwaccel .lyrics-line.active .line-segment) {
+    background: none !important;
+    color: var(--lyrics-active-color, var(--accent-primary)) !important;
+    -webkit-text-fill-color: var(--lyrics-active-color, var(--accent-primary)) !important;
+    transition: none !important;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .lyrics-line.active {
       transition: none;
