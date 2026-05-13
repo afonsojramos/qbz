@@ -1650,9 +1650,14 @@
 
 <svelte:window onclick={handleGlobalClick} />
 
-<aside class="sidebar" class:collapsed={!isExpanded} class:no-titlebar={!showTitleBar}>
+<aside
+  class="sidebar"
+  class:collapsed={!isExpanded}
+  class:no-titlebar={!showTitleBar}
+  data-tauri-drag-region={!showTitleBar ? '' : undefined}
+>
   <!-- Scrollable Content Area -->
-  <div class="content">
+  <div class="content" data-tauri-drag-region="false">
     <!-- Search Bar (hidden when search is in titlebar) -->
     {#if !searchInTitlebar}
       <div
@@ -2256,6 +2261,7 @@
     class="toggle-btn"
     onclick={onToggle}
     title={isExpanded ? $t('actions.collapse') : $t('actions.expand')}
+    data-tauri-drag-region="false"
   >
     {#if isExpanded}
       <ChevronLeft size={16} />
@@ -2265,7 +2271,7 @@
   </button>
 
   <!-- Fixed User Profile at Bottom -->
-  <div class="user-section" class:collapsed={!isExpanded}>
+  <div class="user-section" class:collapsed={!isExpanded} data-tauri-drag-region="false">
     <UserCard
       username={userName}
       {subscription}
@@ -2515,7 +2521,12 @@
     height: calc(100vh - 104px); /* Only 104px NowPlayingBar, no title bar */
   }
 
-  /* macOS: pad top of sidebar to clear native traffic light buttons */
+  /* macOS: pad top of sidebar to clear native traffic light buttons.
+     This 32px band is also the only visible drag surface: the <aside>
+     carries `data-tauri-drag-region` (set in the template when there's
+     no custom titlebar), while each direct child carries
+     `data-tauri-drag-region="false"` so clicks inside .content / the
+     collapse toggle / the user section never start a window drag. */
   :global(html.macos) .sidebar.no-titlebar {
     padding-top: 32px;
   }
@@ -3487,7 +3498,6 @@
     color: var(--text-secondary);
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease;
-    user-select: none;
   }
 
   .my-qbz-parent:hover {
