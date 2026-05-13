@@ -532,6 +532,25 @@
     return new Map(filteredTracks.map((track, index) => [track.id, index]));
   });
 
+  // Tri-state for the "Select All" checkbox shown next to the selection-
+  // mode toggle. 'all' / 'partial' / 'none' over the currently visible
+  // (filtered) tracks — same semantics as LocalLibraryView's track tab.
+  // Declared after `filteredTracks` because it reads from it.
+  const trackSelectAllState = $derived(
+    filteredTracks.length === 0 ? 'none' as const
+    : selectedTrackIds.size === 0 ? 'none' as const
+    : filteredTracks.every((trk) => selectedTrackIds.has(trk.id)) ? 'all' as const
+    : 'partial' as const
+  );
+
+  function toggleTrackSelectAll() {
+    if (trackSelectAllState === 'all') {
+      selectedTrackIds = new Set();
+    } else {
+      selectedTrackIds = new Set(filteredTracks.map((trk) => trk.id));
+    }
+  }
+
   // Genre filter version to trigger reactivity
   let genreFilterVersion = $state(0);
 
@@ -1579,6 +1598,17 @@
         >
           <SquareCheckBig size={16} />
         </button>
+        {#if trackSelectMode}
+          <label class="select-all-checkbox" title={$t('actions.selectAll')}>
+            <input
+              type="checkbox"
+              checked={trackSelectAllState === 'all'}
+              indeterminate={trackSelectAllState === 'partial'}
+              onchange={toggleTrackSelectAll}
+            />
+            <span>{$t('actions.selectAll')}</span>
+          </label>
+        {/if}
         <GenreFilterButton context={GENRE_CONTEXT_TRACKS} variant="control" align="right" onFilterChange={handleGenreFilterChange} />
         <div class="dropdown-container">
           <button class="control-btn" onclick={() => (showTrackGroupMenu = !showTrackGroupMenu)}>
@@ -2276,6 +2306,27 @@
 />
 
 <style>
+  /* Select-all checkbox shown next to the selection-mode toggle in the
+     Tracks tab toolbar. Visual rhythm matches the LocalLibraryView
+     equivalent so the Qobuz favorites and local-library tracks views
+     read the same way side-by-side. */
+  .select-all-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .select-all-checkbox input[type='checkbox'] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
+  }
+
   /* Exit animation for unfavorited tracks */
   :global(.track-removing) {
     animation: track-fade-out 300ms ease forwards;
