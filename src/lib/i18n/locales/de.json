@@ -2821,6 +2821,12 @@
         "maxPerformanceLabel": "Maximale Leistung",
         "maxPerformanceDesc": "Software-Rendering (Cairo) mit deaktiviertem Blur. Maximale Kompatibilitaet, niedrigste GPU-Nutzung. Verwenden bei Ruckeln oder Abstuerzen.",
         "applied": "Profil angewendet: {profile}. QBZ neu starten, damit es wirksam wird."
+      },
+      "recommendation": {
+        "title": "Empfohlen für dein System",
+        "detected": "Erkannt",
+        "apply": "Übernehmen",
+        "applied": "Konfiguration übernommen. QBZ neu starten, damit es wirksam wird."
       }
     }
   },

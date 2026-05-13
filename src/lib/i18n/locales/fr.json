@@ -2821,6 +2821,12 @@
         "maxPerformanceLabel": "Performance maximale",
         "maxPerformanceDesc": "Rendu logiciel (Cairo) avec flou désactivé. Compatibilité maximale, utilisation GPU minimale. À utiliser en cas de saccades ou de plantages.",
         "applied": "Profil appliqué : {profile}. Redémarrez QBZ pour appliquer le changement."
+      },
+      "recommendation": {
+        "title": "Recommandé pour votre système",
+        "detected": "Détecté",
+        "apply": "Appliquer",
+        "applied": "Configuration appliquée. Redémarrez QBZ pour qu'elle prenne effet."
       }
     }
   },

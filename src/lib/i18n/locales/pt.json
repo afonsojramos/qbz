@@ -2821,6 +2821,12 @@
         "maxPerformanceLabel": "Desempenho Máximo",
         "maxPerformanceDesc": "Renderização por software (Cairo) com desfoque desativado. Máxima compatibilidade, menor uso de GPU. Use se tiver engasgos ou travamentos.",
         "applied": "Perfil aplicado: {profile}. Reinicie o QBZ para aplicar."
+      },
+      "recommendation": {
+        "title": "Recomendado para o seu sistema",
+        "detected": "Detectado",
+        "apply": "Aplicar",
+        "applied": "Configuracao aplicada. Reinicie o QBZ para que tenha efeito."
       }
     }
   },

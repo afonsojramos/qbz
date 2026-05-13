@@ -389,6 +389,34 @@
   let gdkScale = $state('');
   let gdkDpiScale = $state('');
   let gskRenderer = $state('');
+
+  // Graphics recommendation surfaced in the Graphics tab. Populated on
+  // mount via v2_get_graphics_recommendation (matrix lives in
+  // autoconfig_graphics.rs). The banner fires only when at least one
+  // recommended value differs from the currently persisted setting; the
+  // "Apply" button writes the entire recommendation via
+  // v2_apply_graphics_recommendation.
+  type GraphicsRecommendation = {
+    environment: {
+      display_server: string;
+      gpu_nvidia: boolean;
+      gpu_amd: boolean;
+      gpu_intel: boolean;
+      gpu_name: string;
+      desktop: string;
+      is_vm: boolean;
+    };
+    recommendation: {
+      hardware_acceleration: boolean;
+      force_x11: boolean;
+      gsk_renderer: string | null;
+      disable_dmabuf: boolean;
+      disable_blur_background: boolean;
+      rationale: string[];
+    };
+  };
+  let graphicsRecommendation = $state<GraphicsRecommendation | null>(null);
+
   // Graphics startup status (for showing degraded mode warning)
   let graphicsUsingFallback = $state(false);
   let graphicsIsWayland = $state(false);
@@ -1808,6 +1836,17 @@
       graphicsHasNvidia = status.has_nvidia;
       graphicsHwAccelEnabled = status.hardware_accel_enabled;
     }).catch(() => {});
+
+    // Linux-only: recommendation banner in the Graphics tab
+    if (platform === 'linux') {
+      invoke<GraphicsRecommendation>('v2_get_graphics_recommendation')
+        .then((payload) => {
+          graphicsRecommendation = payload;
+        })
+        .catch((err) => {
+          console.warn('[Settings] graphics recommendation unavailable:', err);
+        });
+    }
 
     // Subscribe to offline state changes
     const unsubscribeOffline = subscribeOffline(() => {
@@ -4064,6 +4103,53 @@
     }
   }
 
+  // Whether the auto-detected recommendation diverges from any of the
+  // four persisted graphics settings. The DMA-BUF axis is inverted:
+  // recommendation `disable_dmabuf=true` maps to `force_dmabuf=false`
+  // (1.2.13 opt-in semantics), so the two booleans differ iff
+  // `disable_dmabuf === force_dmabuf` (same value means mismatch given
+  // the inversion).
+  const recommendationDiffers = $derived.by(() => {
+    if (!graphicsRecommendation) return false;
+    const rec = graphicsRecommendation.recommendation;
+    if (rec.hardware_acceleration !== hardwareAcceleration) return true;
+    if (rec.force_x11 !== forceX11) return true;
+    if (rec.disable_dmabuf === forceDmabuf) return true;
+    if ((rec.gsk_renderer ?? '') !== gskRenderer) return true;
+    return false;
+  });
+
+  async function handleApplyGraphicsRecommendation() {
+    try {
+      const errors = await invoke<string[]>('v2_apply_graphics_recommendation');
+      if (errors && errors.length > 0) {
+        console.error('Failed to apply some graphics settings:', errors);
+        showToast(errors.join('; '), 'error');
+        return;
+      }
+      // Refresh local state from DB so the toggles snap to the new values
+      const gs = await invoke<any>('v2_get_graphics_settings');
+      forceX11 = gs.force_x11;
+      gskRenderer = gs.gsk_renderer || '';
+      hardwareAcceleration = gs.hardware_acceleration;
+      const ds = await invoke<any>('v2_get_developer_settings');
+      forceDmabuf = ds.force_dmabuf;
+      showToast($t('settings.graphics.recommendation.applied'), 'success');
+    } catch (err) {
+      console.error('Failed to apply graphics recommendation:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  function buildEnvironmentSummary(env: GraphicsRecommendation['environment']): string {
+    const parts: string[] = [];
+    if (env.gpu_name) parts.push(env.gpu_name);
+    if (env.display_server) parts.push(env.display_server);
+    if (env.desktop && env.desktop !== 'Unknown') parts.push(env.desktop);
+    if (env.is_vm) parts.push('VM');
+    return parts.join(' / ');
+  }
+
   const GSK_RENDERER_KEYS = ['', 'gl', 'ngl', 'vulkan', 'cairo'] as const;
 
   function getGskRendererOptions(): string[] {
@@ -5216,6 +5302,29 @@
   <section class="section">
     <h3 class="section-title">{$t('settings.graphics.title')}</h3>
     <p class="section-note">{$t('settings.graphics.helpText')}</p>
+
+    {#if graphicsRecommendation && recommendationDiffers}
+      <div class="recommendation-banner">
+        <div class="recommendation-info">
+          <span class="recommendation-title">{$t('settings.graphics.recommendation.title')}</span>
+          <span class="recommendation-detected">
+            {$t('settings.graphics.recommendation.detected')}: {buildEnvironmentSummary(graphicsRecommendation.environment)}
+          </span>
+          {#if graphicsRecommendation.recommendation.rationale.length > 0}
+            <ul class="recommendation-rationale">
+              {#each graphicsRecommendation.recommendation.rationale as line}
+                <li>{line}</li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+        <div class="recommendation-actions">
+          <button class="primary-btn" onclick={handleApplyGraphicsRecommendation}>
+            {$t('settings.graphics.recommendation.apply')}
+          </button>
+        </div>
+      </div>
+    {/if}
 
     {#if graphicsUsingFallback}
       <div class="composition-warning fallback-warning">
@@ -7017,6 +7126,58 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     font-weight: 600;
     color: #ef4444;
     margin-bottom: 2px;
+  }
+
+  /* Graphics recommendation banner. Shown at the top of the Graphics
+     section when the autoconfig recommendation diverges from the
+     persisted settings. Persistent (no dismiss) so the user knows the
+     option is available; disappears the moment recommendation == state. */
+  .recommendation-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    background: var(--accent-primary-tint, rgba(124, 58, 237, 0.08));
+    border: 1px solid var(--accent-primary, rgba(124, 58, 237, 0.3));
+  }
+
+  .recommendation-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .recommendation-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  .recommendation-detected {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .recommendation-rationale {
+    margin: 4px 0 0;
+    padding-left: 18px;
+    list-style: disc;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .recommendation-rationale li {
+    margin: 1px 0;
+  }
+
+  .recommendation-actions {
+    display: flex;
+    align-items: flex-start;
+    flex-shrink: 0;
   }
 
   .fallback-desc {

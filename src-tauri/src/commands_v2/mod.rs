@@ -23,6 +23,9 @@ pub struct V2PlaylistSuggestionsInput {
 pub(crate) mod helpers;
 pub use helpers::*;
 
+mod graphics_recommendation;
+pub use graphics_recommendation::*;
+
 mod runtime;
 pub use runtime::*;
 

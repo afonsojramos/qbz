@@ -2827,6 +2827,12 @@
         "maxPerformanceLabel": "Rendimiento maximo",
         "maxPerformanceDesc": "Renderizado por software (Cairo) con blur desactivado. Maxima compatibilidad, menor uso de GPU. Usar si hay tartamudeo o crashes.",
         "applied": "Perfil aplicado: {profile}. Reinicia QBZ para que surta efecto."
+      },
+      "recommendation": {
+        "title": "Recomendado para tu sistema",
+        "detected": "Detectado",
+        "apply": "Aplicar",
+        "applied": "Configuracion aplicada. Reinicia QBZ para que surta efecto."
       }
     }
   },

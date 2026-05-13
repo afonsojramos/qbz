@@ -2827,6 +2827,12 @@
         "maxPerformanceLabel": "Max Performance",
         "maxPerformanceDesc": "Software rendering (Cairo) with blur disabled. Maximum compatibility, lowest GPU usage. Use if experiencing stutter or crashes.",
         "applied": "Applied profile: {profile}. Restart QBZ to take effect."
+      },
+      "recommendation": {
+        "title": "Recommended for your system",
+        "detected": "Detected",
+        "apply": "Apply",
+        "applied": "Configuration applied. Restart QBZ to take effect."
       }
     }
   },

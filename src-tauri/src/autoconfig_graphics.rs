@@ -3,30 +3,39 @@
 //! Detects the current GPU, display server, desktop environment, and compositor,
 //! then recommends and applies optimal graphics settings.
 //!
-//! Usage: `qbz --autoconfig-graphics`
+//! Two entry points:
+//!   - `run()` — CLI prompt invoked via `qbz --autoconfig-graphics`
+//!   - `detect_environment()` / `compute_recommendation()` / `apply_recommendation()`
+//!     — public helpers consumed by V2 commands that surface the recommendation
+//!     inside the Settings UI (issue #315 follow-up)
 
 use crate::config::graphics_settings::GraphicsSettingsStore;
+use serde::Serialize;
 use std::io::{self, BufRead, Write};
 
 /// Detected environment information
-struct Environment {
-    display_server: String,
-    gpu_nvidia: bool,
-    gpu_amd: bool,
-    gpu_intel: bool,
-    gpu_name: String,
-    desktop: String,
-    is_vm: bool,
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Environment {
+    pub display_server: String,
+    pub gpu_nvidia: bool,
+    pub gpu_amd: bool,
+    pub gpu_intel: bool,
+    pub gpu_name: String,
+    pub desktop: String,
+    pub is_vm: bool,
 }
 
 /// Recommended configuration
-struct Recommendation {
-    hardware_acceleration: bool,
-    force_x11: bool,
-    gsk_renderer: Option<String>,
-    disable_dmabuf: bool,
-    disable_blur_background: bool,
-    rationale: Vec<String>,
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Recommendation {
+    pub hardware_acceleration: bool,
+    pub force_x11: bool,
+    pub gsk_renderer: Option<String>,
+    pub disable_dmabuf: bool,
+    pub disable_blur_background: bool,
+    pub rationale: Vec<String>,
 }
 
 /// Run the autoconfig-graphics CLI tool.
@@ -57,7 +66,7 @@ pub fn run() {
     }
 }
 
-fn detect_environment() -> Environment {
+pub fn detect_environment() -> Environment {
     let display_server = detect_display_server();
     let gpu_nvidia = is_nvidia_gpu();
     let gpu_amd = is_amd_gpu();
@@ -200,7 +209,7 @@ fn print_environment(env: &Environment) {
     eprintln!();
 }
 
-fn compute_recommendation(env: &Environment) -> Recommendation {
+pub fn compute_recommendation(env: &Environment) -> Recommendation {
     let mut rationale = Vec::new();
 
     // VM: software rendering, no blur
@@ -361,9 +370,40 @@ fn print_recommendation(rec: &Recommendation) {
 }
 
 fn apply_recommendation(rec: &Recommendation) {
+    match write_recommendation(rec) {
+        Ok(()) => {
+            if rec.disable_blur_background {
+                eprintln!(
+                    "[QBZ AutoConfig] Note: blur background will be disabled. You can toggle this in Settings > Appearance."
+                );
+            }
+            eprintln!();
+            eprintln!("[QBZ AutoConfig] Configuration applied successfully.");
+            eprintln!("[QBZ AutoConfig] Restart QBZ to take effect.");
+        }
+        Err(errors) => {
+            eprintln!();
+            eprintln!("[QBZ AutoConfig] Some settings could not be applied:");
+            for e in &errors {
+                eprintln!("  - {}", e);
+            }
+        }
+    }
+}
+
+/// Apply the recommendation to the persistence layer. Shared between the CLI
+/// prompt (`apply_recommendation`) and the V2 command surface. Returns the
+/// list of write errors so the caller can surface them appropriately (stderr
+/// for CLI, frontend toast for the Settings UI).
+///
+/// DMA-BUF semantics after the 1.2.13 opt-in flip:
+///   - `rec.disable_dmabuf = true`  → force_dmabuf = false (matches default;
+///     runtime keeps DMA-BUF off).
+///   - `rec.disable_dmabuf = false` → force_dmabuf = true  (user opts in via
+///     this recommendation; runtime turns DMA-BUF on).
+pub fn write_recommendation(rec: &Recommendation) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
 
-    // Apply graphics settings to DB
     match GraphicsSettingsStore::new() {
         Ok(store) => {
             if let Err(e) = store.set_hardware_acceleration(rec.hardware_acceleration) {
@@ -381,41 +421,21 @@ fn apply_recommendation(rec: &Recommendation) {
         }
     }
 
-    // Apply developer settings (force_dmabuf)
-    if rec.disable_dmabuf {
-        // Note: we don't set force_dmabuf=true here because the default behavior
-        // already disables DMA-BUF for NVIDIA+Wayland. We only reset it to ensure
-        // it's not forced ON.
-        match crate::config::developer_settings::DeveloperSettingsStore::new() {
-            Ok(store) => {
-                if let Err(e) = store.set_force_dmabuf(false) {
-                    errors.push(format!("force_dmabuf: {}", e));
-                }
-            }
-            Err(e) => {
-                errors.push(format!("developer settings store: {}", e));
+    let desired_force_dmabuf = !rec.disable_dmabuf;
+    match crate::config::developer_settings::DeveloperSettingsStore::new() {
+        Ok(store) => {
+            if let Err(e) = store.set_force_dmabuf(desired_force_dmabuf) {
+                errors.push(format!("force_dmabuf: {}", e));
             }
         }
-    }
-
-    // Apply blur background setting to localStorage config file
-    // Note: This is stored in localStorage by the frontend, so we write a hint
-    // that the frontend will read on next startup
-    if rec.disable_blur_background {
-        eprintln!(
-            "[QBZ AutoConfig] Note: blur background will be disabled. You can toggle this in Settings > Appearance."
-        );
+        Err(e) => {
+            errors.push(format!("developer settings store: {}", e));
+        }
     }
 
     if errors.is_empty() {
-        eprintln!();
-        eprintln!("[QBZ AutoConfig] Configuration applied successfully.");
-        eprintln!("[QBZ AutoConfig] Restart QBZ to take effect.");
+        Ok(())
     } else {
-        eprintln!();
-        eprintln!("[QBZ AutoConfig] Some settings could not be applied:");
-        for e in &errors {
-            eprintln!("  - {}", e);
-        }
+        Err(errors)
     }
 }
