@@ -453,18 +453,32 @@ fn main() {
         //
         // QBZ_HARDWARE_ACCEL=0 is the nuclear option: disables everything.
         // QBZ_HARDWARE_ACCEL=1 (explicit) bypasses ALL safety measures.
-        // Default (no env var): v1.1.9 targeted mitigations only.
+        // Default (no env var): GPU compositing on, DMA-BUF off (opt-in).
         //
-        // v1.1.9 defaults:
-        //   - Wayland: COMPOSITING off + DMABUF off (prevents EGL/protocol errors)
-        //   - X11 + NVIDIA: DMABUF off only (prevents Error 71)
-        //   - X11 + non-NVIDIA: nothing disabled (full GPU acceleration)
+        // Policy (since 1.2.13):
+        //   - GPU compositing: opt-out — on by default. User can disable in
+        //     Settings if their stack is broken. The CPU-mode lite path
+        //     covers the disabled case.
+        //   - DMA-BUF renderer: opt-in — off by default. The user has to
+        //     flip Settings > Developer > force_dmabuf to turn it on.
+        //     Rationale: DMA-BUF is the most fragile WebKitGTK feature on
+        //     Linux — NVIDIA+Wayland breaks reliably (EGL Error 71),
+        //     hybrid Intel+NVIDIA can flicker, and the failure mode is
+        //     catastrophic (black window, missing textures) rather than
+        //     degraded. The perf gain when it works is marginal (~5-10%
+        //     memory bandwidth on heavy compositing) and not worth the
+        //     rendering risk for a music app.
+        //   - Wayland+NVIDIA-only compositing: still gated off automatically
+        //     because the EGL protocol errors corrupt the whole window,
+        //     not just texture sharing. Separate axis from DMA-BUF.
         //
         // Override hierarchy (highest to lowest):
         //   1. QBZ_HARDWARE_ACCEL=0 → disable everything
-        //   2. QBZ_HARDWARE_ACCEL=1 → enable everything (bypass all safety)
-        //   3. QBZ_FORCE_DMABUF=1 / QBZ_DISABLE_DMABUF=1 → fine-grained DMA-BUF
-        //   4. Auto-detection (Wayland/NVIDIA)
+        //   2. QBZ_HARDWARE_ACCEL=1 → enable everything (bypass all safety,
+        //      including the DMA-BUF opt-in default)
+        //   3. QBZ_FORCE_DMABUF=1 / QBZ_DISABLE_DMABUF=1 → explicit override
+        //   4. force_dmabuf DB toggle → opt-in DMA-BUF
+        //   5. Default → DMA-BUF off, compositing on (except Wayland+NV-only)
         if !hardware_accel {
             // Nuclear opt-out: disable all GPU compositing and DMA-BUF
             qbz_nix_lib::logging::log_startup(
@@ -476,10 +490,11 @@ fn main() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
             std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
         } else if std::env::var("QBZ_HARDWARE_ACCEL").as_deref() == Ok("1") {
-            // Explicit full GPU: skip ALL safety measures
+            // Explicit full GPU: skip ALL safety measures, including the
+            // DMA-BUF opt-in default. Power-user escape hatch.
             qbz_nix_lib::logging::log_startup("[QBZ] Full GPU mode: all WebKit safety bypassed");
         } else {
-            // Default path: v1.1.9 targeted mitigations
+            // Default path: opt-in DMA-BUF, opt-out compositing
 
             // --- Compositing mode ---
             // NVIDIA-only on Wayland has protocol errors with compositing.
@@ -495,31 +510,21 @@ fn main() {
                 qbz_nix_lib::logging::log_startup("[QBZ] Wayland: compositing mode enabled");
             }
 
-            // --- DMA-BUF renderer control ---
+            // --- DMA-BUF renderer control (opt-in) ---
             if force_dmabuf {
                 qbz_nix_lib::logging::log_startup(
-                    "[QBZ] User override: DMA-BUF renderer forced ON (QBZ_FORCE_DMABUF=1)",
+                    "[QBZ] User opt-in: DMA-BUF renderer ON (Settings > Developer > force_dmabuf)",
                 );
             } else if disable_dmabuf {
                 qbz_nix_lib::logging::log_startup(
-                    "[QBZ] User override: DMA-BUF renderer forced OFF (QBZ_DISABLE_DMABUF=1)",
+                    "[QBZ] Env override: DMA-BUF renderer OFF (QBZ_DISABLE_DMABUF=1)",
                 );
-                std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            } else if is_wayland && !force_x11 && has_nvidia && !has_amd && !has_intel {
-                // NVIDIA-only on Wayland: disable DMA-BUF (Error 71 protocol error)
-                qbz_nix_lib::logging::log_startup(
-                    "[QBZ] Wayland+NVIDIA-only: DMA-BUF renderer disabled (prevents Error 71)",
-                );
-                std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            } else if has_nvidia && !has_intel && !has_amd && !is_wayland {
-                // X11 + NVIDIA: disable DMA-BUF only (keeps full compositing)
-                qbz_nix_lib::logging::log_startup("[QBZ] NVIDIA on X11: DMA-BUF renderer disabled");
                 std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
             } else {
-                // AMD/Intel on Wayland or X11: full GPU acceleration
                 qbz_nix_lib::logging::log_startup(
-                    "[QBZ] Using default WebKit renderer (full hardware acceleration)",
+                    "[QBZ] DMA-BUF renderer off by default (opt-in via Settings > Developer)",
                 );
+                std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
             }
         }
 
