@@ -306,13 +306,19 @@ export function updateActiveLine(): void {
     return;
   }
 
-  // Full tracking: notify on any change. Threshold-based throttling made
-  // sense with setInterval ticks at 80–200ms, but our rAF tick gives us a
-  // natural 60Hz upper bound — and at any threshold > 0, a freshly-activated
-  // line freezes visually until the threshold is crossed (reads as a
-  // "hanging" pause at line start). Each notification is just an inline
-  // style update downstream, so per-tick cost is negligible.
-  if (newIndex !== activeIndex || newProgress !== activeProgress) {
+  // Notify on any actual change. With playerStore now extrapolating audio
+  // position between backend ticks (250ms → ~16ms granularity), each rAF
+  // call sees a freshly-changed progress value. Threshold-based
+  // throttling here would re-introduce the "starts midway" / "ends before
+  // 100%" bugs by skipping the edge-of-line samples where the snap-to-1
+  // and indexChanged transitions need to land.
+  //
+  // Downstream consumers in +page.svelte short-circuit no-op $state
+  // writes via equality guards, so a 60Hz notification only fans out
+  // reactivity for the field(s) that actually changed.
+  const indexChanged = newIndex !== activeIndex;
+  const progressChanged = newProgress !== activeProgress;
+  if (indexChanged || progressChanged) {
     activeIndex = newIndex;
     activeProgress = newProgress;
     notifyListeners();
@@ -497,16 +503,17 @@ export function startActiveLineUpdates(): void {
     console.log('[Lyrics] Starting active line updates (rAF)');
   }
 
+  // Claim the next-frame slot BEFORE running work so the guard above sees
+  // a non-null handle if any listener synchronously re-enters
+  // startActiveLineUpdates during notifyListeners(). Otherwise we'd
+  // schedule a second parallel rAF chain.
   const tick = (): void => {
+    updateRafHandle = requestAnimationFrame(tick);
     if (!isUpdatesActive || !parsedLyrics.isSynced) {
-      if (import.meta.env.DEV) {
-        console.log('[Lyrics] Auto-stopping rAF (conditions no longer met)');
-      }
       stopActiveLineUpdates();
       return;
     }
     updateActiveLine();
-    updateRafHandle = requestAnimationFrame(tick);
   };
 
   updateRafHandle = requestAnimationFrame(tick);
