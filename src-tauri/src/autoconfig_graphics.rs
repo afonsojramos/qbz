@@ -149,38 +149,56 @@ fn is_virtual_machine() -> bool {
     false
 }
 
-fn detect_gpu_name(nvidia: bool, amd: bool, intel: bool) -> String {
-    // Try to get a human-readable GPU name
+pub fn detect_gpu_name(nvidia: bool, amd: bool, intel: bool) -> String {
+    // Hybrid laptops have more than one of these set; join the names
+    // so diagnostics surface the full picture instead of returning only
+    // the first vendor matched.
+    let mut parts: Vec<String> = Vec::new();
     if nvidia {
-        if let Ok(version) = std::fs::read_to_string("/proc/driver/nvidia/version") {
-            if let Some(line) = version.lines().next() {
-                return format!("NVIDIA ({})", line.trim());
-            }
-        }
-        return "NVIDIA (driver loaded)".to_string();
+        parts.push(nvidia_name());
     }
     if amd {
-        // Try to read GPU model from DRM
-        if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("card") && !name.contains('-') {
-                    let model_path = entry.path().join("device/product_name");
-                    if let Ok(model) = std::fs::read_to_string(&model_path) {
-                        let model = model.trim();
-                        if !model.is_empty() {
-                            return format!("AMD {}", model);
-                        }
+        parts.push(amd_name());
+    }
+    if intel {
+        parts.push(intel_name());
+    }
+    if parts.is_empty() {
+        "Unknown / None detected".to_string()
+    } else {
+        parts.join(" + ")
+    }
+}
+
+fn nvidia_name() -> String {
+    if let Ok(version) = std::fs::read_to_string("/proc/driver/nvidia/version") {
+        if let Some(line) = version.lines().next() {
+            return format!("NVIDIA ({})", line.trim());
+        }
+    }
+    "NVIDIA (driver loaded)".to_string()
+}
+
+fn amd_name() -> String {
+    if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("card") && !name.contains('-') {
+                let model_path = entry.path().join("device/product_name");
+                if let Ok(model) = std::fs::read_to_string(&model_path) {
+                    let model = model.trim();
+                    if !model.is_empty() {
+                        return format!("AMD {}", model);
                     }
                 }
             }
         }
-        return "AMD (amdgpu driver loaded)".to_string();
     }
-    if intel {
-        return "Intel (i915 driver loaded)".to_string();
-    }
-    "Unknown / None detected".to_string()
+    "AMD (amdgpu driver loaded)".to_string()
+}
+
+fn intel_name() -> String {
+    "Intel (i915/xe driver loaded)".to_string()
 }
 
 fn detect_desktop() -> String {
@@ -228,6 +246,30 @@ pub fn compute_recommendation(env: &Environment) -> Recommendation {
     let is_wayland = env.display_server == "Wayland";
     let desktop_lower = env.desktop.to_lowercase();
     let is_gnome = desktop_lower.contains("gnome");
+    let has_hybrid_igpu = env.gpu_nvidia && (env.gpu_intel || env.gpu_amd);
+
+    // Hybrid laptops (NVIDIA dGPU + Intel/AMD iGPU). WebKit composes via
+    // the iGPU through EGL/GLX defaults — the NVIDIA card sits idle for
+    // PRIME render offload. Forcing GSK_RENDERER=gl here was hurting
+    // performance because the GL renderer biases toward the dGPU stack
+    // even when the iGPU is the actual paint target. Auto (None) lets
+    // GTK4 pick NGL/Vulkan as appropriate for the iGPU. DMA-BUF stays
+    // disabled — that one is fragile on any NVIDIA-touching setup.
+    if has_hybrid_igpu {
+        let igpu_label = if env.gpu_intel { "Intel" } else { "AMD" };
+        rationale.push(format!(
+            "NVIDIA + {} hybrid: iGPU handles WebKit compositing, leaving GSK at Auto",
+            igpu_label
+        ));
+        return Recommendation {
+            hardware_acceleration: true,
+            force_x11: false,
+            gsk_renderer: None,
+            disable_dmabuf: true,
+            disable_blur_background: false,
+            rationale,
+        };
+    }
 
     // NVIDIA + Wayland + GNOME: known stutter combo
     if env.gpu_nvidia && is_wayland && is_gnome {
