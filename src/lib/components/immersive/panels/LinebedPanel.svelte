@@ -3,7 +3,7 @@
   import { t } from 'svelte-i18n';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
-  import QualityBadgeStatic from '$lib/components/QualityBadgeStatic.svelte';
+  import ImmersiveSongCard from '$lib/components/immersive/ImmersiveSongCard.svelte';
   import { getPanelFrameInterval } from '$lib/immersive/fpsConfig';
 
   interface Props {
@@ -47,15 +47,6 @@
   let animationFrame: number | null = null;
   let unlisten: UnlistenFn | null = null;
   let isInitialized = false;
-
-  // Live height of the track-meta column (3 text lines + quality badge).
-  // The artwork thumb sizes off this so it visually matches the column,
-  // which CSS-only flex stretch + aspect-ratio couldn't deliver reliably
-  // (aspect-ratio interacts poorly with align-self: stretch on items
-  // whose natural width is auto). 98% of this gives a small breathing
-  // gutter that reads as deliberate.
-  let metaHeight = $state(0);
-  const artworkSize = $derived(Math.max(0, Math.floor(metaHeight * 0.98)));
 
   const INPUT_BANDS = 512;
   const VISUAL_BANDS = 256;
@@ -431,28 +422,17 @@
 <div class="linebed-panel" class:visible={enabled}>
   <canvas bind:this={canvasRef} class="linebed-canvas"></canvas>
 
-  <div class="bottom-info">
-    <div class="track-meta" bind:clientHeight={metaHeight}>
-      <span class="track-title">{trackTitle}</span>
-      {#if explicit}
-        <span class="explicit-badge" title="{ $t('library.explicit') }"></span>
-      {/if}
-      {#if album}
-        <span class="track-album">{album}</span>
-      {/if}
-      <span class="track-artist">{artist}</span>
-      <QualityBadgeStatic {quality} {bitDepth} {samplingRate} {format} />
-    </div>
-    {#if artwork && artworkSize > 0}
-      <div
-        class="artwork-thumb"
-        style:width="{artworkSize}px"
-        style:height="{artworkSize}px"
-      >
-        <img src={artwork} alt={trackTitle} />
-      </div>
-    {/if}
-  </div>
+  <ImmersiveSongCard
+    {artwork}
+    {trackTitle}
+    {artist}
+    {album}
+    {explicit}
+    {quality}
+    {bitDepth}
+    {samplingRate}
+    {format}
+  />
 </div>
 
 <style>
@@ -477,88 +457,4 @@
     height: calc(100% - 154px);
   }
 
-  .bottom-info {
-    position: absolute;
-    right: 24px;
-    bottom: 24px;
-    z-index: 10;
-    display: flex;
-    /* center keeps the artwork vertically centered against the
-       track-meta column (3 lines + badge). The artwork's width/height
-       are set inline from the live measured column height, so flex
-       just needs to position it — no stretch shenanigans. */
-    align-items: center;
-    gap: 12px;
-  }
-
-  .track-meta {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 3px;
-  }
-
-  .track-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-primary, white);
-    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .track-album {
-    font-size: 12px;
-    color: var(--alpha-50, rgba(255, 255, 255, 0.5));
-    font-style: italic;
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .track-artist {
-    font-size: 12px;
-    color: var(--alpha-60, rgba(255, 255, 255, 0.6));
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  /* width / height come from inline style (computed as 98% of the
-     measured track-meta column height in the script). The .thumb
-     itself just carries the chrome (rounded corners, drop shadow). */
-  .artwork-thumb {
-    flex-shrink: 0;
-    border-radius: 6px;
-    overflow: hidden;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-  }
-
-  .artwork-thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .explicit-badge {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-    opacity: 0.45;
-    background-color: var(--text-primary, white);
-    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
-    mask: url('/explicit.svg') center / contain no-repeat;
-  }
-
-  @media (max-width: 768px) {
-    .bottom-info {
-      right: 16px;
-      bottom: 16px;
-    }
-  }
 </style>
