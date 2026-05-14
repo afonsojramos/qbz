@@ -2830,6 +2830,25 @@
         "dismiss": "Descartar",
         "redetect": "Detectar configuracoes recomendadas",
         "noChanges": "As configuracoes ja correspondem a recomendacao para este sistema."
+      },
+      "restartRequired": "Reinicie o QBZ para que a mudanca tenha efeito.",
+      "gpu": {
+        "label": "GPU de renderizacao",
+        "desc": "Fixar o WebKit em uma stack GPU especifica. Necessario reiniciar. Auto deixa o sistema decidir.",
+        "auto": "Auto (padrao do sistema)",
+        "autoWithTarget": "Auto ({name})",
+        "integrated": "Integrada — {name}",
+        "discrete": "Dedicada — {name}",
+        "software": "Software (CPU, llvmpipe)"
+      },
+      "recovery": {
+        "title": "O ultimo arranque travou durante o init grafico",
+        "titleLocked": "Desativado apos travamentos graficos repetidos",
+        "hwAccelDisabled": "A aceleracao de hardware foi revertida.",
+        "dmabufDisabled": "O renderer DMA-BUF foi revertido.",
+        "gpuPinDisabled": "A preferencia de GPU foi resetada para Auto.",
+        "tryAgain": "Tentar novamente",
+        "cleared": "Sinalizador de travamento limpo. Reative a configuracao em Settings se quiser tentar novamente."
       }
     }
   },

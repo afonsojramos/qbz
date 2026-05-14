@@ -62,6 +62,16 @@ pub struct GraphicsSettings {
     pub gdk_dpi_scale: Option<String>,
     /// GSK_RENDERER override (None = auto). Values: "gl", "ngl", "vulkan", "cairo"
     pub gsk_renderer: Option<String>,
+    /// Rendering GPU selection. Values:
+    ///   "auto"       — let the system pick (default).
+    ///   "integrated" — pin to the iGPU (Intel/AMD).
+    ///   "discrete"   — pin to the dGPU (NVIDIA, or AMD/Intel discrete).
+    ///   "software"   — software rendering via llvmpipe.
+    ///   "<pci-slot>" — pin to a specific detected GPU (e.g. "0000:01:00.0").
+    /// main.rs applies the choice via env vars (EGL vendor pin, DRI_PRIME,
+    /// NV_PRIME_RENDER_OFFLOAD) before WebKit init. Requires restart to
+    /// take effect.
+    pub preferred_gpu: String,
 }
 
 impl Default for GraphicsSettings {
@@ -72,6 +82,7 @@ impl Default for GraphicsSettings {
             gdk_scale: None,
             gdk_dpi_scale: None,
             gsk_renderer: None,
+            preferred_gpu: "auto".to_string(),
         }
     }
 }
@@ -142,6 +153,13 @@ impl GraphicsSettingsStore {
         let _ = conn.execute_batch("ALTER TABLE graphics_settings ADD COLUMN gdk_scale TEXT;");
         let _ = conn.execute_batch("ALTER TABLE graphics_settings ADD COLUMN gdk_dpi_scale TEXT;");
         let _ = conn.execute_batch("ALTER TABLE graphics_settings ADD COLUMN gsk_renderer TEXT;");
+        // 1.2.13: rendering GPU selection. Default 'auto' so existing
+        // installs keep their current behaviour after migration. Stored
+        // as TEXT to accept both the well-known sentinels (auto /
+        // integrated / discrete / software) and specific PCI slot ids.
+        let _ = conn.execute_batch(
+            "ALTER TABLE graphics_settings ADD COLUMN preferred_gpu TEXT NOT NULL DEFAULT 'auto';",
+        );
 
         Ok(Self { conn })
     }
@@ -149,7 +167,7 @@ impl GraphicsSettingsStore {
     pub fn get_settings(&self) -> Result<GraphicsSettings, String> {
         self.conn
             .query_row(
-                "SELECT hardware_acceleration, force_x11, gdk_scale, gdk_dpi_scale, gsk_renderer FROM graphics_settings WHERE id = 1",
+                "SELECT hardware_acceleration, force_x11, gdk_scale, gdk_dpi_scale, gsk_renderer, preferred_gpu FROM graphics_settings WHERE id = 1",
                 [],
                 |row| {
                     Ok(GraphicsSettings {
@@ -158,6 +176,9 @@ impl GraphicsSettingsStore {
                         gdk_scale: row.get::<_, Option<String>>(2)?,
                         gdk_dpi_scale: row.get::<_, Option<String>>(3)?,
                         gsk_renderer: row.get::<_, Option<String>>(4)?,
+                        preferred_gpu: row
+                            .get::<_, Option<String>>(5)?
+                            .unwrap_or_else(|| "auto".to_string()),
                     })
                 },
             )
@@ -211,6 +232,16 @@ impl GraphicsSettingsStore {
                 params![value],
             )
             .map_err(|e| format!("Failed to set gsk_renderer: {}", e))?;
+        Ok(())
+    }
+
+    pub fn set_preferred_gpu(&self, value: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE graphics_settings SET preferred_gpu = ?1 WHERE id = 1",
+                params![value],
+            )
+            .map_err(|e| format!("Failed to set preferred_gpu: {}", e))?;
         Ok(())
     }
 }
@@ -324,6 +355,25 @@ pub fn set_gdk_dpi_scale(
         .as_ref()
         .ok_or("Graphics settings store not initialized")?;
     store.set_gdk_dpi_scale(value)
+}
+
+#[tauri::command]
+pub fn set_preferred_gpu(
+    state: tauri::State<'_, GraphicsSettingsState>,
+    value: String,
+) -> Result<(), String> {
+    log::info!(
+        "[GraphicsSettings] Setting preferred_gpu to {:?} (restart required)",
+        value
+    );
+    let guard = state
+        .store
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+    let store = guard
+        .as_ref()
+        .ok_or("Graphics settings store not initialized")?;
+    store.set_preferred_gpu(&value)
 }
 
 // --- Startup Status (set once at app launch, read-only thereafter) ---

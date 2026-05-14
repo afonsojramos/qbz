@@ -4734,6 +4734,16 @@
     // Bootstrap app (theme, mouse nav, Last.fm restore)
     const { cleanup: cleanupBootstrap } = bootstrapApp();
 
+    // Tell the boot watchdog that the UI mounted successfully. This
+    // clears the pending-graphics-init marker the backend wrote at
+    // startup; if we never reach this line (WebKit crashed during
+    // graphics init) the next launch sees the stale marker and
+    // auto-reverts the offending risky setting. Idempotent and safe to
+    // call on every mount — backend just removes the file if present.
+    void invoke('v2_mark_boot_succeeded').catch((err) => {
+      console.warn('[BootWatchdog] mark_boot_succeeded failed:', err);
+    });
+
     void initDiscordRpc();
 
     // Window-title preference: load from localStorage and subscribe so that

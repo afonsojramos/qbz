@@ -2836,6 +2836,25 @@
         "dismiss": "Descartar",
         "redetect": "Detectar configuracion recomendada",
         "noChanges": "La configuracion actual ya coincide con la recomendacion para este sistema."
+      },
+      "restartRequired": "Reinicia QBZ para que el cambio surta efecto.",
+      "gpu": {
+        "label": "GPU de renderizado",
+        "desc": "Fija WebKit a una stack GPU especifica. Reinicio requerido. Auto deja que el sistema decida.",
+        "auto": "Auto (predeterminado del sistema)",
+        "autoWithTarget": "Auto ({name})",
+        "integrated": "Integrada — {name}",
+        "discrete": "Dedicada — {name}",
+        "software": "Software (CPU, llvmpipe)"
+      },
+      "recovery": {
+        "title": "El arranque anterior fallo durante el init de graficos",
+        "titleLocked": "Deshabilitado tras varios fallos de graficos",
+        "hwAccelDisabled": "Se revertio la aceleracion por hardware.",
+        "dmabufDisabled": "Se revertio el renderizador DMA-BUF.",
+        "gpuPinDisabled": "La preferencia de GPU se reseteo a Auto.",
+        "tryAgain": "Reintentar",
+        "cleared": "Marca de fallo limpiada. Reactiva el setting en Settings si quieres reintentar."
       }
     }
   },

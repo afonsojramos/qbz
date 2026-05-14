@@ -389,6 +389,49 @@
   let gdkScale = $state('');
   let gdkDpiScale = $state('');
   let gskRenderer = $state('');
+  let preferredGpu = $state('auto');
+
+  // Rendering-GPU detection for the Settings > Graphics dropdown. The
+  // backend cross-references PCI devices visible under /sys/class/drm/
+  // with EGL vendor JSONs available to the running process; the result
+  // lists every GPU the user can practically pick (auto + each usable
+  // discrete/integrated + software fallback). Loaded on mount.
+  type DetectedGpu = {
+    id: string;
+    vendor: string;
+    name: string;
+    pci_id: string | null;
+    kind: 'integrated' | 'discrete' | 'software';
+    egl_vendor_json: string | null;
+    is_usable: boolean;
+  };
+  let detectedGpus = $state<DetectedGpu[]>([]);
+  // Which GPU the backend currently resolves "Auto" to on this system.
+  // Non-null only on hybrid setups (iGPU + dGPU) where Auto pins to the
+  // iGPU; single-GPU and no-GPU systems get null and the dropdown shows
+  // a plain "Automatic" label without a sub-name.
+  let autoResolvedGpuId = $state<string | null>(null);
+  type GpuList = {
+    gpus: DetectedGpu[];
+    auto_resolved_id: string | null;
+  };
+
+  // Sticky crash recovery flags from the boot watchdog. If a previous
+  // launch crashed during graphics init, the offending knob was
+  // auto-reverted and one of these flags is true. Settings > Graphics
+  // renders a banner so the user can retry or keep the safe setting.
+  type CrashFlags = {
+    hardware_acceleration_disabled: boolean;
+    hardware_acceleration_consecutive_failures: number;
+    force_dmabuf_disabled: boolean;
+    force_dmabuf_consecutive_failures: number;
+    preferred_gpu_disabled: boolean;
+    preferred_gpu_consecutive_failures: number;
+    hardware_acceleration_locked: boolean;
+    force_dmabuf_locked: boolean;
+    preferred_gpu_locked: boolean;
+  };
+  let crashFlags = $state<CrashFlags | null>(null);
 
   // Graphics recommendation surfaced in the Graphics tab. Populated on
   // mount via v2_get_graphics_recommendation (matrix lives in
@@ -1836,6 +1879,7 @@
       gdkDpiScale = settings.gdk_dpi_scale || '';
       gskRenderer = settings.gsk_renderer || '';
       hardwareAcceleration = settings.hardware_acceleration;
+      preferredGpu = settings.preferred_gpu || 'auto';
     }).catch(() => {});
 
     // Load graphics startup status (for fallback warning)
@@ -1855,6 +1899,21 @@
         })
         .catch((err) => {
           console.warn('[Settings] graphics recommendation unavailable:', err);
+        });
+      invoke<GpuList>('v2_enumerate_gpus')
+        .then((payload) => {
+          detectedGpus = payload.gpus;
+          autoResolvedGpuId = payload.auto_resolved_id;
+        })
+        .catch((err) => {
+          console.warn('[Settings] gpu enumeration unavailable:', err);
+        });
+      invoke<CrashFlags>('v2_get_crash_flags')
+        .then((flags) => {
+          crashFlags = flags;
+        })
+        .catch((err) => {
+          console.warn('[Settings] crash flags unavailable:', err);
         });
     }
 
@@ -4113,6 +4172,67 @@
     }
   }
 
+  async function handlePreferredGpuChange(value: string) {
+    try {
+      await invoke('v2_set_preferred_gpu', { value });
+      preferredGpu = value;
+      showToast($t('settings.graphics.restartRequired'), 'info');
+    } catch (err) {
+      console.error('Failed to set preferred_gpu:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  async function handleClearCrashFlag(flag: 'hardware_acceleration' | 'force_dmabuf' | 'preferred_gpu') {
+    try {
+      await invoke('v2_clear_crash_flag', { flag });
+      const flags = await invoke<CrashFlags>('v2_get_crash_flags');
+      crashFlags = flags;
+      // If the user just cleared the lockout, also re-apply the
+      // setting they probably wanted. Hardware acceleration: the user
+      // explicitly wants it back ON; same for force_dmabuf and a
+      // non-auto preferred_gpu. We don't auto-re-enable here because
+      // the watchdog already wrote the safer value to DB; the user
+      // needs to re-toggle to express intent. Toast hints what to do.
+      showToast($t('settings.graphics.recovery.cleared'), 'success');
+    } catch (err) {
+      console.error('Failed to clear crash flag:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  const preferredGpuOptions = $derived.by(() => {
+    const autoTarget = autoResolvedGpuId
+      ? detectedGpus.find((g) => g.id === autoResolvedGpuId)
+      : null;
+    const autoLabel = autoTarget
+      ? $t('settings.graphics.gpu.autoWithTarget', { values: { name: autoTarget.name } })
+      : $t('settings.graphics.gpu.auto');
+    const opts: { value: string; label: string }[] = [
+      { value: 'auto', label: autoLabel },
+    ];
+    let hasIntegrated = false;
+    let hasDiscrete = false;
+    for (const g of detectedGpus) {
+      if (!g.is_usable) continue;
+      if (g.kind === 'integrated' && !hasIntegrated) {
+        opts.push({ value: 'integrated', label: $t('settings.graphics.gpu.integrated', { values: { name: g.name } }) });
+        hasIntegrated = true;
+      }
+      if (g.kind === 'discrete' && !hasDiscrete) {
+        opts.push({ value: 'discrete', label: $t('settings.graphics.gpu.discrete', { values: { name: g.name } }) });
+        hasDiscrete = true;
+      }
+    }
+    opts.push({ value: 'software', label: $t('settings.graphics.gpu.software') });
+    return opts;
+  });
+
+  function getPreferredGpuDisplayValue(): string {
+    const match = preferredGpuOptions.find((o) => o.value === preferredGpu);
+    return match ? match.label : preferredGpu;
+  }
+
   // Whether the auto-detected recommendation diverges from any of the
   // four persisted graphics settings. The DMA-BUF axis is inverted:
   // recommendation `disable_dmabuf=true` maps to `force_dmabuf=false`
@@ -5391,6 +5511,47 @@
       </div>
     {/if}
 
+    {#if crashFlags && (crashFlags.hardware_acceleration_disabled || crashFlags.force_dmabuf_disabled || crashFlags.preferred_gpu_disabled)}
+      <div class="crash-recovery-banner" class:locked={crashFlags.hardware_acceleration_locked || crashFlags.force_dmabuf_locked || crashFlags.preferred_gpu_locked}>
+        <TriangleAlert size={16} />
+        <div class="crash-recovery-body">
+          <span class="crash-recovery-title">
+            {#if crashFlags.hardware_acceleration_locked || crashFlags.force_dmabuf_locked || crashFlags.preferred_gpu_locked}
+              {$t('settings.graphics.recovery.titleLocked')}
+            {:else}
+              {$t('settings.graphics.recovery.title')}
+            {/if}
+          </span>
+          <ul class="crash-recovery-list">
+            {#if crashFlags.hardware_acceleration_disabled}
+              <li>
+                <span>{$t('settings.graphics.recovery.hwAccelDisabled')}</span>
+                <button class="link-btn" onclick={() => handleClearCrashFlag('hardware_acceleration')}>
+                  {$t('settings.graphics.recovery.tryAgain')}
+                </button>
+              </li>
+            {/if}
+            {#if crashFlags.force_dmabuf_disabled}
+              <li>
+                <span>{$t('settings.graphics.recovery.dmabufDisabled')}</span>
+                <button class="link-btn" onclick={() => handleClearCrashFlag('force_dmabuf')}>
+                  {$t('settings.graphics.recovery.tryAgain')}
+                </button>
+              </li>
+            {/if}
+            {#if crashFlags.preferred_gpu_disabled}
+              <li>
+                <span>{$t('settings.graphics.recovery.gpuPinDisabled')}</span>
+                <button class="link-btn" onclick={() => handleClearCrashFlag('preferred_gpu')}>
+                  {$t('settings.graphics.recovery.tryAgain')}
+                </button>
+              </li>
+            {/if}
+          </ul>
+        </div>
+      </div>
+    {/if}
+
     {#if graphicsUsingFallback}
       <div class="composition-warning fallback-warning">
         <TriangleAlert size={14} />
@@ -5435,6 +5596,23 @@
       </div>
       <Toggle enabled={hardwareAcceleration} onchange={(v) => handleHardwareAccelerationChange(v)} />
     </div>
+
+    {#if preferredGpuOptions.length > 1}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">{$t('settings.graphics.gpu.label')}</span>
+          <span class="setting-desc">{$t('settings.graphics.gpu.desc')}</span>
+        </div>
+        <Dropdown
+          value={getPreferredGpuDisplayValue()}
+          options={preferredGpuOptions.map((o) => o.label)}
+          onchange={(displayLabel) => {
+            const match = preferredGpuOptions.find((o) => o.label === displayLabel);
+            if (match) void handlePreferredGpuChange(match.value);
+          }}
+        />
+      </div>
+    {/if}
 
     <div class="setting-row">
       <div class="setting-info">
@@ -7244,6 +7422,83 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     align-items: flex-start;
     flex-shrink: 0;
     gap: 8px;
+  }
+
+  /* Crash-recovery banner. Yellow when a single setting was reverted
+     (recoverable), red when one or more knobs hit lockout state after
+     2+ consecutive crashes — the user has to explicitly clear the flag
+     to re-enable. */
+  .crash-recovery-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: var(--text-secondary);
+  }
+
+  .crash-recovery-banner.locked {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.35);
+  }
+
+  .crash-recovery-banner :global(svg) {
+    flex-shrink: 0;
+    color: #f59e0b;
+    margin-top: 2px;
+  }
+
+  .crash-recovery-banner.locked :global(svg) {
+    color: #ef4444;
+  }
+
+  .crash-recovery-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+  }
+
+  .crash-recovery-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  .crash-recovery-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .crash-recovery-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+  }
+
+  .link-btn {
+    background: transparent;
+    color: var(--accent-primary, #7c3aed);
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .link-btn:hover {
+    filter: brightness(1.15);
   }
 
   .primary-btn {

@@ -2830,6 +2830,25 @@
         "dismiss": "Verwerfen",
         "redetect": "Empfohlene Einstellungen erkennen",
         "noChanges": "Die Einstellungen entsprechen bereits der Empfehlung für dieses System."
+      },
+      "restartRequired": "QBZ neu starten, damit die Änderung wirksam wird.",
+      "gpu": {
+        "label": "Rendering-GPU",
+        "desc": "WebKit an eine bestimmte GPU binden. Neustart erforderlich. Auto überlässt die Wahl dem System.",
+        "auto": "Automatisch (System-Standard)",
+        "autoWithTarget": "Automatisch ({name})",
+        "integrated": "Integriert — {name}",
+        "discrete": "Dediziert — {name}",
+        "software": "Software (CPU, llvmpipe)"
+      },
+      "recovery": {
+        "title": "Letzter Start während Grafik-Init abgestürzt",
+        "titleLocked": "Wegen wiederholter Grafikabstürze deaktiviert",
+        "hwAccelDisabled": "Hardware-Beschleunigung wurde zurückgesetzt.",
+        "dmabufDisabled": "DMA-BUF-Renderer wurde zurückgesetzt.",
+        "gpuPinDisabled": "GPU-Auswahl wurde auf Automatisch zurückgesetzt.",
+        "tryAgain": "Erneut versuchen",
+        "cleared": "Absturzmarkierung gelöscht. Aktiviere die Einstellung erneut, wenn du es nochmal versuchen möchtest."
       }
     }
   },

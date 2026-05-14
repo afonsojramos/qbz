@@ -288,8 +288,14 @@ fn main() {
             }
         };
 
-        // Developer settings: force_dmabuf override (from Settings > Developer Mode)
-        let dev_force_dmabuf =
+        // ---- Read remaining risky settings (no env vars set yet) ----
+        let preferred_gpu_raw_intended = graphics_db
+            .as_ref()
+            .map(|s| s.preferred_gpu.clone())
+            .unwrap_or_else(|| "auto".to_string());
+        let force_x11_db = graphics_db.as_ref().map(|s| s.force_x11).unwrap_or(false);
+
+        let dev_force_dmabuf_intended =
             match qbz_nix_lib::config::developer_settings::DeveloperSettingsStore::new() {
                 Ok(store) => match store.get_settings() {
                     Ok(settings) => settings.force_dmabuf,
@@ -309,6 +315,74 @@ fn main() {
                     false
                 }
             };
+
+        // ---- Boot watchdog: revert risky settings if previous boot crashed ----
+        // If a prior launch wrote a pending marker that never got cleared,
+        // those settings crashed WebKit before first paint. The watchdog
+        // returns the resolved values to actually use this boot (usually
+        // the intended ones, with revert flags set for any knob that
+        // matched the prior crash). It also writes a fresh pending marker
+        // for THIS boot; the frontend's first-paint hook clears it.
+        let watchdog_resolution = qbz_nix_lib::boot_watchdog::before_webkit_init(
+            qbz_nix_lib::boot_watchdog::BootAttempt {
+                hardware_acceleration: hardware_accel,
+                force_dmabuf: dev_force_dmabuf_intended,
+                preferred_gpu: preferred_gpu_raw_intended.clone(),
+                force_x11: force_x11_db,
+            },
+        );
+        let hardware_accel = watchdog_resolution.hardware_acceleration;
+        let dev_force_dmabuf = watchdog_resolution.force_dmabuf;
+        let preferred_gpu_raw = watchdog_resolution.preferred_gpu.clone();
+        for msg in &watchdog_resolution.recovery_messages {
+            eprintln!("[QBZ] {}", msg);
+            qbz_nix_lib::logging::log_startup(&format!("[QBZ] {}", msg));
+        }
+
+        // ---- Apply preferred_gpu env vars (using watchdog-resolved value) ----
+        let preferred_gpu_choice =
+            qbz_nix_lib::graphics_detection::PreferredGpu::parse(&preferred_gpu_raw);
+        if !matches!(
+            preferred_gpu_choice,
+            qbz_nix_lib::graphics_detection::PreferredGpu::Auto
+        ) {
+            let detected = qbz_nix_lib::graphics_detection::enumerate_gpus();
+            let env_pairs = qbz_nix_lib::graphics_detection::env_vars_for_preferred_gpu(
+                &preferred_gpu_choice,
+                &detected,
+            );
+            if env_pairs.is_empty() {
+                qbz_nix_lib::logging::log_startup(&format!(
+                    "[QBZ] preferred_gpu={:?} could not be resolved (no matching detected GPU); falling back to system default",
+                    preferred_gpu_raw
+                ));
+            } else {
+                qbz_nix_lib::logging::log_startup(&format!(
+                    "[QBZ] preferred_gpu={:?}: applying GPU pin env vars",
+                    preferred_gpu_raw
+                ));
+                for action in &env_pairs {
+                    match action {
+                        qbz_nix_lib::graphics_detection::EnvAction::Set(name, value) => {
+                            qbz_nix_lib::logging::log_startup(&format!(
+                                "[QBZ]   set {}={}",
+                                name, value
+                            ));
+                            std::env::set_var(name, value);
+                        }
+                        qbz_nix_lib::graphics_detection::EnvAction::Unset(name) => {
+                            qbz_nix_lib::logging::log_startup(&format!(
+                                "[QBZ]   unset {}",
+                                name
+                            ));
+                            std::env::remove_var(name);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Apply dev_force_dmabuf env var (using watchdog-resolved value) ----
         if dev_force_dmabuf {
             std::env::set_var("QBZ_FORCE_DMABUF", "1");
             qbz_nix_lib::logging::log_startup(
@@ -321,8 +395,8 @@ fn main() {
         let force_dmabuf = std::env::var("QBZ_FORCE_DMABUF").as_deref() == Ok("1");
         let disable_dmabuf = std::env::var("QBZ_DISABLE_DMABUF").as_deref() == Ok("1");
 
-        // Force X11: persistent setting from DB, env var overrides (crash recovery)
-        let force_x11_db = graphics_db.as_ref().map(|s| s.force_x11).unwrap_or(false);
+        // Force X11: persistent setting from DB (read above for watchdog),
+        // env var overrides (crash recovery).
         let force_x11 = match std::env::var("QBZ_FORCE_X11").as_deref() {
             Ok("1") => {
                 qbz_nix_lib::logging::log_startup("[QBZ] Env override: QBZ_FORCE_X11=1");

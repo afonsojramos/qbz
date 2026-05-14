@@ -2830,6 +2830,25 @@
         "dismiss": "Ignorer",
         "redetect": "Détecter les paramètres recommandés",
         "noChanges": "Les paramètres correspondent déjà à la recommandation pour ce système."
+      },
+      "restartRequired": "Redémarrez QBZ pour que le changement prenne effet.",
+      "gpu": {
+        "label": "GPU de rendu",
+        "desc": "Forcer WebKit sur une pile GPU spécifique. Redémarrage requis. Auto laisse le système décider.",
+        "auto": "Auto (par défaut)",
+        "autoWithTarget": "Auto ({name})",
+        "integrated": "Intégré — {name}",
+        "discrete": "Dédié — {name}",
+        "software": "Logiciel (CPU, llvmpipe)"
+      },
+      "recovery": {
+        "title": "Le démarrage précédent a planté pendant l'init graphique",
+        "titleLocked": "Désactivé après plusieurs plantages graphiques",
+        "hwAccelDisabled": "L'accélération matérielle a été désactivée.",
+        "dmabufDisabled": "Le moteur DMA-BUF a été désactivé.",
+        "gpuPinDisabled": "La préférence GPU a été réinitialisée sur Auto.",
+        "tryAgain": "Réessayer",
+        "cleared": "Indicateur de plantage effacé. Réactivez le paramètre dans Settings pour réessayer."
       }
     }
   },

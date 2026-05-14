@@ -2836,6 +2836,25 @@
         "dismiss": "Dismiss",
         "redetect": "Detect recommended settings",
         "noChanges": "Settings already match the recommendation for this system."
+      },
+      "restartRequired": "Restart QBZ for the change to take effect.",
+      "gpu": {
+        "label": "Rendering GPU",
+        "desc": "Pin WebKit to a specific GPU stack. Restart required. Auto lets the system pick.",
+        "auto": "Auto (system default)",
+        "autoWithTarget": "Auto ({name})",
+        "integrated": "Integrated — {name}",
+        "discrete": "Discrete — {name}",
+        "software": "Software (CPU, llvmpipe)"
+      },
+      "recovery": {
+        "title": "Last launch crashed during graphics init",
+        "titleLocked": "Disabled after repeated graphics crashes",
+        "hwAccelDisabled": "Hardware acceleration was reverted.",
+        "dmabufDisabled": "DMA-BUF renderer was reverted.",
+        "gpuPinDisabled": "Rendering GPU preference was reset to Auto.",
+        "tryAgain": "Try again",
+        "cleared": "Crash flag cleared. Re-enable the setting in Settings if you want to retry."
       }
     }
   },

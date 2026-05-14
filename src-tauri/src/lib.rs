@@ -25,6 +25,8 @@ pub fn main_window_built_transparent() -> bool {
 }
 #[cfg(target_os = "linux")]
 pub mod autoconfig_graphics;
+pub mod boot_watchdog;
+pub mod graphics_detection;
 
 pub mod api;
 pub mod api_cache;
@@ -1656,8 +1658,13 @@ pub fn run(qconnect_cli_override: Option<bool>) {
             commands_v2::v2_set_gdk_scale,
             commands_v2::v2_set_gdk_dpi_scale,
             commands_v2::v2_set_gsk_renderer,
+            commands_v2::v2_set_preferred_gpu,
             commands_v2::v2_get_graphics_recommendation,
             commands_v2::v2_apply_graphics_recommendation,
+            commands_v2::v2_enumerate_gpus,
+            commands_v2::v2_mark_boot_succeeded,
+            commands_v2::v2_get_crash_flags,
+            commands_v2::v2_clear_crash_flag,
             commands_v2::v2_clear_cache,
             commands_v2::v2_clear_artist_cache,
             commands_v2::v2_get_vector_store_stats,
