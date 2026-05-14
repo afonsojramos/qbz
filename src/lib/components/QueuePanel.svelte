@@ -29,13 +29,15 @@
     parental_warning?: boolean;
   }
 
-  // Mirrors EPHEMERAL_ID_FLOOR (1 << 48) in src-tauri/src/ephemeral_library.
+  // Mirrors EPHEMERAL_ID_FLOOR (2^48) in src-tauri/src/ephemeral_library.
   // Track ids at or above this threshold come from the in-memory ephemeral
   // cache, not the library DB. Favorites / playlists / track-info actions
   // require a DB row and don't make sense for ephemeral tracks; the
   // helper below gates the corresponding UI off so users don't get
   // dead-end clicks.
-  const EPHEMERAL_ID_FLOOR = 1 << 48;
+  // 2 ** 48 (NOT 1 << 48 — JS bitwise shift is 32-bit, 1 << 48 silently
+  // becomes 65536 and every Qobuz track ends up "ephemeral").
+  const EPHEMERAL_ID_FLOOR = 2 ** 48;
   function isEphemeralQueueTrack(id: string | number | null | undefined): boolean {
     if (id == null) return false;
     return Number(id) >= EPHEMERAL_ID_FLOOR;

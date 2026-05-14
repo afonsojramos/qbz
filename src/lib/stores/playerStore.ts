@@ -87,7 +87,10 @@ interface BackendPlaybackState {
 // ephemeral cache, not DB rows; the playback logic special-cases them
 // in a couple of places (gapless transition is_playing carve-out, CUE
 // virtual-track position translation).
-const EPHEMERAL_ID_FLOOR = 1 << 48;
+// 2 ** 48 (NOT 1 << 48 — JavaScript bitwise shift is 32-bit, 1 << 48
+// silently truncates to 65536 and every Qobuz track ends up classified
+// as ephemeral, suppressing favorites and breaking session save).
+const EPHEMERAL_ID_FLOOR = 2 ** 48;
 
 /**
  * Bit-perfect mode of the active audio stream, reported by the Rust backend.

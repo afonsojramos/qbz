@@ -4474,7 +4474,10 @@
       // Strip them from the persisted queue and clear the current-index
       // pointer if it was sitting on one — the ephemeral pane comes back
       // via folder-path persistence and the user re-clicks play.
-      const EPHEMERAL_ID_FLOOR = 1 << 48;
+      // 2 ** 48 (NOT 1 << 48 — JavaScript bitwise shift operates on
+      // 32-bit ints so 1 << 48 silently truncates to 65536, which
+      // mis-classified every Qobuz track as ephemeral).
+      const EPHEMERAL_ID_FLOOR = 2 ** 48;
       const persistedTracks: PersistedQueueTrack[] = [];
       let persistedCurrentIndex: number | null = null;
       for (let i = 0; i < tracks.length; i++) {
@@ -6884,7 +6887,7 @@
         {isFavorite}
         onToggleFavorite={toggleFavorite}
         onAddToPlaylist={openAddToPlaylistModal}
-        metadataActionsDisabled={currentTrack != null && currentTrack.id >= (1 << 48)}
+        metadataActionsDisabled={currentTrack != null && currentTrack.id >= 2 ** 48}
         onOpenQueue={toggleQueue}
         onOpenMiniPlayer={() => {
           void enterMiniplayerMode();
@@ -6990,7 +6993,7 @@
         onToggleRepeat={toggleRepeat}
         {isFavorite}
         onToggleFavorite={toggleFavorite}
-        metadataActionsDisabled={currentTrack != null && currentTrack.id >= (1 << 48)}
+        metadataActionsDisabled={currentTrack != null && currentTrack.id >= 2 ** 48}
         lyricsLines={lyricsLines}
         lyricsActiveIndex={lyricsActiveIndex}
         lyricsActiveProgress={lyricsActiveProgress}

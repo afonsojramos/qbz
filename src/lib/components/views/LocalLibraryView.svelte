@@ -1330,7 +1330,9 @@
   // not a DB row. Used for "did the user just close a folder whose
   // tracks are still playing?" checks so we know whether to wipe the
   // queue + now-playing slot when an ephemeral session ends.
-  const EPHEMERAL_ID_FLOOR = 1 << 48;
+  // 2 ** 48 (NOT 1 << 48 — JS bitwise shift is 32-bit, 1 << 48 silently
+  // becomes 65536 and every Qobuz track gets mis-classified).
+  const EPHEMERAL_ID_FLOOR = 2 ** 48;
   const EPHEMERAL_PATH_STORAGE_KEY = 'qbz-ephemeral-folder-path';
   let ephemeralFolder = $state<EphemeralFolderState | null>(null);
   let openingEphemeralFolder = $state(false);
