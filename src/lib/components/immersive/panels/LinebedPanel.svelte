@@ -435,10 +435,8 @@
       <QualityBadgeStatic {quality} {bitDepth} {samplingRate} {format} />
     </div>
     {#if artwork}
-      <div class="artwork-wrap">
-        <div class="artwork-thumb">
-          <img src={artwork} alt={trackTitle} />
-        </div>
+      <div class="artwork-thumb">
+        <img src={artwork} alt={trackTitle} />
       </div>
     {/if}
   </div>
@@ -517,20 +515,16 @@
     text-overflow: ellipsis;
   }
 
-  /* Stretches to match the height of the track-meta column (3 text
-     lines + quality badge), giving the inner .artwork-thumb a parent
-     against which to size as a percentage. flex-shrink: 0 prevents
-     the wrapper from collapsing if the row runs out of horizontal
-     room. */
-  .artwork-wrap {
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-  }
-
+  /* The thumb stretches to the height of the track-meta column (3
+     text lines + quality badge) via the parent's align-items: stretch.
+     aspect-ratio: 1 keeps it square (width derives from the stretched
+     height). margin-block: 1px gives the 2px gap that reads as a
+     deliberate breathing room around the column instead of a flush
+     edge match. */
   .artwork-thumb {
-    height: 98%;
+    align-self: stretch;
     aspect-ratio: 1;
+    margin-block: 1px;
     border-radius: 6px;
     overflow: hidden;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
