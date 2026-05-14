@@ -74,6 +74,7 @@
     "clearAll": "Tout effacer",
     "confirm": "Confirmer",
     "copy": "Copier",
+    "copiedToClipboard": "Copié dans le presse-papiers",
     "yes": "Oui",
     "no": "Non",
     "ok": "OK",
@@ -2841,6 +2842,10 @@
         "discrete": "Dédié — {name}",
         "software": "Logiciel (CPU, llvmpipe)"
       },
+      "nvidiaCompatMode": "Compatibilité NVIDIA Wayland (expérimental)",
+      "nvidiaCompatModeDesc": "Activer si NVIDIA + Wayland rend incorrectement avec les réglages par défaut. Définit __NV_DISABLE_EXPLICIT_SYNC=1 et lève la fermeture défensive du compositing pour que WebKit utilise le chemin GPU complet. Nécessite libnvidia-egl-gbm installé.",
+      "resetCmdTitle": "Si l'application ne démarre pas",
+      "resetCmdDesc": "Exécutez cette commande dans un terminal pour réinitialiser les paramètres graphiques aux valeurs sûres. Le watchdog de démarrage récupère normalement seul, mais ceci est l'issue manuelle.",
       "recovery": {
         "title": "Le démarrage précédent a planté pendant l'init graphique",
         "titleLocked": "Désactivé après plusieurs plantages graphiques",

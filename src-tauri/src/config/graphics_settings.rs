@@ -72,6 +72,18 @@ pub struct GraphicsSettings {
     /// NV_PRIME_RENDER_OFFLOAD) before WebKit init. Requires restart to
     /// take effect.
     pub preferred_gpu: String,
+    /// Opt-in NVIDIA Wayland compatibility mode. When ON:
+    ///   - Sets `__NV_DISABLE_EXPLICIT_SYNC=1` to bypass the buggy
+    ///     implicit-sync paths in libnvidia-egl-gbm that produce
+    ///     "Failed to create GBM buffer of size NxN: Invalid argument"
+    ///     under WebKit on NVIDIA + Wayland (driver 550+).
+    ///   - Lifts the defensive compositing-mode shutdown that QBZ
+    ///     applies to NVIDIA-only Wayland sessions — the user is
+    ///     signaling that the real fix is now in place, so the
+    ///     safety net is no longer needed.
+    /// Off by default. Requires a driver+system that ships
+    /// libnvidia-egl-gbm to be useful.
+    pub nvidia_compat_mode: bool,
 }
 
 impl Default for GraphicsSettings {
@@ -83,6 +95,7 @@ impl Default for GraphicsSettings {
             gdk_dpi_scale: None,
             gsk_renderer: None,
             preferred_gpu: "auto".to_string(),
+            nvidia_compat_mode: false,
         }
     }
 }
@@ -160,6 +173,12 @@ impl GraphicsSettingsStore {
         let _ = conn.execute_batch(
             "ALTER TABLE graphics_settings ADD COLUMN preferred_gpu TEXT NOT NULL DEFAULT 'auto';",
         );
+        // 1.2.13: NVIDIA Wayland compatibility opt-in. Default OFF so
+        // existing installs don't pick up a behaviour change on migration
+        // — users explicitly enable it after installing libnvidia-egl-gbm.
+        let _ = conn.execute_batch(
+            "ALTER TABLE graphics_settings ADD COLUMN nvidia_compat_mode INTEGER NOT NULL DEFAULT 0;",
+        );
 
         Ok(Self { conn })
     }
@@ -167,7 +186,7 @@ impl GraphicsSettingsStore {
     pub fn get_settings(&self) -> Result<GraphicsSettings, String> {
         self.conn
             .query_row(
-                "SELECT hardware_acceleration, force_x11, gdk_scale, gdk_dpi_scale, gsk_renderer, preferred_gpu FROM graphics_settings WHERE id = 1",
+                "SELECT hardware_acceleration, force_x11, gdk_scale, gdk_dpi_scale, gsk_renderer, preferred_gpu, nvidia_compat_mode FROM graphics_settings WHERE id = 1",
                 [],
                 |row| {
                     Ok(GraphicsSettings {
@@ -179,6 +198,7 @@ impl GraphicsSettingsStore {
                         preferred_gpu: row
                             .get::<_, Option<String>>(5)?
                             .unwrap_or_else(|| "auto".to_string()),
+                        nvidia_compat_mode: row.get::<_, i64>(6).unwrap_or(0) != 0,
                     })
                 },
             )
@@ -242,6 +262,16 @@ impl GraphicsSettingsStore {
                 params![value],
             )
             .map_err(|e| format!("Failed to set preferred_gpu: {}", e))?;
+        Ok(())
+    }
+
+    pub fn set_nvidia_compat_mode(&self, enabled: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE graphics_settings SET nvidia_compat_mode = ?1 WHERE id = 1",
+                params![enabled as i64],
+            )
+            .map_err(|e| format!("Failed to set nvidia_compat_mode: {}", e))?;
         Ok(())
     }
 }
@@ -374,6 +404,25 @@ pub fn set_preferred_gpu(
         .as_ref()
         .ok_or("Graphics settings store not initialized")?;
     store.set_preferred_gpu(&value)
+}
+
+#[tauri::command]
+pub fn set_nvidia_compat_mode(
+    state: tauri::State<'_, GraphicsSettingsState>,
+    enabled: bool,
+) -> Result<(), String> {
+    log::info!(
+        "[GraphicsSettings] Setting nvidia_compat_mode to {} (restart required)",
+        enabled
+    );
+    let guard = state
+        .store
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+    let store = guard
+        .as_ref()
+        .ok_or("Graphics settings store not initialized")?;
+    store.set_nvidia_compat_mode(enabled)
 }
 
 // --- Startup Status (set once at app launch, read-only thereafter) ---

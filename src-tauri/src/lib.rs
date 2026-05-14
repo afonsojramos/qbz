@@ -1659,6 +1659,7 @@ pub fn run(qconnect_cli_override: Option<bool>) {
             commands_v2::v2_set_gdk_dpi_scale,
             commands_v2::v2_set_gsk_renderer,
             commands_v2::v2_set_preferred_gpu,
+            commands_v2::v2_set_nvidia_compat_mode,
             commands_v2::v2_get_graphics_recommendation,
             commands_v2::v2_apply_graphics_recommendation,
             commands_v2::v2_enumerate_gpus,

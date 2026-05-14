@@ -75,6 +75,7 @@
     "clearAll": "Clear All",
     "confirm": "Confirm",
     "copy": "Copy",
+    "copiedToClipboard": "Copied to clipboard",
     "yes": "Yes",
     "no": "No",
     "ok": "OK",
@@ -2847,6 +2848,10 @@
         "discrete": "Discrete — {name}",
         "software": "Software (CPU, llvmpipe)"
       },
+      "nvidiaCompatMode": "NVIDIA Wayland compatibility (experimental)",
+      "nvidiaCompatModeDesc": "Enable when NVIDIA + Wayland renders incorrectly with the default settings. Sets __NV_DISABLE_EXPLICIT_SYNC=1 and lifts the defensive compositing shutdown so WebKit can use the full GPU path. Requires libnvidia-egl-gbm installed.",
+      "resetCmdTitle": "If the app fails to launch",
+      "resetCmdDesc": "Run this command in a terminal to reset graphics settings to safe defaults. The boot watchdog usually recovers automatically, but this is the manual escape hatch.",
       "recovery": {
         "title": "Last launch crashed during graphics init",
         "titleLocked": "Disabled after repeated graphics crashes",

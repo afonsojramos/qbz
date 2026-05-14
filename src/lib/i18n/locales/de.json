@@ -73,6 +73,7 @@
     "clearAll": "Alles löschen",
     "confirm": "Bestätigen",
     "copy": "Kopieren",
+    "copiedToClipboard": "In Zwischenablage kopiert",
     "yes": "Ja",
     "no": "Nein",
     "ok": "OK",
@@ -2841,6 +2842,10 @@
         "discrete": "Dediziert — {name}",
         "software": "Software (CPU, llvmpipe)"
       },
+      "nvidiaCompatMode": "NVIDIA-Wayland-Kompatibilität (experimentell)",
+      "nvidiaCompatModeDesc": "Aktivieren, wenn NVIDIA + Wayland mit Standardeinstellungen falsch rendert. Setzt __NV_DISABLE_EXPLICIT_SYNC=1 und hebt das defensive Compositing-Abschalten auf, damit WebKit den vollen GPU-Pfad nutzen kann. Erfordert installiertes libnvidia-egl-gbm.",
+      "resetCmdTitle": "Falls die App nicht startet",
+      "resetCmdDesc": "Führe diesen Befehl im Terminal aus, um die Grafikeinstellungen auf sichere Standardwerte zurückzusetzen. Der Boot-Watchdog erholt sich normalerweise automatisch, aber dies ist der manuelle Notausstieg.",
       "recovery": {
         "title": "Letzter Start während Grafik-Init abgestürzt",
         "titleLocked": "Wegen wiederholter Grafikabstürze deaktiviert",

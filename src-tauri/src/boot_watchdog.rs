@@ -148,6 +148,7 @@ pub fn before_webkit_init(intended: BootAttempt) -> WatchdogResolution {
     // If a previous boot left a pending marker, it crashed before
     // first paint. Compare what it tried against what we'd try now,
     // and revert the field(s) that look like the cause.
+    let mut any_revert = false;
     if let Some(prev) = read_pending() {
         // Hardware acceleration: if previous tried ON and we're also
         // trying ON, blame this knob and revert.
@@ -164,6 +165,7 @@ pub fn before_webkit_init(intended: BootAttempt) -> WatchdogResolution {
                  graphics init."
                     .to_string(),
             );
+            any_revert = true;
         }
         // Force DMA-BUF: same logic.
         if prev.force_dmabuf && resolved.force_dmabuf {
@@ -179,6 +181,7 @@ pub fn before_webkit_init(intended: BootAttempt) -> WatchdogResolution {
                  graphics init."
                     .to_string(),
             );
+            any_revert = true;
         }
         // Preferred GPU: only revert when the SAME non-auto choice
         // was attempted. Switching from one explicit GPU to another
@@ -196,10 +199,38 @@ pub fn before_webkit_init(intended: BootAttempt) -> WatchdogResolution {
                  previous launch.",
                 prev.preferred_gpu
             ));
+            any_revert = true;
         }
-        // If a previous attempt is present but none of the three
-        // matched, the crash was caused by something else — leave the
-        // flags as-is. The pending marker still gets cleared below.
+
+        // Full CPU fallback after ANY revert. The single-knob revert
+        // above narrows down the *cause* for the UI banner, but the
+        // safest landing pad for a boot that just crashed in graphics
+        // init is full CPU mode (hardware_acceleration off, DMA-BUF
+        // off, preferred_gpu cleared to auto). A partial revert can
+        // still hit the next crash if the failure was a stack-wide
+        // issue (driver bug, missing extension) and only one symptom
+        // was the visible one. Going all-the-way-CPU guarantees the
+        // user always reaches a paintable window after a recovery —
+        // they can selectively re-enable from the Settings banner.
+        if any_revert {
+            if resolved.hardware_acceleration {
+                resolved.hardware_acceleration = false;
+                flags.hardware_acceleration_disabled = true;
+                messages.push(
+                    "Hardware acceleration was also disabled as a safety fallback to land in \
+                     CPU mode."
+                        .to_string(),
+                );
+            }
+            if resolved.force_dmabuf {
+                resolved.force_dmabuf = false;
+                flags.force_dmabuf_disabled = true;
+            }
+            if resolved.preferred_gpu != "auto" {
+                resolved.preferred_gpu = "auto".to_string();
+                flags.preferred_gpu_disabled = true;
+            }
+        }
 
         // Persist the revert decisions back to graphics_settings.db so
         // the user sees the new state in the UI and the next boot

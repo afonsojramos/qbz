@@ -73,6 +73,7 @@
     "clearAll": "Limpar Tudo",
     "confirm": "Confirmar",
     "copy": "Copiar",
+    "copiedToClipboard": "Copiado para a área de transferência",
     "yes": "Sim",
     "no": "Não",
     "ok": "OK",
@@ -2841,6 +2842,10 @@
         "discrete": "Dedicada — {name}",
         "software": "Software (CPU, llvmpipe)"
       },
+      "nvidiaCompatMode": "Compatibilidade NVIDIA Wayland (experimental)",
+      "nvidiaCompatModeDesc": "Ative se NVIDIA + Wayland renderiza errado com a configuração padrão. Define __NV_DISABLE_EXPLICIT_SYNC=1 e levanta o desligamento defensivo do compositing para que o WebKit use o caminho GPU completo. Requer libnvidia-egl-gbm instalado.",
+      "resetCmdTitle": "Se o app não iniciar",
+      "resetCmdDesc": "Execute este comando em um terminal para restaurar as configurações gráficas aos valores seguros. O watchdog de inicialização normalmente recupera sozinho, mas esta é a saída manual.",
       "recovery": {
         "title": "O ultimo arranque travou durante o init grafico",
         "titleLocked": "Desativado apos travamentos graficos repetidos",

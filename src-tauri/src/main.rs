@@ -294,6 +294,15 @@ fn main() {
             .map(|s| s.preferred_gpu.clone())
             .unwrap_or_else(|| "auto".to_string());
         let force_x11_db = graphics_db.as_ref().map(|s| s.force_x11).unwrap_or(false);
+        // NVIDIA Wayland compatibility opt-in: when ON, sets
+        // __NV_DISABLE_EXPLICIT_SYNC=1 to bypass libnvidia-egl-gbm's
+        // buggy implicit-sync paths AND lifts the defensive
+        // compositing-off shutdown that QBZ applies to NVIDIA-only
+        // Wayland sessions.
+        let nvidia_compat_mode = graphics_db
+            .as_ref()
+            .map(|s| s.nvidia_compat_mode)
+            .unwrap_or(false);
 
         let dev_force_dmabuf_intended =
             match qbz_nix_lib::config::developer_settings::DeveloperSettingsStore::new() {
@@ -331,12 +340,42 @@ fn main() {
                 force_x11: force_x11_db,
             },
         );
-        let hardware_accel = watchdog_resolution.hardware_acceleration;
-        let dev_force_dmabuf = watchdog_resolution.force_dmabuf;
+        let mut hardware_accel = watchdog_resolution.hardware_acceleration;
+        let mut dev_force_dmabuf = watchdog_resolution.force_dmabuf;
         let preferred_gpu_raw = watchdog_resolution.preferred_gpu.clone();
         for msg in &watchdog_resolution.recovery_messages {
             eprintln!("[QBZ] {}", msg);
             qbz_nix_lib::logging::log_startup(&format!("[QBZ] {}", msg));
+        }
+
+        // Software GPU choice (preferred_gpu=software) implies CPU mode:
+        // forcing Mesa llvmpipe AND keeping WebKit's GPU compositing on
+        // would just round-trip software pixels through a "GPU" path
+        // that has no GPU. Treat it as the nuclear "no HW" option and
+        // mirror it into hardware_acceleration so the WEBKIT_DISABLE_*
+        // env vars below also fire.
+        if preferred_gpu_raw == "software" {
+            if hardware_accel || dev_force_dmabuf {
+                qbz_nix_lib::logging::log_startup(
+                    "[QBZ] preferred_gpu=software → forcing hardware_acceleration=off + DMA-BUF=off (full CPU mode)",
+                );
+            }
+            hardware_accel = false;
+            dev_force_dmabuf = false;
+        }
+
+        // NVIDIA Wayland compatibility mode: opt-in toggle that says
+        // "I have libnvidia-egl-gbm installed, try the new path".
+        // Sets __NV_DISABLE_EXPLICIT_SYNC=1 to bypass the buggy implicit
+        // sync code that produces "Failed to create GBM buffer of size
+        // NxN: Invalid argument" under WebKit + NVIDIA + Wayland on
+        // driver 550+. Set unconditionally when the toggle is ON — the
+        // env var is a no-op when NVIDIA isn't in use.
+        if nvidia_compat_mode {
+            qbz_nix_lib::logging::log_startup(
+                "[QBZ] NVIDIA compatibility mode ON: setting __NV_DISABLE_EXPLICIT_SYNC=1",
+            );
+            std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
         }
 
         // ---- Apply preferred_gpu env vars (using watchdog-resolved value) ----
@@ -575,7 +614,16 @@ fn main() {
             // Hybrid Intel+NVIDIA and AMD systems can handle compositing fine
             // (WebKit uses the iGPU, not the dGPU).
             // If user forced DMA-BUF on, they want full GPU — skip compositing disable too.
-            if is_wayland && !force_x11 && has_nvidia && !has_amd && !has_intel && !force_dmabuf {
+            // NVIDIA Wayland compat mode also bypasses this safety —
+            // the user has the fix in place and wants the full path.
+            if is_wayland
+                && !force_x11
+                && has_nvidia
+                && !has_amd
+                && !has_intel
+                && !force_dmabuf
+                && !nvidia_compat_mode
+            {
                 std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
                 qbz_nix_lib::logging::log_startup(
                     "[QBZ] Wayland+NVIDIA-only: compositing mode disabled (prevents protocol errors)",

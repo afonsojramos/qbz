@@ -390,6 +390,11 @@
   let gdkDpiScale = $state('');
   let gskRenderer = $state('');
   let preferredGpu = $state('auto');
+  let nvidiaCompatMode = $state(false);
+  // Track install method so the recovery command shown when nvidia
+  // compat mode is enabled matches what the user can actually run
+  // (`qbz --reset-graphics` vs `flatpak run com.blitzfc.qbz --reset-graphics`).
+  let installMethod = $state<string>('dev');
 
   // Rendering-GPU detection for the Settings > Graphics dropdown. The
   // backend cross-references PCI devices visible under /sys/class/drm/
@@ -1880,6 +1885,14 @@
       gskRenderer = settings.gsk_renderer || '';
       hardwareAcceleration = settings.hardware_acceleration;
       preferredGpu = settings.preferred_gpu || 'auto';
+      nvidiaCompatMode = settings.nvidia_compat_mode || false;
+    }).catch(() => {});
+
+    // Read install method from system info so we can render the right
+    // reset-graphics command for the user's packaging when they enable
+    // NVIDIA compat mode below (Flatpak vs native).
+    invoke<{ install_method: string }>('v2_get_system_info').then((info) => {
+      installMethod = info.install_method ?? 'dev';
     }).catch(() => {});
 
     // Load graphics startup status (for fallback warning)
@@ -4183,6 +4196,39 @@
     }
   }
 
+  async function handleNvidiaCompatModeChange(enabled: boolean) {
+    try {
+      await invoke('v2_set_nvidia_compat_mode', { enabled });
+      nvidiaCompatMode = enabled;
+      showToast($t('settings.graphics.restartRequired'), 'info');
+    } catch (err) {
+      console.error('Failed to set nvidia_compat_mode:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  // Command the user should run from a terminal to restore graphics
+  // settings to safe defaults if the NVIDIA compat mode (or any other
+  // risky toggle) crashes the app before first paint. The boot
+  // watchdog already auto-reverts on crash, but exposing the CLI here
+  // gives the user a manual escape hatch that doesn't depend on the
+  // app reaching the Settings screen.
+  const resetGraphicsCommand = $derived(
+    installMethod === 'flatpak'
+      ? 'flatpak run com.blitzfc.qbz --reset-graphics'
+      : 'qbz --reset-graphics'
+  );
+
+  async function copyResetGraphicsCommand() {
+    try {
+      await navigator.clipboard.writeText(resetGraphicsCommand);
+      showToast($t('actions.copiedToClipboard'), 'success');
+    } catch (err) {
+      console.error('Failed to copy reset command:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
   async function handleClearCrashFlag(flag: 'hardware_acceleration' | 'force_dmabuf' | 'preferred_gpu') {
     try {
       await invoke('v2_clear_crash_flag', { flag });
@@ -5621,6 +5667,40 @@
       </div>
       <Toggle enabled={forceDmabuf} onchange={(v) => handleForceDmabufChange(v)} />
     </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.nvidiaCompatMode')}</span>
+        <span class="setting-desc">{$t('settings.graphics.nvidiaCompatModeDesc')}</span>
+      </div>
+      <Toggle enabled={nvidiaCompatMode} onchange={(v) => handleNvidiaCompatModeChange(v)} />
+    </div>
+
+    {#if nvidiaCompatMode}
+      <div class="reset-cmd-row">
+        <div class="reset-cmd-info">
+          <span class="reset-cmd-label">{$t('settings.graphics.resetCmdTitle')}</span>
+          <span class="reset-cmd-desc">{$t('settings.graphics.resetCmdDesc')}</span>
+        </div>
+        <div class="reset-cmd-field">
+          <input
+            class="reset-cmd-input"
+            type="text"
+            readonly
+            value={resetGraphicsCommand}
+            onclick={(e) => (e.currentTarget as HTMLInputElement).select()}
+          />
+          <button
+            class="reset-cmd-copy-btn"
+            type="button"
+            onclick={copyResetGraphicsCommand}
+            title={$t('actions.copy')}
+          >
+            {$t('actions.copy')}
+          </button>
+        </div>
+      </div>
+    {/if}
 
     <div class="setting-row">
       <div class="setting-info">
@@ -7620,6 +7700,80 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     font-size: 12px;
     color: var(--text-primary);
     user-select: all;
+  }
+
+  /* Inline "if this breaks, run this command" affordance for the
+     NVIDIA Wayland compat opt-in. Visible only when the toggle is on
+     so it doubles as a "you opted into the risky path, here's your
+     escape hatch" hint. */
+  .reset-cmd-row {
+    margin: 8px 0 16px 0;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .reset-cmd-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .reset-cmd-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .reset-cmd-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+
+  .reset-cmd-field {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  /* `user-select: all` ensures the whole command selects on a single
+     click even though `select` was disabled globally elsewhere in
+     SettingsView. Combined with onclick={(e) => e.select()} we cover
+     both paths. */
+  .reset-cmd-input {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    user-select: all;
+    -webkit-user-select: all;
+    cursor: text;
+  }
+
+  .reset-cmd-copy-btn {
+    padding: 8px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--accent-primary, var(--bg-tertiary));
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .reset-cmd-copy-btn:hover {
+    background: var(--accent-hover, var(--bg-tertiary));
   }
 
   .composition-input {
