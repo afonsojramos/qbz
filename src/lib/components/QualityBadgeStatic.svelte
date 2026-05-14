@@ -238,15 +238,22 @@
      appear side-by-side in the same row, so the different widths
      don't compete. */
   .quality-badge.icon-only .badge-icon.hires {
-    width: 46px;
-    height: 30px;
+    width: 44px;
+    height: 29px;
     object-fit: contain;
     filter: drop-shadow(0 0 0.4px rgba(0, 0, 0, 0.7));
   }
 
+  /* The Hi-Res brand SVG sits in a SQUARE canvas (48.4×48.4) with the
+     visible mark occupying ~65% of the width — there's permanent
+     transparent gutter to the right of the rendered logo that we can't
+     remove without editing the SVG. Match that gutter on the framed
+     badge with a right margin so both badge variants visually terminate
+     at the same X within the card layout. */
   .quality-badge.icon-only-framed {
     width: 30px;
     height: 30px;
+    margin-right: 8px;
     background: var(--alpha-8, rgba(255, 255, 255, 0.06));
     border: 1px solid var(--alpha-12, rgba(255, 255, 255, 0.1));
     border-radius: 3px;
