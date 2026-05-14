@@ -417,6 +417,15 @@
   };
   let graphicsRecommendation = $state<GraphicsRecommendation | null>(null);
 
+  // Per-environment dismiss flag for the recommendation banner. The
+  // dismissed signature is the joined rationale string of the
+  // recommendation that was active when the user dismissed — if hardware
+  // or session state changes (different GPU vendor, switch X11<->Wayland,
+  // VM detected), the rationale changes, the signature mismatches, and
+  // the banner re-appears so the user can re-evaluate.
+  const RECOMMENDATION_DISMISS_KEY = 'qbz-graphics-recommendation-dismiss-v1';
+  let dismissedRecommendationSignature = $state<string | null>(null);
+
   // Graphics startup status (for showing degraded mode warning)
   let graphicsUsingFallback = $state(false);
   let graphicsIsWayland = $state(false);
@@ -1839,6 +1848,7 @@
 
     // Linux-only: recommendation banner in the Graphics tab
     if (platform === 'linux') {
+      dismissedRecommendationSignature = getUserItem(RECOMMENDATION_DISMISS_KEY);
       invoke<GraphicsRecommendation>('v2_get_graphics_recommendation')
         .then((payload) => {
           graphicsRecommendation = payload;
@@ -4119,6 +4129,21 @@
     return false;
   });
 
+  // Stable identifier for the dismiss flag: joined rationale of the
+  // currently computed recommendation. If the environment changes
+  // enough to flip the matrix branch, the signature changes and the
+  // banner unhides automatically.
+  function recommendationSignature(rec: GraphicsRecommendation): string {
+    return rec.recommendation.rationale.join('|');
+  }
+
+  const recommendationBannerVisible = $derived.by(() => {
+    if (!graphicsRecommendation) return false;
+    if (!recommendationDiffers) return false;
+    if (dismissedRecommendationSignature === null) return true;
+    return recommendationSignature(graphicsRecommendation) !== dismissedRecommendationSignature;
+  });
+
   async function handleApplyGraphicsRecommendation() {
     try {
       const errors = await invoke<string[]>('v2_apply_graphics_recommendation');
@@ -4134,9 +4159,40 @@
       hardwareAcceleration = gs.hardware_acceleration;
       const ds = await invoke<any>('v2_get_developer_settings');
       forceDmabuf = ds.force_dmabuf;
+      // Banner will hide naturally because diff is now false. Clear the
+      // dismiss flag too so the next environment change re-evaluates
+      // cleanly without a stale signature blocking the new banner.
+      dismissedRecommendationSignature = null;
+      removeUserItem(RECOMMENDATION_DISMISS_KEY);
       showToast($t('settings.graphics.recommendation.applied'), 'success');
     } catch (err) {
       console.error('Failed to apply graphics recommendation:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  function handleDismissRecommendation() {
+    if (!graphicsRecommendation) return;
+    const signature = recommendationSignature(graphicsRecommendation);
+    dismissedRecommendationSignature = signature;
+    setUserItem(RECOMMENDATION_DISMISS_KEY, signature);
+  }
+
+  async function handleRedetectRecommendation() {
+    try {
+      const payload = await invoke<GraphicsRecommendation>('v2_get_graphics_recommendation');
+      graphicsRecommendation = payload;
+      // User explicitly asked to re-detect — wipe the dismiss so the
+      // banner can re-appear if the recommendation still diverges.
+      dismissedRecommendationSignature = null;
+      removeUserItem(RECOMMENDATION_DISMISS_KEY);
+      // If everything already matches, surface a confirmation toast so
+      // the user gets feedback instead of seeing nothing happen.
+      if (!recommendationDiffers) {
+        showToast($t('settings.graphics.recommendation.noChanges'), 'success');
+      }
+    } catch (err) {
+      console.error('Failed to re-detect graphics recommendation:', err);
       showToast(String(err), 'error');
     }
   }
@@ -5303,7 +5359,13 @@
     <h3 class="section-title">{$t('settings.graphics.title')}</h3>
     <p class="section-note">{$t('settings.graphics.helpText')}</p>
 
-    {#if graphicsRecommendation && recommendationDiffers}
+    <div class="redetect-row">
+      <button class="secondary-link-btn" onclick={handleRedetectRecommendation}>
+        {$t('settings.graphics.recommendation.redetect')}
+      </button>
+    </div>
+
+    {#if graphicsRecommendation && recommendationBannerVisible}
       <div class="recommendation-banner">
         <div class="recommendation-info">
           <span class="recommendation-title">{$t('settings.graphics.recommendation.title')}</span>
@@ -5321,6 +5383,9 @@
         <div class="recommendation-actions">
           <button class="primary-btn" onclick={handleApplyGraphicsRecommendation}>
             {$t('settings.graphics.recommendation.apply')}
+          </button>
+          <button class="secondary-btn" onclick={handleDismissRecommendation}>
+            {$t('settings.graphics.recommendation.dismiss')}
           </button>
         </div>
       </div>
@@ -7178,6 +7243,58 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     display: flex;
     align-items: flex-start;
     flex-shrink: 0;
+    gap: 8px;
+  }
+
+  .primary-btn {
+    background: var(--accent-primary, #7c3aed);
+    color: var(--btn-primary-text, #fff);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .primary-btn:hover {
+    filter: brightness(1.1);
+  }
+
+  .secondary-btn {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .secondary-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--border, rgba(255, 255, 255, 0.18));
+  }
+
+  .redetect-row {
+    margin: 4px 0 12px;
+  }
+
+  .secondary-link-btn {
+    background: transparent;
+    color: var(--accent-primary, #7c3aed);
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .secondary-link-btn:hover {
+    filter: brightness(1.15);
   }
 
   .fallback-desc {

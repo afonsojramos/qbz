@@ -2832,7 +2832,10 @@
         "title": "Recommended for your system",
         "detected": "Detected",
         "apply": "Apply",
-        "applied": "Configuration applied. Restart QBZ to take effect."
+        "applied": "Configuration applied. Restart QBZ to take effect.",
+        "dismiss": "Dismiss",
+        "redetect": "Detect recommended settings",
+        "noChanges": "Settings already match the recommendation for this system."
       }
     }
   },

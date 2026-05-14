@@ -2832,7 +2832,10 @@
         "title": "Recomendado para tu sistema",
         "detected": "Detectado",
         "apply": "Aplicar",
-        "applied": "Configuracion aplicada. Reinicia QBZ para que surta efecto."
+        "applied": "Configuracion aplicada. Reinicia QBZ para que surta efecto.",
+        "dismiss": "Descartar",
+        "redetect": "Detectar configuracion recomendada",
+        "noChanges": "La configuracion actual ya coincide con la recomendacion para este sistema."
       }
     }
   },

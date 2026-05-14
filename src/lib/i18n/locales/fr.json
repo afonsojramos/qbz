@@ -2826,7 +2826,10 @@
         "title": "Recommandé pour votre système",
         "detected": "Détecté",
         "apply": "Appliquer",
-        "applied": "Configuration appliquée. Redémarrez QBZ pour qu'elle prenne effet."
+        "applied": "Configuration appliquée. Redémarrez QBZ pour qu'elle prenne effet.",
+        "dismiss": "Ignorer",
+        "redetect": "Détecter les paramètres recommandés",
+        "noChanges": "Les paramètres correspondent déjà à la recommandation pour ce système."
       }
     }
   },

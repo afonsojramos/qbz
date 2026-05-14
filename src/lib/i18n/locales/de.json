@@ -2826,7 +2826,10 @@
         "title": "Empfohlen für dein System",
         "detected": "Erkannt",
         "apply": "Übernehmen",
-        "applied": "Konfiguration übernommen. QBZ neu starten, damit es wirksam wird."
+        "applied": "Konfiguration übernommen. QBZ neu starten, damit es wirksam wird.",
+        "dismiss": "Verwerfen",
+        "redetect": "Empfohlene Einstellungen erkennen",
+        "noChanges": "Die Einstellungen entsprechen bereits der Empfehlung für dieses System."
       }
     }
   },
