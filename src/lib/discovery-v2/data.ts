@@ -234,6 +234,12 @@ export interface DiscoveryTrackCard {
   albumId?: string;
   artistId?: number;
   artwork?: string;
+  duration: string;
+  durationSeconds: number;
+  hires: boolean;
+  bitDepth?: number;
+  samplingRate?: number;
+  isrc?: string;
 }
 
 export interface DiscoveryArtistTile {
@@ -267,6 +273,12 @@ interface RecoTrackDisplayMeta {
   albumArt: string;
   albumId?: string;
   artistId?: number;
+  duration: string;
+  durationSeconds: number;
+  hires: boolean;
+  bitDepth?: number;
+  samplingRate?: number;
+  isrc?: string;
 }
 
 interface RecoArtistCardMeta {
@@ -673,6 +685,12 @@ export async function fetchHomeResolved(
         albumId: track.albumId,
         artistId: track.artistId,
         artwork: track.albumArt || undefined,
+        duration: track.duration,
+        durationSeconds: track.durationSeconds,
+        hires: track.hires,
+        bitDepth: track.bitDepth,
+        samplingRate: track.samplingRate,
+        isrc: track.isrc,
       })),
       topArtists: resp.topArtists.slice(0, perSection).map((a) => ({
         artistId: a.id,
