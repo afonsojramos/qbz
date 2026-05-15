@@ -43,6 +43,7 @@
   import { toggleArtistFavorite } from '$lib/stores/artistFavoritesStore';
   import { invoke } from '@tauri-apps/api/core';
   import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
+  import { setPlaybackContext } from '$lib/stores/playbackContextStore';
   import { playQueueIndex } from '$lib/stores/queueStore';
   import type { BackendQueueTrack } from '$lib/stores/queueStore';
 
@@ -291,6 +292,61 @@
   let spotlightTopTracksLoading = $state(false);
   let spotlightRadioLoading = $state(false);
 
+  async function handleContinueListeningTrackClick(track: DiscoveryTrackCard) {
+    const trackIndex = continueListening.findIndex((entry) => entry.trackId === track.trackId);
+    if (trackIndex < 0) return;
+
+    const trackIds = continueListening.map((entry) => entry.trackId);
+
+    await setPlaybackContext(
+      'home_list',
+      'home:continue_listening',
+      'Continue Listening',
+      'qobuz',
+      trackIds,
+      trackIndex,
+    );
+
+    try {
+      const queueTracks: BackendQueueTrack[] = continueListening.map((entry) => ({
+        id: entry.trackId,
+        title: entry.title,
+        version: null,
+        artist: entry.artist,
+        album: entry.album,
+        duration_secs: entry.durationSeconds,
+        artwork_url: entry.artwork ?? null,
+        hires: entry.hires,
+        bit_depth: entry.bitDepth ?? null,
+        sample_rate: entry.samplingRate ?? null,
+        is_local: false,
+        album_id: entry.albumId ?? null,
+        artist_id: entry.artistId ?? null,
+      }));
+      await replacePlaybackQueue(queueTracks, trackIndex, {
+        debugLabel: 'discovery-v2:continue-listening',
+      });
+    } catch (err) {
+      console.error('[discovery-v2] continue listening queue failed', err);
+    }
+
+    onTrackPlay?.({
+      id: track.trackId,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      albumId: track.albumId,
+      artistId: track.artistId,
+      albumArt: track.artwork,
+      duration: track.duration,
+      durationSeconds: track.durationSeconds,
+      hires: track.hires,
+      bitDepth: track.bitDepth,
+      samplingRate: track.samplingRate,
+      isrc: track.isrc,
+    });
+  }
+
   async function handleSpotlightTopTracks() {
     if (!spotlight || spotlightTopTracksLoading || spotlight.topTracks.length === 0) return;
     spotlightTopTracksLoading = true;
@@ -455,15 +511,7 @@
       artist={track.artist}
       artwork={track.artwork}
       isPlaying={track.trackId === activeTrackId && isPlaybackActive === true}
-      onClick={() => onTrackPlay?.({
-        id: track.trackId,
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        albumId: track.albumId,
-        artistId: track.artistId,
-        albumArt: track.artwork,
-      } as DisplayTrack)}
+      onClick={() => handleContinueListeningTrackClick(track)}
       onArtistClick={track.artistId !== undefined
         ? () => onTrackGoToArtist?.(track.artistId!)
         : undefined}
