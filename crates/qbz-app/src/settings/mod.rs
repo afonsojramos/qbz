@@ -1,3 +1,4 @@
+pub mod download;
 pub mod favorites;
 pub mod legal;
 pub mod library;
