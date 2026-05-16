@@ -424,8 +424,10 @@ Contributions welcome. Please read `CONTRIBUTING.md` before submitting issues or
 - [@boxdot](https://github.com/boxdot)
 - [@arminfelder](https://github.com/arminfelder)
 - [@afonsojramos](https://github.com/afonsojramos) — macOS port
+- [@Vudgekek](https://github.com/Vudgekek) — macOS audio
 - [@GwendalBeaumont](https://github.com/GwendalBeaumont) — i18n
 - [@AdamArstall](https://github.com/AdamArstall)
+- [@DoubleGate](https://github.com/DoubleGate)
 
 ## License
 
