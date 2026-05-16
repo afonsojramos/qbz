@@ -1,3 +1,4 @@
+pub mod developer;
 pub mod download;
 pub mod favorites;
 pub mod graphics;
