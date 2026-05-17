@@ -1637,57 +1637,164 @@
    * parent Qobuz album. Builds the full album queue and jumps to the picked
    * track's index so the rest of the album continues after it.
    */
+  // Plays a track clicked inside an expanded Mixtape/Collection item.
+  // Handles Qobuz albums/playlists directly, and local-library / Plex albums
+  // via the backend collection-item resolver.
   async function handleMixtapePlayTrackFromAlbum(
     item: MixtapeCollectionItem,
     trackId: number,
   ) {
-    if (item.item_type !== 'album' || item.source !== 'qobuz') {
+    // Local-library and Plex albums: delegate album resolution to the backend
+    // (v2_enqueue_collection_item — the same path the working "play album"
+    // button uses), then jump the queue cursor to the clicked track. Building
+    // the queue frontend-side would risk getting the Plex base URL / token /
+    // id wrong, so we reuse the proven resolver.
+    if (item.item_type === 'album' && item.source === 'local') {
+      const collectionId = mixtapeDetailId;
+      if (!collectionId) {
+        showToast($t('toast.actionNotAvailableYet') ||
+          'Not available for this item type yet', 'info');
+        return;
+      }
+      try {
+        await invoke('v2_enqueue_collection_item', {
+          collectionId,
+          position: item.position,
+          mode: 'replace',
+        });
+        // The resolver staged the whole album at index 0; find the clicked
+        // track by id and move the cursor there before starting audio.
+        const snapshot = await invoke<{
+          tracks: BackendQueueTrack[];
+          current_index: number | null;
+        }>('v2_get_all_queue_tracks');
+        const idx = Math.max(
+          0,
+          snapshot.tracks.findIndex((qt) => qt.id === trackId),
+        );
+        const trk = await playQueueIndex(idx);
+        if (trk) await playQueueTrack(trk);
+      } catch (err) {
+        console.error(
+          '[Mixtape] handleMixtapePlayTrackFromAlbum (local) failed:',
+          err,
+        );
+        showToast($t('toast.failedAddToQueue'), 'error');
+      }
+      return;
+    }
+
+    if (item.source !== 'qobuz' ||
+        (item.item_type !== 'album' && item.item_type !== 'playlist')) {
       showToast($t('toast.actionNotAvailableYet') ||
         'Not available for this item type yet', 'info');
       return;
     }
     try {
-      const album = await invoke<QobuzAlbum>('v2_get_album', {
-        albumId: item.source_item_id,
-      });
-      const converted = convertQobuzAlbum(album);
-      if (!converted?.tracks?.length) {
-        showToast($t('toast.failedLoadAlbum'), 'error');
-        return;
+      let queueTracks: BackendQueueTrack[] = [];
+
+      if (item.item_type === 'album') {
+        const album = await invoke<QobuzAlbum>('v2_get_album', {
+          albumId: item.source_item_id,
+        });
+        const converted = convertQobuzAlbum(album);
+        if (!converted?.tracks?.length) {
+          showToast($t('toast.failedLoadAlbum'), 'error');
+          return;
+        }
+        const artwork = converted.artwork || '';
+        queueTracks = converted.tracks
+          .filter((trk) => {
+            const artistId = trk.artistId ?? converted.artistId;
+            return !artistId || !isArtistBlacklisted(artistId);
+          })
+          .map((trk) => ({
+            id: trk.id,
+            title: trk.title,
+            version: trk.version ?? null,
+            artist: trk.artist || converted.artist || 'Unknown Artist',
+            album: converted.title || '',
+            duration_secs: trk.durationSeconds,
+            artwork_url: artwork || null,
+            hires: trk.hires ?? false,
+            bit_depth: trk.bitDepth ?? null,
+            sample_rate: trk.samplingRate ?? null,
+            is_local: false,
+            album_id: converted.id,
+            artist_id: trk.artistId ?? converted.artistId,
+            streamable: trk.streamable ?? true,
+            source: 'qobuz' as const,
+            parental_warning: trk.parental_warning ?? false,
+          }));
+      } else {
+        // Playlist item — fetch the playlist and queue its tracks.
+        interface RawPlaylistTrack {
+          id: number;
+          title: string;
+          version?: string;
+          duration?: number;
+          performer?: { id?: number; name?: string };
+          album?: {
+            id?: string;
+            title?: string;
+            image?: { small?: string; large?: string; thumbnail?: string };
+          };
+          hires?: boolean;
+          maximum_bit_depth?: number;
+          maximum_sampling_rate?: number;
+          streamable?: boolean;
+          parental_warning?: boolean;
+        }
+        const playlist = await invoke<{ tracks?: { items?: RawPlaylistTrack[] } }>(
+          'v2_get_playlist',
+          { playlistId: Number(item.source_item_id) },
+        );
+        const raw = playlist.tracks?.items ?? [];
+        queueTracks = raw
+          .filter((trk) => {
+            const artistId = trk.performer?.id;
+            return !artistId || !isArtistBlacklisted(artistId);
+          })
+          .map((trk) => ({
+            id: trk.id,
+            title: trk.title,
+            version: trk.version ?? null,
+            artist: trk.performer?.name || 'Unknown Artist',
+            album: trk.album?.title || '',
+            duration_secs: trk.duration ?? 0,
+            artwork_url:
+              trk.album?.image?.large ||
+              trk.album?.image?.small ||
+              trk.album?.image?.thumbnail ||
+              null,
+            hires: trk.hires ?? false,
+            bit_depth: trk.maximum_bit_depth ?? null,
+            sample_rate: trk.maximum_sampling_rate ?? null,
+            is_local: false,
+            album_id: trk.album?.id ?? null,
+            artist_id: trk.performer?.id ?? null,
+            streamable: trk.streamable ?? true,
+            source: 'qobuz' as const,
+            parental_warning: trk.parental_warning ?? false,
+          }));
       }
-      const playableTracks = converted.tracks.filter((trk) => {
-        const artistId = trk.artistId ?? converted.artistId;
-        return !artistId || !isArtistBlacklisted(artistId);
-      });
-      if (playableTracks.length === 0) {
+
+      if (queueTracks.length === 0) {
         showToast($t('toast.noPlayableTracks') || 'No playable tracks', 'info');
         return;
       }
       const startIndex = Math.max(
         0,
-        playableTracks.findIndex((trk) => trk.id === trackId),
+        queueTracks.findIndex((qt) => qt.id === trackId),
       );
-      const artwork = converted.artwork || '';
-      const queueTracks = playableTracks.map((trk) => ({
-        id: trk.id,
-        title: trk.title,
-        version: trk.version ?? null,
-        artist: trk.artist || converted.artist || 'Unknown Artist',
-        album: converted.title || '',
-        duration_secs: trk.durationSeconds,
-        artwork_url: artwork || null,
-        hires: trk.hires ?? false,
-        bit_depth: trk.bitDepth ?? null,
-        sample_rate: trk.samplingRate ?? null,
-        is_local: false,
-        album_id: converted.id,
-        artist_id: trk.artistId ?? converted.artistId,
-        streamable: trk.streamable ?? true,
-        source: 'qobuz' as const,
-        parental_warning: trk.parental_warning ?? false,
-      }));
-      await invoke('v2_set_queue', { trackIds: queueTracks.map((qt) => qt.id) });
-      await invoke('v2_play_queue_index', { index: startIndex });
+      // Canonical set-queue + start-audio pattern (mirrors handleMixtapeItemAction):
+      // setQueue stages the full track objects server-side, and playQueueTrack is
+      // what actually loads + starts the audio.
+      await setQueue(queueTracks, startIndex, true);
+      const trk = await playQueueIndex(startIndex);
+      if (trk) {
+        await playQueueTrack(trk);
+      }
     } catch (err) {
       console.error('[Mixtape] handleMixtapePlayTrackFromAlbum failed:', err);
       showToast($t('toast.failedAddToQueue'), 'error');
