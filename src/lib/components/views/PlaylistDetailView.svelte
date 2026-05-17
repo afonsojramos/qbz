@@ -52,6 +52,7 @@
     isrc?: string;
     playlist_track_id?: number; // Qobuz playlist-specific ID for removal
     streamable?: boolean; // Whether track is available on Qobuz (false = removed)
+    version?: string; // Remix/edition subtitle from Qobuz (#360 / #443)
   }
 
   interface Playlist {
@@ -112,6 +113,7 @@
     addedIndex?: number;      // Original position in playlist (proxy for date added)
     customPosition?: number;  // User-defined position for custom arrange mode
     streamable?: boolean;     // Whether track is available on Qobuz (false = removed)
+    version?: string;         // Remix/edition subtitle from Qobuz (#360 / #443)
   }
 
   // Local library track from backend
@@ -740,6 +742,7 @@
       label: track.album?.label?.name,
       addedIndex: idx,
       streamable: track.streamable,
+      version: track.version,
     };
   }
 
@@ -1778,6 +1781,7 @@
     const queueTracks = filteredTracks.map(trk => ({
       id: trk.isLocal ? Math.abs(trk.id) : trk.id,
       title: trk.title,
+      version: trk.version ?? null,
       artist: trk.artist || 'Unknown Artist',
       album: trk.album || playlist?.name || 'Playlist',
       duration_secs: trk.durationSeconds,
