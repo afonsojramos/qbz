@@ -39,6 +39,7 @@
   import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { playTrack } from '$lib/services/playbackService';
   import { playQueueIndex } from '$lib/stores/queueStore';
+  import { formatTrackTitle } from '$lib/utils/trackTitle';
   import {
     releaseTypeOverrides,
     loadReleaseTypeOverrides,
@@ -136,6 +137,7 @@
     id: number;
     number: number;
     title: string;
+    version?: string; // Remix/edition subtitle from Qobuz (#360 / #443)
     artist?: string;
     duration: number; // seconds (for internal math)
     durationStr: string; // formatted "m:ss" for TrackRow
@@ -218,6 +220,7 @@
         id: number;
         track_number?: number;
         title: string;
+        version?: string; // Remix/edition subtitle from Qobuz (#360 / #443)
         duration?: number;
         performer?: { name?: string };
         parental_warning?: boolean;
@@ -240,6 +243,7 @@
         id: t.id,
         number: t.track_number ?? i + 1,
         title: t.title,
+        version: t.version,
         artist: t.performer?.name,
         duration: t.duration ?? 0,
         durationStr: formatSec(t.duration ?? 0),
@@ -377,7 +381,44 @@
       });
     }
 
-    // Plex cache / playlist paths still follow-ups.
+    // Qobuz playlist item — fetch the playlist's tracks. Without this,
+    // playlist rows in a Mixtape/Collection expanded to "No results found".
+    if (item.item_type === 'playlist' && item.source === 'qobuz') {
+      interface RawPlaylistTrack {
+        id: number;
+        title: string;
+        version?: string; // Remix/edition subtitle from Qobuz (#360 / #443)
+        duration?: number;
+        performer?: { name?: string };
+        parental_warning?: boolean;
+        maximum_bit_depth?: number;
+        maximum_sampling_rate?: number;
+      }
+      const playlistId = Number(item.source_item_id);
+      const playlist = await invoke<{ tracks?: { items?: RawPlaylistTrack[] } }>(
+        'v2_get_playlist',
+        { playlistId },
+      );
+      const raw = playlist.tracks?.items ?? [];
+      return raw.map((t, i) => {
+        const quality = t.maximum_bit_depth && t.maximum_sampling_rate
+          ? `FLAC ${t.maximum_bit_depth}/${t.maximum_sampling_rate}`
+          : undefined;
+        return {
+          id: t.id,
+          number: i + 1, // playlist position, not album track number
+          title: t.title,
+          version: t.version,
+          artist: t.performer?.name,
+          duration: t.duration ?? 0,
+          durationStr: formatSec(t.duration ?? 0),
+          quality,
+          parental_warning: t.parental_warning,
+        };
+      });
+    }
+
+    // Plex-cache playlist path still a follow-up.
     return [];
   }
 
@@ -1200,6 +1241,7 @@
     await playTrack({
       id: firstTrack.id,
       title: firstTrack.title,
+      version: firstTrack.version ?? null,
       artist: firstTrack.artist,
       album: firstTrack.album ?? '',
       artwork: firstTrack.artwork_url ?? '',
@@ -2078,7 +2120,7 @@
                   <TrackRow
                     trackId={et.id}
                     number={et.number}
-                    title={et.title}
+                    title={formatTrackTitle(et)}
                     artist={et.artist}
                     duration={et.durationStr}
                     quality={et.quality}
