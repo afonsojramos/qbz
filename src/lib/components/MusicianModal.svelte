@@ -71,7 +71,7 @@
   aria-labelledby="musician-modal-title"
   tabindex="-1"
 >
-  <div class="modal">
+  <div class="modal selectable">
     <!-- Header -->
     <div class="modal-header">
       <div class="musician-info">

@@ -3,8 +3,15 @@
   import { t } from 'svelte-i18n';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
-  import QualityBadge from '$lib/components/QualityBadge.svelte';
+  import ImmersiveSongCard from '$lib/components/immersive/ImmersiveSongCard.svelte';
   import { getPanelFrameInterval } from '$lib/immersive/fpsConfig';
+  import { isHardwareAccelEnabled } from '$lib/runtime/graphicsState';
+
+  // CPU mode: the per-band `shadowBlur` (scales with energy up to ~20px)
+  // is the dominant cost — 5 rings × energy-driven blur radius squared,
+  // every frame. Replaced with a fat semi-transparent underlay arc per
+  // band. Also pin dpr to 1.
+  const LOW_PROFILE = !isHardwareAccelEnabled();
 
   interface Props {
     enabled?: boolean;
@@ -153,7 +160,7 @@
     lastRenderTime = timestamp;
 
     const rect = canvasRef.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = LOW_PROFILE ? 1 : (window.devicePixelRatio || 1);
     const width = rect.width;
     const height = rect.height;
 
@@ -180,18 +187,36 @@
 
       const color = bandColors[i];
       const alpha = 0.15 + energy * 0.6;
-      const glowSize = 4 + energy * 16;
+      const ringWidth = 2 + energy * 3;
 
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, pulseRadius, 0, Math.PI * 2);
-      ctx.closePath();
+      if (LOW_PROFILE) {
+        // Fat semi-transparent halo arc + thin opaque ring on top —
+        // approximates the shadowBlur glow without the per-pixel cost.
+        const haloWidth = ringWidth + 4 + energy * 8;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, pulseRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha * 0.35})`;
+        ctx.lineWidth = haloWidth;
+        ctx.stroke();
 
-      ctx.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
-      ctx.lineWidth = 2 + energy * 3;
-      ctx.shadowColor = `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha * 0.8})`;
-      ctx.shadowBlur = glowSize;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, pulseRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
+        ctx.lineWidth = ringWidth;
+        ctx.stroke();
+      } else {
+        const glowSize = 4 + energy * 16;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, pulseRadius, 0, Math.PI * 2);
+        ctx.closePath();
+
+        ctx.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
+        ctx.lineWidth = ringWidth;
+        ctx.shadowColor = `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha * 0.8})`;
+        ctx.shadowBlur = glowSize;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
     }
 
     // Ambient center glow based on total energy
@@ -255,24 +280,17 @@
 <div class="energy-bands-panel" class:visible={enabled}>
   <canvas bind:this={canvasRef} class="energy-canvas"></canvas>
 
-  <div class="bottom-info">
-    <div class="track-meta">
-      <span class="track-title">{trackTitle}</span>
-      {#if explicit}
-        <span class="explicit-badge" title="{ $t('library.explicit') }"></span>
-      {/if}
-      {#if album}
-        <span class="track-album">{album}</span>
-      {/if}
-      <span class="track-artist">{artist}</span>
-      <QualityBadge {quality} {bitDepth} {samplingRate} {originalBitDepth} {originalSamplingRate} {format} compact />
-    </div>
-    {#if artwork}
-      <div class="artwork-thumb">
-        <img src={artwork} alt={trackTitle} />
-      </div>
-    {/if}
-  </div>
+  <ImmersiveSongCard
+    {artwork}
+    {trackTitle}
+    {artist}
+    {album}
+    {explicit}
+    {quality}
+    {bitDepth}
+    {samplingRate}
+    {format}
+  />
 </div>
 
 <style>
@@ -300,88 +318,4 @@
     height: 100%;
   }
 
-  .bottom-info {
-    position: absolute;
-    bottom: 24px;
-    right: 24px;
-    z-index: 10;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .track-meta {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 3px;
-  }
-
-  .track-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-primary, white);
-    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .track-album {
-    font-size: 12px;
-    color: var(--alpha-50, rgba(255, 255, 255, 0.5));
-    font-style: italic;
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .track-artist {
-    font-size: 12px;
-    color: var(--alpha-60, rgba(255, 255, 255, 0.6));
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .artwork-thumb {
-    width: 72px;
-    height: 72px;
-    border-radius: 6px;
-    overflow: hidden;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-    flex-shrink: 0;
-  }
-
-  .artwork-thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  @media (max-width: 768px) {
-    .bottom-info {
-      right: 16px;
-      bottom: 16px;
-    }
-
-    .artwork-thumb {
-      width: 56px;
-      height: 56px;
-    }
-  }
-
-  .explicit-badge {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-    opacity: 0.45;
-    background-color: var(--text-primary, white);
-    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
-    mask: url('/explicit.svg') center / contain no-repeat;
-  }
 </style>

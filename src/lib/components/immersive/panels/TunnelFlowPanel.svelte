@@ -3,7 +3,7 @@
   import { t } from 'svelte-i18n';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
-  import QualityBadge from '$lib/components/QualityBadge.svelte';
+  import ImmersiveSongCard from '$lib/components/immersive/ImmersiveSongCard.svelte';
   import { getPanelFrameInterval } from '$lib/immersive/fpsConfig';
 
   interface Props {
@@ -989,24 +989,17 @@
 <div class="tunnel-flow-panel" class:visible={enabled}>
   <canvas bind:this={canvasRef} class="tunnel-flow-canvas"></canvas>
 
-  <div class="bottom-info">
-    <div class="track-meta">
-      <span class="track-title">{trackTitle}</span>
-      {#if explicit}
-        <span class="explicit-badge" title="{ $t('library.explicit') }"></span>
-      {/if}
-      {#if album}
-        <span class="track-album">{album}</span>
-      {/if}
-      <span class="track-artist">{artist}</span>
-      <QualityBadge {quality} {bitDepth} {samplingRate} {originalBitDepth} {originalSamplingRate} {format} compact />
-    </div>
-    {#if artwork}
-      <div class="artwork-thumb">
-        <img src={artwork} alt={trackTitle} />
-      </div>
-    {/if}
-  </div>
+  <ImmersiveSongCard
+    {artwork}
+    {trackTitle}
+    {artist}
+    {album}
+    {explicit}
+    {quality}
+    {bitDepth}
+    {samplingRate}
+    {format}
+  />
 </div>
 
 <style>
@@ -1030,93 +1023,4 @@
     height: 100%;
   }
 
-  .bottom-info {
-    position: absolute;
-    bottom: 24px;
-    right: 24px;
-    z-index: 10;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .track-meta {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 3px;
-  }
-
-  .track-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-primary, white);
-    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .track-album {
-    font-size: 12px;
-    color: var(--alpha-50, rgba(255, 255, 255, 0.5));
-    font-style: italic;
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .track-artist {
-    font-size: 12px;
-    color: var(--alpha-60, rgba(255, 255, 255, 0.62));
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .artwork-thumb {
-    width: 72px;
-    height: 72px;
-    border-radius: 6px;
-    overflow: hidden;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-    flex-shrink: 0;
-  }
-
-  .artwork-thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .explicit-badge {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-    opacity: 0.45;
-    background-color: var(--text-primary, white);
-    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
-    mask: url('/explicit.svg') center / contain no-repeat;
-  }
-
-  @media (max-width: 768px) {
-    .bottom-info {
-      right: 16px;
-      bottom: 16px;
-    }
-
-    .artwork-thumb {
-      width: 56px;
-      height: 56px;
-    }
-
-    .track-title {
-      font-size: 13px;
-      max-width: 220px;
-    }
-  }
 </style>

@@ -137,7 +137,7 @@
   );
 </script>
 
-<div class="track-info-panel" class:centered-layout={centeredLayout}>
+<div class="track-info-panel selectable" class:centered-layout={centeredLayout}>
   {#if loading}
     <div class="loading-state">
       <LoaderCircle size={28} class="spinner" />

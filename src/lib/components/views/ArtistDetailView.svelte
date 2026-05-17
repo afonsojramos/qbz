@@ -25,7 +25,7 @@
     isAlbumHeaderGradientEnabled,
   } from '$lib/stores/appearancePreferencesStore';
   import { getCachedImageUrl } from '$lib/services/imageCacheService';
-  import AlbumCard from '../AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLite.svelte';
   import TrackMenu from '../TrackMenu.svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
   import { formatQuality } from '$lib/adapters/qobuzAdapters';
@@ -425,23 +425,48 @@
   } as const;
 
   let albumSortMode = $state<AlbumSortMode>(loadAlbumSortMode(STORAGE_SORT_KEYS.ALBUMS));
-  let showAlbumSortMenu = $state(false);
   let epsSinglesSortMode = $state<AlbumSortMode>(loadAlbumSortMode(STORAGE_SORT_KEYS.EPS_SINGLES));
-  let showEpsSinglesSortMenu = $state(false);
   let liveAlbumsSortMode = $state<AlbumSortMode>(loadAlbumSortMode(STORAGE_SORT_KEYS.LIVE_ALBUMS));
-  let showLiveAlbumsSortMenu = $state(false);
   let compilationsSortMode = $state<AlbumSortMode>(loadAlbumSortMode(STORAGE_SORT_KEYS.COMPILATIONS));
-  let showCompilationsSortMenu = $state(false);
   let tributesSortMode = $state<AlbumSortMode>(loadAlbumSortMode(STORAGE_SORT_KEYS.TRIBUTES));
-  let showTributesSortMenu = $state(false);
   let tributesExpanded = $state(false); // Collapsed by default
   let tributesVisibleCount = $state(20); // Load 20 at a time
   let othersSortMode = $state<AlbumSortMode>(loadAlbumSortMode(STORAGE_SORT_KEYS.OTHERS));
-  let showOthersSortMenu = $state(false);
+
+  // Mutually-exclusive section sort menus. Only one menu is open at a time.
+  type OpenSortMenu =
+    | 'albums'
+    | 'epsSingles'
+    | 'liveAlbums'
+    | 'compilations'
+    | 'tributes'
+    | 'others'
+    | null;
+  let openSortMenu = $state<OpenSortMenu>(null);
 
   // Popular tracks display state
   let visibleTracksCount = $state(5);
   let showTracksContextMenu = $state(false);
+
+  // Close the popular-tracks context menu on clicks outside its trigger or panel.
+  $effect(() => {
+    if (!showTracksContextMenu) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.action-btn-circle') || target.closest('.context-menu')) return;
+      showTracksContextMenu = false;
+    }
+
+    setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 0);
+
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  });
 
   function loadAlbumSortMode(key: string, fallback: AlbumSortMode = 'default'): AlbumSortMode {
     try {
@@ -713,12 +738,17 @@
     }
   });
 
-  // Close sort menu when clicking outside
+  // Close any open sort menu when clicking outside it. Clicks on any
+  // sort button or sort menu are handled by the button's own onclick so
+  // switching between sections doesn't immediately collapse the new menu.
   $effect(() => {
-    if (!showAlbumSortMenu) return;
+    if (openSortMenu === null) return;
 
-    function handleClick() {
-      showAlbumSortMenu = false;
+    function handleClick(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.sort-btn') || target.closest('.sort-menu')) return;
+      openSortMenu = null;
     }
 
     // Delay to avoid closing immediately
@@ -1759,7 +1789,7 @@
   });
 </script>
 
-<div class="artist-detail" class:has-art-bg={!!headerColor} style={headerStyle} bind:this={artistDetailEl} onscroll={(e) => saveScrollPosition('artist', (e.target as HTMLElement).scrollTop, artist.id)}>
+<div class="artist-detail" class:has-art-bg={!!headerColor} style={headerStyle} bind:this={artistDetailEl} onscroll={(e) => saveScrollPosition('artist', (e.target as HTMLElement).scrollTop, artist.id)} data-tauri-drag-region>
   <!-- Back Navigation -->
   <button class="back-btn" onclick={onBack}>
     <ArrowLeft size={16} />
@@ -1796,7 +1826,7 @@
     </div>
 
     <!-- Artist Info -->
-    <div class="artist-info">
+    <div class="artist-info selectable">
       <h1 class="artist-name">{artist.name}</h1>
 
       <!-- Biography -->
@@ -2115,7 +2145,7 @@
   <!-- Top Tracks Section -->
   {#if topTracks.length > 0 || tracksLoading}
     <div class="top-tracks-section section-anchor" bind:this={topTracksSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.popularTracks')}</h2>
         </div>
@@ -2141,7 +2171,6 @@
                 <Ellipsis size={18} />
               </button>
               {#if showTracksContextMenu}
-                <div class="context-menu-backdrop" onclick={() => showTracksContextMenu = false} role="presentation"></div>
                 <div class="context-menu">
                   <button class="context-menu-item" onclick={() => { handlePlayAllTracksNext(); showTracksContextMenu = false; }}>
                     {$t('actions.playNext')}
@@ -2362,7 +2391,7 @@
 
   <!-- Discography Section -->
   <div class="discography section-anchor" bind:this={discographySection}>
-    <div class="section-header">
+    <div class="section-header" data-tauri-drag-region="deep">
       <div class="section-header-left">
         <h2 class="section-title">{$t('artist.discography')}</h2>
         {#if artist.albums.length > 0}
@@ -2371,7 +2400,7 @@
       </div>
       <!-- Album Sort Dropdown -->
       <div class="sort-dropdown">
-        <button class="sort-btn" onclick={() => (showAlbumSortMenu = !showAlbumSortMenu)}>
+        <button class="sort-btn" onclick={() => (openSortMenu = openSortMenu === 'albums' ? null : 'albums')}>
           <span>
             {#if albumSortMode === 'default'}{$t('sort.sort')}: {$t('sort.default')}
             {:else if albumSortMode === 'newest'}{$t('sort.sort')}: {$t('sort.newest')}
@@ -2382,40 +2411,40 @@
           </span>
           <ChevronDown size={14} />
         </button>
-        {#if showAlbumSortMenu}
+        {#if openSortMenu === 'albums'}
           <div class="sort-menu">
             <button
               class="sort-item"
               class:selected={albumSortMode === 'default'}
-              onclick={() => { albumSortMode = 'default'; showAlbumSortMenu = false; }}
+              onclick={() => { albumSortMode = 'default'; openSortMenu = null; }}
             >
               {$t('sort.default')}
             </button>
             <button
               class="sort-item"
               class:selected={albumSortMode === 'newest'}
-              onclick={() => { albumSortMode = 'newest'; showAlbumSortMenu = false; }}
+              onclick={() => { albumSortMode = 'newest'; openSortMenu = null; }}
             >
               {$t('sort.newest')}
             </button>
             <button
               class="sort-item"
               class:selected={albumSortMode === 'oldest'}
-              onclick={() => { albumSortMode = 'oldest'; showAlbumSortMenu = false; }}
+              onclick={() => { albumSortMode = 'oldest'; openSortMenu = null; }}
             >
               {$t('sort.oldest')}
             </button>
             <button
               class="sort-item"
               class:selected={albumSortMode === 'title-asc'}
-              onclick={() => { albumSortMode = 'title-asc'; showAlbumSortMenu = false; }}
+              onclick={() => { albumSortMode = 'title-asc'; openSortMenu = null; }}
             >
               {$t('sort.titleAZ')}
             </button>
             <button
               class="sort-item"
               class:selected={albumSortMode === 'title-desc'}
-              onclick={() => { albumSortMode = 'title-desc'; showAlbumSortMenu = false; }}
+              onclick={() => { albumSortMode = 'title-desc'; openSortMenu = null; }}
             >
               {$t('sort.titleZA')}
             </button>
@@ -2433,24 +2462,19 @@
               albumId={album.id}
               artwork={album.artwork}
               title={album.title}
-              artist={album.year || ''}
+              artist={album.year ? String(album.year) : ''}
               genre={album.genre}
-              releaseDate={album.releaseDate}
-              size="large"
               quality={album.quality}
-              searchId={`album-${album.id}`}
+              isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
               onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
               onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
               onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-              onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+              onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
               onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
               onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
               onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
-              isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
-              onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
               onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
-              {downloadStateVersion}
-              onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+              onClick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
             />
           {/each}
         </div>
@@ -2469,13 +2493,13 @@
     <div class="divider"></div>
 
     <div class="discography section-anchor" bind:this={epsSinglesSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.epsSingles')}</h2>
           <span class="section-count">{artist.epsSingles.length}</span>
         </div>
         <div class="sort-dropdown">
-          <button class="sort-btn" onclick={() => (showEpsSinglesSortMenu = !showEpsSinglesSortMenu)}>
+          <button class="sort-btn" onclick={() => (openSortMenu = openSortMenu === 'epsSingles' ? null : 'epsSingles')}>
             <span>
               {#if epsSinglesSortMode === 'default'}{$t('sort.sort')}: {$t('sort.default')}
               {:else if epsSinglesSortMode === 'newest'}{$t('sort.sort')}: {$t('sort.newest')}
@@ -2486,13 +2510,13 @@
             </span>
             <ChevronDown size={14} />
           </button>
-          {#if showEpsSinglesSortMenu}
+          {#if openSortMenu === 'epsSingles'}
             <div class="sort-menu">
-              <button class="sort-item" class:selected={epsSinglesSortMode === 'default'} onclick={() => { epsSinglesSortMode = 'default'; showEpsSinglesSortMenu = false; }}>{$t('sort.default')}</button>
-              <button class="sort-item" class:selected={epsSinglesSortMode === 'newest'} onclick={() => { epsSinglesSortMode = 'newest'; showEpsSinglesSortMenu = false; }}>{$t('sort.newest')}</button>
-              <button class="sort-item" class:selected={epsSinglesSortMode === 'oldest'} onclick={() => { epsSinglesSortMode = 'oldest'; showEpsSinglesSortMenu = false; }}>{$t('sort.oldest')}</button>
-              <button class="sort-item" class:selected={epsSinglesSortMode === 'title-asc'} onclick={() => { epsSinglesSortMode = 'title-asc'; showEpsSinglesSortMenu = false; }}>{$t('sort.titleAZ')}</button>
-              <button class="sort-item" class:selected={epsSinglesSortMode === 'title-desc'} onclick={() => { epsSinglesSortMode = 'title-desc'; showEpsSinglesSortMenu = false; }}>{$t('sort.titleZA')}</button>
+              <button class="sort-item" class:selected={epsSinglesSortMode === 'default'} onclick={() => { epsSinglesSortMode = 'default'; openSortMenu = null; }}>{$t('sort.default')}</button>
+              <button class="sort-item" class:selected={epsSinglesSortMode === 'newest'} onclick={() => { epsSinglesSortMode = 'newest'; openSortMenu = null; }}>{$t('sort.newest')}</button>
+              <button class="sort-item" class:selected={epsSinglesSortMode === 'oldest'} onclick={() => { epsSinglesSortMode = 'oldest'; openSortMenu = null; }}>{$t('sort.oldest')}</button>
+              <button class="sort-item" class:selected={epsSinglesSortMode === 'title-asc'} onclick={() => { epsSinglesSortMode = 'title-asc'; openSortMenu = null; }}>{$t('sort.titleAZ')}</button>
+              <button class="sort-item" class:selected={epsSinglesSortMode === 'title-desc'} onclick={() => { epsSinglesSortMode = 'title-desc'; openSortMenu = null; }}>{$t('sort.titleZA')}</button>
             </div>
           {/if}
         </div>
@@ -2503,24 +2527,19 @@
             albumId={album.id}
             artwork={album.artwork}
             title={album.title}
-            artist={album.year || ''}
+            artist={album.year ? String(album.year) : ''}
             genre={album.genre}
-            releaseDate={album.releaseDate}
-            size="large"
             quality={album.quality}
-            searchId={`album-${album.id}`}
+            isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
             onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
             onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
             onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-            onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+            onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
             onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
             onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
             onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
-            isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
-            onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
             onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
-            {downloadStateVersion}
-            onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+            onClick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
           />
         {/each}
       </div>
@@ -2538,13 +2557,13 @@
     <div class="divider"></div>
 
     <div class="discography section-anchor" bind:this={liveAlbumsSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.liveAlbums')}</h2>
           <span class="section-count">{artist.liveAlbums.length}</span>
         </div>
         <div class="sort-dropdown">
-          <button class="sort-btn" onclick={() => (showLiveAlbumsSortMenu = !showLiveAlbumsSortMenu)}>
+          <button class="sort-btn" onclick={() => (openSortMenu = openSortMenu === 'liveAlbums' ? null : 'liveAlbums')}>
             <span>
               {#if liveAlbumsSortMode === 'default'}{$t('sort.sort')}: {$t('sort.default')}
               {:else if liveAlbumsSortMode === 'newest'}{$t('sort.sort')}: {$t('sort.newest')}
@@ -2555,13 +2574,13 @@
             </span>
             <ChevronDown size={14} />
           </button>
-          {#if showLiveAlbumsSortMenu}
+          {#if openSortMenu === 'liveAlbums'}
             <div class="sort-menu">
-              <button class="sort-item" class:selected={liveAlbumsSortMode === 'default'} onclick={() => { liveAlbumsSortMode = 'default'; showLiveAlbumsSortMenu = false; }}>{$t('sort.default')}</button>
-              <button class="sort-item" class:selected={liveAlbumsSortMode === 'newest'} onclick={() => { liveAlbumsSortMode = 'newest'; showLiveAlbumsSortMenu = false; }}>{$t('sort.newest')}</button>
-              <button class="sort-item" class:selected={liveAlbumsSortMode === 'oldest'} onclick={() => { liveAlbumsSortMode = 'oldest'; showLiveAlbumsSortMenu = false; }}>{$t('sort.oldest')}</button>
-              <button class="sort-item" class:selected={liveAlbumsSortMode === 'title-asc'} onclick={() => { liveAlbumsSortMode = 'title-asc'; showLiveAlbumsSortMenu = false; }}>{$t('sort.titleAZ')}</button>
-              <button class="sort-item" class:selected={liveAlbumsSortMode === 'title-desc'} onclick={() => { liveAlbumsSortMode = 'title-desc'; showLiveAlbumsSortMenu = false; }}>{$t('sort.titleZA')}</button>
+              <button class="sort-item" class:selected={liveAlbumsSortMode === 'default'} onclick={() => { liveAlbumsSortMode = 'default'; openSortMenu = null; }}>{$t('sort.default')}</button>
+              <button class="sort-item" class:selected={liveAlbumsSortMode === 'newest'} onclick={() => { liveAlbumsSortMode = 'newest'; openSortMenu = null; }}>{$t('sort.newest')}</button>
+              <button class="sort-item" class:selected={liveAlbumsSortMode === 'oldest'} onclick={() => { liveAlbumsSortMode = 'oldest'; openSortMenu = null; }}>{$t('sort.oldest')}</button>
+              <button class="sort-item" class:selected={liveAlbumsSortMode === 'title-asc'} onclick={() => { liveAlbumsSortMode = 'title-asc'; openSortMenu = null; }}>{$t('sort.titleAZ')}</button>
+              <button class="sort-item" class:selected={liveAlbumsSortMode === 'title-desc'} onclick={() => { liveAlbumsSortMode = 'title-desc'; openSortMenu = null; }}>{$t('sort.titleZA')}</button>
             </div>
           {/if}
         </div>
@@ -2572,24 +2591,19 @@
             albumId={album.id}
             artwork={album.artwork}
             title={album.title}
-            artist={album.year || ''}
+            artist={album.year ? String(album.year) : ''}
             genre={album.genre}
-            releaseDate={album.releaseDate}
-            size="large"
             quality={album.quality}
-            searchId={`album-${album.id}`}
+            isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
             onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
             onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
             onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-            onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+            onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
             onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
             onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
             onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
-            isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
-            onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
             onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
-            {downloadStateVersion}
-            onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+            onClick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
           />
         {/each}
       </div>
@@ -2607,13 +2621,13 @@
     <div class="divider"></div>
 
     <div class="discography section-anchor" bind:this={compilationsSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.compilations')}</h2>
           <span class="section-count">{artist.compilations.length}</span>
         </div>
         <div class="sort-dropdown">
-          <button class="sort-btn" onclick={() => (showCompilationsSortMenu = !showCompilationsSortMenu)}>
+          <button class="sort-btn" onclick={() => (openSortMenu = openSortMenu === 'compilations' ? null : 'compilations')}>
             <span>
               {#if compilationsSortMode === 'default'}{$t('sort.sort')}: {$t('sort.default')}
               {:else if compilationsSortMode === 'newest'}{$t('sort.sort')}: {$t('sort.newest')}
@@ -2624,13 +2638,13 @@
             </span>
             <ChevronDown size={14} />
           </button>
-          {#if showCompilationsSortMenu}
+          {#if openSortMenu === 'compilations'}
             <div class="sort-menu">
-              <button class="sort-item" class:selected={compilationsSortMode === 'default'} onclick={() => { compilationsSortMode = 'default'; showCompilationsSortMenu = false; }}>{$t('sort.default')}</button>
-              <button class="sort-item" class:selected={compilationsSortMode === 'newest'} onclick={() => { compilationsSortMode = 'newest'; showCompilationsSortMenu = false; }}>{$t('sort.newest')}</button>
-              <button class="sort-item" class:selected={compilationsSortMode === 'oldest'} onclick={() => { compilationsSortMode = 'oldest'; showCompilationsSortMenu = false; }}>{$t('sort.oldest')}</button>
-              <button class="sort-item" class:selected={compilationsSortMode === 'title-asc'} onclick={() => { compilationsSortMode = 'title-asc'; showCompilationsSortMenu = false; }}>{$t('sort.titleAZ')}</button>
-              <button class="sort-item" class:selected={compilationsSortMode === 'title-desc'} onclick={() => { compilationsSortMode = 'title-desc'; showCompilationsSortMenu = false; }}>{$t('sort.titleZA')}</button>
+              <button class="sort-item" class:selected={compilationsSortMode === 'default'} onclick={() => { compilationsSortMode = 'default'; openSortMenu = null; }}>{$t('sort.default')}</button>
+              <button class="sort-item" class:selected={compilationsSortMode === 'newest'} onclick={() => { compilationsSortMode = 'newest'; openSortMenu = null; }}>{$t('sort.newest')}</button>
+              <button class="sort-item" class:selected={compilationsSortMode === 'oldest'} onclick={() => { compilationsSortMode = 'oldest'; openSortMenu = null; }}>{$t('sort.oldest')}</button>
+              <button class="sort-item" class:selected={compilationsSortMode === 'title-asc'} onclick={() => { compilationsSortMode = 'title-asc'; openSortMenu = null; }}>{$t('sort.titleAZ')}</button>
+              <button class="sort-item" class:selected={compilationsSortMode === 'title-desc'} onclick={() => { compilationsSortMode = 'title-desc'; openSortMenu = null; }}>{$t('sort.titleZA')}</button>
             </div>
           {/if}
         </div>
@@ -2641,24 +2655,19 @@
             albumId={album.id}
             artwork={album.artwork}
             title={album.title}
-            artist={album.year || ''}
+            artist={album.year ? String(album.year) : ''}
             genre={album.genre}
-            releaseDate={album.releaseDate}
-            size="large"
             quality={album.quality}
-            searchId={`album-${album.id}`}
+            isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
             onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
             onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
             onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-            onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+            onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
             onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
             onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
             onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
-            isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
-            onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
             onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
-            {downloadStateVersion}
-            onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+            onClick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
           />
         {/each}
       </div>
@@ -2669,13 +2678,13 @@
     <div class="divider"></div>
 
     <div class="discography section-anchor" bind:this={othersSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.others')}</h2>
           <span class="section-count">{artist.others.length}</span>
         </div>
         <div class="sort-dropdown">
-          <button class="sort-btn" onclick={() => (showOthersSortMenu = !showOthersSortMenu)}>
+          <button class="sort-btn" onclick={() => (openSortMenu = openSortMenu === 'others' ? null : 'others')}>
             <span>
               {#if othersSortMode === 'default'}{$t('sort.sort')}: {$t('sort.default')}
               {:else if othersSortMode === 'newest'}{$t('sort.sort')}: {$t('sort.newest')}
@@ -2686,13 +2695,13 @@
             </span>
             <ChevronDown size={14} />
           </button>
-          {#if showOthersSortMenu}
+          {#if openSortMenu === 'others'}
             <div class="sort-menu">
-              <button class="sort-item" class:selected={othersSortMode === 'default'} onclick={() => { othersSortMode = 'default'; showOthersSortMenu = false; }}>{$t('sort.default')}</button>
-              <button class="sort-item" class:selected={othersSortMode === 'newest'} onclick={() => { othersSortMode = 'newest'; showOthersSortMenu = false; }}>{$t('sort.newest')}</button>
-              <button class="sort-item" class:selected={othersSortMode === 'oldest'} onclick={() => { othersSortMode = 'oldest'; showOthersSortMenu = false; }}>{$t('sort.oldest')}</button>
-              <button class="sort-item" class:selected={othersSortMode === 'title-asc'} onclick={() => { othersSortMode = 'title-asc'; showOthersSortMenu = false; }}>{$t('sort.titleAZ')}</button>
-              <button class="sort-item" class:selected={othersSortMode === 'title-desc'} onclick={() => { othersSortMode = 'title-desc'; showOthersSortMenu = false; }}>{$t('sort.titleZA')}</button>
+              <button class="sort-item" class:selected={othersSortMode === 'default'} onclick={() => { othersSortMode = 'default'; openSortMenu = null; }}>{$t('sort.default')}</button>
+              <button class="sort-item" class:selected={othersSortMode === 'newest'} onclick={() => { othersSortMode = 'newest'; openSortMenu = null; }}>{$t('sort.newest')}</button>
+              <button class="sort-item" class:selected={othersSortMode === 'oldest'} onclick={() => { othersSortMode = 'oldest'; openSortMenu = null; }}>{$t('sort.oldest')}</button>
+              <button class="sort-item" class:selected={othersSortMode === 'title-asc'} onclick={() => { othersSortMode = 'title-asc'; openSortMenu = null; }}>{$t('sort.titleAZ')}</button>
+              <button class="sort-item" class:selected={othersSortMode === 'title-desc'} onclick={() => { othersSortMode = 'title-desc'; openSortMenu = null; }}>{$t('sort.titleZA')}</button>
             </div>
           {/if}
         </div>
@@ -2703,24 +2712,19 @@
             albumId={album.id}
             artwork={album.artwork}
             title={album.title}
-            artist={album.year || ''}
+            artist={album.year ? String(album.year) : ''}
             genre={album.genre}
-            releaseDate={album.releaseDate}
-            size="large"
             quality={album.quality}
-            searchId={`album-${album.id}`}
+            isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
             onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
             onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
             onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-            onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+            onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
             onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
             onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
             onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
-            isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
-            onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
             onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
-            {downloadStateVersion}
-            onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+            onClick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
           />
         {/each}
       </div>
@@ -2738,7 +2742,7 @@
     <div class="divider"></div>
 
     <div class="playlists-section section-anchor" bind:this={playlistsSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.playlists')}</h2>
           <span class="section-count">{artist.playlists.length}</span>
@@ -2785,7 +2789,7 @@
     <div class="divider"></div>
 
     <div class="discography section-anchor" bind:this={tributesSection}>
-      <div class="section-header">
+      <div class="section-header" data-tauri-drag-region="deep">
         <div class="section-header-left">
           <h2 class="section-title">{$t('artist.tributes')}</h2>
           <span class="section-count">{artist.tributes.length}</span>
@@ -2805,7 +2809,7 @@
         </div>
         {#if tributesExpanded}
           <div class="sort-dropdown">
-            <button class="sort-btn" onclick={() => (showTributesSortMenu = !showTributesSortMenu)}>
+            <button class="sort-btn" onclick={() => (openSortMenu = openSortMenu === 'tributes' ? null : 'tributes')}>
               <span>
                 {#if tributesSortMode === 'default'}{$t('sort.sort')}: {$t('sort.default')}
                 {:else if tributesSortMode === 'newest'}{$t('sort.sort')}: {$t('sort.newest')}
@@ -2816,13 +2820,13 @@
               </span>
               <ChevronDown size={14} />
             </button>
-            {#if showTributesSortMenu}
+            {#if openSortMenu === 'tributes'}
               <div class="sort-menu">
-                <button class="sort-item" class:selected={tributesSortMode === 'default'} onclick={() => { tributesSortMode = 'default'; showTributesSortMenu = false; }}>{$t('sort.default')}</button>
-                <button class="sort-item" class:selected={tributesSortMode === 'newest'} onclick={() => { tributesSortMode = 'newest'; showTributesSortMenu = false; }}>{$t('sort.newest')}</button>
-                <button class="sort-item" class:selected={tributesSortMode === 'oldest'} onclick={() => { tributesSortMode = 'oldest'; showTributesSortMenu = false; }}>{$t('sort.oldest')}</button>
-                <button class="sort-item" class:selected={tributesSortMode === 'title-asc'} onclick={() => { tributesSortMode = 'title-asc'; showTributesSortMenu = false; }}>{$t('sort.titleAZ')}</button>
-                <button class="sort-item" class:selected={tributesSortMode === 'title-desc'} onclick={() => { tributesSortMode = 'title-desc'; showTributesSortMenu = false; }}>{$t('sort.titleZA')}</button>
+                <button class="sort-item" class:selected={tributesSortMode === 'default'} onclick={() => { tributesSortMode = 'default'; openSortMenu = null; }}>{$t('sort.default')}</button>
+                <button class="sort-item" class:selected={tributesSortMode === 'newest'} onclick={() => { tributesSortMode = 'newest'; openSortMenu = null; }}>{$t('sort.newest')}</button>
+                <button class="sort-item" class:selected={tributesSortMode === 'oldest'} onclick={() => { tributesSortMode = 'oldest'; openSortMenu = null; }}>{$t('sort.oldest')}</button>
+                <button class="sort-item" class:selected={tributesSortMode === 'title-asc'} onclick={() => { tributesSortMode = 'title-asc'; openSortMenu = null; }}>{$t('sort.titleAZ')}</button>
+                <button class="sort-item" class:selected={tributesSortMode === 'title-desc'} onclick={() => { tributesSortMode = 'title-desc'; openSortMenu = null; }}>{$t('sort.titleZA')}</button>
               </div>
             {/if}
           </div>
@@ -2835,24 +2839,19 @@
               albumId={album.id}
               artwork={album.artwork}
               title={album.title}
-              artist={album.year || ''}
+              artist={album.year ? String(album.year) : ''}
               genre={album.genre}
-              releaseDate={album.releaseDate}
-              size="large"
               quality={album.quality}
-              searchId={`album-${album.id}`}
+              isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
               onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
               onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
               onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-              onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+              onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
               onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
               onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
               onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
-              isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
-              onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
               onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
-              {downloadStateVersion}
-              onclick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
+              onClick={() => { onAlbumClick?.(album.id); loadAlbumDownloadStatus(album.id); }}
             />
           {/each}
         </div>
@@ -4540,11 +4539,6 @@
     position: relative;
   }
 
-  .context-menu-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 99;
-  }
 
   .context-menu {
     position: absolute;

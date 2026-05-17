@@ -100,6 +100,25 @@ export function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+// Mutation observer. The route component registers a debounced session-save
+// here so any queue mutation (add / remove / reorder / set / clear / etc.)
+// schedules a full-queue persistence pass through the same coalescing path
+// that the track-change debounce uses — keeps the persisted queue in step
+// with the live one without coupling the store to the save implementation.
+type MutationObserver = () => void;
+let mutationObserver: MutationObserver | null = null;
+
+export function registerQueueMutationObserver(cb: MutationObserver): () => void {
+  mutationObserver = cb;
+  return () => {
+    if (mutationObserver === cb) mutationObserver = null;
+  };
+}
+
+function notifyMutation(): void {
+  mutationObserver?.();
+}
+
 // ============ Getters ============
 
 export function getQueue(): QueueTrack[] {
@@ -333,6 +352,7 @@ export async function addToQueueNext(track: BackendQueueTrack, isLocal = false):
       localTrackIds = new Set([...localTrackIds, track.id]);
     }
     await syncQueueState();
+    notifyMutation();
     return true;
   } catch (err) {
     console.error('Failed to queue track next:', err);
@@ -350,6 +370,7 @@ export async function addToQueue(track: BackendQueueTrack, isLocal = false): Pro
       localTrackIds = new Set([...localTrackIds, track.id]);
     }
     await syncQueueState();
+    notifyMutation();
     return true;
   } catch (err) {
     console.error('Failed to add to queue:', err);
@@ -364,6 +385,7 @@ export async function addTracksToQueue(tracks: BackendQueueTrack[]): Promise<boo
   try {
     await cmdAddTracksToQueue(tracks);
     await syncQueueState();
+    notifyMutation();
     return true;
   } catch (err) {
     console.error('Failed to add tracks to queue:', err);
@@ -379,6 +401,7 @@ export async function addTracksToQueueNext(tracks: BackendQueueTrack[]): Promise
   try {
     await cmdAddTracksToQueueNext(tracks);
     await syncQueueState();
+    notifyMutation();
     return true;
   } catch (err) {
     console.error('Failed to add tracks to queue next:', err);
@@ -409,6 +432,7 @@ export async function setQueue(tracks: BackendQueueTrack[], startIndex: number, 
       localTrackIds = new Set();
     }
     await syncQueueState();
+    notifyMutation();
     return true;
   } catch (err) {
     console.error('Failed to set queue:', err);
@@ -426,6 +450,7 @@ export async function clearQueue(opts?: { includeCurrent?: boolean }): Promise<b
   try {
     queueEpoch++;
     await cmdClearQueue(opts);
+    notifyMutation();
     return true;
   } catch (err) {
     console.error('Failed to clear queue:', err);
@@ -505,6 +530,7 @@ export async function moveQueueTrack(fromIndex: number, toIndex: number): Promis
     const success = await invoke<boolean>('v2_move_queue_track', { fromIndex, toIndex });
     if (success) {
       await syncQueueState();
+      notifyMutation();
     }
     return success;
   } catch (err) {
@@ -549,6 +575,7 @@ export async function consumeStopAfterIf(finishedTrackId: number): Promise<boole
   const fired = await invoke<boolean>('v2_queue_consume_stop_after_if', { finishedTrackId });
   if (fired) {
     await syncQueueState();
+    notifyMutation();
   }
   return fired;
 }
@@ -560,6 +587,7 @@ export async function consumeStopAfterIf(finishedTrackId: number): Promise<boole
 export async function removeAfter(index: number): Promise<number> {
   const count = await invoke<number>('v2_queue_remove_after', { index });
   await syncQueueState();
+  notifyMutation();
   return count;
 }
 

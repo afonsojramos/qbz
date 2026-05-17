@@ -33,13 +33,17 @@
   import { applyShiftRange, isSelectAllShortcut } from '$lib/utils/multiSelect';
   import { downloadSettingsVersion } from '$lib/stores/downloadSettingsStore';
   import { showToast, dismissBuffering } from '$lib/stores/toastStore';
-  import AlbumCard from '../AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLibraryLite.svelte';
+  import AlbumGridPool from '$lib/discovery-v2/AlbumGridPool.svelte';
+  import { LocalAlbumsChunkedStore } from '$lib/discovery-v2/localAlbumsChunkedStore.svelte';
   import VirtualizedAlbumList from '../VirtualizedAlbumList.svelte';
+  import SourceBadge from '../SourceBadge.svelte';
   import VirtualizedArtistGrid from '../VirtualizedArtistGrid.svelte';
   import VirtualizedArtistList from '../VirtualizedArtistList.svelte';
   import VirtualizedTrackList from '../VirtualizedTrackList.svelte';
   import {
     isVirtualizationEnabled,
+    isTrackArtworkEnabled,
     shouldUsePerformanceMode,
     subscribe as subscribePerformance
   } from '$lib/stores/libraryPerformanceStore';
@@ -994,21 +998,27 @@
   let showHiddenAlbums = $state(false);
   let albumSearch = $state('');
   let folderSearch = $state('');
-  let albumViewMode = $state<'grid' | 'list'>('grid');
+  // Default to list view per 2026-05-12 user call: list mode runs
+  // acceptably under SW compositing and is the safer default. Users
+  // can toggle to grid via the controls; persistence is in-session
+  // only.
+  let albumViewMode = $state<'grid' | 'list'>('list');
   type AlbumGroupMode = 'alpha' | 'artist';
   let albumGroupMode = $state<AlbumGroupMode>('alpha');
   let albumGroupingEnabled = $state(false);
-  let showGroupMenu = $state(false);
+
+  // Mutually-exclusive toolbar dropdown state. Only one menu is open at a time.
+  type OpenMenu = 'group' | 'filter' | 'sort' | 'trackGroup' | null;
+  let openMenu = $state<OpenMenu>(null);
 
   // Quality/Format filter with checkboxes (AND between sections, OR within section)
-  let showFilterPanel = $state(false);
   let filterPanelRef: HTMLDivElement | null = $state(null);
   let filterPanelTimeout: ReturnType<typeof setTimeout> | null = null;
 
   function startFilterPanelTimer() {
     clearFilterPanelTimer();
     filterPanelTimeout = setTimeout(() => {
-      showFilterPanel = false;
+      if (openMenu === 'filter') openMenu = null;
     }, 3000);
   }
 
@@ -1020,21 +1030,21 @@
   }
 
   function handleFilterPanelActivity() {
-    if (showFilterPanel) {
+    if (openMenu === 'filter') {
       startFilterPanelTimer();
     }
   }
 
   function handleClickOutsideFilterPanel(event: MouseEvent) {
-    if (showFilterPanel && filterPanelRef && !filterPanelRef.contains(event.target as Node)) {
-      showFilterPanel = false;
+    if (openMenu === 'filter' && filterPanelRef && !filterPanelRef.contains(event.target as Node)) {
+      openMenu = null;
       clearFilterPanelTimer();
     }
   }
 
   // Effect to manage filter panel auto-close
   $effect(() => {
-    if (showFilterPanel) {
+    if (openMenu === 'filter') {
       startFilterPanelTimer();
       document.addEventListener('click', handleClickOutsideFilterPanel, true);
     } else {
@@ -1049,11 +1059,11 @@
 
   // Effect to close sort menu on click outside
   $effect(() => {
-    if (showSortMenu) {
+    if (openMenu === 'sort') {
       const handleClickOutside = (event: MouseEvent) => {
         const target = event.target as HTMLElement;
         if (!target.closest('.sort-btn') && !target.closest('.sort-menu')) {
-          showSortMenu = false;
+          if (openMenu === 'sort') openMenu = null;
         }
       };
       document.addEventListener('click', handleClickOutside, true);
@@ -1167,7 +1177,6 @@
   type SortDirection = 'asc' | 'desc';
   let sortBy = $state<SortBy>('title');
   let sortDirection = $state<SortDirection>('asc');
-  let showSortMenu = $state(false);
 
   const sortOptions: { value: SortBy; label: string }[] = [
     { value: 'title', label: 'Album Name' },
@@ -1191,7 +1200,7 @@
       sortBy = value;
       sortDirection = 'asc';
     }
-    showSortMenu = false;
+    openMenu = null;
   }
 
   function sortAlbums(items: LocalAlbum[]): LocalAlbum[] {
@@ -1225,13 +1234,16 @@
 
   // Performance mode state
   let useVirtualization = $state(isVirtualizationEnabled());
+  // Issue #412 — opt-in album cover thumbs in the tracks/folder list
+  // views. Default OFF: a 16k-track library renders 16k decoded
+  // images otherwise. Subscribed below alongside `useVirtualization`.
+  let showTrackArtwork = $state(isTrackArtworkEnabled());
   let virtualizedScrollTarget = $state<string | undefined>(undefined);
 
   // Artist view state
   let artistSearch = $state('');
   let artistViewMode = $state<'grid' | 'list'>('grid');
   let artistGroupingEnabled = $state(true); // Enable alpha grouping by default
-  let showArtistGroupMenu = $state(false);
   // Selected artist for the two-column layout
   let selectedArtistName = $state<string | null>(null);
   // Reference to the artist list scroll container
@@ -1258,7 +1270,6 @@
   type TrackGroupMode = 'album' | 'artist' | 'name';
   let trackGroupMode = $state<TrackGroupMode>('album');
   let trackGroupingEnabled = $state(false);
-  let showTrackGroupMenu = $state(false);
   let trackSearchTimer: ReturnType<typeof setTimeout> | null = null;
   // Reference to virtualized track list for programmatic scrolling
   let virtualizedTrackListRef = $state<{ scrollToGroup: (groupId: string) => void } | undefined>(undefined);
@@ -1275,6 +1286,14 @@
   let metadataAlbums = $state<LocalAlbum[]>([]);
   let metadataAlbumsLoading = $state(false);
   let metadataAlbumsLoaded = $state(false);
+
+  /** Chunked album store — backs the Plex-style recycling-grid pool on
+   *  the Albums tab when grouping is off and no quality filters are
+   *  active. Hydrated via `$effect` that mirrors search/sort/filter
+   *  state into `setParams`. Other paths (grouped grid, list mode,
+   *  quality-filtered) continue to read from `metadataAlbums` via the
+   *  legacy `VirtualizedAlbumList`. */
+  const metadataAlbumsChunked = new LocalAlbumsChunkedStore();
   let hiddenAlbums = $state<LocalAlbum[]>([]);
   let artists = $state<LocalArtist[]>([]);
   let tracks = $state<LocalTrack[]>([]);
@@ -1312,7 +1331,9 @@
   // not a DB row. Used for "did the user just close a folder whose
   // tracks are still playing?" checks so we know whether to wipe the
   // queue + now-playing slot when an ephemeral session ends.
-  const EPHEMERAL_ID_FLOOR = 1 << 48;
+  // 2 ** 48 (NOT 1 << 48 — JS bitwise shift is 32-bit, 1 << 48 silently
+  // becomes 65536 and every Qobuz track gets mis-classified).
+  const EPHEMERAL_ID_FLOOR = 2 ** 48;
   const EPHEMERAL_PATH_STORAGE_KEY = 'qbz-ephemeral-folder-path';
   let ephemeralFolder = $state<EphemeralFolderState | null>(null);
   let openingEphemeralFolder = $state(false);
@@ -1780,6 +1801,7 @@
   function toggleTrackSelectMode() {
     trackSelectMode = !trackSelectMode;
     if (!trackSelectMode) selectedTrackIds = new Set();
+    else clearOtherSelectionContexts('tracks');
   }
 
   function toggleTrackSelect(id: number) {
@@ -1946,6 +1968,7 @@
   function toggleAlbumSelectMode() {
     albumSelectMode = !albumSelectMode;
     if (!albumSelectMode) selectedAlbumIds = new Set();
+    else clearOtherSelectionContexts('albums');
   }
 
   function toggleAlbumSelect(album: LocalAlbum) {
@@ -2339,6 +2362,30 @@
   // Same pipeline for the metadata-grouped Albums tab
   let filteredAndGroupedMetadataAlbums = $derived.by(() => buildFilteredAndGroupedAlbums(metadataAlbums));
 
+  /** Push search/sort/filter state into the chunked store whenever any
+   *  of them change. The store no-ops if the params are unchanged, so
+   *  this is safe to run every reactive tick. We only feed the store
+   *  while the Albums tab is the active view — chunk 0 + total count
+   *  is one round-trip to the backend, cheap but not free. */
+  $effect(() => {
+    if (activeTab !== 'albums') return;
+    if (albumViewMode !== 'grid') return;
+    if (albumGroupingEnabled) return;
+    if (hasActiveFilters) return;
+    // Plex now consolidated in the backend via ATTACH + UNION when
+    // `include_plex` is passed. Users with Plex-dominant libraries
+    // get the chunked-store benefit too.
+    const mappedSortBy: 'artist' | 'title' | 'year' =
+      sortBy === 'title' || sortBy === 'year' ? sortBy : 'artist';
+    void metadataAlbumsChunked.setParams({
+      search: debouncedAlbumSearch,
+      sortBy: mappedSortBy,
+      sortDir: sortDirection,
+      excludeNetworkFolders: shouldExcludeNetworkFolders(),
+      includePlex: isPlexLibraryEnabled(),
+    });
+  });
+
   // Albums for the selected artist (used in artist view two-column layout)
   // Includes multi-artist albums where the selected artist appears
   let selectedArtistAlbums = $derived.by(() => {
@@ -2593,8 +2640,53 @@
     if (!treeSelectMode) {
       selectedTrackIds = new Set();
       treeSelectedTracksById = new SvelteMap();
+    } else {
+      clearOtherSelectionContexts('tree');
     }
   }
+
+  /**
+   * Mutual exclusion between the three selection contexts in this view:
+   *
+   *   - `tracks`  — flat tracks-tab multi-select (trackSelectMode)
+   *   - `albums`  — albums-tab multi-select (albumSelectMode)
+   *   - `tree`    — folder-tree multi-select (treeSelectMode)
+   *
+   * The bulk-action bar in the footer is a single sink that doesn't know
+   * which context filled it, so allowing two contexts to be active at the
+   * same time confuses the user about what a bulk action will operate on.
+   * Whenever the user enters a new context, this function clears the
+   * other two — explicit, no `$effect` reactivity, no infinite loops.
+   *
+   * Pure light-switch behaviour: tap "select" in tracks while tree
+   * select is on, and tree just turns off — no warning toast, no
+   * disabled state, no extra UI noise. The user already understands
+   * how a toggle works.
+   */
+  function clearOtherSelectionContexts(entering: 'tracks' | 'albums' | 'tree' | 'folder-album') {
+    // Turn off any parent mode flag that isn't the one being entered.
+    // The 'folder-album' value covers the child component's local
+    // selection mode (LocalLibraryFolderAlbumView). Its own state lives
+    // inside the child; the child reacts to a `parentSelectionActive`
+    // prop becoming true by clearing its local selection. Here we just
+    // ensure all parent contexts go off when the child enters select.
+    if (entering !== 'tracks' && trackSelectMode) trackSelectMode = false;
+    if (entering !== 'albums' && albumSelectMode) albumSelectMode = false;
+    if (entering !== 'tree' && treeSelectMode) treeSelectMode = false;
+
+    // `selectedTrackIds` is shared between tracks-tab and tree contexts,
+    // so it ALWAYS gets cleared on a context switch — the entering
+    // context starts fresh and the BulkActionBar count reflects only
+    // the new accumulation. The albums set is tab-local and only needs
+    // clearing when leaving albums.
+    if (selectedTrackIds.size > 0) selectedTrackIds = new Set();
+    if (entering !== 'albums' && selectedAlbumIds.size > 0) selectedAlbumIds = new Set();
+    if (entering !== 'tree') {
+      if (selectedFolders.size > 0) selectedFolders = new Set();
+      if (treeSelectedTracksById.size > 0) treeSelectedTracksById = new SvelteMap();
+    }
+  }
+
 
   // Returns the count of selected track IDs whose file_path lives under
   // the given folder. O(|selection|) — selection is small in practice.
@@ -2835,6 +2927,7 @@
     unsubscribePerformance = subscribePerformance(() => {
       const itemCount = Math.max(albums.length, tracks.length);
       useVirtualization = isVirtualizationEnabled() && shouldUsePerformanceMode(itemCount);
+      showTrackArtwork = isTrackArtworkEnabled();
     });
 
     // Subscribe to navigation changes for back/forward support
@@ -2987,11 +3080,22 @@
     return enabled && baseUrl.length > 0 && token.length > 0;
   }
 
-  function buildPlexArtworkUrl(path: string): string {
+  /**
+   * Build a Plex artwork URL. When `size` is provided, wraps the path
+   * in `/photo/:/transcode` so the Plex server returns a resized image
+   * (server-side downscale) — critical for thumbnail contexts where
+   * the original artwork is typically 1000x1000+ and blowing through
+   * decode + memory budget otherwise. When `size` is omitted, returns
+   * the original full-resolution path (used by AlbumDetailView).
+   */
+  function buildPlexArtworkUrl(path: string, size?: number): string {
     const baseUrl = getUserItem('qbz-plex-poc-base-url') || '';
     const token = getUserItem('qbz-plex-poc-token') || '';
     if (!baseUrl || !token) return path;
     const base = baseUrl.replace(/\/+$/, '');
+    if (size && size > 0) {
+      return `${base}/photo/:/transcode?url=${encodeURIComponent(path)}&width=${size}&height=${size}&minSize=1&X-Plex-Token=${encodeURIComponent(token)}`;
+    }
     const separator = path.includes('?') ? '&' : '?';
     return `${base}${path}${separator}X-Plex-Token=${encodeURIComponent(token)}`;
   }
@@ -4570,7 +4674,7 @@
   function getArtworkUrl(path?: string): string {
     if (!path) return '';
     if (/^https?:\/\//i.test(path)) return path;
-    if (path.startsWith('/library/')) return buildPlexArtworkUrl(path);
+    if (path.startsWith('/library/')) return buildPlexArtworkUrl(path, 220);
 
     // For grid/list views, prefer thumbnails
     const cachedThumb = thumbnailUrlCache.get(path);
@@ -5202,7 +5306,7 @@
       <div class="dropdown-container">
         <button
           class="control-btn"
-          onclick={() => (showGroupMenu = !showGroupMenu)}
+          onclick={() => (openMenu = openMenu === 'group' ? null : 'group')}
           title="Group albums"
         >
           <span>{!albumGroupingEnabled
@@ -5211,26 +5315,26 @@
               ? $t('purchases.group.alpha')
               : $t('purchases.group.artist')}</span>
         </button>
-        {#if showGroupMenu}
+        {#if openMenu === 'group'}
           <div class="dropdown-menu">
             <button
               class="dropdown-item"
               class:selected={!albumGroupingEnabled}
-              onclick={() => { albumGroupingEnabled = false; showGroupMenu = false; }}
+              onclick={() => { albumGroupingEnabled = false; openMenu = null; }}
             >
               {$t('purchases.group.optionOff')}
             </button>
             <button
               class="dropdown-item"
               class:selected={albumGroupingEnabled && albumGroupMode === 'alpha'}
-              onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; showGroupMenu = false; }}
+              onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; openMenu = null; }}
             >
               {$t('purchases.group.optionAlpha')}
             </button>
             <button
               class="dropdown-item"
               class:selected={albumGroupingEnabled && albumGroupMode === 'artist'}
-              onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; showGroupMenu = false; }}
+              onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; openMenu = null; }}
             >
               {$t('purchases.group.optionArtist')}
             </button>
@@ -5243,7 +5347,7 @@
         <button
           class="control-btn icon-only"
           class:active={hasActiveFilters}
-          onclick={() => (showFilterPanel = !showFilterPanel)}
+          onclick={() => (openMenu = openMenu === 'filter' ? null : 'filter')}
           title="Filter by quality/format"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -5253,7 +5357,7 @@
             <span class="filter-badge">{activeFilterCount}</span>
           {/if}
         </button>
-        {#if showFilterPanel}
+        {#if openMenu === 'filter'}
           <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
           <div
             class="filter-panel"
@@ -5364,12 +5468,12 @@
       <div class="dropdown-container">
         <button
           class="control-btn icon-only"
-          onclick={() => (showSortMenu = !showSortMenu)}
+          onclick={() => (openMenu = openMenu === 'sort' ? null : 'sort')}
           title="Sort albums"
         >
           <ArrowUpDown size={14} />
         </button>
-        {#if showSortMenu}
+        {#if openMenu === 'sort'}
           <div class="sort-menu">
             {#each sortOptions as option}
               <button
@@ -5523,6 +5627,15 @@
               <span class="spec-item">{formatBitDepth(firstTrack.bit_depth)}</span>
               <span class="spec-item">{formatSampleRate(firstTrack.sample_rate)}</span>
               <span class="spec-item">{firstTrack.channels === 2 ? $t('quality.stereo') : firstTrack.channels === 1 ? $t('quality.mono') : `${firstTrack.channels}ch`}</span>
+              <SourceBadge
+                value={selectedAlbum.source === 'plex'
+                  ? 'plex'
+                  : selectedAlbum.source === 'qobuz_purchase'
+                    ? 'qobuz_purchase'
+                    : selectedAlbum.source === 'qobuz_download'
+                      ? 'qobuz_download'
+                      : 'user'}
+              />
             </div>
           {/if}
           {#if selectedAlbum.likely_single_file_album}
@@ -5639,7 +5752,7 @@
     </div>
   {:else}
     <!-- Main Library View -->
-    <div class="header">
+    <div class="header" data-tauri-drag-region="deep">
       <div class="header-content">
         <h1>{$t('library.title')}</h1>
         {#if stats}
@@ -5652,7 +5765,7 @@
           <p class="subtitle">{$t('library.yourCollection')}</p>
         {/if}
       </div>
-      <div class="header-actions">
+      <div class="header-actions" data-tauri-drag-region="false">
         {#if hasPlexConfig()}
           <button
             class="icon-btn plex-sync-btn"
@@ -6255,6 +6368,8 @@
                     {getFullArtworkUrl}
                     {buildAlbumSections}
                     {normalizeArtistName}
+                    parentSelectionActive={trackSelectMode || albumSelectMode || treeSelectMode}
+                    onSelectionEntered={() => clearOtherSelectionContexts('folder-album')}
                   />
                 {:else if selectedFolderPath}
                   <LocalLibraryFolderDetail
@@ -6411,25 +6526,78 @@
             {:else}
               <div class="album-sections virtualized">
                 <div class="virtualized-container">
-                  <VirtualizedAlbumList
-                    groups={groupedMetadataAlbums}
-                    viewMode={albumViewMode}
-                    showGroupHeaders={albumGroupingEnabled}
-                    {getArtworkUrl}
-                    getQualityBadge={getAlbumQualityBadge}
-                    isHiRes={isAlbumHiRes}
-                    formatDuration={formatTotalDuration}
-                    onAlbumClick={handleAlbumClick}
-                    onAlbumPlay={handleAlbumPlayFromGrid}
-                    onAlbumQueueNext={handleAlbumQueueNextFromGrid}
-                    onAlbumQueueLater={handleAlbumQueueLaterFromGrid}
-                    scrollToGroupId={virtualizedScrollTarget}
-                    showSourceBadge={true}
-                    selectable={albumSelectMode}
-                    selectedAlbumIds={selectedAlbumIds}
-                    onAlbumToggleSelect={toggleAlbumSelect}
-                    onAlbumToggleSelectRange={addAlbumsToSelection}
-                  />
+                  {#if albumViewMode === 'grid' && !albumGroupingEnabled && !hasActiveFilters}
+                    <!-- Chunked path: on-demand fetch via Tauri command
+                         per chunk, recycling-pool render. The pool
+                         binds to the chunked store's reactive
+                         `total` + `version`. Falls back to the legacy
+                         path below when grouping or quality filters
+                         are on (those don't have backend support yet). -->
+                    {#snippet renderMetadataAlbumCell(album: LocalAlbum, _idx: number)}
+                      <AlbumCard
+                        albumId={album.id}
+                        year={album.year}
+                        trackCount={album.track_count}
+                        artwork={getArtworkUrl(album.artwork_path)}
+                        title={album.title}
+                        artist={album.artist}
+                        quality={getAlbumQualityBadge(album)}
+                        format={album.format}
+                        bitDepth={album.bit_depth}
+                        samplingRate={album.sample_rate ? album.sample_rate / 1000 : undefined}
+                        onPlay={() => handleAlbumPlayFromGrid(album)}
+                        onPlayNext={() => handleAlbumQueueNextFromGrid(album)}
+                        onPlayLater={() => handleAlbumQueueLaterFromGrid(album)}
+                        onClick={() => handleAlbumClick(album)}
+                        sourceBadge={album.source === 'plex' ? 'plex' : album.source === 'qobuz_purchase' ? 'qobuz_purchase' : album.source === 'qobuz_download' ? 'qobuz_download' : 'user'}
+                        selectable={albumSelectMode}
+                        selected={selectedAlbumIds.has(album.id)}
+                        onToggleSelect={() => toggleAlbumSelect(album)}
+                      />
+                    {/snippet}
+                    {#snippet renderMetadataAlbumPlaceholder(_idx: number)}
+                      <!-- Static skeleton: 210x210 cover block + 14px
+                           title bar + 12px artist bar + 14px quality
+                           pill. No shimmer, no animation — the shape
+                           alone signals "loading" without paint per
+                           frame. Matches the loaded card dimensions
+                           so layout doesn't shift on rebind. -->
+                      <div class="album-skeleton" aria-hidden="true">
+                        <div class="album-skeleton-cover"></div>
+                        <div class="album-skeleton-line album-skeleton-title"></div>
+                        <div class="album-skeleton-line album-skeleton-artist"></div>
+                        <div class="album-skeleton-line album-skeleton-quality"></div>
+                      </div>
+                    {/snippet}
+                    <AlbumGridPool
+                      totalCount={metadataAlbumsChunked.total}
+                      getItem={(i) => metadataAlbumsChunked.getAlbum(i) as LocalAlbum | null}
+                      onNeedIndex={(i) => metadataAlbumsChunked.requestIndex(i)}
+                      dataVersion={metadataAlbumsChunked.version}
+                      renderCell={renderMetadataAlbumCell}
+                      renderPlaceholder={renderMetadataAlbumPlaceholder}
+                    />
+                  {:else}
+                    <VirtualizedAlbumList
+                      groups={groupedMetadataAlbums}
+                      viewMode={albumViewMode}
+                      showGroupHeaders={albumGroupingEnabled}
+                      {getArtworkUrl}
+                      getQualityBadge={getAlbumQualityBadge}
+                      isHiRes={isAlbumHiRes}
+                      formatDuration={formatTotalDuration}
+                      onAlbumClick={handleAlbumClick}
+                      onAlbumPlay={handleAlbumPlayFromGrid}
+                      onAlbumQueueNext={handleAlbumQueueNextFromGrid}
+                      onAlbumQueueLater={handleAlbumQueueLaterFromGrid}
+                      scrollToGroupId={virtualizedScrollTarget}
+                      showSourceBadge={true}
+                      selectable={albumSelectMode}
+                      selectedAlbumIds={selectedAlbumIds}
+                      onAlbumToggleSelect={toggleAlbumSelect}
+                      onAlbumToggleSelectRange={addAlbumsToSelection}
+                    />
+                  {/if}
                 </div>
               </div>
             {/if}
@@ -6536,13 +6704,13 @@
                         title={album.title}
                         artist={album.artist}
                         quality={getAlbumQualityBadge(album)}
-                        size="large"
-                        showFavorite={false}
-                        showGenre={false}
+                        format={album.format}
+                        bitDepth={album.bit_depth}
+                        samplingRate={album.sample_rate ? album.sample_rate / 1000 : undefined}
                         onPlay={() => handleAlbumPlayFromGrid(album)}
                         onPlayNext={() => handleAlbumQueueNextFromGrid(album)}
                         onPlayLater={() => handleAlbumQueueLaterFromGrid(album)}
-                        onclick={() => handleAlbumClick(album)}
+                        onClick={() => handleAlbumClick(album)}
                         sourceBadge={album.source === 'plex' ? 'plex' : album.source === 'qobuz_purchase' ? 'qobuz_purchase' : album.source === 'qobuz_download' ? 'qobuz_download' : 'user'}
                       />
                     {/each}
@@ -6593,7 +6761,7 @@
             <div class="dropdown-container">
               <button
                 class="control-btn"
-                onclick={() => (showTrackGroupMenu = !showTrackGroupMenu)}
+                onclick={() => (openMenu = openMenu === 'trackGroup' ? null : 'trackGroup')}
                 title="Group tracks"
               >
                 <span>
@@ -6606,33 +6774,33 @@
                         : $t('purchases.group.name')}
                 </span>
               </button>
-              {#if showTrackGroupMenu}
+              {#if openMenu === 'trackGroup'}
                 <div class="dropdown-menu">
                   <button
                     class="dropdown-item"
                     class:selected={!trackGroupingEnabled}
-                    onclick={() => { trackGroupingEnabled = false; showTrackGroupMenu = false; }}
+                    onclick={() => { trackGroupingEnabled = false; openMenu = null; }}
                   >
                     {$t('purchases.group.optionOff')}
                   </button>
                   <button
                     class="dropdown-item"
                     class:selected={trackGroupingEnabled && trackGroupMode === 'album'}
-                    onclick={() => { trackGroupMode = 'album'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                    onclick={() => { trackGroupMode = 'album'; trackGroupingEnabled = true; openMenu = null; }}
                   >
                     {$t('purchases.group.optionAlbum')}
                   </button>
                   <button
                     class="dropdown-item"
                     class:selected={trackGroupingEnabled && trackGroupMode === 'artist'}
-                    onclick={() => { trackGroupMode = 'artist'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                    onclick={() => { trackGroupMode = 'artist'; trackGroupingEnabled = true; openMenu = null; }}
                   >
                     {$t('purchases.group.optionArtist')}
                   </button>
                   <button
                     class="dropdown-item"
                     class:selected={trackGroupingEnabled && trackGroupMode === 'name'}
-                    onclick={() => { trackGroupMode = 'name'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                    onclick={() => { trackGroupMode = 'name'; trackGroupingEnabled = true; openMenu = null; }}
                   >
                     {$t('purchases.group.optionAlpha')}
                   </button>
@@ -6687,6 +6855,8 @@
                 onToggleSelect={toggleTrackSelect}
                 onToggleSelectRange={addTracksToSelection}
                 onVisibleTracksChange={onVisibleTracksChange}
+                showArtwork={showTrackArtwork}
+                getArtworkUrl={(track) => getArtworkUrl(track.artwork_path)}
               />
             </div>
           </div>
@@ -7896,6 +8066,30 @@
     margin-top: 8px;
   }
 
+  /* Skeleton placeholder for chunked-album grid slots whose data is
+     still in flight. Static blocks only — no shimmer, no animation;
+     the shape signals "loading" without paint per frame. */
+  .album-skeleton {
+    width: 210px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .album-skeleton-cover {
+    width: 210px;
+    height: 210px;
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+  }
+  .album-skeleton-line {
+    height: 12px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+  }
+  .album-skeleton-title { width: 80%; height: 14px; margin-top: 2px; }
+  .album-skeleton-artist { width: 60%; }
+  .album-skeleton-quality { width: 90px; height: 14px; border-radius: 4px; margin-top: 2px; }
+
   /* Album Grid */
   .album-sections {
     display: flex;
@@ -7905,7 +8099,13 @@
 
   .album-sections.virtualized {
     flex: 1;
-    height: calc(100vh - 280px); /* Adjust based on header/controls height */
+    /* `100vh - 280` over-extended past the NowPlayingBar (104px tall
+       at the bottom) once we forced the scrollbar always visible —
+       the bar ran to viewport-bottom instead of ending at the player.
+       Bumped subtraction to 360 to clear the player + controls
+       above the grid; the min-height keeps the area reasonable on
+       small windows. */
+    height: calc(100vh - 360px);
     min-height: 400px;
   }
 
@@ -8006,7 +8206,6 @@
     font-size: 13px;
     color: var(--text-secondary);
     cursor: pointer;
-    user-select: none;
   }
 
   .select-all-checkbox input[type='checkbox'] {
@@ -9106,9 +9305,6 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    /* Block selection bleed on the handle itself; the global override
-       on <body> during drag handles the rest of the page. */
-    user-select: none;
   }
 
   .tree-sidebar-resize-handle:hover,

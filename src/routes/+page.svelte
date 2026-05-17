@@ -280,6 +280,7 @@
     stopQueueEventListener,
     consumeStopAfterIf,
     stopAfterTrackId,
+    registerQueueMutationObserver,
     type QueueTrack,
     type BackendQueueTrack,
     type RepeatMode
@@ -448,7 +449,7 @@
 
   // Views
   import LoginView from '$lib/components/views/LoginView.svelte';
-  import HomeView from '$lib/components/views/HomeView.svelte';
+  import DiscoveryView from '$lib/discovery-v2/DiscoveryView.svelte';
   import SearchView from '$lib/components/views/SearchView.svelte';
   import SettingsView from '$lib/components/views/SettingsView.svelte';
   import AlbumDetailView from '$lib/components/views/AlbumDetailView.svelte';
@@ -477,6 +478,8 @@
   // Overlays
   import QueuePanel from '$lib/components/QueuePanel.svelte';
   import { ImmersivePlayer } from '$lib/components/immersive';
+  import CpuModeWarningModal from '$lib/components/CpuModeWarningModal.svelte';
+  import { isHardwareAccelEnabled } from '$lib/runtime/graphicsState';
   import PlaylistModal from '$lib/components/PlaylistModal.svelte';
   import PlaylistImportModal from '$lib/components/PlaylistImportModal.svelte';
   import FolderEditModal from '$lib/components/FolderEditModal.svelte';
@@ -601,30 +604,52 @@
   let isAutoUpdating = $state(false);
   let autoUpdateProgress = $state<AutoUpdateProgress>({ state: 'checking' });
 
-  // Global back-to-top button
+  // Global back-to-top button.
+  //
+  // The previous implementation registered a capture-phase scroll listener
+  // on .main-content that wrote `globalScrollTop = target.scrollTop` to a
+  // `$state` on every scroll event, and used `$derived(globalScrollTop > 800)`
+  // to gate the button. That fired Svelte reactivity 60-120 times/second
+  // during scroll, and when the derived crossed the 800px threshold the
+  // button mount/unmount work added an extra repaint that registered as
+  // a visible hiccup at 4K under software compositing — especially
+  // pronounced when scrolling up (button unmount).
+  //
+  // New impl: track only the boolean visibility state, coalesce reads via
+  // requestAnimationFrame, and only assign when the threshold flips. This
+  // takes the per-scroll-tick reactive work from "every event" down to
+  // "at most once per animation frame, only on state change".
   let mainContentEl: HTMLElement | null = $state(null);
-  let globalScrollTop = $state(0);
+  let showGlobalBackToTop = $state(false);
   let activeScrollTarget: HTMLElement | null = null;
-  const showGlobalBackToTop = $derived(globalScrollTop > 800);
+  const BACK_TO_TOP_THRESHOLD_PX = 800;
 
   $effect(() => {
     if (!mainContentEl) return;
+    let rafId = 0;
     const handler = (e: Event) => {
       const target = e.target as HTMLElement;
-      if (target !== mainContentEl) {
-        globalScrollTop = target.scrollTop;
-        activeScrollTarget = target;
-      }
+      if (target === mainContentEl) return;
+      activeScrollTarget = target;
+      if (rafId !== 0) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        const next = target.scrollTop > BACK_TO_TOP_THRESHOLD_PX;
+        if (next !== showGlobalBackToTop) showGlobalBackToTop = next;
+      });
     };
     mainContentEl.addEventListener('scroll', handler, true);
-    return () => mainContentEl?.removeEventListener('scroll', handler, true);
+    return () => {
+      mainContentEl?.removeEventListener('scroll', handler, true);
+      if (rafId !== 0) cancelAnimationFrame(rafId);
+    };
   });
 
   // Reset scroll state on view or item change (but not on back/forward — that restores saved position)
   $effect(() => {
     void activeView;
     void currentNavItemId;
-    globalScrollTop = 0;
+    showGlobalBackToTop = false;
     // Scroll to top for forward navigation (not back/forward, which restores saved position)
     if (!isBackForward()) {
       tick().then(() => {
@@ -962,6 +987,35 @@
   let isFocusModeOpen = $state(false);
   let isCastPickerOpen = $state(false);
 
+  // First-time CPU-mode warning for the immersive view. Fires once per
+  // user when they enter immersive with hardware acceleration off; the
+  // user can opt out forever via the "don't show again" checkbox.
+  const CPU_WARNING_FLAG_KEY = 'qbz-cpu-mode-warning-shown-v1';
+  let cpuModeWarningOpen = $state(false);
+  let cpuModeWarningArmed = true;
+
+  $effect(() => {
+    const immersiveOpen = isFullScreenOpen || isFocusModeOpen;
+    if (!immersiveOpen || !cpuModeWarningArmed) return;
+    if (isHardwareAccelEnabled()) return;
+    if (getUserItem(CPU_WARNING_FLAG_KEY) === 'true') return;
+    cpuModeWarningOpen = true;
+    // Disarm so re-renders of this effect during a single immersive
+    // session don't re-trigger the modal mid-flight.
+    cpuModeWarningArmed = false;
+  });
+
+  function handleCpuWarningClose(dontShowAgain: boolean) {
+    cpuModeWarningOpen = false;
+    if (dontShowAgain) {
+      setUserItem(CPU_WARNING_FLAG_KEY, 'true');
+    } else {
+      // User left the checkbox off — re-arm so it shows again next time
+      // they open immersive in this session.
+      cpuModeWarningArmed = true;
+    }
+  }
+
   // Cast State
   let isCastConnected = $state(false);
   let isQconnectPanelOpen = $state(false);
@@ -1103,6 +1157,15 @@
   let lyricsActiveIndex = $state(-1);
   let lyricsActiveProgress = $state(0);
   let lyricsSidebarVisible = $state(false);
+
+  // Hoisted out of the LyricsSidebar template so the `lines` prop only
+  // re-computes when lyricsLines itself changes — not on every re-render
+  // of +page triggered by other reactive state (progress ticks, etc.).
+  // Note: $derived re-evaluates lazily on dep change; it does not deep-
+  // compare, so this is not a memoization in the React useMemo sense.
+  const lyricsSidebarLines = $derived(
+    lyricsLines.map((l) => ({ text: l.text, timeMs: l.timeMs, endMs: l.endMs }))
+  );
 
   let favoritesDefaultTab = $state<FavoritesTab>('tracks');
 
@@ -4113,11 +4176,24 @@
         await syncQueueState();
       }
 
-      if (sessionPersistEnabled && !qconnectRuntimeActive) {
+      if (sessionPersistEnabled) {
         const session = await loadSessionState();
 
-        // Restore queue + track (visual only — paused at 0:00)
-        if (session && session.queue_tracks.length > 0) {
+        // Last-page restore is unrelated to the queue and runs unconditionally
+        // — having QConnect connecting at startup shouldn't change which UI
+        // view the user lands on.
+        if (session) {
+          restoreLastView(session);
+        }
+
+        // Queue + track visual restore. Wrapped in a closure so the flicker
+        // guard below can defer it without duplicating the body. When
+        // QConnect is bootstrapping, we wait up to 1s for the remote queue
+        // to land — the QueueUpdated listener cancels this timer if it
+        // does, so the user sees the remote queue directly instead of
+        // flashing the local one and then swapping.
+        const performQueueRestore = async () => {
+          if (!session || session.queue_tracks.length === 0) return;
           console.log('[Session] Restoring previous session...');
 
           const tracks: BackendQueueTrack[] = session.queue_tracks.map(trk => ({
@@ -4137,6 +4213,9 @@
             // older versions that didn't persist source. Without this, a
             // restored local queue routed next-track auto-advance to Qobuz.
             source: trk.source ?? (trk.is_local ? 'local' : undefined),
+            streamable: trk.streamable ?? true,
+            parental_warning: trk.parental_warning ?? false,
+            source_item_id_hint: trk.source_item_id_hint ?? null,
           }));
 
           await setQueue(tracks, session.current_index ?? 0, true);
@@ -4216,14 +4295,25 @@
           }
 
           console.log('[Session] Session restored successfully');
-        }
+        };
 
-        // Restore last page (opt-in via settings)
-        if (session) {
-          restoreLastView(session);
+        if (qconnectRuntimeActive) {
+          // QConnect is bootstrapping at launch. Hold back the local
+          // restore for 1s — if the remote queue snapshot arrives first
+          // (QueueUpdated event in the QConnect listener cancels this
+          // timer), the user sees only the remote state and we skip the
+          // flicker. If 1s elapses without a remote snapshot, fall back
+          // to the local restore so the user isn't stuck looking at
+          // "No track playing" indefinitely.
+          console.log('[Session] Deferring local restore (waiting for QConnect snapshot)');
+          sessionRestoreFlickerGuard = setTimeout(() => {
+            sessionRestoreFlickerGuard = null;
+            console.log('[Session] QConnect snapshot timeout, applying local restore');
+            void performQueueRestore();
+          }, 1000);
+        } else {
+          await performQueueRestore();
         }
-      } else if (qconnectRuntimeActive) {
-        console.log('[Session] Skipping local session restore while Qobuz Connect remote mode is active');
       }
     } catch (err) {
       console.error('[Session] Failed to restore session:', err);
@@ -4384,7 +4474,10 @@
       // Strip them from the persisted queue and clear the current-index
       // pointer if it was sitting on one — the ephemeral pane comes back
       // via folder-path persistence and the user re-clicks play.
-      const EPHEMERAL_ID_FLOOR = 1 << 48;
+      // 2 ** 48 (NOT 1 << 48 — JavaScript bitwise shift operates on
+      // 32-bit ints so 1 << 48 silently truncates to 65536, which
+      // mis-classified every Qobuz track as ephemeral).
+      const EPHEMERAL_ID_FLOOR = 2 ** 48;
       const persistedTracks: PersistedQueueTrack[] = [];
       let persistedCurrentIndex: number | null = null;
       for (let i = 0; i < tracks.length; i++) {
@@ -4416,6 +4509,13 @@
           // auto-advance routed to v2_play_track with library row ids — which
           // Qobuz then "resolved" to whatever track happened to share the id.
           source: track.source ?? (track.is_local ? 'local' : null),
+          // Round-trip explicit-content + unstreamable visual state + the
+          // Mixtape/Collection source-item id so a restored queue mirrors
+          // the live one. Backend defaults streamable=true, parental=false
+          // and source_item_id_hint=null for tracks saved by older builds.
+          streamable: track.streamable ?? true,
+          parental_warning: track.parental_warning ?? false,
+          source_item_id_hint: track.source_item_id_hint ?? null,
         });
       }
 
@@ -4510,6 +4610,15 @@
       console.warn('[WindowTitle] setTitle threw:', err);
     }
   });
+
+  // Timer that holds back the local session restore for ~1s when Qobuz
+  // Connect is bootstrapping at launch. If the remote queue arrives first
+  // (QueueUpdated event), the listener cancels the timer and we skip the
+  // local restore — avoids the visual flicker of swapping from the last
+  // local queue to the remote one. If QConnect doesn't respond in time,
+  // the timer fires and the local restore proceeds. See onMount QConnect
+  // event listener (~line 5577) for the cancellation site.
+  let sessionRestoreFlickerGuard: ReturnType<typeof setTimeout> | null = null;
 
   // Debounced full session save (coalesces rapid state changes into a single save)
   let sessionSaveDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -4625,6 +4734,16 @@
     // Bootstrap app (theme, mouse nav, Last.fm restore)
     const { cleanup: cleanupBootstrap } = bootstrapApp();
 
+    // Tell the boot watchdog that the UI mounted successfully. This
+    // clears the pending-graphics-init marker the backend wrote at
+    // startup; if we never reach this line (WebKit crashed during
+    // graphics init) the next launch sees the stale marker and
+    // auto-reverts the offending risky setting. Idempotent and safe to
+    // call on every mount — backend just removes the file if present.
+    void invoke('v2_mark_boot_succeeded').catch((err) => {
+      console.warn('[BootWatchdog] mark_boot_succeeded failed:', err);
+    });
+
     void initDiscordRpc();
 
     // Window-title preference: load from localStorage and subscribe so that
@@ -4717,6 +4836,12 @@
     registerAction('ui.escape', handleUIEscape);
     registerAction('ui.showShortcuts', () => { isShortcutsModalOpen = true; });
     registerAction('ui.openLink', () => { isLinkResolverOpen = true; });
+
+    // Persist the queue on every mutation (add / remove / reorder / set /
+    // clear / stop-after consume / remove-after). The store calls back into
+    // debouncedFullSessionSave so multiple rapid mutations coalesce into one
+    // SQLite write — same 2s debounce the track-change save already uses.
+    const unregisterQueueMutationObserver = registerQueueMutationObserver(debouncedFullSessionSave);
 
     // Session save on window close/hide
     const handleBeforeUnload = () => {
@@ -4927,7 +5052,7 @@
 
       // Save scroll position of the view we're leaving
       if (prevView !== navState.activeView || prevItemId !== navState.activeItemId) {
-        const scrollTopToSave = activeScrollTarget?.scrollTop ?? globalScrollTop;
+        const scrollTopToSave = activeScrollTarget?.scrollTop ?? 0;
         saveScrollPosition(prevView, scrollTopToSave, prevItemId);
       }
 
@@ -4946,7 +5071,7 @@
         tick().then(() => {
           if (activeScrollTarget) {
             activeScrollTarget.scrollTop = savedScroll;
-            globalScrollTop = savedScroll;
+            showGlobalBackToTop = savedScroll > BACK_TO_TOP_THRESHOLD_PX;
           }
         });
       }
@@ -5053,15 +5178,19 @@
       repeatMode = queueState.repeatMode;
     });
 
-    // Subscribe to lyrics state changes
+    // Subscribe to lyrics state changes. Listener fires per progress tick
+    // (~12–30 Hz); guard each $state write with a reference/value check so
+    // we only fan out reactivity for fields that actually changed —
+    // critical for `lyricsLines`, which feeds a $derived `.map()` that
+    // would otherwise re-project N objects per tick.
     const unsubscribeLyrics = subscribeLyrics(() => {
       const state = getLyricsState();
-      lyricsStatus = state.status;
-      lyricsError = state.error;
-      lyricsLines = state.lines;
-      lyricsIsSynced = state.isSynced;
-      lyricsActiveIndex = state.activeIndex;
-      lyricsActiveProgress = state.activeProgress;
+      if (lyricsStatus !== state.status) lyricsStatus = state.status;
+      if (lyricsError !== state.error) lyricsError = state.error;
+      if (lyricsLines !== state.lines) lyricsLines = state.lines;
+      if (lyricsIsSynced !== state.isSynced) lyricsIsSynced = state.isSynced;
+      if (lyricsActiveIndex !== state.activeIndex) lyricsActiveIndex = state.activeIndex;
+      if (lyricsActiveProgress !== state.activeProgress) lyricsActiveProgress = state.activeProgress;
       // Close network sidebar and queue when lyrics opens; restore when it closes
       if (state.sidebarVisible && !lyricsSidebarVisible) {
         closeContentSidebar('network');
@@ -5335,6 +5464,7 @@
     let unlistenQconnectDiagnostic: UnlistenFn | null = null;
     let unlistenQconnectRendererReportDebug: UnlistenFn | null = null;
     let unlistenAudioDeviceMissing: UnlistenFn | null = null;
+    let unlistenAudioInitFailed: UnlistenFn | null = null;
 
     (async () => {
       const unlisten1 = await listen('tray:play_pause', () => {
@@ -5490,7 +5620,22 @@
             'RendererCommandApplied' in payload ||
             'PendingActionCompleted' in payload;
           if (needsQueueSync) {
+            // The remote snapshot arrived. Cancel the startup flicker
+            // guard if it is still pending — we want the QConnect state
+            // to win, not the local restore (issue #315). If the timer
+            // already fired or wasn't set, this is a no-op.
+            if (sessionRestoreFlickerGuard !== null) {
+              clearTimeout(sessionRestoreFlickerGuard);
+              sessionRestoreFlickerGuard = null;
+              console.log('[Session] QConnect snapshot arrived, skipping deferred local restore');
+            }
             syncQueueState();
+            // Persist the QConnect-driven queue change so the local
+            // snapshot mirrors remote state. Covers the case where the
+            // remote keeps the same current_track but reorders/replaces
+            // upcoming tracks — the track-change effect wouldn't fire
+            // (issue #315 acceptance: local snapshot updated to match).
+            debouncedFullSessionSave();
           }
 
           const needsQconnectSnapshotRefresh =
@@ -5566,6 +5711,23 @@
       });
       if (disposed) { unlistenDeviceMissing(); return; }
       unlistenAudioDeviceMissing = unlistenDeviceMissing;
+
+      // Backend audio init failed (e.g. macOS CoreAudio rate mismatch after
+      // the retry exhausted, Hog Mode already held by another app, device
+      // disconnected mid-init). The fallback to legacy CPAL is intentionally
+      // refused on macOS — silent wrong-speed audio is worse than no audio —
+      // so the user sees no playback. Surface the cause as a toast instead
+      // of leaving them guessing at the silence.
+      const unlistenInitFailed = await listen<{ message: string }>('audio:init-failed', (event) => {
+        const reason = event.payload?.message ?? '';
+        showToast(
+          $t('toast.audioInitFailed', { values: { reason } }),
+          'error',
+          8000
+        );
+      });
+      if (disposed) { unlistenInitFailed(); return; }
+      unlistenAudioInitFailed = unlistenInitFailed;
     })();
 
     return () => {
@@ -5585,6 +5747,7 @@
       unlistenQconnectDiagnostic?.();
       unlistenQconnectRendererReportDebug?.();
       unlistenAudioDeviceMissing?.();
+      unlistenAudioInitFailed?.();
       unsubscribeWindowTitle();
       // Save session before cleanup
       saveSessionBeforeClose();
@@ -5614,6 +5777,11 @@
       unsubscribeNav();
       unsubscribePlayer();
       unsubscribeQueue();
+      unregisterQueueMutationObserver();
+      if (sessionRestoreFlickerGuard !== null) {
+        clearTimeout(sessionRestoreFlickerGuard);
+        sessionRestoreFlickerGuard = null;
+      }
       unsubscribeLyrics();
       unsubscribeContentSidebar();
       unsubscribeCast();
@@ -5755,10 +5923,15 @@
     class:match-chrome={matchSystemChrome && showTitleBar && windowTransparent}
     style="--chrome-radius: {chromeRadiusPx}px;"
   >
-    <!-- macOS: drag region for window movement (overlay title bar has no native drag area) -->
-    {#if !showTitleBar && platform === 'macos'}
-      <div class="macos-drag-region" data-tauri-drag-region></div>
-    {/if}
+    <!--
+      macOS overlay title bar: drag handling lives on the existing
+      .sidebar element. It already has a 32px top padding band (to
+      clear the traffic lights) — that's the area we reuse as the
+      window drag surface, by tagging the <aside> as a drag region
+      and tagging each of its direct children as no-drag. No new
+      elements added, no spacing added — just attributes.
+    -->
+
     <!-- Custom Title Bar (CSD) -->
     {#if showTitleBar}
       <TitleBar
@@ -5823,7 +5996,7 @@
             onGoToLibrary={() => navigateTo('library')}
           />
         {:else}
-          <HomeView
+          <DiscoveryView
             userName={userInfo?.userName}
             onAlbumClick={handleAlbumClick}
             onAlbumPlay={playAlbumById}
@@ -6642,18 +6815,26 @@
       {/if}
     </main>
 
-    {#if showGlobalBackToTop}
-      <button class="back-to-top-global" onclick={globalScrollToTop} title="Back to top">
-        <ChevronUp size={20} />
-      </button>
-    {/if}
+    <!-- Always mounted to avoid the mount/unmount paint cost when crossing
+         the 800px threshold (visible hiccup on scroll-up at 4K under software
+         compositing). Visibility is toggled via class + opacity transition. -->
+    <button
+      class="back-to-top-global"
+      class:hidden={!showGlobalBackToTop}
+      onclick={globalScrollToTop}
+      title="Back to top"
+      tabindex={showGlobalBackToTop ? 0 : -1}
+      aria-hidden={!showGlobalBackToTop}
+    >
+      <ChevronUp size={20} />
+    </button>
 
     <!-- Lyrics Sidebar -->
     {#if lyricsSidebarVisible && !isQueueOpen}
       <LyricsSidebar
         title={currentTrack?.title}
         artist={currentTrack?.artist}
-        lines={lyricsLines.map(l => ({ text: l.text }))}
+        lines={lyricsSidebarLines}
         activeIndex={lyricsActiveIndex}
         activeProgress={lyricsActiveProgress}
         isSynced={lyricsIsSynced}
@@ -6716,7 +6897,7 @@
         {isFavorite}
         onToggleFavorite={toggleFavorite}
         onAddToPlaylist={openAddToPlaylistModal}
-        metadataActionsDisabled={currentTrack != null && currentTrack.id >= (1 << 48)}
+        metadataActionsDisabled={currentTrack != null && currentTrack.id >= 2 ** 48}
         onOpenQueue={toggleQueue}
         onOpenMiniPlayer={() => {
           void enterMiniplayerMode();
@@ -6822,7 +7003,7 @@
         onToggleRepeat={toggleRepeat}
         {isFavorite}
         onToggleFavorite={toggleFavorite}
-        metadataActionsDisabled={currentTrack != null && currentTrack.id >= (1 << 48)}
+        metadataActionsDisabled={currentTrack != null && currentTrack.id >= 2 ** 48}
         lyricsLines={lyricsLines}
         lyricsActiveIndex={lyricsActiveIndex}
         lyricsActiveProgress={lyricsActiveProgress}
@@ -6858,6 +7039,11 @@
       />
     {/if}
 
+    <CpuModeWarningModal
+      isOpen={cpuModeWarningOpen}
+      onClose={handleCpuWarningClose}
+    />
+
     <!-- Toast -->
     {#if toast}
       <Toast
@@ -6868,75 +7054,89 @@
       />
     {/if}
 
-    <!-- Playlist Modal -->
-    <PlaylistModal
-      isOpen={isPlaylistModalOpen}
-      mode={playlistModalMode}
-      playlist={playlistModalMode === 'edit' ? playlistModalEditPlaylist : undefined}
-      trackIds={playlistModalTrackIds}
-      isLocalTracks={playlistModalTracksAreLocal}
-      plexRatingKeys={playlistModalPlexRatingKeys}
-      isHidden={playlistModalMode === 'edit' ? playlistModalEditIsHidden : false}
-      currentFolderId={playlistModalMode === 'edit' ? playlistModalEditCurrentFolderId : null}
-      {userPlaylists}
-      onClose={handlePlaylistModalClose}
-      onSuccess={handlePlaylistCreated}
-    />
+    <!-- Modals are gated by `{#if}` at the mount site so their <script>
+         blocks (and the reactive declarations within) don't execute when
+         the modal is closed. Previously each modal was always mounted with
+         only its template gated internally, which kept its full reactive
+         graph alive and re-evaluating on every parent tick — the dominant
+         cost of opening any new modal at non-maximized window sizes. -->
+    {#if isPlaylistModalOpen}
+      <PlaylistModal
+        isOpen={isPlaylistModalOpen}
+        mode={playlistModalMode}
+        playlist={playlistModalMode === 'edit' ? playlistModalEditPlaylist : undefined}
+        trackIds={playlistModalTrackIds}
+        isLocalTracks={playlistModalTracksAreLocal}
+        plexRatingKeys={playlistModalPlexRatingKeys}
+        isHidden={playlistModalMode === 'edit' ? playlistModalEditIsHidden : false}
+        currentFolderId={playlistModalMode === 'edit' ? playlistModalEditCurrentFolderId : null}
+        {userPlaylists}
+        onClose={handlePlaylistModalClose}
+        onSuccess={handlePlaylistCreated}
+      />
+    {/if}
 
-    <!-- Playlist Import Modal -->
-    <PlaylistImportModal
-      isOpen={isPlaylistImportOpen}
-      onClose={closePlaylistImport}
-      onSuccess={handlePlaylistImported}
-    />
+    {#if isPlaylistImportOpen}
+      <PlaylistImportModal
+        isOpen={isPlaylistImportOpen}
+        onClose={closePlaylistImport}
+        onSuccess={handlePlaylistImported}
+      />
+    {/if}
 
-    <!-- Folder Edit Modal (sidebar entry-point — issue #364) -->
-    <FolderEditModal
-      isOpen={isSidebarFolderEditOpen}
-      folder={editingSidebarFolder}
-      onClose={closeSidebarFolderEdit}
-      onSave={handleSidebarFolderSave}
-      onDelete={handleSidebarFolderDelete}
-    />
+    {#if isSidebarFolderEditOpen}
+      <FolderEditModal
+        isOpen={isSidebarFolderEditOpen}
+        folder={editingSidebarFolder}
+        onClose={closeSidebarFolderEdit}
+        onSave={handleSidebarFolderSave}
+        onDelete={handleSidebarFolderDelete}
+      />
+    {/if}
 
-    <!-- About Modal -->
-    <AboutModal
-      isOpen={isAboutModalOpen}
-      onClose={() => isAboutModalOpen = false}
-    />
+    {#if isAboutModalOpen}
+      <AboutModal
+        isOpen={isAboutModalOpen}
+        onClose={() => isAboutModalOpen = false}
+      />
+    {/if}
 
-    <!-- Quality Fallback Modal -->
-    <QualityFallbackModal
-      isOpen={isQualityFallbackOpen}
-      trackTitle={qualityFallbackTrackTitle}
-      onTryLower={handleQualityFallbackTryLower}
-      onSkip={handleQualityFallbackSkip}
-      onClose={() => isQualityFallbackOpen = false}
-    />
+    {#if isQualityFallbackOpen}
+      <QualityFallbackModal
+        isOpen={isQualityFallbackOpen}
+        trackTitle={qualityFallbackTrackTitle}
+        onTryLower={handleQualityFallbackTryLower}
+        onSkip={handleQualityFallbackSkip}
+        onClose={() => isQualityFallbackOpen = false}
+      />
+    {/if}
 
-    <!-- Keyboard Shortcuts Modal -->
-    <KeyboardShortcutsModal
-      isOpen={isShortcutsModalOpen}
-      onClose={() => isShortcutsModalOpen = false}
-      onOpenSettings={() => {
-        isShortcutsModalOpen = false;
-        isKeybindingsSettingsOpen = true;
-      }}
-    />
+    {#if isShortcutsModalOpen}
+      <KeyboardShortcutsModal
+        isOpen={isShortcutsModalOpen}
+        onClose={() => isShortcutsModalOpen = false}
+        onOpenSettings={() => {
+          isShortcutsModalOpen = false;
+          isKeybindingsSettingsOpen = true;
+        }}
+      />
+    {/if}
 
-    <!-- Keybindings Settings Modal -->
-    <KeybindingsSettings
-      isOpen={isKeybindingsSettingsOpen}
-      onClose={() => isKeybindingsSettingsOpen = false}
-    />
+    {#if isKeybindingsSettingsOpen}
+      <KeybindingsSettings
+        isOpen={isKeybindingsSettingsOpen}
+        onClose={() => isKeybindingsSettingsOpen = false}
+      />
+    {/if}
 
-    <!-- Link Resolver Modal -->
-    <LinkResolverModal
-      isOpen={isLinkResolverOpen}
-      onClose={() => isLinkResolverOpen = false}
-      onResolve={handleResolvedLink}
-      onOpenImporter={() => { isLinkResolverOpen = false; openPlaylistImport(); }}
-    />
+    {#if isLinkResolverOpen}
+      <LinkResolverModal
+        isOpen={isLinkResolverOpen}
+        onClose={() => isLinkResolverOpen = false}
+        onResolve={handleResolvedLink}
+        onOpenImporter={() => { isLinkResolverOpen = false; openPlaylistImport(); }}
+      />
+    {/if}
 
     {#if updateRelease}
       <UpdateAvailableModal
@@ -7200,28 +7400,6 @@
     height: calc(100vh - var(--player-bar-height, 104px));
   }
 
-  /* macOS: pad main content to clear native overlay title bar */
-  :global(html.macos) .main-content {
-    padding-top: 16px;
-    height: calc(100vh - 104px - 16px);
-  }
-
-  /* macOS: home view handles its own spacing */
-  :global(html.macos) .main-content :global(.home-view) {
-    margin-top: -16px;
-  }
-
-  /* macOS: invisible drag region for window movement (overlay title bar) */
-  :global(html.macos) .macos-drag-region {
-    height: 28px;
-    width: 100%;
-    position: absolute;
-    top: 0;
-    left: 0;
-    z-index: 9999;
-    -webkit-app-region: drag;
-  }
-
   .view-error {
     display: flex;
     flex-direction: column;
@@ -7263,8 +7441,17 @@
     align-items: center;
     justify-content: center;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-    transition: background 150ms ease, color 150ms ease;
+    /* Opacity-only transition for show/hide so the button can stay mounted
+       at all times. Mounting/unmounting a position:fixed element on every
+       scroll-threshold crossing forced an extra paint event that the user
+       perceived as a stutter, especially on scroll-up at 4K. */
+    transition: background 150ms ease, color 150ms ease, opacity 150ms ease;
     z-index: 200;
+  }
+
+  .back-to-top-global.hidden {
+    opacity: 0;
+    pointer-events: none;
   }
 
   .back-to-top-global:hover {

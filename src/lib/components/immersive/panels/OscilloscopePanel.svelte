@@ -3,8 +3,17 @@
   import { t } from 'svelte-i18n';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
-  import QualityBadge from '$lib/components/QualityBadge.svelte';
+  import ImmersiveSongCard from '$lib/components/immersive/ImmersiveSongCard.svelte';
   import { getPanelFrameInterval } from '$lib/immersive/fpsConfig';
+  import { isHardwareAccelEnabled } from '$lib/runtime/graphicsState';
+
+  // Captured once at module load — HW accel state is determined at app
+  // boot and does not change at runtime. When false, we skip per-stroke
+  // `shadowBlur` (the dominant cost on Skia/Cairo software backends, where
+  // each stroke pays an O(pixels * radius^2) blur pass) and force the
+  // canvas to render at devicePixelRatio = 1 to keep the pixel budget
+  // sane on HiDPI displays.
+  const LOW_PROFILE = !isHardwareAccelEnabled();
 
   interface Props {
     enabled?: boolean;
@@ -150,6 +159,35 @@
     if (!ctx) return;
 
     const colorStr = `rgb(${color.r}, ${color.g}, ${color.b})`;
+
+    if (LOW_PROFILE) {
+      // CPU path: fake the glow with a single fat semi-transparent
+      // underlay stroke followed by the thin opaque stroke. Zero
+      // shadowBlur cost, comparable visual weight.
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, 0.35)`;
+      ctx.lineWidth = 5;
+      for (let i = 0; i < WAVEFORM_POINTS; i++) {
+        const x = (i / (WAVEFORM_POINTS - 1)) * width;
+        const y = yCenter + channelData[i] * amplitude;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.strokeStyle = colorStr;
+      ctx.lineWidth = 2;
+      for (let i = 0; i < WAVEFORM_POINTS; i++) {
+        const x = (i / (WAVEFORM_POINTS - 1)) * width;
+        const y = yCenter + channelData[i] * amplitude;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      return;
+    }
+
     const glowStr = `rgba(${color.r}, ${color.g}, ${color.b}, 0.4)`;
 
     ctx.beginPath();
@@ -183,7 +221,7 @@
     lastRenderTime = timestamp;
 
     const rect = canvasRef.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = LOW_PROFILE ? 1 : (window.devicePixelRatio || 1);
     const width = rect.width;
     const height = rect.height;
 
@@ -270,24 +308,17 @@
 <div class="oscilloscope-panel" class:visible={enabled}>
   <canvas bind:this={canvasRef} class="oscilloscope-canvas"></canvas>
 
-  <div class="bottom-info">
-    <div class="track-meta">
-      <span class="track-title">{trackTitle}</span>
-      {#if explicit}
-        <span class="explicit-badge" title="{ $t('library.explicit') }"></span>
-      {/if}
-      {#if album}
-        <span class="track-album">{album}</span>
-      {/if}
-      <span class="track-artist">{artist}</span>
-      <QualityBadge {quality} {bitDepth} {samplingRate} {originalBitDepth} {originalSamplingRate} {format} compact />
-    </div>
-    {#if artwork}
-      <div class="artwork-thumb">
-        <img src={artwork} alt={trackTitle} />
-      </div>
-    {/if}
-  </div>
+  <ImmersiveSongCard
+    {artwork}
+    {trackTitle}
+    {artist}
+    {album}
+    {explicit}
+    {quality}
+    {bitDepth}
+    {samplingRate}
+    {format}
+  />
 </div>
 
 <style>
@@ -313,88 +344,4 @@
     height: 100%;
   }
 
-  .bottom-info {
-    position: absolute;
-    bottom: 24px;
-    right: 24px;
-    z-index: 10;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .track-meta {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 3px;
-  }
-
-  .track-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-primary, white);
-    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .track-album {
-    font-size: 12px;
-    color: var(--alpha-50, rgba(255, 255, 255, 0.5));
-    font-style: italic;
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .track-artist {
-    font-size: 12px;
-    color: var(--alpha-60, rgba(255, 255, 255, 0.6));
-    max-width: 400px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .artwork-thumb {
-    width: 72px;
-    height: 72px;
-    border-radius: 6px;
-    overflow: hidden;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-    flex-shrink: 0;
-  }
-
-  .artwork-thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  @media (max-width: 768px) {
-    .bottom-info {
-      right: 16px;
-      bottom: 16px;
-    }
-
-    .artwork-thumb {
-      width: 56px;
-      height: 56px;
-    }
-  }
-
-  .explicit-badge {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-    opacity: 0.45;
-    background-color: var(--text-primary, white);
-    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
-    mask: url('/explicit.svg') center / contain no-repeat;
-  }
 </style>

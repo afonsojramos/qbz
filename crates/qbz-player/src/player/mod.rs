@@ -68,6 +68,13 @@ enum AudioCommand {
         sample_rate: u32,
         channels: u16,
         duration_secs: u64,
+        /// Resume offset in seconds (#315). When > 0, the audio thread
+        /// waits for enough buffer to cover the offset and pre-skips
+        /// decoder output up to that point before engaging audio.
+        start_position_secs: u64,
+        /// Total content length in bytes. Combined with `duration_secs`
+        /// to estimate bytes-per-second when sizing the resume buffer.
+        content_length: u64,
     },
     /// Pause playback
     Pause,
@@ -504,6 +511,16 @@ impl StreamType {
             _ => false,
         }
     }
+
+    /// Actual output stream rate. On macOS shared mode this is the rate that
+    /// must match CoreAudio's current nominal device rate; decoded track rates
+    /// may differ and are resampled by Rodio.
+    #[cfg(target_os = "macos")]
+    fn output_sample_rate(&self) -> u32 {
+        match self {
+            StreamType::Rodio { sink, .. } => sink.config().sample_rate().get(),
+        }
+    }
 }
 
 fn apply_engine_volume(
@@ -522,6 +539,209 @@ fn apply_engine_volume(
     }
 
     engine.set_volume(volume);
+}
+
+#[cfg(target_os = "macos")]
+fn uses_coreaudio_system_default(settings: &AudioSettings) -> bool {
+    settings
+        .backend_type
+        .unwrap_or(AudioBackendType::SystemDefault)
+        == AudioBackendType::SystemDefault
+}
+
+/// `evaluate_stream_recreate` runs every track change on the audio thread,
+/// and `coreaudio_nominal_rate` issues two CoreAudio HAL queries per call
+/// (`resolve_output_device_id` + `get_nominal_sample_rate`). A short-lived
+/// cache absorbs the bulk of those repeats — long enough to skip duplicate
+/// queries within an album, short enough to notice when the user changes the
+/// system audio rate.
+#[cfg(target_os = "macos")]
+const COREAUDIO_RATE_CACHE_TTL: std::time::Duration = std::time::Duration::from_millis(750);
+
+#[cfg(target_os = "macos")]
+struct CachedNominalRate {
+    cached_at: std::time::Instant,
+    device_name: Option<String>,
+    rate: Option<u32>,
+}
+
+#[cfg(target_os = "macos")]
+std::thread_local! {
+    static COREAUDIO_NOMINAL_RATE_CACHE: std::cell::RefCell<Option<CachedNominalRate>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+fn query_macos_nominal_rate(device_name: Option<&str>) -> Option<u32> {
+    let device_id = qbz_audio::coreaudio_direct::resolve_output_device_id(device_name)
+        .inspect_err(|e| {
+            log::warn!(
+                "[CoreAudio] Failed to resolve output device for rate check: {}",
+                e
+            )
+        })
+        .ok()?;
+
+    qbz_audio::coreaudio_direct::get_nominal_sample_rate(device_id)
+        .inspect_err(|e| log::warn!("[CoreAudio] Failed to query nominal rate: {}", e))
+        .ok()
+}
+
+#[cfg(target_os = "macos")]
+fn coreaudio_nominal_rate(settings: &AudioSettings) -> Option<u32> {
+    if !uses_coreaudio_system_default(settings) {
+        return None;
+    }
+
+    let device_name = settings.output_device.clone();
+    let now = std::time::Instant::now();
+
+    COREAUDIO_NOMINAL_RATE_CACHE.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if let Some(cached) = cell.as_ref() {
+            if cached.device_name == device_name
+                && now.duration_since(cached.cached_at) < COREAUDIO_RATE_CACHE_TTL
+            {
+                return cached.rate;
+            }
+        }
+        let rate = query_macos_nominal_rate(device_name.as_deref());
+        *cell = Some(CachedNominalRate {
+            cached_at: now,
+            device_name,
+            rate,
+        });
+        rate
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn coreaudio_shared_rate_mismatch(
+    settings: &AudioSettings,
+    stream_opt: &Option<StreamType>,
+) -> Option<(u32, u32)> {
+    if settings.exclusive_mode || !uses_coreaudio_system_default(settings) {
+        return None;
+    }
+
+    let stream_rate = stream_opt.as_ref().map(StreamType::output_sample_rate)?;
+    let nominal_rate = coreaudio_nominal_rate(settings)?;
+
+    (stream_rate != nominal_rate).then_some((stream_rate, nominal_rate))
+}
+
+/// Inputs needed by both `Play` and `Stream` handlers to decide whether the
+/// current output stream must be torn down and recreated.
+struct StreamRecreateDecision {
+    needs_new_stream: bool,
+    format_changed: bool,
+    dac_passthrough: bool,
+    using_alsa_direct: bool,
+    using_coreaudio_exclusive: bool,
+    coreaudio_shared_rate_mismatch: Option<(u32, u32)>,
+}
+
+/// Read settings once and evaluate every condition that forces a stream
+/// rebuild: format change on backends that demand bit-perfect output (DAC
+/// passthrough, ALSA Direct, CoreAudio Exclusive) and CoreAudio shared-mode
+/// rate drift (CPAL caches the device rate at open time, so when the OS
+/// nominal rate moves we must rebuild or playback runs at the wrong speed).
+///
+/// `current_track_sample_rate` / `current_track_channels` describe the last
+/// *decoded source* format and are compared to the incoming `sample_rate` /
+/// `channels` — never to the output stream's hardware rate, which on macOS
+/// shared mode may differ and is tracked separately via Rodio's sink config.
+fn evaluate_stream_recreate(
+    thread_settings: &Arc<Mutex<AudioSettings>>,
+    stream_opt: &Option<StreamType>,
+    current_track_sample_rate: Option<u32>,
+    current_track_channels: Option<u16>,
+    sample_rate: u32,
+    channels: u16,
+    context: &str,
+) -> StreamRecreateDecision {
+    let format_changed =
+        current_track_sample_rate != Some(sample_rate) || current_track_channels != Some(channels);
+
+    let settings_guard = thread_settings.lock().ok();
+
+    let dac_passthrough = settings_guard
+        .as_ref()
+        .map(|s| cfg!(target_os = "linux") && s.dac_passthrough)
+        .unwrap_or(false);
+
+    let using_alsa_direct = settings_guard
+        .as_ref()
+        .and_then(|s| s.backend_type)
+        .map(|b| b == AudioBackendType::Alsa)
+        .unwrap_or(false);
+
+    let using_coreaudio_exclusive = settings_guard
+        .as_ref()
+        .map(|s| {
+            cfg!(target_os = "macos")
+                && s.backend_type.unwrap_or(AudioBackendType::SystemDefault)
+                    == AudioBackendType::SystemDefault
+                && s.exclusive_mode
+        })
+        .unwrap_or(false);
+
+    #[cfg(target_os = "macos")]
+    let coreaudio_shared_rate_mismatch = settings_guard
+        .as_ref()
+        .and_then(|s| coreaudio_shared_rate_mismatch(s, stream_opt))
+        .inspect(|(stream_rate, nominal_rate)| {
+            log::warn!(
+                "[CoreAudio] {} shared-mode output rate changed: stream {}Hz, device nominal {}Hz. Recreating stream to avoid wrong-speed playback.",
+                context,
+                stream_rate,
+                nominal_rate
+            );
+        });
+    #[cfg(not(target_os = "macos"))]
+    let coreaudio_shared_rate_mismatch: Option<(u32, u32)> = {
+        let _ = (stream_opt, context);
+        None
+    };
+
+    drop(settings_guard);
+
+    let needs_new_stream = compute_needs_new_stream(
+        stream_opt.is_some(),
+        format_changed,
+        dac_passthrough,
+        using_alsa_direct,
+        using_coreaudio_exclusive,
+        coreaudio_shared_rate_mismatch.is_some(),
+    );
+
+    StreamRecreateDecision {
+        needs_new_stream,
+        format_changed,
+        dac_passthrough,
+        using_alsa_direct,
+        using_coreaudio_exclusive,
+        coreaudio_shared_rate_mismatch,
+    }
+}
+
+/// Pure decision rule for whether the output stream must be rebuilt.
+///
+/// Split out so the truth table can be unit-tested without faking a real
+/// `MixerDeviceSink` or `AudioSettings` mutex.
+fn compute_needs_new_stream(
+    has_stream: bool,
+    format_changed: bool,
+    dac_passthrough: bool,
+    using_alsa_direct: bool,
+    using_coreaudio_exclusive: bool,
+    coreaudio_shared_rate_mismatch: bool,
+) -> bool {
+    !has_stream
+        || (dac_passthrough && format_changed)
+        || (using_alsa_direct && format_changed)
+        || (using_coreaudio_exclusive && format_changed)
+        || coreaudio_shared_rate_mismatch
 }
 
 /// Try to create output stream using the backend system (if configured)
@@ -608,10 +828,12 @@ fn try_init_stream_with_backend(
     // Fallback to regular rodio stream (PipeWire, Pulse, ALSA via CPAL)
     match backend.create_output_stream_with_exclusive_guard(&config) {
         Ok((mixer_sink, _exclusive_guard)) => {
+            let output_sample_rate = mixer_sink.config().sample_rate().get();
             log::info!(
-                "Stream created via {:?} backend at {}Hz",
+                "Stream created via {:?} backend (requested {}Hz, output {}Hz)",
                 backend_type,
-                sample_rate
+                sample_rate,
+                output_sample_rate
             );
             state.set_bit_perfect_mode(Some(BitPerfectMode::Disabled));
             #[cfg(target_os = "macos")]
@@ -689,6 +911,10 @@ pub struct SharedState {
     current_device: Arc<std::sync::RwLock<Option<String>>>,
     /// Stream error flag (set when ALSA/audio errors are detected)
     stream_error: Arc<AtomicBool>,
+    /// Optional user-readable explanation paired with `stream_error`.
+    /// Drained by the Tauri polling loop to emit a frontend toast and then
+    /// cleared, so the UI fires the notification exactly once per error.
+    stream_error_message: Arc<std::sync::RwLock<Option<String>>>,
     /// Actual sample rate of the current stream (Hz)
     sample_rate: Arc<AtomicU32>,
     /// Actual bit depth of the current stream
@@ -726,6 +952,7 @@ impl SharedState {
             position_at_start: Arc::new(AtomicU64::new(0)),
             current_device: Arc::new(std::sync::RwLock::new(None)),
             stream_error: Arc::new(AtomicBool::new(false)),
+            stream_error_message: Arc::new(std::sync::RwLock::new(None)),
             sample_rate: Arc::new(AtomicU32::new(0)),
             bit_depth: Arc::new(AtomicU32::new(0)),
             normalization_gain: Arc::new(AtomicU32::new(0)),
@@ -736,12 +963,43 @@ impl SharedState {
         }
     }
 
+    /// Clearing (`error = false`) also drops any pending
+    /// `stream_error_message`. This is intentional: if init recovers before
+    /// the Tauri polling loop drains the message, we'd rather swallow the
+    /// toast than surface a notification for a transient failure the user
+    /// never perceived. The trade-off is that a fast record→clear→drain
+    /// sequence loses the message — accepted because a recovered error is
+    /// not a user-actionable event.
     pub fn set_stream_error(&self, error: bool) {
         self.stream_error.store(error, Ordering::SeqCst);
+        if !error {
+            if let Ok(mut m) = self.stream_error_message.write() {
+                *m = None;
+            }
+        }
     }
 
     pub fn has_stream_error(&self) -> bool {
         self.stream_error.load(Ordering::SeqCst)
+    }
+
+    /// Record a user-readable error explanation alongside `stream_error=true`.
+    /// The message is drained once via `take_stream_error_message` so the UI
+    /// fires the toast exactly once per error.
+    pub fn record_stream_error(&self, message: impl Into<String>) {
+        self.stream_error.store(true, Ordering::SeqCst);
+        if let Ok(mut m) = self.stream_error_message.write() {
+            *m = Some(message.into());
+        }
+    }
+
+    /// Atomically take the pending stream-error message (if any). Returns
+    /// `None` when no message is pending or has already been read.
+    pub fn take_stream_error_message(&self) -> Option<String> {
+        self.stream_error_message
+            .write()
+            .ok()
+            .and_then(|mut m| m.take())
     }
 
     pub fn set_stream_quality(&self, sample_rate: u32, bit_depth: u32) {
@@ -1068,19 +1326,24 @@ impl Player {
                             }
                             Some(Err(e)) => {
                                 // On macOS, the backend path is the only one that
-                                // honors Exclusive Mode (CoreAudio Hog Mode). Falling
-                                // through to legacy CPAL here would silently create a
-                                // shared-mode stream while the UI still shows
-                                // Exclusive — surface the failure instead so the
-                                // user sees that audio is unavailable rather than
-                                // unknowingly playing in shared mode.
+                                // understands CoreAudio ownership and nominal-rate
+                                // validation. Falling through to legacy CPAL can
+                                // create a stream at a stale/source rate; in
+                                // shared mode that can produce wrong-speed audio,
+                                // and in Exclusive Mode it would silently drop Hog
+                                // Mode. Surface the failure instead.
                                 #[cfg(target_os = "macos")]
-                                if settings.exclusive_mode {
+                                if settings
+                                    .backend_type
+                                    .unwrap_or(AudioBackendType::SystemDefault)
+                                    == AudioBackendType::SystemDefault
+                                {
                                     log::error!(
-                                        "macOS Exclusive Mode init failed: {} — refusing to fall back to shared CPAL",
+                                        "Could not start macOS audio output — {}. Not falling back to the legacy CPAL path because it would either play at the wrong speed (shared mode) or silently drop Exclusive Mode.",
                                         e
                                     );
                                     state.set_current_device(None);
+                                    state.record_stream_error(e.clone());
                                     return None;
                                 }
                                 log::warn!(
@@ -1168,8 +1431,8 @@ impl Player {
             // Initialize audio device lazily on first playback to avoid idle CPU usage.
             let mut current_device_name = device_name.clone();
             let mut stream_opt: Option<StreamType> = None;
-            let mut current_sample_rate: Option<u32> = None;
-            let mut current_channels: Option<u16> = None;
+            let mut current_track_sample_rate: Option<u32> = None;
+            let mut current_track_channels: Option<u16> = None;
 
             #[allow(dead_code)]
             const MAX_INIT_RETRIES: u32 = 5;
@@ -1209,8 +1472,8 @@ impl Player {
                  current_device_name: &mut Option<String>,
                  consecutive_sink_failures: &mut u32,
                  pause_suspend_deadline: &mut Option<Instant>,
-                 current_sample_rate: &mut Option<u32>,
-                 current_channels: &mut Option<u16>,
+                 current_track_sample_rate: &mut Option<u32>,
+                 current_track_channels: &mut Option<u16>,
                  current_normalization_gain: &mut Option<f32>,
                  current_gain_atomic: &mut Option<Arc<AtomicU32>>,
                  gapless_pending: &mut Option<GaplessPending>,
@@ -1236,46 +1499,32 @@ impl Player {
                             thread_state.set_gapless_ready(false);
                             thread_state.set_gapless_next_track_id(0);
 
-                            // Get DAC passthrough setting
-                            let dac_passthrough = thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| cfg!(target_os = "linux") && s.dac_passthrough)
-                                .unwrap_or(false);
-
-                            // Check if we need to recreate the stream
-                            // Recreate on format change if DAC passthrough OR ALSA Direct is enabled (both require bit-perfect)
-                            let format_changed = *current_sample_rate != Some(sample_rate)
-                                || *current_channels != Some(channels);
-
-                            // Check if using ALSA Direct backend
-                            let using_alsa_direct = thread_settings
-                                .lock()
-                                .ok()
-                                .and_then(|s| s.backend_type)
-                                .map(|b| b == AudioBackendType::Alsa)
-                                .unwrap_or(false);
-                            let using_coreaudio_exclusive = thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| {
-                                    cfg!(target_os = "macos")
-                                        && s.backend_type.unwrap_or(AudioBackendType::SystemDefault)
-                                            == AudioBackendType::SystemDefault
-                                        && s.exclusive_mode
-                                })
-                                .unwrap_or(false);
-
-                            let needs_new_stream = stream_opt.is_none()
-                                || (dac_passthrough && format_changed)
-                                || (using_alsa_direct && format_changed)
-                                || (using_coreaudio_exclusive && format_changed);
+                            let StreamRecreateDecision {
+                                needs_new_stream,
+                                format_changed,
+                                dac_passthrough,
+                                using_alsa_direct,
+                                using_coreaudio_exclusive,
+                                coreaudio_shared_rate_mismatch,
+                            } = evaluate_stream_recreate(
+                                &thread_settings,
+                                stream_opt,
+                                *current_track_sample_rate,
+                                *current_track_channels,
+                                sample_rate,
+                                channels,
+                                "Play",
+                            );
 
                             if needs_new_stream {
                                 if stream_opt.is_some() {
-                                    if (dac_passthrough
-                                        || using_alsa_direct
-                                        || using_coreaudio_exclusive)
+                                    // CoreAudio rate-mismatch case already
+                                    // logged at warn level by
+                                    // `evaluate_stream_recreate`.
+                                    if coreaudio_shared_rate_mismatch.is_none()
+                                        && (dac_passthrough
+                                            || using_alsa_direct
+                                            || using_coreaudio_exclusive)
                                         && format_changed
                                     {
                                         let mode = if using_coreaudio_exclusive {
@@ -1287,14 +1536,12 @@ impl Player {
                                         };
                                         log::info!(
                                         "Sample rate/channels changed from {:?}Hz/{:?}ch to {}Hz/{}ch - recreating audio stream ({})",
-                                        *current_sample_rate,
-                                        *current_channels,
+                                        *current_track_sample_rate,
+                                        *current_track_channels,
                                         sample_rate,
                                         channels,
                                         mode
                                     );
-                                    } else {
-                                        log::info!("Creating initial audio stream");
                                     }
                                     // Stop engine FIRST so its writer thread releases its
                                     // Arc<AlsaDirectStream> reference before we drop the stream.
@@ -1455,8 +1702,6 @@ impl Player {
                                 match stream_result {
                                     Ok(stream) => {
                                         *stream_opt = Some(stream);
-                                        *current_sample_rate = Some(sample_rate);
-                                        *current_channels = Some(channels);
                                         thread_state.set_stream_error(false);
 
                                         // Set current device name from settings (for backend system)
@@ -1502,12 +1747,19 @@ impl Player {
                                 // Format changed but DAC passthrough is disabled - reuse existing stream
                                 log::info!(
                                 "Audio format changed from {:?}Hz/{:?}ch to {}Hz/{}ch - reusing audio stream (DAC passthrough disabled, gapless enabled)",
-                                *current_sample_rate,
-                                *current_channels,
+                                *current_track_sample_rate,
+                                *current_track_channels,
                                 sample_rate,
                                 channels
                             );
                             }
+
+                            // Track the decoded source format separately from
+                            // the OS output stream rate. In shared mode the
+                            // stream can stay at the CoreAudio nominal rate
+                            // while each track has its own decoded rate.
+                            *current_track_sample_rate = Some(sample_rate);
+                            *current_track_channels = Some(channels);
 
                             let Some(ref stream) = *stream_opt else {
                                 log::error!("Audio thread: no audio device available");
@@ -1558,8 +1810,8 @@ impl Player {
                                                 std::thread::sleep(Duration::from_millis(200));
 
                                                 // Use last known sample rate/channels to maintain DAC passthrough
-                                                let sr = current_sample_rate.unwrap_or(48000);
-                                                let ch = current_channels.unwrap_or(2);
+                                                let sr = current_track_sample_rate.unwrap_or(48000);
+                                                let ch = current_track_channels.unwrap_or(2);
                                                 *stream_opt = init_device(
                                                     current_device_name,
                                                     &thread_state,
@@ -1698,13 +1950,16 @@ impl Player {
                             sample_rate,
                             channels,
                             duration_secs,
+                            start_position_secs,
+                            content_length,
                         } => {
                             log::info!(
-                            "Audio thread: starting streaming playback for track {} ({}Hz, {} channels, {}s)",
+                            "Audio thread: starting streaming playback for track {} ({}Hz, {} channels, {}s, start={}s)",
                             track_id,
                             sample_rate,
                             channels,
-                            duration_secs
+                            duration_secs,
+                            start_position_secs
                         );
                             *pause_suspend_deadline = None;
 
@@ -1714,44 +1969,32 @@ impl Player {
                             *current_audio_data = None; // Clear regular audio data
                             thread_state.set_loaded_audio(true);
 
-                            // Get DAC passthrough setting
-                            let dac_passthrough = thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| cfg!(target_os = "linux") && s.dac_passthrough)
-                                .unwrap_or(false);
-
-                            // Check if we need to recreate the stream
-                            let format_changed = *current_sample_rate != Some(sample_rate)
-                                || *current_channels != Some(channels);
-
-                            let using_alsa_direct = thread_settings
-                                .lock()
-                                .ok()
-                                .and_then(|s| s.backend_type)
-                                .map(|b| b == AudioBackendType::Alsa)
-                                .unwrap_or(false);
-                            let using_coreaudio_exclusive = thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| {
-                                    cfg!(target_os = "macos")
-                                        && s.backend_type.unwrap_or(AudioBackendType::SystemDefault)
-                                            == AudioBackendType::SystemDefault
-                                        && s.exclusive_mode
-                                })
-                                .unwrap_or(false);
-
-                            let needs_new_stream = stream_opt.is_none()
-                                || (dac_passthrough && format_changed)
-                                || (using_alsa_direct && format_changed)
-                                || (using_coreaudio_exclusive && format_changed);
+                            let StreamRecreateDecision {
+                                needs_new_stream,
+                                format_changed,
+                                dac_passthrough,
+                                using_alsa_direct,
+                                using_coreaudio_exclusive,
+                                coreaudio_shared_rate_mismatch,
+                            } = evaluate_stream_recreate(
+                                &thread_settings,
+                                stream_opt,
+                                *current_track_sample_rate,
+                                *current_track_channels,
+                                sample_rate,
+                                channels,
+                                "Streaming",
+                            );
 
                             if needs_new_stream {
                                 if stream_opt.is_some() {
-                                    if (dac_passthrough
-                                        || using_alsa_direct
-                                        || using_coreaudio_exclusive)
+                                    // CoreAudio rate-mismatch case already
+                                    // logged at warn level by
+                                    // `evaluate_stream_recreate`.
+                                    if coreaudio_shared_rate_mismatch.is_none()
+                                        && (dac_passthrough
+                                            || using_alsa_direct
+                                            || using_coreaudio_exclusive)
                                         && format_changed
                                     {
                                         let mode = if using_coreaudio_exclusive {
@@ -1863,8 +2106,6 @@ impl Player {
                                 match stream_result {
                                     Ok(stream) => {
                                         *stream_opt = Some(stream);
-                                        *current_sample_rate = Some(sample_rate);
-                                        *current_channels = Some(channels);
                                         thread_state.set_stream_error(false);
                                         log::info!(
                                             "Streaming audio stream ready at {}Hz",
@@ -1883,6 +2124,11 @@ impl Player {
                                     }
                                 }
                             }
+
+                            // Keep decoded source format current even when
+                            // macOS shared mode reuses the same output stream.
+                            *current_track_sample_rate = Some(sample_rate);
+                            *current_track_channels = Some(channels);
 
                             let Some(ref stream) = *stream_opt else {
                                 log::error!(
@@ -1935,12 +2181,44 @@ impl Player {
                             let volume = thread_state.volume.load(Ordering::SeqCst) as f32 / 100.0;
                             apply_engine_volume(&stream_opt, &engine, volume);
 
-                            // Wait for minimum buffer before starting playback
+                            // Wait for minimum buffer before starting playback.
+                            // When start_position_secs > 0 (session resume),
+                            // also wait for enough buffer to cover the resume
+                            // offset plus an 8s headroom — the eager pre-skip
+                            // below decodes-and-discards up to the offset and
+                            // needs the bytes available without blocking the
+                            // audio device on the first pull.
                             log::info!("Streaming: waiting for initial buffer...");
                             let start_wait = Instant::now();
-                            let max_wait = Duration::from_secs(30);
+                            let max_wait = Duration::from_secs(60);
 
-                            while !source.has_min_buffer() && start_wait.elapsed() < max_wait {
+                            let bytes_per_sec_estimate: u64 = if duration_secs > 0
+                                && content_length > 0
+                            {
+                                content_length / duration_secs
+                            } else {
+                                200_000
+                            };
+                            let resume_buffer_target: u64 = if start_position_secs > 0 {
+                                bytes_per_sec_estimate
+                                    .saturating_mul(start_position_secs.saturating_add(8))
+                            } else {
+                                0
+                            };
+
+                            let buffer_sufficient = |src: &Arc<BufferedMediaSource>| -> bool {
+                                if !src.has_min_buffer() {
+                                    return false;
+                                }
+                                if resume_buffer_target == 0 {
+                                    return true;
+                                }
+                                (src.buffer_size() as u64) >= resume_buffer_target
+                            };
+
+                            while !buffer_sufficient(&source)
+                                && start_wait.elapsed() < max_wait
+                            {
                                 std::thread::sleep(Duration::from_millis(50));
                             }
 
@@ -1948,11 +2226,20 @@ impl Player {
                                 log::error!("Streaming: timeout waiting for initial buffer");
                                 return;
                             }
+                            if resume_buffer_target > 0
+                                && (source.buffer_size() as u64) < resume_buffer_target
+                            {
+                                log::warn!(
+                                    "Streaming: timed out waiting for resume buffer (got {} bytes, wanted {}); pre-skip may underrun briefly",
+                                    source.buffer_size(),
+                                    resume_buffer_target
+                                );
+                            }
 
                             let buffer_wait_ms = start_wait.elapsed().as_millis();
                             log::info!(
-                            "Streaming: initial buffer ready in {}ms, creating incremental decoder...",
-                            buffer_wait_ms
+                            "Streaming: buffer ready in {}ms ({} bytes, target {}), creating incremental decoder...",
+                            buffer_wait_ms, source.buffer_size(), resume_buffer_target
                         );
 
                             // Create incremental streaming source - this starts playback IMMEDIATELY
@@ -2030,8 +2317,40 @@ impl Player {
                             thread_state.set_normalization_gain(normalization);
 
                             // Box the incremental source to match the expected type
-                            let source_to_play: Box<dyn Source<Item = f32> + Send> =
+                            let mut source_to_play: Box<dyn Source<Item = f32> + Send> =
                                 Box::new(incremental_source);
+
+                            // Eager pre-skip for session resume. Decode and
+                            // discard samples here so the engine's first pull
+                            // doesn't have to do the work synchronously, which
+                            // would underrun the audio device for multi-second
+                            // offsets. The buffer wait above guarantees
+                            // there's enough downloaded data to feed this loop.
+                            if start_position_secs > 0 {
+                                let target_samples: u64 = (start_position_secs)
+                                    .saturating_mul(actual_sr as u64)
+                                    .saturating_mul(actual_ch as u64);
+                                let skip_start = Instant::now();
+                                let mut skipped: u64 = 0;
+                                while skipped < target_samples {
+                                    if source_to_play.next().is_none() {
+                                        log::warn!(
+                                            "Resume: source ended before reaching {}s (pre-skipped {} samples)",
+                                            start_position_secs,
+                                            skipped
+                                        );
+                                        break;
+                                    }
+                                    skipped += 1;
+                                }
+                                log::info!(
+                                    "Resume: pre-skipped {} samples ({}s) in {}ms",
+                                    skipped,
+                                    start_position_secs,
+                                    skip_start.elapsed().as_millis()
+                                );
+                            }
+
                             // Wrap source with diagnostic, normalization, and visualizer
                             let source_to_play = wrap_source(
                                 source_to_play,
@@ -2046,16 +2365,19 @@ impl Player {
                             }
 
                             thread_state.is_playing.store(true, Ordering::SeqCst);
-                            thread_state.position.store(0, Ordering::SeqCst);
+                            thread_state
+                                .position
+                                .store(start_position_secs, Ordering::SeqCst);
                             thread_state
                                 .current_track_id
                                 .store(track_id, Ordering::SeqCst);
-                            thread_state.start_playback_timer(0);
+                            thread_state.start_playback_timer(start_position_secs);
 
                             *current_engine = Some(engine);
                             log::info!(
-                            "Audio thread: streaming playback STARTED in {}ms (incremental decode active)",
-                            start_wait.elapsed().as_millis()
+                            "Audio thread: streaming playback STARTED in {}ms at {}s (incremental decode active)",
+                            start_wait.elapsed().as_millis(),
+                            start_position_secs
                         );
                         }
                         AudioCommand::Pause => {
@@ -2109,8 +2431,8 @@ impl Player {
 
                                 if stream_opt.is_none() {
                                     // Use last known sample rate/channels to maintain DAC passthrough
-                                    let sr = current_sample_rate.unwrap_or(48000);
-                                    let ch = current_channels.unwrap_or(2);
+                                    let sr = current_track_sample_rate.unwrap_or(48000);
+                                    let ch = current_track_channels.unwrap_or(2);
                                     log::info!(
                                         "Resume: reinitializing stream at {}Hz/{}ch",
                                         sr,
@@ -2496,8 +2818,8 @@ impl Player {
 
                             *current_device_name = new_device;
                             // Use last known sample rate/channels to maintain DAC passthrough
-                            let sr = current_sample_rate.unwrap_or(48000);
-                            let ch = current_channels.unwrap_or(2);
+                            let sr = current_track_sample_rate.unwrap_or(48000);
+                            let ch = current_track_channels.unwrap_or(2);
                             log::info!("ReinitDevice: reinitializing at {}Hz/{}ch", sr, ch);
                             *stream_opt = init_device(current_device_name, &thread_state, sr, ch);
 
@@ -2537,7 +2859,7 @@ impl Player {
 
                             // Verify format compatibility (same sample rate and channels)
                             if let (Some(cur_sr), Some(cur_ch)) =
-                                (*current_sample_rate, *current_channels)
+                                (*current_track_sample_rate, *current_track_channels)
                             {
                                 if sample_rate != cur_sr || channels != cur_ch {
                                     log::info!(
@@ -2653,8 +2975,8 @@ impl Player {
                             &mut current_device_name,
                             &mut consecutive_sink_failures,
                             &mut pause_suspend_deadline,
-                            &mut current_sample_rate,
-                            &mut current_channels,
+                            &mut current_track_sample_rate,
+                            &mut current_track_channels,
                             &mut current_normalization_gain,
                             &mut current_gain_atomic,
                             &mut gapless_pending,
@@ -2899,8 +3221,8 @@ impl Player {
                                     &mut current_device_name,
                                     &mut consecutive_sink_failures,
                                     &mut pause_suspend_deadline,
-                                    &mut current_sample_rate,
-                                    &mut current_channels,
+                                    &mut current_track_sample_rate,
+                                    &mut current_track_channels,
                                     &mut current_normalization_gain,
                                     &mut current_gain_atomic,
                                     &mut gapless_pending,
@@ -2927,8 +3249,8 @@ impl Player {
                             &mut current_device_name,
                             &mut consecutive_sink_failures,
                             &mut pause_suspend_deadline,
-                            &mut current_sample_rate,
-                            &mut current_channels,
+                            &mut current_track_sample_rate,
+                            &mut current_track_channels,
                             &mut current_normalization_gain,
                             &mut current_gain_atomic,
                             &mut gapless_pending,
@@ -3065,8 +3387,11 @@ impl Player {
             })
     }
 
-    /// Play from streaming source (starts playback before full download)
-    /// Returns the BufferWriter so caller can push data as it downloads
+    /// Play from streaming source (starts playback before full download).
+    /// Returns the BufferWriter so caller can push data as it downloads.
+    /// `start_position_secs` > 0 turns this into a session-resume play
+    /// (#315): the audio thread waits for enough buffer to cover the
+    /// offset and pre-skips decoder output up to that point.
     pub fn play_streaming(
         &self,
         track_id: u64,
@@ -3075,14 +3400,16 @@ impl Player {
         content_length: u64,
         buffer_seconds: u8,
         duration_secs: u64,
+        start_position_secs: u64,
     ) -> Result<BufferWriter, String> {
         log::info!(
-            "Player: Starting streaming playback for track {} ({}Hz, {}ch, {} bytes total, {}s)",
+            "Player: Starting streaming playback for track {} ({}Hz, {}ch, {} bytes total, {}s, start={}s)",
             track_id,
             sample_rate,
             channels,
             content_length,
-            duration_secs
+            duration_secs,
+            start_position_secs
         );
 
         // Use StreamingConfig::from_seconds for proper buffer sizing
@@ -3098,6 +3425,8 @@ impl Player {
                 sample_rate,
                 channels,
                 duration_secs,
+                start_position_secs,
+                content_length,
             })
             .map_err(|e| {
                 log::error!("Player: Failed to send streaming command: {}", e);
@@ -3108,8 +3437,8 @@ impl Player {
         Ok(writer)
     }
 
-    /// Play from streaming source with dynamic buffer based on measured speed
-    /// Returns the BufferWriter so caller can push data as it downloads
+    /// Play from streaming source with dynamic buffer based on measured speed.
+    /// `start_position_secs` > 0 signals session resume (see `play_streaming`).
     pub fn play_streaming_dynamic(
         &self,
         track_id: u64,
@@ -3119,16 +3448,18 @@ impl Player {
         content_length: u64,
         speed_mbps: f64,
         duration_secs: u64,
+        start_position_secs: u64,
     ) -> Result<BufferWriter, String> {
         log::info!(
-            "Player: Starting dynamic streaming for track {} ({}Hz, {}ch, {}-bit, {:.2} MB, {:.1} MB/s, {}s)",
+            "Player: Starting dynamic streaming for track {} ({}Hz, {}ch, {}-bit, {:.2} MB, {:.1} MB/s, {}s, start={}s)",
             track_id,
             sample_rate,
             channels,
             bit_depth,
             content_length as f64 / (1024.0 * 1024.0),
             speed_mbps,
-            duration_secs
+            duration_secs,
+            start_position_secs
         );
 
         // Update shared state with actual stream quality
@@ -3147,6 +3478,8 @@ impl Player {
                 sample_rate,
                 channels,
                 duration_secs,
+                start_position_secs,
+                content_length,
             })
             .map_err(|e| {
                 log::error!("Player: Failed to send streaming command: {}", e);
@@ -3310,4 +3643,81 @@ pub struct PlaybackState {
     pub duration: u64,
     pub track_id: u64,
     pub volume: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_needs_new_stream;
+
+    #[test]
+    fn no_stream_always_needs_new() {
+        // Without an existing stream there is nothing to reuse — every
+        // other flag is irrelevant.
+        assert!(compute_needs_new_stream(
+            false, false, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn unchanged_format_on_default_backend_reuses_stream() {
+        // Default rodio backend resamples internally, so an unchanged
+        // decoded format on an existing stream needs no rebuild.
+        assert!(!compute_needs_new_stream(
+            true, false, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn format_change_alone_does_not_force_rebuild_on_default_backend() {
+        // Rodio handles sample-rate conversion; a format change without a
+        // bit-perfect backend does not require a new stream.
+        assert!(!compute_needs_new_stream(
+            true, true, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn format_change_with_dac_passthrough_rebuilds() {
+        assert!(compute_needs_new_stream(
+            true, true, true, false, false, false
+        ));
+    }
+
+    #[test]
+    fn format_change_with_alsa_direct_rebuilds() {
+        assert!(compute_needs_new_stream(
+            true, true, false, true, false, false
+        ));
+    }
+
+    #[test]
+    fn format_change_with_coreaudio_exclusive_rebuilds() {
+        assert!(compute_needs_new_stream(
+            true, true, false, false, true, false
+        ));
+    }
+
+    #[test]
+    fn bit_perfect_backends_without_format_change_reuse_stream() {
+        // Bit-perfect flags only force a rebuild *together with* a format
+        // change. On their own they should not.
+        assert!(!compute_needs_new_stream(
+            true, false, true, false, false, false
+        ));
+        assert!(!compute_needs_new_stream(
+            true, false, false, true, false, false
+        ));
+        assert!(!compute_needs_new_stream(
+            true, false, false, false, true, false
+        ));
+    }
+
+    #[test]
+    fn coreaudio_shared_rate_mismatch_rebuilds_regardless_of_format_change() {
+        // The CoreAudio shared-mode rate-drift case has nothing to do with
+        // track format; it must rebuild whenever detected.
+        assert!(compute_needs_new_stream(
+            true, false, false, false, false, true
+        ));
+    }
 }

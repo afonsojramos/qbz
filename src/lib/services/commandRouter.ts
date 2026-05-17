@@ -105,21 +105,27 @@ export async function cmdPlayTrack(
   quality?: string,
   durationSecs?: number | null,
   forceLowestQuality?: boolean | null,
+  startPositionSecs?: number | null,
 ): Promise<unknown> {
   const target = getTarget();
   if (target.type === 'qbzd') {
     return remotePost('/api/playback/play-track', { track_id: trackId, quality });
   } else {
     // Parameter names MUST match Tauri's camelCase mapping of Rust
-    // v2_play_track(track_id, quality, force_lowest_quality, duration_secs).
-    // duration_secs is required on the streaming path — without it the
-    // backend stores duration=0 and current_position() clamps to 0,
-    // freezing the seekbar (seen on session-restore first play).
+    // v2_play_track(track_id, quality, force_lowest_quality, duration_secs,
+    // start_position_secs). duration_secs is required on the streaming
+    // path — without it the backend stores duration=0 and
+    // current_position() clamps to 0, freezing the seekbar (seen on
+    // session-restore first play). start_position_secs is still accepted
+    // by the backend but the frontend no longer uses it: session resume
+    // now seeks to the saved offset only on a cache hit, where the audio
+    // is fully in memory and Seek lands (see playerStore togglePlay).
     return invoke('v2_play_track', {
       trackId,
       quality: quality ?? null,
       forceLowestQuality: forceLowestQuality ?? null,
       durationSecs: durationSecs ?? null,
+      startPositionSecs: startPositionSecs ?? null,
     });
   }
 }

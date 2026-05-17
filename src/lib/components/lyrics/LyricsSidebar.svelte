@@ -4,10 +4,7 @@
   import LyricsLines from './LyricsLines.svelte';
   import LyricsControlsPopover from './LyricsControlsPopover.svelte';
   import { lyricsDisplayStore } from '$lib/stores/lyricsDisplayStore';
-
-  interface LyricsLine {
-    text: string;
-  }
+  import type { LyricsLine } from '$lib/stores/lyricsStore';
 
   interface Props {
     title?: string;
@@ -39,7 +36,7 @@
 </script>
 
 <aside class="lyrics-sidebar">
-  <div class="header">
+  <div class="header" data-tauri-drag-region="deep">
     <div class="header-icon">
       <MicVocal size={18} />
     </div>
@@ -68,7 +65,7 @@
     />
   </div>
 
-  <div class="panel">
+  <div class="panel selectable">
     {#if isLoading}
       <div class="state">
         <div class="loading-spinner"></div>

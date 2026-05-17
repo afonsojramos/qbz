@@ -69,6 +69,11 @@ pub struct RuntimeDiagnostics {
     pub runtime_is_vm: bool,
     pub runtime_hw_accel_enabled: bool,
     pub runtime_force_x11_active: bool,
+    /// Human-readable GPU model name (driver-reported on Linux).
+    /// For hybrid laptops joins both vendors: "NVIDIA (...) + Intel (...)".
+    pub runtime_gpu_name: String,
+    /// Desktop environment string ($XDG_CURRENT_DESKTOP or fallbacks).
+    pub runtime_desktop_environment: String,
 
     // Developer settings
     pub dev_force_dmabuf: bool,
@@ -152,6 +157,15 @@ pub fn v2_get_runtime_diagnostics(
         runtime_is_vm: gfx_status.is_vm,
         runtime_hw_accel_enabled: gfx_status.hardware_accel_enabled,
         runtime_force_x11_active: gfx_status.force_x11_active,
+        runtime_gpu_name: qbz_app::graphics_autoconfig::detect_gpu_name(
+            gfx_status.has_nvidia,
+            gfx_status.has_amd,
+            gfx_status.has_intel,
+        ),
+        runtime_desktop_environment: std::env::var("XDG_CURRENT_DESKTOP")
+            .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
+            .or_else(|_| std::env::var("DESKTOP_SESSION"))
+            .unwrap_or_else(|_| "Unknown".to_string()),
 
         dev_force_dmabuf: dev.force_dmabuf,
 

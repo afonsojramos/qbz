@@ -25,6 +25,8 @@ pub fn main_window_built_transparent() -> bool {
 }
 #[cfg(target_os = "linux")]
 pub mod autoconfig_graphics;
+pub mod boot_watchdog;
+pub mod graphics_detection;
 
 pub mod api;
 pub mod api_cache;
@@ -537,6 +539,31 @@ fn should_use_main_window_transparency() -> bool {
         })
         .unwrap_or(false);
     if force_opaque {
+        return false;
+    }
+
+    // Hardware-acceleration gate. A transparent main window forces GTK
+    // to re-paint the client-side decoration chrome (rounded corners +
+    // subtle edge) on every frame. Under GPU compositing the cost is
+    // imperceptible; under SW compositing it becomes the dominant frame-
+    // budget cost — modals, the splash spinner, and anything else that
+    // animates visibly drop frames. Force opaque whenever HW accel is
+    // off, regardless of the user's "match system window chrome"
+    // preference. The preference itself is preserved in the DB and
+    // reactivates automatically the next time HW accel is on.
+    //
+    // Resolution mirrors main.rs: env var QBZ_HARDWARE_ACCEL (0/1)
+    // overrides the DB; otherwise read the DB; otherwise assume on.
+    let hw_accel_enabled = match std::env::var("QBZ_HARDWARE_ACCEL").as_deref() {
+        Ok("0") => false,
+        Ok("1") => true,
+        _ => config::graphics_settings::GraphicsSettingsStore::new_readonly()
+            .ok()
+            .and_then(|s| s.get_settings().ok())
+            .map(|gs| gs.hardware_acceleration)
+            .unwrap_or(true),
+    };
+    if !hw_accel_enabled {
         return false;
     }
 
@@ -1219,6 +1246,31 @@ pub fn run(qconnect_cli_override: Option<bool>) {
                 let mut last_track_id: u64 = 0;
 
                 loop {
+                    // Surface backend init failures from the V2 player to
+                    // the frontend exactly once. record_stream_error stores
+                    // the user-readable message; take_stream_error_message
+                    // drains it so we never re-emit the same toast on
+                    // subsequent ticks. Only the V2 (qbz-player) path
+                    // populates this — the legacy player's init failures
+                    // continue to surface via existing channels.
+                    let init_error: Option<String> = v2_player_state
+                        .read()
+                        .await
+                        .as_ref()
+                        .and_then(qbz_player::SharedState::take_stream_error_message);
+                    if let Some(message) = init_error {
+                        #[derive(serde::Serialize, Clone)]
+                        struct AudioInitFailedPayload {
+                            message: String,
+                        }
+                        if let Err(e) = app_handle.emit(
+                            "audio:init-failed",
+                            AudioInitFailedPayload { message },
+                        ) {
+                            log::warn!("Failed to emit audio:init-failed event: {}", e);
+                        }
+                    }
+
                     // Check V2 player state first (takes priority if active)
                     // V2 player is accessed via async lock, but we only need a clone
                     let v2_state_opt: Option<qbz_player::SharedState> =
@@ -1606,6 +1658,13 @@ pub fn run(qconnect_cli_override: Option<bool>) {
             commands_v2::v2_set_gdk_scale,
             commands_v2::v2_set_gdk_dpi_scale,
             commands_v2::v2_set_gsk_renderer,
+            commands_v2::v2_set_preferred_gpu,
+            commands_v2::v2_set_nvidia_compat_mode,
+            commands_v2::v2_get_graphics_recommendation,
+            commands_v2::v2_enumerate_gpus,
+            commands_v2::v2_mark_boot_succeeded,
+            commands_v2::v2_get_crash_flags,
+            commands_v2::v2_clear_crash_flag,
             commands_v2::v2_clear_cache,
             commands_v2::v2_clear_artist_cache,
             commands_v2::v2_get_vector_store_stats,
@@ -1763,6 +1822,7 @@ pub fn run(qconnect_cli_override: Option<bool>) {
             commands_v2::v2_library_get_stats,
             commands_v2::v2_library_get_albums,
             commands_v2::v2_library_get_albums_metadata,
+            commands_v2::v2_library_get_albums_page,
             commands_v2::v2_library_get_folders,
             commands_v2::v2_library_get_folders_with_metadata,
             commands_v2::v2_library_count_folder_tracks,

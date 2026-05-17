@@ -49,7 +49,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="modal-backdrop" onclick={onClose} role="presentation">
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-    <div class="modal" onclick={(e) => e.stopPropagation()}>
+    <div class="modal selectable" onclick={(e) => e.stopPropagation()}>
       <!-- Header -->
       <div class="modal-header">
         <div class="app-branding">
@@ -99,7 +99,7 @@
             <span class="label">{$t('about.buildInfo.version')}</span>
             <span class="value">{appVersion}</span>
             <span class="label">{$t('about.buildInfo.codename')}</span>
-            <span class="value codename">Exclusive Hardening</span>
+            <span class="value codename">400+ stars</span>
             <span class="label">{$t('about.buildInfo.license')}</span>
             <span class="value">MIT</span>
             <span class="label">{$t('about.buildInfo.platform')}</span>

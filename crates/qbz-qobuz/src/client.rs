@@ -1284,13 +1284,37 @@ impl QobuzClient {
         Ok(result)
     }
 
-    /// Fetch full Track objects for a batch of track IDs (max 50 per call).
-    /// Uses the `track/getList` endpoint.
-    ///
-    /// Tries multiple API call strategies:
-    /// POST to track/getList with JSON body {"tracks_id": [...]}
-    /// Returns full Track objects for the given IDs (max 50 per call).
+    /// Fetch full Track objects for a batch of track IDs.
+    /// Uses the `track/getList` endpoint, which caps at 50 IDs per call,
+    /// so larger inputs are split into 50-ID windows and fetched serially.
+    /// Input order is preserved in the returned vector.
     pub async fn get_tracks_batch(&self, track_ids: &[u64]) -> Result<Vec<Track>> {
+        const MAX_PER_CALL: usize = 50;
+
+        if track_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if track_ids.len() <= MAX_PER_CALL {
+            return self.get_tracks_batch_chunk(track_ids).await;
+        }
+
+        log::debug!(
+            "[API] get_tracks_batch chunking {} IDs into {}-windows",
+            track_ids.len(),
+            MAX_PER_CALL
+        );
+        let mut all = Vec::with_capacity(track_ids.len());
+        for chunk in track_ids.chunks(MAX_PER_CALL) {
+            let mut tracks = self.get_tracks_batch_chunk(chunk).await?;
+            all.append(&mut tracks);
+        }
+        Ok(all)
+    }
+
+    /// Single `track/getList` POST. Caller is responsible for keeping
+    /// `track_ids.len() <= 50` — `get_tracks_batch` handles that.
+    async fn get_tracks_batch_chunk(&self, track_ids: &[u64]) -> Result<Vec<Track>> {
         let url = endpoints::build_url(paths::TRACK_GET_LIST);
         let headers = self.api_headers().await?;
         let timestamp = get_timestamp();

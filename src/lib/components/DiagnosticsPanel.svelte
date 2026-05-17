@@ -40,6 +40,8 @@
     runtimeIsVm: boolean;
     runtimeHwAccelEnabled: boolean;
     runtimeForceX11Active: boolean;
+    runtimeGpuName: string;
+    runtimeDesktopEnvironment: string;
     devForceDmabuf: boolean;
     envWebkitDisableDmabuf: string | null;
     envWebkitDisableCompositing: string | null;
@@ -306,9 +308,11 @@
       { label: 'GDK Scale', saved: str(diag.gfxGdkScale), runtime: '—', status: 'info' },
       { label: 'GDK DPI Scale', saved: str(diag.gfxGdkDpiScale), runtime: '—', status: 'info' },
       { label: 'Compositing Mode', saved: '—', runtime: compositing, status: 'info' },
+      { label: 'GPU', saved: '—', runtime: diag.runtimeGpuName || 'Unknown', status: 'info' },
       { label: 'GPU: NVIDIA', saved: '—', runtime: diag.runtimeHasNvidia ? 'Detected' : 'No', status: 'info' },
       { label: 'GPU: Intel', saved: '—', runtime: diag.runtimeHasIntel ? 'Detected' : 'No', status: 'info' },
       { label: 'GPU: AMD', saved: '—', runtime: diag.runtimeHasAmd ? 'Detected' : 'No', status: 'info' },
+      { label: 'Desktop Environment', saved: '—', runtime: diag.runtimeDesktopEnvironment || 'Unknown', status: 'info' },
       { label: 'Wayland', saved: '—', runtime: diag.runtimeIsWayland ? 'Yes' : 'No (X11)', status: 'info' },
       { label: 'VM', saved: '—', runtime: diag.runtimeIsVm ? 'Yes' : 'No', status: 'info' },
       { label: 'Using Fallback', saved: '—', runtime: bool(diag.runtimeUsingFallback), status: diag.runtimeUsingFallback ? 'mismatch' : 'info' },
@@ -461,7 +465,7 @@
   }
 </script>
 
-<div class="diagnostics-panel">
+<div class="diagnostics-panel selectable">
   <button class="section-toggle panel-toggle" onclick={togglePanel}>
     {#if panelOpen}<ChevronDown size={14} />{:else}<ChevronRight size={14} />{/if}
     <h4 class="subsection-title" style="margin:0">{$t('settings.developer.diagnostics.title')}</h4>

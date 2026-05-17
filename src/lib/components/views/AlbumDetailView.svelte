@@ -16,7 +16,7 @@
   import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { formatTrackTitle } from '$lib/utils/trackTitle';
   import { cachedSrc } from '$lib/actions/cachedImage';
-  import AlbumCard from '../AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLite.svelte';
   import TrackRow from '../TrackRow.svelte';
   import AlbumMenu from '../AlbumMenu.svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
@@ -31,6 +31,10 @@
     toggleAlbumFavorite
   } from '$lib/stores/albumFavoritesStore';
   import { isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
+  import {
+    isTrackRemovedFromQobuz,
+    subscribe as subscribeUnavailable
+  } from '$lib/stores/unavailableTracksStore';
   import ImageLightbox from '../ImageLightbox.svelte';
   import BookletViewer from '../BookletViewer.svelte';
   import type { QobuzGoody } from '$lib/types';
@@ -59,6 +63,8 @@
     samplingRate?: number;
     isrc?: string;
     parental_warning?: boolean;
+    /** API streamable flag — false when the track has been removed from Qobuz. */
+    streamable?: boolean;
   }
 
   interface ArtistAlbum {
@@ -203,6 +209,15 @@
 
   let isFavorite = $state(false);
   let isFavoriteLoading = $state(false);
+  // Counter incremented when the unavailable-tracks store mutates so reactive
+  // reads in {@const} blocks re-evaluate.
+  let unavailableVersion = $state(0);
+  // Reading `unavailableVersion` here registers the dependency so the {@const}
+  // calling this re-evaluates when the store changes.
+  function checkTrackUnavailable(track: { id: number; streamable?: boolean }): boolean {
+    void unavailableVersion;
+    return isTrackRemovedFromQobuz(track);
+  }
   let lightboxOpen = $state(false);
   let bookletOpen = $state(false);
   let descriptionExpanded = $state(false);
@@ -563,9 +578,14 @@
       gradientEnabled = isAlbumHeaderGradientEnabled();
     });
 
+    const unsubscribeUnavailable = subscribeUnavailable(() => {
+      unavailableVersion++;
+    });
+
     return () => {
       unsubscribe?.();
       unsubscribeAppearance();
+      unsubscribeUnavailable();
     };
   });
 
@@ -644,7 +664,7 @@
     </div>
 
     <!-- Album Metadata -->
-    <div class="metadata" class:no-description={!album.description}>
+    <div class="metadata selectable" class:no-description={!album.description}>
       <h1 class="album-title">{album.title}</h1>
       <div class="artist-line">
         {#if album.parentalWarning}
@@ -799,8 +819,8 @@
   <!-- Track List -->
   <div class="track-list">
     <!-- Table Header -->
-    <div class="tracklist-toolbar">
-      <div class="tracklist-toolbar-left">
+    <div class="tracklist-toolbar" data-tauri-drag-region="deep">
+      <div class="tracklist-toolbar-left" data-tauri-drag-region="false">
         <QualityBadgeStatic
           bare
           quality={album.quality}
@@ -808,7 +828,7 @@
           samplingRate={album.samplingRate}
         />
       </div>
-      <div class="tracklist-toolbar-search">
+      <div class="tracklist-toolbar-search" data-tauri-drag-region="false">
         <Search size={14} />
         <input
           type="text"
@@ -866,6 +886,7 @@
         {@const isTrackDownloaded = downloadInfo.status === 'ready'}
         {@const trackArtistId = track.artistId ?? album.artistId}
         {@const trackBlacklisted = trackArtistId ? isArtistBlacklisted(trackArtistId) : false}
+        {@const trackUnavailable = checkTrackUnavailable(track)}
         <TrackRow
           trackId={track.id}
           number={track.number}
@@ -877,6 +898,8 @@
           isPlaying={isPlaybackActive && activeTrackId === track.id}
           isActiveTrack={activeTrackId === track.id}
           isBlacklisted={trackBlacklisted}
+          isUnavailable={trackUnavailable}
+          unavailableTooltip={trackUnavailable ? $t('player.trackUnavailable') : undefined}
           selectable={multiSelectMode}
           selected={multiSelectedIds.has(track.id)}
           dragTrackIds={multiSelectMode && multiSelectedIds.has(track.id) ? [...multiSelectedIds] : undefined}
@@ -1004,20 +1027,18 @@
                 artwork={relatedAlbum.artwork}
                 title={relatedAlbum.title}
                 artist={album.artist}
-                artistId={album.artistId}
-                onArtistClick={onTrackGoToArtist}
                 genre={relatedAlbum.genre}
-                releaseDate={relatedAlbum.releaseDate}
-                size="large"
+                releaseYear={Number(relatedAlbum.releaseDate?.slice(0, 4)) || undefined}
                 quality={relatedAlbum.quality}
-                onclick={() => onRelatedAlbumClick?.(relatedAlbum.id)}
+                isAlbumFullyDownloaded={isRelatedAlbumDownloaded(relatedAlbum.id)}
+                onArtistClick={album.artistId && onTrackGoToArtist ? () => onTrackGoToArtist(album.artistId!) : undefined}
+                onClick={() => onRelatedAlbumClick?.(relatedAlbum.id)}
                 onPlay={onRelatedAlbumPlay ? () => onRelatedAlbumPlay(relatedAlbum.id) : undefined}
                 onPlayNext={onRelatedAlbumPlayNext ? () => onRelatedAlbumPlayNext(relatedAlbum.id) : undefined}
                 onPlayLater={onRelatedAlbumPlayLater ? () => onRelatedAlbumPlayLater(relatedAlbum.id) : undefined}
                 onDownload={onRelatedAlbumDownload ? () => onRelatedAlbumDownload(relatedAlbum.id) : undefined}
                 onShareQobuz={onRelatedAlbumShareQobuz ? () => onRelatedAlbumShareQobuz(relatedAlbum.id) : undefined}
                 onShareSonglink={onRelatedAlbumShareSonglink ? () => onRelatedAlbumShareSonglink(relatedAlbum.id) : undefined}
-                isAlbumFullyDownloaded={isRelatedAlbumDownloaded(relatedAlbum.id)}
               />
             </div>
           {/each}

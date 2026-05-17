@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { Disc3 } from 'lucide-svelte';
-  import AlbumCard from './AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLibraryLite.svelte';
+  import QualityBadgeStatic from '$lib/components/QualityBadgeStatic.svelte';
+  import SourceBadge from '$lib/components/SourceBadge.svelte';
+  import type { SourceBadgeValue } from '$lib/components/SourceBadge.svelte';
   import { restoreScrollOnBackForward } from '$lib/utils/scrollRestore';
 
   // Types
@@ -77,6 +80,23 @@
     onAlbumToggleSelectRange,
   }: Props = $props();
 
+  // Maps the `album.source` string from the local-library / Plex cache
+  // model onto the typed enum SourceBadge expects. Mirrors the inline
+  // ternary chain that LocalLibraryView uses at its own AlbumCard call
+  // sites — kept here as a function so both list-mode and grid-mode
+  // rows resolve the badge the same way.
+  // Card sourceBadge prop is narrower than the full SourceBadgeValue
+  // (no qobuz_streaming) — the Local Library never produces a
+  // streaming row. We expose a narrowed return type so call sites
+  // that feed the AlbumCard pass type-check.
+  type LibrarySourceBadge = 'user' | 'qobuz_download' | 'qobuz_purchase' | 'plex';
+  function resolveSourceBadge(source: string | undefined): LibrarySourceBadge {
+    if (source === 'plex') return 'plex';
+    if (source === 'qobuz_purchase') return 'qobuz_purchase';
+    if (source === 'qobuz_download') return 'qobuz_download';
+    return 'user';
+  }
+
   // Shift-click range support. We keep a flat id list in the exact
   // order the album cards are rendered, plus the anchor of the last
   // explicit click. Reset the anchor whenever we leave select mode so
@@ -113,9 +133,9 @@
   // Constants
   const HEADER_HEIGHT = 44; // px
   const LIST_ROW_HEIGHT = 76; // px (52px art + padding + gap)
-  const GRID_ROW_HEIGHT = 320; // px (210px artwork + 8px margin + ~64px info + 24px gap + buffer)
-  const GRID_MIN_CARD_WIDTH = 210; // px - matches AlbumCard size="large"
-  const GRID_GAP = 22; // px (horizontal gap between cards)
+  const GRID_ROW_HEIGHT = 330; // px (220px artwork + 8px margin + ~64px info + 32px gap + buffer)
+  const GRID_MIN_CARD_WIDTH = 220; // px - matches Discovery V2 AlbumCardLite for visual consistency across Home + Library
+  const GRID_GAP = 32; // px (horizontal gap between cards — matches Discovery V2)
   const BUFFER_ITEMS = 5; // Extra items to render above/below viewport
   const BOTTOM_PADDING = 100; // px - extra space at bottom for player bar
 
@@ -351,9 +371,15 @@
               </div>
             </div>
             <div class="album-row-quality">
-              <span class="quality-badge" class:hires={isHiRes(item.album)}>
-                {getQualityBadge(item.album)}
-              </span>
+              <QualityBadgeStatic
+                quality={getQualityBadge(item.album)}
+                format={item.album.format}
+                bitDepth={item.album.bit_depth}
+                samplingRate={item.album.sample_rate ? item.album.sample_rate / 1000 : undefined}
+              />
+              {#if showSourceBadge}
+                <SourceBadge value={resolveSourceBadge(item.album.source)} />
+              {/if}
             </div>
           </div>
         {:else if item.type === 'row'}
@@ -368,14 +394,14 @@
                 title={album.title}
                 artist={album.artist}
                 quality={getQualityBadge(album)}
-                size="large"
-                showFavorite={false}
-                showGenre={false}
+                format={album.format}
+                bitDepth={album.bit_depth}
+                samplingRate={album.sample_rate ? album.sample_rate / 1000 : undefined}
                 onPlay={() => onAlbumPlay(album)}
                 onPlayNext={() => onAlbumQueueNext(album)}
                 onPlayLater={() => onAlbumQueueLater(album)}
-                onclick={() => onAlbumClick(album)}
-                sourceBadge={showSourceBadge ? (album.source === 'plex' ? 'plex' : album.source === 'qobuz_purchase' ? 'qobuz_purchase' : album.source === 'qobuz_download' ? 'qobuz_download' : 'user') : undefined}
+                onClick={() => onAlbumClick(album)}
+                sourceBadge={showSourceBadge ? resolveSourceBadge(album.source) : undefined}
                 selectable={selectable}
                 selected={selectedAlbumIds.has(album.id)}
                 onToggleSelect={(e) => handleAlbumToggleSelect(album, e)}
@@ -391,9 +417,30 @@
 <style>
   .virtual-container {
     height: 100%;
-    overflow-y: auto;
+    overflow-y: scroll;
     overflow-x: hidden;
     position: relative;
+    /* Force the scrollbar visible (some WebKitGTK builds default to
+       overlay scrollbars that only paint on active hover). Standard
+       `scrollbar-*` + pseudo-elements for cross-config safety.
+       Values match the global app.css scrollbar styling. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-tertiary) transparent;
+  }
+
+  .virtual-container::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .virtual-container::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .virtual-container::-webkit-scrollbar-thumb {
+    background: var(--bg-tertiary);
+    border-radius: 9999px;
+  }
+  .virtual-container::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
   }
 
   .virtual-content {
@@ -504,30 +551,15 @@
 
   .album-row-quality {
     flex-shrink: 0;
-  }
-
-  .quality-badge {
-    font-size: 10px;
-    font-weight: 600;
-    padding: 4px 8px;
-    border-radius: 6px;
-    background: var(--alpha-10);
-    color: var(--alpha-85);
-    border: 1px solid var(--alpha-15);
-    min-width: 90px;
-    text-align: center;
-  }
-
-  .quality-badge.hires {
-    background: linear-gradient(135deg, #fbbf24 0%, #b8860b 100%);
-    color: #1a1a1a;
-    border-color: transparent;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   /* Album Grid Row (Grid Mode) */
   .album-grid-row {
     display: flex;
-    gap: 22px;
+    gap: 32px;
     padding: 0;
   }
 

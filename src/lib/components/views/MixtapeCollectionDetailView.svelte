@@ -331,10 +331,10 @@
           const needleTitle = item.title.toLowerCase().trim();
           const needleArtist = (item.subtitle ?? '').toLowerCase().trim();
           const match = albums.find((a) => {
-            const t = a.title.toLowerCase().trim();
+            const title = a.title.toLowerCase().trim();
             const ar = a.artist.toLowerCase().trim();
             const allAr = (a.all_artists ?? '').toLowerCase();
-            if (t !== needleTitle) return false;
+            if (title !== needleTitle) return false;
             if (!needleArtist) return true;
             return ar === needleArtist || allAr.includes(needleArtist);
           });
@@ -395,9 +395,30 @@
 
   let sortBy = $state<SortBy>('position');
   let sortDir = $state<SortDir>('asc');
-  let showSortMenu = $state(false);
   let typeFilter = $state<TypeFilter>('all');
-  let showFilterMenu = $state(false);
+
+  // Mutually-exclusive toolbar dropdown state. Only one menu is open at a time.
+  type OpenMenu = 'sort' | 'filter' | null;
+  let openMenu = $state<OpenMenu>(null);
+
+  $effect(() => {
+    if (openMenu === null) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.control-btn') || target.closest('.control-menu')) return;
+      openMenu = null;
+    }
+
+    setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 0);
+
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  });
 
   // Source filter — multi-select, maps to the resolved item kind (qobuz /
   // plex / local, see resolveItems). Empty set means "all pass" (no filter).
@@ -467,7 +488,7 @@
       sortBy = value;
       sortDir = 'asc';
     }
-    showSortMenu = false;
+    openMenu = null;
   }
 
   const sortOptions: { value: SortBy; label: string }[] = $derived([
@@ -996,11 +1017,21 @@
 
   let resolvedById = $state<Record<string, ResolvedItem>>({});
 
-  function buildPlexArtworkUrl(path: string): string | null {
+  /**
+   * Build a Plex artwork URL. When `size` is provided, wraps the path
+   * in `/photo/:/transcode` so the Plex server returns a resized image
+   * (server-side downscale). Without `size`, returns the original
+   * full-res path. Mixtape items render at thumbnail-sized rows so
+   * 220px is plenty.
+   */
+  function buildPlexArtworkUrl(path: string, size?: number): string | null {
     const baseUrl = (getUserItem('qbz-plex-poc-base-url') || '').trim();
     const token = (getUserItem('qbz-plex-poc-token') || '').trim();
     if (!baseUrl || !token) return null;
     const base = baseUrl.replace(/\/+$/, '');
+    if (size && size > 0) {
+      return `${base}/photo/:/transcode?url=${encodeURIComponent(path)}&width=${size}&height=${size}&minSize=1&X-Plex-Token=${encodeURIComponent(token)}`;
+    }
     const separator = path.includes('?') ? '&' : '?';
     return `${base}${path}${separator}X-Plex-Token=${encodeURIComponent(token)}`;
   }
@@ -1070,7 +1101,7 @@
         next[key] = {
           kind: 'plex',
           artworkUrl: plexHit.artworkPath
-            ? buildPlexArtworkUrl(plexHit.artworkPath)
+            ? buildPlexArtworkUrl(plexHit.artworkPath, 220)
             : null,
           bitDepth: plexHit.bitDepth ?? null,
           sampleRateKhz: plexHit.sampleRate ? plexHit.sampleRate / 1000 : null,
@@ -1381,7 +1412,7 @@
     </div>
   {:else}
     <!-- Header -->
-    <header class="detail-header">
+    <header class="detail-header" data-tauri-drag-region="deep">
       {#if onBack}
         <button class="back-btn" onclick={() => onBack()}>
           <ArrowLeft size={16} />
@@ -1542,15 +1573,14 @@
           <button
             type="button"
             class="control-btn"
-            onclick={() => { showSortMenu = !showSortMenu; showFilterMenu = false; }}
+            onclick={() => (openMenu = openMenu === 'sort' ? null : 'sort')}
             title={$t('collectionDetail.sort') || 'Sort'}
           >
             <ArrowUpDown size={14} />
             <span>{sortOptions.find((o) => o.value === sortBy)?.label}</span>
             <span class="sort-indicator">{sortDir === 'asc' ? '↑' : '↓'}</span>
           </button>
-          {#if showSortMenu}
-            <div class="control-backdrop" onclick={() => (showSortMenu = false)} role="presentation"></div>
+          {#if openMenu === 'sort'}
             <div class="control-menu">
               {#each sortOptions as option}
                 <button
@@ -1574,7 +1604,7 @@
             type="button"
             class="control-btn"
             class:active={typeFilter !== 'all' || sourceFilter.size > 0}
-            onclick={() => { showFilterMenu = !showFilterMenu; showSortMenu = false; }}
+            onclick={() => (openMenu = openMenu === 'filter' ? null : 'filter')}
             title={$t('collectionDetail.filter') || 'Filter'}
           >
             <Filter size={14} />
@@ -1583,8 +1613,7 @@
               <span class="filter-count">{(sourceFilter.size) + (typeFilter !== 'all' ? 1 : 0)}</span>
             {/if}
           </button>
-          {#if showFilterMenu}
-            <div class="control-backdrop" onclick={() => (showFilterMenu = false)} role="presentation"></div>
+          {#if openMenu === 'filter'}
             <div class="control-menu wide">
               <div class="filter-section-label">{$t('collectionDetail.colType') || $t('discographyBuilder.colType')}</div>
               {#each typeFilterOptions as option}
@@ -2441,11 +2470,6 @@
   .sort-indicator {
     color: var(--text-muted);
     font-size: 11px;
-  }
-  .control-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
   }
   .control-menu {
     position: absolute;

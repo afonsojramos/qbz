@@ -15,7 +15,7 @@
         # VERSION BUMP: update version, rev, and hashes
         # when tagging a new release.
         # ──────────────────────────────────────────────
-        qbzVersion = "1.2.12";
+        qbzVersion = "1.2.13";
         qbzRev     = "v${qbzVersion}";
         srcHash    = "sha256-SuEmBxwwEkINmH/cswV9Ed6FtBKP6IRrjQ7sIYMPOTg=";
         npmHash    = "sha256-WjZg3xaJFOdCA0XaIFwWhd4kglUjkWei6Cw3+NiP6zs=";

@@ -2904,6 +2904,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a041e753da8b807c9255f28de81879c78c876392ff2469cde94799b2896b9d"
 
 [[package]]
+name = "qbz-app"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "dirs",
+ "log",
+ "md-5",
+ "rand 0.10.1",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "qbz-audio"
 version = "0.1.0"
 dependencies = [

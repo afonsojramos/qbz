@@ -93,6 +93,11 @@
     setAlbumHeaderGradient,
   } from '$lib/stores/appearancePreferencesStore';
   import {
+    isTrackArtworkEnabled,
+    updateSetting as updateLibraryPerformanceSetting,
+    subscribe as subscribeLibraryPerformance,
+  } from '$lib/stores/libraryPerformanceStore';
+  import {
     enableVerboseCapture,
     disableVerboseCapture,
     isVerboseCaptureEnabled
@@ -111,6 +116,14 @@
     getMatchSystemWindowChrome,
     setMatchSystemWindowChrome,
   } from '$lib/stores/windowChromeStore';
+  import { isHardwareAccelEnabled } from '$lib/runtime/graphicsState';
+  import {
+    immersivePanelsStore,
+    setPanelEnabled,
+    ALL_IMMERSIVE_PANELS,
+    HEAVY_PANELS,
+    type ImmersivePanelId,
+  } from '$lib/stores/immersivePanelsStore';
   import {
     subscribe as subscribeSearchBarLocation,
     getSearchBarLocation,
@@ -376,7 +389,91 @@
   let gdkScale = $state('');
   let gdkDpiScale = $state('');
   let gskRenderer = $state('');
-  let compositionCollapsed = $state(true);
+  let preferredGpu = $state('auto');
+  let nvidiaCompatMode = $state(false);
+  // Track install method so the recovery command shown when nvidia
+  // compat mode is enabled matches what the user can actually run
+  // (`qbz --reset-graphics` vs `flatpak run com.blitzfc.qbz --reset-graphics`).
+  let installMethod = $state<string>('dev');
+
+  // Rendering-GPU detection for the Settings > Graphics dropdown. The
+  // backend cross-references PCI devices visible under /sys/class/drm/
+  // with EGL vendor JSONs available to the running process; the result
+  // lists every GPU the user can practically pick (auto + each usable
+  // discrete/integrated + software fallback). Loaded on mount.
+  type DetectedGpu = {
+    id: string;
+    vendor: string;
+    name: string;
+    pci_id: string | null;
+    kind: 'integrated' | 'discrete' | 'software';
+    egl_vendor_json: string | null;
+    is_usable: boolean;
+  };
+  let detectedGpus = $state<DetectedGpu[]>([]);
+  // Which GPU the backend currently resolves "Auto" to on this system.
+  // Non-null only on hybrid setups (iGPU + dGPU) where Auto pins to the
+  // iGPU; single-GPU and no-GPU systems get null and the dropdown shows
+  // a plain "Automatic" label without a sub-name.
+  let autoResolvedGpuId = $state<string | null>(null);
+  type GpuList = {
+    gpus: DetectedGpu[];
+    auto_resolved_id: string | null;
+  };
+
+  // Sticky crash recovery flags from the boot watchdog. If a previous
+  // launch crashed during graphics init, the offending knob was
+  // auto-reverted and one of these flags is true. Settings > Graphics
+  // renders a banner so the user can retry or keep the safe setting.
+  type CrashFlags = {
+    hardware_acceleration_disabled: boolean;
+    hardware_acceleration_consecutive_failures: number;
+    force_dmabuf_disabled: boolean;
+    force_dmabuf_consecutive_failures: number;
+    preferred_gpu_disabled: boolean;
+    preferred_gpu_consecutive_failures: number;
+    hardware_acceleration_locked: boolean;
+    force_dmabuf_locked: boolean;
+    preferred_gpu_locked: boolean;
+  };
+  let crashFlags = $state<CrashFlags | null>(null);
+
+  // Graphics recommendation surfaced in the Graphics tab. Populated on
+  // mount via v2_get_graphics_recommendation (matrix lives in
+  // autoconfig_graphics.rs). The banner is advisory-only: it fires when
+  // at least one recommended value differs from the currently persisted
+  // setting and tells the user what to change. There is no Apply button
+  // by design - the user toggles the real settings manually.
+  type GraphicsRecommendation = {
+    environment: {
+      display_server: string;
+      gpu_nvidia: boolean;
+      gpu_amd: boolean;
+      gpu_intel: boolean;
+      gpu_name: string;
+      desktop: string;
+      is_vm: boolean;
+    };
+    recommendation: {
+      hardware_acceleration: boolean;
+      force_x11: boolean;
+      gsk_renderer: string | null;
+      disable_dmabuf: boolean;
+      disable_blur_background: boolean;
+      rationale: string[];
+    };
+  };
+  let graphicsRecommendation = $state<GraphicsRecommendation | null>(null);
+
+  // Per-environment dismiss flag for the recommendation banner. The
+  // dismissed signature is the joined rationale string of the
+  // recommendation that was active when the user dismissed — if hardware
+  // or session state changes (different GPU vendor, switch X11<->Wayland,
+  // VM detected), the rationale changes, the signature mismatches, and
+  // the banner re-appears so the user can re-evaluate.
+  const RECOMMENDATION_DISMISS_KEY = 'qbz-graphics-recommendation-dismiss-v1';
+  let dismissedRecommendationSignature = $state<string | null>(null);
+
   // Graphics startup status (for showing degraded mode warning)
   let graphicsUsingFallback = $state(false);
   let graphicsIsWayland = $state(false);
@@ -412,8 +509,8 @@
       gdkDpiScale: '',
       gskRenderer: '',
       backgroundMode: 'full',
-      labelKey: 'settings.appearance.composition.profiles.nativeWaylandLabel',
-      descKey: 'settings.appearance.composition.profiles.nativeWaylandDesc',
+      labelKey: 'settings.graphics.profiles.nativeWaylandLabel',
+      descKey: 'settings.graphics.profiles.nativeWaylandDesc',
     },
     {
       id: 'x11Balanced',
@@ -422,8 +519,8 @@
       gdkDpiScale: '1.1',
       gskRenderer: '',
       backgroundMode: 'full',
-      labelKey: 'settings.appearance.composition.profiles.x11BalancedLabel',
-      descKey: 'settings.appearance.composition.profiles.x11BalancedDesc',
+      labelKey: 'settings.graphics.profiles.x11BalancedLabel',
+      descKey: 'settings.graphics.profiles.x11BalancedDesc',
     },
     {
       id: 'x11Performance',
@@ -432,8 +529,8 @@
       gdkDpiScale: '1',
       gskRenderer: '',
       backgroundMode: 'off',
-      labelKey: 'settings.appearance.composition.profiles.x11PerformanceLabel',
-      descKey: 'settings.appearance.composition.profiles.x11PerformanceDesc',
+      labelKey: 'settings.graphics.profiles.x11PerformanceLabel',
+      descKey: 'settings.graphics.profiles.x11PerformanceDesc',
     },
     {
       id: 'maxPerformance',
@@ -442,8 +539,8 @@
       gdkDpiScale: '',
       gskRenderer: 'cairo',
       backgroundMode: 'off',
-      labelKey: 'settings.appearance.composition.profiles.maxPerformanceLabel',
-      descKey: 'settings.appearance.composition.profiles.maxPerformanceDesc',
+      labelKey: 'settings.graphics.profiles.maxPerformanceLabel',
+      descKey: 'settings.graphics.profiles.maxPerformanceDesc',
     },
   ];
 
@@ -463,6 +560,18 @@
   // Navigation section definitions (dynamic: includes sandbox sections when detected)
   const navSectionDefs = $derived.by(() => {
     const sections = [...navSectionIds];
+    // Linux-only: GPU infrastructure (HW accel, DMA-BUF, GSK/GDK, X11 vs
+    // Wayland, env-var overrides). macOS/Windows don't expose these knobs
+    // so the section would just be empty on those platforms.
+    if (platform === 'linux') {
+      const appearanceIdx = sections.findIndex((s) => s.id === 'appearance');
+      if (appearanceIdx !== -1) {
+        sections.splice(appearanceIdx + 1, 0, {
+          id: 'graphics',
+          labelKey: 'settings.graphics.title',
+        });
+      }
+    }
     if (isFlatpak) sections.push({ id: 'flatpak', labelKey: 'nav.flatpak' });
     if (isSnap) sections.push({ id: 'snap', labelKey: 'nav.snap' });
     return sections;
@@ -1071,6 +1180,14 @@
   let theme = $state('Dark');
   let albumHeaderGradient = $state(isAlbumHeaderGradientEnabled());
 
+  // Issue #412 — opt-in album cover thumbs in Local Library tracks/
+  // folder list views. Default OFF; large libraries take a real perf
+  // hit when 10k+ rows each render a decoded image.
+  let showTrackArtwork = $state(isTrackArtworkEnabled());
+  subscribeLibraryPerformance(() => {
+    showTrackArtwork = isTrackArtworkEnabled();
+  });
+
   function handleAlbumHeaderGradientToggle(enabled: boolean) {
     setAlbumHeaderGradient(enabled);
     albumHeaderGradient = enabled;
@@ -1303,6 +1420,10 @@
   ] as const;
 
   let immersiveFpsCollapsed = $state(true);
+  let immersivePanelsCollapsed = $state(true);
+
+  const HEAVY_PANEL_SET = new Set<ImmersivePanelId>(HEAVY_PANELS);
+  const lowProfileMode = !isHardwareAccelEnabled();
   let panelFpsValues: Record<string, string> = $state(
     Object.fromEntries(FPS_PANEL_IDS.map(id => [id, getUserItem(`${FPS_KEY_PREFIX}${id}`) || '15']))
   );
@@ -1763,6 +1884,15 @@
       gdkDpiScale = settings.gdk_dpi_scale || '';
       gskRenderer = settings.gsk_renderer || '';
       hardwareAcceleration = settings.hardware_acceleration;
+      preferredGpu = settings.preferred_gpu || 'auto';
+      nvidiaCompatMode = settings.nvidia_compat_mode || false;
+    }).catch(() => {});
+
+    // Read install method from system info so we can render the right
+    // reset-graphics command for the user's packaging when they enable
+    // NVIDIA compat mode below (Flatpak vs native).
+    invoke<{ install_method: string }>('v2_get_system_info').then((info) => {
+      installMethod = info.install_method ?? 'dev';
     }).catch(() => {});
 
     // Load graphics startup status (for fallback warning)
@@ -1772,6 +1902,33 @@
       graphicsHasNvidia = status.has_nvidia;
       graphicsHwAccelEnabled = status.hardware_accel_enabled;
     }).catch(() => {});
+
+    // Linux-only: recommendation banner in the Graphics tab
+    if (platform === 'linux') {
+      dismissedRecommendationSignature = getUserItem(RECOMMENDATION_DISMISS_KEY);
+      invoke<GraphicsRecommendation>('v2_get_graphics_recommendation')
+        .then((payload) => {
+          graphicsRecommendation = payload;
+        })
+        .catch((err) => {
+          console.warn('[Settings] graphics recommendation unavailable:', err);
+        });
+      invoke<GpuList>('v2_enumerate_gpus')
+        .then((payload) => {
+          detectedGpus = payload.gpus;
+          autoResolvedGpuId = payload.auto_resolved_id;
+        })
+        .catch((err) => {
+          console.warn('[Settings] gpu enumeration unavailable:', err);
+        });
+      invoke<CrashFlags>('v2_get_crash_flags')
+        .then((flags) => {
+          crashFlags = flags;
+        })
+        .catch((err) => {
+          console.warn('[Settings] crash flags unavailable:', err);
+        });
+    }
 
     // Subscribe to offline state changes
     const unsubscribeOffline = subscribeOffline(() => {
@@ -4001,7 +4158,7 @@
       setImmersiveConfig({ backgroundMode: profile.backgroundMode, disableBlurBackground: profile.backgroundMode === 'off' });
 
       showToast(
-        $t('settings.appearance.composition.profiles.applied', { values: { profile: $t(profile.labelKey) } }),
+        $t('settings.graphics.profiles.applied', { values: { profile: $t(profile.labelKey) } }),
         'info'
       );
       showToast($t('settings.developer.restartRequired'), 'info');
@@ -4028,19 +4185,206 @@
     }
   }
 
+  async function handlePreferredGpuChange(value: string) {
+    try {
+      await invoke('v2_set_preferred_gpu', { value });
+      preferredGpu = value;
+      showToast($t('settings.graphics.restartRequired'), 'info');
+    } catch (err) {
+      console.error('Failed to set preferred_gpu:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  async function handleNvidiaCompatModeChange(enabled: boolean) {
+    try {
+      await invoke('v2_set_nvidia_compat_mode', { enabled });
+      nvidiaCompatMode = enabled;
+      showToast($t('settings.graphics.restartRequired'), 'info');
+    } catch (err) {
+      console.error('Failed to set nvidia_compat_mode:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  // Command the user should run from a terminal to restore graphics
+  // settings to safe defaults if the NVIDIA compat mode (or any other
+  // risky toggle) crashes the app before first paint. The boot
+  // watchdog already auto-reverts on crash, but exposing the CLI here
+  // gives the user a manual escape hatch that doesn't depend on the
+  // app reaching the Settings screen.
+  const resetGraphicsCommand = $derived(
+    installMethod === 'flatpak'
+      ? 'flatpak run com.blitzfc.qbz --reset-graphics'
+      : 'qbz --reset-graphics'
+  );
+
+  async function copyResetGraphicsCommand() {
+    try {
+      await navigator.clipboard.writeText(resetGraphicsCommand);
+      showToast($t('actions.copiedToClipboard'), 'success');
+    } catch (err) {
+      console.error('Failed to copy reset command:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  async function handleClearCrashFlag(flag: 'hardware_acceleration' | 'force_dmabuf' | 'preferred_gpu') {
+    try {
+      await invoke('v2_clear_crash_flag', { flag });
+      const flags = await invoke<CrashFlags>('v2_get_crash_flags');
+      crashFlags = flags;
+      // If the user just cleared the lockout, also re-apply the
+      // setting they probably wanted. Hardware acceleration: the user
+      // explicitly wants it back ON; same for force_dmabuf and a
+      // non-auto preferred_gpu. We don't auto-re-enable here because
+      // the watchdog already wrote the safer value to DB; the user
+      // needs to re-toggle to express intent. Toast hints what to do.
+      showToast($t('settings.graphics.recovery.cleared'), 'success');
+    } catch (err) {
+      console.error('Failed to clear crash flag:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  const preferredGpuOptions = $derived.by(() => {
+    // On a hybrid NVIDIA + iGPU host, the iGPU is the recommended pick:
+    // WebKit composites there and the NVIDIA card stays idle. Mark it so
+    // the user does not leave the dropdown on the ambiguous Auto.
+    const env = graphicsRecommendation?.environment;
+    const igpuRecommended = !!env && env.gpu_nvidia && (env.gpu_intel || env.gpu_amd);
+    const autoTarget = autoResolvedGpuId
+      ? detectedGpus.find((g) => g.id === autoResolvedGpuId)
+      : null;
+    const autoLabel = autoTarget
+      ? $t('settings.graphics.gpu.autoWithTarget', { values: { name: autoTarget.name } })
+      : $t('settings.graphics.gpu.auto');
+    const opts: { value: string; label: string }[] = [
+      { value: 'auto', label: autoLabel },
+    ];
+    let hasIntegrated = false;
+    let hasDiscrete = false;
+    for (const g of detectedGpus) {
+      if (!g.is_usable) continue;
+      if (g.kind === 'integrated' && !hasIntegrated) {
+        const integratedLabel = $t('settings.graphics.gpu.integrated', { values: { name: g.name } });
+        opts.push({
+          value: 'integrated',
+          label: igpuRecommended
+            ? `${integratedLabel} ${$t('settings.graphics.gpu.recommendedSuffix')}`
+            : integratedLabel,
+        });
+        hasIntegrated = true;
+      }
+      if (g.kind === 'discrete' && !hasDiscrete) {
+        opts.push({ value: 'discrete', label: $t('settings.graphics.gpu.discrete', { values: { name: g.name } }) });
+        hasDiscrete = true;
+      }
+    }
+    opts.push({ value: 'software', label: $t('settings.graphics.gpu.software') });
+    return opts;
+  });
+
+  function getPreferredGpuDisplayValue(): string {
+    const match = preferredGpuOptions.find((o) => o.value === preferredGpu);
+    return match ? match.label : preferredGpu;
+  }
+
+  // Whether the auto-detected recommendation diverges from any of the
+  // four persisted graphics settings. The DMA-BUF axis is inverted:
+  // recommendation `disable_dmabuf=true` maps to `force_dmabuf=false`
+  // (1.2.13 opt-in semantics), so the two booleans differ iff
+  // `disable_dmabuf === force_dmabuf` (same value means mismatch given
+  // the inversion).
+  const recommendationDiffers = $derived.by(() => {
+    if (!graphicsRecommendation) return false;
+    const rec = graphicsRecommendation.recommendation;
+    if (rec.hardware_acceleration !== hardwareAcceleration) return true;
+    if (rec.force_x11 !== forceX11) return true;
+    if (rec.disable_dmabuf === forceDmabuf) return true;
+    if ((rec.gsk_renderer ?? '') !== gskRenderer) return true;
+    return false;
+  });
+
+  // Stable identifier for the dismiss flag: joined rationale of the
+  // currently computed recommendation. If the environment changes
+  // enough to flip the matrix branch, the signature changes and the
+  // banner unhides automatically.
+  function recommendationSignature(rec: GraphicsRecommendation): string {
+    return rec.recommendation.rationale.join('|');
+  }
+
+  const recommendationBannerVisible = $derived.by(() => {
+    if (!graphicsRecommendation) return false;
+    if (!recommendationDiffers) return false;
+    if (dismissedRecommendationSignature === null) return true;
+    return recommendationSignature(graphicsRecommendation) !== dismissedRecommendationSignature;
+  });
+
+  // DMA-BUF help text is GPU-aware. The instability warning only
+  // applies to NVIDIA-only systems; non-NVIDIA and hybrid setups (the
+  // iGPU composites) can enable it safely. Returns an i18n key so $t()
+  // stays in the template, not inside $derived (CSS-extraction rule).
+  const forceDmabufDescKey = $derived.by(() => {
+    const env = graphicsRecommendation?.environment;
+    if (!env) return 'settings.graphics.forceDmabufDesc';
+    if (env.gpu_nvidia && (env.gpu_intel || env.gpu_amd)) {
+      return 'settings.graphics.forceDmabufDescHybrid';
+    }
+    if (env.gpu_nvidia) {
+      return 'settings.graphics.forceDmabufDescNvidiaOnly';
+    }
+    return 'settings.graphics.forceDmabufDescSafe';
+  });
+
+  function handleDismissRecommendation() {
+    if (!graphicsRecommendation) return;
+    const signature = recommendationSignature(graphicsRecommendation);
+    dismissedRecommendationSignature = signature;
+    setUserItem(RECOMMENDATION_DISMISS_KEY, signature);
+  }
+
+  async function handleRedetectRecommendation() {
+    try {
+      const payload = await invoke<GraphicsRecommendation>('v2_get_graphics_recommendation');
+      graphicsRecommendation = payload;
+      // User explicitly asked to re-detect — wipe the dismiss so the
+      // banner can re-appear if the recommendation still diverges.
+      dismissedRecommendationSignature = null;
+      removeUserItem(RECOMMENDATION_DISMISS_KEY);
+      // If everything already matches, surface a confirmation toast so
+      // the user gets feedback instead of seeing nothing happen.
+      if (!recommendationDiffers) {
+        showToast($t('settings.graphics.recommendation.noChanges'), 'success');
+      }
+    } catch (err) {
+      console.error('Failed to re-detect graphics recommendation:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  function buildEnvironmentSummary(env: GraphicsRecommendation['environment']): string {
+    const parts: string[] = [];
+    if (env.gpu_name) parts.push(env.gpu_name);
+    if (env.display_server) parts.push(env.display_server);
+    if (env.desktop && env.desktop !== 'Unknown') parts.push(env.desktop);
+    if (env.is_vm) parts.push('VM');
+    return parts.join(' / ');
+  }
+
   const GSK_RENDERER_KEYS = ['', 'gl', 'ngl', 'vulkan', 'cairo'] as const;
 
   function getGskRendererOptions(): string[] {
     return GSK_RENDERER_KEYS.map(key => {
-      if (key === '') return $t('settings.appearance.composition.gskRendererAuto');
-      if (key === 'cairo') return $t('settings.appearance.composition.gskRendererCairo');
+      if (key === '') return $t('settings.graphics.gskRendererAuto');
+      if (key === 'cairo') return $t('settings.graphics.gskRendererCairo');
       return key.toUpperCase();
     });
   }
 
   function getGskRendererDisplayValue(): string {
-    if (!gskRenderer) return $t('settings.appearance.composition.gskRendererAuto');
-    if (gskRenderer === 'cairo') return $t('settings.appearance.composition.gskRendererCairo');
+    if (!gskRenderer) return $t('settings.graphics.gskRendererAuto');
+    if (gskRenderer === 'cairo') return $t('settings.graphics.gskRendererCairo');
     return gskRenderer.toUpperCase();
   }
 
@@ -4156,7 +4500,7 @@
   {/if}
 
   <!-- Header -->
-  <div class="header">
+  <div class="header" data-tauri-drag-region="deep">
     {#if onBack}
       <button class="back-btn" onclick={onBack}>
         <ArrowLeft size={16} />
@@ -4775,6 +5119,19 @@
       <Toggle enabled={sidebarPlaylistCollage} onchange={(v) => { sidebarPlaylistCollage = v; setShowPlaylistCollage(v); }} />
     </div>
     <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.localLibraryTrackArtwork')}</span>
+        <small class="setting-note">{$t('settings.appearance.localLibraryTrackArtworkDesc')}</small>
+      </div>
+      <Toggle
+        enabled={showTrackArtwork}
+        onchange={(v) => {
+          showTrackArtwork = v;
+          updateLibraryPerformanceSetting('showTrackArtwork', v);
+        }}
+      />
+    </div>
+    <div class="setting-row">
       <span class="setting-label">{$t('settings.appearance.inAppToasts')}</span>
       <Toggle enabled={toastsEnabled} onchange={(v) => { toastsEnabled = v; setToastsEnabled(v); }} />
     </div>
@@ -4828,14 +5185,17 @@
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.matchSystemChrome')}</span>
         <span class="setting-desc">{$t('settings.appearance.matchSystemChromeDesc')}</span>
+        {#if !isHardwareAccelEnabled()}
+          <small class="setting-note">{$t('settings.appearance.matchSystemChromeCpuOverride')}</small>
+        {/if}
       </div>
       <Toggle
-        enabled={matchSystemWindowChromeState}
+        enabled={matchSystemWindowChromeState && isHardwareAccelEnabled()}
         onchange={(v) => {
           setMatchSystemWindowChrome(v);
           showToast($t('settings.appearance.matchSystemChromeRestart'), 'info');
         }}
-        disabled={hideTitleBar || useSystemTitleBar}
+        disabled={hideTitleBar || useSystemTitleBar || !isHardwareAccelEnabled()}
       />
     </div>
     {/if}
@@ -5082,160 +5442,6 @@
       />
     </div>
 
-    <!-- Composition subsection (collapsible, Linux-only: GDK/GSK/X11/Wayland/DMA-BUF) -->
-    {#if platform === 'linux'}
-    <div class="collapsible-section composition-subsection">
-      <button class="section-title-btn" onclick={() => compositionCollapsed = !compositionCollapsed}>
-        <div class="section-title-row">
-          <span class="section-title composition-title">{$t('settings.appearance.composition.title')}</span>
-          {#if compositionCollapsed}
-            <ChevronDown size={16} />
-          {:else}
-            <ChevronUp size={16} />
-          {/if}
-        </div>
-        <span class="section-summary">{$t('settings.appearance.composition.summary')}</span>
-      </button>
-      {#if !compositionCollapsed}
-        <p class="section-note">{$t('settings.appearance.composition.helpText')}</p>
-
-        {#if graphicsUsingFallback}
-          <div class="composition-warning fallback-warning">
-            <TriangleAlert size={14} />
-            <div>
-              <span class="fallback-title">{$t('settings.appearance.composition.fallbackWarning')}</span>
-              <span class="fallback-desc">{$t('settings.appearance.composition.fallbackDesc')}</span>
-              <code class="recovery-cmd">qbz --reset-graphics</code>
-            </div>
-          </div>
-        {/if}
-
-        <div class="composition-warning">
-          <TriangleAlert size={14} />
-          <div>
-            <span>{$t('settings.appearance.composition.recoveryNote')}</span>
-            <code class="recovery-cmd">{$t('settings.appearance.composition.recoveryCmd')}</code>
-          </div>
-        </div>
-
-        <div class="composition-profile-section">
-          <span class="composition-profile-title">{$t('settings.appearance.composition.profiles.title')}</span>
-          <p class="section-note">{$t('settings.appearance.composition.profiles.helpText')}</p>
-          <div class="composition-profile-grid">
-            {#each compositionProfiles as profile (profile.id)}
-              <button
-                class="composition-profile-card"
-                class:active={activeCompositionProfileId === profile.id}
-                type="button"
-                onclick={() => applyCompositionProfile(profile.id)}
-              >
-                <span class="profile-label">{$t(profile.labelKey)}</span>
-                <span class="profile-desc">{$t(profile.descKey)}</span>
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">{$t('settings.appearance.composition.hardwareAcceleration')}</span>
-            <span class="setting-desc">{$t('settings.appearance.composition.hardwareAccelerationDesc')}</span>
-          </div>
-          <Toggle enabled={hardwareAcceleration} onchange={(v) => handleHardwareAccelerationChange(v)} />
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">{$t('settings.appearance.composition.forceDmabuf')}</span>
-            <span class="setting-desc">{$t('settings.appearance.composition.forceDmabufDesc')}</span>
-          </div>
-          <Toggle enabled={forceDmabuf} onchange={(v) => handleForceDmabufChange(v)} />
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">{$t('settings.appearance.composition.forceX11')}</span>
-            <span class="setting-desc">{$t('settings.appearance.composition.forceX11Desc')}</span>
-          </div>
-          <Toggle enabled={forceX11} onchange={(v) => handleForceX11Change(v)} />
-        </div>
-
-        {#if forceX11}
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-label">{$t('settings.appearance.composition.gdkScale')}</span>
-              <span class="setting-desc">{$t('settings.appearance.composition.gdkScaleDesc')}</span>
-            </div>
-            <input
-              class="composition-input"
-              type="text"
-              placeholder="auto"
-              bind:value={gdkScale}
-              onblur={handleGdkScaleChange}
-            />
-          </div>
-        {/if}
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">{$t('settings.appearance.composition.gdkDpiScale')}</span>
-            <span class="setting-desc">{$t('settings.appearance.composition.gdkDpiScaleDesc')}</span>
-          </div>
-          <input
-            class="composition-input"
-            type="text"
-            placeholder="auto"
-            bind:value={gdkDpiScale}
-            onblur={handleGdkDpiScaleChange}
-          />
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">{$t('settings.appearance.composition.gskRenderer')}</span>
-            <span class="setting-desc">{$t('settings.appearance.composition.gskRendererDesc')}</span>
-          </div>
-          <Dropdown
-            value={getGskRendererDisplayValue()}
-            options={getGskRendererOptions()}
-            onchange={handleGskRendererChange}
-          />
-        </div>
-
-        <div class="composition-env-section">
-          <span class="composition-env-title">{$t('settings.appearance.composition.envVarsTitle')}</span>
-          <p class="section-note">{$t('settings.appearance.composition.envVarsDesc')}</p>
-          <div class="env-vars-list">
-            <div class="env-var-row">
-              <code>QBZ_HARDWARE_ACCEL=0</code>
-              <span>{$t('settings.appearance.composition.envVarHwAccel0')}</span>
-            </div>
-            <div class="env-var-row">
-              <code>QBZ_HARDWARE_ACCEL=1</code>
-              <span>{$t('settings.appearance.composition.envVarHwAccel1')}</span>
-            </div>
-            <div class="env-var-row">
-              <code>QBZ_FORCE_X11=1</code>
-              <span>{$t('settings.appearance.composition.envVarForceX11')}</span>
-            </div>
-            <div class="env-var-row">
-              <code>QBZ_SOFTWARE_RENDER=1</code>
-              <span>{$t('settings.appearance.composition.envVarSoftwareRender')}</span>
-            </div>
-            <div class="env-var-row">
-              <code>QBZ_FORCE_DMABUF=1</code>
-              <span>{$t('settings.appearance.composition.envVarForceDmabuf')}</span>
-            </div>
-            <div class="env-var-row">
-              <code>QBZ_DISABLE_DMABUF=1</code>
-              <span>{$t('settings.appearance.composition.envVarDisableDmabuf')}</span>
-            </div>
-          </div>
-        </div>
-      {/if}
-    </div>
-    {/if}
-
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.immersive.backgroundMode')}</span>
@@ -5246,6 +5452,42 @@
         options={BACKGROUND_MODES.map(m => getBackgroundModeLabel(m))}
         onchange={handleBackgroundModeChange}
       />
+    </div>
+
+    <div class="collapsible-section composition-subsection">
+      <button class="section-title-btn" onclick={() => immersivePanelsCollapsed = !immersivePanelsCollapsed}>
+        <div class="section-title-row">
+          <span class="section-title composition-title">{$t('settings.appearance.immersivePanels.title')}</span>
+          {#if immersivePanelsCollapsed}
+            <ChevronDown size={16} />
+          {:else}
+            <ChevronUp size={16} />
+          {/if}
+        </div>
+        <span class="section-summary">{$t('settings.appearance.immersivePanels.summary')}</span>
+      </button>
+      {#if !immersivePanelsCollapsed}
+        <p class="section-note">{$t('settings.appearance.immersivePanels.desc')}</p>
+        {#if lowProfileMode}
+          <p class="section-note section-note-warn">{$t('settings.appearance.immersivePanels.cpuWarning')}</p>
+        {/if}
+        {#each ALL_IMMERSIVE_PANELS as panelId}
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">
+                {$t(`settings.appearance.immersiveFps.panels.${panelId}`)}
+                {#if lowProfileMode && HEAVY_PANEL_SET.has(panelId)}
+                  <span class="heavy-badge" title={$t('settings.appearance.immersivePanels.heavyTooltip')}>GPU</span>
+                {/if}
+              </span>
+            </div>
+            <Toggle
+              enabled={$immersivePanelsStore[panelId] !== false}
+              onchange={(v) => setPanelEnabled(panelId, v)}
+            />
+          </div>
+        {/each}
+      {/if}
     </div>
 
     <div class="collapsible-section composition-subsection">
@@ -5273,6 +5515,269 @@
           </div>
         {/each}
       {/if}
+    </div>
+  </section>
+  {/if}
+
+  <!-- Graphics Section (Linux-only: GDK/GSK/X11/Wayland/DMA-BUF) -->
+  {#if activeSection === 'graphics' && platform === 'linux'}
+  <section class="section">
+    <h3 class="section-title">{$t('settings.graphics.title')}</h3>
+    <p class="section-note">{$t('settings.graphics.helpText')}</p>
+
+    <div class="redetect-row">
+      <button class="secondary-link-btn" onclick={handleRedetectRecommendation}>
+        {$t('settings.graphics.recommendation.redetect')}
+      </button>
+    </div>
+
+    {#if graphicsRecommendation && recommendationBannerVisible}
+      <div class="recommendation-banner">
+        <div class="recommendation-info">
+          <span class="recommendation-title">{$t('settings.graphics.recommendation.title')}</span>
+          <span class="recommendation-detected">
+            {$t('settings.graphics.recommendation.detected')}: {buildEnvironmentSummary(graphicsRecommendation.environment)}
+          </span>
+          {#if graphicsRecommendation.recommendation.rationale.length > 0}
+            <ul class="recommendation-rationale">
+              {#each graphicsRecommendation.recommendation.rationale as line}
+                <li>{line}</li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+        <div class="recommendation-actions">
+          <button class="secondary-btn" onclick={handleDismissRecommendation}>
+            {$t('settings.graphics.recommendation.dismiss')}
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    {#if crashFlags && (crashFlags.hardware_acceleration_disabled || crashFlags.force_dmabuf_disabled || crashFlags.preferred_gpu_disabled)}
+      <div class="crash-recovery-banner" class:locked={crashFlags.hardware_acceleration_locked || crashFlags.force_dmabuf_locked || crashFlags.preferred_gpu_locked}>
+        <TriangleAlert size={16} />
+        <div class="crash-recovery-body">
+          <span class="crash-recovery-title">
+            {#if crashFlags.hardware_acceleration_locked || crashFlags.force_dmabuf_locked || crashFlags.preferred_gpu_locked}
+              {$t('settings.graphics.recovery.titleLocked')}
+            {:else}
+              {$t('settings.graphics.recovery.title')}
+            {/if}
+          </span>
+          <ul class="crash-recovery-list">
+            {#if crashFlags.hardware_acceleration_disabled}
+              <li>
+                <span>{$t('settings.graphics.recovery.hwAccelDisabled')}</span>
+                <button class="link-btn" onclick={() => handleClearCrashFlag('hardware_acceleration')}>
+                  {$t('settings.graphics.recovery.tryAgain')}
+                </button>
+              </li>
+            {/if}
+            {#if crashFlags.force_dmabuf_disabled}
+              <li>
+                <span>{$t('settings.graphics.recovery.dmabufDisabled')}</span>
+                <button class="link-btn" onclick={() => handleClearCrashFlag('force_dmabuf')}>
+                  {$t('settings.graphics.recovery.tryAgain')}
+                </button>
+              </li>
+            {/if}
+            {#if crashFlags.preferred_gpu_disabled}
+              <li>
+                <span>{$t('settings.graphics.recovery.gpuPinDisabled')}</span>
+                <button class="link-btn" onclick={() => handleClearCrashFlag('preferred_gpu')}>
+                  {$t('settings.graphics.recovery.tryAgain')}
+                </button>
+              </li>
+            {/if}
+          </ul>
+        </div>
+      </div>
+    {/if}
+
+    {#if graphicsUsingFallback}
+      <div class="composition-warning fallback-warning">
+        <TriangleAlert size={14} />
+        <div>
+          <span class="fallback-title">{$t('settings.graphics.fallbackWarning')}</span>
+          <span class="fallback-desc">{$t('settings.graphics.fallbackDesc')}</span>
+          <code class="recovery-cmd">qbz --reset-graphics</code>
+        </div>
+      </div>
+    {/if}
+
+    <div class="composition-warning">
+      <TriangleAlert size={14} />
+      <div>
+        <span>{$t('settings.graphics.recoveryNote')}</span>
+        <code class="recovery-cmd">{$t('settings.graphics.recoveryCmd')}</code>
+      </div>
+    </div>
+
+    <div class="composition-profile-section">
+      <span class="composition-profile-title">{$t('settings.graphics.profiles.title')}</span>
+      <p class="section-note">{$t('settings.graphics.profiles.helpText')}</p>
+      <div class="composition-profile-grid">
+        {#each compositionProfiles as profile (profile.id)}
+          <button
+            class="composition-profile-card"
+            class:active={activeCompositionProfileId === profile.id}
+            type="button"
+            onclick={() => applyCompositionProfile(profile.id)}
+          >
+            <span class="profile-label">{$t(profile.labelKey)}</span>
+            <span class="profile-desc">{$t(profile.descKey)}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.hardwareAcceleration')}</span>
+        <span class="setting-desc">{$t('settings.graphics.hardwareAccelerationDesc')}</span>
+      </div>
+      <Toggle enabled={hardwareAcceleration} onchange={(v) => handleHardwareAccelerationChange(v)} />
+    </div>
+
+    {#if preferredGpuOptions.length > 1}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">{$t('settings.graphics.gpu.label')}</span>
+          <span class="setting-desc">{$t('settings.graphics.gpu.desc')}</span>
+        </div>
+        <Dropdown
+          value={getPreferredGpuDisplayValue()}
+          options={preferredGpuOptions.map((o) => o.label)}
+          onchange={(displayLabel) => {
+            const match = preferredGpuOptions.find((o) => o.label === displayLabel);
+            if (match) void handlePreferredGpuChange(match.value);
+          }}
+        />
+      </div>
+    {/if}
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.forceDmabuf')}</span>
+        <span class="setting-desc">{$t(forceDmabufDescKey)}</span>
+      </div>
+      <Toggle enabled={forceDmabuf} onchange={(v) => handleForceDmabufChange(v)} />
+    </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.nvidiaCompatMode')}</span>
+        <span class="setting-desc">{$t('settings.graphics.nvidiaCompatModeDesc')}</span>
+      </div>
+      <Toggle enabled={nvidiaCompatMode} onchange={(v) => handleNvidiaCompatModeChange(v)} />
+    </div>
+
+    {#if nvidiaCompatMode}
+      <div class="reset-cmd-row">
+        <div class="reset-cmd-info">
+          <span class="reset-cmd-label">{$t('settings.graphics.resetCmdTitle')}</span>
+          <span class="reset-cmd-desc">{$t('settings.graphics.resetCmdDesc')}</span>
+        </div>
+        <div class="reset-cmd-field">
+          <input
+            class="reset-cmd-input"
+            type="text"
+            readonly
+            value={resetGraphicsCommand}
+            onclick={(e) => (e.currentTarget as HTMLInputElement).select()}
+          />
+          <button
+            class="reset-cmd-copy-btn"
+            type="button"
+            onclick={copyResetGraphicsCommand}
+            title={$t('actions.copy')}
+          >
+            {$t('actions.copy')}
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.forceX11')}</span>
+        <span class="setting-desc">{$t('settings.graphics.forceX11Desc')}</span>
+      </div>
+      <Toggle enabled={forceX11} onchange={(v) => handleForceX11Change(v)} />
+    </div>
+
+    {#if forceX11}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">{$t('settings.graphics.gdkScale')}</span>
+          <span class="setting-desc">{$t('settings.graphics.gdkScaleDesc')}</span>
+        </div>
+        <input
+          class="composition-input"
+          type="text"
+          placeholder="auto"
+          bind:value={gdkScale}
+          onblur={handleGdkScaleChange}
+        />
+      </div>
+    {/if}
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.gdkDpiScale')}</span>
+        <span class="setting-desc">{$t('settings.graphics.gdkDpiScaleDesc')}</span>
+      </div>
+      <input
+        class="composition-input"
+        type="text"
+        placeholder="auto"
+        bind:value={gdkDpiScale}
+        onblur={handleGdkDpiScaleChange}
+      />
+    </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.gskRenderer')}</span>
+        <span class="setting-desc">{$t('settings.graphics.gskRendererDesc')}</span>
+      </div>
+      <Dropdown
+        value={getGskRendererDisplayValue()}
+        options={getGskRendererOptions()}
+        onchange={handleGskRendererChange}
+      />
+    </div>
+
+    <div class="composition-env-section">
+      <span class="composition-env-title">{$t('settings.graphics.envVarsTitle')}</span>
+      <p class="section-note">{$t('settings.graphics.envVarsDesc')}</p>
+      <div class="env-vars-list">
+        <div class="env-var-row">
+          <code>QBZ_HARDWARE_ACCEL=0</code>
+          <span>{$t('settings.graphics.envVarHwAccel0')}</span>
+        </div>
+        <div class="env-var-row">
+          <code>QBZ_HARDWARE_ACCEL=1</code>
+          <span>{$t('settings.graphics.envVarHwAccel1')}</span>
+        </div>
+        <div class="env-var-row">
+          <code>QBZ_FORCE_X11=1</code>
+          <span>{$t('settings.graphics.envVarForceX11')}</span>
+        </div>
+        <div class="env-var-row">
+          <code>QBZ_SOFTWARE_RENDER=1</code>
+          <span>{$t('settings.graphics.envVarSoftwareRender')}</span>
+        </div>
+        <div class="env-var-row">
+          <code>QBZ_FORCE_DMABUF=1</code>
+          <span>{$t('settings.graphics.envVarForceDmabuf')}</span>
+        </div>
+        <div class="env-var-row">
+          <code>QBZ_DISABLE_DMABUF=1</code>
+          <span>{$t('settings.graphics.envVarDisableDmabuf')}</span>
+        </div>
+      </div>
     </div>
   </section>
   {/if}
@@ -6756,6 +7261,31 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     line-height: 1.4;
   }
 
+  .section-note-warn {
+    color: var(--warning, #f59e0b);
+    border-left: 3px solid var(--warning, #f59e0b);
+    padding: 6px 10px;
+    background: var(--alpha-05, rgba(255, 255, 255, 0.04));
+    border-radius: 4px;
+    margin-bottom: 16px;
+  }
+
+  /* Badge next to a panel name in Immersive Panels list, marking
+     it as requiring GPU compositing. Only rendered when the user
+     is running without HW accel. */
+  .heavy-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--warning, #f59e0b);
+    border: 1px solid var(--warning, #f59e0b);
+    border-radius: 4px;
+    vertical-align: middle;
+  }
+
   /* Compact Account Section */
   .account-section {
     padding: 16px 24px;
@@ -6918,6 +7448,172 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     margin-bottom: 2px;
   }
 
+  /* Graphics recommendation banner. Shown at the top of the Graphics
+     section when the autoconfig recommendation diverges from the
+     persisted settings. Persistent (no dismiss) so the user knows the
+     option is available; disappears the moment recommendation == state. */
+  .recommendation-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    background: var(--accent-primary-tint, rgba(124, 58, 237, 0.08));
+    border: 1px solid var(--accent-primary, rgba(124, 58, 237, 0.3));
+  }
+
+  .recommendation-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .recommendation-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  .recommendation-detected {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .recommendation-rationale {
+    margin: 4px 0 0;
+    padding-left: 18px;
+    list-style: disc;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .recommendation-rationale li {
+    margin: 1px 0;
+  }
+
+  .recommendation-actions {
+    display: flex;
+    align-items: flex-start;
+    flex-shrink: 0;
+    gap: 8px;
+  }
+
+  /* Crash-recovery banner. Yellow when a single setting was reverted
+     (recoverable), red when one or more knobs hit lockout state after
+     2+ consecutive crashes — the user has to explicitly clear the flag
+     to re-enable. */
+  .crash-recovery-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: var(--text-secondary);
+  }
+
+  .crash-recovery-banner.locked {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.35);
+  }
+
+  .crash-recovery-banner :global(svg) {
+    flex-shrink: 0;
+    color: #f59e0b;
+    margin-top: 2px;
+  }
+
+  .crash-recovery-banner.locked :global(svg) {
+    color: #ef4444;
+  }
+
+  .crash-recovery-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+  }
+
+  .crash-recovery-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  .crash-recovery-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .crash-recovery-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+  }
+
+  .link-btn {
+    background: transparent;
+    color: var(--accent-primary, #7c3aed);
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .link-btn:hover {
+    filter: brightness(1.15);
+  }
+
+  .secondary-btn {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .secondary-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--border, rgba(255, 255, 255, 0.18));
+  }
+
+  .redetect-row {
+    margin: 4px 0 12px;
+  }
+
+  .secondary-link-btn {
+    background: transparent;
+    color: var(--accent-primary, #7c3aed);
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .secondary-link-btn:hover {
+    filter: brightness(1.15);
+  }
+
   .fallback-desc {
     display: block;
     color: var(--text-secondary);
@@ -6988,6 +7684,80 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     user-select: all;
   }
 
+  /* Inline "if this breaks, run this command" affordance for the
+     NVIDIA Wayland compat opt-in. Visible only when the toggle is on
+     so it doubles as a "you opted into the risky path, here's your
+     escape hatch" hint. */
+  .reset-cmd-row {
+    margin: 8px 0 16px 0;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .reset-cmd-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .reset-cmd-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .reset-cmd-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+
+  .reset-cmd-field {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  /* `user-select: all` ensures the whole command selects on a single
+     click even though `select` was disabled globally elsewhere in
+     SettingsView. Combined with onclick={(e) => e.select()} we cover
+     both paths. */
+  .reset-cmd-input {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    user-select: all;
+    -webkit-user-select: all;
+    cursor: text;
+  }
+
+  .reset-cmd-copy-btn {
+    padding: 8px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--accent-primary, var(--bg-tertiary));
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .reset-cmd-copy-btn:hover {
+    background: var(--accent-hover, var(--bg-tertiary));
+  }
+
   .composition-input {
     width: 80px;
     padding: 6px 8px;
@@ -7055,7 +7825,6 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     color: var(--text-secondary);
     font-size: 13px;
     list-style: none;
-    user-select: none;
   }
 
   .discord-rpc-override > summary::-webkit-details-marker {
