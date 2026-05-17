@@ -17,8 +17,8 @@
         # ──────────────────────────────────────────────
         qbzVersion = "1.2.13";
         qbzRev     = "v${qbzVersion}";
-        srcHash    = "sha256-SuEmBxwwEkINmH/cswV9Ed6FtBKP6IRrjQ7sIYMPOTg=";
-        npmHash    = "sha256-WjZg3xaJFOdCA0XaIFwWhd4kglUjkWei6Cw3+NiP6zs=";
+        srcHash    = "sha256-LlpMCO8RHbC+MNCcsaUqAGNuaK2CSk4GEpVtmfKtsFo=";
+        npmHash    = "sha256-HfdYKnjXf6/LqdTy7RCPfVfh8NdXuGHYrqDWAT3ozk4=";
       in
       {
         packages.default = pkgs.rustPlatform.buildRustPackage rec {
