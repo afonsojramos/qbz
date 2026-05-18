@@ -33,7 +33,7 @@
 //!
 //! ## Usage
 //!
-//! ```no_run
+//! ```ignore
 //! use qbz_cache::{AudioCache, PlaybackCache};
 //! use std::sync::Arc;
 //!
@@ -56,7 +56,9 @@
 //! ```
 
 mod audio_cache;
+mod image_cache;
 mod playback_cache;
 
 pub use audio_cache::{AudioCache, CacheStats, CachedTrack};
+pub use image_cache::{ImageCacheService, ImageCacheStats};
 pub use playback_cache::{PlaybackCache, PlaybackCacheStats};
