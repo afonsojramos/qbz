@@ -22,10 +22,12 @@ export component SectionRow inherits VerticalLayout {
         font-weight: Typography.semibold;
     }
 
-    // Fixed to the AlbumCard height with vertical scrolling disabled, so
-    // the row never grows an internal vertical scrollbar.
+    // Pinned to the AlbumCard height: viewport-height equals height, so
+    // the vertical scroll range is zero — the row cannot scroll vertically
+    // (visibly or not). Only horizontal scrolling remains.
     ScrollView {
-        height: 274px;
+        height: 266px;
+        viewport-height: 266px;
         vertical-scrollbar-policy: ScrollBarPolicy.always-off;
         HorizontalLayout {
             spacing: 32px;

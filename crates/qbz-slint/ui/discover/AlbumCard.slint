@@ -14,8 +14,9 @@ import { AlbumCardItem } from "../state.slint";
 export component AlbumCard inherits Rectangle {
     in property <AlbumCardItem> album;
 
+    // Fully deterministic height: artwork 220 + 6 spacer + 40 meta.
     width: 220px;
-    height: 274px;
+    height: 266px;
 
     VerticalLayout {
         alignment: start;
@@ -73,11 +74,11 @@ export component AlbumCard inherits Rectangle {
             }
         }
 
-        Rectangle { height: 8px; }
+        Rectangle { height: 6px; }
 
         // --- Title / artist + quality badge ------------------------------
         HorizontalLayout {
-            height: 46px;
+            height: 40px;
             spacing: Spacing.sm;
 
             VerticalLayout {
@@ -87,15 +88,19 @@ export component AlbumCard inherits Rectangle {
 
                 Text {
                     text: root.album.title;
+                    height: 20px;
                     color: Theme.text-primary;
                     font-size: Typography.body;
                     font-weight: Typography.medium;
+                    vertical-alignment: center;
                     overflow: elide;
                 }
                 Text {
                     text: root.album.artist;
+                    height: 18px;
                     color: Theme.text-muted;
                     font-size: Typography.link;
+                    vertical-alignment: center;
                     overflow: elide;
                 }
             }
