@@ -1,9 +1,11 @@
 // App shell — the post-login frame: header bar, sidebar, content
 // region, and player bar. The content region shows either the Discover
 // Home view or the Album detail view, driven by NavState.
+//
+// Regions are delineated by their surface colors (chrome over the darker
+// content well); no hairline borders.
 
 import { Theme } from "../foundation/semantic-colors.slint";
-import { Layout } from "../foundation/layout.slint";
 import { NavState } from "../state.slint";
 import { Sidebar } from "Sidebar.slint";
 import { HeaderBar } from "HeaderBar.slint";
@@ -29,20 +31,12 @@ export component AppShell inherits Rectangle {
                 root.close-app();
             }
         }
-        Rectangle {
-            height: Layout.hairline;
-            background: Theme.border-subtle;
-        }
 
         HorizontalLayout {
             vertical-stretch: 1;
             spacing: 0px;
 
             Sidebar { }
-            Rectangle {
-                width: Layout.hairline;
-                background: Theme.border-subtle;
-            }
 
             // Content region — Home or Album detail.
             Rectangle {
@@ -58,10 +52,6 @@ export component AppShell inherits Rectangle {
             }
         }
 
-        Rectangle {
-            height: Layout.hairline;
-            background: Theme.border-subtle;
-        }
         PlayerBar { }
     }
 }

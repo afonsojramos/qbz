@@ -121,5 +121,22 @@ export component Carousel inherits VerticalLayout {
                 }
             }
         }
+
+        // Cider-style edge fades — clipped cards dissolve into the
+        // content background instead of being hard-cut.
+        Rectangle {
+            x: 0px;
+            width: 56px;
+            background: @linear-gradient(90deg, Theme.surface-main 0%, transparent 100%);
+            opacity: root.current-page > 0 ? 1.0 : 0.0;
+            animate opacity { duration: 150ms; }
+        }
+        Rectangle {
+            x: parent.width - self.width;
+            width: 56px;
+            background: @linear-gradient(90deg, transparent 0%, Theme.surface-main 100%);
+            opacity: root.current-page < root.page-count - 1 ? 1.0 : 0.0;
+            animate opacity { duration: 150ms; }
+        }
     }
 }
