@@ -61,7 +61,40 @@ export global AlbumState {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist }
+export enum ContentView { home, album, artist, settings }
+
+// Settings screen state. Audio and Playback preferences are loaded from
+// the persistence stores by the Rust settings controller and pushed here;
+// changes flow back through the settings-bool / settings-select callbacks.
+export global SettingsState {
+    // Sub-section: 0 = Audio, 1 = Playback.
+    in-out property <int> section: 0;
+    in property <bool> loading: true;
+
+    // Audio — dropdowns. Each list is paired with a selected index; the
+    // Rust controller owns the index -> value mapping.
+    in-out property <[string]> backends: [];
+    in-out property <int> backend-index: 0;
+    in-out property <[string]> devices: [];
+    in-out property <int> device-index: 0;
+    in-out property <[string]> sample-rates: [];
+    in-out property <int> sample-rate-index: 0;
+
+    // Audio — toggles.
+    in-out property <bool> exclusive-mode: false;
+    in-out property <bool> dac-passthrough: false;
+    in-out property <bool> pw-force-bitperfect: false;
+    in-out property <bool> gapless: true;
+    in-out property <bool> normalization: false;
+    in-out property <bool> allow-quality-fallback: false;
+
+    // Playback.
+    in-out property <[string]> autoplay-modes: [];
+    in-out property <int> autoplay-index: 0;
+    in-out property <bool> show-context-icon: false;
+    in-out property <bool> persist-session: false;
+    in-out property <bool> resume-position: false;
+}
 
 export global NavState {
     in-out property <ContentView> view: ContentView.home;

@@ -8,7 +8,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { HomeState } from "../state.slint";
+import { HomeState, NavState, ContentView } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { GridSection } from "GridSection.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
@@ -144,7 +144,11 @@ export component HomeView inherits Rectangle {
                     HorizontalLayout {
                         spacing: 6px;
                         GenreButton { }
-                        GearButton { }
+                        GearButton {
+                            clicked => {
+                                NavState.view = ContentView.settings;
+                            }
+                        }
                     }
                 }
             }

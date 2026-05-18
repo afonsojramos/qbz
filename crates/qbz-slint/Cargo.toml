@@ -21,6 +21,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 urlencoding = "2"
 open = "5"
 qbz-app = { path = "../qbz-app" }
+qbz-audio = { path = "../qbz-audio" }
 qbz-core = { path = "../qbz-core" }
 qbz-models = { path = "../qbz-models" }
 qbz-cache = { path = "../qbz-cache" }

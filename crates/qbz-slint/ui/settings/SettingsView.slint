@@ -1,0 +1,183 @@
+// Settings page — a back/title header, a left sub-navigation column
+// (Audio, Playback), and the active settings panel in a scroll area.
+//
+// Navigation between sub-sections is pure UI state (SettingsState.section);
+// setting changes bubble up as settings-bool / settings-select callbacks
+// to the Rust layer, which persists them and applies them to the player.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import { NavState, ContentView, SettingsState } from "../state.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { AudioSettings } from "AudioSettings.slint";
+import { PlaybackSettings } from "PlaybackSettings.slint";
+import { ScrollView } from "std-widgets.slint";
+
+component SubNavItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 38px;
+    border-radius: Radius.sm;
+    background: root.active ? Theme.surface-elevated
+        : ta.has-hover ? Theme.surface-hover : transparent;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.icon;
+                width: 16px;
+                height: 16px;
+                tint: root.active ? Theme.text-primary : Theme.text-secondary;
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.active ? Theme.text-primary : Theme.text-secondary;
+            font-size: Typography.body;
+            font-weight: root.active ? Typography.semibold : Typography.regular;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component SettingsView inherits Rectangle {
+    callback settings-bool(string, bool);
+    callback settings-select(string, int);
+
+    background: Theme.surface-main;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // --- Header: back button + title -----------------------------------
+        Rectangle {
+            height: 92px;
+            VerticalLayout {
+                padding-left: 32px;
+                padding-right: 32px;
+                padding-top: 14px;
+                spacing: 12px;
+                alignment: start;
+
+                back := TouchArea {
+                    width: back-row.preferred-width;
+                    height: 26px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        NavState.view = ContentView.home;
+                    }
+                    back-row := HorizontalLayout {
+                        spacing: 6px;
+                        VerticalLayout {
+                            alignment: center;
+                            QbzIcon {
+                                source: @image-url("../assets/icons/arrow-left.svg");
+                                width: 16px;
+                                height: 16px;
+                                tint: back.has-hover ? Theme.text-secondary : Theme.text-muted;
+                            }
+                        }
+                        Text {
+                            text: @tr("Back");
+                            color: back.has-hover ? Theme.text-secondary : Theme.text-muted;
+                            font-size: Typography.body;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Text {
+                    text: @tr("Settings");
+                    color: Theme.text-primary;
+                    font-size: Typography.title;
+                    font-weight: Typography.bold;
+                }
+            }
+        }
+
+        // --- Sub-nav + active panel ----------------------------------------
+        HorizontalLayout {
+            vertical-stretch: 1;
+
+            // Left sub-navigation.
+            Rectangle {
+                width: 232px;
+                VerticalLayout {
+                    padding-left: 24px;
+                    padding-right: 12px;
+                    padding-top: 4px;
+                    spacing: 4px;
+                    alignment: start;
+                    SubNavItem {
+                        icon: @image-url("../assets/icons/volume-2.svg");
+                        label: @tr("Audio");
+                        active: SettingsState.section == 0;
+                        clicked => {
+                            SettingsState.section = 0;
+                        }
+                    }
+                    SubNavItem {
+                        icon: @image-url("../assets/icons/play.svg");
+                        label: @tr("Playback");
+                        active: SettingsState.section == 1;
+                        clicked => {
+                            SettingsState.section = 1;
+                        }
+                    }
+                }
+            }
+
+            // Active panel.
+            ScrollView {
+                horizontal-stretch: 1;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                VerticalLayout {
+                    padding-left: 20px;
+                    padding-right: 40px;
+                    padding-top: 4px;
+                    padding-bottom: 60px;
+                    alignment: start;
+
+                    if SettingsState.loading: Text {
+                        text: @tr("Loading settings...");
+                        color: Theme.text-muted;
+                        font-size: Typography.body;
+                    }
+
+                    if !SettingsState.loading && SettingsState.section == 0: AudioSettings {
+                        settings-bool(k, v) => {
+                            root.settings-bool(k, v);
+                        }
+                        settings-select(k, i) => {
+                            root.settings-select(k, i);
+                        }
+                    }
+                    if !SettingsState.loading && SettingsState.section == 1: PlaybackSettings {
+                        settings-bool(k, v) => {
+                            root.settings-bool(k, v);
+                        }
+                        settings-select(k, i) => {
+                            root.settings-select(k, i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

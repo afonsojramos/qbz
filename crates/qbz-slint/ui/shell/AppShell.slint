@@ -13,10 +13,13 @@ import { PlayerBar } from "PlayerBar.slint";
 import { HomeView } from "../discover/HomeView.slint";
 import { AlbumPageView } from "../album/AlbumPageView.slint";
 import { ArtistPageView } from "../artist/ArtistPageView.slint";
+import { SettingsView } from "../settings/SettingsView.slint";
 
 export component AppShell inherits Rectangle {
     callback open-album(string);
     callback open-artist(string);
+    callback settings-bool(string, bool);
+    callback settings-select(string, int);
     callback logout();
     callback close-app();
 
@@ -58,6 +61,14 @@ export component AppShell inherits Rectangle {
                 if NavState.view == ContentView.artist: ArtistPageView {
                     open-album(id) => {
                         root.open-album(id);
+                    }
+                }
+                if NavState.view == ContentView.settings: SettingsView {
+                    settings-bool(k, v) => {
+                        root.settings-bool(k, v);
+                    }
+                    settings-select(k, i) => {
+                        root.settings-select(k, i);
                     }
                 }
             }

@@ -1,0 +1,151 @@
+// Audio settings panel — output routing, bit-perfect options, and
+// playback-quality preferences. All rows are backed by the SettingsState
+// global and persisted through the Rust settings controller.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { SettingsState } from "../state.slint";
+import { QbzToggle } from "../primitives/QbzToggle.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
+import { SettingRow } from "SettingRow.slint";
+
+component GroupHeader inherits Text {
+    color: Theme.text-muted;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    font-weight: Typography.semibold;
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border-subtle;
+}
+
+export component AudioSettings inherits VerticalLayout {
+    callback settings-bool(string, bool);
+    callback settings-select(string, int);
+
+    spacing: 4px;
+
+    GroupHeader { text: @tr("OUTPUT"); }
+
+    SettingRow {
+        label: @tr("Audio backend");
+        description: @tr("The audio stack QBZ routes playback through.");
+        QbzSelect {
+            menu-width: 220px;
+            options: SettingsState.backends;
+            current-index: SettingsState.backend-index;
+            selected(i) => {
+                SettingsState.backend-index = i;
+                root.settings-select("backend", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Output device");
+        description: @tr("The DAC or sound device that receives audio.");
+        QbzSelect {
+            menu-width: 300px;
+            options: SettingsState.devices;
+            current-index: SettingsState.device-index;
+            selected(i) => {
+                SettingsState.device-index = i;
+                root.settings-select("device", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Preferred sample rate");
+        description: @tr("Force a sample rate, or let the track decide.");
+        QbzSelect {
+            menu-width: 170px;
+            options: SettingsState.sample-rates;
+            current-index: SettingsState.sample-rate-index;
+            selected(i) => {
+                SettingsState.sample-rate-index = i;
+                root.settings-select("sample-rate", i);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    GroupHeader { text: @tr("BIT-PERFECT"); }
+
+    SettingRow {
+        label: @tr("Exclusive mode");
+        description: @tr("Lock the device so no other app can resample it.");
+        QbzToggle {
+            checked: SettingsState.exclusive-mode;
+            toggled(v) => {
+                SettingsState.exclusive-mode = v;
+                root.settings-bool("exclusive-mode", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("DAC passthrough");
+        description: @tr("Send the bitstream untouched to the DAC.");
+        QbzToggle {
+            checked: SettingsState.dac-passthrough;
+            toggled(v) => {
+                SettingsState.dac-passthrough = v;
+                root.settings-bool("dac-passthrough", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("PipeWire force bit-perfect");
+        description: @tr("Pin the PipeWire quantum and rate for the active track.");
+        QbzToggle {
+            checked: SettingsState.pw-force-bitperfect;
+            toggled(v) => {
+                SettingsState.pw-force-bitperfect = v;
+                root.settings-bool("pw-force-bitperfect", v);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    GroupHeader { text: @tr("PLAYBACK QUALITY"); }
+
+    SettingRow {
+        label: @tr("Gapless playback");
+        description: @tr("Play consecutive same-format tracks without a gap.");
+        QbzToggle {
+            checked: SettingsState.gapless;
+            toggled(v) => {
+                SettingsState.gapless = v;
+                root.settings-bool("gapless", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Volume normalization");
+        description: @tr("Apply ReplayGain. Off keeps the pipeline bit-perfect.");
+        QbzToggle {
+            checked: SettingsState.normalization;
+            toggled(v) => {
+                SettingsState.normalization = v;
+                root.settings-bool("normalization", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Allow quality fallback");
+        description: @tr("Drop to a lower tier when the requested one is unavailable.");
+        QbzToggle {
+            checked: SettingsState.allow-quality-fallback;
+            toggled(v) => {
+                SettingsState.allow-quality-fallback = v;
+                root.settings-bool("allow-quality-fallback", v);
+            }
+        }
+    }
+}

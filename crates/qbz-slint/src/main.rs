@@ -21,6 +21,7 @@ mod artwork;
 mod auth;
 mod commands;
 mod home;
+mod settings;
 
 use std::sync::Arc;
 
@@ -41,6 +42,7 @@ async fn enter_shell(
     runtime: Arc<AppRuntime<SlintAdapter>>,
     weak: slint::Weak<AppWindow>,
     image_cache: artwork::ImageCache,
+    settings_ctx: Arc<settings::SettingsCtx>,
     user_name: String,
 ) {
     let _ = weak.upgrade_in_event_loop(move |w| {
@@ -48,6 +50,24 @@ async fn enter_shell(
         w.global::<HomeState>().set_loading(true);
         w.set_screen(AppScreen::Shell);
     });
+
+    // Load Audio + Playback settings into the Settings page in the
+    // background — store reads and device enumeration are blocking.
+    {
+        let settings_ctx = settings_ctx.clone();
+        let weak = weak.clone();
+        tokio::spawn(async move {
+            match tokio::task::spawn_blocking(move || settings::load_snapshot(&settings_ctx)).await
+            {
+                Ok(snap) => {
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        settings::apply_snapshot(&w, snap);
+                    });
+                }
+                Err(e) => log::error!("[qbz-slint] settings load task failed: {e}"),
+            }
+        });
+    }
 
     match home::load_home(&runtime).await {
         Ok(data) => {
@@ -115,6 +135,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let image_cache = artwork::open_cache();
     artwork::spawn_evict(image_cache.clone());
 
+    // Audio + Playback settings stores, opened once for the app lifetime.
+    let settings_ctx = settings::SettingsCtx::open();
+
     // Startup: initialize the core, then try to restore a saved session.
     // A valid saved token jumps straight to the shell; otherwise the
     // login screen stays.
@@ -122,6 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
         let image_cache = image_cache.clone();
+        let settings_ctx = settings_ctx.clone();
         tokio_rt.spawn(async move {
             if let Err(e) = runtime.init().await {
                 log::error!("[qbz-slint] core init failed: {e}");
@@ -129,7 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match auth::restore_saved_session(&runtime).await {
                 Ok(Some((user_id, user_name))) => {
                     log::info!("[qbz-slint] session restored for user {user_id}");
-                    enter_shell(runtime, weak, image_cache, user_name).await;
+                    enter_shell(runtime, weak, image_cache, settings_ctx, user_name).await;
                 }
                 Ok(None) => {
                     log::info!("[qbz-slint] no saved session — showing login");
@@ -151,15 +175,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         let image_cache = image_cache.clone();
+        let settings_ctx = settings_ctx.clone();
         move || {
             let runtime = runtime.clone();
             let weak = weak.clone();
             let image_cache = image_cache.clone();
+            let settings_ctx = settings_ctx.clone();
             handle.spawn(async move {
                 match auth::login_via_system_browser(&runtime).await {
                     Ok((user_id, user_name)) => {
                         log::info!("[qbz-slint] authenticated as user {user_id}");
-                        enter_shell(runtime, weak, image_cache, user_name).await;
+                        enter_shell(runtime, weak, image_cache, settings_ctx, user_name).await;
                     }
                     Err(e) => log::error!("[qbz-slint] sign-in failed: {e}"),
                 }
@@ -307,6 +333,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     w.global::<SessionState>().set_user_name("".into());
                     w.set_screen(AppScreen::Login);
                 });
+            });
+        });
+    }
+
+    // Settings — a toggle changed: persist it and apply audio ones to the
+    // live player.
+    {
+        let runtime = app_runtime.clone();
+        let settings_ctx = settings_ctx.clone();
+        let handle = tokio_rt.handle().clone();
+        window.on_settings_bool(move |key, value| {
+            let runtime = runtime.clone();
+            let settings_ctx = settings_ctx.clone();
+            let key = key.to_string();
+            handle.spawn(async move {
+                settings::handle_bool(&settings_ctx, &runtime, &key, value);
+            });
+        });
+    }
+
+    // Settings — a dropdown changed: persist it, apply audio ones, and
+    // re-enumerate devices on a backend switch.
+    {
+        let runtime = app_runtime.clone();
+        let settings_ctx = settings_ctx.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.on_settings_select(move |key, index| {
+            let runtime = runtime.clone();
+            let settings_ctx = settings_ctx.clone();
+            let weak = weak.clone();
+            let key = key.to_string();
+            let index = index.max(0) as usize;
+            handle.spawn(async move {
+                settings::handle_select(settings_ctx, runtime, weak, key, index).await;
             });
         });
     }

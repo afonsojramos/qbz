@@ -10,7 +10,7 @@ import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { SessionState } from "../state.slint";
+import { SessionState, NavState, ContentView } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 
 component NavTab inherits Rectangle {
@@ -245,6 +245,9 @@ export component HeaderBar inherits Rectangle {
                 MenuItem {
                     icon: @image-url("../assets/icons/settings.svg");
                     label: @tr("Settings");
+                    clicked => {
+                        NavState.view = ContentView.settings;
+                    }
                 }
                 MenuItem {
                     icon: @image-url("../assets/icons/keyboard.svg");

@@ -1,0 +1,105 @@
+// Dropdown select primitive — the standard option picker for settings.
+//
+// The QBZ UI uses dropdowns, never pill-style option buttons. The select
+// shows the current option and opens a PopupWindow list on click; picking
+// an option emits `selected(index)` and the caller updates the bound
+// state.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import { QbzIcon } from "QbzIcon.slint";
+
+export component QbzSelect inherits Rectangle {
+    in property <[string]> options;
+    in property <int> current-index: 0;
+    in property <length> menu-width: 240px;
+    in property <bool> enabled: true;
+    callback selected(int);
+
+    width: root.menu-width;
+    height: 34px;
+    border-radius: Radius.sm;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+    background: ta.has-hover && root.enabled ? Theme.surface-hover : Theme.surface-elevated;
+    opacity: root.enabled ? 1.0 : 0.4;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text {
+            text: root.current-index >= 0 && root.current-index < root.options.length
+                ? root.options[root.current-index]
+                : "";
+            color: Theme.text-primary;
+            font-size: Typography.body;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: @image-url("../assets/icons/chevron-down.svg");
+                width: 16px;
+                height: 16px;
+                tint: Theme.text-muted;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                popup.show();
+            }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: root.menu-width;
+        height: root.options.length * 32px + 10px;
+
+        Rectangle {
+            background: Theme.surface-elevated;
+            border-radius: Radius.md;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            drop-shadow-blur: 20px;
+            drop-shadow-color: Theme.card-shadow;
+            drop-shadow-offset-y: 5px;
+
+            VerticalLayout {
+                padding-top: 5px;
+                padding-bottom: 5px;
+                for opt[i] in root.options: Rectangle {
+                    height: 32px;
+                    background: opt-ta.has-hover ? Theme.surface-hover : transparent;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        Text {
+                            text: opt;
+                            color: i == root.current-index ? Theme.accent : Theme.text-secondary;
+                            font-size: Typography.body;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+                    opt-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.selected(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

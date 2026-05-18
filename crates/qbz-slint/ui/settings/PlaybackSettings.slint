@@ -1,0 +1,87 @@
+// Playback settings panel — end-of-source behavior and session
+// persistence. Backed by the SettingsState global and persisted through
+// the Rust settings controller.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { SettingsState } from "../state.slint";
+import { QbzToggle } from "../primitives/QbzToggle.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
+import { SettingRow } from "SettingRow.slint";
+
+component GroupHeader inherits Text {
+    color: Theme.text-muted;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    font-weight: Typography.semibold;
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border-subtle;
+}
+
+export component PlaybackSettings inherits VerticalLayout {
+    callback settings-bool(string, bool);
+    callback settings-select(string, int);
+
+    spacing: 4px;
+
+    GroupHeader { text: @tr("AUTOPLAY"); }
+
+    SettingRow {
+        label: @tr("When the source ends");
+        description: @tr("What happens after the last track of an album or playlist.");
+        QbzSelect {
+            menu-width: 240px;
+            options: SettingsState.autoplay-modes;
+            current-index: SettingsState.autoplay-index;
+            selected(i) => {
+                SettingsState.autoplay-index = i;
+                root.settings-select("autoplay-mode", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Show context icon");
+        description: @tr("Display the context-stack icon in the player.");
+        QbzToggle {
+            checked: SettingsState.show-context-icon;
+            toggled(v) => {
+                SettingsState.show-context-icon = v;
+                root.settings-bool("show-context-icon", v);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    GroupHeader { text: @tr("SESSION"); }
+
+    SettingRow {
+        label: @tr("Remember session");
+        description: @tr("Restore the queue and current track on the next launch.");
+        QbzToggle {
+            checked: SettingsState.persist-session;
+            toggled(v) => {
+                SettingsState.persist-session = v;
+                root.settings-bool("persist-session", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Resume playback position");
+        description: @tr("Also seek back to where the saved track left off.");
+        enabled: SettingsState.persist-session;
+        QbzToggle {
+            checked: SettingsState.resume-position;
+            enabled: SettingsState.persist-session;
+            toggled(v) => {
+                SettingsState.resume-position = v;
+                root.settings-bool("resume-position", v);
+            }
+        }
+    }
+}
