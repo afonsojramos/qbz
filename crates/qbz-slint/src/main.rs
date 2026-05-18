@@ -50,10 +50,10 @@ async fn enter_shell(
     });
 
     match home::load_home(&runtime).await {
-        Ok(sections) => {
-            // Collect artwork jobs before the data is consumed by
-            // apply_sections.
-            let jobs: Vec<artwork::ArtworkJob> = sections
+        Ok(data) => {
+            // Collect artwork jobs before the data is consumed by apply_home.
+            let mut jobs: Vec<artwork::ArtworkJob> = data
+                .sections
                 .iter()
                 .enumerate()
                 .flat_map(|(section_idx, section)| {
@@ -66,17 +66,29 @@ async fn enter_shell(
                                 None
                             } else {
                                 Some(artwork::ArtworkJob {
-                                    section_idx,
-                                    album_idx,
+                                    target: artwork::ArtworkTarget::Section {
+                                        section_idx,
+                                        album_idx,
+                                    },
                                     url: card.artwork_url.clone(),
                                 })
                             }
                         })
                 })
                 .collect();
+            jobs.extend(data.popular.iter().enumerate().filter_map(|(idx, slim)| {
+                if slim.artwork_url.is_empty() {
+                    None
+                } else {
+                    Some(artwork::ArtworkJob {
+                        target: artwork::ArtworkTarget::Popular { idx },
+                        url: slim.artwork_url.clone(),
+                    })
+                }
+            }));
             let weak_for_artwork = weak.clone();
             let _ = weak.upgrade_in_event_loop(move |w| {
-                home::apply_sections(&w, sections);
+                home::apply_home(&w, data);
                 w.global::<HomeState>().set_loading(false);
             });
             artwork::spawn_loads(jobs, weak_for_artwork, image_cache);

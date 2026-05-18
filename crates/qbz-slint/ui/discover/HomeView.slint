@@ -10,6 +10,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { HomeState } from "../state.slint";
 import { Carousel } from "Carousel.slint";
+import { GridSection } from "GridSection.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -171,6 +172,14 @@ export component HomeView inherits Rectangle {
                 for section in HomeState.sections: Carousel {
                     section: section;
                     album-clicked(id) => {
+                        root.album-clicked(id);
+                    }
+                }
+
+                if HomeState.popular.length > 0: GridSection {
+                    title: @tr("Popular albums");
+                    items: HomeState.popular;
+                    item-clicked(id) => {
                         root.album-clicked(id);
                     }
                 }

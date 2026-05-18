@@ -21,9 +21,21 @@ export struct DiscoverSection {
     albums: [AlbumCardItem],
 }
 
+// Compact "slim" card item — a small thumbnail with a title/subtitle,
+// optionally rank-numbered (Popular albums, Recently Played).
+export struct SlimItem {
+    id: string,
+    title: string,
+    subtitle: string,
+    rank: string,          // "" = no rank
+    artwork-url: string,
+    artwork: image,
+}
+
 // Discover / Home screen state.
 export global HomeState {
     in property <[DiscoverSection]> sections: [];
+    in property <[SlimItem]> popular: [];
     in property <bool> loading: false;
 }
 

@@ -28,10 +28,18 @@ pub const MAX_CACHE_BYTES: u64 = 200 * 1024 * 1024;
 /// — artwork then falls back to direct downloads.
 pub type ImageCache = Arc<Mutex<Option<ImageCacheService>>>;
 
+/// Which card an artwork download targets.
+#[derive(Clone, Copy)]
+pub enum ArtworkTarget {
+    /// A card in `HomeState.sections[section_idx].albums[album_idx]`.
+    Section { section_idx: usize, album_idx: usize },
+    /// A card in `HomeState.popular[idx]`.
+    Popular { idx: usize },
+}
+
 /// An artwork download job: which card, and the image URL.
 pub struct ArtworkJob {
-    pub section_idx: usize,
-    pub album_idx: usize,
+    pub target: ArtworkTarget,
     pub url: String,
 }
 
@@ -75,8 +83,9 @@ pub fn spawn_loads(jobs: Vec<ArtworkJob>, window: slint::Weak<AppWindow>, cache:
             let _permit = semaphore.acquire().await.ok()?;
             let (pixels, width, height) =
                 fetch_and_decode(&job.url, &cache, DECODE_SIZE).await?;
+            let target = job.target;
             let _ = window.upgrade_in_event_loop(move |w| {
-                apply_artwork(&w, job.section_idx, job.album_idx, &pixels, width, height);
+                apply_artwork(&w, target, &pixels, width, height);
             });
             Some(())
         });
@@ -117,30 +126,45 @@ pub async fn fetch_and_decode(
     Some((rgba.into_raw(), width, height))
 }
 
-/// Apply decoded pixels to a single card row. Runs on the Slint event loop.
+/// Apply decoded pixels to a single card. Runs on the Slint event loop.
 fn apply_artwork(
     window: &AppWindow,
-    section_idx: usize,
-    album_idx: usize,
+    target: ArtworkTarget,
     pixels: &[u8],
     width: u32,
     height: u32,
 ) {
-    let sections = window.global::<HomeState>().get_sections();
-    let Some(section) = sections.row_data(section_idx) else {
-        return;
-    };
-    let Some(mut item) = section.albums.row_data(album_idx) else {
-        return;
-    };
-
     let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
     let dst = buffer.make_mut_bytes();
     if dst.len() != pixels.len() {
         return;
     }
     dst.copy_from_slice(pixels);
+    let image = slint::Image::from_rgba8(buffer);
 
-    item.artwork = slint::Image::from_rgba8(buffer);
-    section.albums.set_row_data(album_idx, item);
+    let home = window.global::<HomeState>();
+    match target {
+        ArtworkTarget::Section {
+            section_idx,
+            album_idx,
+        } => {
+            let sections = home.get_sections();
+            let Some(section) = sections.row_data(section_idx) else {
+                return;
+            };
+            let Some(mut item) = section.albums.row_data(album_idx) else {
+                return;
+            };
+            item.artwork = image;
+            section.albums.set_row_data(album_idx, item);
+        }
+        ArtworkTarget::Popular { idx } => {
+            let popular = home.get_popular();
+            let Some(mut item) = popular.row_data(idx) else {
+                return;
+            };
+            item.artwork = image;
+            popular.set_row_data(idx, item);
+        }
+    }
 }

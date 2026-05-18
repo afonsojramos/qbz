@@ -1,9 +1,9 @@
 //! Discover / Home controller.
 //!
 //! Fetches the Qobuz discover index through `QbzCore`, maps it into plain
-//! (Send) section data on the worker thread, and — separately, on the
-//! Slint event loop — converts that into Slint models pushed onto the
-//! `HomeState` global. Domain types never reach the `.slint` files.
+//! (Send) data on the worker thread, and — separately, on the Slint event
+//! loop — converts that into Slint models pushed onto the `HomeState`
+//! global. Domain types never reach the `.slint` files.
 
 use std::sync::Arc;
 
@@ -12,9 +12,14 @@ use qbz_core::FrontendAdapter;
 use qbz_models::{AlbumAward, DiscoverAlbum, DiscoverAudioInfo, DiscoverContainer};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use crate::{AlbumCardItem, AppWindow, DiscoverSection, HomeState};
+use crate::{AlbumCardItem, AppWindow, DiscoverSection, HomeState, SlimItem};
 
-/// Plain, `Send` section data produced on the worker thread.
+/// Plain, `Send` home data produced on the worker thread.
+pub struct HomeData {
+    pub sections: Vec<SectionData>,
+    pub popular: Vec<SlimData>,
+}
+
 pub struct SectionData {
     pub title: String,
     pub albums: Vec<CardData>,
@@ -33,8 +38,17 @@ pub struct CardData {
     pub artwork_url: String,
 }
 
+/// A compact ranked item for the slim grid sections.
+pub struct SlimData {
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub rank: String,
+    pub artwork_url: String,
+}
+
 /// Fetch the discover index and map it into Home sections.
-pub async fn load_home<A>(runtime: &Arc<AppRuntime<A>>) -> Result<Vec<SectionData>, String>
+pub async fn load_home<A>(runtime: &Arc<AppRuntime<A>>) -> Result<HomeData, String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
@@ -59,7 +73,17 @@ where
         "Albums of the Week",
         containers.album_of_the_week,
     );
-    Ok(sections)
+
+    let popular = containers
+        .most_streamed
+        .map(|container| container.data.items)
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(index, album)| map_slim(index, album))
+        .collect();
+
+    Ok(HomeData { sections, popular })
 }
 
 fn push_section(
@@ -114,6 +138,27 @@ fn map_album(album: DiscoverAlbum) -> CardData {
     }
 }
 
+fn map_slim(index: usize, album: DiscoverAlbum) -> SlimData {
+    let subtitle = album
+        .artists
+        .first()
+        .map(|a| a.name.clone())
+        .unwrap_or_default();
+    let artwork_url = album
+        .image
+        .thumbnail
+        .or(album.image.small)
+        .or(album.image.large)
+        .unwrap_or_default();
+    SlimData {
+        id: album.id,
+        title: album.title,
+        subtitle,
+        rank: (index + 1).to_string(),
+        artwork_url,
+    }
+}
+
 /// Pick the single award ribbon, mirroring `pickAlbumRibbon` in data.ts:
 /// award id 151 = Album of the Week, 88 = Qobuzissime, otherwise the last
 /// award becomes a generic "press" ribbon.
@@ -146,10 +191,11 @@ fn quality_tier(audio: Option<&DiscoverAudioInfo>) -> &'static str {
     }
 }
 
-/// Convert worker-thread section data into Slint models and push them onto
+/// Convert worker-thread home data into Slint models and push them onto
 /// the `HomeState` global. Must run on the Slint event loop.
-pub fn apply_sections(window: &AppWindow, data: Vec<SectionData>) {
+pub fn apply_home(window: &AppWindow, data: HomeData) {
     let sections: Vec<DiscoverSection> = data
+        .sections
         .into_iter()
         .map(|section| {
             let albums: Vec<AlbumCardItem> = section
@@ -174,9 +220,23 @@ pub fn apply_sections(window: &AppWindow, data: Vec<SectionData>) {
             }
         })
         .collect();
-    window
-        .global::<HomeState>()
-        .set_sections(ModelRc::new(VecModel::from(sections)));
+
+    let popular: Vec<SlimItem> = data
+        .popular
+        .into_iter()
+        .map(|slim| SlimItem {
+            id: slim.id.into(),
+            title: slim.title.into(),
+            subtitle: slim.subtitle.into(),
+            rank: slim.rank.into(),
+            artwork_url: slim.artwork_url.into(),
+            artwork: slint::Image::default(),
+        })
+        .collect();
+
+    let state = window.global::<HomeState>();
+    state.set_sections(ModelRc::new(VecModel::from(sections)));
+    state.set_popular(ModelRc::new(VecModel::from(popular)));
 }
 
 #[cfg(test)]
