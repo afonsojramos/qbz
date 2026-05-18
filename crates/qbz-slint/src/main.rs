@@ -115,8 +115,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     log::info!("[qbz-slint] session restored for user {user_id}");
                     enter_shell(runtime, weak, image_cache).await;
                 }
-                Ok(None) => log::info!("[qbz-slint] no saved session — showing login"),
-                Err(e) => log::error!("[qbz-slint] session restore failed: {e}"),
+                Ok(None) => {
+                    log::info!("[qbz-slint] no saved session — showing login");
+                    let _ = weak.upgrade_in_event_loop(|w| w.set_screen(AppScreen::Login));
+                }
+                Err(e) => {
+                    log::error!("[qbz-slint] session restore failed: {e}");
+                    let _ = weak.upgrade_in_event_loop(|w| w.set_screen(AppScreen::Login));
+                }
             }
         });
     }

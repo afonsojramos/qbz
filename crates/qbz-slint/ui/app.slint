@@ -5,16 +5,16 @@
 // (POC ADR, sections 13 and 21).
 
 import { Theme } from "foundation/semantic-colors.slint";
+import { SplashScreen } from "splash/SplashScreen.slint";
 import { LoginScreen } from "login/LoginScreen.slint";
 import { AppShell } from "shell/AppShell.slint";
 
 // Re-export the HomeState global so the Rust layer can populate it.
 export { HomeState } from "state.slint";
 
-// Which top-level screen is shown. During M1 the screen switches on a
-// login-button click without real authentication; M2 ties the switch
-// to a real session.
-export enum AppScreen { login, shell }
+// Which top-level screen is shown. The app starts on `splash` while it
+// restores a saved session, then resolves to `shell` or `login`.
+export enum AppScreen { splash, login, shell }
 
 export component AppWindow inherits Window {
     title: "QBZ";
@@ -24,13 +24,15 @@ export component AppWindow inherits Window {
     min-height: 600px;
     background: Theme.surface-main;
 
-    in-out property <AppScreen> screen: AppScreen.login;
+    in-out property <AppScreen> screen: AppScreen.splash;
 
     // Forwarded to the Rust layer, which maps them to typed AppCommands.
     callback sign-in-via-browser();
     callback use-system-browser();
     callback start-offline();
     callback open-tos();
+
+    if root.screen == AppScreen.splash: SplashScreen { }
 
     if root.screen == AppScreen.login: LoginScreen {
         sign-in-via-browser => {
