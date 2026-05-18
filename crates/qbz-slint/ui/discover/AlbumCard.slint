@@ -12,6 +12,7 @@ import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
 import { AlbumCardItem } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { QualityBadge } from "../primitives/QualityBadge.slint";
 
 // Circular hover-overlay action button.
 component OverlayButton inherits Rectangle {
@@ -75,26 +76,29 @@ export component AlbumCard inherits Rectangle {
                 animate opacity { duration: 150ms; }
             }
 
-            // Hover meta — genre + year, top-left.
+            // Hover meta — genre + year, top-left. The year sits one
+            // single line below the genre.
             VerticalLayout {
                 x: 12px;
                 y: 12px;
-                spacing: 1px;
+                spacing: 2px;
                 opacity: hover.has-hover ? 1.0 : 0.0;
                 animate opacity { duration: 150ms; }
 
-                Text {
+                if root.album.genre != "": Text {
                     text: root.album.genre;
-                    visible: root.album.genre != "";
+                    height: 20px;
                     color: #ffffffeb;
-                    font-size: 14px;
-                    font-weight: Typography.medium;
+                    font-size: 15px;
+                    font-weight: Typography.bold;
+                    vertical-alignment: center;
                 }
-                Text {
+                if root.album.year != "": Text {
                     text: root.album.year;
-                    visible: root.album.year != "";
+                    height: 17px;
                     color: #ffffffcc;
                     font-size: 13px;
+                    vertical-alignment: center;
                 }
             }
 
@@ -125,16 +129,21 @@ export component AlbumCard inherits Rectangle {
                 }
             }
 
-            // Award ribbon — always visible, above the overlay.
+            // Award ribbon — content-width only (it is a ribbon, not a
+            // full-width band), capped so long labels still elide.
             if root.album.ribbon != "": Rectangle {
                 x: 0px;
                 y: parent.height - self.height - 8px;
                 height: 20px;
+                // Hug the label; cap below the card width so a runaway
+                // label elides instead of spanning the whole card.
+                width: Math.min(ribbon-row.preferred-width, 200px);
                 background: root.album.ribbon-kind == "press"
                     ? #d49511
                     : #000000e0;
                 border-top-right-radius: 3px;
                 border-bottom-right-radius: 3px;
+                clip: true;
 
                 // Left accent stripe (not on the gold press ribbon).
                 Rectangle {
@@ -144,7 +153,7 @@ export component AlbumCard inherits Rectangle {
                         ? #8b5cf6
                         : #eab308;
                 }
-                HorizontalLayout {
+                ribbon-row := HorizontalLayout {
                     padding-left: 10px;
                     padding-right: 10px;
                     Text {
@@ -202,31 +211,12 @@ export component AlbumCard inherits Rectangle {
                 }
             }
 
-            // Icon-only quality badge.
+            // Icon-only quality badge with an exact-quality hover tooltip.
             VerticalLayout {
                 alignment: center;
-
-                if root.album.quality-tier == "hires": Image {
-                    source: @image-url("../assets/hi-res.svg");
-                    width: 42px;
-                    height: 28px;
-                    image-fit: contain;
-                }
-                if root.album.quality-tier == "cd": Rectangle {
-                    width: 30px;
-                    height: 30px;
-                    border-radius: 3px;
-                    background: Theme.surface-elevated;
-                    border-width: 1px;
-                    border-color: Theme.border-subtle;
-                    Image {
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        width: 16px;
-                        height: 16px;
-                        source: @image-url("../assets/cd.svg");
-                        image-fit: contain;
-                    }
+                QualityBadge {
+                    tier: root.album.quality-tier;
+                    label: root.album.quality-label;
                 }
             }
         }

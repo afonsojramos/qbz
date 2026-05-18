@@ -1,0 +1,78 @@
+// Icon-only quality badge with a hover tooltip.
+//
+// The square badge is intentionally compact (it buys layout space); the
+// exact quality — "Hi-Res: 24-bit / 96 kHz" — is revealed on hover, the
+// same string the Tauri QualityBadge surfaces.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+
+export component QualityBadge inherits Rectangle {
+    // "hires" | "cd" | "" — empty hides the badge entirely.
+    in property <string> tier;
+    // Exact quality string for the hover tooltip.
+    in property <string> label;
+
+    visible: root.tier != "";
+    width: root.tier == "hires" ? 42px : 30px;
+    height: 30px;
+
+    if root.tier == "hires": Image {
+        source: @image-url("../assets/hi-res.svg");
+        width: 42px;
+        height: 28px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        image-fit: contain;
+    }
+    if root.tier == "cd": Rectangle {
+        width: 30px;
+        height: 30px;
+        border-radius: 3px;
+        background: Theme.surface-elevated;
+        border-width: 1px;
+        border-color: Theme.border-subtle;
+        Image {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 16px;
+            height: 16px;
+            source: @image-url("../assets/cd.svg");
+            image-fit: contain;
+        }
+    }
+
+    // Hover tooltip — floats just above the badge.
+    tip := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: -self.height - 6px;
+        width: tip-row.preferred-width;
+        height: 24px;
+        background: Theme.surface-elevated;
+        border-radius: Radius.sm;
+        border-width: 1px;
+        border-color: Theme.border-subtle;
+        drop-shadow-blur: 14px;
+        drop-shadow-color: Theme.card-shadow;
+        drop-shadow-offset-y: 3px;
+        opacity: ta.has-hover && root.label != "" ? 1.0 : 0.0;
+        animate opacity { duration: 120ms; }
+
+        tip-row := HorizontalLayout {
+            padding-left: 9px;
+            padding-right: 9px;
+            Text {
+                text: root.label;
+                color: Theme.text-secondary;
+                font-size: 11px;
+                font-weight: Typography.medium;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: default;
+    }
+}

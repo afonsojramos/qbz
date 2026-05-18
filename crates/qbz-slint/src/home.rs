@@ -33,6 +33,8 @@ pub struct CardData {
     pub year: String,
     /// "hires" | "cd" | "" — drives the icon-only quality badge.
     pub quality_tier: String,
+    /// "Hi-Res: 24-bit / 96 kHz" — shown when hovering the quality badge.
+    pub quality_label: String,
     pub ribbon: String,
     pub ribbon_kind: String,
     pub artwork_url: String,
@@ -119,6 +121,7 @@ fn map_album(album: DiscoverAlbum) -> CardData {
         .to_string();
     let (ribbon, ribbon_kind) = pick_ribbon(album.awards.as_deref());
     let quality_tier = quality_tier(album.audio_info.as_ref()).to_string();
+    let quality_label = quality_label(album.audio_info.as_ref());
     let artwork_url = album
         .image
         .large
@@ -132,6 +135,7 @@ fn map_album(album: DiscoverAlbum) -> CardData {
         genre,
         year,
         quality_tier,
+        quality_label,
         ribbon,
         ribbon_kind,
         artwork_url,
@@ -191,6 +195,34 @@ fn quality_tier(audio: Option<&DiscoverAudioInfo>) -> &'static str {
     }
 }
 
+/// Exact-quality label for the badge hover tooltip, mirroring the Tauri
+/// `QualityBadge` (`{tier}: {depth}-bit / {rate} kHz`). Empty when the
+/// discover entry carries no audio info, matching `quality_tier`.
+fn quality_label(audio: Option<&DiscoverAudioInfo>) -> String {
+    let Some(audio) = audio else {
+        return String::new();
+    };
+    let hi_res = matches!(audio.maximum_bit_depth, Some(depth) if depth >= 24);
+    let tier = if hi_res { "Hi-Res" } else { "CD" };
+    let depth = audio
+        .maximum_bit_depth
+        .unwrap_or(if hi_res { 24 } else { 16 });
+    let rate = audio
+        .maximum_sampling_rate
+        .unwrap_or(if hi_res { 96.0 } else { 44.1 });
+    format!("{tier}: {depth}-bit / {} kHz", format_rate(rate))
+}
+
+/// Format a kHz sample rate without a trailing `.0` (96.0 -> "96",
+/// 44.1 -> "44.1").
+fn format_rate(rate: f64) -> String {
+    if (rate.fract()).abs() < f64::EPSILON {
+        format!("{}", rate as i64)
+    } else {
+        format!("{rate}")
+    }
+}
+
 /// Convert worker-thread home data into Slint models and push them onto
 /// the `HomeState` global. Must run on the Slint event loop.
 pub fn apply_home(window: &AppWindow, data: HomeData) {
@@ -208,6 +240,7 @@ pub fn apply_home(window: &AppWindow, data: HomeData) {
                     genre: card.genre.into(),
                     year: card.year.into(),
                     quality_tier: card.quality_tier.into(),
+                    quality_label: card.quality_label.into(),
                     ribbon: card.ribbon.into(),
                     ribbon_kind: card.ribbon_kind.into(),
                     artwork_url: card.artwork_url.into(),

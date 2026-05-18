@@ -5454,6 +5454,7 @@ dependencies = [
  "log",
  "open",
  "qbz-app",
+ "qbz-audio",
  "qbz-cache",
  "qbz-core",
  "qbz-credentials",
