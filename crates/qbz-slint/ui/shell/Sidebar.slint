@@ -12,7 +12,9 @@ import { ScrollView } from "std-widgets.slint";
 
 export component Sidebar inherits Rectangle {
     width: Layout.sidebar-width;
-    background: Theme.surface-main;
+    // The sidebar sits one surface above the content area, matching the
+    // QBZ dark theme (--bg-secondary sidebar over --bg-primary content).
+    background: Theme.surface-card;
 
     VerticalLayout {
         padding: Spacing.md;
@@ -75,7 +77,7 @@ export component Sidebar inherits Rectangle {
                         font-size: Typography.body;
                     }
                     Text {
-                        text: "Slint POC";
+                        text: "QBZ MVP";
                         color: Theme.text-muted;
                         font-size: 11px;
                     }

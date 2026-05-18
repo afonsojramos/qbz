@@ -1,8 +1,10 @@
-// Discover — Home view: greeting, tab pill, and the discover sections.
+// Discover — Home view: a fixed 56px toolbar (tab pill + genre filter +
+// settings gear) over a scrollable column of section carousels.
 //
 // Section data is supplied by the Rust home controller through the
-// HomeState global. The Editor's Picks / For You tabs are visual only
-// for now; switching their data is a later increment.
+// HomeState global. The Editor's Picks / For You tabs, the genre filter,
+// and the settings gear are visual for now; wiring them is a later
+// increment.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
@@ -40,38 +42,120 @@ component Tab inherits Rectangle {
     }
 }
 
+component GenreButton inherits Rectangle {
+    callback clicked();
+
+    height: 32px;
+    border-radius: 6px;
+    background: ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        Text {
+            text: @tr("Filter by genre");
+            color: Theme.text-secondary;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component GearButton inherits Rectangle {
+    callback clicked();
+
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+
+    Text {
+        text: "⚙";
+        color: ta.has-hover ? Theme.text-primary : Theme.text-muted;
+        font-size: 17px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 export component HomeView inherits Rectangle {
     background: Theme.surface-main;
 
-    ScrollView {
-        VerticalLayout {
-            padding: 32px;
-            spacing: 28px;
-            alignment: start;
+    VerticalLayout {
+        spacing: 0px;
+
+        // --- Toolbar (fixed 56px) ----------------------------------------
+        Rectangle {
+            height: 56px;
+            background: Theme.surface-main;
 
             HorizontalLayout {
-                alignment: start;
-                Rectangle {
-                    background: Theme.surface-elevated;
-                    border-radius: 6px;
+                padding-left: 32px;
+                padding-right: 32px;
+
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        background: Theme.surface-elevated;
+                        border-radius: 6px;
+                        HorizontalLayout {
+                            padding: 3px;
+                            spacing: 4px;
+                            Tab { label: @tr("Home"); active: true; }
+                            Tab { label: @tr("Editor's Picks"); }
+                            Tab { label: @tr("For You"); }
+                        }
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                VerticalLayout {
+                    alignment: center;
                     HorizontalLayout {
-                        padding: 3px;
-                        spacing: 4px;
-                        Tab { label: @tr("Home"); active: true; }
-                        Tab { label: @tr("Editor's Picks"); }
-                        Tab { label: @tr("For You"); }
+                        spacing: 6px;
+                        GenreButton { }
+                        GearButton { }
                     }
                 }
             }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.border-subtle;
+        }
 
-            if HomeState.loading && HomeState.sections.length == 0: Text {
-                text: @tr("Loading your music...");
-                color: Theme.text-muted;
-                font-size: 14px;
-            }
+        // --- Scrollable sections -----------------------------------------
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: 32px;
+                spacing: 28px;
+                alignment: start;
 
-            for section in HomeState.sections: Carousel {
-                section: section;
+                if HomeState.loading && HomeState.sections.length == 0: Text {
+                    text: @tr("Loading your music...");
+                    color: Theme.text-muted;
+                    font-size: 14px;
+                }
+
+                for section in HomeState.sections: Carousel {
+                    section: section;
+                }
             }
         }
     }
