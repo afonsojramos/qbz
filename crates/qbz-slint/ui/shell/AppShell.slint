@@ -1,20 +1,22 @@
 // App shell — the post-login frame: header bar, sidebar, content
-// region, and player bar. The content region shows either the Discover
-// Home view or the Album detail view, driven by NavState.
+// region, and player bar. The content region shows the Discover Home,
+// Album detail, or Artist detail view, driven by NavState.
 //
 // Regions are delineated by their surface colors (chrome over the darker
 // content well); no hairline borders.
 
 import { Theme } from "../foundation/semantic-colors.slint";
-import { NavState } from "../state.slint";
+import { NavState, ContentView } from "../state.slint";
 import { Sidebar } from "Sidebar.slint";
 import { HeaderBar } from "HeaderBar.slint";
 import { PlayerBar } from "PlayerBar.slint";
 import { HomeView } from "../discover/HomeView.slint";
 import { AlbumPageView } from "../album/AlbumPageView.slint";
+import { ArtistPageView } from "../artist/ArtistPageView.slint";
 
 export component AppShell inherits Rectangle {
     callback open-album(string);
+    callback open-artist(string);
     callback logout();
     callback close-app();
 
@@ -38,17 +40,26 @@ export component AppShell inherits Rectangle {
 
             Sidebar { }
 
-            // Content region — Home or Album detail.
+            // Content region — Home, Album, or Artist.
             Rectangle {
                 horizontal-stretch: 1;
                 background: Theme.surface-main;
 
-                if !NavState.showing-album: HomeView {
+                if NavState.view == ContentView.home: HomeView {
                     album-clicked(id) => {
                         root.open-album(id);
                     }
                 }
-                if NavState.showing-album: AlbumPageView { }
+                if NavState.view == ContentView.album: AlbumPageView {
+                    open-artist(id) => {
+                        root.open-artist(id);
+                    }
+                }
+                if NavState.view == ContentView.artist: ArtistPageView {
+                    open-album(id) => {
+                        root.open-album(id);
+                    }
+                }
             }
         }
 

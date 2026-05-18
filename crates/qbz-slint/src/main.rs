@@ -16,6 +16,7 @@ slint::include_modules!();
 
 mod adapter;
 mod album;
+mod artist;
 mod artwork;
 mod auth;
 mod commands;
@@ -203,7 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             handle.spawn(async move {
                 let _ = weak.upgrade_in_event_loop(|w| {
                     album::reset_album(&w);
-                    w.global::<NavState>().set_showing_album(true);
+                    w.global::<NavState>().set_view(ContentView::Album);
                 });
                 match album::load_album(&runtime, &album_id).await {
                     Ok(data) => {
@@ -233,6 +234,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Open an artist: load the artist page, show it, then fetch the portrait.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.on_open_artist(move |artist_id| {
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let image_cache = image_cache.clone();
+            let artist_id = artist_id.to_string();
+            handle.spawn(async move {
+                let _ = weak.upgrade_in_event_loop(|w| {
+                    artist::reset_artist(&w);
+                    w.global::<NavState>().set_view(ContentView::Artist);
+                });
+                match artist::load_artist(&runtime, &artist_id).await {
+                    Ok(data) => {
+                        let artwork_url = data.artwork_url.clone();
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            artist::apply_artist(&w, data);
+                            w.global::<ArtistState>().set_loading(false);
+                        });
+                        if !artwork_url.is_empty() {
+                            if let Some((pixels, width, height)) =
+                                artwork::fetch_and_decode(&artwork_url, &image_cache, 440).await
+                            {
+                                let _ = weak.upgrade_in_event_loop(move |w| {
+                                    artist::apply_artwork(&w, &pixels, width, height);
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("[qbz-slint] artist load failed: {e}");
+                        let _ = weak.upgrade_in_event_loop(|w| {
+                            w.global::<ArtistState>().set_loading(false);
+                        });
+                    }
+                }
+            });
+        });
+    }
+
     // Log out: clear the session and return to the login screen.
     {
         let runtime = app_runtime.clone();
@@ -246,7 +291,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     log::error!("[qbz-slint] logout failed: {e}");
                 }
                 let _ = weak.upgrade_in_event_loop(|w| {
-                    w.global::<NavState>().set_showing_album(false);
+                    w.global::<NavState>().set_view(ContentView::Home);
                     w.global::<SessionState>().set_user_name("".into());
                     w.set_screen(AppScreen::Login);
                 });

@@ -40,6 +40,7 @@ export struct AlbumTrackItem {
 export global AlbumState {
     in property <string> title;
     in property <string> artist;
+    in property <string> artist-id;
     in property <string> info-line;
     in property <string> quality-tier;
     in property <image> artwork;
@@ -48,8 +49,20 @@ export global AlbumState {
 }
 
 // Which content view the shell shows.
+export enum ContentView { home, album, artist }
+
 export global NavState {
-    in-out property <bool> showing-album: false;
+    in-out property <ContentView> view: ContentView.home;
+}
+
+// Artist detail screen state.
+export global ArtistState {
+    in property <string> name;
+    in property <string> bio;
+    in property <image> artwork;
+    in property <[AlbumTrackItem]> top-tracks: [];
+    in property <[AlbumCardItem]> releases: [];
+    in property <bool> loading: false;
 }
 
 // Authenticated user, for the header user element.

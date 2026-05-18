@@ -1,16 +1,15 @@
-// Album detail page.
+// Artist detail page.
 //
-// Mirrors the Svelte AlbumDetailView: back button, an album header
-// (artwork + title / artist / info line / action buttons), a divider,
-// and the track list with a column header. Data comes from the
-// AlbumState global; the action buttons are visual for now.
+// Mirrors the Svelte ArtistDetailView: back button, an artist header
+// (circular portrait, name, biography, action buttons), a Popular
+// Tracks list, and a Discography carousel. Data comes from the
+// ArtistState global; action buttons are visual for now.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { Radius } from "../foundation/radius.slint";
-import { Spacing } from "../foundation/spacing.slint";
-import { AlbumState, AlbumTrackItem, NavState, ContentView } from "../state.slint";
+import { ArtistState, AlbumTrackItem, DiscoverSection, NavState, ContentView } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { Carousel } from "../discover/Carousel.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component CircleAction inherits Rectangle {
@@ -47,7 +46,7 @@ component TrackRow inherits Rectangle {
     in property <AlbumTrackItem> track;
     in property <int> index;
 
-    height: 56px;
+    height: 52px;
     border-radius: 8px;
     background: ta.has-hover
         ? Theme.surface-hover
@@ -60,55 +59,25 @@ component TrackRow inherits Rectangle {
 
         Text {
             text: root.track.number;
-            width: 32px;
+            width: 28px;
             color: Theme.text-muted;
             font-size: Typography.body;
             vertical-alignment: center;
         }
-
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
-            spacing: 2px;
-
-            HorizontalLayout {
-                spacing: 6px;
-                Text {
-                    text: root.track.title;
-                    color: Theme.text-primary;
-                    font-size: Typography.body;
-                    font-weight: Typography.medium;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-                if root.track.explicit: Rectangle {
-                    width: 16px;
-                    height: 16px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: 3px;
-                    background: Theme.surface-elevated;
-                    Text {
-                        text: "E";
-                        color: Theme.text-muted;
-                        font-size: 9px;
-                        font-weight: Typography.semibold;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-            }
             Text {
-                text: root.track.artist;
-                visible: root.track.artist != "";
-                color: Theme.text-muted;
-                font-size: Typography.link;
+                text: root.track.title;
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: Typography.medium;
                 overflow: elide;
             }
         }
-
         Text {
             text: root.track.duration;
-            width: 80px;
+            width: 70px;
             color: Theme.text-muted;
             font-size: Typography.body;
             horizontal-alignment: center;
@@ -118,7 +87,7 @@ component TrackRow inherits Rectangle {
             text: root.track.quality-tier == "hires"
                 ? "Hi-Res"
                 : (root.track.quality-tier == "cd" ? "CD" : "");
-            width: 80px;
+            width: 70px;
             color: Theme.text-muted;
             font-size: Typography.legal;
             horizontal-alignment: center;
@@ -131,8 +100,8 @@ component TrackRow inherits Rectangle {
     }
 }
 
-export component AlbumPageView inherits Rectangle {
-    callback open-artist(string);
+export component ArtistPageView inherits Rectangle {
+    callback open-album(string);
 
     background: Theme.surface-main;
 
@@ -176,15 +145,15 @@ export component AlbumPageView inherits Rectangle {
 
             Rectangle { height: 22px; }
 
-            // --- Album header ------------------------------------------------
+            // --- Artist header -----------------------------------------------
             HorizontalLayout {
                 spacing: 32px;
                 alignment: start;
 
                 Rectangle {
-                    width: 224px;
-                    height: 224px;
-                    border-radius: 12px;
+                    width: 200px;
+                    height: 200px;
+                    border-radius: 100px;
                     background: Theme.surface-elevated;
                     drop-shadow-blur: 32px;
                     drop-shadow-color: #00000080;
@@ -193,50 +162,31 @@ export component AlbumPageView inherits Rectangle {
                     Image {
                         width: 100%;
                         height: 100%;
-                        source: AlbumState.artwork;
+                        source: ArtistState.artwork;
                         image-fit: cover;
                     }
                 }
 
                 VerticalLayout {
                     alignment: start;
-                    padding-top: 4px;
+                    padding-top: 8px;
                     spacing: 0px;
                     horizontal-stretch: 1;
 
                     Text {
-                        text: AlbumState.title;
+                        text: ArtistState.name;
                         color: Theme.text-primary;
                         font-size: Typography.title;
                         font-weight: Typography.bold;
                         overflow: elide;
                     }
-                    Rectangle { height: 4px; }
-                    HorizontalLayout {
-                        alignment: start;
-                        artist-area := TouchArea {
-                            width: artist-text.preferred-width;
-                            height: artist-text.preferred-height;
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.open-artist(AlbumState.artist-id);
-                            }
-                            artist-text := Text {
-                                text: AlbumState.artist;
-                                color: artist-area.has-hover
-                                    ? Theme.accent-hover
-                                    : Theme.accent;
-                                font-size: Typography.heading;
-                                font-weight: Typography.medium;
-                            }
-                        }
-                    }
-                    Rectangle { height: 10px; }
+                    Rectangle { height: 12px; }
                     Text {
-                        text: AlbumState.info-line;
-                        color: Theme.text-muted;
+                        text: ArtistState.bio;
+                        visible: ArtistState.bio != "";
+                        color: Theme.text-secondary;
                         font-size: Typography.body;
-                        overflow: elide;
+                        wrap: word-wrap;
                     }
                     Rectangle { height: 20px; }
                     HorizontalLayout {
@@ -257,71 +207,43 @@ export component AlbumPageView inherits Rectangle {
                         }
                         VerticalLayout {
                             alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/ellipsis.svg"); }
+                            CircleAction { icon: @image-url("../assets/icons/cast.svg"); }
                         }
                     }
                 }
             }
 
-            Rectangle { height: 20px; }
-            Rectangle {
-                height: 1px;
-                background: Theme.border-subtle;
-            }
-            Rectangle { height: 8px; }
+            Rectangle { height: 32px; }
 
-            // --- Track list --------------------------------------------------
-            if AlbumState.loading && AlbumState.tracks.length == 0: Text {
-                text: @tr("Loading album...");
+            if ArtistState.loading && ArtistState.top-tracks.length == 0: Text {
+                text: @tr("Loading artist...");
                 color: Theme.text-muted;
                 font-size: Typography.body;
             }
 
-            // Column header.
-            HorizontalLayout {
-                height: 40px;
-                padding-left: 12px;
-                padding-right: 12px;
-                spacing: 16px;
-                Text {
-                    text: "#";
-                    width: 32px;
-                    color: Theme.text-muted;
-                    font-size: Typography.legal;
-                    letter-spacing: 0.5px;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: @tr("TITLE");
-                    horizontal-stretch: 1;
-                    color: Theme.text-muted;
-                    font-size: Typography.legal;
-                    letter-spacing: 0.5px;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: @tr("DURATION");
-                    width: 80px;
-                    color: Theme.text-muted;
-                    font-size: Typography.legal;
-                    letter-spacing: 0.5px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: @tr("QUALITY");
-                    width: 80px;
-                    color: Theme.text-muted;
-                    font-size: Typography.legal;
-                    letter-spacing: 0.5px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+            // --- Popular tracks ----------------------------------------------
+            if ArtistState.top-tracks.length > 0: Text {
+                text: @tr("Popular Tracks");
+                color: Theme.text-primary;
+                font-size: Typography.heading;
+                font-weight: Typography.semibold;
             }
-
-            for track[index] in AlbumState.tracks: TrackRow {
+            if ArtistState.top-tracks.length > 0: Rectangle { height: 10px; }
+            for track[index] in ArtistState.top-tracks: TrackRow {
                 track: track;
                 index: index;
+            }
+
+            // --- Discography -------------------------------------------------
+            if ArtistState.releases.length > 0: Rectangle { height: 28px; }
+            if ArtistState.releases.length > 0: Carousel {
+                section: {
+                    title: @tr("Discography"),
+                    albums: ArtistState.releases,
+                };
+                album-clicked(id) => {
+                    root.open-album(id);
+                }
             }
         }
     }

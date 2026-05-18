@@ -17,6 +17,7 @@ use crate::{AlbumState, AlbumTrackItem, AppWindow};
 pub struct AlbumData {
     pub title: String,
     pub artist: String,
+    pub artist_id: String,
     /// Pre-formatted "year • label • genre • N tracks • duration".
     pub info_line: String,
     pub quality_tier: String,
@@ -48,6 +49,7 @@ where
 
 fn map_album(album: Album) -> AlbumData {
     let artist = album.artist.name.clone();
+    let artist_id = album.artist.id.to_string();
 
     let year = album
         .release_date_original
@@ -87,6 +89,7 @@ fn map_album(album: Album) -> AlbumData {
     AlbumData {
         title: album.title,
         artist,
+        artist_id,
         info_line,
         quality_tier,
         artwork_url,
@@ -152,6 +155,7 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
     let state = window.global::<AlbumState>();
     state.set_title(data.title.into());
     state.set_artist(data.artist.into());
+    state.set_artist_id(data.artist_id.into());
     state.set_info_line(data.info_line.into());
     state.set_quality_tier(data.quality_tier.into());
     state.set_tracks(ModelRc::new(VecModel::from(tracks)));
