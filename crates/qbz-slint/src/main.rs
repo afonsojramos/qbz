@@ -8,8 +8,9 @@
 //! is compiled from `ui/app.slint` by `build.rs`; `include_modules!` pulls in
 //! the generated Rust bindings.
 //!
-//! M1 status: foundation tokens + login screen. UI callbacks reach the
-//! typed-command layer; M2 wires that layer to `AppRuntime`.
+//! M1 status: foundation tokens, login screen, and the app shell frame
+//! (sidebar / header / content / player bar). UI callbacks reach the typed-
+//! command layer; M2 wires that layer to `AppRuntime` and real auth.
 
 slint::include_modules!();
 
@@ -28,9 +29,26 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let window = AppWindow::new()?;
 
-    window.on_sign_in_via_browser(|| dispatch(AppCommand::SignInViaBrowser));
+    // Sign-in and offline both reveal the app shell. During M1 this happens
+    // without real authentication; M2 gates the transition on a real session.
+    let weak = window.as_weak();
+    window.on_sign_in_via_browser(move || {
+        dispatch(AppCommand::SignInViaBrowser);
+        if let Some(win) = weak.upgrade() {
+            win.set_screen(AppScreen::Shell);
+        }
+    });
+
     window.on_use_system_browser(|| dispatch(AppCommand::UseSystemBrowser));
-    window.on_start_offline(|| dispatch(AppCommand::StartOffline));
+
+    let weak = window.as_weak();
+    window.on_start_offline(move || {
+        dispatch(AppCommand::StartOffline);
+        if let Some(win) = weak.upgrade() {
+            win.set_screen(AppScreen::Shell);
+        }
+    });
+
     window.on_open_tos(|| dispatch(AppCommand::OpenTermsOfService));
 
     log::info!("[qbz-slint] window ready — login screen");

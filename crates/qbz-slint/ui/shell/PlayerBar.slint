@@ -1,0 +1,132 @@
+// Bottom now-playing / transport bar.
+//
+// Shell-frame increment: controls are laid out and hover-reactive but
+// not yet wired to playback. Real playback state arrives in a later
+// milestone.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Spacing } from "../foundation/spacing.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Layout } from "../foundation/layout.slint";
+import { Radius } from "../foundation/radius.slint";
+
+component GlyphButton inherits Rectangle {
+    in property <string> glyph;
+    in property <length> glyph-size: 18px;
+    callback clicked();
+
+    width: 34px;
+    height: 34px;
+    border-radius: Radius.sm;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+
+    Text {
+        text: root.glyph;
+        font-size: root.glyph-size;
+        color: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component PlayerBar inherits Rectangle {
+    height: Layout.player-bar-height;
+    background: Theme.surface-main;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // Progress line across the top edge.
+        Rectangle {
+            height: 2px;
+            background: Theme.surface-elevated;
+            Rectangle {
+                x: 0;
+                width: parent.width * 0.32;
+                background: Theme.accent;
+            }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            spacing: Spacing.md;
+
+            // Transport controls.
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: 2px;
+                    GlyphButton { glyph: "⇄"; }
+                    GlyphButton { glyph: "⏮"; }
+                    GlyphButton { glyph: "▶"; glyph-size: 22px; }
+                    GlyphButton { glyph: "⏭"; }
+                    GlyphButton { glyph: "↻"; }
+                }
+            }
+
+            // Now-playing.
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: Spacing.sm;
+                    Rectangle {
+                        width: 48px;
+                        height: 48px;
+                        border-radius: Radius.sm;
+                        background: Theme.surface-elevated;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "Nothing playing";
+                            color: Theme.text-primary;
+                            font-size: Typography.body;
+                        }
+                        Text {
+                            text: "QBZ Slint POC";
+                            color: Theme.text-muted;
+                            font-size: 12px;
+                        }
+                    }
+                }
+            }
+
+            // Right-side controls.
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Spacing.sm;
+                    GlyphButton { glyph: "♡"; }
+                    GlyphButton { glyph: "⤢"; }
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 90px;
+                            height: 4px;
+                            border-radius: 2px;
+                            background: Theme.surface-elevated;
+                            Rectangle {
+                                x: 0;
+                                width: parent.width * 0.6;
+                                border-radius: 2px;
+                                background: Theme.accent;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

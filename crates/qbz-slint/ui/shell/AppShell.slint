@@ -1,0 +1,69 @@
+// App shell — the post-login frame: header bar, sidebar, content
+// region, and player bar.
+//
+// The content region is a placeholder; the Discover / Home view lands
+// in the next increment. Hairlines separate the regions.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Layout } from "../foundation/layout.slint";
+import { Spacing } from "../foundation/spacing.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Sidebar } from "Sidebar.slint";
+import { HeaderBar } from "HeaderBar.slint";
+import { PlayerBar } from "PlayerBar.slint";
+
+export component AppShell inherits Rectangle {
+    background: Theme.surface-main;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        HeaderBar { }
+        Rectangle {
+            height: Layout.hairline;
+            background: Theme.border-subtle;
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 0px;
+
+            Sidebar { }
+
+            // Content region — placeholder until the Discover/Home view.
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Theme.surface-main;
+
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: center;
+                        VerticalLayout {
+                            spacing: Spacing.sm;
+                            Text {
+                                text: "Discover — Home";
+                                color: Theme.text-primary;
+                                font-size: 22px;
+                                font-weight: Typography.semibold;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: "Content view lands in the next increment";
+                                color: Theme.text-muted;
+                                font-size: Typography.body;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: Layout.hairline;
+            background: Theme.border-subtle;
+        }
+        PlayerBar { }
+    }
+}

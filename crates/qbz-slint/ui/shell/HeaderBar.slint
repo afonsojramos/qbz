@@ -1,0 +1,74 @@
+// Top header bar — primary navigation tabs and the search field.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Spacing } from "../foundation/spacing.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Layout } from "../foundation/layout.slint";
+import { Radius } from "../foundation/radius.slint";
+import { LineEdit } from "std-widgets.slint";
+
+component NavTab inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 32px;
+    border-radius: Radius.sm;
+    background: root.active ? Theme.surface-elevated
+        : ta.has-hover ? Theme.surface-hover : transparent;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        Text {
+            text: root.label;
+            color: root.active ? Theme.text-primary : Theme.text-secondary;
+            font-size: Typography.body;
+            font-weight: root.active ? Typography.semibold : Typography.regular;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component HeaderBar inherits Rectangle {
+    height: Layout.header-height;
+    background: Theme.surface-main;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.xs;
+
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: Spacing.xs;
+                NavTab { label: "Discover"; active: true; }
+                NavTab { label: "Library"; }
+                NavTab { label: "Local Library"; }
+                NavTab { label: "My QBZ"; }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 360px;
+                    search := LineEdit {
+                        placeholder-text: "Search";
+                    }
+                }
+            }
+        }
+    }
+}
