@@ -1,0 +1,29 @@
+// Semantic color tokens — the contract every component consumes.
+//
+// Currently bound to the QBZ dark theme. When theme switching lands
+// (later in M1), `Theme` becomes the surface that swaps palettes; the
+// token names stay stable so components never change.
+
+import { Palette } from "palette.slint";
+
+export global Theme {
+    // Surfaces
+    out property <color> surface-main: Palette.black-0;
+    out property <color> surface-card: Palette.black-1;
+    out property <color> surface-elevated: Palette.black-2;
+
+    // Text
+    out property <color> text-primary: Palette.white;
+    out property <color> text-secondary: Palette.gray-c;
+    out property <color> text-muted: Palette.gray-8;
+    out property <color> text-disabled: Palette.gray-5;
+
+    // Accent
+    out property <color> accent: Palette.blue;
+    out property <color> accent-hover: Palette.blue-hover;
+    out property <color> accent-pressed: Palette.blue-active;
+    out property <color> accent-text: Palette.white;
+
+    // Effects
+    out property <color> card-shadow: Palette.shadow;
+}

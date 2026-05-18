@@ -1,0 +1,160 @@
+// QBZ login screen — first feature screen of the Slint POC.
+//
+// Visual parity target: the current Svelte `LoginView.svelte` on the QBZ
+// dark theme — centered card, logo, wordmark, ToS checkbox, browser
+// sign-in button, secondary links, and the legal disclaimer.
+//
+// No domain logic here: the buttons emit callbacks that the Rust layer
+// turns into typed commands (see `src/commands.rs`).
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Spacing } from "../foundation/spacing.slint";
+import { Radius } from "../foundation/radius.slint";
+import { Typography } from "../foundation/typography.slint";
+import { QbzCheckbox } from "../primitives/QbzCheckbox.slint";
+import { QbzPrimaryButton } from "../primitives/QbzPrimaryButton.slint";
+import { QbzTextLink } from "../primitives/QbzTextLink.slint";
+
+export component LoginScreen inherits Rectangle {
+    in-out property <bool> tos-accepted: true;
+
+    callback sign-in-via-browser();
+    callback use-system-browser();
+    callback start-offline();
+    callback open-tos();
+
+    background: Theme.surface-main;
+
+    VerticalLayout {
+        alignment: center;
+
+        HorizontalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 720px;
+                background: Theme.surface-card;
+                border-radius: Radius.lg;
+                drop-shadow-blur: 32px;
+                drop-shadow-color: Theme.card-shadow;
+                drop-shadow-offset-y: 8px;
+
+                VerticalLayout {
+                    padding: Spacing.card-padding;
+                    spacing: 0px;
+
+                    // --- Brand ------------------------------------------------
+                    HorizontalLayout {
+                        alignment: center;
+                        Image {
+                            source: @image-url("../assets/qbz-logo.png");
+                            width: 140px;
+                            height: 140px;
+                            image-fit: contain;
+                        }
+                    }
+                    Rectangle { height: Spacing.sm; }
+                    Text {
+                        text: @tr("QBZ");
+                        color: Theme.text-primary;
+                        font-size: Typography.wordmark;
+                        font-weight: Typography.semibold;
+                        letter-spacing: 8px;
+                        horizontal-alignment: center;
+                    }
+                    Rectangle { height: 2px; }
+                    Text {
+                        text: @tr("QOBUZ™ PLAYER");
+                        color: Theme.text-muted;
+                        font-size: Typography.subtitle;
+                        letter-spacing: 4px;
+                        horizontal-alignment: center;
+                    }
+
+                    Rectangle { height: Spacing.xl; }
+
+                    // --- Terms of Service row --------------------------------
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: Spacing.sm;
+
+                        VerticalLayout {
+                            alignment: center;
+                            QbzCheckbox {
+                                checked <=> root.tos-accepted;
+                            }
+                        }
+                        Text {
+                            text: @tr("I have read the");
+                            color: Theme.text-secondary;
+                            font-size: Typography.body;
+                            vertical-alignment: center;
+                        }
+                        tos-area := TouchArea {
+                            width: tos-text.preferred-width;
+                            height: tos-text.preferred-height;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.open-tos();
+                            }
+                            tos-text := Text {
+                                text: @tr("Qobuz™ Terms of Service");
+                                color: Theme.accent;
+                                font-size: Typography.body;
+                            }
+                        }
+                    }
+
+                    Rectangle { height: Spacing.lg; }
+
+                    // --- Sign in ---------------------------------------------
+                    QbzPrimaryButton {
+                        label: @tr("Sign in via Browser");
+                        enabled: root.tos-accepted;
+                        clicked => {
+                            root.sign-in-via-browser();
+                        }
+                    }
+
+                    Rectangle { height: Spacing.md; }
+
+                    // --- Secondary links -------------------------------------
+                    HorizontalLayout {
+                        alignment: center;
+                        QbzTextLink {
+                            label: @tr("Use your system browser instead");
+                            clicked => {
+                                root.use-system-browser();
+                            }
+                        }
+                    }
+                    Rectangle { height: 10px; }
+                    HorizontalLayout {
+                        alignment: center;
+                        QbzTextLink {
+                            label: @tr("Start offline (no access to Qobuz™ services)");
+                            clicked => {
+                                root.start-offline();
+                            }
+                        }
+                    }
+
+                    Rectangle { height: Spacing.xl; }
+
+                    // --- Legal disclaimer ------------------------------------
+                    Text {
+                        text: @tr("QBZ requires an active Qobuz™ subscription. Your credentials are sent directly to Qobuz™.")
+                            + "\n"
+                            + @tr("This application uses the Qobuz API but is not certified by Qobuz.")
+                            + " "
+                            + @tr("Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz.");
+                        color: Theme.text-muted;
+                        font-size: Typography.legal;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

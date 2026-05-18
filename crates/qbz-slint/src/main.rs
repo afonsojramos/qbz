@@ -7,10 +7,32 @@
 //! Lives only on the private `slint-poc` branch (ADR-007). The Slint UI tree
 //! is compiled from `ui/app.slint` by `build.rs`; `include_modules!` pulls in
 //! the generated Rust bindings.
+//!
+//! M1 status: foundation tokens + login screen. UI callbacks reach the
+//! typed-command layer; M2 wires that layer to `AppRuntime`.
 
 slint::include_modules!();
 
+mod commands;
+
+use commands::AppCommand;
+
+/// Central command sink. M2 replaces the body with real `AppRuntime`
+/// dispatch; today it records that the typed-command path works.
+fn dispatch(command: AppCommand) {
+    log::info!("[qbz-slint] AppCommand::{} dispatched", command.id());
+}
+
 fn main() -> Result<(), slint::PlatformError> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     let window = AppWindow::new()?;
+
+    window.on_sign_in_via_browser(|| dispatch(AppCommand::SignInViaBrowser));
+    window.on_use_system_browser(|| dispatch(AppCommand::UseSystemBrowser));
+    window.on_start_offline(|| dispatch(AppCommand::StartOffline));
+    window.on_open_tos(|| dispatch(AppCommand::OpenTermsOfService));
+
+    log::info!("[qbz-slint] window ready — login screen");
     window.run()
 }

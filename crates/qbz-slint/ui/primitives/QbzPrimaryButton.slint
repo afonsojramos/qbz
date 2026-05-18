@@ -1,0 +1,35 @@
+// Full-width accent button primitive.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Radius } from "../foundation/radius.slint";
+import { Typography } from "../foundation/typography.slint";
+
+export component QbzPrimaryButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 48px;
+    border-radius: Radius.sm;
+    opacity: root.enabled ? 1.0 : 0.5;
+    background: ta.has-hover && root.enabled ? Theme.accent-hover : Theme.accent;
+
+    animate background { duration: 150ms; }
+
+    Text {
+        text: root.label;
+        color: Theme.accent-text;
+        font-size: Typography.button;
+        font-weight: Typography.semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
