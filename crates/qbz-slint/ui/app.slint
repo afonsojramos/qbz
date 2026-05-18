@@ -1,0 +1,22 @@
+// QBZ Slint POC — UI entry point.
+//
+// This file stays thin: it imports the foundation, shell, and feature
+// modules and exports the single top-level window. No raw visual constants
+// or domain logic live here (see the POC ADR, sections 13 and 21).
+
+export component AppWindow inherits Window {
+    title: "QBZ";
+    preferred-width: 1180px;
+    preferred-height: 760px;
+    min-width: 940px;
+    min-height: 600px;
+
+    // Placeholder content. Replaced by the AppShell in the next M1 step
+    // (foundation tokens + sidebar / header / content / player bar).
+    Text {
+        text: "QBZ — Slint POC";
+        font-size: 22px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

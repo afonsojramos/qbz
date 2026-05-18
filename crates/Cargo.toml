@@ -19,6 +19,7 @@ members = [
     "qconnect-transport-ws",
     "qconnect-app",
     "qbzd",
+    "qbz-slint",
 ]
 
 [workspace.package]

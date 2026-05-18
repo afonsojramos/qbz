@@ -1,0 +1,18 @@
+[package]
+name = "qbz-slint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Slint functional POC shell for QBZ (private branch only)"
+
+[[bin]]
+name = "qbz-slint"
+path = "src/main.rs"
+
+[dependencies]
+slint = "1"
+log = { workspace = true }
+
+[build-dependencies]
+slint-build = "1"
