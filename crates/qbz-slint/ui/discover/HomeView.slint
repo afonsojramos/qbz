@@ -7,7 +7,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { HomeState } from "../state.slint";
-import { SectionRow } from "SectionRow.slint";
+import { Carousel } from "Carousel.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component Tab inherits Rectangle {
@@ -70,7 +70,7 @@ export component HomeView inherits Rectangle {
                 font-size: 14px;
             }
 
-            for section in HomeState.sections: SectionRow {
+            for section in HomeState.sections: Carousel {
                 section: section;
             }
         }
