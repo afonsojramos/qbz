@@ -24,31 +24,11 @@ pub struct CardData {
     pub id: String,
     pub title: String,
     pub artist: String,
-    pub quality: String,
+    /// "hires" | "cd" | "" — drives the icon-only quality badge.
+    pub quality_tier: String,
     pub ribbon: String,
     pub ribbon_kind: String,
     pub artwork_url: String,
-}
-
-/// Time-of-day greeting, matching the QBZ home greeting strings.
-pub fn greeting(display_name: &str) -> String {
-    use chrono::Timelike;
-    let hour = chrono::Local::now().hour();
-    let part = if (5..12).contains(&hour) {
-        "Good morning"
-    } else if (12..17).contains(&hour) {
-        "Good afternoon"
-    } else if (17..21).contains(&hour) {
-        "Good evening"
-    } else {
-        "Good night"
-    };
-    let first = display_name.split_whitespace().next().unwrap_or("");
-    if first.is_empty() {
-        part.to_string()
-    } else {
-        format!("{part}, {first}")
-    }
 }
 
 /// Fetch the discover index and map it into Home sections.
@@ -114,7 +94,7 @@ fn map_album(album: DiscoverAlbum) -> CardData {
         id: album.id,
         title: album.title,
         artist,
-        quality: quality_string(album.audio_info.as_ref()),
+        quality_tier: quality_tier(album.audio_info.as_ref()).to_string(),
         ribbon,
         ribbon_kind,
         artwork_url,
@@ -141,22 +121,15 @@ fn pick_ribbon(awards: Option<&[AlbumAward]>) -> (String, String) {
     (last.name.clone(), "press".to_string())
 }
 
-/// Format the quality badge as `{depth}-bit / {rate} kHz`.
-fn quality_string(audio: Option<&DiscoverAudioInfo>) -> String {
+/// Classify the quality tier for the icon-only badge: 24-bit and up is
+/// Hi-Res, anything else with audio info is CD-quality.
+fn quality_tier(audio: Option<&DiscoverAudioInfo>) -> &'static str {
     let Some(audio) = audio else {
-        return String::new();
+        return "";
     };
-    match (audio.maximum_bit_depth, audio.maximum_sampling_rate) {
-        (Some(depth), Some(rate)) => format!("{depth}-bit / {} kHz", format_rate(rate)),
-        _ => String::new(),
-    }
-}
-
-fn format_rate(rate: f64) -> String {
-    if rate.fract().abs() < 0.05 {
-        format!("{}", rate.round() as i64)
-    } else {
-        format!("{rate:.1}")
+    match audio.maximum_bit_depth {
+        Some(depth) if depth >= 24 => "hires",
+        _ => "cd",
     }
 }
 
@@ -173,7 +146,7 @@ pub fn apply_sections(window: &AppWindow, data: Vec<SectionData>) {
                     id: card.id.into(),
                     title: card.title.into(),
                     artist: card.artist.into(),
-                    quality: card.quality.into(),
+                    quality_tier: card.quality_tier.into(),
                     ribbon: card.ribbon.into(),
                     ribbon_kind: card.ribbon_kind.into(),
                     artwork_url: card.artwork_url.into(),
@@ -195,36 +168,27 @@ pub fn apply_sections(window: &AppWindow, data: Vec<SectionData>) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn greeting_uses_first_name_only() {
-        let g = greeting("Victor Rodriguez Hernandez");
-        assert!(g.ends_with(", Victor"), "got: {g}");
-    }
-
-    #[test]
-    fn greeting_without_name_omits_comma() {
-        let g = greeting("");
-        assert!(!g.contains(','), "got: {g}");
-    }
-
-    #[test]
-    fn quality_formats_bit_depth_and_rate() {
-        let audio = DiscoverAudioInfo {
-            maximum_bit_depth: Some(24),
+    fn audio(bit_depth: Option<u32>) -> DiscoverAudioInfo {
+        DiscoverAudioInfo {
+            maximum_bit_depth: bit_depth,
             maximum_sampling_rate: Some(96.0),
             maximum_channel_count: Some(2),
-        };
-        assert_eq!(quality_string(Some(&audio)), "24-bit / 96 kHz");
+        }
     }
 
     #[test]
-    fn quality_keeps_fractional_rate() {
-        let audio = DiscoverAudioInfo {
-            maximum_bit_depth: Some(16),
-            maximum_sampling_rate: Some(44.1),
-            maximum_channel_count: Some(2),
-        };
-        assert_eq!(quality_string(Some(&audio)), "16-bit / 44.1 kHz");
+    fn quality_tier_hires_for_24_bit() {
+        assert_eq!(quality_tier(Some(&audio(Some(24)))), "hires");
+    }
+
+    #[test]
+    fn quality_tier_cd_for_16_bit() {
+        assert_eq!(quality_tier(Some(&audio(Some(16)))), "cd");
+    }
+
+    #[test]
+    fn quality_tier_empty_without_audio_info() {
+        assert_eq!(quality_tier(None), "");
     }
 
     #[test]

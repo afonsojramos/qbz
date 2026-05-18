@@ -22,8 +22,11 @@ export component SectionRow inherits VerticalLayout {
         font-weight: Typography.semibold;
     }
 
+    // Fixed to the AlbumCard height with vertical scrolling disabled, so
+    // the row never grows an internal vertical scrollbar.
     ScrollView {
-        height: 290px;
+        height: 274px;
+        vertical-scrollbar-policy: ScrollBarPolicy.always-off;
         HorizontalLayout {
             spacing: 32px;
             for album in root.section.albums: AlbumCard {

@@ -7,7 +7,7 @@ export struct AlbumCardItem {
     id: string,
     title: string,
     artist: string,
-    quality: string,
+    quality-tier: string,  // "hires" | "cd" | "" — drives the badge icon
     ribbon: string,
     ribbon-kind: string,   // "press" | "qobuzissime" | "albumOfTheWeek" | ""
     artwork-url: string,
@@ -21,7 +21,6 @@ export struct DiscoverSection {
 
 // Discover / Home screen state.
 export global HomeState {
-    in property <string> greeting: "";
     in property <[DiscoverSection]> sections: [];
     in property <bool> loading: false;
 }

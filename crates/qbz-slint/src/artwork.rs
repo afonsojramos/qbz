@@ -40,11 +40,18 @@ pub fn spawn_loads(jobs: Vec<ArtworkJob>, window: slint::Weak<AppWindow>) {
     }
 }
 
-/// Download and decode one cover image into raw RGBA8 pixels. Runs on a
-/// worker thread; the result tuple is `Send`.
+/// Target decode size. Cards display at 220px; 264px keeps them crisp at
+/// modest DPI without holding full ~600px source textures in memory.
+const DECODE_SIZE: u32 = 264;
+
+/// Download and decode one cover image into raw RGBA8 pixels, downscaled to
+/// `DECODE_SIZE`. Runs on a worker thread; the result tuple is `Send`.
 async fn fetch_and_decode(url: &str) -> Option<(Vec<u8>, u32, u32)> {
     let bytes = reqwest::get(url).await.ok()?.bytes().await.ok()?;
-    let rgba = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let rgba = image::load_from_memory(&bytes)
+        .ok()?
+        .thumbnail(DECODE_SIZE, DECODE_SIZE)
+        .to_rgba8();
     let (width, height) = rgba.dimensions();
     Some((rgba.into_raw(), width, height))
 }

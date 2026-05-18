@@ -1,10 +1,9 @@
 // Album card for the Discover sections.
 //
-// Mirrors the Svelte AlbumCardLite: 220px column, square artwork with a
-// bottom-left award ribbon, single-line title, artist, and a compact
-// quality badge. Artwork image loading lands in the artwork-pipeline
-// increment; for now the artwork area is the same elevated placeholder
-// the real card shows before its image resolves.
+// Mirrors the Svelte AlbumCardLite: 220px column, 220px square artwork
+// with a bottom-left award ribbon, then a tight title / artist stack
+// alongside an icon-only quality badge. Deterministic height (274px) so
+// the section row never scrolls vertically.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
@@ -16,10 +15,11 @@ export component AlbumCard inherits Rectangle {
     in property <AlbumCardItem> album;
 
     width: 220px;
-    height: 282px;
+    height: 274px;
 
     VerticalLayout {
-        spacing: Spacing.xs;
+        alignment: start;
+        spacing: 0px;
 
         // --- Artwork ------------------------------------------------------
         Rectangle {
@@ -73,41 +73,57 @@ export component AlbumCard inherits Rectangle {
             }
         }
 
-        // --- Title --------------------------------------------------------
-        Text {
-            text: root.album.title;
-            color: Theme.text-primary;
-            font-size: Typography.body;
-            font-weight: Typography.medium;
-            overflow: elide;
-        }
+        Rectangle { height: 8px; }
 
-        // --- Artist + quality --------------------------------------------
+        // --- Title / artist + quality badge ------------------------------
         HorizontalLayout {
+            height: 46px;
             spacing: Spacing.sm;
 
-            Text {
-                text: root.album.artist;
-                color: Theme.text-muted;
-                font-size: Typography.link;
-                vertical-alignment: center;
-                overflow: elide;
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
                 horizontal-stretch: 1;
+
+                Text {
+                    text: root.album.title;
+                    color: Theme.text-primary;
+                    font-size: Typography.body;
+                    font-weight: Typography.medium;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.album.artist;
+                    color: Theme.text-muted;
+                    font-size: Typography.link;
+                    overflow: elide;
+                }
             }
 
-            if root.album.quality != "": Rectangle {
-                background: Theme.surface-elevated;
-                border-radius: 3px;
-                HorizontalLayout {
-                    padding-left: 6px;
-                    padding-right: 6px;
-                    padding-top: 3px;
-                    padding-bottom: 3px;
-                    Text {
-                        text: root.album.quality;
-                        color: Theme.text-secondary;
-                        font-size: 9px;
-                        vertical-alignment: center;
+            // Icon-only quality badge.
+            VerticalLayout {
+                alignment: center;
+
+                if root.album.quality-tier == "hires": Image {
+                    source: @image-url("../assets/hi-res.svg");
+                    width: 42px;
+                    height: 28px;
+                    image-fit: contain;
+                }
+                if root.album.quality-tier == "cd": Rectangle {
+                    width: 30px;
+                    height: 30px;
+                    border-radius: 3px;
+                    background: Theme.surface-elevated;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+                    Image {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: 16px;
+                        height: 16px;
+                        source: @image-url("../assets/cd.svg");
+                        image-fit: contain;
                     }
                 }
             }

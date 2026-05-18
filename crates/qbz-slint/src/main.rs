@@ -63,20 +63,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let runtime = runtime.clone();
             let weak = weak.clone();
             handle.spawn(async move {
-                let outcome = match auth::login_via_system_browser(&runtime).await {
-                    Ok(outcome) => outcome,
+                let user_id = match auth::login_via_system_browser(&runtime).await {
+                    Ok(user_id) => user_id,
                     Err(e) => {
                         log::error!("[qbz-slint] sign-in failed: {e}");
                         return;
                     }
                 };
-                log::info!("[qbz-slint] authenticated as user {}", outcome.user_id);
+                log::info!("[qbz-slint] authenticated as user {user_id}");
 
-                let greeting = home::greeting(&outcome.display_name);
                 let _ = weak.upgrade_in_event_loop(move |w| {
-                    let state = w.global::<HomeState>();
-                    state.set_greeting(greeting.into());
-                    state.set_loading(true);
+                    w.global::<HomeState>().set_loading(true);
                     w.set_screen(AppScreen::Shell);
                 });
 

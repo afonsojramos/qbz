@@ -49,14 +49,6 @@ export component HomeView inherits Rectangle {
             spacing: 28px;
             alignment: start;
 
-            Text {
-                text: HomeState.greeting;
-                visible: HomeState.greeting != "";
-                color: Theme.text-primary;
-                font-size: 26px;
-                font-weight: Typography.semibold;
-            }
-
             HorizontalLayout {
                 alignment: start;
                 Rectangle {
