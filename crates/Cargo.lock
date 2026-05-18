@@ -5371,10 +5371,17 @@ dependencies = [
 name = "qbz-slint"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "env_logger",
  "log",
+ "open",
+ "qbz-app",
+ "qbz-core",
+ "qbz-models",
  "slint",
  "slint-build",
+ "tokio",
+ "urlencoding",
 ]
 
 [[package]]

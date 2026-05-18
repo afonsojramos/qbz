@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Slint functional POC shell for QBZ (private branch only)"
+description = "Slint functional MVP shell for QBZ (private branch only)"
 
 [[bin]]
 name = "qbz-slint"
@@ -14,6 +14,13 @@ path = "src/main.rs"
 slint = "1"
 log = { workspace = true }
 env_logger = "0.11"
+tokio = { workspace = true }
+async-trait = { workspace = true }
+urlencoding = "2"
+open = "5"
+qbz-app = { path = "../qbz-app" }
+qbz-core = { path = "../qbz-core" }
+qbz-models = { path = "../qbz-models" }
 
 [build-dependencies]
 slint-build = "1"

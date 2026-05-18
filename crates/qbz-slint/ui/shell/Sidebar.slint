@@ -1,7 +1,7 @@
 // Left navigation sidebar — playlists list plus the user card.
 //
-// Shell-frame increment: the playlist rows are placeholder names for
-// visual reference. Real playlist data is wired in a later milestone.
+// The playlist list is empty until real playlist data is wired (the
+// sidebar is a later milestone). No placeholder/fixture rows.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Spacing } from "../foundation/spacing.slint";
@@ -9,46 +9,6 @@ import { Typography } from "../foundation/typography.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
 import { ScrollView } from "std-widgets.slint";
-
-component PlaylistRow inherits Rectangle {
-    in property <string> name;
-    height: 34px;
-    border-radius: Radius.sm;
-    background: ta.has-hover ? Theme.surface-hover : transparent;
-
-    HorizontalLayout {
-        padding-left: Spacing.sm;
-        padding-right: Spacing.sm;
-        spacing: Spacing.sm;
-
-        Rectangle {
-            width: 16px;
-            height: 16px;
-            y: (parent.height - self.height) / 2;
-            border-radius: 3px;
-            background: Theme.accent;
-            opacity: 0.55;
-        }
-        Text {
-            text: root.name;
-            color: Theme.text-secondary;
-            font-size: Typography.body;
-            vertical-alignment: center;
-            overflow: elide;
-            horizontal-stretch: 1;
-        }
-        Text {
-            text: "›";
-            color: Theme.text-muted;
-            font-size: 16px;
-            vertical-alignment: center;
-        }
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-    }
-}
 
 export component Sidebar inherits Rectangle {
     width: Layout.sidebar-width;
@@ -79,15 +39,8 @@ export component Sidebar inherits Rectangle {
             vertical-stretch: 1;
             VerticalLayout {
                 spacing: 2px;
-                for name in [
-                    "N.W.O.B.H.M.", "Beatles", "Progressive Metal",
-                    "Progressive Rock", "Rock en español", "Español",
-                    "Metal of the world", "Curated Metal", "Soundtracks",
-                    "Rock Mix", "Anime", "Classic Punk", "grls",
-                    "One Hit Wonder",
-                ] : PlaylistRow {
-                    name: name;
-                }
+                // Real playlist rows are populated when the sidebar
+                // milestone wires playlist data. No fixtures.
             }
         }
 
