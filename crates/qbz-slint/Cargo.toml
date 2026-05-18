@@ -23,6 +23,7 @@ open = "5"
 qbz-app = { path = "../qbz-app" }
 qbz-core = { path = "../qbz-core" }
 qbz-models = { path = "../qbz-models" }
+qbz-cache = { path = "../qbz-cache" }
 
 [build-dependencies]
 slint-build = "1"

@@ -5074,6 +5074,8 @@ dependencies = [
  "dirs",
  "filetime",
  "log",
+ "md-5",
+ "rusqlite",
  "serde",
 ]
 

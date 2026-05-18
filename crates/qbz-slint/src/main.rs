@@ -37,9 +37,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let tokio_rt = tokio::runtime::Runtime::new()?;
+    let _enter = tokio_rt.enter();
 
     let window = AppWindow::new()?;
     let app_runtime = Arc::new(AppRuntime::new(SlintAdapter::new(window.as_weak())));
+
+    // Shared QBZ image cache for album artwork; trim it on startup.
+    let image_cache = artwork::open_cache();
+    artwork::spawn_evict(image_cache.clone());
 
     // Extract Qobuz bundle tokens in the background so OAuth is ready
     // by the time the user signs in.
@@ -59,9 +64,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
         move || {
             let runtime = runtime.clone();
             let weak = weak.clone();
+            let image_cache = image_cache.clone();
             handle.spawn(async move {
                 let user_id = match auth::login_via_system_browser(&runtime).await {
                     Ok(user_id) => user_id,
@@ -104,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             home::apply_sections(&w, sections);
                             w.global::<HomeState>().set_loading(false);
                         });
-                        artwork::spawn_loads(jobs, weak.clone());
+                        artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
                     }
                     Err(e) => {
                         log::error!("[qbz-slint] discover load failed: {e}");

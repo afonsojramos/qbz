@@ -5215,6 +5215,8 @@ dependencies = [
  "dirs",
  "filetime",
  "log",
+ "md-5",
+ "rusqlite",
  "serde",
 ]
 
@@ -5377,6 +5379,7 @@ dependencies = [
  "log",
  "open",
  "qbz-app",
+ "qbz-cache",
  "qbz-core",
  "qbz-models",
  "reqwest",
