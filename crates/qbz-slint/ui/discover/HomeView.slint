@@ -107,6 +107,7 @@ component GearButton inherits Rectangle {
 
 export component HomeView inherits Rectangle {
     callback album-clicked(string);
+    callback media-action(string, string, string);
 
     background: Theme.surface-main;
 
@@ -181,6 +182,9 @@ export component HomeView inherits Rectangle {
                     section: section;
                     album-clicked(id) => {
                         root.album-clicked(id);
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
                     }
                 }
 

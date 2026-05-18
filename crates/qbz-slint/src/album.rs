@@ -26,6 +26,7 @@ pub struct AlbumData {
 }
 
 pub struct TrackData {
+    pub id: String,
     pub number: String,
     pub title: String,
     pub artist: String,
@@ -103,6 +104,7 @@ fn map_track(track: Track) -> TrackData {
         title = format!("{title} ({version})");
     }
     TrackData {
+        id: track.id.to_string(),
         number: track.track_number.to_string(),
         title,
         artist: track.performer.map(|p| p.name).unwrap_or_default(),
@@ -143,6 +145,7 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
         .tracks
         .into_iter()
         .map(|track| AlbumTrackItem {
+            id: track.id.into(),
             number: track.number.into(),
             title: track.title.into(),
             artist: track.artist.into(),

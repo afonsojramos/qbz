@@ -5,6 +5,9 @@
 // genre/year meta, and play / favorite / more action buttons), then a
 // tight title / artist stack alongside an icon-only quality badge.
 // Deterministic 266px height.
+//
+// The "more" overlay button opens a context menu; its actions bubble up
+// as media-action(kind, id, action).
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
@@ -13,18 +16,26 @@ import { Spacing } from "../foundation/spacing.slint";
 import { AlbumCardItem } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadge } from "../primitives/QualityBadge.slint";
+import { ContextMenu } from "../primitives/ContextMenu.slint";
+import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 
-// Circular hover-overlay action button.
+// Circular hover-overlay action button. `interactive` gates its pointer
+// handling so that, while the card is not hovered, clicks fall through to
+// the card-open detector underneath.
 component OverlayButton inherits Rectangle {
     in property <image> icon;
     in property <bool> primary: false;
+    in property <bool> interactive: true;
     in property <length> diameter: 36px;
     in property <length> icon-size: 16px;
+    callback clicked();
 
     width: root.diameter;
     height: root.diameter;
     border-radius: root.diameter / 2;
-    background: root.primary ? #ffffff : transparent;
+    background: root.primary
+        ? (ta.has-hover ? #ffffffd0 : #ffffff)
+        : (ta.has-hover ? #ffffff28 : transparent);
     border-width: root.primary ? 0px : 1.5px;
     border-color: #ffffffe6;
 
@@ -36,11 +47,21 @@ component OverlayButton inherits Rectangle {
         y: (parent.height - self.height) / 2;
         tint: root.primary ? #000000 : #ffffff;
     }
+
+    ta := TouchArea {
+        enabled: root.interactive;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
 }
 
 export component AlbumCard inherits Rectangle {
     in property <AlbumCardItem> album;
     callback clicked(string);
+    // kind ("album") , album id, action ("play" | "queue" | "favorite").
+    callback media-action(string, string, string);
 
     // Fully deterministic height: artwork 220 + 6 spacer + 40 meta.
     width: 220px;
@@ -102,6 +123,17 @@ export component AlbumCard inherits Rectangle {
                 }
             }
 
+            // Card-open + hover detector. Declared before the action
+            // buttons so those, when interactive, win the pointer.
+            hover := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.clicked(root.album.id);
+                }
+            }
+
             // Hover action buttons — favorite / play / more.
             HorizontalLayout {
                 x: 0px;
@@ -115,17 +147,33 @@ export component AlbumCard inherits Rectangle {
 
                 VerticalLayout {
                     alignment: center;
-                    OverlayButton { icon: @image-url("../assets/icons/heart.svg"); }
+                    OverlayButton {
+                        icon: @image-url("../assets/icons/heart.svg");
+                        interactive: hover.has-hover;
+                        clicked => {
+                            root.media-action("album", root.album.id, "favorite");
+                        }
+                    }
                 }
                 OverlayButton {
                     icon: @image-url("../assets/icons/play.svg");
                     primary: true;
                     diameter: 44px;
                     icon-size: 18px;
+                    interactive: hover.has-hover;
+                    clicked => {
+                        root.media-action("album", root.album.id, "play");
+                    }
                 }
                 VerticalLayout {
                     alignment: center;
-                    OverlayButton { icon: @image-url("../assets/icons/ellipsis.svg"); }
+                    OverlayButton {
+                        icon: @image-url("../assets/icons/ellipsis.svg");
+                        interactive: hover.has-hover;
+                        clicked => {
+                            album-menu.show();
+                        }
+                    }
                 }
             }
 
@@ -169,13 +217,41 @@ export component AlbumCard inherits Rectangle {
                 }
             }
 
-            // Hover + click detector — topmost so it owns the pointer.
-            hover := TouchArea {
-                width: 100%;
-                height: 100%;
-                mouse-cursor: pointer;
-                clicked => {
-                    root.clicked(root.album.id);
+            // Context menu for the "more" button.
+            album-menu := PopupWindow {
+                x: 26px;
+                y: 56px;
+                width: 196px;
+                height: 142px;
+                ContextMenu {
+                    ContextMenuItem {
+                        icon: @image-url("../assets/icons/library-big.svg");
+                        label: @tr("Open album");
+                        clicked => {
+                            root.clicked(root.album.id);
+                        }
+                    }
+                    ContextMenuItem {
+                        icon: @image-url("../assets/icons/play.svg");
+                        label: @tr("Play");
+                        clicked => {
+                            root.media-action("album", root.album.id, "play");
+                        }
+                    }
+                    ContextMenuItem {
+                        icon: @image-url("../assets/icons/list-plus.svg");
+                        label: @tr("Add to queue");
+                        clicked => {
+                            root.media-action("album", root.album.id, "queue");
+                        }
+                    }
+                    ContextMenuItem {
+                        icon: @image-url("../assets/icons/heart.svg");
+                        label: @tr("Add to favorites");
+                        clicked => {
+                            root.media-action("album", root.album.id, "favorite");
+                        }
+                    }
                 }
             }
         }

@@ -102,6 +102,7 @@ component TrackRow inherits Rectangle {
 
 export component ArtistPageView inherits Rectangle {
     callback open-album(string);
+    callback media-action(string, string, string);
 
     background: Theme.surface-main;
 
@@ -243,6 +244,9 @@ export component ArtistPageView inherits Rectangle {
                 };
                 album-clicked(id) => {
                     root.open-album(id);
+                }
+                media-action(kind, id, action) => {
+                    root.media-action(kind, id, action);
                 }
             }
         }

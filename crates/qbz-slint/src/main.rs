@@ -372,6 +372,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Context-menu / overlay media actions. Playback wiring lands with the
+    // playback session; for now the action is logged.
+    window.on_media_action(move |kind, id, action| {
+        log::info!("[qbz-slint] media-action: kind={kind} id={id} action={action}");
+    });
+
     window.on_close_app(|| {
         log::info!("[qbz-slint] closing");
         let _ = slint::quit_event_loop();

@@ -1,0 +1,43 @@
+// One row of a context menu — an icon, a label, and a click callback.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { QbzIcon } from "QbzIcon.slint";
+
+export component ContextMenuItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    callback clicked();
+
+    height: 33px;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+
+    HorizontalLayout {
+        padding-left: 11px;
+        padding-right: 16px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.icon;
+                width: 15px;
+                height: 15px;
+                tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+            }
+        }
+        Text {
+            text: root.label;
+            color: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

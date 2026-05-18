@@ -94,6 +94,7 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackData {
         title = format!("{title} ({version})");
     }
     TrackData {
+        id: track.id.to_string(),
         number: (index + 1).to_string(),
         title,
         artist: track.artist.map(|a| a.name.display).unwrap_or_default(),
@@ -165,6 +166,7 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
         .top_tracks
         .into_iter()
         .map(|track| AlbumTrackItem {
+            id: track.id.into(),
             number: track.number.into(),
             title: track.title.into(),
             artist: track.artist.into(),

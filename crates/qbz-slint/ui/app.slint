@@ -33,6 +33,7 @@ export component AppWindow inherits Window {
     callback open-tos();
     callback open-album(string);
     callback open-artist(string);
+    callback media-action(string, string, string);
     callback settings-bool(string, bool);
     callback settings-select(string, int);
     callback logout();
@@ -61,6 +62,9 @@ export component AppWindow inherits Window {
         }
         open-artist(id) => {
             root.open-artist(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
         }
         settings-bool(k, v) => {
             root.settings-bool(k, v);

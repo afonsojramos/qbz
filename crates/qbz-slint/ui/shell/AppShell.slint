@@ -18,6 +18,7 @@ import { SettingsView } from "../settings/SettingsView.slint";
 export component AppShell inherits Rectangle {
     callback open-album(string);
     callback open-artist(string);
+    callback media-action(string, string, string);
     callback settings-bool(string, bool);
     callback settings-select(string, int);
     callback logout();
@@ -52,15 +53,24 @@ export component AppShell inherits Rectangle {
                     album-clicked(id) => {
                         root.open-album(id);
                     }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
                 }
                 if NavState.view == ContentView.album: AlbumPageView {
                     open-artist(id) => {
                         root.open-artist(id);
                     }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
                 }
                 if NavState.view == ContentView.artist: ArtistPageView {
                     open-album(id) => {
                         root.open-album(id);
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
                     }
                 }
                 if NavState.view == ContentView.settings: SettingsView {

@@ -45,6 +45,7 @@ component NavButton inherits Rectangle {
 export component Carousel inherits VerticalLayout {
     in property <DiscoverSection> section;
     callback album-clicked(string);
+    callback media-action(string, string, string);
 
     property <length> card-width: 220px;
     property <length> card-height: 266px;
@@ -117,6 +118,9 @@ export component Carousel inherits VerticalLayout {
                     album: album;
                     clicked(id) => {
                         root.album-clicked(id);
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
                     }
                 }
             }
