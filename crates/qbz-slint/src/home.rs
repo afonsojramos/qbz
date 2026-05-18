@@ -24,6 +24,8 @@ pub struct CardData {
     pub id: String,
     pub title: String,
     pub artist: String,
+    pub genre: String,
+    pub year: String,
     /// "hires" | "cd" | "" — drives the icon-only quality badge.
     pub quality_tier: String,
     pub ribbon: String,
@@ -83,7 +85,16 @@ fn map_album(album: DiscoverAlbum) -> CardData {
         .first()
         .map(|a| a.name.clone())
         .unwrap_or_default();
+    let genre = album.genre.map(|g| g.name).unwrap_or_default();
+    let year = album
+        .dates
+        .as_ref()
+        .and_then(|d| d.original.as_ref().or(d.download.as_ref()).or(d.stream.as_ref()))
+        .and_then(|date| date.get(0..4))
+        .unwrap_or("")
+        .to_string();
     let (ribbon, ribbon_kind) = pick_ribbon(album.awards.as_deref());
+    let quality_tier = quality_tier(album.audio_info.as_ref()).to_string();
     let artwork_url = album
         .image
         .large
@@ -94,7 +105,9 @@ fn map_album(album: DiscoverAlbum) -> CardData {
         id: album.id,
         title: album.title,
         artist,
-        quality_tier: quality_tier(album.audio_info.as_ref()).to_string(),
+        genre,
+        year,
+        quality_tier,
         ribbon,
         ribbon_kind,
         artwork_url,
@@ -146,6 +159,8 @@ pub fn apply_sections(window: &AppWindow, data: Vec<SectionData>) {
                     id: card.id.into(),
                     title: card.title.into(),
                     artist: card.artist.into(),
+                    genre: card.genre.into(),
+                    year: card.year.into(),
                     quality_tier: card.quality_tier.into(),
                     ribbon: card.ribbon.into(),
                     ribbon_kind: card.ribbon_kind.into(),

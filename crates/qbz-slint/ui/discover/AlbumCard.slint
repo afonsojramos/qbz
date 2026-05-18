@@ -1,9 +1,10 @@
 // Album card for the Discover sections.
 //
 // Mirrors the Svelte AlbumCardLite: 220px column, 220px square artwork
-// with a bottom-left award ribbon, then a tight title / artist stack
-// alongside an icon-only quality badge. Deterministic height (274px) so
-// the section row never scrolls vertically.
+// with a bottom-left award ribbon and a hover overlay (dark scrim,
+// genre/year meta, and play / favorite / more action buttons), then a
+// tight title / artist stack alongside an icon-only quality badge.
+// Deterministic 266px height.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
@@ -11,8 +12,32 @@ import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
 import { AlbumCardItem } from "../state.slint";
 
+// Circular hover-overlay action button.
+component OverlayButton inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> primary: false;
+    in property <length> diameter: 36px;
+    in property <length> glyph-size: 16px;
+
+    width: root.diameter;
+    height: root.diameter;
+    border-radius: root.diameter / 2;
+    background: root.primary ? #ffffff : transparent;
+    border-width: root.primary ? 0px : 1.5px;
+    border-color: #ffffffe6;
+
+    Text {
+        text: root.glyph;
+        color: root.primary ? #000000 : #ffffff;
+        font-size: root.glyph-size;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
 export component AlbumCard inherits Rectangle {
     in property <AlbumCardItem> album;
+    callback clicked(string);
 
     // Fully deterministic height: artwork 220 + 6 spacer + 40 meta.
     width: 220px;
@@ -22,7 +47,7 @@ export component AlbumCard inherits Rectangle {
         alignment: start;
         spacing: 0px;
 
-        // --- Artwork ------------------------------------------------------
+        // --- Artwork + hover overlay -------------------------------------
         Rectangle {
             width: 220px;
             height: 220px;
@@ -39,6 +64,66 @@ export component AlbumCard inherits Rectangle {
                 image-fit: cover;
             }
 
+            // Hover scrim.
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                background: #000000;
+                opacity: hover.has-hover ? 0.6 : 0.0;
+                animate opacity { duration: 150ms; }
+            }
+
+            // Hover meta — genre + year, top-left.
+            VerticalLayout {
+                x: 12px;
+                y: 12px;
+                spacing: 1px;
+                opacity: hover.has-hover ? 1.0 : 0.0;
+                animate opacity { duration: 150ms; }
+
+                Text {
+                    text: root.album.genre;
+                    visible: root.album.genre != "";
+                    color: #ffffffeb;
+                    font-size: 14px;
+                    font-weight: Typography.medium;
+                }
+                Text {
+                    text: root.album.year;
+                    visible: root.album.year != "";
+                    color: #ffffffcc;
+                    font-size: 13px;
+                }
+            }
+
+            // Hover action buttons — favorite / play / more.
+            HorizontalLayout {
+                x: 0px;
+                y: 132px;
+                width: 220px;
+                height: 44px;
+                alignment: center;
+                spacing: 12px;
+                opacity: hover.has-hover ? 1.0 : 0.0;
+                animate opacity { duration: 150ms; }
+
+                VerticalLayout {
+                    alignment: center;
+                    OverlayButton { glyph: "♡"; }
+                }
+                OverlayButton {
+                    glyph: "▶";
+                    primary: true;
+                    diameter: 44px;
+                    glyph-size: 17px;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    OverlayButton { glyph: "⋯"; glyph-size: 18px; }
+                }
+            }
+
+            // Award ribbon — always visible, above the overlay.
             if root.album.ribbon != "": Rectangle {
                 x: 0px;
                 y: parent.height - self.height - 8px;
@@ -70,6 +155,16 @@ export component AlbumCard inherits Rectangle {
                         vertical-alignment: center;
                         overflow: elide;
                     }
+                }
+            }
+
+            // Hover + click detector — topmost so it owns the pointer.
+            hover := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.clicked(root.album.id);
                 }
             }
         }
