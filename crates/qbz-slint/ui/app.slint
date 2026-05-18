@@ -1,16 +1,16 @@
-// QBZ Slint POC — UI entry point.
+// QBZ Slint MVP — UI entry point.
 //
 // Stays thin: imports the feature screens and exports the single
 // top-level window. No raw visual constants or domain logic here
-// (POC ADR, sections 13 and 21).
+// (MVP ADR, sections 13 and 21).
 
 import { Theme } from "foundation/semantic-colors.slint";
 import { SplashScreen } from "splash/SplashScreen.slint";
 import { LoginScreen } from "login/LoginScreen.slint";
 import { AppShell } from "shell/AppShell.slint";
 
-// Re-export the HomeState global so the Rust layer can populate it.
-export { HomeState } from "state.slint";
+// Re-export the state globals so the Rust layer can populate them.
+export { HomeState, AlbumState, NavState } from "state.slint";
 
 // Which top-level screen is shown. The app starts on `splash` while it
 // restores a saved session, then resolves to `shell` or `login`.
@@ -26,11 +26,12 @@ export component AppWindow inherits Window {
 
     in-out property <AppScreen> screen: AppScreen.splash;
 
-    // Forwarded to the Rust layer, which maps them to typed AppCommands.
+    // Forwarded to the Rust layer.
     callback sign-in-via-browser();
     callback use-system-browser();
     callback start-offline();
     callback open-tos();
+    callback open-album(string);
 
     if root.screen == AppScreen.splash: SplashScreen { }
 
@@ -49,5 +50,9 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.screen == AppScreen.shell: AppShell { }
+    if root.screen == AppScreen.shell: AppShell {
+        open-album(id) => {
+            root.open-album(id);
+        }
+    }
 }

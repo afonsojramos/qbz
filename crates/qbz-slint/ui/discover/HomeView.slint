@@ -93,6 +93,8 @@ component GearButton inherits Rectangle {
 }
 
 export component HomeView inherits Rectangle {
+    callback album-clicked(string);
+
     background: Theme.surface-main;
 
     VerticalLayout {
@@ -155,6 +157,9 @@ export component HomeView inherits Rectangle {
 
                 for section in HomeState.sections: Carousel {
                     section: section;
+                    album-clicked(id) => {
+                        root.album-clicked(id);
+                    }
                 }
             }
         }

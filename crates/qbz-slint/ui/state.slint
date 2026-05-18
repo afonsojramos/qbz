@@ -26,3 +26,28 @@ export global HomeState {
     in property <[DiscoverSection]> sections: [];
     in property <bool> loading: false;
 }
+
+export struct AlbumTrackItem {
+    number: string,
+    title: string,
+    artist: string,
+    duration: string,
+    quality-tier: string,
+    explicit: bool,
+}
+
+// Album detail screen state.
+export global AlbumState {
+    in property <string> title;
+    in property <string> artist;
+    in property <string> info-line;
+    in property <string> quality-tier;
+    in property <image> artwork;
+    in property <[AlbumTrackItem]> tracks: [];
+    in property <bool> loading: false;
+}
+
+// Which content view the shell shows.
+export global NavState {
+    in-out property <bool> showing-album: false;
+}

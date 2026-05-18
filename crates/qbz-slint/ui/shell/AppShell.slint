@@ -1,17 +1,19 @@
 // App shell — the post-login frame: header bar, sidebar, content
-// region, and player bar.
-//
-// The content region is a placeholder; the Discover / Home view lands
-// in the next increment. Hairlines separate the regions.
+// region, and player bar. The content region shows either the Discover
+// Home view or the Album detail view, driven by NavState.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
+import { NavState } from "../state.slint";
 import { Sidebar } from "Sidebar.slint";
 import { HeaderBar } from "HeaderBar.slint";
 import { PlayerBar } from "PlayerBar.slint";
 import { HomeView } from "../discover/HomeView.slint";
+import { AlbumPageView } from "../album/AlbumPageView.slint";
 
 export component AppShell inherits Rectangle {
+    callback open-album(string);
+
     background: Theme.surface-main;
 
     VerticalLayout {
@@ -32,8 +34,18 @@ export component AppShell inherits Rectangle {
                 width: Layout.hairline;
                 background: Theme.border-subtle;
             }
-            HomeView {
+
+            // Content region — Home or Album detail.
+            Rectangle {
                 horizontal-stretch: 1;
+                background: Theme.surface-main;
+
+                if !NavState.showing-album: HomeView {
+                    album-clicked(id) => {
+                        root.open-album(id);
+                    }
+                }
+                if NavState.showing-album: AlbumPageView { }
             }
         }
 

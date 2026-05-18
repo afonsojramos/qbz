@@ -15,6 +15,7 @@
 slint::include_modules!();
 
 mod adapter;
+mod album;
 mod artwork;
 mod auth;
 mod commands;
@@ -181,6 +182,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let _ = weak.upgrade_in_event_loop(|w| w.set_screen(AppScreen::Shell));
                     }
                     Err(e) => log::error!("[qbz-slint] offline start failed: {e}"),
+                }
+            });
+        });
+    }
+
+    // Open an album: load it, show the album view, then fetch its artwork.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.on_open_album(move |album_id| {
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let image_cache = image_cache.clone();
+            let album_id = album_id.to_string();
+            handle.spawn(async move {
+                let _ = weak.upgrade_in_event_loop(|w| {
+                    album::reset_album(&w);
+                    w.global::<NavState>().set_showing_album(true);
+                });
+                match album::load_album(&runtime, &album_id).await {
+                    Ok(data) => {
+                        let artwork_url = data.artwork_url.clone();
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            album::apply_album(&w, data);
+                            w.global::<AlbumState>().set_loading(false);
+                        });
+                        if !artwork_url.is_empty() {
+                            if let Some((pixels, width, height)) =
+                                artwork::fetch_and_decode(&artwork_url, &image_cache, 448).await
+                            {
+                                let _ = weak.upgrade_in_event_loop(move |w| {
+                                    album::apply_artwork(&w, &pixels, width, height);
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("[qbz-slint] album load failed: {e}");
+                        let _ = weak.upgrade_in_event_loop(|w| {
+                            w.global::<AlbumState>().set_loading(false);
+                        });
+                    }
                 }
             });
         });

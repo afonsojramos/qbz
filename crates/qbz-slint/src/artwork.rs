@@ -73,7 +73,8 @@ pub fn spawn_loads(jobs: Vec<ArtworkJob>, window: slint::Weak<AppWindow>, cache:
         let cache = cache.clone();
         tokio::spawn(async move {
             let _permit = semaphore.acquire().await.ok()?;
-            let (pixels, width, height) = fetch_and_decode(&job.url, &cache).await?;
+            let (pixels, width, height) =
+                fetch_and_decode(&job.url, &cache, DECODE_SIZE).await?;
             let _ = window.upgrade_in_event_loop(move |w| {
                 apply_artwork(&w, job.section_idx, job.album_idx, &pixels, width, height);
             });
@@ -82,10 +83,14 @@ pub fn spawn_loads(jobs: Vec<ArtworkJob>, window: slint::Weak<AppWindow>, cache:
     }
 }
 
-/// Resolve one cover image to raw RGBA8 pixels, downscaled to `DECODE_SIZE`.
+/// Resolve one cover image to raw RGBA8 pixels, downscaled to `decode_size`.
 /// Reads from the shared cache on a hit; on a miss downloads, stores, and
 /// uses the bytes. Runs on a worker thread; the result tuple is `Send`.
-async fn fetch_and_decode(url: &str, cache: &ImageCache) -> Option<(Vec<u8>, u32, u32)> {
+pub async fn fetch_and_decode(
+    url: &str,
+    cache: &ImageCache,
+    decode_size: u32,
+) -> Option<(Vec<u8>, u32, u32)> {
     let cached_path = {
         let guard = cache.lock().ok()?;
         guard.as_ref().and_then(|service| service.get(url))
@@ -106,7 +111,7 @@ async fn fetch_and_decode(url: &str, cache: &ImageCache) -> Option<(Vec<u8>, u32
 
     let rgba = image::load_from_memory(&bytes)
         .ok()?
-        .thumbnail(DECODE_SIZE, DECODE_SIZE)
+        .thumbnail(decode_size, decode_size)
         .to_rgba8();
     let (width, height) = rgba.dimensions();
     Some((rgba.into_raw(), width, height))
