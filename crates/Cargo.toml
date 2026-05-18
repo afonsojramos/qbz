@@ -20,6 +20,7 @@ members = [
     "qconnect-app",
     "qbzd",
     "qbz-slint",
+    "qbz-credentials",
 ]
 
 [workspace.package]

@@ -33,6 +33,7 @@ qbz-qobuz = { path = "../crates/qbz-qobuz" }
 qbz-core = { path = "../crates/qbz-core" }
 qbz-integrations = { path = "../crates/qbz-integrations" }
 qbz-cache = { path = "../crates/qbz-cache" }
+qbz-credentials = { path = "../crates/qbz-credentials" }
 qbz-library = { path = "../crates/qbz-library" }
 qbz-cast = { path = "../crates/qbz-cast" }
 qbz-cmaf = { path = "../crates/qbz-cmaf" }

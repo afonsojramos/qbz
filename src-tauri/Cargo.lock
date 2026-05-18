@@ -5127,6 +5127,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-credentials"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "ashpd",
+ "base64 0.22.1",
+ "dirs",
+ "keyring",
+ "log",
+ "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+]
+
+[[package]]
 name = "qbz-integrations"
 version = "0.1.0"
 dependencies = [
@@ -5207,6 +5224,7 @@ dependencies = [
  "qbz-cast",
  "qbz-cmaf",
  "qbz-core",
+ "qbz-credentials",
  "qbz-integrations",
  "qbz-library",
  "qbz-models",
