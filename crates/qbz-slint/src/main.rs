@@ -578,6 +578,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Switch search results tab. search_all already loaded every
+    // category, so this only changes which one the view renders.
+    {
+        let weak = window.as_weak();
+        window.global::<SearchActions>().on_tab_changed(move |tab| {
+            if let Some(w) = weak.upgrade() {
+                w.global::<SearchState>().set_tab(tab);
+            }
+        });
+    }
+
     // History navigation — back / forward / settings, all recorded by the
     // nav module so the [<] [>] pair and the mouse buttons stay in sync.
     {
