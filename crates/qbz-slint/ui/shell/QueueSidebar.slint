@@ -128,6 +128,17 @@ component QueueRow inherits Rectangle {
     background: ta.has-hover ? Theme.surface-hover : transparent;
     border-radius: Radius.sm;
 
+    // Declared before the content so the context-menu button (which has
+    // its own TouchArea) renders on top and keeps its own clicks. A row
+    // TouchArea declared after the content would sit on top and eat the
+    // menu-button clicks — making the [...] just skip to the track.
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
     HorizontalLayout {
         padding-left: Spacing.sm;
         padding-right: Spacing.xs;
@@ -223,15 +234,6 @@ component QueueRow inherits Rectangle {
                     }
                 }
             }
-        }
-    }
-
-    ta := TouchArea {
-        // The menu trigger sits above this area and consumes its own
-        // clicks, so a row click never doubles as a menu open.
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
         }
     }
 

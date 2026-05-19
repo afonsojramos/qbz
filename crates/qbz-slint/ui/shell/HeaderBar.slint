@@ -22,13 +22,16 @@ component SidebarToggle inherits Rectangle {
     width: 30px;
     height: 30px;
 
+    // 14px matches the nav-tab icons; with the 30px box the centering
+    // math ((30-14)/2 = 8) lands on whole pixels so the glyph stays
+    // crisp. Tint matches the tab icons (secondary, primary on hover).
     QbzIcon {
         source: @image-url("../assets/icons/panel-left.svg");
-        width: 19px;
-        height: 19px;
+        width: 14px;
+        height: 14px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        tint: Theme.text-primary;
+        tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
     }
 
     ta := TouchArea {

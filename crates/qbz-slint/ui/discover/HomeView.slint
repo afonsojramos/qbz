@@ -151,6 +151,10 @@ export component HomeView inherits Rectangle {
                 x: 32px;
                 y: (parent.height - self.height) / 2;
                 width: self.preferred-width;
+                // Explicit height too — without it the layout fills the
+                // 56px toolbar, so `y` resolves to 0 and the tab pill
+                // sticks to the top instead of centering.
+                height: self.preferred-height;
                 spacing: 16px;
                 VerticalLayout {
                     alignment: center;
@@ -179,6 +183,7 @@ export component HomeView inherits Rectangle {
                 x: parent.width - self.width - 32px;
                 y: (parent.height - self.height) / 2;
                 width: self.preferred-width;
+                height: self.preferred-height;
                 spacing: 6px;
                 GenreButton { }
                 // Per-tab sort / show-hide control for the Discover
