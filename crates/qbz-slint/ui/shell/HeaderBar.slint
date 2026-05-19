@@ -42,12 +42,16 @@ component NavTab inherits Rectangle {
                 tint: root.active ? Theme.text-primary : Theme.text-secondary;
             }
         }
-        Text {
-            text: root.label;
-            color: root.active ? Theme.text-primary : Theme.text-secondary;
-            font-size: 12px;
-            font-weight: root.active ? Typography.semibold : Typography.regular;
-            vertical-alignment: center;
+        // Wrapped in a centered VerticalLayout so the label is centered
+        // the same way the glyph and caret are — otherwise it rides high.
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.label;
+                color: root.active ? Theme.text-primary : Theme.text-secondary;
+                font-size: 12px;
+                font-weight: root.active ? Typography.semibold : Typography.regular;
+            }
         }
         // Caret marking the tab as a dropdown.
         VerticalLayout {
@@ -107,9 +111,18 @@ component MenuItem inherits Rectangle {
     }
 }
 
-// Text-only menu row for the nav-tab dropdowns (no leading icon).
+// One entry of a nav-tab dropdown.
+struct NavMenuEntry {
+    label: string,
+    icon: image,
+    has-glyph: bool,
+}
+
+// A menu row for the nav-tab dropdowns, with an optional leading glyph.
 component NavMenuItem inherits Rectangle {
     in property <string> label;
+    in property <image> icon;
+    in property <bool> has-glyph: false;
     callback clicked();
 
     height: 32px;
@@ -118,6 +131,16 @@ component NavMenuItem inherits Rectangle {
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 22px;
+        spacing: 9px;
+        if root.has-glyph: VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.icon;
+                width: 14px;
+                height: 14px;
+                tint: Theme.text-secondary;
+            }
+        }
         Text {
             text: root.label;
             color: Theme.text-secondary;
@@ -144,7 +167,7 @@ component NavTabWithMenu inherits Rectangle {
     in property <string> label;
     in property <bool> active: false;
     in property <bool> show-icon: true;
-    in property <[string]> items;
+    in property <[NavMenuEntry]> items;
     // Index of the row wired to Home (-1 = none). Clicking it switches
     // to ContentView.home; all other rows are harmless no-ops.
     in property <int> home-item: -1;
@@ -170,7 +193,7 @@ component NavTabWithMenu inherits Rectangle {
 
         menu-box := Rectangle {
             background: Theme.surface-elevated;
-            border-radius: Radius.md;
+            border-radius: Radius.sm;
             border-width: 1px;
             border-color: Theme.border-subtle;
             drop-shadow-blur: 24px;
@@ -181,7 +204,9 @@ component NavTabWithMenu inherits Rectangle {
                 padding-top: 6px;
                 padding-bottom: 6px;
                 for entry[idx] in root.items: NavMenuItem {
-                    label: entry;
+                    label: entry.label;
+                    icon: entry.icon;
+                    has-glyph: entry.has-glyph;
                     clicked => {
                         if (idx == root.home-item) {
                             NavState.view = ContentView.home;
@@ -246,29 +271,46 @@ export component HeaderBar inherits Rectangle {
             label: @tr("Discover");
             active: true;
             show-icon: root.show-tab-icons;
-            items: [@tr("Home"), @tr("Editor's Picks"), @tr("For You")];
+            // Discover rows are text-only (no glyphs).
+            items: [
+                { label: @tr("Home"), has-glyph: false },
+                { label: @tr("Editor's Picks"), has-glyph: false },
+                { label: @tr("For You"), has-glyph: false },
+            ];
             // Row 0 = Home, the one working destination.
             home-item: 0;
         }
         NavTabWithMenu {
-            icon: @image-url("../assets/icons/library-big.svg");
+            icon: @image-url("../assets/icons/music-library-2.svg");
             label: @tr("Library");
             show-icon: root.show-tab-icons;
-            items: [@tr("Tracks"), @tr("Albums"), @tr("Artists"),
-                @tr("Playlists"), @tr("Labels")];
+            items: [
+                { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true },
+                { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true },
+                { label: @tr("Artists"), icon: @image-url("../assets/icons/user.svg"), has-glyph: true },
+                { label: @tr("Playlists"), icon: @image-url("../assets/icons/list-music.svg"), has-glyph: true },
+                { label: @tr("Labels"), icon: @image-url("../assets/icons/disc-3.svg"), has-glyph: true },
+            ];
         }
         NavTabWithMenu {
             icon: @image-url("../assets/icons/hard-drive.svg");
             label: @tr("Local Library");
             show-icon: root.show-tab-icons;
-            items: [@tr("Albums"), @tr("Artists"), @tr("Folders"),
-                @tr("Tracks")];
+            items: [
+                { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true },
+                { label: @tr("Artists"), icon: @image-url("../assets/icons/user.svg"), has-glyph: true },
+                { label: @tr("Folders"), icon: @image-url("../assets/icons/folder.svg"), has-glyph: true },
+                { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true },
+            ];
         }
         NavTabWithMenu {
             icon: @image-url("../assets/icons/cassette-tape.svg");
             label: @tr("My QBZ");
             show-icon: root.show-tab-icons;
-            items: [@tr("Collections"), @tr("Mixtapes")];
+            items: [
+                { label: @tr("Collections"), icon: @image-url("../assets/icons/library-big.svg"), has-glyph: true },
+                { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true },
+            ];
         }
     }
 
@@ -346,7 +388,7 @@ export component HeaderBar inherits Rectangle {
 
         Rectangle {
             background: Theme.surface-elevated;
-            border-radius: Radius.md;
+            border-radius: Radius.sm;
             border-width: 1px;
             border-color: Theme.border-subtle;
             drop-shadow-blur: 24px;
