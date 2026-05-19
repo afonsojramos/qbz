@@ -55,6 +55,68 @@ pub async fn after_track_change(
     refresh_now_playing_meta(runtime, weak).await;
     record_recent(runtime).await;
     play_audible(runtime, track_id).await;
+    // Warm the cache for the upcoming tracks so the next transition can be
+    // gapless (a cached track plays via `play_data`, which the audio
+    // engine's gapless engine supports; a streamed track does not).
+    kick_prefetch(runtime).await;
+}
+
+/// How many upcoming queue tracks to prefetch into the player cache.
+/// Two tracks ahead is enough headroom for gapless without holding an
+/// excessive number of HiRes payloads in memory. Matches the spirit of
+/// Tauri's `v2_prefetch_count` (which is host-tuned; the Slint MVP uses
+/// a fixed small value).
+const PREFETCH_LOOKAHEAD: usize = 2;
+
+/// Maximum concurrent prefetch downloads — mirrors Tauri's
+/// `v2_max_concurrent_prefetch` default for normal hosts.
+const MAX_CONCURRENT_PREFETCH: usize = 2;
+
+/// Shared semaphore bounding concurrent prefetch downloads across all
+/// `kick_prefetch` calls.
+static PREFETCH_SEMAPHORE: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(MAX_CONCURRENT_PREFETCH);
+
+/// Peek the next `PREFETCH_LOOKAHEAD` upcoming queue tracks and spawn a
+/// background download for each one not already cached. Each download
+/// goes into the player's L1/L2 cache via `Player::prefetch_into_cache`
+/// so the track later plays via `play_data` (a cache hit) and is gapless
+/// eligible. Concurrency is bounded by `PREFETCH_SEMAPHORE`.
+async fn kick_prefetch(runtime: &Runtime) {
+    let upcoming = runtime.core().peek_upcoming(PREFETCH_LOOKAHEAD).await;
+    if upcoming.is_empty() {
+        return;
+    }
+    for track in upcoming {
+        let track_id = track.id;
+        // Local tracks never need a Qobuz prefetch.
+        if track.is_local {
+            continue;
+        }
+        let player = runtime.core().player();
+        if player.is_track_cached(track_id) {
+            continue;
+        }
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            let _permit = match PREFETCH_SEMAPHORE.acquire().await {
+                Ok(permit) => permit,
+                Err(_) => return,
+            };
+            let client_lock = runtime.core().client();
+            let guard = client_lock.read().await;
+            let Some(client) = guard.as_ref() else {
+                return;
+            };
+            let player = runtime.core().player();
+            if let Err(e) = player
+                .prefetch_into_cache(client, track_id, PLAYBACK_QUALITY)
+                .await
+            {
+                log::debug!("[qbz-slint] prefetch: track {track_id} failed: {e}");
+            }
+        });
+    }
 }
 
 /// Streaming quality used for all playback in the MVP — highest tier,
@@ -562,6 +624,9 @@ pub fn start_poll_loop(
         let mut last_track_id: u64 = 0;
         let mut was_playing = false;
         let mut seen_position: u64 = 0;
+        // Track id we have already fired a gapless prefetch for, so the
+        // 450ms ticker does not re-request it every tick.
+        let mut gapless_requested_for: u64 = 0;
 
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(450));
         loop {
@@ -576,6 +641,84 @@ pub fn start_poll_loop(
             let volume = event.volume;
             // Streaming buffer fill, for the seek-bar cache overlay.
             let cache = event.buffer_progress.unwrap_or(0.0);
+
+            // --- Seamless gapless transition detection -------------------
+            // When the audio engine performs a gapless handoff the track
+            // changes WITHOUT a stop: `track_id` becomes the previously
+            // gapless-queued id while `is_playing` stays true. Detect that
+            // edge — a track-id change while still playing, where the new
+            // id is not the end-of-track edge — and sync the core queue
+            // pointer + refresh metadata WITHOUT calling the audible play
+            // path (the player is already playing it).
+            let seamless_change = track_id != 0
+                && last_track_id != 0
+                && track_id != last_track_id
+                && is_playing
+                && was_playing;
+            if seamless_change {
+                log::info!(
+                    "[qbz-slint] [GAPLESS] seamless transition {last_track_id} -> {track_id}"
+                );
+                // Advance the core queue pointer so the queue state stays
+                // in sync with what the player is actually playing.
+                let _ = runtime.core().next_track().await;
+                refresh_now_playing_meta(&runtime, &weak).await;
+                record_recent(&runtime).await;
+                refresh_sidebar(true);
+                // Prefetch the successors of the now-current track.
+                kick_prefetch(&runtime).await;
+                gapless_requested_for = 0;
+                last_track_id = track_id;
+                seen_position = position;
+                was_playing = is_playing;
+                continue;
+            }
+
+            // --- Gapless prefetch trigger --------------------------------
+            // When the engine signals it wants the next track pre-queued
+            // (`gapless_ready`) and nothing is queued yet
+            // (`gapless_next_track_id == 0`), resolve the next upcoming
+            // queue track, fetch its bytes (L1 -> L2 -> CMAF download),
+            // and hand them to `Player::play_next`. The
+            // `gapless_requested_for` guard stops the 450ms ticker from
+            // re-firing while the download is in flight.
+            if event.gapless_ready
+                && event.gapless_next_track_id == 0
+                && track_id != 0
+                && gapless_requested_for != track_id
+            {
+                let upcoming = runtime.core().peek_upcoming(1).await;
+                if let Some(next) = upcoming.into_iter().next() {
+                    // Never queue the current track as its own next.
+                    if next.id != track_id && !next.is_local {
+                        gapless_requested_for = track_id;
+                        let runtime = runtime.clone();
+                        let next_id = next.id;
+                        tokio::spawn(async move {
+                            let client_lock = runtime.core().client();
+                            let guard = client_lock.read().await;
+                            let Some(client) = guard.as_ref() else {
+                                return;
+                            };
+                            let player = runtime.core().player();
+                            if let Some(data) = player
+                                .fetch_for_gapless(client, next_id, PLAYBACK_QUALITY)
+                                .await
+                            {
+                                if let Err(e) = player.play_next(data, next_id) {
+                                    log::warn!(
+                                        "[qbz-slint] [GAPLESS] play_next {next_id} failed: {e}"
+                                    );
+                                } else {
+                                    log::info!(
+                                        "[qbz-slint] [GAPLESS] queued track {next_id} for gapless"
+                                    );
+                                }
+                            }
+                        });
+                    }
+                }
+            }
 
             // Detect end-of-track: there was a track, it has reached the
             // end (position within the duration) and is no longer playing.
@@ -619,6 +762,7 @@ pub fn start_poll_loop(
                 last_track_id = 0;
                 was_playing = false;
                 seen_position = 0;
+                gapless_requested_for = 0;
                 if let Some(track) = runtime.core().next_track().await {
                     let next_id = track.id;
                     after_track_change(&runtime, &weak, next_id).await;
