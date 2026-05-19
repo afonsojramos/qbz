@@ -412,6 +412,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("[qbz-slint] media-action: kind={kind} id={id} action={action}");
     });
 
+    // Album track search — client-side filter, no backend round-trip.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<AlbumActions>()
+            .on_search(move |query| {
+                if let Some(w) = weak.upgrade() {
+                    album::filter_tracks(&w, query.as_str());
+                }
+            });
+    }
+
     window.on_close_app(|| {
         log::info!("[qbz-slint] closing");
         let _ = slint::quit_event_loop();

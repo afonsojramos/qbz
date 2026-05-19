@@ -9,7 +9,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
-import { AlbumState, AlbumTrackItem, NavState, ContentView } from "../state.slint";
+import { AlbumState, AlbumTrackItem, AlbumActions, NavState, ContentView } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
@@ -83,7 +83,11 @@ component TrackRow inherits Rectangle {
             horizontal-stretch: 1;
             spacing: 2px;
 
+            // alignment: start packs the title and the explicit badge at
+            // their natural sizes, so the badge sits right after the name
+            // instead of being stretched out to a column position.
             HorizontalLayout {
+                alignment: start;
                 spacing: 6px;
                 Text {
                     text: root.track.title;
@@ -93,19 +97,21 @@ component TrackRow inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                 }
-                if root.track.explicit: Rectangle {
-                    width: 16px;
-                    height: 16px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: 3px;
-                    background: Theme.surface-elevated;
-                    Text {
-                        text: "E";
-                        color: Theme.text-muted;
-                        font-size: 9px;
-                        font-weight: Typography.semibold;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                if root.track.explicit: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 3px;
+                        background: Theme.surface-elevated;
+                        Text {
+                            text: "E";
+                            color: Theme.text-muted;
+                            font-size: 9px;
+                            font-weight: Typography.semibold;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
@@ -347,7 +353,6 @@ export component AlbumPageView inherits Rectangle {
             // --- Album header ------------------------------------------------
             HorizontalLayout {
                 spacing: 32px;
-                alignment: start;
 
                 Rectangle {
                     width: 224px;
@@ -498,9 +503,14 @@ export component AlbumPageView inherits Rectangle {
             Rectangle { height: 8px; }
 
             // --- Track list + label/awards sidebar --------------------------
+            // No `alignment: start` here: it would defeat the track list's
+            // horizontal-stretch and leave the sidebar floating mid-row
+            // with dead space to its right. The track list stretches and
+            // the 254px sidebar is pushed flush to the right edge; when a
+            // main right sidebar opens, the whole content region narrows
+            // and the sidebar rides along with it.
             HorizontalLayout {
                 spacing: 32px;
-                alignment: start;
 
                 VerticalLayout {
                     horizontal-stretch: 1;
@@ -547,12 +557,27 @@ export component AlbumPageView inherits Rectangle {
                                             tint: Theme.text-muted;
                                         }
                                     }
-                                    Text {
-                                        text: @tr("Search tracks...");
-                                        color: Theme.text-muted;
-                                        font-size: 13px;
-                                        vertical-alignment: center;
+                                    // Functional client-side filter.
+                                    Rectangle {
                                         horizontal-stretch: 1;
+                                        track-search := TextInput {
+                                            width: 100%;
+                                            height: 100%;
+                                            color: Theme.text-primary;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                            single-line: true;
+                                            edited => {
+                                                AlbumActions.search(self.text);
+                                            }
+                                        }
+                                        Text {
+                                            visible: track-search.text == "";
+                                            text: @tr("Search tracks...");
+                                            color: Theme.text-muted;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                        }
                                     }
                                 }
                             }
@@ -723,7 +748,10 @@ export component AlbumPageView inherits Rectangle {
                     }
                 }
 
+                // vertical-stretch bounds the Flickable to the leftover
+                // panel height so a long description actually scrolls.
                 Flickable {
+                    vertical-stretch: 1;
                     viewport-width: self.width;
                     viewport-height: desc-text.preferred-height;
                     desc-text := Text {

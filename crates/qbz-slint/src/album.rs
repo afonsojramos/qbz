@@ -4,6 +4,7 @@
 //! on the worker thread, and applies it to the `AlbumState` global on the
 //! Slint event loop.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
@@ -12,6 +13,13 @@ use qbz_models::{Album, Track};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::{AlbumState, AlbumTrackItem, AppWindow};
+
+thread_local! {
+    /// The current album's full, unfiltered track list — kept so the
+    /// track search can filter against it without a re-fetch. UI thread
+    /// only, hence `thread_local`.
+    static FULL_TRACKS: RefCell<Vec<AlbumTrackItem>> = RefCell::new(Vec::new());
+}
 
 /// Plain, `Send` album data produced on the worker thread.
 pub struct AlbumData {
@@ -144,11 +152,22 @@ fn quality_detail(bit_depth: Option<u32>, sample_rate: Option<f64>) -> String {
     format!("{depth}-bit / {rate} kHz")
 }
 
-/// Crude HTML strip for Qobuz album descriptions (tags + a few entities).
+/// Crude HTML strip for Qobuz album descriptions. Break and paragraph
+/// tags become newlines first so paragraph structure survives; remaining
+/// tags are dropped and a few entities decoded.
 fn strip_html(input: &str) -> String {
+    let normalized = input
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n")
+        .replace("<BR>", "\n")
+        .replace("<BR/>", "\n")
+        .replace("</p>", "\n\n")
+        .replace("</P>", "\n\n");
+
     let mut out = String::new();
     let mut in_tag = false;
-    for ch in input.chars() {
+    for ch in normalized.chars() {
         match ch {
             '<' => in_tag = true,
             '>' => in_tag = false,
@@ -156,12 +175,17 @@ fn strip_html(input: &str) -> String {
             _ => {}
         }
     }
-    out.replace("&amp;", "&")
+
+    let mut out = out
+        .replace("&amp;", "&")
         .replace("&#39;", "'")
         .replace("&quot;", "\"")
-        .replace("&nbsp;", " ")
-        .trim()
-        .to_string()
+        .replace("&nbsp;", " ");
+    // Collapse runs of blank lines left by stacked tags.
+    while out.contains("\n\n\n") {
+        out = out.replace("\n\n\n", "\n\n");
+    }
+    out.trim().to_string()
 }
 
 fn map_track(track: Track) -> TrackData {
@@ -235,12 +259,37 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
     state.set_description(data.description.into());
     state.set_label(data.label.into());
     state.set_awards(ModelRc::new(VecModel::from(awards)));
+
+    // Keep the unfiltered list for the track search, then show it all.
+    FULL_TRACKS.with(|cell| *cell.borrow_mut() = tracks.clone());
     state.set_tracks(ModelRc::new(VecModel::from(tracks)));
+}
+
+/// Filter the visible track list by `query` (case-insensitive match on
+/// title or artist), against the unfiltered list kept in `FULL_TRACKS`.
+/// Runs on the Slint event loop.
+pub fn filter_tracks(window: &AppWindow, query: &str) {
+    let needle = query.trim().to_lowercase();
+    let filtered: Vec<AlbumTrackItem> = FULL_TRACKS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .filter(|track| {
+                needle.is_empty()
+                    || track.title.as_str().to_lowercase().contains(&needle)
+                    || track.artist.as_str().to_lowercase().contains(&needle)
+            })
+            .cloned()
+            .collect()
+    });
+    window
+        .global::<AlbumState>()
+        .set_tracks(ModelRc::new(VecModel::from(filtered)));
 }
 
 /// Clear album state and show an empty track list (used when opening a new
 /// album so the previous one does not flash).
 pub fn reset_album(window: &AppWindow) {
+    FULL_TRACKS.with(|cell| cell.borrow_mut().clear());
     let state = window.global::<AlbumState>();
     state.set_tracks(ModelRc::new(VecModel::from(Vec::<AlbumTrackItem>::new())));
     state.set_artwork(slint::Image::default());
