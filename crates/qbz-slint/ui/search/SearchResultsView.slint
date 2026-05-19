@@ -1,0 +1,109 @@
+// Search results view.
+//
+// Phase-1 scaffold: proves the search pipeline end to end (header input ->
+// QbzCore::search_all -> SearchState -> rendered results). Phase 2 builds
+// this out into the tabbed dashboard (tabs, carousels, load-more).
+
+import { SearchState } from "../state.slint";
+import { Theme } from "../foundation/semantic-colors.slint";
+import { SlimCard } from "../discover/SlimCard.slint";
+
+export component SearchResultsView inherits Rectangle {
+    callback open-album(string);
+    callback open-artist(string);
+    callback media-action(string, string, string);
+
+    background: Theme.surface-main;
+
+    Flickable {
+        viewport-width: self.width;
+        viewport-height: body.preferred-height;
+
+        body := VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            Text {
+                text: SearchState.loading
+                    ? @tr("Searching…")
+                    : @tr("Results for ") + SearchState.query;
+                color: Theme.text-primary;
+                font-size: 22px;
+                font-weight: 700;
+            }
+
+            // Artists.
+            if SearchState.artists.length > 0: VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: @tr("Artists") + " (\{SearchState.artists-total})";
+                    color: Theme.text-secondary;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                for artist in SearchState.artists: SlimCard {
+                    item: artist;
+                    clicked(id) => {
+                        root.open-artist(id);
+                    }
+                }
+            }
+
+            // Albums.
+            if SearchState.albums.length > 0: VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: @tr("Albums") + " (\{SearchState.albums-total})";
+                    color: Theme.text-secondary;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                for album in SearchState.albums: Rectangle {
+                    height: 28px;
+                    album-ta := TouchArea {
+                        clicked => {
+                            root.open-album(album.id);
+                        }
+                    }
+                    Text {
+                        x: 0;
+                        text: album.title + "   —   " + album.artist;
+                        color: album-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                        vertical-alignment: center;
+                        height: 100%;
+                    }
+                }
+            }
+
+            // Tracks.
+            if SearchState.tracks.length > 0: VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: @tr("Tracks") + " (\{SearchState.tracks-total})";
+                    color: Theme.text-secondary;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                for track in SearchState.tracks: Text {
+                    text: track.title + "   —   " + track.artist;
+                    color: Theme.text-secondary;
+                }
+            }
+
+            // Playlists.
+            if SearchState.playlists.length > 0: VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: @tr("Playlists") + " (\{SearchState.playlists-total})";
+                    color: Theme.text-secondary;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                for playlist in SearchState.playlists: Text {
+                    text: playlist.title + "   —   " + playlist.subtitle;
+                    color: Theme.text-secondary;
+                }
+            }
+        }
+    }
+}

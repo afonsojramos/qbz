@@ -17,6 +17,7 @@ import { HomeView } from "../discover/HomeView.slint";
 import { AlbumPageView } from "../album/AlbumPageView.slint";
 import { ArtistPageView } from "../artist/ArtistPageView.slint";
 import { SettingsView } from "../settings/SettingsView.slint";
+import { SearchResultsView } from "../search/SearchResultsView.slint";
 
 export component AppShell inherits Rectangle {
     callback open-album(string);
@@ -105,6 +106,17 @@ export component AppShell inherits Rectangle {
                     }
                     settings-reset => {
                         root.settings-reset();
+                    }
+                }
+                if NavState.view == ContentView.search: SearchResultsView {
+                    open-album(id) => {
+                        root.open-album(id);
+                    }
+                    open-artist(id) => {
+                        root.open-artist(id);
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
                     }
                 }
             }
