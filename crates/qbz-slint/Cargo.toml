@@ -11,7 +11,18 @@ name = "qbz-slint"
 path = "src/main.rs"
 
 [dependencies]
-slint = "1"
+# Skia renderer instead of the default femtovg — femtovg's text rendering
+# looks coarse next to native Qt/KDE. default-features = false drops
+# femtovg; std/accessibility/compat-1-2 are kept from the old default set,
+# renderer-software stays as a cheap fallback if Skia fails to init.
+slint = { version = "1", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-skia",
+    "renderer-software",
+    "accessibility",
+    "compat-1-2",
+] }
 log = { workspace = true }
 env_logger = "0.11"
 tokio = { workspace = true }
