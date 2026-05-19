@@ -886,6 +886,10 @@ pub struct PlaybackEvent {
     /// (pipewire/pulse/cpal) where bit-perfect is not guaranteed.
     #[serde(default)]
     pub bit_perfect_mode: Option<BitPerfectMode>,
+    /// Streaming buffer progress (0.0..1.0). `None` when not streaming or
+    /// the track is fully buffered — drives the seek-bar cache overlay.
+    #[serde(default)]
+    pub buffer_progress: Option<f32>,
 }
 
 /// Shared state between main thread and audio thread
@@ -3311,6 +3315,22 @@ impl Player {
                         .map(|s| s.byte_len as u64)
                         .sum::<u64>();
 
+                // Track duration from the CMAF segment table. The streaming
+                // path's position timer clamps `current_position` to the
+                // duration it was given, so a zero here freezes the seek bar
+                // at 0:00 and blocks auto-advance — derive the real value
+                // from the per-segment sample counts.
+                let total_samples: u64 = cmaf_info
+                    .segment_table
+                    .iter()
+                    .map(|s| s.sample_count as u64)
+                    .sum();
+                let duration_secs = if sample_rate > 0 {
+                    total_samples / sample_rate as u64
+                } else {
+                    0
+                };
+
                 // Estimate speed from the init segment fetch (conservative:
                 // assume ~10 MB/s if init was too fast to measure reliably).
                 let speed_mbps = if cmaf_info.init_fetch_ms > 0 {
@@ -3338,7 +3358,7 @@ impl Player {
                     bit_depth,
                     total_flac_size,
                     speed_mbps,
-                    0, // duration determined by decoder
+                    duration_secs,
                     0, // no resume offset
                 )?;
 
@@ -3830,6 +3850,7 @@ impl Player {
             gapless_ready: self.state.is_gapless_ready(),
             gapless_next_track_id: self.state.get_gapless_next_track_id(),
             bit_perfect_mode: self.state.get_bit_perfect_mode(),
+            buffer_progress: self.state.get_buffer_progress(),
         }
     }
 }

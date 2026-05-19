@@ -691,6 +691,8 @@ pub fn start_poll_loop(
             let duration = event.duration;
             let is_playing = event.is_playing;
             let volume = event.volume;
+            // Streaming buffer fill, for the seek-bar cache overlay.
+            let cache = event.buffer_progress.unwrap_or(0.0);
 
             // Detect end-of-track: there was a track, it has reached the
             // end (position within the duration) and is no longer playing.
@@ -716,6 +718,7 @@ pub fn start_poll_loop(
                     np.set_duration_secs(duration as i32);
                 }
                 np.set_progress(progress);
+                np.set_cache(cache);
                 np.set_elapsed(elapsed.into());
                 np.set_remaining(remaining.into());
                 np.set_playing(is_playing);
