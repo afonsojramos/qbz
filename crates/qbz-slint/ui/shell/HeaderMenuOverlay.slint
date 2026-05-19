@@ -61,10 +61,14 @@ export component HeaderMenuOverlay inherits Rectangle {
         }
     }
 
-    // Full-window transparent scrim — a click anywhere outside the panel
-    // closes the menu. Declared before the panel so the panel sits on
-    // top and its own TouchArea wins over this one.
+    // Transparent scrim — a click outside the panel closes the menu.
+    // It starts BELOW the header so the tabs stay hoverable while a menu
+    // is open: a full-window scrim would intercept the tabs' hover
+    // events and block hover-switching, exactly like the old
+    // PopupWindow's pointer grab did.
     if HeaderMenuState.open-index >= 0: TouchArea {
+        y: Layout.header-height;
+        height: parent.height - Layout.header-height;
         clicked => {
             root.close-menu();
         }
@@ -74,7 +78,9 @@ export component HeaderMenuOverlay inherits Rectangle {
     // surface-main background, 1px border-muted, Radius.sm, drop shadow.
     if HeaderMenuState.open-index >= 0: panel := Rectangle {
         x: HeaderMenuState.anchor-x;
-        y: Layout.header-height + 6px;
+        // Snug under the tabs — the 30px tab is centered in the 48px
+        // header, so its bottom edge sits at ~39px.
+        y: 45px;
         width: 188px;
         height: panel-box.preferred-height;
 
