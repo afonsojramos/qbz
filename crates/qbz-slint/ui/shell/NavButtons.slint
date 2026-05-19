@@ -1,24 +1,54 @@
 // Sidebar-collapse toggle + browser-like back / forward navigation pair.
 //
-// Two separate elevated pills with a gap between them: the sidebar
-// toggle stands on its own, the [<] [>] history pair is its own group.
-// Used inline beside the Discover tabs and in place of the per-page
-// Back button.
+// The sidebar toggle is a bare icon button (no background). The [<] [>]
+// history pair uses the same circular elevated style as the Discover
+// carousel page navigators. Used inline beside the Discover tabs and in
+// place of the per-page Back button.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { NavState, ShellState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 
-component NavBtn inherits Rectangle {
+// Bare icon button — no background, brightest icon tint. Used for the
+// sidebar collapse toggle.
+component PlainNavBtn inherits Rectangle {
     in property <image> icon;
-    in property <bool> enabled: true;
     callback clicked();
 
     width: 32px;
     height: 28px;
-    border-radius: 4px;
-    background: ta.has-hover && root.enabled ? Theme.surface-hover : transparent;
-    opacity: root.enabled ? 1.0 : 0.3;
+
+    QbzIcon {
+        source: root.icon;
+        width: 17px;
+        height: 17px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: Theme.text-primary;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// Circular elevated icon button — same look as the Discover carousel
+// page navigators (Carousel.slint NavButton).
+component HistoryNavBtn inherits Rectangle {
+    in property <image> icon;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    opacity: root.enabled ? 1.0 : 0.4;
+    background: ta.has-hover && root.enabled
+        ? Theme.surface-hover
+        : Theme.surface-elevated;
 
     QbzIcon {
         source: root.icon;
@@ -26,10 +56,11 @@ component NavBtn inherits Rectangle {
         height: 15px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        tint: Theme.text-secondary;
+        tint: root.enabled ? Theme.text-primary : Theme.text-muted;
     }
 
     ta := TouchArea {
+        enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
             if (root.enabled) {
@@ -39,45 +70,36 @@ component NavBtn inherits Rectangle {
     }
 }
 
-// One elevated rounded pill wrapping its NavBtn children.
-component NavPill inherits Rectangle {
-    background: Theme.surface-elevated;
-    border-radius: 6px;
-    height: 34px;
-    @children
-}
-
 export component NavButtons inherits HorizontalLayout {
     spacing: 8px;
 
-    // Sidebar collapse toggle — its own pill.
-    NavPill {
-        width: collapse-row.preferred-width;
-        collapse-row := HorizontalLayout {
-            padding: 3px;
-            NavBtn {
-                icon: @image-url("../assets/icons/panel-left.svg");
-                clicked => {
-                    ShellState.sidebar-collapsed = !ShellState.sidebar-collapsed;
-                }
+    // Sidebar collapse toggle — bare icon, no pill.
+    VerticalLayout {
+        alignment: center;
+        PlainNavBtn {
+            icon: @image-url("../assets/icons/panel-left.svg");
+            clicked => {
+                ShellState.sidebar-collapsed = !ShellState.sidebar-collapsed;
             }
         }
     }
 
-    // Back / forward history pair — its own pill.
-    NavPill {
-        width: history-row.preferred-width;
-        history-row := HorizontalLayout {
-            padding: 3px;
-            spacing: 4px;
-            NavBtn {
+    // Back / forward history pair — circular carousel-navigator style.
+    HorizontalLayout {
+        spacing: 4px;
+        VerticalLayout {
+            alignment: center;
+            HistoryNavBtn {
                 icon: @image-url("../assets/icons/chevron-left.svg");
                 enabled: NavState.can-back;
                 clicked => {
                     NavState.request-back();
                 }
             }
-            NavBtn {
+        }
+        VerticalLayout {
+            alignment: center;
+            HistoryNavBtn {
                 icon: @image-url("../assets/icons/chevron-right.svg");
                 enabled: NavState.can-forward;
                 clicked => {
