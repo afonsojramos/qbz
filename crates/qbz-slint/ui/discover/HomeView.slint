@@ -188,6 +188,14 @@ export component HomeView inherits Rectangle {
                     }
                 }
 
+                if HomeState.recent.length > 0: GridSection {
+                    title: @tr("Recently Played");
+                    items: HomeState.recent;
+                    item-clicked(id) => {
+                        root.media-action("track", id, "play");
+                    }
+                }
+
                 if HomeState.popular.length > 0: GridSection {
                     title: @tr("Popular albums");
                     items: HomeState.popular;

@@ -35,6 +35,8 @@ pub enum ArtworkTarget {
     Section { section_idx: usize, album_idx: usize },
     /// A card in `HomeState.popular[idx]`.
     Popular { idx: usize },
+    /// A card in `HomeState.recent[idx]`.
+    Recent { idx: usize },
 }
 
 /// An artwork download job: which card, and the image URL.
@@ -187,6 +189,14 @@ fn apply_artwork(
             };
             item.artwork = image;
             popular.set_row_data(idx, item);
+        }
+        ArtworkTarget::Recent { idx } => {
+            let recent = home.get_recent();
+            let Some(mut item) = recent.row_data(idx) else {
+                return;
+            };
+            item.artwork = image;
+            recent.set_row_data(idx, item);
         }
     }
 }

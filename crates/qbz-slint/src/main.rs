@@ -21,6 +21,7 @@ mod artwork;
 mod auth;
 mod commands;
 mod home;
+mod recently;
 mod settings;
 
 use std::sync::Arc;
@@ -104,6 +105,16 @@ async fn enter_shell(
                 } else {
                     Some(artwork::ArtworkJob {
                         target: artwork::ArtworkTarget::Popular { idx },
+                        url: slim.artwork_url.clone(),
+                    })
+                }
+            }));
+            jobs.extend(data.recent.iter().enumerate().filter_map(|(idx, slim)| {
+                if slim.artwork_url.is_empty() {
+                    None
+                } else {
+                    Some(artwork::ArtworkJob {
+                        target: artwork::ArtworkTarget::Recent { idx },
                         url: slim.artwork_url.clone(),
                     })
                 }

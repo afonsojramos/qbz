@@ -18,6 +18,7 @@ use crate::{AlbumCardItem, AppWindow, DiscoverSection, HomeState, SlimItem};
 pub struct HomeData {
     pub sections: Vec<SectionData>,
     pub popular: Vec<SlimData>,
+    pub recent: Vec<SlimData>,
 }
 
 pub struct SectionData {
@@ -85,7 +86,24 @@ where
         .map(|(index, album)| map_slim(index, album))
         .collect();
 
-    Ok(HomeData { sections, popular })
+    // Recently played comes from the local play-history store, not the
+    // discover index. Empty until the playback session records plays.
+    let recent = crate::recently::load()
+        .into_iter()
+        .map(|track| SlimData {
+            id: track.id,
+            title: track.title,
+            subtitle: track.subtitle,
+            rank: String::new(),
+            artwork_url: track.artwork_url,
+        })
+        .collect();
+
+    Ok(HomeData {
+        sections,
+        popular,
+        recent,
+    })
 }
 
 fn push_section(
@@ -254,22 +272,26 @@ pub fn apply_home(window: &AppWindow, data: HomeData) {
         })
         .collect();
 
-    let popular: Vec<SlimItem> = data
-        .popular
-        .into_iter()
-        .map(|slim| SlimItem {
-            id: slim.id.into(),
-            title: slim.title.into(),
-            subtitle: slim.subtitle.into(),
-            rank: slim.rank.into(),
-            artwork_url: slim.artwork_url.into(),
-            artwork: slint::Image::default(),
-        })
-        .collect();
+    let to_slim_items = |items: Vec<SlimData>| -> Vec<SlimItem> {
+        items
+            .into_iter()
+            .map(|slim| SlimItem {
+                id: slim.id.into(),
+                title: slim.title.into(),
+                subtitle: slim.subtitle.into(),
+                rank: slim.rank.into(),
+                artwork_url: slim.artwork_url.into(),
+                artwork: slint::Image::default(),
+            })
+            .collect()
+    };
+    let popular = to_slim_items(data.popular);
+    let recent = to_slim_items(data.recent);
 
     let state = window.global::<HomeState>();
     state.set_sections(ModelRc::new(VecModel::from(sections)));
     state.set_popular(ModelRc::new(VecModel::from(popular)));
+    state.set_recent(ModelRc::new(VecModel::from(recent)));
 }
 
 #[cfg(test)]
