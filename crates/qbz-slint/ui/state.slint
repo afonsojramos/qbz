@@ -212,6 +212,7 @@ export global NowPlayingState {
     in property <string> elapsed: "0:00";
     in property <string> remaining: "0:00";
     in property <float> volume: 0.7;      // 0..1
+    in property <bool> muted: false;
     in property <bool> shuffle: false;
     in property <int> repeat-mode: 0;     // 0 off, 1 all, 2 one
 
@@ -221,6 +222,7 @@ export global NowPlayingState {
     callback previous();
     callback seek(float);          // 0..1
     callback set-volume(float);    // 0..1
+    callback toggle-mute();
     callback toggle-shuffle();
     callback cycle-repeat();
 }

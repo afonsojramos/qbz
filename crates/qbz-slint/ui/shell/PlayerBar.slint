@@ -259,7 +259,16 @@ export component PlayerBar inherits Rectangle {
 
                     Rectangle { width: 6px; }
 
-                    IconButton { icon: @image-url("../assets/icons/volume-2.svg"); icon-size: 16px; }
+                    IconButton {
+                        icon: NowPlayingState.muted
+                            ? @image-url("../assets/icons/volume-x.svg")
+                            : @image-url("../assets/icons/volume-2.svg");
+                        icon-size: 16px;
+                        active: NowPlayingState.muted;
+                        clicked => {
+                            NowPlayingState.toggle-mute();
+                        }
+                    }
                     VerticalLayout {
                         alignment: center;
                         QbzSlider {

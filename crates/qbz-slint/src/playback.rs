@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qbz_models::{Quality, QueueTrack, RepeatMode};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 use crate::adapter::SlintAdapter;
 use crate::{AppWindow, NowPlayingState, QueueItem, QueueState};
@@ -50,6 +50,7 @@ struct QueueRowData {
     id: String,
     title: String,
     artist: String,
+    artwork_url: String,
     playing: bool,
 }
 
@@ -73,6 +74,14 @@ async fn refresh_queue(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
         rows.push(queue_row(track, false));
     }
 
+    // Collect the cover jobs before the rows are moved into the closure.
+    let art_jobs: Vec<(usize, String)> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| !row.artwork_url.is_empty())
+        .map(|(idx, row)| (idx, row.artwork_url.clone()))
+        .collect();
+
     let _ = weak.upgrade_in_event_loop(move |w| {
         let items: Vec<QueueItem> = rows
             .into_iter()
@@ -88,6 +97,8 @@ async fn refresh_queue(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
         qs.set_items(slint::ModelRc::new(slint::VecModel::from(items)));
         qs.set_current_index(current_index);
     });
+
+    load_queue_artwork(weak.clone(), art_jobs);
 }
 
 /// Map a `QueueTrack` to plain `Send` row data.
@@ -100,8 +111,57 @@ fn queue_row(track: &QueueTrack, playing: bool) -> QueueRowData {
         id: track.id.to_string(),
         title,
         artist: track.artist.clone(),
+        artwork_url: track.artwork_url.clone().unwrap_or_default(),
         playing,
     }
+}
+
+/// Resolve cover art for a list of queue rows and apply each decoded
+/// image onto its `QueueState.items` row by index. Spawns one task per
+/// cover; misses are silently skipped.
+fn load_queue_artwork(weak: slint::Weak<AppWindow>, jobs: Vec<(usize, String)>) {
+    let Some(cache) = crate::artwork::shared_cache() else {
+        return;
+    };
+    for (idx, url) in jobs {
+        let weak = weak.clone();
+        let cache = cache.clone();
+        tokio::spawn(async move {
+            let Some((pixels, w, h)) =
+                crate::artwork::fetch_and_decode(&url, &cache, 96).await
+            else {
+                return;
+            };
+            let _ = weak.upgrade_in_event_loop(move |win| {
+                let items = win.global::<QueueState>().get_items();
+                if let Some(mut item) = items.row_data(idx) {
+                    item.artwork = crate::artwork::pixels_to_image(&pixels, w, h);
+                    items.set_row_data(idx, item);
+                }
+            });
+        });
+    }
+}
+
+/// Resolve the now-playing cover and apply it to `NowPlayingState`.
+fn load_now_playing_artwork(weak: slint::Weak<AppWindow>, url: String) {
+    if url.is_empty() {
+        return;
+    }
+    let Some(cache) = crate::artwork::shared_cache() else {
+        return;
+    };
+    tokio::spawn(async move {
+        let Some((pixels, w, h)) =
+            crate::artwork::fetch_and_decode(&url, &cache, 160).await
+        else {
+            return;
+        };
+        let _ = weak.upgrade_in_event_loop(move |win| {
+            let img = crate::artwork::pixels_to_image(&pixels, w, h);
+            win.global::<NowPlayingState>().set_artwork(img);
+        });
+    });
 }
 
 /// `M:SS` for the elapsed string.
@@ -137,6 +197,7 @@ async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindo
     let artist_id = track.artist_id.map(|id| id.to_string()).unwrap_or_default();
     let track_id = track.id.to_string();
     let duration = track.duration_secs;
+    let artwork_url = track.artwork_url.clone().unwrap_or_default();
 
     let _ = weak.upgrade_in_event_loop(move |w| {
         let np = w.global::<NowPlayingState>();
@@ -154,7 +215,12 @@ async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindo
         np.set_elapsed("0:00".into());
         np.set_remaining(fmt_remaining(0, duration).into());
         np.set_playing(true);
+        // Clear the previous cover so it does not linger while the new
+        // one resolves.
+        np.set_artwork(slint::Image::default());
     });
+
+    load_now_playing_artwork(weak.clone(), artwork_url);
 }
 
 /// Build a `QueueTrack` for the queue from the catalog `Track`, filling
@@ -459,12 +525,54 @@ pub fn seek(runtime: Runtime, handle: tokio::runtime::Handle, fraction: f32) {
     });
 }
 
-/// Set the player volume from `fraction` (0..1).
-pub fn set_volume(runtime: Runtime, handle: tokio::runtime::Handle, fraction: f32) {
+/// Mute state and the volume to restore on unmute. `PREMUTE_VOLUME`
+/// holds the f32 level as bits; `MUTED` is the authoritative flag.
+static MUTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PREMUTE_VOLUME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Set the player volume from `fraction` (0..1). A non-zero level clears
+/// any active mute, so dragging the slider or stepping volume unmutes.
+pub fn set_volume(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    fraction: f32,
+) {
     handle.spawn(async move {
         let fraction = fraction.clamp(0.0, 1.0);
         if let Err(e) = runtime.core().set_volume(fraction) {
             log::error!("[qbz-slint] playback: set_volume failed: {e}");
+        }
+        if fraction > 0.0 && MUTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            let _ = weak.upgrade_in_event_loop(|w| {
+                w.global::<NowPlayingState>().set_muted(false);
+            });
+        }
+    });
+}
+
+/// Toggle mute: silence the player and remember the level, or restore it.
+pub fn toggle_mute(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    use std::sync::atomic::Ordering;
+    handle.spawn(async move {
+        if MUTED.swap(false, Ordering::Relaxed) {
+            // Unmute — restore the stored level.
+            let restored = f32::from_bits(PREMUTE_VOLUME.load(Ordering::Relaxed));
+            let restored = if restored > 0.0 { restored } else { 0.7 };
+            let _ = runtime.core().set_volume(restored);
+            let _ = weak.upgrade_in_event_loop(|w| {
+                w.global::<NowPlayingState>().set_muted(false);
+            });
+        } else {
+            // Mute — stash the current level, then drop to zero.
+            let current = runtime.core().player().get_playback_event().volume;
+            let current = if current > 0.0 { current } else { 0.7 };
+            PREMUTE_VOLUME.store(current.to_bits(), Ordering::Relaxed);
+            MUTED.store(true, Ordering::Relaxed);
+            let _ = runtime.core().set_volume(0.0);
+            let _ = weak.upgrade_in_event_loop(|w| {
+                w.global::<NowPlayingState>().set_muted(true);
+            });
         }
     });
 }

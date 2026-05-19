@@ -287,6 +287,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Shared QBZ image cache for album artwork; trim it on startup.
     let image_cache = artwork::open_cache();
     artwork::spawn_evict(image_cache.clone());
+    // Publish it so the playback controller can resolve now-playing /
+    // queue cover art without the cache being threaded through.
+    artwork::set_shared_cache(image_cache.clone());
 
     // Audio + Playback settings stores, opened once for the app lifetime.
     let settings_ctx = settings::SettingsCtx::open();
@@ -650,11 +653,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let runtime = app_runtime.clone();
+        let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         window
             .global::<NowPlayingState>()
             .on_set_volume(move |fraction| {
-                playback::set_volume(runtime.clone(), handle.clone(), fraction);
+                playback::set_volume(runtime.clone(), weak.clone(), handle.clone(), fraction);
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<NowPlayingState>()
+            .on_toggle_mute(move || {
+                playback::toggle_mute(runtime.clone(), weak.clone(), handle.clone());
             });
     }
 
