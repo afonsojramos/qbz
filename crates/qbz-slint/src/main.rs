@@ -249,6 +249,37 @@ fn navigate_artist(
     });
 }
 
+/// Run a search and show the results view. Shared by the search-submit
+/// callback, the live-search debounce, and history back/forward.
+fn navigate_search(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    _image_cache: artwork::ImageCache,
+    query: String,
+) {
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            search::reset_search(&w);
+            w.global::<NavState>().set_view(ContentView::Search);
+        });
+        match search::load_search(&runtime, &query).await {
+            Ok(data) => {
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    search::apply_search(&w, data);
+                    w.global::<SearchState>().set_loading(false);
+                });
+            }
+            Err(e) => {
+                log::error!("[qbz-slint] search load failed: {e}");
+                let _ = weak.upgrade_in_event_loop(|w| {
+                    w.global::<SearchState>().set_loading(false);
+                });
+            }
+        }
+    });
+}
+
 /// Apply a history entry — set the view and re-load entity pages.
 fn apply_entry(
     entry: nav::NavEntry,
@@ -274,11 +305,8 @@ fn apply_entry(
         nav::NavEntry::Artist(id) => {
             navigate_artist(runtime.clone(), weak.clone(), handle, image_cache.clone(), id);
         }
-        nav::NavEntry::Search(_query) => {
-            // Upgraded to a full navigate_search call in Task 6.
-            let _ = weak.upgrade_in_event_loop(|w| {
-                w.global::<NavState>().set_view(ContentView::Search);
-            });
+        nav::NavEntry::Search(query) => {
+            navigate_search(runtime.clone(), weak.clone(), handle, image_cache.clone(), query);
         }
     }
 }
