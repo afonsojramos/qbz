@@ -42,16 +42,16 @@ component NavTab inherits Rectangle {
                 tint: root.active ? Theme.text-primary : Theme.text-secondary;
             }
         }
-        // Wrapped in a centered VerticalLayout so the label is centered
-        // the same way the glyph and caret are — otherwise it rides high.
-        VerticalLayout {
-            alignment: center;
-            Text {
-                text: root.label;
-                color: root.active ? Theme.text-primary : Theme.text-secondary;
-                font-size: 12px;
-                font-weight: root.active ? Typography.semibold : Typography.regular;
-            }
+        // An explicit row-height box plus vertical-alignment centers the
+        // label optically against the glyph and caret — a bare Text box
+        // rides high because of the font's descender space.
+        Text {
+            text: root.label;
+            height: root.height;
+            vertical-alignment: center;
+            color: Theme.text-primary;
+            font-size: 11px;
+            font-weight: root.active ? Typography.semibold : Typography.regular;
         }
         // Caret marking the tab as a dropdown.
         VerticalLayout {
