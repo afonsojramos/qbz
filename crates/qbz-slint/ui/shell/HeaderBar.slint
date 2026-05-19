@@ -335,7 +335,8 @@ export component HeaderBar inherits Rectangle {
 
     // Responsive breakpoints.
     property <bool> show-tab-icons: root.width >= 1140px;
-    property <length> search-width: root.width < 960px ? 224px : 320px;
+    // 80% of the prior search width (was 224px / 320px).
+    property <length> search-width: root.width < 960px ? 179px : 256px;
 
     // --- Tabs (anchored left) ----------------------------------------------
     tabs := HorizontalLayout {
@@ -414,12 +415,25 @@ export component HeaderBar inherits Rectangle {
                     tint: Theme.text-muted;
                 }
             }
-            Text {
-                text: @tr("Search");
-                color: Theme.text-muted;
-                font-size: 13px;
-                vertical-alignment: center;
+            // Real text input, with a placeholder shown while empty —
+            // same pattern as the album track-search field.
+            Rectangle {
                 horizontal-stretch: 1;
+                search-input := TextInput {
+                    width: 100%;
+                    height: 100%;
+                    color: Theme.text-primary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    single-line: true;
+                }
+                Text {
+                    visible: search-input.text == "";
+                    text: @tr("Search");
+                    color: Theme.text-muted;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
             }
         }
     }
