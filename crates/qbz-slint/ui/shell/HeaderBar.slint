@@ -170,11 +170,11 @@ export component HeaderBar inherits Rectangle {
         }
     }
 
-    // --- User element (anchored right) -------------------------------------
+    // --- Hamburger (anchored right) ----------------------------------------
     user-area := TouchArea {
         x: root.width - self.width - Spacing.md;
         y: (root.height - self.height) / 2;
-        width: user-row.preferred-width + 16px;
+        width: 36px;
         height: 36px;
         mouse-cursor: pointer;
         clicked => {
@@ -186,29 +186,13 @@ export component HeaderBar inherits Rectangle {
             border-radius: Radius.sm;
             background: user-area.has-hover ? Theme.surface-hover : transparent;
         }
-        user-row := HorizontalLayout {
-            x: 8px;
-            height: parent.height;
-            spacing: 9px;
-            VerticalLayout {
-                alignment: center;
-                Text {
-                    text: SessionState.user-name == ""
-                        ? @tr("Guest")
-                        : SessionState.user-name;
-                    color: Theme.text-primary;
-                    font-size: Typography.body;
-                }
-            }
-            VerticalLayout {
-                alignment: center;
-                QbzIcon {
-                    source: @image-url("../assets/icons/menu.svg");
-                    width: 18px;
-                    height: 18px;
-                    tint: Theme.text-secondary;
-                }
-            }
+        QbzIcon {
+            source: @image-url("../assets/icons/menu.svg");
+            width: 20px;
+            height: 20px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            tint: user-area.has-hover ? Theme.text-primary : Theme.text-secondary;
         }
     }
 
@@ -216,7 +200,7 @@ export component HeaderBar inherits Rectangle {
         x: parent.width - 234px - Spacing.md;
         y: Layout.header-height - 4px;
         width: 234px;
-        height: 254px;
+        height: 310px;
 
         Rectangle {
             background: Theme.surface-elevated;
@@ -230,6 +214,38 @@ export component HeaderBar inherits Rectangle {
             VerticalLayout {
                 padding-top: 6px;
                 padding-bottom: 6px;
+
+                // Signed-in user — name and subscription tier.
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    padding-top: 6px;
+                    padding-bottom: 10px;
+                    VerticalLayout {
+                        spacing: 2px;
+                        Text {
+                            text: SessionState.user-name == ""
+                                ? @tr("Guest")
+                                : SessionState.user-name;
+                            color: Theme.text-primary;
+                            font-size: Typography.body;
+                            font-weight: Typography.semibold;
+                        }
+                        Text {
+                            text: SessionState.subscription == ""
+                                ? @tr("Not signed in")
+                                : SessionState.subscription;
+                            color: Theme.text-muted;
+                            font-size: 12px;
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border-subtle;
+                }
+                Rectangle { height: 4px; }
+
                 MenuItem {
                     icon: @image-url("../assets/icons/settings.svg");
                     label: @tr("Settings");

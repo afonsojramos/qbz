@@ -43,10 +43,12 @@ async fn enter_shell(
     weak: slint::Weak<AppWindow>,
     image_cache: artwork::ImageCache,
     settings_ctx: Arc<settings::SettingsCtx>,
-    user_name: String,
+    session: auth::SessionInfo,
 ) {
     let _ = weak.upgrade_in_event_loop(move |w| {
-        w.global::<SessionState>().set_user_name(user_name.into());
+        let state = w.global::<SessionState>();
+        state.set_user_name(session.display_name.into());
+        state.set_subscription(session.subscription.into());
         w.global::<HomeState>().set_loading(true);
         w.set_screen(AppScreen::Shell);
     });
@@ -151,9 +153,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 log::error!("[qbz-slint] core init failed: {e}");
             }
             match auth::restore_saved_session(&runtime).await {
-                Ok(Some((user_id, user_name))) => {
-                    log::info!("[qbz-slint] session restored for user {user_id}");
-                    enter_shell(runtime, weak, image_cache, settings_ctx, user_name).await;
+                Ok(Some(session)) => {
+                    log::info!(
+                        "[qbz-slint] session restored for user {}",
+                        session.user_id
+                    );
+                    enter_shell(runtime, weak, image_cache, settings_ctx, session).await;
                 }
                 Ok(None) => {
                     log::info!("[qbz-slint] no saved session — showing login");
@@ -183,9 +188,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let settings_ctx = settings_ctx.clone();
             handle.spawn(async move {
                 match auth::login_via_system_browser(&runtime).await {
-                    Ok((user_id, user_name)) => {
-                        log::info!("[qbz-slint] authenticated as user {user_id}");
-                        enter_shell(runtime, weak, image_cache, settings_ctx, user_name).await;
+                    Ok(session) => {
+                        log::info!(
+                            "[qbz-slint] authenticated as user {}",
+                            session.user_id
+                        );
+                        enter_shell(runtime, weak, image_cache, settings_ctx, session).await;
                     }
                     Err(e) => log::error!("[qbz-slint] sign-in failed: {e}"),
                 }

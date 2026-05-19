@@ -16,11 +16,18 @@ use tokio::net::TcpListener;
 
 const OAUTH_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// The authenticated user, as the shell needs it.
+pub struct SessionInfo {
+    pub user_id: u64,
+    pub display_name: String,
+    pub subscription: String,
+}
+
 /// Run the full system-browser OAuth login. Returns the authenticated
-/// `(user_id, display_name)` on success.
+/// session info on success.
 pub async fn login_via_system_browser<A>(
     runtime: &Arc<AppRuntime<A>>,
-) -> Result<(u64, String), String>
+) -> Result<SessionInfo, String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
@@ -71,6 +78,7 @@ where
     };
     let user_id = session.user_id;
     let display_name = session.display_name.clone();
+    let subscription = session.subscription_label.clone();
     let token = session.user_auth_token.clone();
 
     // Emit LoggedIn through the core (idempotent set_session).
@@ -85,18 +93,22 @@ where
     }
 
     log::info!("[qbz-slint] login complete for user {user_id}");
-    Ok((user_id, display_name))
+    Ok(SessionInfo {
+        user_id,
+        display_name,
+        subscription,
+    })
 }
 
 /// Restore a previously saved session from the encrypted token store
 /// (keyring + AES-256-GCM file — the same store the Tauri app uses).
 ///
-/// Returns `Ok(Some((user_id, display_name)))` when a saved token is valid
-/// and the session is activated, `Ok(None)` when there is no token. A token
-/// that exists but is rejected by Qobuz is cleared and treated as `None`.
+/// Returns `Ok(Some(SessionInfo))` when a saved token is valid and the
+/// session is activated, `Ok(None)` when there is no token. A token that
+/// exists but is rejected by Qobuz is cleared and treated as `None`.
 pub async fn restore_saved_session<A>(
     runtime: &Arc<AppRuntime<A>>,
-) -> Result<Option<(u64, String)>, String>
+) -> Result<Option<SessionInfo>, String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
@@ -118,10 +130,15 @@ where
         Ok(session) => {
             let user_id = session.user_id;
             let display_name = session.display_name.clone();
+            let subscription = session.subscription_label.clone();
             core.set_session(session).await.map_err(|e| e.to_string())?;
             runtime.activate(user_id).await?;
             log::info!("[qbz-slint] restored saved session for user {user_id}");
-            Ok(Some((user_id, display_name)))
+            Ok(Some(SessionInfo {
+                user_id,
+                display_name,
+                subscription,
+            }))
         }
         Err(e) => {
             log::warn!("[qbz-slint] saved token rejected, clearing: {e}");
