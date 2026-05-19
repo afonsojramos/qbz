@@ -311,16 +311,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _enter = tokio_rt.enter();
 
     let window = AppWindow::new()?;
-    // FONT TEST (slint-mvp): trying the bundled LINE Seed JP face instead
-    // of the desktop font, to compare text rendering against a clean,
-    // unpatched font. Flip `FONT_TEST_LINESEED` to false to restore the
-    // KDE system font (kdeglobals lookup).
-    const FONT_TEST_LINESEED: bool = true;
-    if FONT_TEST_LINESEED {
-        // LINE Seed JP is bundled + registered by the `import` of the .ttf
-        // in app.slint; here we just select it as the default family.
-        log::info!("[qbz-slint] font test: using bundled LINE Seed JP");
-        window.set_system_font("LINE Seed JP".into());
+    // FONT TEST (slint-mvp): render with bundled Inter 18pt. Inter is a
+    // clean, screen-tuned UI face; combined with the femtovg #5177/#11335
+    // text fixes this is the candidate for the final look. Flip
+    // `FONT_TEST_INTER` to false to fall back to the KDE system font.
+    const FONT_TEST_INTER: bool = true;
+    if FONT_TEST_INTER {
+        log::info!("[qbz-slint] font test: using bundled Inter 18pt");
+        window.set_system_font("Inter 18pt".into());
     } else if let Some(font) = system_font_family() {
         log::info!("[qbz-slint] using system font: {font}");
         window.set_system_font(font.into());

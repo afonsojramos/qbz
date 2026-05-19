@@ -4,9 +4,12 @@
 // top-level window. No raw visual constants or domain logic here
 // (MVP ADR, sections 13 and 21).
 
-// Bundles + registers LINE Seed JP so it can be selected as the default
-// font family (font-rendering test on the slint-mvp branch).
-import "assets/fonts/LINESeedJP-Regular.ttf";
+// Bundles + registers the Inter 18pt faces (compile-time embed) so the
+// app can render with Inter — see the FONT_TEST_INTER toggle in main.rs.
+import "assets/fonts/Inter_18pt-Regular.ttf";
+import "assets/fonts/Inter_18pt-Medium.ttf";
+import "assets/fonts/Inter_18pt-SemiBold.ttf";
+import "assets/fonts/Inter_18pt-Bold.ttf";
 
 import { Theme } from "foundation/semantic-colors.slint";
 import { SplashScreen } from "splash/SplashScreen.slint";
