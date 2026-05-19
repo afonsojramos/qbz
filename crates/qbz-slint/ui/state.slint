@@ -193,6 +193,8 @@ export struct QueueItem {
     artist: string,
     artwork: image,
     playing: bool,
+    duration: string,    // "M:SS"
+    explicit: bool,
 }
 
 // Now-playing / transport state. The Rust playback poll loop pushes the
@@ -230,9 +232,70 @@ export global NowPlayingState {
 }
 
 // Playback queue model, for the Queue sidebar.
+//
+// The sidebar shows two tabs. The Queue tab renders `now-playing` plus a
+// paginated slice of `upcoming` (40 per page). The History tab renders
+// `history` (most-recent first). The Rust queue controller owns the full
+// upcoming/history lists and the pagination maths; it pushes the current
+// page's slice into `upcoming-page` and the counters that label it.
 export global QueueState {
-    in property <[QueueItem]> items: [];
-    in property <int> current-index: -1;
-    // Play the queue entry at `index`.
-    callback play-index(int);
+    // --- Queue tab -------------------------------------------------------
+    // Current track card. `has-current` gates the NOW PLAYING section.
+    in property <bool> has-current: false;
+    in property <QueueItem> now-playing;
+    // Whether the now-playing track is in the user's favorites.
+    in property <bool> now-playing-favorite: false;
+
+    // The slice of upcoming tracks for the current page (<= 40 entries).
+    in property <[QueueItem]> upcoming-page: [];
+    // Total upcoming-track count (post-filter when a search is active).
+    in property <int> upcoming-total: 0;
+    // Tracks remaining after the current one (total - played - 1).
+    in property <int> upcoming-remaining: 0;
+    // Zero-based page index and total page count for the paginator.
+    in-out property <int> page: 0;
+    in property <int> page-count: 1;
+    // Index of the first upcoming entry shown, 1-based, for the counter.
+    in property <int> page-start: 0;
+    // Index of the last upcoming entry shown, 1-based, for the counter.
+    in property <int> page-end: 0;
+
+    // --- History tab -----------------------------------------------------
+    in property <[QueueItem]> history: [];
+
+    // --- Shared ----------------------------------------------------------
+    // Active tab: 0 = Queue, 1 = History.
+    in-out property <int> tab: 0;
+    // Live search query; the Rust controller re-filters `upcoming-page`.
+    in-out property <string> search-query: "";
+
+    // --- Callbacks (wired to the Rust queue controller) ------------------
+    // Play the upcoming entry at `index` within the current page slice.
+    callback play-upcoming(int);
+    // Play a history entry by its `index` in the `history` list.
+    callback play-history(int);
+    // Remove the upcoming entry at `index` within the current page slice.
+    callback remove-upcoming(int);
+    // Empty the queue.
+    callback clear-queue();
+    // Toggle the favorite state of the now-playing track.
+    callback toggle-now-playing-favorite();
+    // Save the current queue as a new playlist.
+    callback save-as-playlist();
+    // Toggle infinite-play (auto-refill the queue with similar tracks).
+    callback toggle-infinite-play();
+    // Re-filter the upcoming list after `search-query` changed.
+    callback search-changed();
+    // Move to the previous / next paginator page.
+    callback prev-page();
+    callback next-page();
+    // Switch the active tab (0 = Queue, 1 = History).
+    callback set-tab(int);
+    // Fired when the sidebar becomes visible, so the Rust controller can
+    // pull a fresh queue snapshot (the queue may have changed while the
+    // panel was closed, e.g. after a session restore).
+    callback panel-opened();
+
+    // Reflects whether infinite-play is currently enabled.
+    in property <bool> infinite-play: false;
 }
