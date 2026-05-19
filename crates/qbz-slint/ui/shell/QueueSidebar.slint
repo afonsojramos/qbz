@@ -188,32 +188,30 @@ component QueueRow inherits Rectangle {
             }
         }
 
-        // Duration (hidden on hover when the row is removable, so the
-        // remove control can take its place).
+        // Duration.
         VerticalLayout {
             alignment: center;
             Text {
                 text: root.item.duration;
                 color: Theme.text-muted;
                 font-size: 11px;
-                visible: !(root.removable && ta.has-hover);
             }
         }
 
-        // Context-menu trigger — only on UP NEXT rows, shown on hover.
+        // Context-menu trigger — UP NEXT rows. Always visible, with a
+        // proper 32px hit area (matching the album track rows) so a
+        // near-miss never falls through to the row and skips the queue.
         if root.removable: VerticalLayout {
             alignment: center;
-            width: 24px;
-            visible: ta.has-hover;
             menu-btn := Rectangle {
-                width: 24px;
-                height: 24px;
+                width: 32px;
+                height: 32px;
                 border-radius: Radius.sm;
-                background: mta.has-hover ? Theme.surface-hover : transparent;
+                background: mta.has-hover ? Theme.surface-elevated : transparent;
                 QbzIcon {
                     source: @image-url("../assets/icons/ellipsis.svg");
-                    width: 15px;
-                    height: 15px;
+                    width: 16px;
+                    height: 16px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     tint: mta.has-hover ? Theme.text-primary : Theme.text-muted;
@@ -690,6 +688,8 @@ export component QueueSidebar inherits Rectangle {
                         Text {
                             visible: search-input.text == "";
                             text: @tr("Search queue");
+                            width: 100%;
+                            height: 100%;
                             color: Theme.text-muted;
                             font-size: 12px;
                             vertical-alignment: center;
