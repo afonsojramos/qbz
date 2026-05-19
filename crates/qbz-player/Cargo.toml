@@ -9,6 +9,7 @@ description = "Playback engine and queue management for QBZ"
 qbz-models = { path = "../qbz-models" }
 qbz-audio = { path = "../qbz-audio" }
 qbz-qobuz = { path = "../qbz-qobuz" }
+qbz-cmaf = { path = "../qbz-cmaf" }
 
 # Serialization
 serde = { workspace = true }

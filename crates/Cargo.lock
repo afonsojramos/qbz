@@ -5416,6 +5416,7 @@ dependencies = [
  "futures-util",
  "log",
  "qbz-audio",
+ "qbz-cmaf",
  "qbz-models",
  "qbz-qobuz",
  "rand 0.9.3",
