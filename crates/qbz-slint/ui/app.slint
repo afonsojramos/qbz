@@ -4,6 +4,10 @@
 // top-level window. No raw visual constants or domain logic here
 // (MVP ADR, sections 13 and 21).
 
+// Bundles + registers LINE Seed JP so it can be selected as the default
+// font family (font-rendering test on the slint-mvp branch).
+import "assets/fonts/LINESeedJP-Regular.ttf";
+
 import { Theme } from "foundation/semantic-colors.slint";
 import { SplashScreen } from "splash/SplashScreen.slint";
 import { LoginScreen } from "login/LoginScreen.slint";

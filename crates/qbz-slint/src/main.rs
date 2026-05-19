@@ -311,9 +311,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _enter = tokio_rt.enter();
 
     let window = AppWindow::new()?;
-    // Render with the desktop environment's UI font when we can resolve
-    // one; otherwise Slint keeps its bundled default.
-    if let Some(font) = system_font_family() {
+    // FONT TEST (slint-mvp): trying the bundled LINE Seed JP face instead
+    // of the desktop font, to compare text rendering against a clean,
+    // unpatched font. Flip `FONT_TEST_LINESEED` to false to restore the
+    // KDE system font (kdeglobals lookup).
+    const FONT_TEST_LINESEED: bool = true;
+    if FONT_TEST_LINESEED {
+        // LINE Seed JP is bundled + registered by the `import` of the .ttf
+        // in app.slint; here we just select it as the default family.
+        log::info!("[qbz-slint] font test: using bundled LINE Seed JP");
+        window.set_system_font("LINE Seed JP".into());
+    } else if let Some(font) = system_font_family() {
         log::info!("[qbz-slint] using system font: {font}");
         window.set_system_font(font.into());
     }
