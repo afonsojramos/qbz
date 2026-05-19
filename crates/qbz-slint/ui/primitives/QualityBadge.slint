@@ -43,9 +43,10 @@ export component QualityBadge inherits Rectangle {
         }
     }
 
-    // Hover tooltip — floats just above the badge.
+    // Hover tooltip — floats just above the badge, right-anchored so it
+    // extends leftward into the card and is never clipped by the next card.
     tip := Rectangle {
-        x: (parent.width - self.width) / 2;
+        x: root.width - self.width;
         y: -self.height - 6px;
         width: tip-row.preferred-width;
         height: 24px;
