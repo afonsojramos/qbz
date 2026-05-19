@@ -198,9 +198,12 @@ export component HeaderBar inherits Rectangle {
     }
 
     // --- Right controls: queue, lyrics, hamburger (anchored right) ---------
+    // Explicit width (3 * 36 + 2 * 2 spacing) so the right anchor lands
+    // correctly — a layout left to its own devices fills the parent.
     right-controls := HorizontalLayout {
         x: root.width - self.width - Spacing.md;
         y: (root.height - self.height) / 2;
+        width: 112px;
         height: 36px;
         spacing: 2px;
         HeaderIconButton {
