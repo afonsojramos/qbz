@@ -1,12 +1,14 @@
-// Playback settings panel — end-of-source behavior and session
-// persistence. Backed by the SettingsState global and persisted through
-// the Rust settings controller.
+// Playback settings panel — end-of-source behavior, session persistence,
+// and streaming/caching options. 1:1 with the Tauri app. Backed by the
+// SettingsState global and persisted through the Rust settings
+// controller.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { SettingsState } from "../state.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
+import { QbzSlider } from "../primitives/QbzSlider.slint";
 import { SettingRow } from "SettingRow.slint";
 
 component GroupHeader inherits Text {
@@ -24,32 +26,42 @@ component Divider inherits Rectangle {
 export component PlaybackSettings inherits VerticalLayout {
     callback settings-bool(string, bool);
     callback settings-select(string, int);
+    callback settings-slider(string, int);
 
     spacing: 4px;
 
-    GroupHeader { text: @tr("AUTOPLAY"); }
+    GroupHeader { text: @tr("PLAYBACK"); }
 
     SettingRow {
-        label: @tr("When the source ends");
-        description: @tr("What happens after the last track of an album or playlist.");
-        QbzSelect {
-            menu-width: 240px;
-            options: SettingsState.autoplay-modes;
-            current-index: SettingsState.autoplay-index;
-            selected(i) => {
-                SettingsState.autoplay-index = i;
-                root.settings-select("autoplay-mode", i);
+        label: @tr("Continue playback after track ends");
+        description: @tr("Keep playing the rest of the album or playlist instead of stopping.");
+        QbzToggle {
+            checked: SettingsState.continue-playback;
+            toggled(v) => {
+                SettingsState.continue-playback = v;
+                root.settings-bool("continue-playback", v);
             }
         }
     }
     SettingRow {
-        label: @tr("Show context icon");
+        label: @tr("Show track playing context");
         description: @tr("Display the context-stack icon in the player.");
         QbzToggle {
             checked: SettingsState.show-context-icon;
             toggled(v) => {
                 SettingsState.show-context-icon = v;
                 root.settings-bool("show-context-icon", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Gapless playback");
+        description: @tr("Play consecutive same-format tracks without a gap.");
+        QbzToggle {
+            checked: SettingsState.gapless;
+            toggled(v) => {
+                SettingsState.gapless = v;
+                root.settings-bool("gapless", v);
             }
         }
     }
@@ -61,7 +73,7 @@ export component PlaybackSettings inherits VerticalLayout {
     GroupHeader { text: @tr("SESSION"); }
 
     SettingRow {
-        label: @tr("Remember session");
+        label: @tr("Restore session on startup");
         description: @tr("Restore the queue and current track on the next launch.");
         QbzToggle {
             checked: SettingsState.persist-session;
@@ -81,6 +93,76 @@ export component PlaybackSettings inherits VerticalLayout {
             toggled(v) => {
                 SettingsState.resume-position = v;
                 root.settings-bool("resume-position", v);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    GroupHeader { text: @tr("STREAMING"); }
+
+    SettingRow {
+        label: @tr("Stream uncached tracks");
+        description: @tr("Start uncached tracks via streaming instead of waiting for the full download.");
+        QbzToggle {
+            checked: SettingsState.stream-uncached;
+            toggled(v) => {
+                SettingsState.stream-uncached = v;
+                root.settings-bool("stream-uncached", v);
+            }
+        }
+    }
+    if SettingsState.stream-uncached: SettingRow {
+        label: @tr("Initial buffer size");
+        description: @tr("Seconds of audio buffered before streaming playback starts.");
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                alignment: center;
+                QbzSlider {
+                    minimum: 1;
+                    maximum: 10;
+                    value: SettingsState.buffer-seconds;
+                    changed(v) => {
+                        SettingsState.buffer-seconds = v;
+                        root.settings-slider("buffer-seconds", v);
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: SettingsState.buffer-seconds + @tr("s");
+                    color: Theme.text-secondary;
+                    font-size: Typography.body;
+                    font-weight: Typography.medium;
+                }
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Streaming only");
+        description: @tr("Skip writing tracks to the local cache while streaming.");
+        QbzToggle {
+            checked: SettingsState.streaming-only;
+            toggled(v) => {
+                SettingsState.streaming-only = v;
+                root.settings-bool("streaming-only", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("When quality retries fail");
+        description: @tr("What to do when every quality tier for a track is unavailable.");
+        QbzSelect {
+            menu-width: 240px;
+            options: SettingsState.retry-behaviors;
+            current-index: SettingsState.retry-behavior-index;
+            selected(i) => {
+                SettingsState.retry-behavior-index = i;
+                root.settings-select("retry-behavior", i);
             }
         }
     }

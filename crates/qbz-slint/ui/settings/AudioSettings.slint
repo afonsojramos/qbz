@@ -1,9 +1,11 @@
-// Audio settings panel — output routing, bit-perfect options, and
-// playback-quality preferences. All rows are backed by the SettingsState
-// global and persisted through the Rust settings controller.
+// Audio settings panel — streaming quality, output routing, and
+// bit-perfect options. 1:1 with the Tauri app. All rows are backed by
+// the SettingsState global and persisted through the Rust settings
+// controller. Conditional rows are `if`-gated on Rust-computed flags.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
 import { SettingsState } from "../state.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
@@ -24,8 +26,54 @@ component Divider inherits Rectangle {
 export component AudioSettings inherits VerticalLayout {
     callback settings-bool(string, bool);
     callback settings-select(string, int);
+    // Emitted by the Reset button.
+    callback settings-reset();
 
     spacing: 4px;
+
+    GroupHeader { text: @tr("STREAMING"); }
+
+    SettingRow {
+        label: @tr("Streaming quality");
+        description: @tr("The quality tier QBZ requests for playback.");
+        QbzSelect {
+            menu-width: 200px;
+            options: SettingsState.streaming-qualities;
+            current-index: SettingsState.streaming-quality-index;
+            selected(i) => {
+                SettingsState.streaming-quality-index = i;
+                root.settings-select("streaming-quality", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Limit quality to device");
+        description: @tr("Cap streaming quality at the output device's maximum sample rate.");
+        QbzToggle {
+            checked: SettingsState.limit-quality-to-device;
+            toggled(v) => {
+                SettingsState.limit-quality-to-device = v;
+                root.settings-bool("limit-quality-to-device", v);
+            }
+        }
+    }
+    if SettingsState.limit-quality-to-device: SettingRow {
+        label: @tr("Maximum sample rate");
+        description: @tr("The highest sample rate streamed tracks may use.");
+        QbzSelect {
+            menu-width: 170px;
+            options: SettingsState.sample-rates;
+            current-index: SettingsState.sample-rate-index;
+            selected(i) => {
+                SettingsState.sample-rate-index = i;
+                root.settings-select("sample-rate", i);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
 
     GroupHeader { text: @tr("OUTPUT"); }
 
@@ -55,16 +103,27 @@ export component AudioSettings inherits VerticalLayout {
             }
         }
     }
-    SettingRow {
-        label: @tr("Preferred sample rate");
-        description: @tr("Force a sample rate, or let the track decide.");
+    if SettingsState.backend-is-alsa: SettingRow {
+        label: @tr("ALSA plugin");
+        description: @tr("How ALSA opens the device — hw is bit-perfect, plughw converts.");
         QbzSelect {
-            menu-width: 170px;
-            options: SettingsState.sample-rates;
-            current-index: SettingsState.sample-rate-index;
+            menu-width: 220px;
+            options: SettingsState.alsa-plugins;
+            current-index: SettingsState.alsa-plugin-index;
             selected(i) => {
-                SettingsState.sample-rate-index = i;
-                root.settings-select("sample-rate", i);
+                SettingsState.alsa-plugin-index = i;
+                root.settings-select("alsa-plugin", i);
+            }
+        }
+    }
+    if SettingsState.backend-is-alsa && SettingsState.alsa-plugin-is-hw: SettingRow {
+        label: @tr("Hardware volume control");
+        description: @tr("Use the ALSA mixer for volume instead of software gain.");
+        QbzToggle {
+            checked: SettingsState.alsa-hardware-volume;
+            toggled(v) => {
+                SettingsState.alsa-hardware-volume = v;
+                root.settings-bool("alsa-hardware-volume", v);
             }
         }
     }
@@ -87,6 +146,17 @@ export component AudioSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        label: @tr("Reserve DAC while running");
+        description: @tr("Hold the device reserved so other apps can't grab it.");
+        QbzToggle {
+            checked: SettingsState.reserve-dac;
+            toggled(v) => {
+                SettingsState.reserve-dac = v;
+                root.settings-bool("reserve-dac", v);
+            }
+        }
+    }
+    SettingRow {
         label: @tr("DAC passthrough");
         description: @tr("Send the bitstream untouched to the DAC.");
         QbzToggle {
@@ -97,43 +167,14 @@ export component AudioSettings inherits VerticalLayout {
             }
         }
     }
-    SettingRow {
-        label: @tr("PipeWire force bit-perfect");
+    if SettingsState.dac-passthrough && SettingsState.backend-is-pipewire: SettingRow {
+        label: @tr("Force bit-perfect");
         description: @tr("Pin the PipeWire quantum and rate for the active track.");
         QbzToggle {
             checked: SettingsState.pw-force-bitperfect;
             toggled(v) => {
                 SettingsState.pw-force-bitperfect = v;
                 root.settings-bool("pw-force-bitperfect", v);
-            }
-        }
-    }
-
-    Rectangle { height: 12px; }
-    Divider { }
-    Rectangle { height: 12px; }
-
-    GroupHeader { text: @tr("PLAYBACK QUALITY"); }
-
-    SettingRow {
-        label: @tr("Gapless playback");
-        description: @tr("Play consecutive same-format tracks without a gap.");
-        QbzToggle {
-            checked: SettingsState.gapless;
-            toggled(v) => {
-                SettingsState.gapless = v;
-                root.settings-bool("gapless", v);
-            }
-        }
-    }
-    SettingRow {
-        label: @tr("Volume normalization");
-        description: @tr("Apply ReplayGain. Off keeps the pipeline bit-perfect.");
-        QbzToggle {
-            checked: SettingsState.normalization;
-            toggled(v) => {
-                SettingsState.normalization = v;
-                root.settings-bool("normalization", v);
             }
         }
     }
@@ -145,6 +186,64 @@ export component AudioSettings inherits VerticalLayout {
             toggled(v) => {
                 SettingsState.allow-quality-fallback = v;
                 root.settings-bool("allow-quality-fallback", v);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    GroupHeader { text: @tr("STARTUP"); }
+
+    SettingRow {
+        label: @tr("Sync audio settings on startup");
+        description: @tr("Reload saved audio settings into the player when QBZ launches.");
+        QbzToggle {
+            checked: SettingsState.sync-audio-on-startup;
+            toggled(v) => {
+                SettingsState.sync-audio-on-startup = v;
+                root.settings-bool("sync-audio-on-startup", v);
+            }
+        }
+    }
+    if SettingsState.backend-is-pipewire: SettingRow {
+        label: @tr("Lock output device");
+        description: @tr("Keep external routing intact — skip switching the default sink.");
+        QbzToggle {
+            checked: SettingsState.skip-sink-switch;
+            toggled(v) => {
+                SettingsState.skip-sink-switch = v;
+                root.settings-bool("skip-sink-switch", v);
+            }
+        }
+    }
+
+    Rectangle { height: 20px; }
+
+    // Reset — restores Audio + Playback defaults.
+    HorizontalLayout {
+        alignment: start;
+        reset-btn := Rectangle {
+            width: 200px;
+            height: 36px;
+            border-radius: Radius.sm;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            background: reset-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+            Text {
+                text: @tr("Reset to defaults");
+                color: Theme.text-secondary;
+                font-size: Typography.body;
+                font-weight: Typography.medium;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            reset-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.settings-reset();
+                }
             }
         }
     }

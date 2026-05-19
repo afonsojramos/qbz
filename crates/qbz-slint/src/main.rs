@@ -24,6 +24,7 @@ mod home;
 mod nav;
 mod recently;
 mod settings;
+mod ui_prefs;
 
 use std::sync::Arc;
 
@@ -517,6 +518,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let index = index.max(0) as usize;
             handle.spawn(async move {
                 settings::handle_select(settings_ctx, runtime, weak, key, index).await;
+            });
+        });
+    }
+
+    // Settings — a slider changed (Initial Buffer Size): persist it and
+    // reload the player settings.
+    {
+        let runtime = app_runtime.clone();
+        let settings_ctx = settings_ctx.clone();
+        let handle = tokio_rt.handle().clone();
+        window.on_settings_slider(move |key, value| {
+            let runtime = runtime.clone();
+            let settings_ctx = settings_ctx.clone();
+            let key = key.to_string();
+            handle.spawn(async move {
+                settings::handle_slider(&settings_ctx, &runtime, &key, value);
+            });
+        });
+    }
+
+    // Settings — Reset: restore Audio + Playback defaults, rebuild the
+    // snapshot, and re-apply the audio settings to the player.
+    {
+        let runtime = app_runtime.clone();
+        let settings_ctx = settings_ctx.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.on_settings_reset(move || {
+            let runtime = runtime.clone();
+            let settings_ctx = settings_ctx.clone();
+            let weak = weak.clone();
+            handle.spawn(async move {
+                settings::handle_reset(settings_ctx, runtime, weak).await;
             });
         });
     }

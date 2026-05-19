@@ -21,6 +21,8 @@ export component AppShell inherits Rectangle {
     callback media-action(string, string, string);
     callback settings-bool(string, bool);
     callback settings-select(string, int);
+    callback settings-slider(string, int);
+    callback settings-reset();
     callback logout();
     callback close-app();
 
@@ -94,6 +96,12 @@ export component AppShell inherits Rectangle {
                     }
                     settings-select(k, i) => {
                         root.settings-select(k, i);
+                    }
+                    settings-slider(k, v) => {
+                        root.settings-slider(k, v);
+                    }
+                    settings-reset => {
+                        root.settings-reset();
                     }
                 }
             }

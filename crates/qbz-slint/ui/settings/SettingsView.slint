@@ -60,6 +60,8 @@ component SubNavItem inherits Rectangle {
 export component SettingsView inherits Rectangle {
     callback settings-bool(string, bool);
     callback settings-select(string, int);
+    callback settings-slider(string, int);
+    callback settings-reset();
 
     background: Theme.surface-main;
 
@@ -146,6 +148,9 @@ export component SettingsView inherits Rectangle {
                         settings-select(k, i) => {
                             root.settings-select(k, i);
                         }
+                        settings-reset => {
+                            root.settings-reset();
+                        }
                     }
                     if !SettingsState.loading && SettingsState.section == 1: PlaybackSettings {
                         settings-bool(k, v) => {
@@ -153,6 +158,9 @@ export component SettingsView inherits Rectangle {
                         }
                         settings-select(k, i) => {
                             root.settings-select(k, i);
+                        }
+                        settings-slider(k, v) => {
+                            root.settings-slider(k, v);
                         }
                     }
                 }

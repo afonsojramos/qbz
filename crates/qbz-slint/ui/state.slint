@@ -86,35 +86,62 @@ export enum ContentView { home, album, artist, settings }
 
 // Settings screen state. Audio and Playback preferences are loaded from
 // the persistence stores by the Rust settings controller and pushed here;
-// changes flow back through the settings-bool / settings-select callbacks.
+// changes flow back through the settings-bool / settings-select /
+// settings-slider callbacks.
 export global SettingsState {
     // Sub-section: 0 = Audio, 1 = Playback.
     in-out property <int> section: 0;
     in property <bool> loading: true;
 
+    // --- AUDIO -------------------------------------------------------------
+
     // Audio — dropdowns. Each list is paired with a selected index; the
     // Rust controller owns the index -> value mapping.
+    in-out property <[string]> streaming-qualities: [];
+    in-out property <int> streaming-quality-index: 0;
+    in-out property <[string]> sample-rates: [];
+    in-out property <int> sample-rate-index: 0;
     in-out property <[string]> backends: [];
     in-out property <int> backend-index: 0;
     in-out property <[string]> devices: [];
     in-out property <int> device-index: 0;
-    in-out property <[string]> sample-rates: [];
-    in-out property <int> sample-rate-index: 0;
+    in-out property <[string]> alsa-plugins: [];
+    in-out property <int> alsa-plugin-index: 0;
 
     // Audio — toggles.
+    in-out property <bool> limit-quality-to-device: false;
+    in-out property <bool> alsa-hardware-volume: false;
     in-out property <bool> exclusive-mode: false;
+    in-out property <bool> reserve-dac: false;
     in-out property <bool> dac-passthrough: false;
     in-out property <bool> pw-force-bitperfect: false;
-    in-out property <bool> gapless: true;
-    in-out property <bool> normalization: false;
     in-out property <bool> allow-quality-fallback: false;
+    in-out property <bool> sync-audio-on-startup: false;
+    in-out property <bool> skip-sink-switch: false;
 
-    // Playback.
-    in-out property <[string]> autoplay-modes: [];
-    in-out property <int> autoplay-index: 0;
-    in-out property <bool> show-context-icon: false;
+    // Audio — Rust-computed conditional flags driving `if`-gated rows.
+    in-out property <bool> backend-is-alsa: false;
+    in-out property <bool> backend-is-pipewire: false;
+    in-out property <bool> alsa-plugin-is-hw: false;
+
+    // --- PLAYBACK ----------------------------------------------------------
+
+    // Playback — toggles. `continue-playback` maps to the autoplay mode
+    // (on = ContinueWithinSource, off = PlayTrackOnly).
+    in-out property <bool> continue-playback: true;
+    in-out property <bool> show-context-icon: true;
     in-out property <bool> persist-session: false;
     in-out property <bool> resume-position: false;
+    in-out property <bool> gapless: true;
+    in-out property <bool> stream-uncached: false;
+    in-out property <bool> streaming-only: false;
+
+    // Playback — Initial Buffer Size slider (seconds, 1-10).
+    in-out property <int> buffer-seconds: 3;
+
+    // Playback — "When quality retries fail" dropdown.
+    in-out property <[string]> retry-behaviors: [];
+    in-out property <int> retry-behavior-index: 0;
 }
 
 export global NavState {
