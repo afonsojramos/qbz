@@ -492,13 +492,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let runtime = app_runtime.clone();
         let settings_ctx = settings_ctx.clone();
+        let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         window.on_settings_bool(move |key, value| {
             let runtime = runtime.clone();
             let settings_ctx = settings_ctx.clone();
+            let weak = weak.clone();
             let key = key.to_string();
             handle.spawn(async move {
-                settings::handle_bool(&settings_ctx, &runtime, &key, value);
+                settings::handle_bool(settings_ctx, runtime, weak, key, value).await;
             });
         });
     }

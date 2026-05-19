@@ -418,20 +418,70 @@ fn push_conditional_flags(ctx: &SettingsCtx, weak: &slint::Weak<AppWindow>) {
     });
 }
 
-/// Handle a toggle change: persist it, then apply audio ones to the
-/// player.
+/// Rebuild the full snapshot off the UI thread and push it onto
+/// `SettingsState`. Used after a cross-setting cascade so the UI reflects
+/// every forced change (and the conditional flags) in one shot.
+async fn rebuild_and_push(ctx: Arc<SettingsCtx>, weak: slint::Weak<AppWindow>) {
+    let snap = match tokio::task::spawn_blocking(move || load_snapshot(&ctx)).await {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("[qbz-slint] settings cascade rebuild task failed: {e}");
+            return;
+        }
+    };
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        apply_snapshot(&w, snap);
+    });
+}
+
+/// Handle a toggle change: persist it, apply any cross-setting cascade,
+/// then apply audio settings to the player.
 ///
-/// No audio toggle moves the backend or ALSA plugin, so no conditional
-/// flag recompute is needed here — the rows gated on toggle state
-/// (`dac-passthrough`, `limit-quality-to-device`, `stream-uncached`,
-/// `persist-session`) read `SettingsState` booleans directly in Slint.
-/// Backend / ALSA-plugin flag recomputes happen in `handle_select`.
-pub fn handle_bool(
-    ctx: &SettingsCtx,
-    runtime: &AppRuntime<SlintAdapter>,
-    key: &str,
+/// Cross-setting cascades (matching the Tauri app):
+///  - DAC passthrough ON  → force `skip_sink_switch` off (mutually exclusive).
+///  - DAC passthrough OFF → force `pw_force_bitperfect` off.
+///  - Streaming-only  ON  → force `gapless_enabled` off.
+///
+/// When a cascade fires, the forced changes are persisted too and the
+/// whole snapshot is rebuilt and re-pushed to `SettingsState` so the UI
+/// (toggle states, conditional rows, disabled states) stays consistent.
+pub async fn handle_bool(
+    ctx: Arc<SettingsCtx>,
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    key: String,
     value: bool,
 ) {
+    let key = key.as_str();
+    // Cross-setting cascades — force dependent settings off and persist
+    // those forced changes. `cascaded` flags whether a full snapshot
+    // re-push is needed afterwards.
+    let mut cascaded = false;
+    match key {
+        "dac-passthrough" if value => {
+            if let Err(e) = with_audio(&ctx.audio, |s| s.set_skip_sink_switch(false)) {
+                log::error!("[qbz-slint] cascade skip-sink-switch off failed: {e}");
+            } else {
+                cascaded = true;
+            }
+        }
+        "dac-passthrough" => {
+            if let Err(e) = with_audio(&ctx.audio, |s| s.set_pw_force_bitperfect(false)) {
+                log::error!("[qbz-slint] cascade pw-force-bitperfect off failed: {e}");
+            } else {
+                cascaded = true;
+            }
+        }
+        "streaming-only" if value => {
+            if let Err(e) = with_audio(&ctx.audio, |s| s.set_gapless_enabled(false)) {
+                log::error!("[qbz-slint] cascade gapless off failed: {e}");
+            } else {
+                cascaded = true;
+            }
+        }
+        _ => {}
+    }
+
     let outcome: Result<Apply, String> = match key {
         // --- Audio toggles -------------------------------------------------
         "limit-quality-to-device" => {
@@ -500,8 +550,19 @@ pub fn handle_bool(
         }
     };
     match outcome {
-        Ok(apply) => apply_audio(ctx, runtime, apply),
+        Ok(apply) => {
+            // A cascade forced extra changes — always re-init the device
+            // (cascade targets are routing-critical) regardless of what the
+            // triggering toggle alone required.
+            let apply = if cascaded { Apply::Reinit } else { apply };
+            apply_audio(&ctx, &runtime, apply);
+        }
         Err(e) => log::error!("[qbz-slint] failed to persist '{key}': {e}"),
+    }
+    // After a cascade, rebuild + re-push the full snapshot so the forced
+    // changes and disabled states reach the UI.
+    if cascaded {
+        rebuild_and_push(ctx, weak).await;
     }
 }
 
@@ -568,32 +629,40 @@ pub async fn handle_select(
                 log::error!("[qbz-slint] persist backend failed: {e}");
                 return;
             }
-            // A backend switch invalidates the device list; re-enumerate
-            // and reset routing to the system default.
-            let device_list =
-                match tokio::task::spawn_blocking(move || enumerate_devices(backend)).await {
-                    Ok(d) => d,
-                    Err(e) => {
-                        log::error!("[qbz-slint] device enumeration task failed: {e}");
-                        return;
-                    }
-                };
+            // Cross-setting cascades — force settings unsupported by the
+            // new backend off, matching the Tauri app.
+            if backend != AudioBackendType::PipeWire {
+                if let Err(e) = with_audio(&ctx.audio, |s| s.set_dac_passthrough(false)) {
+                    log::error!("[qbz-slint] cascade dac-passthrough off failed: {e}");
+                }
+                if let Err(e) = with_audio(&ctx.audio, |s| s.set_pw_force_bitperfect(false)) {
+                    log::error!("[qbz-slint] cascade pw-force-bitperfect off failed: {e}");
+                }
+            }
+            if backend != AudioBackendType::Alsa {
+                if let Err(e) = with_audio(&ctx.audio, |s| s.set_exclusive_mode(false)) {
+                    log::error!("[qbz-slint] cascade exclusive-mode off failed: {e}");
+                }
+            }
+            if backend == AudioBackendType::Alsa {
+                if let Err(e) = with_audio(&ctx.audio, |s| s.set_gapless_enabled(false)) {
+                    log::error!("[qbz-slint] cascade gapless off failed: {e}");
+                }
+            }
+            // A backend switch invalidates the device list; reset routing
+            // to the system default.
             if let Err(e) = with_audio(&ctx.audio, |s| s.set_output_device(None)) {
                 log::error!("[qbz-slint] reset output device failed: {e}");
             }
-            {
-                let mut maps = ctx.maps.lock().unwrap_or_else(|e| e.into_inner());
-                maps.devices = device_list.ids.clone();
-            }
-            let labels = device_list.labels;
-            let _ = weak.upgrade_in_event_loop(move |w| {
-                let st = w.global::<SettingsState>();
-                st.set_devices(string_model(labels));
-                st.set_device_index(0);
-            });
-            // Recompute conditional flags (backend-is-alsa / -pipewire).
-            push_conditional_flags(&ctx, &weak);
+            // Apply to the player first, then rebuild + re-push the full
+            // snapshot. `load_snapshot` re-enumerates the new backend's
+            // devices and refills the index maps, so the new device list,
+            // the reset device index, the forced cascade changes
+            // (dac-passthrough / pw-force-bitperfect / exclusive-mode /
+            // gapless) and the conditional flags all reach the UI in one
+            // consistent push.
             apply_audio(&ctx, &runtime, Apply::Reinit);
+            rebuild_and_push(ctx, weak).await;
         }
         "device" => {
             let id = ctx

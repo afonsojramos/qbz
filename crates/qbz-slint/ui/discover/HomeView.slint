@@ -14,6 +14,25 @@ import { GridSection } from "GridSection.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 
+// Header + hint shown for a recently-played module while it has no data
+// yet (the play history fills once the playback session records plays).
+component RecentPlaceholder inherits VerticalLayout {
+    in property <string> title;
+    in property <string> hint;
+    spacing: 10px;
+    Text {
+        text: root.title;
+        color: Theme.text-primary;
+        font-size: 18px;
+        font-weight: Typography.semibold;
+    }
+    Text {
+        text: root.hint;
+        color: Theme.text-muted;
+        font-size: 13px;
+    }
+}
+
 component Tab inherits Rectangle {
     in property <string> label;
     in property <bool> active: false;
@@ -47,11 +66,13 @@ component Tab inherits Rectangle {
 component GenreButton inherits Rectangle {
     callback clicked();
 
+    // Hug the content — the button is only as wide as its label.
+    width: genre-row.preferred-width;
     height: 32px;
     border-radius: 6px;
     background: ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
 
-    HorizontalLayout {
+    genre-row := HorizontalLayout {
         padding-left: 12px;
         padding-right: 14px;
         spacing: 7px;
@@ -152,11 +173,10 @@ export component HomeView inherits Rectangle {
                     HorizontalLayout {
                         spacing: 6px;
                         GenreButton { }
-                        GearButton {
-                            clicked => {
-                                NavState.request-settings();
-                            }
-                        }
+                        // Per-tab sort / show-hide control for the Discover
+                        // sections (not global Settings — that lives in the
+                        // header menu). Its menu is a later increment.
+                        GearButton { }
                     }
                 }
             }
@@ -177,7 +197,7 @@ export component HomeView inherits Rectangle {
 
             home-content := VerticalLayout {
                 padding: 32px;
-                spacing: 28px;
+                spacing: 40px;
                 alignment: start;
 
                 if HomeState.loading && HomeState.sections.length == 0: Text {
@@ -196,6 +216,8 @@ export component HomeView inherits Rectangle {
                     }
                 }
 
+                // Recently Played Albums — always present; shows a
+                // placeholder until the play history has data.
                 if HomeState.recent-albums.length > 0: Carousel {
                     section: {
                         title: @tr("Recently Played Albums"),
@@ -208,13 +230,22 @@ export component HomeView inherits Rectangle {
                         root.media-action(kind, id, action);
                     }
                 }
+                if HomeState.recent-albums.length == 0: RecentPlaceholder {
+                    title: @tr("Recently Played Albums");
+                    hint: @tr("Albums you play will appear here.");
+                }
 
+                // Recently Played Tracks — always present, same pattern.
                 if HomeState.recent.length > 0: GridSection {
                     title: @tr("Recently Played Tracks");
                     items: HomeState.recent;
                     item-clicked(id) => {
                         root.media-action("track", id, "play");
                     }
+                }
+                if HomeState.recent.length == 0: RecentPlaceholder {
+                    title: @tr("Recently Played Tracks");
+                    hint: @tr("Tracks you play will appear here.");
                 }
 
                 if HomeState.popular.length > 0: GridSection {

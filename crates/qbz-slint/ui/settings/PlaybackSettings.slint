@@ -57,8 +57,11 @@ export component PlaybackSettings inherits VerticalLayout {
     SettingRow {
         label: @tr("Gapless playback");
         description: @tr("Play consecutive same-format tracks without a gap.");
+        // Disabled while Streaming only is on — gapless needs local cache.
+        enabled: !SettingsState.streaming-only;
         QbzToggle {
             checked: SettingsState.gapless;
+            enabled: !SettingsState.streaming-only;
             toggled(v) => {
                 SettingsState.gapless = v;
                 root.settings-bool("gapless", v);
@@ -117,10 +120,14 @@ export component PlaybackSettings inherits VerticalLayout {
     if SettingsState.stream-uncached: SettingRow {
         label: @tr("Initial buffer size");
         description: @tr("Seconds of audio buffered before streaming playback starts.");
+        // Fixed width so the slider row right-aligns flush with the toggle
+        // and select rows instead of stretching across the row.
         HorizontalLayout {
+            width: 200px;
             spacing: 12px;
             VerticalLayout {
                 alignment: center;
+                horizontal-stretch: 1;
                 QbzSlider {
                     minimum: 1;
                     maximum: 10;
@@ -133,6 +140,7 @@ export component PlaybackSettings inherits VerticalLayout {
             }
             VerticalLayout {
                 alignment: center;
+                horizontal-stretch: 0;
                 Text {
                     text: SettingsState.buffer-seconds + @tr("s");
                     color: Theme.text-secondary;

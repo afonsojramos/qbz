@@ -193,9 +193,11 @@ export component ArtistPageView inherits Rectangle {
 
         page := VerticalLayout {
             width: parent.width;
-            padding-left: 24px;
-            padding-right: 24px;
-            padding-top: 14px;
+            // padding matches Discover so the [<] [>] pair sits at the same
+            // top/left margin across every view.
+            padding-left: 32px;
+            padding-right: 32px;
+            padding-top: 11px;
             padding-bottom: 100px;
             spacing: 0px;
             alignment: start;
@@ -251,6 +253,14 @@ export component ArtistPageView inherits Rectangle {
                         font-weight: Typography.bold;
                         overflow: elide;
                     }
+                    Rectangle { height: 12px; }
+                    Text {
+                        text: ArtistState.bio;
+                        visible: ArtistState.bio != "";
+                        color: Theme.text-secondary;
+                        font-size: Typography.body;
+                        wrap: word-wrap;
+                    }
                     Rectangle { height: 18px; }
                     HorizontalLayout {
                         alignment: start;
@@ -278,15 +288,6 @@ export component ArtistPageView inherits Rectangle {
                         }
                     }
                 }
-            }
-
-            // Biography — full content width, below the header block.
-            if ArtistState.bio != "": Rectangle { height: 20px; }
-            if ArtistState.bio != "": Text {
-                text: ArtistState.bio;
-                color: Theme.text-secondary;
-                font-size: Typography.body;
-                wrap: word-wrap;
             }
 
             Rectangle { height: 36px; }

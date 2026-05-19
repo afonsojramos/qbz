@@ -1,7 +1,12 @@
 // Bottom now-playing / transport bar.
 //
-// Controls are laid out and hover-reactive but not yet wired to
-// playback. Real playback state arrives in a later milestone.
+// 110px tall. A seek bar near the top, then a controls row: transport
+// cluster (left), the song card (center, no background/border), and the
+// secondary actions + volume cluster (right). Queue and Lyrics are
+// intentionally absent — they live in the header.
+//
+// Playback state is not wired yet; the values are placeholders until the
+// playback session lands.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Spacing } from "../foundation/spacing.slint";
@@ -9,10 +14,13 @@ import { Typography } from "../foundation/typography.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { QbzSlider } from "../primitives/QbzSlider.slint";
+import { SeekBar } from "SeekBar.slint";
 
 component IconButton inherits Rectangle {
     in property <image> icon;
     in property <length> icon-size: 18px;
+    in property <bool> active: false;
     callback clicked();
 
     width: 34px;
@@ -26,7 +34,9 @@ component IconButton inherits Rectangle {
         height: root.icon-size;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+        tint: root.active
+            ? Theme.accent
+            : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
     }
 
     ta := TouchArea {
@@ -37,6 +47,51 @@ component IconButton inherits Rectangle {
     }
 }
 
+// Primary, filled play/pause button.
+component PlayButton inherits Rectangle {
+    in property <image> icon;
+    callback clicked();
+
+    width: 38px;
+    height: 38px;
+    border-radius: 19px;
+    background: ta.has-hover ? #ffffffd6 : #ffffff;
+
+    QbzIcon {
+        source: root.icon;
+        width: 20px;
+        height: 20px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: #000000;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// Clickable album/artist link text.
+component MetaLink inherits TouchArea {
+    in property <string> label;
+    callback activated();
+
+    width: link-text.preferred-width;
+    height: link-text.preferred-height;
+    mouse-cursor: pointer;
+    clicked => {
+        root.activated();
+    }
+    link-text := Text {
+        text: root.label;
+        color: root.has-hover ? Theme.text-primary : Theme.text-muted;
+        font-size: 12px;
+    }
+}
+
 export component PlayerBar inherits Rectangle {
     height: Layout.player-bar-height;
     background: Theme.surface-card;
@@ -44,92 +99,109 @@ export component PlayerBar inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        // Progress line across the top edge.
-        Rectangle {
-            height: 2px;
-            background: Theme.surface-elevated;
-            Rectangle {
-                x: 0;
-                width: parent.width * 0.32;
-                background: Theme.accent;
-            }
+        // Gap from the top edge to the seek bar.
+        Rectangle { height: 14px; }
+
+        // --- Seek bar ----------------------------------------------------
+        HorizontalLayout {
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            SeekBar { }
         }
 
+        // --- Controls row ------------------------------------------------
         HorizontalLayout {
             vertical-stretch: 1;
             padding-left: Spacing.md;
             padding-right: Spacing.md;
             spacing: Spacing.md;
 
-            // Transport controls.
+            // Transport cluster.
             VerticalLayout {
                 alignment: center;
                 HorizontalLayout {
                     spacing: 2px;
-                    IconButton { icon: @image-url("../assets/icons/shuffle.svg"); }
+                    IconButton { icon: @image-url("../assets/icons/shuffle.svg"); icon-size: 16px; }
                     IconButton { icon: @image-url("../assets/icons/skip-back.svg"); }
-                    IconButton {
-                        icon: @image-url("../assets/icons/play.svg");
-                        icon-size: 22px;
-                    }
-                    IconButton { icon: @image-url("../assets/icons/skip-forward.svg"); }
-                    IconButton { icon: @image-url("../assets/icons/repeat.svg"); }
-                }
-            }
-
-            // Now-playing.
-            VerticalLayout {
-                alignment: center;
-                horizontal-stretch: 1;
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: Spacing.sm;
-                    Rectangle {
-                        width: 48px;
-                        height: 48px;
-                        border-radius: Radius.sm;
-                        background: Theme.surface-elevated;
-                    }
                     VerticalLayout {
                         alignment: center;
-                        Text {
-                            text: "Nothing playing";
-                            color: Theme.text-primary;
-                            font-size: Typography.body;
-                        }
-                        Text {
-                            text: "QBZ MVP";
-                            color: Theme.text-muted;
-                            font-size: 12px;
-                        }
+                        PlayButton { icon: @image-url("../assets/icons/play-fill.svg"); }
                     }
+                    IconButton { icon: @image-url("../assets/icons/skip-forward.svg"); }
+                    IconButton { icon: @image-url("../assets/icons/repeat.svg"); icon-size: 16px; }
+                    IconButton { icon: @image-url("../assets/icons/plus.svg"); icon-size: 16px; }
+                    IconButton { icon: @image-url("../assets/icons/heart.svg"); icon-size: 16px; }
                 }
             }
 
-            // Right-side controls.
-            VerticalLayout {
+            // Song card — no background, no border.
+            HorizontalLayout {
+                horizontal-stretch: 1;
                 alignment: center;
                 HorizontalLayout {
-                    alignment: end;
-                    spacing: Spacing.sm;
-                    IconButton { icon: @image-url("../assets/icons/heart.svg"); }
-                    IconButton { icon: @image-url("../assets/icons/maximize-2.svg"); }
-                    IconButton { icon: @image-url("../assets/icons/volume-2.svg"); }
+                    spacing: 12px;
                     VerticalLayout {
                         alignment: center;
                         Rectangle {
-                            width: 90px;
-                            height: 4px;
-                            border-radius: 2px;
+                            width: 56px;
+                            height: 56px;
+                            border-radius: 6px;
                             background: Theme.surface-elevated;
-                            Rectangle {
-                                x: 0;
-                                width: parent.width * 0.6;
-                                border-radius: 2px;
-                                background: Theme.accent;
+                            clip: true;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 4px;
+                        Text {
+                            text: @tr("Nothing playing");
+                            color: Theme.text-primary;
+                            font-size: Typography.body;
+                            font-weight: Typography.medium;
+                            overflow: elide;
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+                            MetaLink { label: "QBZ MVP"; }
+                            VerticalLayout {
+                                alignment: center;
+                                QbzIcon {
+                                    source: @image-url("../assets/icons/layers.svg");
+                                    width: 13px;
+                                    height: 13px;
+                                    tint: Theme.text-muted;
+                                }
                             }
                         }
                     }
+                }
+            }
+
+            // Secondary actions + volume cluster.
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: 2px;
+                    IconButton { icon: @image-url("../assets/icons/cast.svg"); icon-size: 16px; }
+                    IconButton { icon: @image-url("../assets/icons/picture-in-picture-2.svg"); icon-size: 16px; }
+                    IconButton { icon: @image-url("../assets/icons/maximize-2.svg"); icon-size: 16px; }
+                    IconButton { icon: @image-url("../assets/icons/audio-lines.svg"); icon-size: 16px; }
+
+                    Rectangle { width: 6px; }
+
+                    IconButton { icon: @image-url("../assets/icons/volume-2.svg"); icon-size: 16px; }
+                    VerticalLayout {
+                        alignment: center;
+                        QbzSlider {
+                            width: 90px;
+                            minimum: 0;
+                            maximum: 100;
+                            value: 70;
+                        }
+                    }
+                    IconButton { icon: @image-url("../assets/icons/minus.svg"); icon-size: 15px; }
+                    IconButton { icon: @image-url("../assets/icons/plus.svg"); icon-size: 15px; }
                 }
             }
         }

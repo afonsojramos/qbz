@@ -137,8 +137,11 @@ export component AudioSettings inherits VerticalLayout {
     SettingRow {
         label: @tr("Exclusive mode");
         description: @tr("Lock the device so no other app can resample it.");
+        // ALSA-only — disabled for PipeWire / Pulse / System default.
+        enabled: SettingsState.backend-is-alsa;
         QbzToggle {
             checked: SettingsState.exclusive-mode;
+            enabled: SettingsState.backend-is-alsa;
             toggled(v) => {
                 SettingsState.exclusive-mode = v;
                 root.settings-bool("exclusive-mode", v);
@@ -159,8 +162,11 @@ export component AudioSettings inherits VerticalLayout {
     SettingRow {
         label: @tr("DAC passthrough");
         description: @tr("Send the bitstream untouched to the DAC.");
+        // PipeWire-only — disabled for ALSA / Pulse / System default.
+        enabled: SettingsState.backend-is-pipewire;
         QbzToggle {
             checked: SettingsState.dac-passthrough;
+            enabled: SettingsState.backend-is-pipewire;
             toggled(v) => {
                 SettingsState.dac-passthrough = v;
                 root.settings-bool("dac-passthrough", v);
@@ -210,8 +216,11 @@ export component AudioSettings inherits VerticalLayout {
     if SettingsState.backend-is-pipewire: SettingRow {
         label: @tr("Lock output device");
         description: @tr("Keep external routing intact — skip switching the default sink.");
+        // Mutually exclusive with DAC passthrough — disabled while it is on.
+        enabled: !SettingsState.dac-passthrough;
         QbzToggle {
             checked: SettingsState.skip-sink-switch;
+            enabled: !SettingsState.dac-passthrough;
             toggled(v) => {
                 SettingsState.skip-sink-switch = v;
                 root.settings-bool("skip-sink-switch", v);
