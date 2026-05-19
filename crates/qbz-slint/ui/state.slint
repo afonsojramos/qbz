@@ -183,3 +183,48 @@ export global SessionState {
     in property <string> user-name: "";
     in property <string> subscription: "";
 }
+
+// One entry in the playback queue, for the Queue sidebar list.
+export struct QueueItem {
+    id: string,
+    title: string,
+    artist: string,
+    artwork: image,
+    playing: bool,
+}
+
+// Now-playing / transport state. The Rust playback poll loop pushes the
+// live values here; the PlayerBar and SeekBar bind to it directly.
+export global NowPlayingState {
+    in property <bool> has-track: false;
+    in property <string> title;
+    in property <string> artist;
+    in property <string> album;
+    in property <string> album-id;
+    in property <string> artist-id;
+    in property <image> artwork;
+    in property <string> track-id;
+    in property <bool> playing: false;
+    in property <int> position-secs: 0;
+    in property <int> duration-secs: 0;
+    in property <float> progress: 0.0;   // 0..1
+    in property <float> cache: 0.0;       // 0..1 buffered
+    in property <string> elapsed: "0:00";
+    in property <string> remaining: "0:00";
+    in property <float> volume: 0.7;      // 0..1
+
+    // Transport callbacks, wired to the Rust playback controller.
+    callback toggle-play();
+    callback next();
+    callback previous();
+    callback seek(float);          // 0..1
+    callback set-volume(float);    // 0..1
+}
+
+// Playback queue model, for the Queue sidebar.
+export global QueueState {
+    in property <[QueueItem]> items: [];
+    in property <int> current-index: -1;
+    // Play the queue entry at `index`.
+    callback play-index(int);
+}

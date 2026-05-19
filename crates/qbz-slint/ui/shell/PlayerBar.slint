@@ -16,6 +16,7 @@ import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzSlider } from "../primitives/QbzSlider.slint";
 import { SeekBar } from "SeekBar.slint";
+import { NowPlayingState } from "../state.slint";
 
 component IconButton inherits Rectangle {
     in property <image> icon;
@@ -93,6 +94,9 @@ component MetaLink inherits TouchArea {
 }
 
 export component PlayerBar inherits Rectangle {
+    callback open-album(string);
+    callback open-artist(string);
+
     height: Layout.player-bar-height;
     background: Theme.surface-card;
 
@@ -106,7 +110,16 @@ export component PlayerBar inherits Rectangle {
         HorizontalLayout {
             padding-left: Spacing.md;
             padding-right: Spacing.md;
-            SeekBar { }
+            SeekBar {
+                progress: NowPlayingState.progress;
+                cache: NowPlayingState.cache;
+                elapsed: NowPlayingState.elapsed;
+                remaining: NowPlayingState.remaining;
+                duration-secs: NowPlayingState.duration-secs;
+                seek(fraction) => {
+                    NowPlayingState.seek(fraction);
+                }
+            }
         }
 
         // --- Controls row ------------------------------------------------
@@ -122,12 +135,29 @@ export component PlayerBar inherits Rectangle {
                 HorizontalLayout {
                     spacing: 2px;
                     IconButton { icon: @image-url("../assets/icons/shuffle.svg"); icon-size: 16px; }
-                    IconButton { icon: @image-url("../assets/icons/skip-back.svg"); }
+                    IconButton {
+                        icon: @image-url("../assets/icons/skip-back.svg");
+                        clicked => {
+                            NowPlayingState.previous();
+                        }
+                    }
                     VerticalLayout {
                         alignment: center;
-                        PlayButton { icon: @image-url("../assets/icons/play-fill.svg"); }
+                        PlayButton {
+                            icon: NowPlayingState.playing
+                                ? @image-url("../assets/icons/pause.svg")
+                                : @image-url("../assets/icons/play-fill.svg");
+                            clicked => {
+                                NowPlayingState.toggle-play();
+                            }
+                        }
                     }
-                    IconButton { icon: @image-url("../assets/icons/skip-forward.svg"); }
+                    IconButton {
+                        icon: @image-url("../assets/icons/skip-forward.svg");
+                        clicked => {
+                            NowPlayingState.next();
+                        }
+                    }
                     IconButton { icon: @image-url("../assets/icons/repeat.svg"); icon-size: 16px; }
                     IconButton { icon: @image-url("../assets/icons/plus.svg"); icon-size: 16px; }
                     IconButton { icon: @image-url("../assets/icons/heart.svg"); icon-size: 16px; }
@@ -148,13 +178,21 @@ export component PlayerBar inherits Rectangle {
                             border-radius: 6px;
                             background: Theme.surface-elevated;
                             clip: true;
+                            if NowPlayingState.has-track && NowPlayingState.artwork.width > 0: Image {
+                                source: NowPlayingState.artwork;
+                                width: 100%;
+                                height: 100%;
+                                image-fit: cover;
+                            }
                         }
                     }
                     VerticalLayout {
                         alignment: center;
                         spacing: 4px;
                         Text {
-                            text: @tr("Nothing playing");
+                            text: NowPlayingState.has-track
+                                ? NowPlayingState.title
+                                : @tr("Nothing playing");
                             color: Theme.text-primary;
                             font-size: Typography.body;
                             font-weight: Typography.medium;
@@ -163,14 +201,29 @@ export component PlayerBar inherits Rectangle {
                         HorizontalLayout {
                             spacing: 6px;
                             alignment: start;
-                            MetaLink { label: "QBZ MVP"; }
-                            VerticalLayout {
+                            if NowPlayingState.has-track: MetaLink {
+                                label: NowPlayingState.artist;
+                                activated => {
+                                    if (NowPlayingState.artist-id != "") {
+                                        root.open-artist(NowPlayingState.artist-id);
+                                    }
+                                }
+                            }
+                            if NowPlayingState.has-track: VerticalLayout {
                                 alignment: center;
                                 QbzIcon {
                                     source: @image-url("../assets/icons/layers.svg");
                                     width: 13px;
                                     height: 13px;
                                     tint: Theme.text-muted;
+                                }
+                            }
+                            if NowPlayingState.has-track: MetaLink {
+                                label: NowPlayingState.album;
+                                activated => {
+                                    if (NowPlayingState.album-id != "") {
+                                        root.open-album(NowPlayingState.album-id);
+                                    }
                                 }
                             }
                         }
@@ -197,7 +250,10 @@ export component PlayerBar inherits Rectangle {
                             width: 90px;
                             minimum: 0;
                             maximum: 100;
-                            value: 70;
+                            value: NowPlayingState.volume * 100;
+                            changed(v) => {
+                                NowPlayingState.set-volume(v / 100.0);
+                            }
                         }
                     }
                     IconButton { icon: @image-url("../assets/icons/minus.svg"); icon-size: 15px; }

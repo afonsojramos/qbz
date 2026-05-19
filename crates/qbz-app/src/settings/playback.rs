@@ -64,9 +64,10 @@ impl Default for PlaybackPreferences {
     fn default() -> Self {
         Self {
             autoplay_mode: AutoplayMode::ContinueWithinSource,
-            show_context_icon: false,
-            persist_session: false,
-            resume_playback_position: false,
+            // Playback preferences are opt-out: on by default.
+            show_context_icon: true,
+            persist_session: true,
+            resume_playback_position: true,
         }
     }
 }
@@ -109,7 +110,7 @@ impl PlaybackPreferencesStore {
         if !show_context_icon_exists {
             info!("[PlaybackPrefs] Migrating: adding show_context_icon column");
             conn.execute(
-                "ALTER TABLE playback_preferences ADD COLUMN show_context_icon INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE playback_preferences ADD COLUMN show_context_icon INTEGER NOT NULL DEFAULT 1",
                 [],
             )
             .map_err(|e| format!("Failed to add show_context_icon column: {}", e))?;
@@ -119,7 +120,7 @@ impl PlaybackPreferencesStore {
         if !column_exists(&conn, "playback_preferences", "persist_session") {
             info!("[PlaybackPrefs] Migrating: adding persist_session column");
             conn.execute(
-                "ALTER TABLE playback_preferences ADD COLUMN persist_session INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE playback_preferences ADD COLUMN persist_session INTEGER NOT NULL DEFAULT 1",
                 [],
             )
             .map_err(|e| format!("Failed to add persist_session column: {}", e))?;
@@ -129,7 +130,7 @@ impl PlaybackPreferencesStore {
         if !column_exists(&conn, "playback_preferences", "resume_playback_position") {
             info!("[PlaybackPrefs] Migrating: adding resume_playback_position column");
             conn.execute(
-                "ALTER TABLE playback_preferences ADD COLUMN resume_playback_position INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE playback_preferences ADD COLUMN resume_playback_position INTEGER NOT NULL DEFAULT 1",
                 [],
             )
             .map_err(|e| format!("Failed to add resume_playback_position column: {}", e))?;
@@ -138,7 +139,7 @@ impl PlaybackPreferencesStore {
 
         conn.execute(
             "INSERT OR IGNORE INTO playback_preferences (id, autoplay_mode, show_context_icon, persist_session, resume_playback_position)
-            VALUES (1, 'continue', 0, 0, 0)",
+            VALUES (1, 'continue', 1, 1, 1)",
             [],
         )
         .map_err(|e| format!("Failed to insert default preferences: {}", e))?;
@@ -354,9 +355,9 @@ mod tests {
         let prefs = PlaybackPreferences::default();
 
         assert_eq!(prefs.autoplay_mode, AutoplayMode::ContinueWithinSource);
-        assert!(!prefs.show_context_icon);
-        assert!(!prefs.persist_session);
-        assert!(!prefs.resume_playback_position);
+        assert!(prefs.show_context_icon);
+        assert!(prefs.persist_session);
+        assert!(prefs.resume_playback_position);
     }
 
     #[test]
@@ -366,9 +367,9 @@ mod tests {
         let prefs = store.get_preferences().expect("get prefs");
 
         assert_eq!(prefs.autoplay_mode, AutoplayMode::ContinueWithinSource);
-        assert!(!prefs.show_context_icon);
-        assert!(!prefs.persist_session);
-        assert!(!prefs.resume_playback_position);
+        assert!(prefs.show_context_icon);
+        assert!(prefs.persist_session);
+        assert!(prefs.resume_playback_position);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -420,9 +421,9 @@ mod tests {
         let prefs = store.get_preferences().expect("get prefs");
 
         assert_eq!(prefs.autoplay_mode, AutoplayMode::PlayTrackOnly);
-        assert!(!prefs.show_context_icon);
-        assert!(!prefs.persist_session);
-        assert!(!prefs.resume_playback_position);
+        assert!(prefs.show_context_icon);
+        assert!(prefs.persist_session);
+        assert!(prefs.resume_playback_position);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -443,9 +444,9 @@ mod tests {
 
         assert_eq!(defaults.autoplay_mode, AutoplayMode::ContinueWithinSource);
         assert_eq!(prefs.autoplay_mode, AutoplayMode::ContinueWithinSource);
-        assert!(!prefs.show_context_icon);
-        assert!(!prefs.persist_session);
-        assert!(!prefs.resume_playback_position);
+        assert!(prefs.show_context_icon);
+        assert!(prefs.persist_session);
+        assert!(prefs.resume_playback_position);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

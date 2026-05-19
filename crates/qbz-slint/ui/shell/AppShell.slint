@@ -114,6 +114,13 @@ export component AppShell inherits Rectangle {
             if ShellState.right-panel == 2: LyricsSidebar { }
         }
 
-        PlayerBar { }
+        PlayerBar {
+            open-album(id) => {
+                root.open-album(id);
+            }
+            open-artist(id) => {
+                root.open-artist(id);
+            }
+        }
     }
 }

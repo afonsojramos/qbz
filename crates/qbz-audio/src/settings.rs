@@ -91,8 +91,8 @@ impl Default for AudioSettings {
             backend_type: Some(AudioBackendType::default()),
             alsa_plugin: Some(AlsaPlugin::Hw), // Default to hw (bit-perfect)
             alsa_hardware_volume: false, // Disabled by default (maximum compatibility)
-            stream_first_track: false, // Disabled by default — user opts in
-            stream_buffer_seconds: 3, // 3 seconds initial buffer
+            stream_first_track: true, // On by default (opt-out)
+            stream_buffer_seconds: 2, // 2 seconds initial buffer
             streaming_only: false, // Disabled by default (cache tracks for instant replay)
             limit_quality_to_device: false, // Disabled in 1.1.9 — detection logic unreliable (#45)
             device_max_sample_rate: None, // Set when device is selected
@@ -136,8 +136,8 @@ impl AudioSettingsStore {
                 backend_type TEXT,
                 alsa_plugin TEXT,
                 alsa_hardware_volume INTEGER NOT NULL DEFAULT 0,
-                stream_first_track INTEGER NOT NULL DEFAULT 0,
-                stream_buffer_seconds INTEGER NOT NULL DEFAULT 3
+                stream_first_track INTEGER NOT NULL DEFAULT 1,
+                stream_buffer_seconds INTEGER NOT NULL DEFAULT 2
             );
             INSERT OR IGNORE INTO audio_settings (id, exclusive_mode, dac_passthrough)
             VALUES (1, 0, 0);",
@@ -155,11 +155,11 @@ impl AudioSettingsStore {
             [],
         );
         let _ = conn.execute(
-            "ALTER TABLE audio_settings ADD COLUMN stream_first_track INTEGER DEFAULT 0",
+            "ALTER TABLE audio_settings ADD COLUMN stream_first_track INTEGER DEFAULT 1",
             [],
         );
         let _ = conn.execute(
-            "ALTER TABLE audio_settings ADD COLUMN stream_buffer_seconds INTEGER DEFAULT 3",
+            "ALTER TABLE audio_settings ADD COLUMN stream_buffer_seconds INTEGER DEFAULT 2",
             [],
         );
         let _ = conn.execute(

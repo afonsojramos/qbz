@@ -421,6 +421,34 @@ export component AlbumPageView inherits Rectangle {
                         overflow: elide;
                     }
 
+                    // Editorial description — lives with the metadata and
+                    // fills the width to the right of the artwork; truncated,
+                    // with a Read more link to the full modal.
+                    if AlbumState.description != "": Rectangle { height: 12px; }
+                    if AlbumState.description != "": Text {
+                        text: AlbumState.description-short;
+                        color: Theme.text-secondary;
+                        font-size: Typography.legal;
+                        wrap: word-wrap;
+                    }
+                    if AlbumState.description != AlbumState.description-short: Rectangle { height: 4px; }
+                    if AlbumState.description != AlbumState.description-short: read-more := TouchArea {
+                        width: read-more-row.preferred-width;
+                        height: 20px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.show-description = true;
+                        }
+                        read-more-row := HorizontalLayout {
+                            Text {
+                                text: @tr("Read more");
+                                color: read-more.has-hover ? Theme.accent-hover : Theme.accent;
+                                font-size: Typography.legal;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
                     Rectangle { height: 20px; }
                     HorizontalLayout {
                         alignment: start;
@@ -470,33 +498,6 @@ export component AlbumPageView inherits Rectangle {
                             alignment: center;
                             CircleAction { icon: @image-url("../assets/icons/ellipsis.svg"); }
                         }
-                    }
-                }
-            }
-
-            // Editorial description — full content width (the artwork no
-            // longer caps it), truncated, with a Read more link.
-            if AlbumState.description != "": Rectangle { height: 18px; }
-            if AlbumState.description != "": Text {
-                text: AlbumState.description-short;
-                color: Theme.text-secondary;
-                font-size: Typography.body;
-                wrap: word-wrap;
-            }
-            if AlbumState.description != AlbumState.description-short: Rectangle { height: 4px; }
-            if AlbumState.description != AlbumState.description-short: read-more := TouchArea {
-                width: read-more-row.preferred-width;
-                height: 20px;
-                mouse-cursor: pointer;
-                clicked => {
-                    root.show-description = true;
-                }
-                read-more-row := HorizontalLayout {
-                    Text {
-                        text: @tr("Read more");
-                        color: read-more.has-hover ? Theme.accent-hover : Theme.accent;
-                        font-size: Typography.legal;
-                        vertical-alignment: center;
                     }
                 }
             }

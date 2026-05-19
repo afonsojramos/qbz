@@ -22,6 +22,7 @@ mod auth;
 mod commands;
 mod home;
 mod nav;
+mod playback;
 mod recently;
 mod settings;
 mod ui_prefs;
@@ -55,6 +56,11 @@ async fn enter_shell(
         w.global::<HomeState>().set_loading(true);
         w.set_screen(AppScreen::Shell);
     });
+
+    // Start the playback poll loop — it runs for the app lifetime,
+    // ticking position/progress onto NowPlayingState and auto-advancing
+    // the queue on track end. Safe to start once per shell entry.
+    playback::start_poll_loop(runtime.clone(), weak.clone(), tokio::runtime::Handle::current());
 
     // Load Audio + Playback settings into the Settings page in the
     // background — store reads and device enumeration are blocking.
@@ -557,11 +563,117 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Context-menu / overlay media actions. Playback wiring lands with the
-    // playback session; for now the action is logged.
-    window.on_media_action(move |kind, id, action| {
-        log::info!("[qbz-slint] media-action: kind={kind} id={id} action={action}");
-    });
+    // Context-menu / overlay media actions — route play / queue actions
+    // into the playback controller; favorite / download stay logged.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.on_media_action(move |kind, id, action| {
+            let kind = kind.to_string();
+            let id = id.to_string();
+            let action = action.to_string();
+            log::info!("[qbz-slint] media-action: kind={kind} id={id} action={action}");
+            match (kind.as_str(), action.as_str()) {
+                ("album", "play") => playback::play_album(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id,
+                    0,
+                ),
+                ("track", "play") => {
+                    if let Ok(track_id) = id.parse::<u64>() {
+                        playback::play_track_now(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            track_id,
+                        );
+                    }
+                }
+                ("album", "queue") => playback::enqueue_album(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id,
+                ),
+                ("track", "queue") => {
+                    if let Ok(track_id) = id.parse::<u64>() {
+                        playback::enqueue_track(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            track_id,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
+
+    // Transport — wired through the NowPlayingState global callbacks.
+    {
+        let runtime = app_runtime.clone();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<NowPlayingState>()
+            .on_toggle_play(move || {
+                playback::toggle_play_pause(runtime.clone(), handle.clone());
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<NowPlayingState>().on_next(move || {
+            playback::next(runtime.clone(), weak.clone(), handle.clone());
+        });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<NowPlayingState>().on_previous(move || {
+            playback::previous(runtime.clone(), weak.clone(), handle.clone());
+        });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<NowPlayingState>()
+            .on_seek(move |fraction| {
+                playback::seek(runtime.clone(), handle.clone(), fraction);
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<NowPlayingState>()
+            .on_set_volume(move |fraction| {
+                playback::set_volume(runtime.clone(), handle.clone(), fraction);
+            });
+    }
+
+    // Queue sidebar — clicking a row jumps to that queue index.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<QueueState>()
+            .on_play_index(move |index| {
+                playback::play_queue_index(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    index.max(0) as usize,
+                );
+            });
+    }
 
     // Album track search — client-side filter, no backend round-trip.
     {

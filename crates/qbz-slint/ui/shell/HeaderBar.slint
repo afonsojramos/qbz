@@ -30,8 +30,8 @@ component NavTab inherits Rectangle {
         : ta.has-hover ? Theme.surface-hover : transparent;
 
     tab-row := HorizontalLayout {
-        padding-left: root.show-icon ? 9px : 11px;
-        padding-right: 11px;
+        padding-left: root.show-icon ? 11px : 13px;
+        padding-right: 13px;
         spacing: 6px;
         if root.show-icon: VerticalLayout {
             alignment: center;
@@ -48,6 +48,16 @@ component NavTab inherits Rectangle {
             font-size: 12px;
             font-weight: root.active ? Typography.semibold : Typography.regular;
             vertical-alignment: center;
+        }
+        // Caret marking the tab as a dropdown.
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: @image-url("../assets/icons/chevron-down.svg");
+                width: 12px;
+                height: 12px;
+                tint: root.active ? Theme.text-secondary : Theme.text-muted;
+            }
         }
     }
 

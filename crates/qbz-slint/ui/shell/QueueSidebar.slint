@@ -10,7 +10,7 @@ import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { ShellState } from "../state.slint";
+import { ShellState, QueueState } from "../state.slint";
 
 component CloseButton inherits Rectangle {
     callback clicked();
@@ -26,6 +26,79 @@ component CloseButton inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// One queue entry row — thumbnail, title, artist, playing indicator.
+component QueueRow inherits Rectangle {
+    in property <string> title;
+    in property <string> artist;
+    in property <image> artwork;
+    in property <bool> playing: false;
+    callback clicked();
+
+    height: 56px;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 10px;
+
+        // Small album thumbnail.
+        Rectangle {
+            width: 44px;
+            height: 44px;
+            border-radius: 4px;
+            background: Theme.surface-elevated;
+            clip: true;
+            if root.artwork.width > 0: Image {
+                source: root.artwork;
+                width: 100%;
+                height: 100%;
+                image-fit: cover;
+            }
+        }
+
+        // Title + artist.
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.title;
+                color: root.playing ? Theme.accent : Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: root.playing ? Typography.semibold : Typography.regular;
+                overflow: elide;
+            }
+            Text {
+                text: root.artist;
+                color: Theme.text-muted;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+
+        // Now-playing indicator.
+        VerticalLayout {
+            alignment: center;
+            if root.playing: QbzIcon {
+                source: @image-url("../assets/icons/audio-lines.svg");
+                width: 15px;
+                height: 15px;
+                tint: Theme.accent;
+            }
+        }
     }
 
     ta := TouchArea {
@@ -72,13 +145,32 @@ export component QueueSidebar inherits Rectangle {
             background: Theme.border-subtle;
         }
 
-        // Body — placeholder until queue contents are wired.
+        // Body — the live queue, or an empty-state placeholder.
         Rectangle {
             vertical-stretch: 1;
-            Text {
+
+            if QueueState.items.length == 0: Text {
                 text: @tr("Nothing queued");
                 color: Theme.text-muted;
                 font-size: Typography.body;
+            }
+
+            if QueueState.items.length > 0: Flickable {
+                viewport-width: self.width;
+                viewport-height: rows.preferred-height;
+
+                rows := VerticalLayout {
+                    spacing: 0px;
+                    for item[idx] in QueueState.items: QueueRow {
+                        title: item.title;
+                        artist: item.artist;
+                        artwork: item.artwork;
+                        playing: item.playing;
+                        clicked => {
+                            QueueState.play-index(idx);
+                        }
+                    }
+                }
             }
         }
     }
