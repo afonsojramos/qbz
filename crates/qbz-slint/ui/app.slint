@@ -24,6 +24,11 @@ export component AppWindow inherits Window {
     min-height: 600px;
     background: Theme.surface-main;
 
+    // Resolved by the Rust layer from the desktop environment (e.g. the
+    // KDE Plasma general font). Empty falls back to the Slint default.
+    in property <string> system-font: "";
+    default-font-family: root.system-font;
+
     in-out property <AppScreen> screen: AppScreen.splash;
 
     // Forwarded to the Rust layer.

@@ -275,6 +275,34 @@ fn apply_entry(
     }
 }
 
+/// Resolve the desktop environment's UI font family. Reads the KDE
+/// Plasma general font from `kdeglobals` (`[General] font=`), whose
+/// value is a Qt font string `Family,pointSize,...` — only the family
+/// is taken. Returns `None` off KDE or when the key is absent, so the
+/// caller can fall back to the Slint default.
+fn system_font_family() -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let path = std::path::Path::new(&home).join(".config/kdeglobals");
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut in_general = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_general = line == "[General]";
+            continue;
+        }
+        if in_general {
+            if let Some(rest) = line.strip_prefix("font=") {
+                let family = rest.split(',').next().unwrap_or("").trim();
+                if !family.is_empty() {
+                    return Some(family.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -282,6 +310,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _enter = tokio_rt.enter();
 
     let window = AppWindow::new()?;
+    // Render with the desktop environment's UI font when we can resolve
+    // one; otherwise Slint keeps its bundled default.
+    if let Some(font) = system_font_family() {
+        log::info!("[qbz-slint] using system font: {font}");
+        window.set_system_font(font.into());
+    }
     let app_runtime = Arc::new(AppRuntime::new(SlintAdapter::new(window.as_weak())));
 
     // Shared QBZ image cache for album artwork; trim it on startup.
