@@ -110,7 +110,7 @@ component GearButton inherits Rectangle {
     background: ta.has-hover ? Theme.surface-hover : transparent;
 
     QbzIcon {
-        source: @image-url("../assets/icons/settings.svg");
+        source: @image-url("../assets/icons/home-gear.svg");
         width: 18px;
         height: 18px;
         x: (parent.width - self.width) / 2;
@@ -136,49 +136,47 @@ export component HomeView inherits Rectangle {
         spacing: 0px;
 
         // --- Toolbar (fixed 56px) ----------------------------------------
+        // Side controls are anchored to the toolbar edges; the three-tab
+        // pill is absolutely centered on the toolbar so it stays at the
+        // true horizontal center regardless of the side controls' widths.
         Rectangle {
             height: 56px;
             background: Theme.surface-main;
 
-            HorizontalLayout {
-                padding-left: 32px;
-                padding-right: 32px;
+            // Back / forward history pair, anchored left.
+            left-controls := HorizontalLayout {
+                x: 32px;
+                y: (parent.height - self.height) / 2;
+                NavButtons { }
+            }
 
-                // Back / forward history pair, inline beside the tabs.
-                VerticalLayout {
-                    alignment: center;
-                    NavButtons { }
+            // Centered three-tab nav bar.
+            tab-pill := Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: tab-row.preferred-width;
+                height: tab-row.preferred-height;
+                background: Theme.surface-elevated;
+                border-radius: 6px;
+                tab-row := HorizontalLayout {
+                    padding: 3px;
+                    spacing: 4px;
+                    Tab { label: @tr("Home"); active: true; }
+                    Tab { label: @tr("Editor's Picks"); }
+                    Tab { label: @tr("For You"); }
                 }
-                Rectangle { width: 16px; }
+            }
 
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        background: Theme.surface-elevated;
-                        border-radius: 6px;
-                        HorizontalLayout {
-                            padding: 3px;
-                            spacing: 4px;
-                            Tab { label: @tr("Home"); active: true; }
-                            Tab { label: @tr("Editor's Picks"); }
-                            Tab { label: @tr("For You"); }
-                        }
-                    }
-                }
-
-                Rectangle { horizontal-stretch: 1; }
-
-                VerticalLayout {
-                    alignment: center;
-                    HorizontalLayout {
-                        spacing: 6px;
-                        GenreButton { }
-                        // Per-tab sort / show-hide control for the Discover
-                        // sections (not global Settings — that lives in the
-                        // header menu). Its menu is a later increment.
-                        GearButton { }
-                    }
-                }
+            // Genre filter + sort gear, anchored right.
+            right-controls := HorizontalLayout {
+                x: parent.width - self.width - 32px;
+                y: (parent.height - self.height) / 2;
+                spacing: 6px;
+                GenreButton { }
+                // Per-tab sort / show-hide control for the Discover
+                // sections (not global Settings — that lives in the
+                // header menu). Its menu is a later increment.
+                GearButton { }
             }
         }
         Rectangle {
