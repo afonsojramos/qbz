@@ -5298,6 +5298,7 @@ dependencies = [
  "futures-util",
  "log",
  "qbz-audio",
+ "qbz-cache",
  "qbz-cmaf",
  "qbz-models",
  "qbz-qobuz",

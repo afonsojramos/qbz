@@ -309,6 +309,27 @@ fn extract_audio_metadata_full(data: &[u8]) -> Result<AudioMetadata, String> {
     })
 }
 
+/// True when a cached FLAC is a lower quality than `requested`, so the
+/// cache entry should be bypassed and the track re-fetched. Ported from
+/// the Tauri `cached_quality_below_requested` helper: an unparseable
+/// buffer is assumed compatible.
+fn cached_quality_below_requested(data: &[u8], requested: Quality) -> bool {
+    let meta = match extract_audio_metadata_full(data) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let sample_rate = meta.sample_rate;
+    let bit_depth = meta.bit_depth.unwrap_or(16);
+    match requested {
+        // Hi-Res+: expect 24-bit AND > 96 kHz.
+        Quality::UltraHiRes => bit_depth < 24 || sample_rate <= 96000,
+        // Hi-Res: expect 24-bit.
+        Quality::HiRes => bit_depth < 24,
+        // Lossless / Mp3: any FLAC satisfies the request.
+        _ => false,
+    }
+}
+
 fn decode_with_fallback(data: &[u8]) -> Result<Box<dyn Source<Item = f32> + Send>, String> {
     if is_isomp4(data) {
         return decode_with_symphonia(data).map(|specs| {
@@ -1191,6 +1212,9 @@ pub struct Player {
     visualizer_tap: Option<VisualizerTap>,
     /// Bit-depth diagnostic capture (always available, zero-cost when idle)
     pub diagnostic: AudioDiagnostic,
+    /// Two-level playback cache (L1 memory + optional L2 disk). A track is
+    /// cached after its first play so replays start instantly.
+    audio_cache: Arc<qbz_cache::AudioCache>,
 }
 
 impl Default for Player {
@@ -3269,12 +3293,27 @@ impl Player {
             }
         });
 
+        // Two-level playback cache: L1 in memory (~400 MB), L2 on disk
+        // (~800 MB). A disk-cache failure degrades to L1-only rather than
+        // aborting player creation.
+        let audio_cache = match qbz_cache::PlaybackCache::new(800 * 1024 * 1024) {
+            Ok(pc) => Arc::new(qbz_cache::AudioCache::with_playback_cache(
+                400 * 1024 * 1024,
+                Arc::new(pc),
+            )),
+            Err(e) => {
+                log::warn!("Playback disk cache unavailable: {e}; memory cache only");
+                Arc::new(qbz_cache::AudioCache::new(400 * 1024 * 1024))
+            }
+        };
+
         Self {
             tx,
             state,
             audio_settings: settings,
             visualizer_tap,
             diagnostic,
+            audio_cache,
         }
     }
 
@@ -3297,6 +3336,32 @@ impl Player {
             track_id,
             quality
         );
+
+        // Cache hit: replay instantly from L1/L2 unless the cached copy is
+        // a lower quality than now requested.
+        if let Some(cached) = self.audio_cache.get(track_id) {
+            if cached_quality_below_requested(&cached.data, quality) {
+                log::info!(
+                    "[CACHE] Track {} cached below requested {:?} — re-fetching",
+                    track_id,
+                    quality
+                );
+            } else {
+                log::info!(
+                    "[CACHE HIT] Track {} ({} bytes) — playing from cache",
+                    track_id,
+                    cached.size_bytes
+                );
+                return self.play_data(cached.data, track_id);
+            }
+        }
+
+        // `streaming_only` suppresses writing the track into the cache.
+        let skip_cache = self
+            .audio_settings
+            .lock()
+            .map(|s| s.streaming_only)
+            .unwrap_or(false);
 
         // Try CMAF streaming pipeline first.
         // Only the init segment is fetched synchronously; audio segments
@@ -3368,6 +3433,7 @@ impl Player {
                 let content_key = cmaf_info.content_key;
                 let flac_header = cmaf_info.flac_header;
                 let n_segments = cmaf_info.n_segments;
+                let cache = self.audio_cache.clone();
 
                 tokio::spawn(async move {
                     match Self::cmaf_stream_segments(
@@ -3377,6 +3443,8 @@ impl Player {
                         flac_header,
                         buffer_writer,
                         track_id,
+                        cache,
+                        skip_cache,
                     )
                     .await
                     {
@@ -3427,6 +3495,11 @@ impl Player {
         })?;
         log::info!("Player: Cached {} bytes of audio data", audio_data.len());
 
+        // Store the legacy download in the cache for instant replay.
+        if !skip_cache {
+            self.audio_cache.insert(track_id, audio_data.clone());
+        }
+
         // Send to audio thread
         self.play_data(audio_data, track_id)
     }
@@ -3444,6 +3517,8 @@ impl Player {
         flac_header: Vec<u8>,
         writer: BufferWriter,
         track_id: u64,
+        cache: Arc<qbz_cache::AudioCache>,
+        skip_cache: bool,
     ) -> Result<(), String> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -3456,6 +3531,14 @@ impl Player {
         }
 
         let mut total_written: u64 = flac_header.len() as u64;
+        // Accumulate the assembled FLAC (header + decrypted frames) so the
+        // finished track can be cached for instant replay. Empty when
+        // `skip_cache` (streaming_only) is set.
+        let mut cache_data: Vec<u8> = if skip_cache {
+            Vec::new()
+        } else {
+            flac_header.clone()
+        };
         let start = Instant::now();
 
         for seg_idx in 1..=n_segments {
@@ -3488,6 +3571,9 @@ impl Player {
                 if let Err(e) = writer.push_chunk(&frame) {
                     log::error!("[CMAF-STREAM] Failed to push frame: {}", e);
                 }
+                if !skip_cache {
+                    cache_data.extend_from_slice(&frame);
+                }
                 total_written += frame.len() as u64;
                 data_pos = frame_end;
             }
@@ -3497,6 +3583,9 @@ impl Player {
                 let trailing = &seg_data[data_pos..crypto.mdat_end];
                 if let Err(e) = writer.push_chunk(trailing) {
                     log::error!("[CMAF-STREAM] Failed to push trailing data: {}", e);
+                }
+                if !skip_cache {
+                    cache_data.extend_from_slice(trailing);
                 }
                 total_written += trailing.len() as u64;
             }
@@ -3530,6 +3619,14 @@ impl Player {
             track_id,
             n_segments - 1
         );
+
+        // Cache the assembled FLAC (header + decrypted frames) for instant
+        // replay on the next play of this track.
+        if !skip_cache && !cache_data.is_empty() {
+            let bytes = cache_data.len();
+            cache.insert(track_id, cache_data);
+            log::info!("[CMAF-STREAM] Track {} cached ({} bytes)", track_id, bytes);
+        }
 
         Ok(())
     }
