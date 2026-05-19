@@ -23,6 +23,7 @@ mod commands;
 mod home;
 mod nav;
 mod playback;
+mod queue;
 mod recently;
 mod settings;
 mod ui_prefs;
@@ -727,21 +728,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
-    // Queue sidebar — clicking a row jumps to that queue index.
+    // Queue sidebar — build the controller and wire every callback.
     {
-        let runtime = app_runtime.clone();
-        let weak = window.as_weak();
-        let handle = tokio_rt.handle().clone();
-        window
-            .global::<QueueState>()
-            .on_play_index(move |index| {
-                playback::play_queue_index(
-                    runtime.clone(),
-                    weak.clone(),
-                    handle.clone(),
-                    index.max(0) as usize,
-                );
+        let controller = queue::QueueController::new(
+            app_runtime.clone(),
+            window.as_weak(),
+            tokio_rt.handle().clone(),
+            settings_ctx.playback_prefs(),
+        );
+        // Publish it so the playback paths refresh the sidebar after every
+        // queue mutation (play / skip / auto-advance / enqueue).
+        playback::set_queue_controller(controller.clone());
+
+        let qs = window.global::<QueueState>();
+        {
+            let c = controller.clone();
+            qs.on_play_upcoming(move |index| c.play_upcoming(index.max(0) as usize));
+        }
+        {
+            let c = controller.clone();
+            qs.on_play_history(move |index| c.play_history(index.max(0) as usize));
+        }
+        {
+            let c = controller.clone();
+            qs.on_remove_upcoming(move |index| c.remove_upcoming(index.max(0) as usize));
+        }
+        {
+            let c = controller.clone();
+            qs.on_clear_queue(move || c.clear());
+        }
+        {
+            let c = controller.clone();
+            qs.on_toggle_now_playing_favorite(move || c.toggle_favorite());
+        }
+        {
+            let c = controller.clone();
+            qs.on_save_as_playlist(move || c.save_as_playlist());
+        }
+        {
+            let c = controller.clone();
+            qs.on_toggle_infinite_play(move || c.toggle_infinite_play());
+        }
+        {
+            let c = controller.clone();
+            let weak = window.as_weak();
+            qs.on_search_changed(move || {
+                let query = weak
+                    .upgrade()
+                    .map(|w| w.global::<QueueState>().get_search_query().to_string())
+                    .unwrap_or_default();
+                c.search_changed(query);
             });
+        }
+        {
+            let c = controller.clone();
+            qs.on_prev_page(move || c.prev_page());
+        }
+        {
+            let c = controller.clone();
+            qs.on_next_page(move || c.next_page());
+        }
+        {
+            let c = controller.clone();
+            qs.on_set_tab(move |tab| c.set_tab(tab));
+        }
+        {
+            let c = controller.clone();
+            // On open, also re-pull favorites so the heart is accurate.
+            qs.on_panel_opened(move || c.refresh_with_favorites());
+        }
     }
 
     // Album track search — client-side filter, no backend round-trip.

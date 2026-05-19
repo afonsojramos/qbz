@@ -105,6 +105,16 @@ impl SettingsCtx {
             maps: Mutex::new(SettingsMaps::default()),
         })
     }
+
+    /// A handle to the playback-preferences store sharing the same
+    /// underlying SQLite connection. The Queue controller uses it to read
+    /// and toggle the autoplay (infinite-play) mode so the sidebar's
+    /// infinite-play button stays in step with the Playback settings.
+    pub fn playback_prefs(&self) -> PlaybackPreferencesState {
+        PlaybackPreferencesState {
+            store: std::sync::Arc::clone(&self.playback.store),
+        }
+    }
 }
 
 /// Plain, `Send` settings data built off the UI thread.

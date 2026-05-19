@@ -11,14 +11,51 @@
 //! values onto the `NowPlayingState` global. The same task drives
 //! auto-advance when a track ends.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use qbz_app::shell::AppRuntime;
 use qbz_models::{Quality, QueueTrack, RepeatMode};
-use slint::{ComponentHandle, Model};
+use slint::ComponentHandle;
 
 use crate::adapter::SlintAdapter;
-use crate::{AppWindow, NowPlayingState, QueueItem, QueueState};
+use crate::queue::QueueController;
+use crate::{AppWindow, NowPlayingState};
+
+/// The Queue sidebar controller, published once the shell is up so the
+/// playback paths (album/track play, skip, auto-advance) can refresh the
+/// sidebar after every queue mutation.
+static QUEUE_CONTROLLER: OnceLock<QueueController> = OnceLock::new();
+
+/// Register the Queue sidebar controller. Called once during shell setup.
+pub fn set_queue_controller(controller: QueueController) {
+    let _ = QUEUE_CONTROLLER.set(controller);
+}
+
+/// Refresh the Queue sidebar from the current core queue state. No-op
+/// before the controller is registered. `with_favorites` re-pulls the
+/// favorite-track cache as well (used after a fresh play starts).
+fn refresh_sidebar(with_favorites: bool) {
+    if let Some(controller) = QUEUE_CONTROLLER.get() {
+        if with_favorites {
+            controller.refresh_with_favorites();
+        } else {
+            controller.refresh();
+        }
+    }
+}
+
+/// Shared post-track-change step: update the now-playing card, record the
+/// play in the recently-played store, and start audio for `track_id`.
+/// Used by the queue controller's play paths.
+pub async fn after_track_change(
+    runtime: &Runtime,
+    weak: &slint::Weak<AppWindow>,
+    track_id: u64,
+) {
+    refresh_now_playing_meta(runtime, weak).await;
+    record_recent(runtime).await;
+    play_audible(runtime, track_id).await;
+}
 
 /// Streaming quality used for all playback in the MVP — highest tier,
 /// the player falls back internally when it is not available.
@@ -40,106 +77,6 @@ async fn play_audible(runtime: &Runtime, track_id: u64) {
     let player = runtime.core().player();
     if let Err(e) = player.play_track(client, track_id, PLAYBACK_QUALITY).await {
         log::error!("[qbz-slint] playback: play_track {track_id} failed: {e}");
-    }
-}
-
-/// Plain, `Send` queue-row data produced on the worker thread. The
-/// `QueueItem` (which holds a non-`Send` `slint::Image`) is built from
-/// this inside the event-loop closure.
-struct QueueRowData {
-    id: String,
-    title: String,
-    artist: String,
-    artwork_url: String,
-    playing: bool,
-}
-
-/// Push the current queue snapshot onto the `QueueState` global. Builds
-/// the ordered list (history → current → upcoming) so the sidebar shows
-/// the whole queue with the playing row marked.
-async fn refresh_queue(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
-    let state = runtime.core().get_queue_state().await;
-
-    let mut rows: Vec<QueueRowData> = Vec::new();
-    let mut current_index: i32 = -1;
-
-    for track in &state.history {
-        rows.push(queue_row(track, false));
-    }
-    if let Some(current) = state.current_track.as_ref() {
-        current_index = rows.len() as i32;
-        rows.push(queue_row(current, true));
-    }
-    for track in &state.upcoming {
-        rows.push(queue_row(track, false));
-    }
-
-    // Collect the cover jobs before the rows are moved into the closure.
-    let art_jobs: Vec<(usize, String)> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| !row.artwork_url.is_empty())
-        .map(|(idx, row)| (idx, row.artwork_url.clone()))
-        .collect();
-
-    let _ = weak.upgrade_in_event_loop(move |w| {
-        let items: Vec<QueueItem> = rows
-            .into_iter()
-            .map(|row| QueueItem {
-                id: row.id.into(),
-                title: row.title.into(),
-                artist: row.artist.into(),
-                artwork: slint::Image::default(),
-                playing: row.playing,
-            })
-            .collect();
-        let qs = w.global::<QueueState>();
-        qs.set_items(slint::ModelRc::new(slint::VecModel::from(items)));
-        qs.set_current_index(current_index);
-    });
-
-    load_queue_artwork(weak.clone(), art_jobs);
-}
-
-/// Map a `QueueTrack` to plain `Send` row data.
-fn queue_row(track: &QueueTrack, playing: bool) -> QueueRowData {
-    let title = match track.version.as_deref().filter(|v| !v.is_empty()) {
-        Some(version) => format!("{} ({version})", track.title),
-        None => track.title.clone(),
-    };
-    QueueRowData {
-        id: track.id.to_string(),
-        title,
-        artist: track.artist.clone(),
-        artwork_url: track.artwork_url.clone().unwrap_or_default(),
-        playing,
-    }
-}
-
-/// Resolve cover art for a list of queue rows and apply each decoded
-/// image onto its `QueueState.items` row by index. Spawns one task per
-/// cover; misses are silently skipped.
-fn load_queue_artwork(weak: slint::Weak<AppWindow>, jobs: Vec<(usize, String)>) {
-    let Some(cache) = crate::artwork::shared_cache() else {
-        return;
-    };
-    for (idx, url) in jobs {
-        let weak = weak.clone();
-        let cache = cache.clone();
-        tokio::spawn(async move {
-            let Some((pixels, w, h)) =
-                crate::artwork::fetch_and_decode(&url, &cache, 96).await
-            else {
-                return;
-            };
-            let _ = weak.upgrade_in_event_loop(move |win| {
-                let items = win.global::<QueueState>().get_items();
-                if let Some(mut item) = items.row_data(idx) {
-                    item.artwork = crate::artwork::pixels_to_image(&pixels, w, h);
-                    items.set_row_data(idx, item);
-                }
-            });
-        });
     }
 }
 
@@ -331,10 +268,8 @@ pub fn play_album(
         let start_track_id = tracks[start].id;
 
         runtime.core().set_queue(tracks, Some(start)).await;
-        refresh_queue(&runtime, &weak).await;
-        refresh_now_playing_meta(&runtime, &weak).await;
-        record_recent(&runtime).await;
-        play_audible(&runtime, start_track_id).await;
+        after_track_change(&runtime, &weak, start_track_id).await;
+        refresh_sidebar(true);
     });
 }
 
@@ -377,15 +312,13 @@ pub fn play_track_now(
         );
 
         runtime.core().set_queue(vec![queue_track], Some(0)).await;
-        refresh_queue(&runtime, &weak).await;
-        refresh_now_playing_meta(&runtime, &weak).await;
-        record_recent(&runtime).await;
-        play_audible(&runtime, track_id).await;
+        after_track_change(&runtime, &weak, track_id).await;
+        refresh_sidebar(true);
     });
 }
 
 /// Enqueue an album's tracks at the end of the current queue.
-pub fn enqueue_album(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle, album_id: String) {
+pub fn enqueue_album(runtime: Runtime, _weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle, album_id: String) {
     handle.spawn(async move {
         let album = match runtime.core().get_album(&album_id).await {
             Ok(album) => album,
@@ -411,12 +344,12 @@ pub fn enqueue_album(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
             return;
         }
         runtime.core().add_tracks(tracks).await;
-        refresh_queue(&runtime, &weak).await;
+        refresh_sidebar(false);
     });
 }
 
 /// Enqueue a single track at the end of the current queue.
-pub fn enqueue_track(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle, track_id: u64) {
+pub fn enqueue_track(runtime: Runtime, _weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle, track_id: u64) {
     handle.spawn(async move {
         let track = match runtime.core().get_track(track_id).await {
             Ok(track) => track,
@@ -441,27 +374,7 @@ pub fn enqueue_track(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
         let queue_track =
             make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork);
         runtime.core().add_track(queue_track).await;
-        refresh_queue(&runtime, &weak).await;
-    });
-}
-
-/// Jump to queue entry `index` and start audio for it.
-pub fn play_queue_index(
-    runtime: Runtime,
-    weak: slint::Weak<AppWindow>,
-    handle: tokio::runtime::Handle,
-    index: usize,
-) {
-    handle.spawn(async move {
-        let Some(track) = runtime.core().play_index(index).await else {
-            log::warn!("[qbz-slint] playback: play_index {index} out of range");
-            return;
-        };
-        let track_id = track.id;
-        refresh_queue(&runtime, &weak).await;
-        refresh_now_playing_meta(&runtime, &weak).await;
-        record_recent(&runtime).await;
-        play_audible(&runtime, track_id).await;
+        refresh_sidebar(false);
     });
 }
 
@@ -488,10 +401,8 @@ pub fn next(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tokio::runti
             return;
         };
         let track_id = track.id;
-        refresh_queue(&runtime, &weak).await;
-        refresh_now_playing_meta(&runtime, &weak).await;
-        record_recent(&runtime).await;
-        play_audible(&runtime, track_id).await;
+        after_track_change(&runtime, &weak, track_id).await;
+        refresh_sidebar(true);
     });
 }
 
@@ -503,10 +414,8 @@ pub fn previous(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tokio::r
             return;
         };
         let track_id = track.id;
-        refresh_queue(&runtime, &weak).await;
-        refresh_now_playing_meta(&runtime, &weak).await;
-        record_recent(&runtime).await;
-        play_audible(&runtime, track_id).await;
+        after_track_change(&runtime, &weak, track_id).await;
+        refresh_sidebar(true);
     });
 }
 
@@ -636,32 +545,6 @@ mod tests {
         assert_eq!(fmt_remaining(250, 200), "-0:00");
     }
 
-    #[test]
-    fn queue_row_appends_version() {
-        let track = QueueTrack {
-            id: 7,
-            title: "Song".to_string(),
-            version: Some("Live".to_string()),
-            artist: "Artist".to_string(),
-            album: "Album".to_string(),
-            duration_secs: 100,
-            artwork_url: None,
-            hires: false,
-            bit_depth: None,
-            sample_rate: None,
-            is_local: false,
-            album_id: None,
-            artist_id: None,
-            streamable: true,
-            source: None,
-            parental_warning: false,
-            source_item_id_hint: None,
-        };
-        let row = queue_row(&track, true);
-        assert_eq!(row.title, "Song (Live)");
-        assert_eq!(row.id, "7");
-        assert!(row.playing);
-    }
 }
 
 /// Start the playback poll loop. Runs for the app lifetime: every ~450ms
@@ -738,10 +621,8 @@ pub fn start_poll_loop(
                 seen_position = 0;
                 if let Some(track) = runtime.core().next_track().await {
                     let next_id = track.id;
-                    refresh_queue(&runtime, &weak).await;
-                    refresh_now_playing_meta(&runtime, &weak).await;
-                    record_recent(&runtime).await;
-                    play_audible(&runtime, next_id).await;
+                    after_track_change(&runtime, &weak, next_id).await;
+                    refresh_sidebar(true);
                 } else {
                     log::info!("[qbz-slint] playback: queue finished");
                     let _ = weak.upgrade_in_event_loop(|w| {
