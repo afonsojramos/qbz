@@ -25,6 +25,7 @@ mod nav;
 mod playback;
 mod queue;
 mod recently;
+mod search;
 mod settings;
 mod ui_prefs;
 
