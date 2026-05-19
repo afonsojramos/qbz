@@ -12,7 +12,7 @@ use qbz_cache::ImageCacheService;
 use slint::{ComponentHandle, Model};
 use tokio::sync::Semaphore;
 
-use crate::{AppWindow, HomeState};
+use crate::{AppWindow, HomeState, SearchState};
 
 /// Cap on simultaneous artwork downloads.
 const MAX_CONCURRENT: usize = 16;
@@ -39,6 +39,14 @@ pub enum ArtworkTarget {
     Recent { idx: usize },
     /// A card in `HomeState.recent-albums[idx]`.
     RecentAlbum { idx: usize },
+    /// A row in `SearchState.albums[idx]`.
+    SearchAlbum { idx: usize },
+    /// A row in `SearchState.tracks[idx]`.
+    SearchTrack { idx: usize },
+    /// A row in `SearchState.artists[idx]`.
+    SearchArtist { idx: usize },
+    /// A row in `SearchState.playlists[idx]`.
+    SearchPlaylist { idx: usize },
 }
 
 /// An artwork download job: which card, and the image URL.
@@ -257,6 +265,34 @@ fn apply_artwork(
             };
             item.artwork = image;
             albums.set_row_data(idx, item);
+        }
+        ArtworkTarget::SearchAlbum { idx } => {
+            let model = window.global::<SearchState>().get_albums();
+            if let Some(mut item) = model.row_data(idx) {
+                item.artwork = image;
+                model.set_row_data(idx, item);
+            }
+        }
+        ArtworkTarget::SearchTrack { idx } => {
+            let model = window.global::<SearchState>().get_tracks();
+            if let Some(mut item) = model.row_data(idx) {
+                item.artwork = image;
+                model.set_row_data(idx, item);
+            }
+        }
+        ArtworkTarget::SearchArtist { idx } => {
+            let model = window.global::<SearchState>().get_artists();
+            if let Some(mut item) = model.row_data(idx) {
+                item.artwork = image;
+                model.set_row_data(idx, item);
+            }
+        }
+        ArtworkTarget::SearchPlaylist { idx } => {
+            let model = window.global::<SearchState>().get_playlists();
+            if let Some(mut item) = model.row_data(idx) {
+                item.artwork = image;
+                model.set_row_data(idx, item);
+            }
         }
     }
 }

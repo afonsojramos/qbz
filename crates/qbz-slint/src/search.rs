@@ -12,6 +12,7 @@ use qbz_core::FrontendAdapter;
 use qbz_models::{Album, Artist, MostPopularItem, Playlist, SearchAllResults, Track};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
+use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::{AlbumCardItem, AppWindow, SearchPlaylistItem, SearchState, SearchTrackItem, SlimItem};
 
 thread_local! {
@@ -513,6 +514,96 @@ pub fn append_results(window: &AppWindow, more: MoreRows) {
             }
         }
     }
+}
+
+// ==================== Artwork jobs ====================
+
+/// Build artwork download jobs for a freshly applied `SearchData` — one
+/// per result row that carries a cover URL.
+pub fn artwork_jobs(data: &SearchData) -> Vec<ArtworkJob> {
+    let mut jobs = Vec::new();
+    for (idx, row) in data.albums.iter().enumerate() {
+        if !row.artwork_url.is_empty() {
+            jobs.push(ArtworkJob {
+                target: ArtworkTarget::SearchAlbum { idx },
+                url: row.artwork_url.clone(),
+            });
+        }
+    }
+    for (idx, row) in data.tracks.iter().enumerate() {
+        if !row.artwork_url.is_empty() {
+            jobs.push(ArtworkJob {
+                target: ArtworkTarget::SearchTrack { idx },
+                url: row.artwork_url.clone(),
+            });
+        }
+    }
+    for (idx, row) in data.artists.iter().enumerate() {
+        if !row.artwork_url.is_empty() {
+            jobs.push(ArtworkJob {
+                target: ArtworkTarget::SearchArtist { idx },
+                url: row.artwork_url.clone(),
+            });
+        }
+    }
+    for (idx, row) in data.playlists.iter().enumerate() {
+        if !row.artwork_url.is_empty() {
+            jobs.push(ArtworkJob {
+                target: ArtworkTarget::SearchPlaylist { idx },
+                url: row.artwork_url.clone(),
+            });
+        }
+    }
+    jobs
+}
+
+/// Build artwork jobs for a load-more page, targeting the rows that were
+/// just appended (`start` is the index of the first appended row).
+pub fn artwork_jobs_for_more(more: &MoreRows, start: usize) -> Vec<ArtworkJob> {
+    let mut jobs = Vec::new();
+    match more {
+        MoreRows::Albums(rows) => {
+            for (i, row) in rows.iter().enumerate() {
+                if !row.artwork_url.is_empty() {
+                    jobs.push(ArtworkJob {
+                        target: ArtworkTarget::SearchAlbum { idx: start + i },
+                        url: row.artwork_url.clone(),
+                    });
+                }
+            }
+        }
+        MoreRows::Tracks(rows) => {
+            for (i, row) in rows.iter().enumerate() {
+                if !row.artwork_url.is_empty() {
+                    jobs.push(ArtworkJob {
+                        target: ArtworkTarget::SearchTrack { idx: start + i },
+                        url: row.artwork_url.clone(),
+                    });
+                }
+            }
+        }
+        MoreRows::Artists(rows) => {
+            for (i, row) in rows.iter().enumerate() {
+                if !row.artwork_url.is_empty() {
+                    jobs.push(ArtworkJob {
+                        target: ArtworkTarget::SearchArtist { idx: start + i },
+                        url: row.artwork_url.clone(),
+                    });
+                }
+            }
+        }
+        MoreRows::Playlists(rows) => {
+            for (i, row) in rows.iter().enumerate() {
+                if !row.artwork_url.is_empty() {
+                    jobs.push(ArtworkJob {
+                        target: ArtworkTarget::SearchPlaylist { idx: start + i },
+                        url: row.artwork_url.clone(),
+                    });
+                }
+            }
+        }
+    }
+    jobs
 }
 
 #[cfg(test)]

@@ -263,7 +263,7 @@ fn navigate_search(
     runtime: Arc<AppRuntime<SlintAdapter>>,
     weak: slint::Weak<AppWindow>,
     handle: &tokio::runtime::Handle,
-    _image_cache: artwork::ImageCache,
+    image_cache: artwork::ImageCache,
     query: String,
 ) {
     // Capture a version so a slow, stale load cannot overwrite a newer
@@ -276,12 +276,14 @@ fn navigate_search(
         });
         match search::load_search(&runtime, &query).await {
             Ok(data) => {
+                let jobs = search::artwork_jobs(&data);
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     if search::is_current_version(version) {
                         search::apply_search(&w, data);
                         w.global::<SearchState>().set_loading(false);
                     }
                 });
+                artwork::spawn_loads(jobs, weak.clone(), image_cache);
             }
             Err(e) => {
                 log::error!("[qbz-slint] search load failed: {e}");
@@ -597,6 +599,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
         window.global::<SearchActions>().on_load_more(move |tab| {
             let Some(w) = weak.upgrade() else {
                 return;
@@ -614,12 +617,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } as u32;
             let runtime = runtime.clone();
             let weak = weak.clone();
+            let image_cache = image_cache.clone();
             handle.spawn(async move {
                 match search::load_more(&runtime, &query, category, offset).await {
                     Ok(more) => {
+                        let jobs = search::artwork_jobs_for_more(&more, offset as usize);
                         let _ = weak.upgrade_in_event_loop(move |w| {
                             search::append_results(&w, more);
                         });
+                        artwork::spawn_loads(jobs, weak.clone(), image_cache);
                     }
                     Err(e) => log::error!("[qbz-slint] search load-more failed: {e}"),
                 }
