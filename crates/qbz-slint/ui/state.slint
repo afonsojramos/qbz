@@ -82,7 +82,7 @@ export global AlbumActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings }
+export enum ContentView { home, album, artist, settings, search }
 
 // Settings screen state. Audio and Playback preferences are loaded from
 // the persistence stores by the Rust settings controller and pushed here;
@@ -329,4 +329,63 @@ export global QueueState {
 
     // Reflects whether infinite-play is currently enabled.
     in property <bool> infinite-play: false;
+}
+
+// A track result row in search (cover thumbnail, unlike album tracks).
+export struct SearchTrackItem {
+    id: string,
+    title: string,
+    artist: string,
+    duration: string,
+    quality-tier: string,
+    explicit: bool,
+    artwork-url: string,
+    artwork: image,
+}
+
+// A playlist result row in search.
+export struct SearchPlaylistItem {
+    id: string,
+    title: string,
+    subtitle: string,      // owner name + track count
+    artwork-url: string,
+    artwork: image,
+}
+
+// Search results screen state. The Rust search controller populates the
+// four category lists, their totals, and the most-popular hero entry.
+export global SearchState {
+    in property <string> query;
+    // Active tab: 0 = All, 1 = Albums, 2 = Tracks, 3 = Artists, 4 = Playlists.
+    in property <int> tab: 0;
+    in property <bool> loading: false;
+    in property <[AlbumCardItem]> albums: [];
+    in property <[SearchTrackItem]> tracks: [];
+    in property <[SlimItem]> artists: [];
+    in property <[SearchPlaylistItem]> playlists: [];
+    in property <int> albums-total: 0;
+    in property <int> tracks-total: 0;
+    in property <int> artists-total: 0;
+    in property <int> playlists-total: 0;
+    // Most-popular hero: `kind` selects which of the three items is shown.
+    in property <string> most-popular-kind;  // "album" | "artist" | "track" | ""
+    in property <AlbumCardItem> most-popular-album;
+    in property <SlimItem> most-popular-artist;
+    in property <SearchTrackItem> most-popular-track;
+    // Active searchType filter: "" | "MainArtist" | "Performer" | ...
+    in property <string> filter-type;
+}
+
+// Search actions wired to the Rust search controller.
+export global SearchActions {
+    // Enter / explicit submit — navigate to the full results page.
+    callback submit(string);
+    // Live (debounced) search as the user types.
+    callback live(string);
+    // User picked a results tab (0..4).
+    callback tab-changed(int);
+    // searchType filter changed.
+    callback filter-changed(string);
+    // Request the next page for the given tab.
+    callback load-more(int);
 }
