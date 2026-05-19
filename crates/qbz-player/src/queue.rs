@@ -869,6 +869,58 @@ impl QueueManager {
         (state.tracks.clone(), state.current_index)
     }
 
+    /// Get the full queue state without the upcoming/history caps applied by
+    /// `get_state()`. Used by clients that paginate the upcoming list (e.g.
+    /// the Queue sidebar's "UP NEXT" paginator) and need the complete history.
+    /// The `upcoming` ordering is shuffle-aware, matching `get_state()`.
+    pub fn get_state_full(&self) -> QueueState {
+        let state = self.state.lock().unwrap();
+
+        let current_track = state
+            .current_index
+            .and_then(|idx| state.tracks.get(idx).cloned());
+
+        // Full upcoming list (after current), shuffle-aware. No `take` cap.
+        let upcoming: Vec<QueueTrack> = if let Some(curr_idx) = state.current_index {
+            if state.shuffle {
+                state
+                    .shuffle_order
+                    .iter()
+                    .skip(state.shuffle_position + 1)
+                    .filter_map(|&idx| state.tracks.get(idx).cloned())
+                    .collect()
+            } else {
+                state
+                    .tracks
+                    .iter()
+                    .skip(curr_idx + 1)
+                    .cloned()
+                    .collect()
+            }
+        } else {
+            state.tracks.clone()
+        };
+
+        // Full history (recent first). No `take` cap.
+        let history_tracks: Vec<QueueTrack> = state
+            .history
+            .iter()
+            .rev()
+            .filter_map(|&idx| state.tracks.get(idx).cloned())
+            .collect();
+
+        QueueState {
+            current_track,
+            current_index: state.current_index,
+            upcoming,
+            history: history_tracks,
+            shuffle: state.shuffle,
+            repeat: state.repeat,
+            total_tracks: state.tracks.len(),
+            stop_after_track_id: state.stop_after_track_id,
+        }
+    }
+
     /// Regenerate shuffle order (internal, must be called with lock held)
     fn regenerate_shuffle_order_internal(state: &mut InternalState) {
         let mut order: Vec<usize> = (0..state.tracks.len()).collect();
@@ -1826,6 +1878,58 @@ mod tests {
         let state = queue.get_state();
 
         assert_eq!(state.stop_after_track_id, Some(101));
+    }
+
+    #[test]
+    fn test_get_state_full_returns_uncapped_upcoming() {
+        let queue = QueueManager::new();
+        // 50 tracks — more than get_state()'s 20-track upcoming cap.
+        for i in 1..=50 {
+            queue.add_track(create_test_track(i));
+        }
+        queue.play_index(0);
+
+        let capped = queue.get_state();
+        assert_eq!(capped.upcoming.len(), 20, "get_state caps upcoming at 20");
+
+        let full = queue.get_state_full();
+        assert_eq!(full.upcoming.len(), 49, "get_state_full returns all upcoming");
+        assert_eq!(full.total_tracks, 50);
+        assert_eq!(full.upcoming.first().unwrap().id, 2);
+        assert_eq!(full.upcoming.last().unwrap().id, 50);
+    }
+
+    #[test]
+    fn test_get_state_full_returns_uncapped_history() {
+        let queue = QueueManager::new();
+        for i in 1..=30 {
+            queue.add_track(create_test_track(i));
+        }
+        queue.play_index(0);
+        // Advance through 25 tracks — more than get_state()'s 10-entry cap.
+        for _ in 0..25 {
+            queue.next();
+        }
+
+        let capped = queue.get_state();
+        assert_eq!(capped.history.len(), 10, "get_state caps history at 10");
+
+        let full = queue.get_state_full();
+        assert_eq!(full.history.len(), 25, "get_state_full returns all history");
+        // Newest-first ordering: most recently played sits at the front.
+        assert_eq!(full.history.first().unwrap().id, 25);
+    }
+
+    #[test]
+    fn test_get_state_full_no_current_track_returns_all_as_upcoming() {
+        let queue = QueueManager::new();
+        for i in 1..=5 {
+            queue.add_track(create_test_track(i));
+        }
+
+        let full = queue.get_state_full();
+        assert!(full.current_track.is_none());
+        assert_eq!(full.upcoming.len(), 5);
     }
 
     #[test]

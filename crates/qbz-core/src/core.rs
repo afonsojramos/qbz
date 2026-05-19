@@ -204,6 +204,14 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         queue.get_all_tracks()
     }
 
+    /// Get the full queue state without the upcoming/history caps that
+    /// `get_queue_state` applies. Used by clients that paginate the
+    /// upcoming list and need the complete play history (Queue sidebar).
+    pub async fn get_queue_state_full(&self) -> QueueState {
+        let queue = self.queue.read().await;
+        queue.get_state_full()
+    }
+
     /// Set repeat mode
     pub async fn set_repeat_mode(&self, mode: RepeatMode) {
         let queue = self.queue.write().await;
@@ -606,6 +614,58 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             .remove_favorite(fav_type, item_id)
             .await
             .map_err(CoreError::Api)
+    }
+
+    /// Fetch the set of the user's favorite track IDs. Pages through the
+    /// favorites endpoint until exhausted. Used by clients that need to
+    /// reflect favorite state on individual tracks (e.g. the Queue
+    /// sidebar's now-playing heart).
+    pub async fn favorite_track_ids(&self) -> Result<std::collections::HashSet<u64>, CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+
+        let mut ids = std::collections::HashSet::new();
+        let page_size: u32 = 500;
+        let mut offset: u32 = 0;
+        loop {
+            let value = client
+                .get_favorites("tracks", page_size, offset)
+                .await
+                .map_err(CoreError::Api)?;
+            let items = value
+                .get("tracks")
+                .and_then(|t| t.get("items"))
+                .and_then(|i| i.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let count = items.len() as u32;
+            for item in &items {
+                if let Some(id) = item.get("id").and_then(|v| v.as_u64()) {
+                    ids.insert(id);
+                }
+            }
+            if count < page_size {
+                break;
+            }
+            offset += page_size;
+        }
+        Ok(ids)
+    }
+
+    /// Toggle the favorite state of a track. `make_favorite = true` adds it,
+    /// `false` removes it. Thin convenience over `add_favorite` /
+    /// `remove_favorite` so callers do not duplicate the type string.
+    pub async fn set_track_favorite(
+        &self,
+        track_id: u64,
+        make_favorite: bool,
+    ) -> Result<(), CoreError> {
+        let id = track_id.to_string();
+        if make_favorite {
+            self.add_favorite("track", &id).await
+        } else {
+            self.remove_favorite("track", &id).await
+        }
     }
 
     // ==================== Playlists ====================
