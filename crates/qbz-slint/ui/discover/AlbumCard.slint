@@ -19,25 +19,25 @@ import { QualityBadge } from "../primitives/QualityBadge.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 
-// Circular hover-overlay action button. `interactive` gates its pointer
-// handling so that, while the card is not hovered, clicks fall through to
-// the card-open detector underneath.
+// Circular hover-overlay action button. Solid (semi-transparent) fill so
+// the whole circle is a stable hit/hover surface — an outline-only button
+// makes the pointer flicker between the ring and the transparent center.
 component OverlayButton inherits Rectangle {
     in property <image> icon;
     in property <bool> primary: false;
-    in property <bool> interactive: true;
     in property <length> diameter: 36px;
     in property <length> icon-size: 16px;
+    out property <bool> hovered: ta.has-hover;
     callback clicked();
 
     width: root.diameter;
     height: root.diameter;
     border-radius: root.diameter / 2;
     background: root.primary
-        ? (ta.has-hover ? #ffffffd0 : #ffffff)
-        : (ta.has-hover ? #ffffff28 : transparent);
+        ? (ta.has-hover ? #ffffffd6 : #ffffff)
+        : (ta.has-hover ? #ffffff3d : #ffffff24);
     border-width: root.primary ? 0px : 1.5px;
-    border-color: #ffffffe6;
+    border-color: #ffffffcc;
 
     QbzIcon {
         source: root.icon;
@@ -49,7 +49,6 @@ component OverlayButton inherits Rectangle {
     }
 
     ta := TouchArea {
-        enabled: root.interactive;
         mouse-cursor: pointer;
         clicked => {
             root.clicked();
@@ -66,6 +65,12 @@ export component AlbumCard inherits Rectangle {
     // Fully deterministic height: artwork 220 + 6 spacer + 40 meta.
     width: 220px;
     height: 266px;
+
+    // The overlay stays up while the pointer is anywhere over the artwork
+    // OR over one of its buttons. A child button steals `has-hover` from
+    // the artwork detector, so the states are OR-combined.
+    property <bool> overlay-on: hover.has-hover
+        || fav-btn.hovered || play-btn.hovered || more-btn.hovered;
 
     VerticalLayout {
         alignment: start;
@@ -93,7 +98,7 @@ export component AlbumCard inherits Rectangle {
                 width: 100%;
                 height: 100%;
                 background: #000000;
-                opacity: hover.has-hover ? 0.6 : 0.0;
+                opacity: root.overlay-on ? 0.6 : 0.0;
                 animate opacity { duration: 150ms; }
             }
 
@@ -103,7 +108,7 @@ export component AlbumCard inherits Rectangle {
                 x: 12px;
                 y: 12px;
                 spacing: 2px;
-                opacity: hover.has-hover ? 1.0 : 0.0;
+                opacity: root.overlay-on ? 1.0 : 0.0;
                 animate opacity { duration: 150ms; }
 
                 if root.album.genre != "": Text {
@@ -142,34 +147,31 @@ export component AlbumCard inherits Rectangle {
                 height: 44px;
                 alignment: center;
                 spacing: 12px;
-                opacity: hover.has-hover ? 1.0 : 0.0;
+                opacity: root.overlay-on ? 1.0 : 0.0;
                 animate opacity { duration: 150ms; }
 
                 VerticalLayout {
                     alignment: center;
-                    OverlayButton {
+                    fav-btn := OverlayButton {
                         icon: @image-url("../assets/icons/heart.svg");
-                        interactive: hover.has-hover;
                         clicked => {
                             root.media-action("album", root.album.id, "favorite");
                         }
                     }
                 }
-                OverlayButton {
-                    icon: @image-url("../assets/icons/play.svg");
+                play-btn := OverlayButton {
+                    icon: @image-url("../assets/icons/play-fill.svg");
                     primary: true;
                     diameter: 44px;
                     icon-size: 18px;
-                    interactive: hover.has-hover;
                     clicked => {
                         root.media-action("album", root.album.id, "play");
                     }
                 }
                 VerticalLayout {
                     alignment: center;
-                    OverlayButton {
+                    more-btn := OverlayButton {
                         icon: @image-url("../assets/icons/ellipsis.svg");
-                        interactive: hover.has-hover;
                         clicked => {
                             album-menu.show();
                         }
