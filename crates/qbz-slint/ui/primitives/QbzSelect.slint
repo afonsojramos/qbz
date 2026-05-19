@@ -21,10 +21,26 @@ component BpBadge inherits Text {
     vertical-alignment: center;
 }
 
+// Non-selectable section header row shown in the open list above the
+// first option of a group. Plain muted-caps text, no background — the
+// QBZ UI never uses pill-style chips.
+component SectionHeader inherits Text {
+    color: Theme.text-muted;
+    font-size: Typography.legal;
+    font-weight: Typography.semibold;
+    letter-spacing: 0.5px;
+    vertical-alignment: center;
+}
+
 export component QbzSelect inherits Rectangle {
     in property <[string]> options;
     // Optional, parallel to `options`: a true entry shows a "BP" badge.
     in property <[bool]> badges: [];
+    // Optional, parallel to `options`: a non-empty entry renders a
+    // non-selectable section-header row immediately above that option.
+    // Empty (the default) means no headers — backward compatible with
+    // every other QbzSelect caller (backend, sample-rate, ...).
+    in property <[string]> groups: [];
     in property <int> current-index: 0;
     in property <length> menu-width: 240px;
     // Optional: a wider open list than the collapsed control, for long
@@ -36,6 +52,10 @@ export component QbzSelect inherits Rectangle {
     // Resolved width of the open list.
     private property <length> list-width:
         root.popup-width > root.menu-width ? root.popup-width : root.menu-width;
+
+    // Height of one option row and one section-header row.
+    private property <length> row-height: 32px;
+    private property <length> header-height: 24px;
 
     width: root.menu-width;
     height: 34px;
@@ -91,7 +111,7 @@ export component QbzSelect inherits Rectangle {
         x: root.menu-width - root.list-width;
         y: root.height + 4px;
         width: root.list-width;
-        height: root.options.length * 32px + 10px;
+        height: list-layout.preferred-height;
 
         Rectangle {
             background: Theme.surface-main;
@@ -102,33 +122,51 @@ export component QbzSelect inherits Rectangle {
             drop-shadow-color: Theme.card-shadow;
             drop-shadow-offset-y: 5px;
 
-            VerticalLayout {
+            list-layout := VerticalLayout {
                 padding-top: 5px;
                 padding-bottom: 5px;
-                for opt[i] in root.options: Rectangle {
-                    height: 32px;
-                    background: opt-ta.has-hover ? Theme.surface-hover : transparent;
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        spacing: 8px;
-                        Text {
-                            text: opt;
-                            color: i == root.current-index ? Theme.accent : Theme.text-secondary;
-                            font-size: Typography.body;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
-                        if i < root.badges.length && root.badges[i]: VerticalLayout {
-                            alignment: center;
-                            BpBadge { }
+                // Each entry is a group-header row (optional, non-selectable)
+                // stacked above its option row. A `groups[i]` of "" means the
+                // option carries no header — every non-device QbzSelect caller
+                // leaves `groups` empty, so they render exactly as before.
+                for opt[i] in root.options: VerticalLayout {
+                    if i < root.groups.length && root.groups[i] != "": Rectangle {
+                        height: root.header-height;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 4px;
+                            SectionHeader {
+                                text: root.groups[i];
+                                horizontal-stretch: 1;
+                            }
                         }
                     }
-                    opt-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.selected(i);
+                    Rectangle {
+                        height: root.row-height;
+                        background: opt-ta.has-hover ? Theme.surface-hover : transparent;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 8px;
+                            Text {
+                                text: opt;
+                                color: i == root.current-index ? Theme.accent : Theme.text-secondary;
+                                font-size: Typography.body;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            if i < root.badges.length && root.badges[i]: VerticalLayout {
+                                alignment: center;
+                                BpBadge { }
+                            }
+                        }
+                        opt-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.selected(i);
+                            }
                         }
                     }
                 }
