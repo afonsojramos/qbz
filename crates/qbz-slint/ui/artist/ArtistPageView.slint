@@ -251,15 +251,7 @@ export component ArtistPageView inherits Rectangle {
                         font-weight: Typography.bold;
                         overflow: elide;
                     }
-                    Rectangle { height: 12px; }
-                    Text {
-                        text: ArtistState.bio;
-                        visible: ArtistState.bio != "";
-                        color: Theme.text-secondary;
-                        font-size: Typography.body;
-                        wrap: word-wrap;
-                    }
-                    Rectangle { height: 20px; }
+                    Rectangle { height: 18px; }
                     HorizontalLayout {
                         alignment: start;
                         spacing: 12px;
@@ -286,6 +278,15 @@ export component ArtistPageView inherits Rectangle {
                         }
                     }
                 }
+            }
+
+            // Biography — full content width, below the header block.
+            if ArtistState.bio != "": Rectangle { height: 20px; }
+            if ArtistState.bio != "": Text {
+                text: ArtistState.bio;
+                color: Theme.text-secondary;
+                font-size: Typography.body;
+                wrap: word-wrap;
             }
 
             Rectangle { height: 36px; }
