@@ -14,6 +14,8 @@ import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { ContextMenu } from "../primitives/ContextMenu.slint";
+import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { ShellState, QueueState, QueueItem } from "../state.slint";
 
 // Close button — mirrors the X control used by LyricsSidebar.
@@ -198,28 +200,28 @@ component QueueRow inherits Rectangle {
             }
         }
 
-        // Remove control — only on UP NEXT rows, only on hover.
+        // Context-menu trigger — only on UP NEXT rows, shown on hover.
         if root.removable: VerticalLayout {
             alignment: center;
             width: 24px;
             visible: ta.has-hover;
-            remove-btn := Rectangle {
+            menu-btn := Rectangle {
                 width: 24px;
                 height: 24px;
                 border-radius: Radius.sm;
-                background: rta.has-hover ? Theme.surface-hover : transparent;
+                background: mta.has-hover ? Theme.surface-hover : transparent;
                 QbzIcon {
-                    source: @image-url("../assets/icons/x.svg");
-                    width: 13px;
-                    height: 13px;
+                    source: @image-url("../assets/icons/ellipsis.svg");
+                    width: 15px;
+                    height: 15px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    tint: rta.has-hover ? Theme.text-primary : Theme.text-muted;
+                    tint: mta.has-hover ? Theme.text-primary : Theme.text-muted;
                 }
-                rta := TouchArea {
+                mta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
-                        root.remove();
+                        track-menu.show();
                     }
                 }
             }
@@ -227,11 +229,45 @@ component QueueRow inherits Rectangle {
     }
 
     ta := TouchArea {
-        // The remove control sits above this area and consumes its own
-        // clicks, so a row click never doubles as a remove.
+        // The menu trigger sits above this area and consumes its own
+        // clicks, so a row click never doubles as a menu open.
         mouse-cursor: pointer;
         clicked => {
             root.clicked();
+        }
+    }
+
+    // Per-track context menu — 1:1 with the Tauri queue track menu.
+    // Only "Remove from queue" is wired; the rest are placeholders.
+    track-menu := PopupWindow {
+        x: root.width - 200px;
+        y: 44px;
+        width: 196px;
+        height: 175px;
+        ContextMenu {
+            ContextMenuItem {
+                icon: @image-url("../assets/icons/trash-2.svg");
+                label: @tr("Remove from queue");
+                clicked => {
+                    root.remove();
+                }
+            }
+            ContextMenuItem {
+                icon: @image-url("../assets/icons/circle-stop.svg");
+                label: @tr("Stop after this");
+            }
+            ContextMenuItem {
+                icon: @image-url("../assets/icons/list-x.svg");
+                label: @tr("Remove all after");
+            }
+            ContextMenuItem {
+                icon: @image-url("../assets/icons/list-plus.svg");
+                label: @tr("Add to playlist");
+            }
+            ContextMenuItem {
+                icon: @image-url("../assets/icons/info.svg");
+                label: @tr("Track info");
+            }
         }
     }
 }
@@ -578,7 +614,7 @@ export component QueueSidebar inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 IconButton {
-                    icon: @image-url("../assets/icons/list-x.svg");
+                    icon: @image-url("../assets/icons/trash-list.svg");
                     clicked => {
                         QueueState.clear-queue();
                     }
@@ -588,7 +624,7 @@ export component QueueSidebar inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 IconButton {
-                    icon: @image-url("../assets/icons/list-plus.svg");
+                    icon: @image-url("../assets/icons/add-to-list.svg");
                     clicked => {
                         QueueState.save-as-playlist();
                     }
@@ -603,6 +639,14 @@ export component QueueSidebar inherits Rectangle {
                     clicked => {
                         QueueState.toggle-infinite-play();
                     }
+                }
+            }
+            // Action 4 — Sleep timer. Visual parity with Tauri; the
+            // timer popover / functionality is not wired yet.
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: @image-url("../assets/icons/clock.svg");
                 }
             }
 
