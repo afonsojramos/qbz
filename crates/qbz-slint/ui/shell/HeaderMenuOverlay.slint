@@ -1,0 +1,121 @@
+// In-window overlay that draws the open header nav-tab dropdown.
+//
+// Why this exists: the four header tabs used to each own a PopupWindow.
+// A PopupWindow grabs the pointer while open, so hovering a sibling tab
+// delivered no hover event — the menus could not be hover-switched, the
+// new menu only appeared after the old one's idle timer fired.
+//
+// This overlay is a plain Rectangle, so it does NOT grab the pointer:
+// the header tabs stay hoverable while a menu is open. It must be the
+// LAST child of the AppShell root so it draws on top of the content
+// area (the header itself is only 48px tall — a menu hosted inside it
+// would be clipped by the content region below).
+//
+// Tabs publish their identity into HeaderMenuState (open-index, anchor-x,
+// items, home-item). Hovering a different tab overwrites the global, so
+// the menu switches instantly. open-index == -1 means nothing is open.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Radius } from "../foundation/radius.slint";
+import { Layout } from "../foundation/layout.slint";
+import { HeaderMenuState, NavState, ContentView } from "../state.slint";
+import { NavMenuItem } from "NavMenuItem.slint";
+
+export component HeaderMenuOverlay inherits Rectangle {
+    // Fills the whole shell; only visible (and only consumes events)
+    // while a menu is open.
+    visible: HeaderMenuState.open-index >= 0;
+
+    // (Re)arms the idle countdown — called on any pointer activity over
+    // the panel or its rows.
+    function reset-idle() {
+        idle-timer.restart();
+    }
+
+    // Closes the menu and disarms the timer.
+    function close-menu() {
+        HeaderMenuState.open-index = -1;
+        idle-timer.running = false;
+    }
+
+    // Restart the idle countdown every time a tab (re)publishes the
+    // open menu — covers both the initial open and hover-switching
+    // between tabs.
+    changed open-index => {
+        if (HeaderMenuState.open-index >= 0) {
+            idle-timer.running = true;
+            idle-timer.restart();
+        } else {
+            idle-timer.running = false;
+        }
+    }
+    property <int> open-index: HeaderMenuState.open-index;
+
+    // Closes the menu after 1.5s without pointer interaction.
+    idle-timer := Timer {
+        interval: 1500ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            HeaderMenuState.open-index = -1;
+        }
+    }
+
+    // Full-window transparent scrim — a click anywhere outside the panel
+    // closes the menu. Declared before the panel so the panel sits on
+    // top and its own TouchArea wins over this one.
+    if HeaderMenuState.open-index >= 0: TouchArea {
+        clicked => {
+            root.close-menu();
+        }
+    }
+
+    // The menu panel — same styling as the former PopupWindow content:
+    // surface-main background, 1px border-muted, Radius.sm, drop shadow.
+    if HeaderMenuState.open-index >= 0: panel := Rectangle {
+        x: HeaderMenuState.anchor-x;
+        y: Layout.header-height + 6px;
+        width: 188px;
+        height: panel-box.preferred-height;
+
+        panel-box := Rectangle {
+            background: Theme.surface-main;
+            border-radius: Radius.sm;
+            border-width: 1px;
+            border-color: Theme.border-muted;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: Theme.card-shadow;
+            drop-shadow-offset-y: 6px;
+
+            // Keeps the pointer "inside" the menu so the scrim's click
+            // does not pass through, and resets the idle countdown on
+            // any movement over the panel body.
+            panel-ta := TouchArea {
+                moved => {
+                    root.reset-idle();
+                }
+            }
+
+            VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                for entry[idx] in HeaderMenuState.items: NavMenuItem {
+                    label: entry.label;
+                    icon: entry.icon;
+                    has-glyph: entry.has-glyph;
+                    clicked => {
+                        if (idx == HeaderMenuState.home-item) {
+                            NavState.view = ContentView.home;
+                        }
+                        root.close-menu();
+                    }
+                    // Any pointer interaction with a row resets the
+                    // idle-close countdown.
+                    hovered => {
+                        root.reset-idle();
+                    }
+                }
+            }
+        }
+    }
+}
