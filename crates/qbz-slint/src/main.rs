@@ -658,6 +658,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<NowPlayingState>()
+            .on_toggle_shuffle(move || {
+                playback::toggle_shuffle(runtime.clone(), weak.clone(), handle.clone());
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<NowPlayingState>()
+            .on_cycle_repeat(move || {
+                playback::cycle_repeat(runtime.clone(), weak.clone(), handle.clone());
+            });
+    }
+
     // Queue sidebar — clicking a row jumps to that queue index.
     {
         let runtime = app_runtime.clone();

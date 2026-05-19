@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
-use qbz_models::{Quality, QueueTrack};
+use qbz_models::{Quality, QueueTrack, RepeatMode};
 use slint::ComponentHandle;
 
 use crate::adapter::SlintAdapter;
@@ -466,6 +466,44 @@ pub fn set_volume(runtime: Runtime, handle: tokio::runtime::Handle, fraction: f3
         if let Err(e) = runtime.core().set_volume(fraction) {
             log::error!("[qbz-slint] playback: set_volume failed: {e}");
         }
+    });
+}
+
+/// Toggle shuffle on the queue and reflect the new state on NowPlayingState.
+pub fn toggle_shuffle(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+) {
+    handle.spawn(async move {
+        let on = runtime.core().toggle_shuffle().await;
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            w.global::<NowPlayingState>().set_shuffle(on);
+        });
+    });
+}
+
+/// Cycle the repeat mode Off -> All -> One -> Off and reflect it.
+pub fn cycle_repeat(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+) {
+    handle.spawn(async move {
+        let next = match runtime.core().get_queue_state().await.repeat {
+            RepeatMode::Off => RepeatMode::All,
+            RepeatMode::All => RepeatMode::One,
+            RepeatMode::One => RepeatMode::Off,
+        };
+        runtime.core().set_repeat_mode(next).await;
+        let mode: i32 = match next {
+            RepeatMode::Off => 0,
+            RepeatMode::All => 1,
+            RepeatMode::One => 2,
+        };
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            w.global::<NowPlayingState>().set_repeat_mode(mode);
+        });
     });
 }
 

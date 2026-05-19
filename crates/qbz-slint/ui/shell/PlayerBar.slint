@@ -134,7 +134,14 @@ export component PlayerBar inherits Rectangle {
                 alignment: center;
                 HorizontalLayout {
                     spacing: 2px;
-                    IconButton { icon: @image-url("../assets/icons/shuffle.svg"); icon-size: 16px; }
+                    IconButton {
+                        icon: @image-url("../assets/icons/shuffle.svg");
+                        icon-size: 16px;
+                        active: NowPlayingState.shuffle;
+                        clicked => {
+                            NowPlayingState.toggle-shuffle();
+                        }
+                    }
                     IconButton {
                         icon: @image-url("../assets/icons/skip-back.svg");
                         clicked => {
@@ -158,7 +165,16 @@ export component PlayerBar inherits Rectangle {
                             NowPlayingState.next();
                         }
                     }
-                    IconButton { icon: @image-url("../assets/icons/repeat.svg"); icon-size: 16px; }
+                    IconButton {
+                        icon: NowPlayingState.repeat-mode == 2
+                            ? @image-url("../assets/icons/repeat-1.svg")
+                            : @image-url("../assets/icons/repeat.svg");
+                        icon-size: 16px;
+                        active: NowPlayingState.repeat-mode != 0;
+                        clicked => {
+                            NowPlayingState.cycle-repeat();
+                        }
+                    }
                     IconButton { icon: @image-url("../assets/icons/plus.svg"); icon-size: 16px; }
                     IconButton { icon: @image-url("../assets/icons/heart.svg"); icon-size: 16px; }
                 }
@@ -256,8 +272,20 @@ export component PlayerBar inherits Rectangle {
                             }
                         }
                     }
-                    IconButton { icon: @image-url("../assets/icons/minus.svg"); icon-size: 15px; }
-                    IconButton { icon: @image-url("../assets/icons/plus.svg"); icon-size: 15px; }
+                    IconButton {
+                        icon: @image-url("../assets/icons/minus.svg");
+                        icon-size: 15px;
+                        clicked => {
+                            NowPlayingState.set-volume(Math.max(0.0, NowPlayingState.volume - 0.05));
+                        }
+                    }
+                    IconButton {
+                        icon: @image-url("../assets/icons/plus.svg");
+                        icon-size: 15px;
+                        clicked => {
+                            NowPlayingState.set-volume(Math.min(1.0, NowPlayingState.volume + 0.05));
+                        }
+                    }
                 }
             }
         }
