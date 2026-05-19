@@ -95,6 +95,9 @@ export component AudioSettings inherits VerticalLayout {
         description: @tr("The DAC or sound device that receives audio.");
         QbzSelect {
             menu-width: 300px;
+            // Device labels run long; open the list wider so the full
+            // name (card + ALSA PCM id) is readable.
+            popup-width: 480px;
             options: SettingsState.devices;
             badges: SettingsState.device-bp;
             current-index: SettingsState.device-index;

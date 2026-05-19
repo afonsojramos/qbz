@@ -27,8 +27,15 @@ export component QbzSelect inherits Rectangle {
     in property <[bool]> badges: [];
     in property <int> current-index: 0;
     in property <length> menu-width: 240px;
+    // Optional: a wider open list than the collapsed control, for long
+    // option labels (device names). 0px keeps the list at `menu-width`.
+    in property <length> popup-width: 0px;
     in property <bool> enabled: true;
     callback selected(int);
+
+    // Resolved width of the open list.
+    private property <length> list-width:
+        root.popup-width > root.menu-width ? root.popup-width : root.menu-width;
 
     width: root.menu-width;
     height: 34px;
@@ -79,9 +86,11 @@ export component QbzSelect inherits Rectangle {
     }
 
     popup := PopupWindow {
-        x: 0;
+        // Right-anchored so a list wider than the control grows leftward
+        // and stays on-screen.
+        x: root.menu-width - root.list-width;
         y: root.height + 4px;
-        width: root.menu-width;
+        width: root.list-width;
         height: root.options.length * 32px + 10px;
 
         Rectangle {

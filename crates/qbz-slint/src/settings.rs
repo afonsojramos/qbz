@@ -156,12 +156,20 @@ struct DeviceList {
     bp: Vec<bool>,
 }
 
-/// Whether a device can deliver bit-perfect playback on `backend`. ALSA
-/// enumerates real `hw:` cards (always capable); PipeWire reports a
-/// hardware flag per node; PulseAudio always mixes, so never capable.
+/// Whether a device can deliver bit-perfect playback on `backend`. On
+/// ALSA only the direct-hardware PCMs qualify (`hw:` / `front:` and the
+/// digital `iec958:` / `hdmi:`) — `sysdefault:`, `plughw:` and friends
+/// route through converting plugins. PipeWire reports a hardware flag
+/// per node; PulseAudio always mixes, so never capable.
 fn device_is_bit_perfect(backend: AudioBackendType, device: &qbz_audio::AudioDevice) -> bool {
     match backend {
-        AudioBackendType::Alsa => true,
+        AudioBackendType::Alsa => {
+            let id = device.id.to_ascii_lowercase();
+            id.starts_with("hw:")
+                || id.starts_with("front:")
+                || id.starts_with("iec958:")
+                || id.starts_with("hdmi:")
+        }
         AudioBackendType::PipeWire => device.is_hardware,
         AudioBackendType::Pulse | AudioBackendType::SystemDefault => false,
     }
