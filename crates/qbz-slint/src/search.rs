@@ -10,7 +10,7 @@ use std::sync::Arc;
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
 use qbz_models::{Album, Artist, MostPopularItem, Playlist, SearchAllResults, Track};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::{AlbumCardItem, AppWindow, SearchPlaylistItem, SearchState, SearchTrackItem, SlimItem};
 
@@ -377,9 +377,157 @@ pub fn reset_search(window: &AppWindow) {
     state.set_loading(true);
 }
 
+// ==================== Load-more (pagination) ====================
+
+/// Which category a load-more request targets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SearchCategory {
+    Albums,
+    Tracks,
+    Artists,
+    Playlists,
+}
+
+/// Map a results-tab index to the category whose list it paginates.
+/// Tab 0 (All) has no single category.
+pub fn category_for_tab(tab: i32) -> Option<SearchCategory> {
+    match tab {
+        1 => Some(SearchCategory::Albums),
+        2 => Some(SearchCategory::Tracks),
+        3 => Some(SearchCategory::Artists),
+        4 => Some(SearchCategory::Playlists),
+        _ => None,
+    }
+}
+
+/// A page of additional rows fetched by load-more, ready to append.
+pub enum MoreRows {
+    Albums(Vec<AlbumRow>),
+    Tracks(Vec<TrackRow>),
+    Artists(Vec<ArtistRow>),
+    Playlists(Vec<PlaylistRow>),
+}
+
+/// Load-more page size (matches the Tauri search page size).
+const PAGE_SIZE: u32 = 20;
+
+/// Fetch the next page for one category, starting at `offset`.
+pub async fn load_more<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    query: &str,
+    category: SearchCategory,
+    offset: u32,
+) -> Result<MoreRows, String>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let core = runtime.core();
+    match category {
+        SearchCategory::Albums => {
+            let page = core
+                .search_albums(query, PAGE_SIZE, offset, None)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(MoreRows::Albums(
+                page.items.into_iter().map(map_album).collect(),
+            ))
+        }
+        SearchCategory::Tracks => {
+            let page = core
+                .search_tracks(query, PAGE_SIZE, offset, None)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(MoreRows::Tracks(
+                page.items.into_iter().map(map_track).collect(),
+            ))
+        }
+        SearchCategory::Artists => {
+            let page = core
+                .search_artists(query, PAGE_SIZE, offset, None)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(MoreRows::Artists(
+                page.items.iter().map(map_artist).collect(),
+            ))
+        }
+        SearchCategory::Playlists => {
+            let page = core
+                .search_playlists(query, PAGE_SIZE, offset)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(MoreRows::Playlists(
+                page.items.into_iter().map(map_playlist).collect(),
+            ))
+        }
+    }
+}
+
+/// Append fetched rows to the matching `SearchState` list. Pushes onto the
+/// existing `VecModel` so already-loaded rows (and any resolved artwork)
+/// are untouched. Runs on the Slint event loop.
+pub fn append_results(window: &AppWindow, more: MoreRows) {
+    let state = window.global::<SearchState>();
+    match more {
+        MoreRows::Albums(rows) => {
+            if let Some(vm) = state
+                .get_albums()
+                .as_any()
+                .downcast_ref::<VecModel<AlbumCardItem>>()
+            {
+                for row in rows {
+                    vm.push(album_item(row));
+                }
+            }
+        }
+        MoreRows::Tracks(rows) => {
+            if let Some(vm) = state
+                .get_tracks()
+                .as_any()
+                .downcast_ref::<VecModel<SearchTrackItem>>()
+            {
+                for row in rows {
+                    vm.push(track_item(row));
+                }
+            }
+        }
+        MoreRows::Artists(rows) => {
+            if let Some(vm) = state
+                .get_artists()
+                .as_any()
+                .downcast_ref::<VecModel<SlimItem>>()
+            {
+                for row in rows {
+                    vm.push(artist_item(row));
+                }
+            }
+        }
+        MoreRows::Playlists(rows) => {
+            if let Some(vm) = state
+                .get_playlists()
+                .as_any()
+                .downcast_ref::<VecModel<SearchPlaylistItem>>()
+            {
+                for row in rows {
+                    vm.push(playlist_item(row));
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn category_for_tab_maps_per_type_tabs() {
+        assert_eq!(category_for_tab(0), None);
+        assert_eq!(category_for_tab(1), Some(SearchCategory::Albums));
+        assert_eq!(category_for_tab(2), Some(SearchCategory::Tracks));
+        assert_eq!(category_for_tab(3), Some(SearchCategory::Artists));
+        assert_eq!(category_for_tab(4), Some(SearchCategory::Playlists));
+        assert_eq!(category_for_tab(9), None);
+    }
 
     #[test]
     fn mmss_pads_seconds() {

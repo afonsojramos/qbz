@@ -31,6 +31,8 @@ mod ui_prefs;
 
 use std::sync::Arc;
 
+use slint::Model;
+
 use adapter::SlintAdapter;
 use commands::AppCommand;
 use qbz_app::shell::AppRuntime;
@@ -586,6 +588,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(w) = weak.upgrade() {
                 w.global::<SearchState>().set_tab(tab);
             }
+        });
+    }
+
+    // Load more results for the active per-type tab. The offset is the
+    // count already loaded into that category's list.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<SearchActions>().on_load_more(move |tab| {
+            let Some(w) = weak.upgrade() else {
+                return;
+            };
+            let Some(category) = search::category_for_tab(tab) else {
+                return;
+            };
+            let st = w.global::<SearchState>();
+            let query = st.get_query().to_string();
+            let offset = match category {
+                search::SearchCategory::Albums => st.get_albums().row_count(),
+                search::SearchCategory::Tracks => st.get_tracks().row_count(),
+                search::SearchCategory::Artists => st.get_artists().row_count(),
+                search::SearchCategory::Playlists => st.get_playlists().row_count(),
+            } as u32;
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            handle.spawn(async move {
+                match search::load_more(&runtime, &query, category, offset).await {
+                    Ok(more) => {
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            search::append_results(&w, more);
+                        });
+                    }
+                    Err(e) => log::error!("[qbz-slint] search load-more failed: {e}"),
+                }
+            });
         });
     }
 
