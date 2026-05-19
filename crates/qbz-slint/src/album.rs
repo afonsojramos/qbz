@@ -22,6 +22,10 @@ pub struct AlbumData {
     /// Pre-formatted "year • label • genre • N tracks • duration".
     pub info_line: String,
     pub quality_tier: String,
+    /// "24-bit / 96 kHz" — the quality-badge detail line.
+    pub quality_detail: String,
+    /// Editorial description / review (HTML stripped). May be empty.
+    pub description: String,
     pub artwork_url: String,
     /// Record label name, for the sidebar (empty when unknown).
     pub label: String,
@@ -83,6 +87,12 @@ fn map_album(album: Album) -> AlbumData {
     let info_line = parts.join("   •   ");
 
     let quality_tier = tier(album.maximum_bit_depth).to_string();
+    let quality_detail = quality_detail(album.maximum_bit_depth, album.maximum_sampling_rate);
+    let description = album
+        .description
+        .as_deref()
+        .map(strip_html)
+        .unwrap_or_default();
     let artwork_url = album.image.best().cloned().unwrap_or_default();
     let label = album
         .label
@@ -112,11 +122,46 @@ fn map_album(album: Album) -> AlbumData {
         artist_id,
         info_line,
         quality_tier,
+        quality_detail,
+        description,
         artwork_url,
         label,
         awards,
         tracks,
     }
+}
+
+/// "24-bit / 96 kHz" — the quality-badge detail string.
+fn quality_detail(bit_depth: Option<u32>, sample_rate: Option<f64>) -> String {
+    let hi_res = matches!(bit_depth, Some(depth) if depth >= 24);
+    let depth = bit_depth.unwrap_or(if hi_res { 24 } else { 16 });
+    let rate = sample_rate.unwrap_or(if hi_res { 96.0 } else { 44.1 });
+    let rate = if rate.fract().abs() < f64::EPSILON {
+        format!("{}", rate as i64)
+    } else {
+        format!("{rate}")
+    };
+    format!("{depth}-bit / {rate} kHz")
+}
+
+/// Crude HTML strip for Qobuz album descriptions (tags + a few entities).
+fn strip_html(input: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out.replace("&amp;", "&")
+        .replace("&#39;", "'")
+        .replace("&quot;", "\"")
+        .replace("&nbsp;", " ")
+        .trim()
+        .to_string()
 }
 
 fn map_track(track: Track) -> TrackData {
@@ -186,6 +231,8 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
     state.set_artist_id(data.artist_id.into());
     state.set_info_line(data.info_line.into());
     state.set_quality_tier(data.quality_tier.into());
+    state.set_quality_detail(data.quality_detail.into());
+    state.set_description(data.description.into());
     state.set_label(data.label.into());
     state.set_awards(ModelRc::new(VecModel::from(awards)));
     state.set_tracks(ModelRc::new(VecModel::from(tracks)));
