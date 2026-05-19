@@ -495,6 +495,23 @@ impl AlsaBackend {
 
         // For each card, add relevant devices using STABLE IDs (card NAME, not number)
         for card in &cards {
+            // Skip cards with no PCM playback devices. /proc/asound/cards lists
+            // every registered sound card, including capture-only hardware
+            // (USB webcams, microphones, HDMI-audio-less capture devices).
+            // Those expose only `pcmXc` (capture) nodes, so `read_card_pcm_devices`
+            // — which keeps only `pcmXp` (playback) — yields an empty list for
+            // them. Without this guard such a card still got a bogus
+            // `sysdefault:CARD=<name>` output entry, e.g. a webcam showing up as
+            // a selectable "output device".
+            if card.pcm_playback_devices.is_empty() {
+                log::debug!(
+                    "[ALSA Backend] Skipping capture-only card {} ({}) — no playback PCMs",
+                    card.number,
+                    card.short_name
+                );
+                continue;
+            }
+
             // Add sysdefault:CARD=name (card default with software mixing)
             let sysdefault_id = format!("sysdefault:CARD={}", card.short_name);
             let sysdefault_rates = cpal_devices
