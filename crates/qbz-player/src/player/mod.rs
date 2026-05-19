@@ -3274,7 +3274,14 @@ impl Player {
         }
     }
 
-    /// Play a track by ID (downloads audio)
+    /// Play a track by ID.
+    ///
+    /// First attempts the CMAF streaming pipeline (Akamai CDN, encrypted
+    /// segments): only the init segment is fetched synchronously to derive
+    /// stream parameters, playback starts immediately, and audio segments are
+    /// fetched + decrypted + pushed to the streaming buffer in a background
+    /// task. If the CMAF setup fails for any reason, falls back to the legacy
+    /// `/track/getFileUrl` path (full FLAC download, then `play_data`).
     pub async fn play_track(
         &self,
         client: &QobuzClient,
@@ -3287,7 +3294,96 @@ impl Player {
             quality
         );
 
-        // Get the stream URL
+        // Try CMAF streaming pipeline first.
+        // Only the init segment is fetched synchronously; audio segments
+        // stream in a background task.
+        log::info!("[CMAF] Attempting CMAF streaming for track {}", track_id);
+        match qbz_qobuz::cmaf::setup_streaming(client, track_id, quality).await {
+            Ok(cmaf_info) => {
+                // Derive stream parameters from init segment metadata.
+                let sample_rate = cmaf_info.sampling_rate.unwrap_or(44100);
+                let channels = 2u16; // FLAC from Qobuz is always stereo
+                let bit_depth = cmaf_info.bit_depth.unwrap_or(16);
+                let total_flac_size = cmaf_info.flac_header.len() as u64
+                    + cmaf_info
+                        .segment_table
+                        .iter()
+                        .map(|s| s.byte_len as u64)
+                        .sum::<u64>();
+
+                // Estimate speed from the init segment fetch (conservative:
+                // assume ~10 MB/s if init was too fast to measure reliably).
+                let speed_mbps = if cmaf_info.init_fetch_ms > 0 {
+                    let init_bytes = cmaf_info.flac_header.len() as f64 + 4096.0; // rough init size
+                    (init_bytes / (cmaf_info.init_fetch_ms as f64 / 1000.0))
+                        / (1024.0 * 1024.0)
+                } else {
+                    10.0
+                };
+
+                log::info!(
+                    "[CMAF] Streaming setup: {}Hz, {}-bit, {:.2} MB total, {:.1} MB/s est, {} segments",
+                    sample_rate,
+                    bit_depth,
+                    total_flac_size as f64 / (1024.0 * 1024.0),
+                    speed_mbps,
+                    cmaf_info.n_segments
+                );
+
+                // Create the streaming buffer and start playback immediately.
+                let buffer_writer = self.play_streaming_dynamic(
+                    track_id,
+                    sample_rate,
+                    channels,
+                    bit_depth,
+                    total_flac_size,
+                    speed_mbps,
+                    0, // duration determined by decoder
+                    0, // no resume offset
+                )?;
+
+                // Spawn the background task that fetches + decrypts + pushes
+                // audio segments to the buffer.
+                let url_template = cmaf_info.url_template.clone();
+                let content_key = cmaf_info.content_key;
+                let flac_header = cmaf_info.flac_header;
+                let n_segments = cmaf_info.n_segments;
+
+                tokio::spawn(async move {
+                    match Self::cmaf_stream_segments(
+                        &url_template,
+                        n_segments,
+                        content_key,
+                        flac_header,
+                        buffer_writer,
+                        track_id,
+                    )
+                    .await
+                    {
+                        Ok(()) => log::info!(
+                            "[CMAF-STREAM COMPLETE] Track {}",
+                            track_id
+                        ),
+                        Err(e) => log::error!(
+                            "[CMAF-STREAM ERROR] Track {}: {}",
+                            track_id,
+                            e
+                        ),
+                    }
+                });
+
+                return Ok(());
+            }
+            Err(e) => {
+                log::warn!(
+                    "[CMAF] Streaming setup failed: {}, falling back to legacy download",
+                    e
+                );
+                // Fall through to the legacy download path.
+            }
+        }
+
+        // Legacy fallback: get the stream URL
         log::info!("Player: Getting stream URL...");
         let stream_url = client
             .get_stream_url_with_fallback(track_id, quality)
@@ -3313,6 +3409,109 @@ impl Player {
 
         // Send to audio thread
         self.play_data(audio_data, track_id)
+    }
+
+    /// Stream CMAF segments to the player's buffer, decrypting on the fly.
+    ///
+    /// Writes the FLAC header first so the decoder can identify the format,
+    /// then fetches each audio segment, decrypts encrypted frames, and pushes
+    /// the resulting FLAC frame data to the streaming buffer. The player
+    /// starts playing as soon as enough data is buffered.
+    async fn cmaf_stream_segments(
+        url_template: &str,
+        n_segments: u8,
+        content_key: [u8; 16],
+        flac_header: Vec<u8>,
+        writer: BufferWriter,
+        track_id: u64,
+    ) -> Result<(), String> {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("CMAF client error: {}", e))?;
+
+        // Write the FLAC header first so the decoder can identify the format.
+        if let Err(e) = writer.push_chunk(&flac_header) {
+            return Err(format!("Failed to write FLAC header to buffer: {}", e));
+        }
+
+        let mut total_written: u64 = flac_header.len() as u64;
+        let start = Instant::now();
+
+        for seg_idx in 1..=n_segments {
+            let seg_url = url_template.replace("$SEGMENT$", &seg_idx.to_string());
+            let seg_data = client
+                .get(&seg_url)
+                .header("User-Agent", "Mozilla/5.0")
+                .send()
+                .await
+                .map_err(|e| format!("CMAF segment {} fetch: {}", seg_idx, e))?
+                .bytes()
+                .await
+                .map_err(|e| format!("CMAF segment {} read: {}", seg_idx, e))?;
+
+            let crypto = qbz_cmaf::parse_segment_crypto(&seg_data)
+                .map_err(|e| format!("CMAF segment {} parse: {}", seg_idx, e))?;
+
+            let mut data_pos = crypto.data_offset;
+            for entry in &crypto.entries {
+                let frame_end = data_pos + entry.size as usize;
+                if frame_end > seg_data.len() {
+                    let _ = writer.error(format!("CMAF segment {} frame overflow", seg_idx));
+                    return Err(format!("CMAF segment {} frame overflow", seg_idx));
+                }
+                let mut frame = seg_data[data_pos..frame_end].to_vec();
+                if entry.flags != 0 {
+                    qbz_cmaf::decrypt_frame(&content_key, &entry.iv, &mut frame);
+                }
+                // Write decrypted frame to the streaming buffer.
+                if let Err(e) = writer.push_chunk(&frame) {
+                    log::error!("[CMAF-STREAM] Failed to push frame: {}", e);
+                }
+                total_written += frame.len() as u64;
+                data_pos = frame_end;
+            }
+
+            // Trailing unencrypted data after all frame entries.
+            if data_pos < crypto.mdat_end && crypto.mdat_end <= seg_data.len() {
+                let trailing = &seg_data[data_pos..crypto.mdat_end];
+                if let Err(e) = writer.push_chunk(trailing) {
+                    log::error!("[CMAF-STREAM] Failed to push trailing data: {}", e);
+                }
+                total_written += trailing.len() as u64;
+            }
+
+            // Progress logging every 5 segments or on the last segment.
+            if seg_idx % 5 == 0 || seg_idx == n_segments {
+                let elapsed = start.elapsed().as_secs_f64();
+                log::info!(
+                    "[CMAF-STREAM] Segment {}/{} ({:.1} MB, {:.1} MB/s)",
+                    seg_idx,
+                    n_segments - 1,
+                    total_written as f64 / (1024.0 * 1024.0),
+                    if elapsed > 0.0 {
+                        total_written as f64 / (1024.0 * 1024.0) / elapsed
+                    } else {
+                        0.0
+                    }
+                );
+            }
+        }
+
+        // Signal end of stream.
+        if let Err(e) = writer.complete() {
+            log::error!("[CMAF-STREAM] Failed to mark buffer complete: {}", e);
+        }
+
+        log::info!(
+            "[CMAF-STREAM] Complete: {:.2} MB written in {:.1}s for track {}, segments fetched: 1..{}",
+            total_written as f64 / (1024.0 * 1024.0),
+            start.elapsed().as_secs_f64(),
+            track_id,
+            n_segments - 1
+        );
+
+        Ok(())
     }
 
     /// Play from raw audio data (for cached tracks)
