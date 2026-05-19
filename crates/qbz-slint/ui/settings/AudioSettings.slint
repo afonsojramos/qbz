@@ -96,6 +96,7 @@ export component AudioSettings inherits VerticalLayout {
         QbzSelect {
             menu-width: 300px;
             options: SettingsState.devices;
+            badges: SettingsState.device-bp;
             current-index: SettingsState.device-index;
             selected(i) => {
                 SettingsState.device-index = i;

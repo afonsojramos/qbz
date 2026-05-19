@@ -104,6 +104,8 @@ export global SettingsState {
     in-out property <[string]> backends: [];
     in-out property <int> backend-index: 0;
     in-out property <[string]> devices: [];
+    // Parallel to `devices`: true marks a bit-perfect-capable device.
+    in-out property <[bool]> device-bp: [];
     in-out property <int> device-index: 0;
     in-out property <[string]> alsa-plugins: [];
     in-out property <int> alsa-plugin-index: 0;

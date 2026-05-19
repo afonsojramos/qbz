@@ -117,6 +117,7 @@ pub struct SettingsSnapshot {
     backends: Vec<String>,
     backend_index: i32,
     devices: Vec<String>,
+    device_bp: Vec<bool>,
     device_index: i32,
     alsa_plugins: Vec<String>,
     alsa_plugin_index: i32,
@@ -147,10 +148,23 @@ pub struct SettingsSnapshot {
     retry_behavior_index: i32,
 }
 
-/// Devices enumerated for one backend: parallel label / id lists.
+/// Devices enumerated for one backend: parallel label / id / bit-perfect
+/// lists. `bp[i]` flags a device able to deliver bit-perfect output.
 struct DeviceList {
     labels: Vec<String>,
     ids: Vec<String>,
+    bp: Vec<bool>,
+}
+
+/// Whether a device can deliver bit-perfect playback on `backend`. ALSA
+/// enumerates real `hw:` cards (always capable); PipeWire reports a
+/// hardware flag per node; PulseAudio always mixes, so never capable.
+fn device_is_bit_perfect(backend: AudioBackendType, device: &qbz_audio::AudioDevice) -> bool {
+    match backend {
+        AudioBackendType::Alsa => true,
+        AudioBackendType::PipeWire => device.is_hardware,
+        AudioBackendType::Pulse | AudioBackendType::SystemDefault => false,
+    }
 }
 
 fn backend_label(t: AudioBackendType) -> String {
@@ -168,6 +182,7 @@ fn backend_label(t: AudioBackendType) -> String {
 fn enumerate_devices(backend: AudioBackendType) -> DeviceList {
     let mut labels = vec!["System default".to_string()];
     let mut ids = vec![String::new()];
+    let mut bp = vec![false];
     match BackendManager::create_backend(backend).and_then(|b| b.enumerate_devices()) {
         Ok(devices) => {
             for d in devices {
@@ -176,12 +191,13 @@ fn enumerate_devices(backend: AudioBackendType) -> DeviceList {
                     _ => d.name.clone(),
                 };
                 labels.push(label);
+                bp.push(device_is_bit_perfect(backend, &d));
                 ids.push(d.id);
             }
         }
         Err(e) => log::warn!("[qbz-slint] device enumeration failed: {e}"),
     }
-    DeviceList { labels, ids }
+    DeviceList { labels, ids, bp }
 }
 
 fn with_audio<T>(
@@ -274,6 +290,7 @@ fn build_snapshot(
         backends: backend_types.iter().map(|t| backend_label(*t)).collect(),
         backend_index: backend_index as i32,
         devices: device_list.labels,
+        device_bp: device_list.bp,
         device_index: device_index as i32,
         alsa_plugins: ALSA_PLUGINS.iter().map(|(l, _)| l.to_string()).collect(),
         alsa_plugin_index: alsa_plugin_index as i32,
@@ -321,6 +338,10 @@ fn string_model(items: Vec<String>) -> ModelRc<SharedString> {
     ))
 }
 
+fn bool_model(items: Vec<bool>) -> ModelRc<bool> {
+    ModelRc::new(VecModel::from(items))
+}
+
 /// Push a snapshot onto the `SettingsState` global. Runs on the UI thread.
 pub fn apply_snapshot(window: &AppWindow, snap: SettingsSnapshot) {
     let st = window.global::<SettingsState>();
@@ -332,6 +353,7 @@ pub fn apply_snapshot(window: &AppWindow, snap: SettingsSnapshot) {
     st.set_backends(string_model(snap.backends));
     st.set_backend_index(snap.backend_index);
     st.set_devices(string_model(snap.devices));
+    st.set_device_bp(bool_model(snap.device_bp));
     st.set_device_index(snap.device_index);
     st.set_alsa_plugins(string_model(snap.alsa_plugins));
     st.set_alsa_plugin_index(snap.alsa_plugin_index);

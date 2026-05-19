@@ -10,8 +10,21 @@ import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "QbzIcon.slint";
 
+// "BP" marker for bit-perfect-capable options. Plain accent text, no
+// background — the QBZ UI never uses pill-style chips.
+component BpBadge inherits Text {
+    text: "BP";
+    color: Theme.accent;
+    font-size: Typography.legal;
+    font-weight: Typography.semibold;
+    letter-spacing: 0.5px;
+    vertical-alignment: center;
+}
+
 export component QbzSelect inherits Rectangle {
     in property <[string]> options;
+    // Optional, parallel to `options`: a true entry shows a "BP" badge.
+    in property <[bool]> badges: [];
     in property <int> current-index: 0;
     in property <length> menu-width: 240px;
     in property <bool> enabled: true;
@@ -38,6 +51,12 @@ export component QbzSelect inherits Rectangle {
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
+        }
+        if root.current-index >= 0
+            && root.current-index < root.badges.length
+            && root.badges[root.current-index]: VerticalLayout {
+            alignment: center;
+            BpBadge { }
         }
         VerticalLayout {
             alignment: center;
@@ -83,6 +102,7 @@ export component QbzSelect inherits Rectangle {
                     HorizontalLayout {
                         padding-left: 12px;
                         padding-right: 12px;
+                        spacing: 8px;
                         Text {
                             text: opt;
                             color: i == root.current-index ? Theme.accent : Theme.text-secondary;
@@ -90,6 +110,10 @@ export component QbzSelect inherits Rectangle {
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                             overflow: elide;
+                        }
+                        if i < root.badges.length && root.badges[i]: VerticalLayout {
+                            alignment: center;
+                            BpBadge { }
                         }
                     }
                     opt-ta := TouchArea {
