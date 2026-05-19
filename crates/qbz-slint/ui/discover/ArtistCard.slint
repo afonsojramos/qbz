@@ -1,0 +1,73 @@
+// Artist card — a circular portrait with the artist name and a subtitle
+// (album count). Mirrors the Tauri search artist card.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { SlimItem } from "../state.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+
+export component ArtistCard inherits Rectangle {
+    in property <SlimItem> artist;
+    callback clicked(string);
+
+    width: 160px;
+    height: 200px;
+
+    VerticalLayout {
+        alignment: start;
+        spacing: 12px;
+
+        // Circular portrait, centered in the card column.
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 148px;
+                height: 148px;
+                border-radius: 74px;
+                clip: true;
+                background: Theme.surface-elevated;
+                QbzIcon {
+                    source: @image-url("../assets/icons/user.svg");
+                    width: 46px;
+                    height: 46px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: Theme.text-muted;
+                }
+                Image {
+                    width: 100%;
+                    height: 100%;
+                    source: root.artist.artwork;
+                    image-fit: cover;
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: root.artist.title;
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: Typography.medium;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: root.artist.subtitle;
+                visible: root.artist.subtitle != "";
+                color: Theme.text-muted;
+                font-size: Typography.link;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked(root.artist.id);
+        }
+    }
+}

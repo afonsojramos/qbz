@@ -35,6 +35,16 @@ export component SearchTrackRow inherits Rectangle {
         padding-right: 12px;
         spacing: 14px;
 
+        // Track position in the result list.
+        Text {
+            text: "\{root.index + 1}";
+            width: 24px;
+            color: Theme.text-muted;
+            font-size: Typography.body;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
         // Leading slot — cover thumbnail (music-note fallback until the
         // artwork pipeline resolves the cover).
         if root.show-artwork: VerticalLayout {

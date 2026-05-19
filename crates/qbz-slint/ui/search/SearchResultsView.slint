@@ -1,20 +1,23 @@
-// Search results view — a tabbed results page.
+// Search results view — a tabbed results page, ported faithfully from
+// the Tauri SearchView.
 //
-// Tabs: All / Albums / Tracks / Artists / Playlists. The All tab is a
-// dashboard (a most-popular hero plus a capped preview of each category);
-// the per-type tabs show the full loaded list with a load-more button.
-// Data comes from the SearchState global; QbzCore::search_all populates
-// all four categories in one call, so switching tabs needs no re-query.
+// Toolbar with the history nav pair, a five-tab strip, and a scrollable
+// body. The All tab is a dashboard (a top-result hero, an albums
+// carousel, an artists carousel, and capped track/playlist previews);
+// the per-type tabs show the full loaded set as a card grid or row list
+// with a load-more button. Data comes from the SearchState global.
 
-import { SearchState, SearchActions, SearchTrackItem, SearchPlaylistItem, AlbumCardItem } from "../state.slint";
+import { SearchState, SearchActions, SearchTrackItem, SearchPlaylistItem, AlbumCardItem, SlimItem } from "../state.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { SlimCard } from "../discover/SlimCard.slint";
+import { Carousel } from "../discover/Carousel.slint";
+import { ArtistCarousel } from "../discover/ArtistCarousel.slint";
+import { AlbumCard } from "../discover/AlbumCard.slint";
+import { ArtistCard } from "../discover/ArtistCard.slint";
 import { SearchTrackRow } from "SearchTrackRow.slint";
+import { NavButtons } from "../shell/NavButtons.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { ContextMenu } from "../primitives/ContextMenu.slint";
-import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 
 // One tab in the results tab strip.
@@ -55,14 +58,14 @@ component SectionHeader inherits Rectangle {
     in property <bool> show-more;
     callback more-clicked();
 
-    height: 26px;
+    height: 28px;
 
     HorizontalLayout {
         Text {
             text: root.title + " (\{root.count})";
-            color: Theme.text-secondary;
-            font-size: 14px;
-            font-weight: 600;
+            color: Theme.text-primary;
+            font-size: 18px;
+            font-weight: Typography.semibold;
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
@@ -91,7 +94,7 @@ component LoadMoreButton inherits Rectangle {
     callback clicked();
 
     visible: root.loaded < root.total;
-    height: self.visible ? 40px : 0px;
+    height: self.visible ? 44px : 0px;
     horizontal-stretch: 1;
 
     Rectangle {
@@ -112,150 +115,6 @@ component LoadMoreButton inherits Rectangle {
             mouse-cursor: pointer;
             clicked => {
                 root.clicked();
-            }
-        }
-    }
-}
-
-// An album result row — cover thumbnail, title / artist, quality, menu.
-component SearchAlbumRow inherits Rectangle {
-    in property <AlbumCardItem> album;
-    in property <int> index;
-    callback clicked(string);
-    callback media-action(string, string, string);
-
-    height: 56px;
-    border-radius: 8px;
-    background: ta.has-hover
-        ? #ffffff16
-        : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked(root.album.id);
-        }
-    }
-
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 14px;
-
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 40px;
-                height: 40px;
-                border-radius: Radius.sm;
-                clip: true;
-                background: Theme.surface-elevated;
-                QbzIcon {
-                    source: @image-url("../assets/icons/disc.svg");
-                    width: 18px;
-                    height: 18px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    tint: Theme.text-muted;
-                }
-                Image {
-                    width: 100%;
-                    height: 100%;
-                    source: root.album.artwork;
-                    image-fit: cover;
-                }
-            }
-        }
-
-        VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 1;
-            spacing: 2px;
-            Text {
-                text: root.album.title;
-                color: Theme.text-primary;
-                font-size: Typography.body;
-                font-weight: Typography.medium;
-                overflow: elide;
-            }
-            Text {
-                text: root.album.artist;
-                visible: root.album.artist != "";
-                color: Theme.text-muted;
-                font-size: Typography.link;
-                overflow: elide;
-            }
-        }
-
-        Text {
-            text: root.album.quality-tier == "hires"
-                ? "Hi-Res"
-                : (root.album.quality-tier == "cd" ? "CD" : "");
-            width: 60px;
-            color: Theme.text-muted;
-            font-size: Typography.legal;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 32px;
-                height: 32px;
-                border-radius: Radius.sm;
-                background: more-ta.has-hover ? Theme.surface-elevated : transparent;
-                QbzIcon {
-                    source: @image-url("../assets/icons/ellipsis.svg");
-                    width: 16px;
-                    height: 16px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    tint: more-ta.has-hover ? Theme.text-primary : Theme.text-muted;
-                }
-                more-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        album-menu.show();
-                    }
-                }
-            }
-        }
-    }
-
-    album-menu := PopupWindow {
-        x: parent.width - 208px;
-        y: 46px;
-        width: 196px;
-        height: 109px;
-        ContextMenu {
-            ContextMenuItem {
-                icon: @image-url("../assets/icons/play.svg");
-                label: @tr("Play");
-                clicked => {
-                    root.media-action("album", root.album.id, "play");
-                }
-            }
-            ContextMenuItem {
-                icon: @image-url("../assets/icons/list-plus.svg");
-                label: @tr("Play next");
-                clicked => {
-                    root.media-action("album", root.album.id, "play-next");
-                }
-            }
-            ContextMenuItem {
-                icon: @image-url("../assets/icons/list-end.svg");
-                label: @tr("Add to queue");
-                clicked => {
-                    root.media-action("album", root.album.id, "queue");
-                }
-            }
-            ContextMenuItem {
-                icon: @image-url("../assets/icons/heart.svg");
-                label: @tr("Add to favorites");
-                clicked => {
-                    root.media-action("album", root.album.id, "favorite");
-                }
             }
         }
     }
@@ -322,138 +181,235 @@ component SearchPlaylistRow inherits Rectangle {
     }
 }
 
+// A wrapping grid of album cards (per-type Albums tab).
+component AlbumGrid inherits Rectangle {
+    in property <[AlbumCardItem]> albums;
+    callback open(string);
+    callback media-action(string, string, string);
+
+    property <length> card-w: 220px;
+    property <length> card-h: 266px;
+    property <length> gap: 24px;
+    property <int> columns:
+        Math.max(1, Math.floor((self.width + root.gap) / (root.card-w + root.gap)));
+    property <int> row-count: Math.ceil(root.albums.length / root.columns);
+
+    height: root.row-count > 0
+        ? root.row-count * root.card-h + (root.row-count - 1) * root.gap
+        : 0px;
+
+    for album[i] in root.albums: AlbumCard {
+        x: Math.mod(i, root.columns) * (root.card-w + root.gap);
+        y: Math.floor(i / root.columns) * (root.card-h + root.gap);
+        album: album;
+        clicked(id) => {
+            root.open(id);
+        }
+        media-action(k, ii, a) => {
+            root.media-action(k, ii, a);
+        }
+    }
+}
+
+// A wrapping grid of artist cards (per-type Artists tab).
+component ArtistGrid inherits Rectangle {
+    in property <[SlimItem]> artists;
+    callback open(string);
+
+    property <length> card-w: 160px;
+    property <length> card-h: 200px;
+    property <length> gap: 24px;
+    property <int> columns:
+        Math.max(1, Math.floor((self.width + root.gap) / (root.card-w + root.gap)));
+    property <int> row-count: Math.ceil(root.artists.length / root.columns);
+
+    height: root.row-count > 0
+        ? root.row-count * root.card-h + (root.row-count - 1) * root.gap
+        : 0px;
+
+    for artist[i] in root.artists: ArtistCard {
+        x: Math.mod(i, root.columns) * (root.card-w + root.gap);
+        y: Math.floor(i / root.columns) * (root.card-h + root.gap);
+        artist: artist;
+        clicked(id) => {
+            root.open(id);
+        }
+    }
+}
+
 export component SearchResultsView inherits Rectangle {
     callback open-album(string);
     callback open-artist(string);
     callback media-action(string, string, string);
 
-    // How many items each category previews on the All tab.
+    // How many tracks/playlists each category previews on the All tab.
     property <int> preview-cap: 5;
 
     background: Theme.surface-main;
 
     VerticalLayout {
-        padding: 24px;
-        spacing: 14px;
+        spacing: 0px;
 
-        Text {
-            text: SearchState.loading
-                ? @tr("Searching…")
-                : @tr("Results for ") + SearchState.query;
-            color: Theme.text-primary;
-            font-size: 22px;
-            font-weight: 700;
-        }
-
-        // Tab strip.
-        HorizontalLayout {
-            spacing: 22px;
-            alignment: start;
-            SearchTab {
-                label: @tr("All");
-                active: SearchState.tab == 0;
-                clicked => { SearchActions.tab-changed(0); }
-            }
-            SearchTab {
-                label: @tr("Albums");
-                active: SearchState.tab == 1;
-                clicked => { SearchActions.tab-changed(1); }
-            }
-            SearchTab {
-                label: @tr("Tracks");
-                active: SearchState.tab == 2;
-                clicked => { SearchActions.tab-changed(2); }
-            }
-            SearchTab {
-                label: @tr("Artists");
-                active: SearchState.tab == 3;
-                clicked => { SearchActions.tab-changed(3); }
-            }
-            SearchTab {
-                label: @tr("Playlists");
-                active: SearchState.tab == 4;
-                clicked => { SearchActions.tab-changed(4); }
-            }
-        }
-
-        // searchType filter — shown on the Albums / Tracks / Artists tabs.
-        if SearchState.tab >= 1 && SearchState.tab <= 3: HorizontalLayout {
-            alignment: start;
-            QbzSelect {
-                menu-width: 180px;
-                options: [
-                    @tr("No filter"),
-                    @tr("Main artist"),
-                    @tr("Performer"),
-                    @tr("Composer"),
-                    @tr("Label"),
-                    @tr("Release name"),
-                ];
-                current-index: SearchState.filter-index;
-                selected(i) => {
-                    SearchActions.filter-changed(i);
+        // --- Toolbar: history nav pair ----------------------------------
+        Rectangle {
+            height: 56px;
+            background: Theme.surface-main;
+            HorizontalLayout {
+                x: 32px;
+                y: 25px - self.height / 2;
+                width: self.preferred-width;
+                height: self.preferred-height;
+                VerticalLayout {
+                    alignment: center;
+                    NavButtons { }
                 }
             }
         }
 
-        // Scrollable results region.
+        // --- Fixed header: title, tabs, filter --------------------------
+        VerticalLayout {
+            padding-left: 32px;
+            padding-right: 32px;
+            padding-bottom: 10px;
+            spacing: 14px;
+
+            Text {
+                text: SearchState.loading
+                    ? @tr("Searching…")
+                    : @tr("Results for ") + SearchState.query;
+                color: Theme.text-primary;
+                font-size: 24px;
+                font-weight: 700;
+            }
+
+            HorizontalLayout {
+                spacing: 22px;
+                alignment: start;
+                SearchTab {
+                    label: @tr("All");
+                    active: SearchState.tab == 0;
+                    clicked => { SearchActions.tab-changed(0); }
+                }
+                SearchTab {
+                    label: @tr("Albums");
+                    active: SearchState.tab == 1;
+                    clicked => { SearchActions.tab-changed(1); }
+                }
+                SearchTab {
+                    label: @tr("Tracks");
+                    active: SearchState.tab == 2;
+                    clicked => { SearchActions.tab-changed(2); }
+                }
+                SearchTab {
+                    label: @tr("Artists");
+                    active: SearchState.tab == 3;
+                    clicked => { SearchActions.tab-changed(3); }
+                }
+                SearchTab {
+                    label: @tr("Playlists");
+                    active: SearchState.tab == 4;
+                    clicked => { SearchActions.tab-changed(4); }
+                }
+            }
+
+            if SearchState.tab >= 1 && SearchState.tab <= 3: HorizontalLayout {
+                alignment: start;
+                QbzSelect {
+                    menu-width: 180px;
+                    options: [
+                        @tr("No filter"),
+                        @tr("Main artist"),
+                        @tr("Performer"),
+                        @tr("Composer"),
+                        @tr("Label"),
+                        @tr("Release name"),
+                    ];
+                    current-index: SearchState.filter-index;
+                    selected(i) => {
+                        SearchActions.filter-changed(i);
+                    }
+                }
+            }
+        }
+
+        // --- Scrollable results body ------------------------------------
         Flickable {
             vertical-stretch: 1;
             viewport-width: self.width;
             viewport-height: body.preferred-height;
 
             body := VerticalLayout {
-                spacing: 18px;
+                padding-left: 32px;
+                padding-right: 32px;
+                padding-bottom: 32px;
+                spacing: 24px;
+                alignment: start;
 
-                // ---- Top result (All tab) -----------------------------
+                // ---- Top result (All tab) ---------------------------------
                 if SearchState.tab == 0 && SearchState.most-popular-kind != "": VerticalLayout {
-                    spacing: 4px;
+                    spacing: 12px;
                     Text {
                         text: @tr("Top result");
-                        color: Theme.text-secondary;
-                        font-size: 14px;
-                        font-weight: 600;
+                        color: Theme.text-primary;
+                        font-size: 18px;
+                        font-weight: Typography.semibold;
                     }
-                    if SearchState.most-popular-kind == "artist": SlimCard {
-                        item: SearchState.most-popular-artist;
-                        clicked(id) => { root.open-artist(id); }
-                    }
-                    if SearchState.most-popular-kind == "album": SearchAlbumRow {
-                        album: SearchState.most-popular-album;
-                        clicked(id) => { root.open-album(id); }
-                        media-action(k, i, a) => { root.media-action(k, i, a); }
+                    HorizontalLayout {
+                        alignment: start;
+                        if SearchState.most-popular-kind == "artist": ArtistCard {
+                            artist: SearchState.most-popular-artist;
+                            clicked(id) => { root.open-artist(id); }
+                        }
+                        if SearchState.most-popular-kind == "album": AlbumCard {
+                            album: SearchState.most-popular-album;
+                            clicked(id) => { root.open-album(id); }
+                            media-action(k, i, a) => { root.media-action(k, i, a); }
+                        }
                     }
                     if SearchState.most-popular-kind == "track": SearchTrackRow {
                         track: SearchState.most-popular-track;
+                        index: 0;
                         media-action(k, i, a) => { root.media-action(k, i, a); }
                     }
                 }
 
-                // ---- Albums -------------------------------------------
-                if (SearchState.tab == 0 || SearchState.tab == 1) && SearchState.albums.length > 0: VerticalLayout {
-                    spacing: 4px;
-                    SectionHeader {
-                        title: @tr("Albums");
-                        count: SearchState.albums-total;
-                        show-more: SearchState.tab == 0 && SearchState.albums-total > root.preview-cap;
-                        more-clicked => { SearchActions.tab-changed(1); }
-                    }
-                    for album[idx] in SearchState.albums: SearchAlbumRow {
-                        visible: SearchState.tab == 1 || idx < root.preview-cap;
-                        height: self.visible ? 56px : 0px;
-                        album: album;
-                        index: idx;
-                        clicked(id) => { root.open-album(id); }
-                        media-action(k, i, a) => { root.media-action(k, i, a); }
-                    }
-                    if SearchState.tab == 1: LoadMoreButton {
-                        loaded: SearchState.albums.length;
-                        total: SearchState.albums-total;
-                        clicked => { SearchActions.load-more(1); }
-                    }
+                // ---- Albums -----------------------------------------------
+                if SearchState.tab == 0 && SearchState.albums.length > 0: Carousel {
+                    section: {
+                        title: @tr("Albums") + " (\{SearchState.albums-total})",
+                        albums: SearchState.albums,
+                    };
+                    album-clicked(id) => { root.open-album(id); }
+                    media-action(k, i, a) => { root.media-action(k, i, a); }
+                }
+                if SearchState.tab == 1: AlbumGrid {
+                    albums: SearchState.albums;
+                    open(id) => { root.open-album(id); }
+                    media-action(k, i, a) => { root.media-action(k, i, a); }
+                }
+                if SearchState.tab == 1: LoadMoreButton {
+                    loaded: SearchState.albums.length;
+                    total: SearchState.albums-total;
+                    clicked => { SearchActions.load-more(1); }
                 }
 
-                // ---- Tracks -------------------------------------------
+                // ---- Artists ----------------------------------------------
+                if SearchState.tab == 0 && SearchState.artists.length > 0: ArtistCarousel {
+                    title: @tr("Artists") + " (\{SearchState.artists-total})";
+                    artists: SearchState.artists;
+                    artist-clicked(id) => { root.open-artist(id); }
+                }
+                if SearchState.tab == 3: ArtistGrid {
+                    artists: SearchState.artists;
+                    open(id) => { root.open-artist(id); }
+                }
+                if SearchState.tab == 3: LoadMoreButton {
+                    loaded: SearchState.artists.length;
+                    total: SearchState.artists-total;
+                    clicked => { SearchActions.load-more(3); }
+                }
+
+                // ---- Tracks -----------------------------------------------
                 if (SearchState.tab == 0 || SearchState.tab == 2) && SearchState.tracks.length > 0: VerticalLayout {
                     spacing: 4px;
                     SectionHeader {
@@ -476,29 +432,7 @@ export component SearchResultsView inherits Rectangle {
                     }
                 }
 
-                // ---- Artists ------------------------------------------
-                if (SearchState.tab == 0 || SearchState.tab == 3) && SearchState.artists.length > 0: VerticalLayout {
-                    spacing: 4px;
-                    SectionHeader {
-                        title: @tr("Artists");
-                        count: SearchState.artists-total;
-                        show-more: SearchState.tab == 0 && SearchState.artists-total > root.preview-cap;
-                        more-clicked => { SearchActions.tab-changed(3); }
-                    }
-                    for artist[idx] in SearchState.artists: SlimCard {
-                        visible: SearchState.tab == 3 || idx < root.preview-cap;
-                        height: self.visible ? 60px : 0px;
-                        item: artist;
-                        clicked(id) => { root.open-artist(id); }
-                    }
-                    if SearchState.tab == 3: LoadMoreButton {
-                        loaded: SearchState.artists.length;
-                        total: SearchState.artists-total;
-                        clicked => { SearchActions.load-more(3); }
-                    }
-                }
-
-                // ---- Playlists ----------------------------------------
+                // ---- Playlists --------------------------------------------
                 if (SearchState.tab == 0 || SearchState.tab == 4) && SearchState.playlists.length > 0: VerticalLayout {
                     spacing: 4px;
                     SectionHeader {
@@ -520,7 +454,7 @@ export component SearchResultsView inherits Rectangle {
                     }
                 }
 
-                // Empty state.
+                // ---- Empty state ------------------------------------------
                 if !SearchState.loading
                     && SearchState.albums.length == 0
                     && SearchState.tracks.length == 0
