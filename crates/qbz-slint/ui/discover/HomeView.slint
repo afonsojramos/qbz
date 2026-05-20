@@ -13,6 +13,7 @@ import { Carousel } from "Carousel.slint";
 import { GridSection } from "GridSection.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
+import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 
 // Header + hint shown for a recently-played module while it has no data
 // yet (the play history fills once the playback session records plays).
@@ -217,10 +218,22 @@ export component HomeView inherits Rectangle {
                 spacing: 40px;
                 alignment: start;
 
-                if HomeState.loading && HomeState.sections.length == 0: Text {
-                    text: @tr("Loading your music...");
-                    color: Theme.text-muted;
-                    font-size: 14px;
+                if HomeState.loading && HomeState.sections.length == 0: Rectangle {
+                    height: 320px;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 18px;
+                        HorizontalLayout {
+                            alignment: center;
+                            LoadingSpinner { size: 36px; }
+                        }
+                        Text {
+                            text: @tr("Loading your music…");
+                            color: Theme.text-muted;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                        }
+                    }
                 }
 
                 for section in HomeState.sections: Carousel {

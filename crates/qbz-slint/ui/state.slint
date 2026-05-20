@@ -372,6 +372,10 @@ export global SearchState {
     in property <[AlbumCardItem]> albums: [];
     in property <[SearchTrackItem]> tracks: [];
     in property <[SlimItem]> artists: [];
+    // Carousel-only variant of artists — skips the top-result artist when
+    // it is also the first list entry, so the All-tab carousel does not
+    // duplicate the Most-popular hero. The Artists tab uses `artists`.
+    in property <[SlimItem]> artists-carousel: [];
     in property <[SearchPlaylistItem]> playlists: [];
     in property <int> albums-total: 0;
     in property <int> tracks-total: 0;

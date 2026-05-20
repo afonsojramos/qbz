@@ -14,6 +14,7 @@ import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
 import { TrackContextMenu } from "../primitives/TrackContextMenu.slint";
+import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { Carousel } from "../discover/Carousel.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 
@@ -297,10 +298,22 @@ export component ArtistPageView inherits Rectangle {
 
             Rectangle { height: 36px; }
 
-            if ArtistState.loading && ArtistState.top-tracks.length == 0: Text {
-                text: @tr("Loading artist...");
-                color: Theme.text-muted;
-                font-size: Typography.body;
+            if ArtistState.loading && ArtistState.top-tracks.length == 0: Rectangle {
+                height: 280px;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 18px;
+                    HorizontalLayout {
+                        alignment: center;
+                        LoadingSpinner { size: 36px; }
+                    }
+                    Text {
+                        text: @tr("Loading artist…");
+                        color: Theme.text-muted;
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                    }
+                }
             }
 
             // --- Popular tracks ----------------------------------------------

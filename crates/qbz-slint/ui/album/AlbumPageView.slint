@@ -16,6 +16,7 @@ import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
 import { TrackContextMenu } from "../primitives/TrackContextMenu.slint";
+import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 
 component CircleAction inherits Rectangle {
@@ -528,10 +529,22 @@ export component AlbumPageView inherits Rectangle {
                     spacing: 0px;
                     alignment: start;
 
-                    if AlbumState.loading && AlbumState.tracks.length == 0: Text {
-                        text: @tr("Loading album...");
-                        color: Theme.text-muted;
-                        font-size: Typography.body;
+                    if AlbumState.loading && AlbumState.tracks.length == 0: Rectangle {
+                        height: 280px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 18px;
+                            HorizontalLayout {
+                                alignment: center;
+                                LoadingSpinner { size: 36px; }
+                            }
+                            Text {
+                                text: @tr("Loading album…");
+                                color: Theme.text-muted;
+                                font-size: 13px;
+                                horizontal-alignment: center;
+                            }
+                        }
                     }
 
                     // Toolbar — album quality badge and track search.

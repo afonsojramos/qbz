@@ -268,20 +268,17 @@ pub fn map_search_all(
     results: SearchAllResults,
     favorite_artists: &HashSet<u64>,
 ) -> SearchData {
-    let mut artists: Vec<ArtistRow> = results
+    let artists: Vec<ArtistRow> = results
         .artists
         .items
         .iter()
         .map(|a| map_artist(a, favorite_artists.contains(&a.id)))
         .collect();
     let most_popular = map_most_popular(results.most_popular, favorite_artists);
-    // When the top-result is an artist and is also the first entry in the
-    // artists list, drop the duplicate so the carousel does not repeat it.
-    if let MostPopularRow::Artist(mp) = &most_popular {
-        if artists.first().map_or(false, |a| a.id == mp.id) {
-            artists.remove(0);
-        }
-    }
+    // Dedupe used to drop the top-result artist from the artists list
+    // here, but the Artists tab does not show the Most-popular hero —
+    // it should keep the artist. The dedupe now lives at `apply_search`
+    // where the carousel-only `artists_carousel` is built.
     SearchData {
         query: query.to_string(),
         albums_total: results.albums.total,
@@ -394,10 +391,23 @@ pub fn apply_search(window: &AppWindow, data: SearchData) {
     let artists: Vec<SlimItem> = data.artists.into_iter().map(artist_item).collect();
     let playlists: Vec<SearchPlaylistItem> =
         data.playlists.into_iter().map(playlist_item).collect();
+    // Carousel variant of the artists list — drops the first entry when
+    // it equals the most-popular hero, so the All tab does not duplicate
+    // the Top result alongside the carousel.
+    let mp_id = if let MostPopularRow::Artist(ref mp) = data.most_popular {
+        Some(mp.id.clone())
+    } else {
+        None
+    };
+    let artists_carousel: Vec<SlimItem> = match (mp_id, artists.first()) {
+        (Some(id), Some(first)) if first.id == id.as_str() => artists[1..].to_vec(),
+        _ => artists.clone(),
+    };
 
     state.set_albums(ModelRc::new(VecModel::from(albums)));
     state.set_tracks(ModelRc::new(VecModel::from(tracks)));
     state.set_artists(ModelRc::new(VecModel::from(artists)));
+    state.set_artists_carousel(ModelRc::new(VecModel::from(artists_carousel)));
     state.set_playlists(ModelRc::new(VecModel::from(playlists)));
 
     state.set_albums_total(data.albums_total as i32);
@@ -639,18 +649,22 @@ pub fn replace_category(window: &AppWindow, more: MoreRows) {
             let items: Vec<SearchTrackItem> = rows.into_iter().map(track_item).collect();
             state.set_tracks(ModelRc::new(VecModel::from(items)));
         }
-        MoreRows::Artists(mut rows) => {
-            // Re-apply the top-result dedupe — if the most-popular hero
-            // is an artist and is the first entry in the new list, drop
-            // it so the carousel does not show the duplicate.
-            if state.get_most_popular_kind().as_str() == "artist" {
-                let mp_id = state.get_most_popular_artist().id;
-                if rows.first().map_or(false, |r| r.id == mp_id.as_str()) {
-                    rows.remove(0);
-                }
-            }
+        MoreRows::Artists(rows) => {
+            // Rebuild both lists: the Artists tab keeps every result; the
+            // All-tab carousel drops the duplicate next to the Most-popular
+            // hero.
             let items: Vec<SlimItem> = rows.into_iter().map(artist_item).collect();
+            let mp_id = if state.get_most_popular_kind().as_str() == "artist" {
+                Some(state.get_most_popular_artist().id)
+            } else {
+                None
+            };
+            let carousel: Vec<SlimItem> = match (mp_id, items.first()) {
+                (Some(id), Some(first)) if first.id == id.as_str() => items[1..].to_vec(),
+                _ => items.clone(),
+            };
             state.set_artists(ModelRc::new(VecModel::from(items)));
+            state.set_artists_carousel(ModelRc::new(VecModel::from(carousel)));
         }
         MoreRows::Playlists(rows) => {
             let items: Vec<SearchPlaylistItem> = rows.into_iter().map(playlist_item).collect();

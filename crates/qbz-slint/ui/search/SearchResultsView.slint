@@ -489,11 +489,13 @@ export component SearchResultsView inherits Rectangle {
                         }
                     }
 
-                    // Artists carousel — fills the rest of the row.
-                    if SearchState.artists.length > 0: ArtistCarousel {
+                    // Artists carousel — fills the rest of the row. Uses
+                    // the carousel-only list so the Most-popular hero is
+                    // not duplicated next to it.
+                    if SearchState.artists-carousel.length > 0: ArtistCarousel {
                         horizontal-stretch: 1;
                         title: @tr("Artists");
-                        artists: SearchState.artists;
+                        artists: SearchState.artists-carousel;
                         show-view-all: true;
                         artist-clicked(id) => { root.open-artist(id); }
                         media-action(k, i, a) => { root.media-action(k, i, a); }
