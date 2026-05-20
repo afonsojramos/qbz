@@ -3,6 +3,9 @@
 // The Rust side builds these models on a worker thread, then sets them
 // on the global from the Slint event loop (see src/home.rs, src/main.rs).
 
+import { JumpNavTab } from "primitives/JumpNavBar.slint";
+export { JumpNavTab }
+
 export struct AlbumCardItem {
     id: string,
     title: string,
@@ -231,6 +234,11 @@ export global ArtistState {
     // Similar artists from the /artist/page response — feed the Similar
     // Artists section of the network sidebar.
     in property <[SimilarEntry]> similar-artists: [];
+    // Filtered JUMP TO tabs for this artist — only the sections
+    // that actually have content. Built in artist::apply_artist
+    // from the page response. anchor-y is the page-local y the
+    // ArtistPageView will scroll to when the tab is clicked.
+    in property <[JumpNavTab]> jump-tabs: [];
     in property <bool> loading: false;
 }
 

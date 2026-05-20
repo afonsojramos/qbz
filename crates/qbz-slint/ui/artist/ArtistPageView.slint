@@ -279,17 +279,6 @@ export component ArtistPageView inherits Rectangle {
     // future pass will compute it from scroll position so the bar
     // self-tracks the visible section.
     property <string> active-jump-tab: "popular-tracks";
-    // Static tab list — same labels Tauri uses. The Slint tabs trigger
-    // scroll-to-section via tab-clicked; until the section anchors are
-    // wired, the click just updates the active state.
-    property <[JumpNavTab]> jump-tabs: [
-        { id: "about", label: "About" },
-        { id: "popular-tracks", label: "Popular Tracks" },
-        { id: "discography", label: "Discography" },
-        { id: "eps-singles", label: "EPs & Singles" },
-        { id: "compilations", label: "Compilations" },
-        { id: "playlists", label: "Playlists" },
-    ];
     // Width handed down to the bio paragraph. The artist header sits
     // above the body row where the sidebar lives, so the bio never
     // needs to shrink for the sidebar — it always uses the full
@@ -495,16 +484,22 @@ export component ArtistPageView inherits Rectangle {
             // release grids) flanked by an empty 300px reservation when
             // the network sidebar is open, so the actual sidebar
             // overlay (rendered below) never covers the page content.
-            HorizontalLayout {
+            // jump-nav.natural-top binds to `body-row.absolute-position.y
+            // - 44px`, so the bar always sits flush in the gap above
+            // this row regardless of how tall the artist header above
+            // it grew (long bios push the body row down with no manual
+            // tuning).
+            body-row := HorizontalLayout {
                 spacing: 0px;
                 main-col := VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 0px;
 
             // Reservation slot for the JUMP TO bar — the bar is an
-            // absolute-positioned overlay, so the body column has to
-            // skip its 44px (plus a small visual gap above and
-            // below) for content to land below it, not behind it.
+            // absolute-positioned overlay (sticky-positioned above
+            // this row), so the body column has to skip its 44px
+            // height plus a small visual gap for content to land
+            // below it rather than behind it.
             Rectangle { height: 52px; }
 
             if ArtistState.loading && ArtistState.top-tracks.length == 0: Rectangle {
@@ -689,20 +684,29 @@ export component ArtistPageView inherits Rectangle {
     // y is the row just below the artist header in the page layout
     // (NavButtons + spacer + artist header + small gap, ~290px).
     jump-nav := JumpNavBar {
-        // Sits in the 52px reservation slot at the top of the body
-        // column (artist header + 22 spacer + 4 gap = 291). Sticks
-        // to viewport top once the user scrolls past the header.
-        property <length> natural-top: 291px;
+        // Dynamic anchor — sits 44px above the body row, regardless
+        // of how tall the artist header grew. As the user scrolls
+        // past the header, the bar pins to viewport top
+        // (sticky-top = 0).
+        property <length> natural-top:
+            body-row.absolute-position.y
+            - page-flickable.absolute-position.y
+            - self.height;
         property <length> sticky-top: 0px;
 
         x: 0;
         y: max(self.natural-top + page-flickable.viewport-y, self.sticky-top);
         width: root.width;
-        tabs: root.jump-tabs;
+        tabs: ArtistState.jump-tabs;
         active-tab-id: root.active-jump-tab;
         search-open: root.search-visible;
-        tab-clicked(id) => {
+        tab-clicked(id, anchor-y) => {
             root.active-jump-tab = id;
+            // Scroll the page so the target section lands right
+            // below the sticky JUMP TO bar. anchor-y is the
+            // target's page-local y (content-coords); subtract
+            // self.height to put the section just below the bar.
+            page-flickable.viewport-y = -(anchor-y - self.height);
         }
         search-clicked => {
             root.search-visible = !root.search-visible;
@@ -723,12 +727,13 @@ export component ArtistPageView inherits Rectangle {
         // bottom edge is always flush with the now-playing bar
         // (height = root.height - y), so no gap appears when sticky.
         if NetworkSidebarState.open: sidebar-panel := Rectangle {
-            // 335px = jump-nav natural-top (291) + jump-nav height
-            // (44). Starts the sidebar flush with the bottom edge of
-            // the JUMP TO bar, never sliding behind it. As the user
-            // scrolls down, y tracks page-flickable.viewport-y until
-            // it hits sticky-top.
-            property <length> natural-top: 335px;
+            // Anchored to the body row's actual top, so the sidebar
+            // always starts flush with the bottom of the JUMP TO bar
+            // (which itself sits 44px above the body row). Matches
+            // long-bio artist pages where the header pushes
+            // everything further down.
+            property <length> natural-top:
+                body-row.absolute-position.y - page-flickable.absolute-position.y;
             // 44px parks the sidebar just below the sticky JUMP TO
             // bar (jump-nav's height) once the header scrolls away.
             property <length> sticky-top: 44px;

@@ -21,6 +21,11 @@ import { QbzIcon } from "QbzIcon.slint";
 export struct JumpNavTab {
     id: string,
     label: string,
+    // Page-local y the tab scrolls to when clicked. Measured from the
+    // top of the Flickable content (not the viewport), so the parent
+    // can set `viewport-y = -(anchor-y - sticky-bar-height)` to land
+    // the section just below the sticky bar.
+    anchor-y: length,
 }
 
 export component JumpNavBar inherits Rectangle {
@@ -28,7 +33,17 @@ export component JumpNavBar inherits Rectangle {
     in property <string> active-tab-id;
     in-out property <bool> search-open: false;
     in-out property <string> search-text;
-    callback tab-clicked(string /* tab-id */);
+
+    // When the input opens, focus it so the caret lands inside the
+    // text field without an extra click. Without this the user has
+    // to move the cursor from the search button into the input
+    // before typing.
+    changed search-open => {
+        if (root.search-open) {
+            search-input.focus();
+        }
+    }
+    callback tab-clicked(string /* tab-id */, length /* anchor-y */);
     callback search-clicked();
     callback search-text-edited(string);
 
@@ -113,7 +128,7 @@ export component JumpNavBar inherits Rectangle {
                             mouse-cursor: pointer;
                             enabled: !root.search-open;
                             clicked => {
-                                root.tab-clicked(tab.id);
+                                root.tab-clicked(tab.id, tab.anchor-y);
                             }
                         }
                     }
@@ -223,14 +238,15 @@ export component JumpNavBar inherits Rectangle {
             }
         }
 
-        // Outer search toggle — only visible when the input is
-        // closed. Opening it expands the inline input above (which
-        // carries its own X close button), so the bar never shows
-        // two competing search affordances.
-        VerticalLayout {
+        // Outer search toggle — only present when the input is
+        // closed. `if` (not `visible:`) so the slot is reclaimed by
+        // the center region when the input opens, letting the
+        // expanded input run all the way to the bar's right padding
+        // (right where the user just clicked the lupa). The inline
+        // input carries its own X close button.
+        if !root.search-open: VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
-            visible: !root.search-open;
             Rectangle {
                 width: 32px;
                 height: 32px;
@@ -250,7 +266,6 @@ export component JumpNavBar inherits Rectangle {
                 }
                 search-ta := TouchArea {
                     mouse-cursor: pointer;
-                    enabled: !root.search-open;
                     clicked => {
                         root.search-clicked();
                     }

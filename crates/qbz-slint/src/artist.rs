@@ -19,8 +19,8 @@ use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::home::CardData;
 use crate::{
     AlbumCardItem, AlbumTrackItem, AppWindow, ArtistState, DiscoverSection, DiscoveryArtist,
-    LabelEntry, MbOriginData, MbRelationship, MbRelationshipsData, NetworkSidebarState,
-    SimilarEntry,
+    JumpNavTab, LabelEntry, MbOriginData, MbRelationship, MbRelationshipsData,
+    NetworkSidebarState, SimilarEntry,
 };
 
 /// Plain, `Send` artist data produced on the worker thread.
@@ -462,6 +462,15 @@ thread_local! {
 
 /// Apply artist data to the `ArtistState` global. Runs on the Slint event loop.
 pub fn apply_artist(window: &AppWindow, data: ArtistData) {
+    // Capture counts before we move the data so the JUMP TO tab
+    // anchor-y estimates can use them.
+    let top_tracks_count = data.top_tracks.len();
+    let section_counts: Vec<(String, usize)> = data
+        .release_sections
+        .iter()
+        .map(|s| (s.title.clone(), s.cards.len()))
+        .collect();
+
     let top_tracks: Vec<AlbumTrackItem> = data
         .top_tracks
         .into_iter()
@@ -486,6 +495,8 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
             )),
         })
         .collect();
+
+    let jump_tabs = build_jump_tabs(top_tracks_count, &section_counts);
 
     let labels: Vec<LabelEntry> = data
         .labels
@@ -523,6 +534,74 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
     state.set_release_sections(ModelRc::new(VecModel::from(release_sections)));
     state.set_labels(ModelRc::new(VecModel::from(labels)));
     state.set_similar_artists(ModelRc::new(VecModel::from(similar_artists)));
+    state.set_jump_tabs(ModelRc::new(VecModel::from(jump_tabs)));
+}
+
+/// Build the JUMP TO tab list for this artist. Tabs are emitted only
+/// for sections that actually have content (no empty Compilations
+/// row when the artist has none); each tab carries a page-local
+/// `anchor-y` estimate so a click can scroll the page-flickable
+/// straight to that section. Heights are layout-derived
+/// approximations — variable bio length and grid wrapping make a
+/// truly precise number hard without measuring each frame, but the
+/// estimates land the user inside the right section.
+fn build_jump_tabs(
+    top_tracks_count: usize,
+    sections: &[(String, usize)],
+) -> Vec<JumpNavTab> {
+    // Layout constants — keep in sync with ArtistPageView.slint.
+    const BODY_ROW_TOP_GUESS: f32 = 320.0;
+    const SECTION_SPACER: f32 = 32.0;
+    const RELEASE_HEADER: f32 = 28.0;
+    const RELEASE_ROW: f32 = 290.0;
+    const RELEASE_ROW_GAP: f32 = 24.0;
+    const RELEASE_COLS: f32 = 5.0;
+    const POPULAR_HEADER: f32 = 36.0;
+    const POPULAR_HEADER_GAP: f32 = 10.0;
+    const POPULAR_ROW: f32 = 52.0;
+    const POPULAR_TAIL: f32 = 32.0;
+
+    let mut tabs: Vec<JumpNavTab> = Vec::new();
+    tabs.push(JumpNavTab {
+        id: "about".into(),
+        label: "About".into(),
+        anchor_y: 0.0,
+    });
+
+    let mut cursor = BODY_ROW_TOP_GUESS;
+    if top_tracks_count > 0 {
+        tabs.push(JumpNavTab {
+            id: "popular-tracks".into(),
+            label: "Popular Tracks".into(),
+            anchor_y: cursor,
+        });
+        let visible_rows = top_tracks_count.min(5) as f32;
+        cursor +=
+            POPULAR_HEADER + POPULAR_HEADER_GAP + visible_rows * POPULAR_ROW + POPULAR_TAIL;
+    }
+
+    for (title, count) in sections {
+        let id = match title.as_str() {
+            "Discography" => "discography",
+            "EPs & Singles" => "eps-singles",
+            "Live Albums" => "live-albums",
+            "Compilations" => "compilations",
+            "Others" => "others",
+            _ => continue,
+        };
+        tabs.push(JumpNavTab {
+            id: id.into(),
+            label: title.clone().into(),
+            anchor_y: cursor,
+        });
+        let rows = (*count as f32 / RELEASE_COLS).ceil().max(1.0);
+        cursor += SECTION_SPACER
+            + RELEASE_HEADER
+            + rows * RELEASE_ROW
+            + (rows - 1.0).max(0.0) * RELEASE_ROW_GAP;
+    }
+
+    tabs
 }
 
 /// Filter the visible Popular Tracks (title or artist substring) and
@@ -577,6 +656,7 @@ pub fn reset_artist(window: &AppWindow) {
     state.set_release_sections(ModelRc::new(VecModel::from(Vec::<DiscoverSection>::new())));
     state.set_labels(ModelRc::new(VecModel::from(Vec::<LabelEntry>::new())));
     state.set_similar_artists(ModelRc::new(VecModel::from(Vec::<SimilarEntry>::new())));
+    state.set_jump_tabs(ModelRc::new(VecModel::from(Vec::<JumpNavTab>::new())));
     state.set_artwork(slint::Image::default());
     state.set_name("".into());
     state.set_bio("".into());
