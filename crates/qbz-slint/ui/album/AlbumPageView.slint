@@ -14,6 +14,7 @@ import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
+import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 
 component CircleAction inherits Rectangle {
@@ -73,12 +74,18 @@ component TrackRow inherits Rectangle {
         padding-right: 12px;
         spacing: 16px;
 
-        Text {
-            text: root.track.number;
-            width: 32px;
-            color: Theme.text-muted;
-            font-size: Typography.body;
-            vertical-alignment: center;
+        VerticalLayout {
+            alignment: center;
+            TrackPlayCell {
+                track-id: root.track.id;
+                number: root.track.number;
+                show-artwork: false;
+                number-width: 32px;
+                row-hovered: ta.has-hover;
+                play => {
+                    root.media-action("track", root.track.id, "play");
+                }
+            }
         }
 
         VerticalLayout {

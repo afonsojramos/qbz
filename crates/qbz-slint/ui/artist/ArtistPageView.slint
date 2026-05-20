@@ -12,6 +12,7 @@ import { ArtistState, AlbumTrackItem, NavState, ContentView } from "../state.sli
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
+import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
 import { Carousel } from "../discover/Carousel.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 
@@ -69,12 +70,18 @@ component TrackRow inherits Rectangle {
         padding-right: 12px;
         spacing: 16px;
 
-        Text {
-            text: root.track.number;
-            width: 28px;
-            color: Theme.text-muted;
-            font-size: Typography.body;
-            vertical-alignment: center;
+        VerticalLayout {
+            alignment: center;
+            TrackPlayCell {
+                track-id: root.track.id;
+                number: root.track.number;
+                show-artwork: false;
+                number-width: 28px;
+                row-hovered: ta.has-hover;
+                play => {
+                    root.media-action("track", root.track.id, "play");
+                }
+            }
         }
         VerticalLayout {
             alignment: center;

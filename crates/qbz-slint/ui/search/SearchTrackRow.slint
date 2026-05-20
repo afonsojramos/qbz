@@ -12,6 +12,7 @@ import { SearchTrackItem } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
+import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
 
 export component SearchTrackRow inherits Rectangle {
     in property <SearchTrackItem> track;
@@ -45,29 +46,17 @@ export component SearchTrackRow inherits Rectangle {
             vertical-alignment: center;
         }
 
-        // Leading slot — cover thumbnail (music-note fallback until the
-        // artwork pipeline resolves the cover).
-        if root.show-artwork: VerticalLayout {
+        // Leading slot — cover thumbnail with the play / playing-state
+        // affordance.
+        VerticalLayout {
             alignment: center;
-            Rectangle {
-                width: 40px;
-                height: 40px;
-                border-radius: Radius.sm;
-                clip: true;
-                background: Theme.surface-elevated;
-                QbzIcon {
-                    source: @image-url("../assets/icons/music.svg");
-                    width: 18px;
-                    height: 18px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    tint: Theme.text-muted;
-                }
-                Image {
-                    width: 100%;
-                    height: 100%;
-                    source: root.track.artwork;
-                    image-fit: cover;
+            TrackPlayCell {
+                track-id: root.track.id;
+                artwork: root.track.artwork;
+                show-artwork: true;
+                row-hovered: ta.has-hover;
+                play => {
+                    root.media-action("track", root.track.id, "play");
                 }
             }
         }
