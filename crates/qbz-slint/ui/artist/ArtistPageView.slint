@@ -22,7 +22,7 @@ import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
 import { TrackContextMenu } from "../primitives/TrackContextMenu.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
-import { Carousel } from "../discover/Carousel.slint";
+import { ReleaseGrid } from "ReleaseGrid.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 
 component CircleAction inherits Rectangle {
@@ -569,7 +569,7 @@ export component ArtistPageView inherits Rectangle {
             for section in ArtistState.release-sections: VerticalLayout {
                 spacing: 0px;
                 Rectangle { height: 32px; }
-                Carousel {
+                ReleaseGrid {
                     section: section;
                     album-clicked(id) => {
                         root.open-album(id);

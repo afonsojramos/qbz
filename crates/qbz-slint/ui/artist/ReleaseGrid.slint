@@ -1,0 +1,73 @@
+// Wrapping grid of AlbumCards for the artist page's release sections
+// (Discography, EPs & Singles, Live Albums, Compilations, Others).
+//
+// The Tauri artist view lays these as grids — never as horizontally
+// paginated carousels — so a long discography wraps into rows and the
+// whole shape stays scannable. Pattern mirrors `discover/GridSection`:
+// absolute positioning inside a Rectangle whose height comes from the
+// row count, computed once per resize.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { DiscoverSection } from "../state.slint";
+import { AlbumCard } from "../discover/AlbumCard.slint";
+
+export component ReleaseGrid inherits VerticalLayout {
+    in property <DiscoverSection> section;
+    callback album-clicked(string);
+    callback media-action(string, string, string);
+
+    property <length> card-width: 220px;
+    property <length> card-height: 266px;
+    property <length> gap: 24px;
+    property <int> count: root.section.albums.length;
+
+    spacing: 12px;
+
+    // --- Header: title + count -------------------------------------------
+    HorizontalLayout {
+        Text {
+            text: root.section.title;
+            color: Theme.text-primary;
+            font-size: Typography.heading;
+            font-weight: Typography.semibold;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        if root.count > 0: Text {
+            text: " " + root.count;
+            color: Theme.text-muted;
+            font-size: Typography.body;
+            font-weight: Typography.regular;
+            vertical-alignment: center;
+        }
+    }
+
+    // --- Grid: absolute-positioned cards inside a sized Rectangle --------
+    grid := Rectangle {
+        // Columns recomputed per resize so the grid flows from 5 wide
+        // at large viewports down to 2 on narrow ones.
+        property <int> columns: Math.max(
+            1,
+            Math.floor((self.width + root.gap) / (root.card-width + root.gap)));
+        property <int> rows: Math.ceil(root.count / self.columns);
+
+        height: self.rows > 0
+            ? self.rows * root.card-height + Math.max(0, self.rows - 1) * root.gap
+            : 0px;
+
+        for album[i] in root.section.albums: AlbumCard {
+            x: Math.mod(i, grid.columns) * (root.card-width + root.gap);
+            y: Math.floor(i / grid.columns) * (root.card-height + root.gap);
+            width: root.card-width;
+            height: root.card-height;
+            album: album;
+            clicked(id) => {
+                root.album-clicked(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
+        }
+    }
+}
