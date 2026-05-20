@@ -19,7 +19,7 @@ use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::home::CardData;
 use crate::{
     AlbumCardItem, AlbumTrackItem, AppWindow, ArtistState, DiscoverSection, LabelEntry,
-    MbOriginData, NetworkSidebarState, SimilarEntry,
+    MbOriginData, MbRelationship, MbRelationshipsData, NetworkSidebarState, SimilarEntry,
 };
 
 /// Plain, `Send` artist data produced on the worker thread.
@@ -669,6 +669,174 @@ pub fn apply_mb_unavailable(window: &AppWindow) {
     state.set_origin_loading(false);
     state.set_relationships_loading(false);
     state.set_discovery_loading(false);
+}
+
+// ----- MB relationships -------------------------------------------------
+
+/// Plain, `Send` mapped relationships ready to push into Slint. Members
+/// here are the still-active ones (ended members already moved to
+/// past_members on the qbz-core side, and Tauri's sidebar renders only
+/// members — see groupedMembers in ArtistDetailView).
+pub struct MbRelationshipsRowData {
+    pub members: Vec<MbRelationshipRow>,
+    pub groups: Vec<MbRelationshipRow>,
+    pub collaborators: Vec<MbRelationshipRow>,
+    pub has_data: bool,
+}
+
+pub struct MbRelationshipRow {
+    pub mbid: String,
+    pub name: String,
+    /// Primary role for the musician-click callback. Defaults to "Band
+    /// Member" / "Band" / "Collaborator" by section when MB has no
+    /// attributes for the relation.
+    pub role: String,
+    /// Tooltip — roles joined with ", " plus the period in parens when
+    /// present. Falls back to the period string or the name.
+    pub tooltip: String,
+}
+
+/// Fetch MB relationships for `mbid` and map into the Slint-friendly
+/// row shape. Groups members by mbid combining their roles, mirroring
+/// Tauri's `groupMembersByMbid` plus the per-section role defaults.
+pub async fn load_mb_relationships<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    mbid: &str,
+) -> Result<MbRelationshipsRowData, String>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let relations = runtime
+        .core()
+        .musicbrainz_get_artist_relationships(mbid)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(map_relationships(relations))
+}
+
+fn map_relationships(
+    rels: qbz_integrations::musicbrainz::ArtistRelationships,
+) -> MbRelationshipsRowData {
+    let members = group_relations(rels.members, "Band Member");
+    let groups = group_relations(rels.groups, "Band");
+    let collaborators = group_relations(rels.collaborators, "Collaborator");
+    let has_data =
+        !members.is_empty() || !groups.is_empty() || !collaborators.is_empty();
+    MbRelationshipsRowData {
+        members,
+        groups,
+        collaborators,
+        has_data,
+    }
+}
+
+fn group_relations(
+    rels: Vec<qbz_integrations::musicbrainz::RelatedArtist>,
+    default_role: &str,
+) -> Vec<MbRelationshipRow> {
+    use std::collections::HashMap;
+    struct Pending {
+        name: String,
+        roles: Vec<String>,
+        begin: Option<String>,
+        end: Option<String>,
+    }
+    let mut by_mbid: HashMap<String, Pending> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for r in rels {
+        let begin = r.period.as_ref().and_then(|p| p.begin.clone());
+        let end = r.period.as_ref().and_then(|p| p.end.clone());
+        match by_mbid.get_mut(&r.mbid) {
+            Some(existing) => {
+                if let Some(role) = r.role.clone() {
+                    if !existing.roles.iter().any(|rr| rr == &role) {
+                        existing.roles.push(role);
+                    }
+                }
+            }
+            None => {
+                order.push(r.mbid.clone());
+                let mut roles = Vec::new();
+                if let Some(role) = r.role.clone() {
+                    roles.push(role);
+                }
+                by_mbid.insert(
+                    r.mbid.clone(),
+                    Pending {
+                        name: r.name,
+                        roles,
+                        begin,
+                        end,
+                    },
+                );
+            }
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|mbid| by_mbid.remove(&mbid).map(|p| (mbid, p)))
+        .map(|(mbid, p)| {
+            let period = format_period(p.begin.as_deref(), p.end.as_deref());
+            let tooltip = if !p.roles.is_empty() {
+                let roles_joined = p.roles.join(", ");
+                if period.is_empty() {
+                    roles_joined
+                } else {
+                    format!("{} ({})", roles_joined, period)
+                }
+            } else if !period.is_empty() {
+                period.clone()
+            } else {
+                p.name.clone()
+            };
+            let role = p
+                .roles
+                .first()
+                .cloned()
+                .unwrap_or_else(|| default_role.to_string());
+            MbRelationshipRow {
+                mbid,
+                name: p.name,
+                role,
+                tooltip,
+            }
+        })
+        .collect()
+}
+
+fn format_period(begin: Option<&str>, end: Option<&str>) -> String {
+    if begin.is_some() || end.is_some() {
+        let b = begin.unwrap_or("?");
+        let e = end.unwrap_or("present");
+        format!("{} - {}", b, e)
+    } else {
+        String::new()
+    }
+}
+
+/// Apply MB relationships to NetworkSidebarState. Runs on the Slint
+/// event loop.
+pub fn apply_mb_relationships(window: &AppWindow, data: MbRelationshipsRowData) {
+    let to_slint = |rows: Vec<MbRelationshipRow>| -> ModelRc<MbRelationship> {
+        ModelRc::new(VecModel::from(
+            rows.into_iter()
+                .map(|r| MbRelationship {
+                    mbid: r.mbid.into(),
+                    name: r.name.into(),
+                    role: r.role.into(),
+                    tooltip: r.tooltip.into(),
+                })
+                .collect::<Vec<_>>(),
+        ))
+    };
+    let state = window.global::<NetworkSidebarState>();
+    state.set_relationships(MbRelationshipsData {
+        members: to_slint(data.members),
+        groups: to_slint(data.groups),
+        collaborators: to_slint(data.collaborators),
+        has_data: data.has_data,
+    });
+    state.set_relationships_loading(false);
 }
 
 /// Format a MusicBrainz partial date into a short human string —

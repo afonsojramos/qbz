@@ -238,19 +238,39 @@ fn navigate_artist(
                 artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
 
                 // Network sidebar — kick the MB enrichment off in
-                // parallel with artwork. Origin section shows a loading
-                // state until the MB resolve + metadata calls return.
+                // parallel with artwork. Origin shows a loading state
+                // until the resolve + metadata calls return; on success
+                // the resolved mbid is used to fetch relationships in a
+                // second round-trip (the V2 cache, when wired, will
+                // make this single-shot for repeat visits).
                 let runtime_mb = runtime.clone();
                 let weak_mb = weak.clone();
                 tokio::spawn(async move {
                     let _ = weak_mb.upgrade_in_event_loop(|w| {
-                        w.global::<NetworkSidebarState>().set_origin_loading(true);
+                        let state = w.global::<NetworkSidebarState>();
+                        state.set_origin_loading(true);
+                        state.set_relationships_loading(true);
                     });
                     match artist::load_mb_metadata(&runtime_mb, &artist_name).await {
                         Ok(Some(meta)) => {
+                            let mbid = meta.mbid.clone();
                             let _ = weak_mb.upgrade_in_event_loop(move |w| {
                                 artist::apply_mb_metadata(&w, meta);
                             });
+                            match artist::load_mb_relationships(&runtime_mb, &mbid).await {
+                                Ok(data) => {
+                                    let _ = weak_mb.upgrade_in_event_loop(move |w| {
+                                        artist::apply_mb_relationships(&w, data);
+                                    });
+                                }
+                                Err(e) => {
+                                    log::warn!("[qbz-slint] MB relationships failed: {e}");
+                                    let _ = weak_mb.upgrade_in_event_loop(|w| {
+                                        w.global::<NetworkSidebarState>()
+                                            .set_relationships_loading(false);
+                                    });
+                                }
+                            }
                         }
                         Ok(None) => {
                             let _ = weak_mb.upgrade_in_event_loop(|w| {

@@ -887,6 +887,100 @@ export component ArtistPageView inherits Rectangle {
                                 }
                             }
                         }
+
+                        // --- Relationships (MB) --------------------------
+                        // Section is gated by mb-available so a
+                        // disabled MB or unmatched artist hides it.
+                        if NetworkSidebarState.mb-available
+                            && (NetworkSidebarState.relationships-loading
+                                || NetworkSidebarState.relationships.has-data):
+                        VerticalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            padding-top: 12px;
+                            padding-bottom: 6px;
+                            spacing: 6px;
+
+                            Text {
+                                text: @tr("RELATIONSHIPS");
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                font-weight: Typography.semibold;
+                                letter-spacing: 0.5px;
+                            }
+
+                            if NetworkSidebarState.relationships-loading: Text {
+                                text: @tr("Loading…");
+                                color: Theme.text-muted;
+                                font-size: 12px;
+                            }
+
+                            if !NetworkSidebarState.relationships-loading
+                                && NetworkSidebarState.relationships.members.length > 0:
+                            VerticalLayout {
+                                spacing: 2px;
+                                padding-top: 2px;
+                                Text {
+                                    text: @tr("Members & Former");
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                }
+                                for member in NetworkSidebarState.relationships.members:
+                                SidebarLink {
+                                    label: member.name;
+                                    icon: @image-url("../assets/icons/user.svg");
+                                    tooltip: member.tooltip;
+                                    clicked => {
+                                        NetworkSidebarActions.musician-clicked(
+                                            member.name, member.role);
+                                    }
+                                }
+                            }
+
+                            if !NetworkSidebarState.relationships-loading
+                                && NetworkSidebarState.relationships.groups.length > 0:
+                            VerticalLayout {
+                                spacing: 2px;
+                                padding-top: 2px;
+                                Text {
+                                    text: @tr("Member Of");
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                }
+                                for group in NetworkSidebarState.relationships.groups:
+                                SidebarLink {
+                                    label: group.name;
+                                    icon: @image-url("../assets/icons/music.svg");
+                                    tooltip: group.tooltip;
+                                    clicked => {
+                                        NetworkSidebarActions.musician-clicked(
+                                            group.name, group.role);
+                                    }
+                                }
+                            }
+
+                            if !NetworkSidebarState.relationships-loading
+                                && NetworkSidebarState.relationships.collaborators.length > 0:
+                            VerticalLayout {
+                                spacing: 2px;
+                                padding-top: 2px;
+                                Text {
+                                    text: @tr("Collaborators");
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                }
+                                for collab in NetworkSidebarState.relationships.collaborators:
+                                SidebarLink {
+                                    label: collab.name;
+                                    icon: @image-url("../assets/icons/user.svg");
+                                    tooltip: collab.tooltip;
+                                    clicked => {
+                                        NetworkSidebarActions.musician-clicked(
+                                            collab.name, collab.role);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
