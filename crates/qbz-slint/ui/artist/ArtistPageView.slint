@@ -53,6 +53,10 @@ component CircleAction inherits Rectangle {
 component TrackRow inherits Rectangle {
     in property <AlbumTrackItem> track;
     in property <int> index;
+    // When true, the row shows a leading checkbox column and hides the
+    // per-row hover affordances — driven by the Popular Tracks "Select"
+    // header toggle, which mirrors Tauri's multiSelectMode flow.
+    in property <bool> multi-select-mode: false;
     callback media-action(string, string, string);
 
     // Any-hover detector — Slint does not propagate has-hover to ancestor
@@ -122,8 +126,10 @@ component TrackRow inherits Rectangle {
             vertical-alignment: center;
         }
 
-        // Select button — circular checkbox; multi-select foundation.
-        VerticalLayout {
+        // Select checkbox — only visible while the section is in
+        // multi-select mode (toggled by the section header's Select
+        // button). Mirrors Tauri's #if multiSelectMode gate.
+        if root.multi-select-mode: VerticalLayout {
             alignment: center;
             Rectangle {
                 width: 22px;
@@ -202,6 +208,10 @@ export component ArtistPageView inherits Rectangle {
     // Popular Tracks shows the first 5; Load more expands to all.
     property <bool> top-tracks-expanded: false;
     property <int> top-tracks-preview: 5;
+    // Popular Tracks multi-select mode — toggled by the section header's
+    // Select button. When true, each row reveals a leading checkbox column
+    // (TrackRow's `multi-select-mode` prop). Mirrors Tauri's flow.
+    property <bool> multi-select-mode: false;
 
     background: Theme.surface-main;
 
@@ -283,69 +293,102 @@ export component ArtistPageView inherits Rectangle {
                         font-weight: Typography.bold;
                         overflow: elide;
                     }
-                    Rectangle { height: 12px; }
-                    Text {
-                        text: ArtistState.bio;
-                        visible: ArtistState.bio != "";
+
+                    // Biography — single inline block matching Tauri's
+                    // structure: truncated body + Read more/less toggle +
+                    // optional "Source: <name>" line. The full text is
+                    // shown when `bio-expanded` flips.
+                    if ArtistState.bio != "": Rectangle { height: 12px; }
+                    if ArtistState.bio != "": Text {
+                        text: root.bio-expanded ? ArtistState.bio : ArtistState.bio-short;
                         color: Theme.text-secondary;
                         font-size: Typography.body;
                         wrap: word-wrap;
                     }
+                    if ArtistState.bio-truncated: Rectangle {
+                        height: 24px;
+                        width: read-more-text.preferred-width + 16px;
+                        read-more-text := Text {
+                            text: root.bio-expanded ? @tr("Read less") : @tr("Read more");
+                            color: read-more-ta.has-hover
+                                ? Theme.text-primary
+                                : Theme.accent;
+                            font-size: 13px;
+                            font-weight: Typography.medium;
+                            vertical-alignment: center;
+                            height: 100%;
+                        }
+                        read-more-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.bio-expanded = !root.bio-expanded;
+                            }
+                        }
+                    }
+                    if ArtistState.bio-source != "": Rectangle { height: 4px; }
+                    if ArtistState.bio-source != "": Text {
+                        text: @tr("Source") + ": " + ArtistState.bio-source;
+                        color: Theme.text-muted;
+                        font-size: 11px;
+                    }
+
                     Rectangle { height: 18px; }
+
+                    // Action buttons — Heart, Build collection, Radio
+                    // (with QBZ / Qobuz dropdown). Mirrors Tauri's
+                    // artist-actions: NO Play here (top tracks has its
+                    // own play). Network sidebar toggle and Hide are
+                    // deferred to Tanda 2 (sidebar work).
                     HorizontalLayout {
                         alignment: start;
                         spacing: 12px;
                         CircleAction {
-                            icon: @image-url("../assets/icons/play-fill.svg");
-                            primary: true;
-                            diameter: 44px;
+                            icon: @image-url("../assets/icons/heart.svg");
+                            clicked => {
+                                root.media-action("artist", "", "favorite");
+                            }
                         }
-                        VerticalLayout {
-                            alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/heart.svg"); }
+                        CircleAction {
+                            icon: @image-url("../assets/icons/library-big.svg");
+                            clicked => {
+                                root.media-action("artist", "", "build-collection");
+                            }
                         }
-                        VerticalLayout {
-                            alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/radio.svg"); }
+                        // Radio with dropdown — QBZ radio (local engine)
+                        // vs Qobuz radio (qobuz-curated). Both call
+                        // distinct media-actions; main.rs wires them.
+                        Rectangle {
+                            width: 40px;
+                            height: 40px;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/radio.svg");
+                                clicked => {
+                                    radio-popup.show();
+                                }
+                            }
+                            radio-popup := PopupWindow {
+                                x: 0px;
+                                y: 50px;
+                                width: 180px;
+                                close-policy: close-on-click;
+                                ContextMenu {
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/radio.svg");
+                                        label: "QBZ Radio";
+                                        clicked => {
+                                            root.media-action("artist", "", "radio-qbz");
+                                        }
+                                    }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/radio.svg");
+                                        label: "Qobuz Radio";
+                                        clicked => {
+                                            root.media-action("artist", "", "radio-qobuz");
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        VerticalLayout {
-                            alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/library-big.svg"); }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/ellipsis.svg"); }
-                        }
-                    }
-                }
-            }
-
-            // Biography — full content width, below the header block.
-            // Read-more toggle expands an inline word-boundary truncation.
-            if ArtistState.bio != "": Rectangle { height: 18px; }
-            if ArtistState.bio != "": Text {
-                text: root.bio-expanded ? ArtistState.bio : ArtistState.bio-short;
-                color: Theme.text-secondary;
-                font-size: Typography.body;
-                wrap: word-wrap;
-            }
-            if ArtistState.bio-truncated: Rectangle {
-                height: 24px;
-                width: read-more-text.preferred-width + 16px;
-                read-more-text := Text {
-                    text: root.bio-expanded ? @tr("Read less") : @tr("Read more");
-                    color: read-more-ta.has-hover
-                        ? Theme.text-primary
-                        : Theme.accent;
-                    font-size: 13px;
-                    font-weight: Typography.medium;
-                    vertical-alignment: center;
-                    height: 100%;
-                }
-                read-more-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.bio-expanded = !root.bio-expanded;
                     }
                 }
             }
@@ -371,8 +414,42 @@ export component ArtistPageView inherits Rectangle {
             }
 
             // --- Popular tracks ----------------------------------------------
-            if ArtistState.top-tracks.length > 0: SectionTitle {
-                text: @tr("Popular Tracks");
+            // Section header: title on the left, action cluster on the right
+            // (Play all / Select-mode toggle / More menu). Mirrors Tauri's
+            // popular-tracks section-header.
+            if ArtistState.top-tracks.length > 0: HorizontalLayout {
+                alignment: space-between;
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    SectionTitle {
+                        text: @tr("Popular Tracks");
+                    }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 12px;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/play-fill.svg");
+                        primary: true;
+                        diameter: 40px;
+                        clicked => {
+                            root.media-action("artist", "", "play-top");
+                        }
+                    }
+                    CircleAction {
+                        icon: @image-url("../assets/icons/square-check-big.svg");
+                        clicked => {
+                            root.multi-select-mode = !root.multi-select-mode;
+                        }
+                    }
+                    CircleAction {
+                        icon: @image-url("../assets/icons/ellipsis.svg");
+                        clicked => {
+                            root.media-action("artist", "", "top-tracks-menu");
+                        }
+                    }
+                }
             }
             if ArtistState.top-tracks.length > 0: Rectangle { height: 10px; }
             for track[index] in ArtistState.top-tracks: TrackRow {
@@ -380,6 +457,7 @@ export component ArtistPageView inherits Rectangle {
                 height: self.visible ? 52px : 0px;
                 track: track;
                 index: index;
+                multi-select-mode: root.multi-select-mode;
                 media-action(kind, id, action) => {
                     root.media-action(kind, id, action);
                 }

@@ -4,11 +4,14 @@
 //! data on the worker thread, and applies it to the `ArtistState`
 //! global on the Slint event loop.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
-use qbz_models::{PageArtistRelease, PageArtistResponse, PageArtistTrack};
+use qbz_models::{
+    PageArtistRelease, PageArtistResponse, PageArtistTrack, PageArtistTrackAlbum,
+};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::album::TrackData;
@@ -24,6 +27,8 @@ pub struct ArtistData {
     /// swaps to `bio`. Equal to `bio` when the text fits in the cap.
     pub bio_short: String,
     pub bio_truncated: bool,
+    /// Editorial source for the biography ("TiVo" etc). Empty when absent.
+    pub bio_source: String,
     pub artwork_url: String,
     pub top_tracks: Vec<TrackData>,
     /// Releases grouped into titled sections (Albums, EPs & Singles, ...).
@@ -56,13 +61,27 @@ where
 }
 
 fn map_artist(page: PageArtistResponse) -> ArtistData {
+    let main_artist_id = page.id;
     let name = page.name.display;
 
-    let bio = page
-        .biography
-        .and_then(|b| b.content)
-        .map(|content| strip_html(&content))
-        .unwrap_or_default();
+    // Biography: content (HTML-stripped) + source name (when present). The
+    // /artist/page biography.source is a raw JSON value because Qobuz
+    // sometimes returns a string and sometimes an object; we only care
+    // about the string form.
+    let (bio, bio_source) = match page.biography {
+        Some(biography) => {
+            let content = biography
+                .content
+                .map(|c| strip_html(&c))
+                .unwrap_or_default();
+            let source = biography
+                .source
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+            (content, source)
+        }
+        None => (String::new(), String::new()),
+    };
     let bio_short = truncate_words(&bio, 360);
     let bio_truncated = bio_short != bio;
 
@@ -85,25 +104,135 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
         .map(|(index, track)| map_track(index, track))
         .collect();
 
-    let release_sections = page
-        .releases
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|group| !group.items.is_empty())
-        .map(|group| ReleaseSection {
-            title: release_section_title(&group.release_type),
-            cards: group.items.into_iter().map(map_release).collect(),
-        })
-        .collect();
+    // Releases: bucket into 4 categories per Tauri's convertPageArtist:
+    //   album              → Discography
+    //   ep | single | epSingle → EPs & Singles
+    //   live               → Live Albums
+    //   compilation | boxset | download | other | _ → Others
+    // The "download" group items are re-categorized by their individual
+    // release_type because download is a distribution channel, not a
+    // content type. Foreign-artist releases are filtered out (only the
+    // main artist's own pieces stay) and IDs are deduped across groups
+    // so a release listed in multiple groups appears once.
+    let mut albums: Vec<CardData> = Vec::new();
+    let mut eps_singles: Vec<CardData> = Vec::new();
+    let mut live_albums: Vec<CardData> = Vec::new();
+    let mut others: Vec<CardData> = Vec::new();
+    let mut seen_release_ids: HashSet<String> = HashSet::new();
+
+    for group in page.releases.into_iter().flatten() {
+        let group_bucket = map_release_type(&group.release_type);
+        for release in group.items.into_iter() {
+            // Foreign-artist filter — the page sometimes surfaces "appears
+            // on" entries inside release groups; those don't belong here.
+            if let Some(artist_ref) = release.artist.as_ref() {
+                if artist_ref.id != main_artist_id {
+                    continue;
+                }
+            }
+            if seen_release_ids.contains(&release.id) {
+                continue;
+            }
+            seen_release_ids.insert(release.id.clone());
+
+            let item_bucket = if group.release_type == "download" {
+                release
+                    .release_type
+                    .as_deref()
+                    .map(map_release_type)
+                    .unwrap_or(group_bucket)
+            } else {
+                group_bucket
+            };
+
+            let card = map_release(release);
+            match item_bucket {
+                ReleaseBucket::Albums => albums.push(card),
+                ReleaseBucket::Eps => eps_singles.push(card),
+                ReleaseBucket::Live => live_albums.push(card),
+                ReleaseBucket::Others => others.push(card),
+            }
+        }
+    }
+
+    // Compilations come from tracks_appears_on — albums by other artists
+    // that include this artist. Dedupe by album id.
+    let mut compilations: Vec<CardData> = Vec::new();
+    let mut seen_compilation_albums: HashSet<String> = HashSet::new();
+    for track in page.tracks_appears_on.into_iter().flatten() {
+        let Some(album) = track.album else { continue };
+        if seen_compilation_albums.contains(&album.id) {
+            continue;
+        }
+        seen_compilation_albums.insert(album.id.clone());
+        compilations.push(map_compilation_album(album));
+    }
+
+    let mut release_sections: Vec<ReleaseSection> = Vec::new();
+    if !albums.is_empty() {
+        release_sections.push(ReleaseSection {
+            title: "Discography".to_string(),
+            cards: albums,
+        });
+    }
+    if !eps_singles.is_empty() {
+        release_sections.push(ReleaseSection {
+            title: "EPs & Singles".to_string(),
+            cards: eps_singles,
+        });
+    }
+    if !live_albums.is_empty() {
+        release_sections.push(ReleaseSection {
+            title: "Live Albums".to_string(),
+            cards: live_albums,
+        });
+    }
+    if !compilations.is_empty() {
+        release_sections.push(ReleaseSection {
+            title: "Compilations".to_string(),
+            cards: compilations,
+        });
+    }
+    if !others.is_empty() {
+        release_sections.push(ReleaseSection {
+            title: "Others".to_string(),
+            cards: others,
+        });
+    }
 
     ArtistData {
         name,
         bio,
         bio_short,
         bio_truncated,
+        bio_source,
         artwork_url,
         top_tracks,
         release_sections,
+    }
+}
+
+/// UI bucket a Qobuz release_type maps to. Mirrors Tauri's adapter so the
+/// section headings stay 1:1 with the WebKit build.
+#[derive(Debug, Clone, Copy)]
+enum ReleaseBucket {
+    Albums,
+    Eps,
+    Live,
+    Others,
+}
+
+/// Map a Qobuz release_type string to its UI bucket. Anything not in the
+/// curated three categories (album / ep* / live) lands in Others so the
+/// page never grows a long tail of one-off section titles.
+fn map_release_type(release_type: &str) -> ReleaseBucket {
+    match release_type {
+        "album" => ReleaseBucket::Albums,
+        "ep" | "single" | "epSingle" => ReleaseBucket::Eps,
+        "live" => ReleaseBucket::Live,
+        // compilation, boxset, download, other, and anything new the API
+        // adds in the future.
+        _ => ReleaseBucket::Others,
     }
 }
 
@@ -139,17 +268,27 @@ pub fn artwork_jobs(data: &ArtistData) -> Vec<ArtworkJob> {
     jobs
 }
 
-/// Human title for a Qobuz artist-page release group type.
-fn release_section_title(release_type: &str) -> String {
-    match release_type {
-        "album" => "Albums",
-        "epSingle" | "ep" | "single" => "EPs & Singles",
-        "live" => "Live Albums",
-        "compilation" => "Compilations",
-        "download" => "Downloads",
-        _ => "Other Releases",
+/// Build a CardData for the Compilations section out of a track's album
+/// (tracks_appears_on entries — albums by other artists that feature the
+/// main artist). The PageArtistTrackAlbum payload is lighter than a full
+/// release (no year/dates), so the year stays empty.
+fn map_compilation_album(album: PageArtistTrackAlbum) -> CardData {
+    let artwork_url = album
+        .image
+        .and_then(|img| img.best().cloned())
+        .unwrap_or_default();
+    CardData {
+        id: album.id,
+        title: album.title,
+        artist: String::new(),
+        genre: album.genre.map(|g| g.name).unwrap_or_default(),
+        year: String::new(),
+        quality_tier: String::new(),
+        quality_label: String::new(),
+        ribbon: String::new(),
+        ribbon_kind: String::new(),
+        artwork_url,
     }
-    .to_string()
 }
 
 fn map_track(index: usize, track: PageArtistTrack) -> TrackData {
@@ -204,7 +343,11 @@ fn mmss(secs: u32) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-/// Crude HTML strip for Qobuz biographies (tags + a few entities).
+/// Crude HTML strip for Qobuz biographies (tags + a few entities). The
+/// entity set is intentionally small — only the ones the Qobuz API
+/// regularly emits in biography bodies, with the © family explicitly
+/// covered because TiVo-sourced bios often close with a `&copy; TiVo`
+/// credit line.
 fn strip_html(input: &str) -> String {
     let mut out = String::new();
     let mut in_tag = false;
@@ -218,8 +361,18 @@ fn strip_html(input: &str) -> String {
     }
     out.replace("&amp;", "&")
         .replace("&#39;", "'")
+        .replace("&apos;", "'")
         .replace("&quot;", "\"")
         .replace("&nbsp;", " ")
+        .replace("&copy;", "©")
+        .replace("&#169;", "©")
+        .replace("&#xa9;", "©")
+        .replace("&#xA9;", "©")
+        .replace("&reg;", "®")
+        .replace("&trade;", "™")
+        .replace("&mdash;", "—")
+        .replace("&ndash;", "–")
+        .replace("&hellip;", "…")
         .trim()
         .to_string()
 }
@@ -272,6 +425,7 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
     state.set_bio(data.bio.into());
     state.set_bio_short(data.bio_short.into());
     state.set_bio_truncated(data.bio_truncated);
+    state.set_bio_source(data.bio_source.into());
     state.set_top_tracks(ModelRc::new(VecModel::from(top_tracks)));
     state.set_release_sections(ModelRc::new(VecModel::from(release_sections)));
 }
@@ -284,6 +438,7 @@ pub fn reset_artist(window: &AppWindow) {
     state.set_artwork(slint::Image::default());
     state.set_name("".into());
     state.set_bio("".into());
+    state.set_bio_source("".into());
     state.set_loading(true);
 }
 

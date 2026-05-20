@@ -201,6 +201,9 @@ export global ArtistState {
     // the full bio in `bio` is shown when the Read-more toggle expands.
     in property <string> bio-short;
     in property <bool> bio-truncated: false;
+    // Editorial source for the biography ("TiVo" etc); shown as a small
+    // "Source: <name>" line under the Read more toggle when present.
+    in property <string> bio-source;
     in property <image> artwork;
     // Artwork-derived tint for the header gradient.
     in property <color> header-color: #181820;
