@@ -227,10 +227,12 @@ fn navigate_artist(
         match artist::load_artist(&runtime, &artist_id).await {
             Ok(data) => {
                 let artwork_url = data.artwork_url.clone();
+                let jobs = artist::artwork_jobs(&data);
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     artist::apply_artist(&w, data);
                     w.global::<ArtistState>().set_loading(false);
                 });
+                artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
                 if !artwork_url.is_empty() {
                     if let Some((pixels, width, height)) =
                         artwork::fetch_and_decode(&artwork_url, &image_cache, 440).await

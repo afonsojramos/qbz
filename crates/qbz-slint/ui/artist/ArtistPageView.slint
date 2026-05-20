@@ -170,6 +170,9 @@ export component ArtistPageView inherits Rectangle {
     callback open-album(string);
     callback media-action(string, string, string);
 
+    // Read-more toggle for the biography.
+    property <bool> bio-expanded: false;
+
     background: Theme.surface-main;
 
     Flickable {
@@ -288,12 +291,33 @@ export component ArtistPageView inherits Rectangle {
             }
 
             // Biography — full content width, below the header block.
+            // Read-more toggle expands an inline word-boundary truncation.
             if ArtistState.bio != "": Rectangle { height: 18px; }
             if ArtistState.bio != "": Text {
-                text: ArtistState.bio;
+                text: root.bio-expanded ? ArtistState.bio : ArtistState.bio-short;
                 color: Theme.text-secondary;
                 font-size: Typography.body;
                 wrap: word-wrap;
+            }
+            if ArtistState.bio-truncated: Rectangle {
+                height: 24px;
+                width: read-more-text.preferred-width + 16px;
+                read-more-text := Text {
+                    text: root.bio-expanded ? @tr("Read less") : @tr("Read more");
+                    color: read-more-ta.has-hover
+                        ? Theme.text-primary
+                        : Theme.accent;
+                    font-size: 13px;
+                    font-weight: Typography.medium;
+                    vertical-alignment: center;
+                    height: 100%;
+                }
+                read-more-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.bio-expanded = !root.bio-expanded;
+                    }
+                }
             }
 
             Rectangle { height: 36px; }

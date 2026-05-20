@@ -12,7 +12,7 @@ use qbz_cache::ImageCacheService;
 use slint::{ComponentHandle, Model};
 use tokio::sync::Semaphore;
 
-use crate::{AppWindow, HomeState, SearchState};
+use crate::{AppWindow, ArtistState, HomeState, SearchState};
 
 /// Cap on simultaneous artwork downloads.
 const MAX_CONCURRENT: usize = 16;
@@ -49,6 +49,9 @@ pub enum ArtworkTarget {
     SearchPlaylistCover { idx: usize, slot: usize },
     /// The most-popular search hero (its kind is read from SearchState).
     SearchMostPopular,
+    /// A release card in `ArtistState.release-sections[section_idx]
+    /// .albums[album_idx]`.
+    ArtistRelease { section_idx: usize, album_idx: usize },
 }
 
 /// An artwork download job: which card, and the image URL.
@@ -322,6 +325,20 @@ fn apply_artwork(
                 }
                 _ => {}
             }
+        }
+        ArtworkTarget::ArtistRelease {
+            section_idx,
+            album_idx,
+        } => {
+            let sections = window.global::<ArtistState>().get_release_sections();
+            let Some(section) = sections.row_data(section_idx) else {
+                return;
+            };
+            let Some(mut item) = section.albums.row_data(album_idx) else {
+                return;
+            };
+            item.artwork = image;
+            section.albums.set_row_data(album_idx, item);
         }
     }
 }

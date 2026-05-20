@@ -12,6 +12,7 @@ use qbz_models::{PageArtistRelease, PageArtistResponse, PageArtistTrack};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::album::TrackData;
+use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::home::CardData;
 use crate::{AlbumCardItem, AlbumTrackItem, AppWindow, ArtistState, DiscoverSection};
 
@@ -19,6 +20,10 @@ use crate::{AlbumCardItem, AlbumTrackItem, AppWindow, ArtistState, DiscoverSecti
 pub struct ArtistData {
     pub name: String,
     pub bio: String,
+    /// Word-boundary truncated bio used at rest; the Read-more toggle
+    /// swaps to `bio`. Equal to `bio` when the text fits in the cap.
+    pub bio_short: String,
+    pub bio_truncated: bool,
     pub artwork_url: String,
     pub top_tracks: Vec<TrackData>,
     /// Releases grouped into titled sections (Albums, EPs & Singles, ...).
@@ -58,6 +63,8 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
         .and_then(|b| b.content)
         .map(|content| strip_html(&content))
         .unwrap_or_default();
+    let bio_short = truncate_words(&bio, 360);
+    let bio_truncated = bio_short != bio;
 
     let artwork_url = page
         .images
@@ -92,10 +99,44 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
     ArtistData {
         name,
         bio,
+        bio_short,
+        bio_truncated,
         artwork_url,
         top_tracks,
         release_sections,
     }
+}
+
+/// Truncate text at the last word boundary within `max` characters,
+/// appending an ellipsis. Returns the text unchanged when it already
+/// fits.
+fn truncate_words(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let truncated: String = text.chars().take(max).collect();
+    let cut = truncated.rfind(' ').unwrap_or(truncated.len());
+    format!("{}…", truncated[..cut].trim_end())
+}
+
+/// Build artwork download jobs for every release card so the cover grid
+/// fills in once the images decode.
+pub fn artwork_jobs(data: &ArtistData) -> Vec<ArtworkJob> {
+    let mut jobs = Vec::new();
+    for (section_idx, section) in data.release_sections.iter().enumerate() {
+        for (album_idx, card) in section.cards.iter().enumerate() {
+            if !card.artwork_url.is_empty() {
+                jobs.push(ArtworkJob {
+                    target: ArtworkTarget::ArtistRelease {
+                        section_idx,
+                        album_idx,
+                    },
+                    url: card.artwork_url.clone(),
+                });
+            }
+        }
+    }
+    jobs
 }
 
 /// Human title for a Qobuz artist-page release group type.
@@ -228,6 +269,8 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
     let state = window.global::<ArtistState>();
     state.set_name(data.name.into());
     state.set_bio(data.bio.into());
+    state.set_bio_short(data.bio_short.into());
+    state.set_bio_truncated(data.bio_truncated);
     state.set_top_tracks(ModelRc::new(VecModel::from(top_tracks)));
     state.set_release_sections(ModelRc::new(VecModel::from(release_sections)));
 }
