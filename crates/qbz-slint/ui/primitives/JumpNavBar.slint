@@ -125,9 +125,16 @@ export component JumpNavBar inherits Rectangle {
             // when it goes false. surface-main background fully
             // hides the tabs while expanded.
             search-overlay := Rectangle {
+                // Cap the expanded width so the open input reads as a
+                // compact box pinned to the right side of the bar
+                // (matches Tauri's `.search-input-container` width),
+                // not a full-bar slab. min() guards narrow viewports.
+                property <length> max-open-width: 360px;
                 x: parent.width - self.width;
                 y: 4px;
-                width: root.search-open ? parent.width : 0px;
+                width: root.search-open
+                    ? min(parent.width, self.max-open-width)
+                    : 0px;
                 height: parent.height - 8px;
                 background: Theme.surface-card;
                 border-radius: 6px;

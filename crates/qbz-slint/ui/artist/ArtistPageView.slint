@@ -720,16 +720,14 @@ export component ArtistPageView inherits Rectangle {
         // bottom edge is always flush with the now-playing bar
         // (height = root.height - y), so no gap appears when sticky.
         if NetworkSidebarState.open: sidebar-panel := Rectangle {
-            // 320px = NavButtons + artist header + 36px spacer (the
-            // natural y of the body row). At scroll = 0 the sidebar
-            // sits below the header; as the user scrolls down, y
-            // tracks page-flickable.viewport-y until it hits
-            // sticky-top.
-            property <length> natural-top: 320px;
-            // 44px reserves room for a future sticky JUMP TO bar
-            // (parked at viewport top once the header scrolls away).
-            // Until that lands, the value is harmless — the sidebar
-            // simply sticks at y = 44 instead of y = 0.
+            // 334px = jump-nav natural-top (290) + jump-nav height
+            // (44). Starts the sidebar flush with the bottom edge of
+            // the JUMP TO bar, never sliding behind it. As the user
+            // scrolls down, y tracks page-flickable.viewport-y until
+            // it hits sticky-top.
+            property <length> natural-top: 334px;
+            // 44px parks the sidebar just below the sticky JUMP TO
+            // bar (jump-nav's height) once the header scrolls away.
             property <length> sticky-top: 44px;
 
             x: root.width - self.width;
