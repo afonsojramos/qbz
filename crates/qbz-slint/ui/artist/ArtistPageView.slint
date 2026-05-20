@@ -8,7 +8,14 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { ArtistState, AlbumTrackItem, NavState, ContentView } from "../state.slint";
+import {
+    ArtistState,
+    AlbumTrackItem,
+    NavState,
+    ContentView,
+    NetworkSidebarState,
+    NetworkSidebarActions,
+} from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
@@ -21,6 +28,9 @@ import { NavButtons } from "../shell/NavButtons.slint";
 component CircleAction inherits Rectangle {
     in property <image> icon;
     in property <bool> primary: false;
+    // Stays "pressed" — same surface as a hover, icon tinted accent.
+    // Used by the Network button while the sidebar is open.
+    in property <bool> active: false;
     in property <length> diameter: 40px;
     callback clicked();
 
@@ -29,9 +39,9 @@ component CircleAction inherits Rectangle {
     border-radius: root.diameter / 2;
     // Ghost circle — translucent fill with a faint ring, never a solid
     // accent fill (mirrors the Tauri transport controls).
-    background: ta.has-hover ? Theme.surface-hover : transparent;
+    background: (ta.has-hover || root.active) ? Theme.surface-hover : transparent;
     border-width: 1px;
-    border-color: ta.has-hover ? Theme.text-disabled : Theme.border-subtle;
+    border-color: (ta.has-hover || root.active) ? Theme.text-disabled : Theme.border-subtle;
 
     QbzIcon {
         source: root.icon;
@@ -39,7 +49,9 @@ component CircleAction inherits Rectangle {
         height: root.primary ? 19px : 17px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+        tint: root.active
+            ? Theme.accent
+            : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
     }
 
     ta := TouchArea {
@@ -335,10 +347,11 @@ export component ArtistPageView inherits Rectangle {
                     Rectangle { height: 18px; }
 
                     // Action buttons — Heart, Build collection, Radio
-                    // (with QBZ / Qobuz dropdown). Mirrors Tauri's
-                    // artist-actions: NO Play here (top tracks has its
-                    // own play). Network sidebar toggle and Hide are
-                    // deferred to Tanda 2 (sidebar work).
+                    // (with QBZ / Qobuz dropdown), Network. Mirrors
+                    // Tauri's artist-actions: NO Play here (top tracks
+                    // has its own play). Hide (blacklist) is still
+                    // deferred until the blacklist module migrates out
+                    // of src-tauri.
                     HorizontalLayout {
                         alignment: start;
                         spacing: 12px;
@@ -387,6 +400,17 @@ export component ArtistPageView inherits Rectangle {
                                         }
                                     }
                                 }
+                            }
+                        }
+                        // Network — toggles the artist network sidebar.
+                        // Stays active (accent-tinted) while the sidebar
+                        // is open, matching Tauri's `.network-btn.active`.
+                        CircleAction {
+                            icon: @image-url("../assets/icons/element-connect.svg");
+                            active: NetworkSidebarState.open;
+                            clicked => {
+                                NetworkSidebarState.open = !NetworkSidebarState.open;
+                                NetworkSidebarActions.toggle();
                             }
                         }
                     }

@@ -1087,6 +1087,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // Artist network sidebar — persist the open/closed flag on every
+    // toggle so the sidebar reopens in the same state next launch. The
+    // Slint side already flipped NetworkSidebarState.open before
+    // emitting the callback.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<NetworkSidebarActions>()
+            .on_toggle(move || {
+                if let Some(w) = weak.upgrade() {
+                    let open = w.global::<NetworkSidebarState>().get_open();
+                    network_sidebar_prefs::set_open(open);
+                }
+            });
+    }
+
     window.on_close_app(|| {
         log::info!("[qbz-slint] closing");
         let _ = slint::quit_event_loop();
