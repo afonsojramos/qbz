@@ -24,6 +24,7 @@ mod discovery_dismiss;
 mod home;
 mod nav;
 mod play_history;
+mod strip_html;
 mod playback;
 mod queue;
 mod recently;

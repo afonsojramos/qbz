@@ -101,7 +101,7 @@ fn map_album(album: Album) -> AlbumData {
     let description = album
         .description
         .as_deref()
-        .map(strip_html)
+        .map(crate::strip_html::strip_html)
         .unwrap_or_default();
     // The header description fills the full width to the right of the
     // artwork, so a longer truncation keeps it from looking like a thin
@@ -172,40 +172,10 @@ fn quality_detail(bit_depth: Option<u32>, sample_rate: Option<f64>) -> String {
 }
 
 /// Crude HTML strip for Qobuz album descriptions. Break and paragraph
-/// tags become newlines first so paragraph structure survives; remaining
-/// tags are dropped and a few entities decoded.
-fn strip_html(input: &str) -> String {
-    let normalized = input
-        .replace("<br>", "\n")
-        .replace("<br/>", "\n")
-        .replace("<br />", "\n")
-        .replace("<BR>", "\n")
-        .replace("<BR/>", "\n")
-        .replace("</p>", "\n\n")
-        .replace("</P>", "\n\n");
-
-    let mut out = String::new();
-    let mut in_tag = false;
-    for ch in normalized.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
-        }
-    }
-
-    let mut out = out
-        .replace("&amp;", "&")
-        .replace("&#39;", "'")
-        .replace("&quot;", "\"")
-        .replace("&nbsp;", " ");
-    // Collapse runs of blank lines left by stacked tags.
-    while out.contains("\n\n\n") {
-        out = out.replace("\n\n\n", "\n\n");
-    }
-    out.trim().to_string()
-}
+// The previous local strip_html lived here; moved to
+// `crate::strip_html` so artist and album views share the same
+// paragraph + entity handling and pick up the same future
+// improvements.
 
 fn map_track(track: Track) -> TrackData {
     let mut title = track.title;

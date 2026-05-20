@@ -93,7 +93,7 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
         Some(biography) => {
             let content = biography
                 .content
-                .map(|c| strip_html(&c))
+                .map(|c| crate::strip_html::strip_html(&c))
                 .unwrap_or_default();
             let source = biography
                 .source
@@ -408,34 +408,10 @@ fn mmss(secs: u32) -> String {
 /// regularly emits in biography bodies, with the © family explicitly
 /// covered because TiVo-sourced bios often close with a `&copy; TiVo`
 /// credit line.
-fn strip_html(input: &str) -> String {
-    let mut out = String::new();
-    let mut in_tag = false;
-    for ch in input.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
-        }
-    }
-    out.replace("&amp;", "&")
-        .replace("&#39;", "'")
-        .replace("&apos;", "'")
-        .replace("&quot;", "\"")
-        .replace("&nbsp;", " ")
-        .replace("&copy;", "©")
-        .replace("&#169;", "©")
-        .replace("&#xa9;", "©")
-        .replace("&#xA9;", "©")
-        .replace("&reg;", "®")
-        .replace("&trade;", "™")
-        .replace("&mdash;", "—")
-        .replace("&ndash;", "–")
-        .replace("&hellip;", "…")
-        .trim()
-        .to_string()
-}
+// strip_html now lives in `crate::strip_html` so both album and
+// artist views use the same paragraph-preserving conversion. The
+// previous artist-local helper produced one long paragraph for
+// multi-paragraph biographies — gone with this refactor.
 
 fn card_to_item(card: CardData) -> AlbumCardItem {
     AlbumCardItem {
