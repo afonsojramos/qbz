@@ -21,6 +21,7 @@ import { PlaylistCard } from "../discover/PlaylistCard.slint";
 import { SearchTrackRow } from "SearchTrackRow.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { LoadingDots } from "../primitives/LoadingDots.slint";
 
 // One tab in the results tab strip.
 component SearchTab inherits Rectangle {
@@ -425,8 +426,18 @@ export component SearchResultsView inherits Rectangle {
                 padding-left: 32px;
                 padding-right: 32px;
                 padding-bottom: 32px;
-                spacing: 28px;
+                spacing: 0px;
                 alignment: start;
+
+                // Results sections — fade in once the search completes
+                // so the empty placeholder colors never show through.
+                VerticalLayout {
+                    spacing: 28px;
+                    opacity: SearchState.loading ? 0.0 : 1.0;
+                    animate opacity {
+                        duration: 280ms;
+                        easing: ease-in-out;
+                    }
 
                 // ---- Most popular + Artists (All tab) ---------------------
                 if SearchState.tab == 0 && SearchState.most-popular-kind != "": HorizontalLayout {
@@ -571,11 +582,11 @@ export component SearchResultsView inherits Rectangle {
                     clicked => { SearchActions.load-more(4); }
                 }
 
-                // ---- Empty / loading state --------------------------------
-                if SearchState.loading && !root.has-results: Text {
-                    text: @tr("Searching…");
-                    color: Theme.text-muted;
-                    font-size: 14px;
+                }
+                // ---- Loading + empty states -------------------------------
+                if SearchState.loading && !root.has-results: LoadingDots {
+                    label: @tr("Searching…");
+                    height: 140px;
                 }
                 if !SearchState.loading && !root.has-results: Text {
                     text: @tr("No results.");

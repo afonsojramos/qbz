@@ -51,9 +51,10 @@ export component HeaderMenuOverlay inherits Rectangle {
     }
     property <int> open-index: HeaderMenuState.open-index;
 
-    // Closes the menu after 1.5s without pointer interaction.
+    // Closes the menu after 1s without pointer interaction (project rule:
+    // no menu stays open more than 1s idle).
     idle-timer := Timer {
-        interval: 1500ms;
+        interval: 1000ms;
         running: false;
         triggered => {
             self.running = false;
