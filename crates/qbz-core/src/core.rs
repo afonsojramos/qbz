@@ -14,6 +14,7 @@ use qbz_models::{
     RepeatMode, SearchAllResults, SearchResultsPage, StreamUrl, Track, TracksContainer,
     UserSession,
 };
+use qbz_integrations::musicbrainz::cache::MusicBrainzCache;
 use qbz_integrations::musicbrainz::{
     location, ArtistMetadata, ArtistRelationships, DiscoveryArtist, DiscoveryResponse,
     MusicBrainzClient, Period, RelatedArtist, ResolvedArtist,
@@ -142,6 +143,10 @@ pub struct QbzCore<A: FrontendAdapter> {
     player: Arc<Player>,
     /// MusicBrainz client (always present; enable/disable toggle lives inside)
     musicbrainz: Arc<MusicBrainzClient>,
+    /// Persistent MB cache. Opened by the frontend (which owns the
+    /// data-dir path) via `set_musicbrainz_cache`. Methods read the
+    /// cache before hitting the network and persist on miss.
+    musicbrainz_cache: Arc<std::sync::Mutex<Option<MusicBrainzCache>>>,
     /// Whether the core is initialized
     initialized: Arc<RwLock<bool>>,
 }
@@ -158,7 +163,18 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             queue: Arc::new(RwLock::new(QueueManager::new())),
             player: Arc::new(player),
             musicbrainz: Arc::new(MusicBrainzClient::new()),
+            musicbrainz_cache: Arc::new(std::sync::Mutex::new(None)),
             initialized: Arc::new(RwLock::new(false)),
+        }
+    }
+
+    /// Install a MusicBrainz cache. The frontend owns the data path
+    /// and opens the cache; QbzCore just stores the handle and uses
+    /// it transparently in `musicbrainz_get_artist_metadata` and
+    /// `musicbrainz_get_artist_relationships`.
+    pub fn set_musicbrainz_cache(&self, cache: MusicBrainzCache) {
+        if let Ok(mut guard) = self.musicbrainz_cache.lock() {
+            *guard = Some(cache);
         }
     }
 
@@ -1426,6 +1442,15 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         &self,
         mbid: &str,
     ) -> Result<ArtistMetadata, CoreError> {
+        // Cache lookup — same behavior as Tauri's v2 command.
+        if let Ok(guard) = self.musicbrainz_cache.lock() {
+            if let Some(cache) = guard.as_ref() {
+                if let Ok(Some(cached)) = cache.get_artist_metadata(mbid) {
+                    return Ok(cached);
+                }
+            }
+        }
+
         let artist = self
             .musicbrainz
             .get_artist_with_relations(mbid)
@@ -1448,6 +1473,12 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             }
         }
 
+        if let Ok(guard) = self.musicbrainz_cache.lock() {
+            if let Some(cache) = guard.as_ref() {
+                let _ = cache.set_artist_metadata(mbid, &metadata);
+            }
+        }
+
         Ok(metadata)
     }
 
@@ -1460,6 +1491,14 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         &self,
         mbid: &str,
     ) -> Result<ArtistRelationships, CoreError> {
+        if let Ok(guard) = self.musicbrainz_cache.lock() {
+            if let Some(cache) = guard.as_ref() {
+                if let Ok(Some(cached)) = cache.get_artist_relations(mbid) {
+                    return Ok(cached);
+                }
+            }
+        }
+
         let artist = self
             .musicbrainz
             .get_artist_with_relations(mbid)
@@ -1511,12 +1550,20 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             }
         }
 
-        Ok(ArtistRelationships {
+        let result = ArtistRelationships {
             members,
             past_members,
             groups,
             collaborators,
-        })
+        };
+
+        if let Ok(guard) = self.musicbrainz_cache.lock() {
+            if let Some(cache) = guard.as_ref() {
+                let _ = cache.set_artist_relations(mbid, &result);
+            }
+        }
+
+        Ok(result)
     }
 
     /// "You may also like" tag-based discovery — finds artists that

@@ -459,6 +459,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let app_runtime = Arc::new(AppRuntime::new(SlintAdapter::new(window.as_weak())));
 
+    // MusicBrainz cache — opens a SQLite store at
+    // <data-dir>/qbz/cache/musicbrainz_cache.db so artist metadata
+    // and relationships persist across sessions (matches Tauri's
+    // MusicBrainzCache init path). Failure to open just degrades to
+    // direct network calls — the methods skip the cache when none
+    // is set.
+    if let Some(data_dir) = dirs::data_dir() {
+        let cache_dir = data_dir.join("qbz").join("cache");
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            log::warn!("[qbz-slint] MB cache dir create failed: {e}");
+        } else {
+            let db_path = cache_dir.join("musicbrainz_cache.db");
+            match qbz_integrations::musicbrainz::cache::MusicBrainzCache::new(&db_path) {
+                Ok(cache) => {
+                    app_runtime.core().set_musicbrainz_cache(cache);
+                    log::info!("[qbz-slint] MB cache opened at {db_path:?}");
+                }
+                Err(e) => log::warn!("[qbz-slint] MB cache open failed: {e}"),
+            }
+        }
+    }
+
     // Shared QBZ image cache for album artwork; trim it on startup.
     let image_cache = artwork::open_cache();
     artwork::spawn_evict(image_cache.clone());
