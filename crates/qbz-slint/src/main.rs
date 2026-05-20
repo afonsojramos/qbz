@@ -1087,10 +1087,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
-    // Artist network sidebar — persist the open/closed flag on every
-    // toggle so the sidebar reopens in the same state next launch. The
-    // Slint side already flipped NetworkSidebarState.open before
-    // emitting the callback.
+    // Artist network sidebar — load the persisted open/closed flag
+    // (defaults to true on first launch), then persist on every toggle.
+    // The Slint side flips NetworkSidebarState.open before emitting
+    // the callback.
+    window
+        .global::<NetworkSidebarState>()
+        .set_open(network_sidebar_prefs::load_open());
     {
         let weak = window.as_weak();
         window

@@ -279,7 +279,9 @@ export struct DiscoveryArtist {
 export global NetworkSidebarState {
     // Open/closed. The header network button toggles this; persistence
     // is handled by the Rust side (`network_sidebar_prefs::set_open`).
-    in-out property <bool> open: false;
+    // Defaults to open — Rust overrides on startup from the persisted
+    // value if any.
+    in-out property <bool> open: true;
 
     // True until proven otherwise. Set to false when MB is disabled in
     // settings, or when the name → mbid resolution fails. Drives whether

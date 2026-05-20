@@ -9,28 +9,39 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct Prefs {
-    #[serde(default)]
+    #[serde(default = "default_open")]
     open: bool,
+}
+
+fn default_open() -> bool {
+    true
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self { open: true }
+    }
 }
 
 fn store_path() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join("qbz").join("network_sidebar.json"))
 }
 
-/// Read the persisted open/closed flag. Returns `false` (closed) when
-/// the file does not exist or cannot be read.
-#[allow(dead_code)] // wired by the artist controller in phase 4 (sidebar layout)
+/// Read the persisted open/closed flag. Defaults to `true` (open) on a
+/// fresh install — the artist network sidebar is one of the visible
+/// improvements over a generic Linux music player, so it should be on
+/// out of the box until the user closes it.
 pub fn load_open() -> bool {
     let Some(path) = store_path() else {
-        return false;
+        return true;
     };
     match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice::<Prefs>(&bytes)
             .map(|p| p.open)
-            .unwrap_or(false),
-        Err(_) => false,
+            .unwrap_or(true),
+        Err(_) => true,
     }
 }
 

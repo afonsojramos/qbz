@@ -539,14 +539,22 @@ export component ArtistPageView inherits Rectangle {
         }
     }
 
-        // Network sidebar — a 300px column on the right, fills the
-        // available height, separated from the main content by a thin
-        // border. Sections (Origin / Labels / Similar / Relationships /
+        // Network sidebar — a 300px column on the right, vertically
+        // inset so it does not occupy the full body height (matches
+        // Tauri's `height: calc(100vh - 180px)`, which leaves room for
+        // the jump-nav at the top and the now-playing bar at the
+        // bottom). Sections (Origin / Labels / Similar / Relationships /
         // Discovery) are populated in the following phases; the shell
         // only renders the header and an empty body.
-        if NetworkSidebarState.open: Rectangle {
+        if NetworkSidebarState.open: VerticalLayout {
             width: 300px;
-            background: Theme.surface-card;
+            spacing: 0px;
+
+            Rectangle { height: 22px; }
+
+            sidebar-panel := Rectangle {
+                vertical-stretch: 1;
+                background: Theme.surface-card;
 
             // Left border line — 1px Theme.border-subtle, matching the
             // Tauri `.network-sidebar-column { border-left: 1px solid
@@ -627,6 +635,9 @@ export component ArtistPageView inherits Rectangle {
                     vertical-stretch: 1;
                 }
             }
+        }
+
+            Rectangle { height: 22px; }
         }
     }
 }
