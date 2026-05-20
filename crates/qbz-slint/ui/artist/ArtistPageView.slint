@@ -268,11 +268,11 @@ export component ArtistPageView inherits Rectangle {
     // Whether the full-biography modal is open. Mirrors the album
     // description Read-more pattern in AlbumPageView.
     property <bool> show-bio: false;
-    // Width of the main content column — shrinks when the network
-    // sidebar opens, so the bio text wraps inside the visible band
-    // instead of being clipped by the sidebar.
-    property <length> content-width:
-        NetworkSidebarState.open ? root.width - 300px : root.width;
+    // Width handed down to the bio paragraph. The artist header sits
+    // above the body row where the sidebar lives, so the bio never
+    // needs to shrink for the sidebar — it always uses the full
+    // window width minus the page padding + portrait + header gap.
+    property <length> content-width: root.width;
     // Popular Tracks shows the first 5; Load more expands to all.
     property <bool> top-tracks-expanded: false;
     property <int> top-tracks-preview: 5;
@@ -283,14 +283,15 @@ export component ArtistPageView inherits Rectangle {
 
     background: Theme.surface-main;
 
-    // Main content + optional network sidebar — same flow as Tauri's
-    // .artist-body. The Flickable shrinks when the sidebar opens; the
-    // sidebar itself is a fixed 300px column on the right.
-    HorizontalLayout {
-        spacing: 0px;
-
-    Flickable {
-        horizontal-stretch: 1;
+    // Single page-wide Flickable — the gradient header + body row
+    // (main content + sidebar-slot placeholder) all live inside it so
+    // the artist header spans the full window width (gradient covers
+    // edge-to-edge, mirroring Tauri's `.artist-body` row analogy of a
+    // colspan=2 header followed by a 2-column body). The actual
+    // sidebar is rendered AFTER the Flickable as an overlay sibling so
+    // it can stay anchored on the right and fill the available height
+    // independently of the page scroll.
+    page-flickable := Flickable {
         viewport-width: self.width;
         viewport-height: page.preferred-height;
 
@@ -468,6 +469,16 @@ export component ArtistPageView inherits Rectangle {
                 }
             }
 
+            // Body row — main content column (search, popular tracks,
+            // release grids) flanked by an empty 300px reservation when
+            // the network sidebar is open, so the actual sidebar
+            // overlay (rendered below) never covers the page content.
+            HorizontalLayout {
+                spacing: 0px;
+                main-col := VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 0px;
+
             Rectangle { height: 24px; }
 
             // --- In-page search ---------------------------------------------
@@ -637,34 +648,42 @@ export component ArtistPageView inherits Rectangle {
                     }
                 }
             }
-        }
-    }
+                }   // close main-col VerticalLayout
 
-        // Network sidebar — a 300px column on the right, vertically
-        // inset so it does not occupy the full body height (matches
-        // Tauri's `height: calc(100vh - 180px)`, which leaves room for
-        // the jump-nav at the top and the now-playing bar at the
-        // bottom). Sections (Origin / Labels / Similar / Relationships /
-        // Discovery) are populated in the following phases; the shell
-        // only renders the header and an empty body.
-        if NetworkSidebarState.open: VerticalLayout {
+                // Sidebar slot — empty placeholder that reserves the
+                // right 300px so the main column does not stretch
+                // under the overlay sidebar.
+                if NetworkSidebarState.open: Rectangle {
+                    width: 300px;
+                }
+            }   // close body HorizontalLayout
+        }   // close page VerticalLayout
+    }   // close Flickable
+
+        // Network sidebar — overlay anchored to the right edge of the
+        // ArtistPageView, with sticky-style y positioning so it tracks
+        // the page scroll while the header is visible and then pins
+        // to `sticky-top` once the user scrolls past the header. The
+        // bottom edge is always flush with the now-playing bar
+        // (height = root.height - y), so no gap appears when sticky.
+        if NetworkSidebarState.open: sidebar-panel := Rectangle {
+            // 320px = NavButtons + artist header + 36px spacer (the
+            // natural y of the body row). At scroll = 0 the sidebar
+            // sits below the header; as the user scrolls down, y
+            // tracks page-flickable.viewport-y until it hits
+            // sticky-top.
+            property <length> natural-top: 320px;
+            // 44px reserves room for a future sticky JUMP TO bar
+            // (parked at viewport top once the header scrolls away).
+            // Until that lands, the value is harmless — the sidebar
+            // simply sticks at y = 44 instead of y = 0.
+            property <length> sticky-top: 44px;
+
+            x: root.width - self.width;
+            y: max(self.natural-top + page-flickable.viewport-y, self.sticky-top);
             width: 300px;
-            spacing: 0px;
-
-            // Top inset clears the entire artist header — NavButtons
-            // (11 padding + ~32 row + 22 spacer = 65) + the artist
-            // header itself (~214px: ARTIST label + name + truncated
-            // bio + Read more + action buttons) + the 36px spacer
-            // before Popular Tracks. Total ~315px so the sidebar's
-            // top edge sits inline with where Popular Tracks starts,
-            // matching Tauri's `.network-sidebar-column` natural flow
-            // position (inside the body, alongside the sections —
-            // never overlapping the artist header).
-            Rectangle { height: 320px; }
-
-            sidebar-panel := Rectangle {
-                vertical-stretch: 1;
-                background: Theme.surface-card;
+            height: root.height - self.y;
+            background: Theme.surface-card;
 
             // Left border line — 1px Theme.border-subtle, matching the
             // Tauri `.network-sidebar-column { border-left: 1px solid
@@ -1128,13 +1147,6 @@ export component ArtistPageView inherits Rectangle {
                 }
             }
         }
-
-            // 32px gap above the now-playing bar — mirrors Tauri's
-            // height = calc(100vh - titlebar - jump-nav - nowplaying)
-            // which leaves a small margin above the bar.
-            Rectangle { height: 32px; }
-        }
-    }
 
     // --- Full-biography modal ----------------------------------------------
     // Same pattern as AlbumPageView's description modal: scrim that
