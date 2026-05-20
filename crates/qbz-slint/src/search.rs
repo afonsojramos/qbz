@@ -639,7 +639,16 @@ pub fn replace_category(window: &AppWindow, more: MoreRows) {
             let items: Vec<SearchTrackItem> = rows.into_iter().map(track_item).collect();
             state.set_tracks(ModelRc::new(VecModel::from(items)));
         }
-        MoreRows::Artists(rows) => {
+        MoreRows::Artists(mut rows) => {
+            // Re-apply the top-result dedupe — if the most-popular hero
+            // is an artist and is the first entry in the new list, drop
+            // it so the carousel does not show the duplicate.
+            if state.get_most_popular_kind().as_str() == "artist" {
+                let mp_id = state.get_most_popular_artist().id;
+                if rows.first().map_or(false, |r| r.id == mp_id.as_str()) {
+                    rows.remove(0);
+                }
+            }
             let items: Vec<SlimItem> = rows.into_iter().map(artist_item).collect();
             state.set_artists(ModelRc::new(VecModel::from(items)));
         }

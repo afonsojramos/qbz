@@ -28,7 +28,9 @@ export component SearchTrackRow inherits Rectangle {
 
     height: 56px;
     border-radius: 8px;
-    background: ta.has-hover
+    // Use the OR'd row-hovered so hovering nested controls (cell / more)
+    // does not break the row tint.
+    background: root.row-hovered
         ? #ffffff16
         : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
 

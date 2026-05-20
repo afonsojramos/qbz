@@ -539,7 +539,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
             SEARCH_DEBOUNCE.with(|t| t.stop());
-            nav::record(nav::NavEntry::Search(q.clone()));
+            nav::push_or_replace_search(q.clone());
             navigate_search(runtime.clone(), weak.clone(), &handle, image_cache.clone(), q);
             if let Some(w) = weak.upgrade() {
                 update_nav_flags(&w);
@@ -569,6 +569,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     slint::TimerMode::SingleShot,
                     std::time::Duration::from_millis(300),
                     move || {
+                        // Record (or replace) the Search history entry so
+                        // back/forward returns to this search instead of
+                        // skipping past it.
+                        nav::push_or_replace_search(q.clone());
                         navigate_search(
                             runtime.clone(),
                             weak.clone(),
@@ -576,6 +580,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             image_cache.clone(),
                             q.clone(),
                         );
+                        if let Some(w) = weak.upgrade() {
+                            update_nav_flags(&w);
+                        }
                     },
                 );
             });

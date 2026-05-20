@@ -1,6 +1,8 @@
-// Artist card — a circular portrait with the artist name and, when the
-// user does not already follow the artist, a Follow chip. Style ported
-// from the Tauri Discover "For You" artist tile.
+// Artist card — ported 1:1 from the Tauri SearchView `.artist-card`:
+// 160x220 tile inside a surface-card container, with a 120px circular
+// avatar (gradient placeholder), centered name, and an optional Follow
+// chip (rectangular per ADR-008) shown only when the user does not yet
+// follow the artist.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
@@ -14,13 +16,12 @@ export component ArtistCard inherits Rectangle {
     // kind ("artist"), artist id, action ("follow").
     callback media-action(string, string, string);
 
-    width: 170px;
-    height: 248px;
-    border-radius: 8px;
-    background: ta.has-hover ? Theme.surface-elevated : transparent;
+    width: 160px;
+    height: 220px;
+    border-radius: 12px;
+    background: ta.has-hover ? Theme.surface-elevated : Theme.surface-card;
+    animate background { duration: 150ms; }
 
-    // Whole-card click — declared before the content so the Follow chip
-    // keeps its own clicks.
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => {
@@ -29,23 +30,26 @@ export component ArtistCard inherits Rectangle {
     }
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 8px;
+        padding: 16px;
+        spacing: 12px;
         alignment: start;
 
-        // Circular portrait.
+        // 120px circular avatar with a soft gradient placeholder.
         HorizontalLayout {
             alignment: center;
             Rectangle {
-                width: 140px;
-                height: 140px;
-                border-radius: 70px;
+                width: 120px;
+                height: 120px;
+                border-radius: 60px;
                 clip: true;
-                background: Theme.surface-elevated;
+                background: @linear-gradient(
+                    135deg,
+                    Theme.surface-elevated 0%,
+                    Theme.surface-card 100%);
                 QbzIcon {
                     source: @image-url("../assets/icons/user.svg");
-                    width: 44px;
-                    height: 44px;
+                    width: 38px;
+                    height: 38px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     tint: Theme.text-muted;
@@ -61,7 +65,7 @@ export component ArtistCard inherits Rectangle {
 
         Text {
             text: root.artist.title;
-            width: 146px;
+            width: 128px;
             color: Theme.text-primary;
             font-size: 14px;
             font-weight: Typography.medium;
@@ -69,28 +73,29 @@ export component ArtistCard inherits Rectangle {
             overflow: elide;
         }
 
-        // Follow chip — only while the user does not follow the artist.
+        // Rectangular Follow chip (ADR-008 — no pills). Shown only when
+        // the artist is not yet followed.
         if !root.artist.following: HorizontalLayout {
             alignment: center;
+            spacing: 0px;
             Rectangle {
                 width: chip-row.preferred-width;
-                height: 30px;
-                // Rectangular with small rounded corners — QBZ never uses
-                // pill-shaped chips (ADR-008).
+                height: 28px;
                 border-radius: Radius.sm;
                 background: follow-ta.has-hover
                     ? Theme.surface-hover
                     : Theme.surface-elevated;
+                animate background { duration: 150ms; }
                 chip-row := HorizontalLayout {
-                    padding-left: 14px;
-                    padding-right: 14px;
+                    padding-left: 12px;
+                    padding-right: 12px;
                     spacing: 6px;
                     VerticalLayout {
                         alignment: center;
                         QbzIcon {
                             source: @image-url("../assets/icons/user-plus.svg");
-                            width: 14px;
-                            height: 14px;
+                            width: 13px;
+                            height: 13px;
                             tint: Theme.text-primary;
                         }
                     }

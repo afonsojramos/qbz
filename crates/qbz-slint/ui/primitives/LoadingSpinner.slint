@@ -1,0 +1,22 @@
+// Loading spinner — a rotating 3/4 arc (Lucide LoaderCircle). Matches the
+// Tauri `.spinner` (32px, 1s linear infinite). Used for heavy loads where
+// `LoadingDots` reads too lightweight.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+
+export component LoadingSpinner inherits Rectangle {
+    in property <length> size: 32px;
+    in property <color> tint: Theme.accent;
+
+    width: root.size;
+    height: root.size;
+
+    Image {
+        width: root.size;
+        height: root.size;
+        source: @image-url("../assets/icons/loader-circle.svg");
+        colorize: root.tint;
+        // Linear 1s/full-turn spin driven by animation-tick (360deg / 1000ms).
+        transform-rotation: ((animation-tick() / 1ms) * 0.36) * 1deg;
+    }
+}

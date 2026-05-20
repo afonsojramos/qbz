@@ -33,6 +33,27 @@ thread_local! {
     });
 }
 
+/// Push a Search history entry, OR replace the cursor entry in place
+/// when it is already a Search. Used by the live-search debounce so
+/// quick keystrokes do not push one entry per character, while still
+/// keeping the page reachable via back/forward at the final query.
+pub fn push_or_replace_search(query: String) {
+    HISTORY.with(|h| {
+        let h = &mut *h.borrow_mut();
+        match h.entries.get(h.cursor) {
+            Some(NavEntry::Search(_)) => {
+                h.entries.truncate(h.cursor + 1);
+                h.entries[h.cursor] = NavEntry::Search(query);
+            }
+            _ => {
+                h.entries.truncate(h.cursor + 1);
+                h.entries.push(NavEntry::Search(query));
+                h.cursor = h.entries.len() - 1;
+            }
+        }
+    });
+}
+
 /// Record a fresh forward navigation, dropping any forward history. A
 /// no-op when the destination already is the current entry, so repeated
 /// clicks on the same page do not pile up.

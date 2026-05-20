@@ -63,8 +63,9 @@ component TrackRow inherits Rectangle {
     height: 52px;
     border-radius: 8px;
     // The even-row tint is clearly fainter than the hover tint so the two
-    // never read as the same state.
-    background: ta.has-hover
+    // never read as the same state. Use row-hovered so hovering the cell
+    // or the more button keeps the row tint.
+    background: root.row-hovered
         ? #ffffff16
         : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
 

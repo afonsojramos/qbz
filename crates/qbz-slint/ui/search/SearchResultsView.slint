@@ -21,7 +21,7 @@ import { PlaylistCard } from "../discover/PlaylistCard.slint";
 import { SearchTrackRow } from "SearchTrackRow.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { LoadingDots } from "../primitives/LoadingDots.slint";
+import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 
 // One tab in the results tab strip.
 component SearchTab inherits Rectangle {
@@ -211,8 +211,8 @@ component ArtistGrid inherits Rectangle {
     callback open(string);
     callback media-action(string, string, string);
 
-    property <length> card-w: 170px;
-    property <length> card-h: 248px;
+    property <length> card-w: 160px;
+    property <length> card-h: 220px;
     property <length> gap: 16px;
     property <int> columns:
         Math.max(1, Math.floor((self.width + root.gap) / (root.card-w + root.gap)));
@@ -296,7 +296,9 @@ export component SearchResultsView inherits Rectangle {
         }
 
         // --- Fixed header: title, tabs + filter radios ------------------
-        VerticalLayout {
+        // Collapsed during the initial load so the empty title + tabs do
+        // not show through behind the loading state.
+        if !(SearchState.loading && !root.has-results): VerticalLayout {
             padding-left: 32px;
             padding-right: 32px;
             padding-bottom: 12px;
@@ -584,9 +586,24 @@ export component SearchResultsView inherits Rectangle {
 
                 }
                 // ---- Loading + empty states -------------------------------
-                if SearchState.loading && !root.has-results: LoadingDots {
-                    label: @tr("Searching…");
-                    height: 140px;
+                if SearchState.loading && !root.has-results: Rectangle {
+                    height: 320px;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 18px;
+                        HorizontalLayout {
+                            alignment: center;
+                            LoadingSpinner {
+                                size: 36px;
+                            }
+                        }
+                        Text {
+                            text: @tr("Searching…");
+                            color: Theme.text-muted;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                        }
+                    }
                 }
                 if !SearchState.loading && !root.has-results: Text {
                     text: @tr("No results.");
