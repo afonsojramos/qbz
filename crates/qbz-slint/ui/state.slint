@@ -213,6 +213,118 @@ export global ArtistState {
     in property <bool> loading: false;
 }
 
+// Artist network sidebar — Origin / Labels / Similar / Relationships /
+// Discovery. The first three lists come from artist state already; this
+// global covers the MusicBrainz-driven sections plus the open/closed
+// flag the network button toggles.
+
+// One row of the Origin section. Empty strings mark absent fields so the
+// view can hide individual rows without an Option wrapper.
+export struct MbOriginData {
+    // True when the artist is a person (vs group/orchestra/etc). Drives
+    // the row labels: "Born / Born in / Died" vs "Founded / Founded in /
+    // Disbanded".
+    is-person: bool,
+    // Begin date — "1976" / "May 1976" / "May 14 1976". Empty when MB
+    // has no life_span.begin.
+    begin-date: string,
+    // End date — same shape as begin. Empty when life_span.end is
+    // missing (or the artist is still active).
+    end-date: string,
+    // Location display string ("Berlin, Germany" / "United Kingdom").
+    // Empty when MB has no location.
+    location-display: string,
+    // True when the location is precise enough to drill in (city/state
+    // precision, or precision==country but a city is present somehow).
+    // When false, the row renders as plain text.
+    location-clickable: bool,
+}
+
+// One member, group, or collaborator row.
+export struct MbRelationship {
+    mbid: string,
+    name: string,
+    // Primary role string for the musician-click callback ("Band Member",
+    // "Guitar", "Producer", ...). Always populated — defaults to "Band
+    // Member" / "Band" / "Collaborator" by section when MB has no
+    // attributes for the relation.
+    role: string,
+    // Tooltip — roles joined with ", " plus the period in parens when
+    // present. Falls back to the name.
+    tooltip: string,
+}
+
+// All MB relationship rows for the sidebar. Each list is independently
+// hideable.
+export struct MbRelationshipsData {
+    members: [MbRelationship],
+    groups: [MbRelationship],
+    collaborators: [MbRelationship],
+    // Convenience flag — true when any of the three lists has at least
+    // one row, so the section header can hide on no-data.
+    has-data: bool,
+}
+
+// One row of the "You may also like" discovery section.
+export struct DiscoveryArtist {
+    // MB id — used by the dismiss callback to remember the rejection.
+    mbid: string,
+    name: string,
+    // Qobuz artist id (string form) when the MB candidate matched a
+    // Qobuz artist; empty when only available on MB. Drives whether the
+    // row is clickable.
+    qobuz-id: string,
+}
+
+export global NetworkSidebarState {
+    // Open/closed. The header network button toggles this; persistence
+    // is handled by the Rust side (`network_sidebar_prefs::set_open`).
+    in-out property <bool> open: false;
+
+    // True until proven otherwise. Set to false when MB is disabled in
+    // settings, or when the name → mbid resolution fails. Drives whether
+    // the MB-sourced sections render at all (Origin, Relationships,
+    // Discovery).
+    in property <bool> mb-available: true;
+
+    // Resolved MB id for the current artist; empty before resolve
+    // completes or when the artist could not be matched. Used by the
+    // Rust side as the key for relationship/discovery loads.
+    in property <string> mb-mbid;
+
+    // Origin (MB metadata) section
+    in property <bool> origin-loading: false;
+    in property <MbOriginData> origin;
+
+    // Relationships (MB) section
+    in property <bool> relationships-loading: false;
+    in property <MbRelationshipsData> relationships;
+
+    // Discovery (MB tag + LB similar) section — populated in phase 8.
+    in property <bool> discovery-loading: false;
+    in property <[DiscoveryArtist]> discovery-artists: [];
+}
+
+// Callbacks the sidebar emits. Each delivers the minimum payload the
+// Rust controller needs; the controller reconstructs richer payloads
+// (location precision, affinity seeds) from cached metadata when it
+// has to call out to a target view.
+export global NetworkSidebarActions {
+    // Origin location row clicked — opens ArtistsByLocation view.
+    callback location-clicked(string /* current artist mbid */);
+    // Label row clicked — opens LabelReleases view.
+    callback label-clicked(string /* label id */, string /* label name */);
+    // Similar / discovery / similar-row clicked — opens the Qobuz
+    // artist page for `qobuz-id`.
+    callback artist-clicked(string /* qobuz id */);
+    // Relationship row clicked — opens MusicianPage with the role.
+    callback musician-clicked(string /* name */, string /* role */);
+    // Discovery dismiss — removes the row and remembers the rejection.
+    callback discovery-dismissed(string /* mbid */);
+    // Sidebar toggled — Rust persists the new open state.
+    callback toggle();
+}
+
 // Shell chrome state — collapsible left sidebar and right-side panels.
 // Globals are imported directly by the shell components, so toggles
 // need no callback plumbing.

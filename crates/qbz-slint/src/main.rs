@@ -22,6 +22,7 @@ mod auth;
 mod commands;
 mod home;
 mod nav;
+mod network_sidebar_prefs;
 mod playback;
 mod queue;
 mod recently;
