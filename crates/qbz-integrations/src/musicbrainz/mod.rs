@@ -31,5 +31,8 @@ mod models;
 #[cfg(feature = "cache")]
 pub mod cache;
 
+pub mod genre;
+pub mod location;
+
 pub use client::{MusicBrainzClient, MusicBrainzConfig};
 pub use models::*;

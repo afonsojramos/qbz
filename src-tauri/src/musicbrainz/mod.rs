@@ -21,8 +21,6 @@ pub mod smart_playlists;
 
 pub use cache::{CacheStats, MusicBrainzCache, MusicBrainzCacheState};
 pub use client::{MusicBrainzClient, MusicBrainzConfig};
-pub mod genre_normalization;
-pub mod location_discovery;
 
 pub use models::{
     AffinitySeeds, AlbumAppearance, Area, AreaResult, AreaSearchResponse, ArtistBrowseResponse,

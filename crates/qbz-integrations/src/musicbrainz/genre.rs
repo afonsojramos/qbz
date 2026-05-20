@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use qbz_integrations::musicbrainz::{AffinitySeeds, Tag};
+use super::{AffinitySeeds, Tag};
 
 /// Tags that provide no useful genre/scene signal
 const NOISY_TAGS: &[&str] = &[
