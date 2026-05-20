@@ -268,6 +268,20 @@ pub fn map_search_all(
     results: SearchAllResults,
     favorite_artists: &HashSet<u64>,
 ) -> SearchData {
+    let mut artists: Vec<ArtistRow> = results
+        .artists
+        .items
+        .iter()
+        .map(|a| map_artist(a, favorite_artists.contains(&a.id)))
+        .collect();
+    let most_popular = map_most_popular(results.most_popular, favorite_artists);
+    // When the top-result is an artist and is also the first entry in the
+    // artists list, drop the duplicate so the carousel does not repeat it.
+    if let MostPopularRow::Artist(mp) = &most_popular {
+        if artists.first().map_or(false, |a| a.id == mp.id) {
+            artists.remove(0);
+        }
+    }
     SearchData {
         query: query.to_string(),
         albums_total: results.albums.total,
@@ -276,14 +290,9 @@ pub fn map_search_all(
         playlists_total: results.playlists.total,
         albums: results.albums.items.into_iter().map(map_album).collect(),
         tracks: results.tracks.items.into_iter().map(map_track).collect(),
-        artists: results
-            .artists
-            .items
-            .iter()
-            .map(|a| map_artist(a, favorite_artists.contains(&a.id)))
-            .collect(),
+        artists,
         playlists: results.playlists.items.into_iter().map(map_playlist).collect(),
-        most_popular: map_most_popular(results.most_popular, favorite_artists),
+        most_popular,
     }
 }
 

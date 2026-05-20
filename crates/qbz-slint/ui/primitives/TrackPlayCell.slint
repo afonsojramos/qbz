@@ -34,20 +34,29 @@ component EqBar inherits Rectangle {
     height: root.base * (0.5 + 0.5 * root.tri);
 }
 
-// Three-bar equalizer; bars grow from a shared bottom baseline.
-component EqualizerBars inherits HorizontalLayout {
-    spacing: 2px;
-    VerticalLayout {
-        alignment: end;
-        EqBar { base: 10px; delay: 0.0; }
-    }
-    VerticalLayout {
-        alignment: end;
-        EqBar { base: 14px; delay: 0.15; }
-    }
-    VerticalLayout {
-        alignment: end;
-        EqBar { base: 8px; delay: 0.3; }
+// Three-bar equalizer; bars grow from a fixed baseline so the block
+// stays perfectly centered while the bar heights oscillate.
+component EqualizerBars inherits Rectangle {
+    width: row.preferred-width;
+    height: 16px;
+    row := HorizontalLayout {
+        height: 16px;
+        spacing: 2px;
+        VerticalLayout {
+            height: 16px;
+            alignment: end;
+            EqBar { base: 10px; delay: 0.0; }
+        }
+        VerticalLayout {
+            height: 16px;
+            alignment: end;
+            EqBar { base: 14px; delay: 0.15; }
+        }
+        VerticalLayout {
+            height: 16px;
+            alignment: end;
+            EqBar { base: 8px; delay: 0.3; }
+        }
     }
 }
 
@@ -59,6 +68,10 @@ export component TrackPlayCell inherits Rectangle {
     in property <bool> row-hovered: false;
     in property <length> art-size: 40px;
     in property <length> number-width: 32px;
+    // True while the pointer is over the cell itself. The row OR's this
+    // with its other TouchAreas to drive `row-hovered` (Slint's has-hover
+    // does not propagate to ancestor TouchAreas).
+    out property <bool> hovered: ta.has-hover;
     // Fired when a non-current track should start playing.
     callback play();
 

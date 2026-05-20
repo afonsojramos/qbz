@@ -21,6 +21,12 @@ export component SearchTrackRow inherits Rectangle {
     // kind ("track"), track id, action ("play" | "play-next" | "queue" | "favorite").
     callback media-action(string, string, string);
 
+    // Slint's has-hover does not propagate to ancestor TouchAreas, so the
+    // row OR's its own ta with every nested TouchArea to drive the cell
+    // play overlay reliably regardless of pointer position.
+    property <bool> row-hovered:
+        ta.has-hover || play-cell.hovered || more-ta.has-hover;
+
     height: 56px;
     border-radius: 8px;
     background: ta.has-hover
@@ -50,11 +56,11 @@ export component SearchTrackRow inherits Rectangle {
         // affordance.
         VerticalLayout {
             alignment: center;
-            TrackPlayCell {
+            play-cell := TrackPlayCell {
                 track-id: root.track.id;
                 artwork: root.track.artwork;
                 show-artwork: true;
-                row-hovered: ta.has-hover;
+                row-hovered: root.row-hovered;
                 play => {
                     root.media-action("track", root.track.id, "play");
                 }

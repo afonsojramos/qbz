@@ -4,6 +4,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
 import { SlimItem } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 
@@ -74,7 +75,9 @@ export component ArtistCard inherits Rectangle {
             Rectangle {
                 width: chip-row.preferred-width;
                 height: 30px;
-                border-radius: 15px;
+                // Rectangular with small rounded corners — QBZ never uses
+                // pill-shaped chips (ADR-008).
+                border-radius: Radius.sm;
                 background: follow-ta.has-hover
                     ? Theme.surface-hover
                     : Theme.surface-elevated;

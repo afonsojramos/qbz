@@ -55,6 +55,16 @@ component TrackRow inherits Rectangle {
     // kind ("track"), track id, action ("play" | "queue" | "favorite").
     callback media-action(string, string, string);
 
+    // Any-hover detector — Slint does not propagate has-hover to ancestor
+    // TouchAreas, so the row OR's its own TouchArea with every nested one
+    // (the play cell + the side buttons) to drive the play overlay.
+    property <bool> row-hovered:
+        ta.has-hover
+        || play-cell.hovered
+        || fav-ta.has-hover
+        || dl-ta.has-hover
+        || more-ta.has-hover;
+
     height: 56px;
     border-radius: 8px;
     // The even-row tint is clearly fainter than the hover tint so the two
@@ -76,12 +86,12 @@ component TrackRow inherits Rectangle {
 
         VerticalLayout {
             alignment: center;
-            TrackPlayCell {
+            play-cell := TrackPlayCell {
                 track-id: root.track.id;
                 number: root.track.number;
                 show-artwork: false;
                 number-width: 32px;
-                row-hovered: ta.has-hover;
+                row-hovered: root.row-hovered;
                 play => {
                     root.media-action("track", root.track.id, "play");
                 }

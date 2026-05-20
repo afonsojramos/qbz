@@ -52,8 +52,8 @@ export component PlaylistCard inherits Rectangle {
     // "queue" | "favorite").
     callback media-action(string, string, string);
 
-    width: 162px;
-    height: 210px;
+    width: 220px;
+    height: 266px;
 
     property <bool> overlay-on: hover.has-hover
         || fav-btn.hovered || play-btn.hovered || more-btn.hovered;
@@ -64,14 +64,14 @@ export component PlaylistCard inherits Rectangle {
 
         // --- Cover collage + hover overlay -------------------------------
         Rectangle {
-            width: 162px;
-            height: 162px;
+            width: 220px;
+            height: 220px;
             border-radius: Radius.sm;
             clip: true;
 
             PlaylistCollage {
                 playlist: root.playlist;
-                size: 162px;
+                size: 220px;
             }
 
             Rectangle {
@@ -93,8 +93,8 @@ export component PlaylistCard inherits Rectangle {
 
             HorizontalLayout {
                 x: 0px;
-                y: 95px;
-                width: 162px;
+                y: 132px;
+                width: 220px;
                 height: 44px;
                 alignment: center;
                 spacing: 12px;
@@ -172,7 +172,7 @@ export component PlaylistCard inherits Rectangle {
 
         // --- Title / subtitle --------------------------------------------
         VerticalLayout {
-            height: 42px;
+            height: 40px;
             spacing: 2px;
             padding-left: Spacing.xs;
             Text {
