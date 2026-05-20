@@ -14,6 +14,10 @@ use qbz_models::{
     RepeatMode, SearchAllResults, SearchResultsPage, StreamUrl, Track, TracksContainer,
     UserSession,
 };
+use qbz_integrations::musicbrainz::{
+    location, ArtistMetadata, ArtistRelationships, MusicBrainzClient, Period, RelatedArtist,
+    ResolvedArtist,
+};
 use qbz_player::{PlaybackState, Player, QueueManager};
 use qbz_qobuz::QobuzClient;
 
@@ -136,6 +140,8 @@ pub struct QbzCore<A: FrontendAdapter> {
     queue: Arc<RwLock<QueueManager>>,
     /// Audio player
     player: Arc<Player>,
+    /// MusicBrainz client (always present; enable/disable toggle lives inside)
+    musicbrainz: Arc<MusicBrainzClient>,
     /// Whether the core is initialized
     initialized: Arc<RwLock<bool>>,
 }
@@ -151,6 +157,7 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             client: Arc::new(RwLock::new(None)),
             queue: Arc::new(RwLock::new(QueueManager::new())),
             player: Arc::new(player),
+            musicbrainz: Arc::new(MusicBrainzClient::new()),
             initialized: Arc::new(RwLock::new(false)),
         }
     }
@@ -1384,6 +1391,132 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
     /// Get the queue manager (for advanced usage)
     pub fn queue(&self) -> Arc<RwLock<QueueManager>> {
         Arc::clone(&self.queue)
+    }
+
+    // ----- MusicBrainz -------------------------------------------------------
+
+    /// Whether MusicBrainz integration is currently enabled.
+    pub async fn musicbrainz_is_enabled(&self) -> bool {
+        self.musicbrainz.is_enabled().await
+    }
+
+    /// Enable or disable MusicBrainz integration.
+    pub async fn musicbrainz_set_enabled(&self, enabled: bool) {
+        self.musicbrainz.set_enabled(enabled).await;
+    }
+
+    /// Resolve an artist name to a MusicBrainz id. Returns `None` if no
+    /// confident match is found.
+    pub async fn musicbrainz_resolve_artist(
+        &self,
+        name: &str,
+    ) -> Result<Option<ResolvedArtist>, CoreError> {
+        self.musicbrainz
+            .resolve_artist(name)
+            .await
+            .map_err(|e| CoreError::Internal(e.to_string()))
+    }
+
+    /// Fetch the artist metadata (location, life_span, genre seeds) for
+    /// the Origin section of the artist network sidebar. Resolves the
+    /// real country from the begin_area hierarchy when a city-level
+    /// location is found, because MB's `country` field is where the
+    /// artist is active, not where they were born/formed.
+    pub async fn musicbrainz_get_artist_metadata(
+        &self,
+        mbid: &str,
+    ) -> Result<ArtistMetadata, CoreError> {
+        let artist = self
+            .musicbrainz
+            .get_artist_with_relations(mbid)
+            .await
+            .map_err(|e| CoreError::Internal(e.to_string()))?;
+
+        let mut metadata = location::extract_metadata(&artist);
+
+        if let Some(ref mut loc) = metadata.location {
+            if loc.city.is_some() {
+                if let Some(ref area_id) = loc.area_id {
+                    if let Ok(Some((country_name, country_code))) =
+                        self.musicbrainz.resolve_area_country(area_id).await
+                    {
+                        loc.display_name = format!("{}, {}", loc.display_name, country_name);
+                        loc.country = Some(country_name);
+                        loc.country_code = country_code;
+                    }
+                }
+            }
+        }
+
+        Ok(metadata)
+    }
+
+    /// Fetch the artist relationships (band members, member-of groups,
+    /// collaborators) for the Relationships section of the sidebar.
+    /// Splits `member of band` by direction: backward direction lists
+    /// members of *this* artist (still-active vs ended -> past), forward
+    /// direction lists groups this artist is a member of.
+    pub async fn musicbrainz_get_artist_relationships(
+        &self,
+        mbid: &str,
+    ) -> Result<ArtistRelationships, CoreError> {
+        let artist = self
+            .musicbrainz
+            .get_artist_with_relations(mbid)
+            .await
+            .map_err(|e| CoreError::Internal(e.to_string()))?;
+
+        let mut members = Vec::new();
+        let mut past_members = Vec::new();
+        let mut groups = Vec::new();
+        let mut collaborators = Vec::new();
+
+        if let Some(relations) = &artist.relations {
+            for relation in relations {
+                let Some(related_artist) = &relation.artist else {
+                    continue;
+                };
+
+                let related = RelatedArtist {
+                    mbid: related_artist.id.clone(),
+                    name: related_artist.name.clone(),
+                    role: relation
+                        .attributes
+                        .as_ref()
+                        .and_then(|a| a.first().cloned()),
+                    period: Some(Period {
+                        begin: relation.begin.clone(),
+                        end: relation.end.clone(),
+                    }),
+                    ended: relation.ended.unwrap_or(false),
+                };
+
+                match relation.relation_type.as_str() {
+                    "member of band" => {
+                        if relation.direction.as_deref() == Some("backward") {
+                            if related.ended {
+                                past_members.push(related);
+                            } else {
+                                members.push(related);
+                            }
+                        } else {
+                            groups.push(related);
+                        }
+                    }
+                    "collaboration" => {
+                        collaborators.push(related);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(ArtistRelationships {
+            members,
+            past_members,
+            groups,
+            collaborators,
+        })
     }
 }
 

@@ -5014,6 +5014,7 @@ dependencies = [
  "async-trait",
  "log",
  "qbz-audio",
+ "qbz-integrations",
  "qbz-models",
  "qbz-player",
  "qbz-qobuz",
