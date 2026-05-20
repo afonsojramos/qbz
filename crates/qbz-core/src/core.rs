@@ -15,8 +15,8 @@ use qbz_models::{
     UserSession,
 };
 use qbz_integrations::musicbrainz::{
-    location, ArtistMetadata, ArtistRelationships, MusicBrainzClient, Period, RelatedArtist,
-    ResolvedArtist,
+    location, ArtistMetadata, ArtistRelationships, DiscoveryArtist, DiscoveryResponse,
+    MusicBrainzClient, Period, RelatedArtist, ResolvedArtist,
 };
 use qbz_player::{PlaybackState, Player, QueueManager};
 use qbz_qobuz::QobuzClient;
@@ -1517,6 +1517,188 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             groups,
             collaborators,
         })
+    }
+
+    /// "You may also like" tag-based discovery — finds artists that
+    /// share the seed artist's primary genre tag on MusicBrainz, then
+    /// validates exact name matches on Qobuz so the row can actually
+    /// open the artist page. Filters out the seed itself, the artists
+    /// already shown in the Similar section, and any dismissed
+    /// artists (passed in by the caller; the dismiss store lives at
+    /// the frontend layer).
+    ///
+    /// When the primary tag does not return enough validated results,
+    /// the pipeline falls back to the secondary tag, dedupes against
+    /// the primary's results, and tops up. Result ordering is
+    /// deterministic per seed_mbid (same artist page = same shuffle).
+    pub async fn musicbrainz_discover_artists(
+        &self,
+        seed_mbid: &str,
+        seed_name: &str,
+        similar_names: &[String],
+        dismissed_per_tag: &(dyn Fn(&str) -> std::collections::HashSet<String> + Send + Sync),
+    ) -> Result<DiscoveryResponse, CoreError> {
+        use std::collections::HashSet;
+
+        if !self.musicbrainz.is_enabled().await {
+            return Ok(DiscoveryResponse {
+                artists: Vec::new(),
+                primary_tag: String::new(),
+            });
+        }
+
+        let seed_tags = self
+            .musicbrainz
+            .get_artist_tags(seed_mbid)
+            .await
+            .unwrap_or_default();
+        if seed_tags.is_empty() {
+            return Ok(DiscoveryResponse {
+                artists: Vec::new(),
+                primary_tag: String::new(),
+            });
+        }
+
+        let primary_tag = seed_tags[0].clone();
+        let mb_results = self
+            .musicbrainz
+            .search_artists_by_tag(&primary_tag, 50)
+            .await
+            .map_err(|e| CoreError::Internal(e.to_string()))?;
+
+        if mb_results.artists.is_empty() {
+            return Ok(DiscoveryResponse {
+                artists: Vec::new(),
+                primary_tag,
+            });
+        }
+
+        let seed_norm = normalize_artist_name(seed_name);
+        let similar_norm: HashSet<String> =
+            similar_names.iter().map(|n| normalize_artist_name(n)).collect();
+        let dismissed_primary = dismissed_per_tag(&primary_tag.to_lowercase());
+
+        let mut candidates: Vec<(String, String)> = Vec::new();
+        for artist in &mb_results.artists {
+            let n = normalize_artist_name(&artist.name);
+            if n == seed_norm
+                || artist.id.eq_ignore_ascii_case(seed_mbid)
+                || similar_norm.contains(&n)
+                || dismissed_primary.contains(&n)
+            {
+                continue;
+            }
+            candidates.push((artist.id.clone(), artist.name.clone()));
+        }
+
+        shuffle_with_seed(&mut candidates, seed_mbid, None);
+
+        let max_results = 8;
+        let min_results = 5;
+        let mut results = self
+            .validate_discovery_on_qobuz(&candidates, max_results)
+            .await;
+
+        if results.len() < min_results && seed_tags.len() > 1 {
+            let secondary_tag = seed_tags[1].clone();
+            let dismissed_secondary = dismissed_per_tag(&secondary_tag.to_lowercase());
+            let existing_mbids: HashSet<String> =
+                results.iter().map(|r| r.mbid.clone()).collect();
+            if let Ok(secondary) = self
+                .musicbrainz
+                .search_artists_by_tag(&secondary_tag, 30)
+                .await
+            {
+                let mut secondary_candidates: Vec<(String, String)> = Vec::new();
+                for a in &secondary.artists {
+                    let n = normalize_artist_name(&a.name);
+                    if n == seed_norm
+                        || a.id.eq_ignore_ascii_case(seed_mbid)
+                        || similar_norm.contains(&n)
+                        || dismissed_primary.contains(&n)
+                        || dismissed_secondary.contains(&n)
+                        || existing_mbids.contains(&a.id)
+                    {
+                        continue;
+                    }
+                    secondary_candidates.push((a.id.clone(), a.name.clone()));
+                }
+                shuffle_with_seed(&mut secondary_candidates, seed_mbid, Some(&secondary_tag));
+                let remaining = max_results.saturating_sub(results.len());
+                let mut more = self
+                    .validate_discovery_on_qobuz(&secondary_candidates, remaining)
+                    .await;
+                results.append(&mut more);
+            }
+        }
+
+        Ok(DiscoveryResponse {
+            artists: results,
+            primary_tag,
+        })
+    }
+
+    async fn validate_discovery_on_qobuz(
+        &self,
+        candidates: &[(String, String)],
+        max: usize,
+    ) -> Vec<DiscoveryArtist> {
+        let mut out: Vec<DiscoveryArtist> = Vec::new();
+        for (mbid, name) in candidates {
+            if out.len() >= max {
+                break;
+            }
+            let Ok(page) = self.search_artists(name, 1, 0, None).await else {
+                continue;
+            };
+            let Some(first) = page.items.first() else {
+                continue;
+            };
+            if normalize_artist_name(&first.name) != normalize_artist_name(name) {
+                continue;
+            }
+            out.push(DiscoveryArtist {
+                mbid: mbid.clone(),
+                name: first.name.clone(),
+                qobuz_id: Some(first.id),
+            });
+        }
+        out
+    }
+}
+
+/// Normalize an artist name for dedupe: trim, lowercase, collapse
+/// whitespace. Used by the discovery pipeline so "Iron  Maiden" and
+/// "iron maiden" hash to the same key in the dismiss store.
+pub fn normalize_artist_name(name: &str) -> String {
+    name.trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Deterministic shuffle keyed by `seed_mbid` (and optionally a tag).
+/// Same artist page produces the same order across runs; different
+/// artist or different fallback tag produces a different order.
+fn shuffle_with_seed<T>(items: &mut Vec<T>, seed_mbid: &str, secondary_tag: Option<&str>) {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    seed_mbid.hash(&mut hasher);
+    if let Some(t) = secondary_tag {
+        t.hash(&mut hasher);
+    }
+    let mut h = hasher.finish();
+    // Fisher-Yates with a simple xorshift PRNG seeded from the hash —
+    // keeps qbz-core free of the rand dep.
+    let n = items.len();
+    for i in (1..n).rev() {
+        h ^= h << 13;
+        h ^= h >> 7;
+        h ^= h << 17;
+        let j = (h % ((i + 1) as u64)) as usize;
+        items.swap(i, j);
     }
 }
 

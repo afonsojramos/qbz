@@ -12,14 +12,15 @@ use qbz_core::FrontendAdapter;
 use qbz_models::{
     PageArtistRelease, PageArtistResponse, PageArtistTrack, PageArtistTrackAlbum,
 };
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::album::TrackData;
 use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::home::CardData;
 use crate::{
-    AlbumCardItem, AlbumTrackItem, AppWindow, ArtistState, DiscoverSection, LabelEntry,
-    MbOriginData, MbRelationship, MbRelationshipsData, NetworkSidebarState, SimilarEntry,
+    AlbumCardItem, AlbumTrackItem, AppWindow, ArtistState, DiscoverSection, DiscoveryArtist,
+    LabelEntry, MbOriginData, MbRelationship, MbRelationshipsData, NetworkSidebarState,
+    SimilarEntry,
 };
 
 /// Plain, `Send` artist data produced on the worker thread.
@@ -812,6 +813,93 @@ fn format_period(begin: Option<&str>, end: Option<&str>) -> String {
     } else {
         String::new()
     }
+}
+
+// ----- MB discovery -----------------------------------------------------
+
+/// Plain, `Send` payload for the Discovery section. `primary_tag` is
+/// kept alongside so the dismiss callback can look up the right key in
+/// the dismiss store.
+pub struct MbDiscoveryData {
+    pub primary_tag: String,
+    pub artists: Vec<MbDiscoveryRow>,
+}
+
+#[derive(Clone)]
+pub struct MbDiscoveryRow {
+    pub mbid: String,
+    pub name: String,
+    pub qobuz_id: String,
+}
+
+/// Load discovery candidates for `seed_mbid` (the artist's MB id) using
+/// `similar_names` to suppress already-shown rows and the local
+/// discovery_dismiss store to suppress thumbs-downed rows.
+pub async fn load_mb_discovery<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    seed_mbid: &str,
+    seed_name: &str,
+    similar_names: Vec<String>,
+) -> Result<MbDiscoveryData, String>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let response = runtime
+        .core()
+        .musicbrainz_discover_artists(
+            seed_mbid,
+            seed_name,
+            &similar_names,
+            &|tag| crate::discovery_dismiss::dismissed_for_tag(tag),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let artists = response
+        .artists
+        .into_iter()
+        .map(|a| MbDiscoveryRow {
+            mbid: a.mbid,
+            name: a.name,
+            qobuz_id: a.qobuz_id.map(|id| id.to_string()).unwrap_or_default(),
+        })
+        .collect();
+
+    Ok(MbDiscoveryData {
+        primary_tag: response.primary_tag,
+        artists,
+    })
+}
+
+/// Apply discovery candidates to NetworkSidebarState. Runs on the
+/// Slint event loop. `primary_tag` is stored on the sidebar state for
+/// the dismiss callback to read.
+pub fn apply_mb_discovery(window: &AppWindow, data: MbDiscoveryData) {
+    let state = window.global::<NetworkSidebarState>();
+    state.set_discovery_tag(data.primary_tag.into());
+    let rows: Vec<DiscoveryArtist> = data
+        .artists
+        .into_iter()
+        .map(|r| DiscoveryArtist {
+            mbid: r.mbid.into(),
+            name: r.name.into(),
+            qobuz_id: r.qobuz_id.into(),
+        })
+        .collect();
+    state.set_discovery_artists(ModelRc::new(VecModel::from(rows)));
+    state.set_discovery_loading(false);
+}
+
+/// Remove a dismissed row from the visible Discovery list. The dismiss
+/// store persistence is handled by the caller before this is invoked.
+pub fn remove_discovery_artist(window: &AppWindow, mbid: &str) {
+    let state = window.global::<NetworkSidebarState>();
+    let model = state.get_discovery_artists();
+    let kept: Vec<DiscoveryArtist> = (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .filter(|row| row.mbid.as_str() != mbid)
+        .collect();
+    state.set_discovery_artists(ModelRc::new(VecModel::from(kept)));
 }
 
 /// Apply MB relationships to NetworkSidebarState. Runs on the Slint

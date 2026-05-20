@@ -554,6 +554,23 @@ pub struct LocationDiscoveryResponse {
     pub next_offset: usize,
 }
 
+/// One candidate from the "you may also like" tag-based discovery pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryArtist {
+    pub mbid: String,
+    pub name: String,
+    pub qobuz_id: Option<u64>,
+}
+
+/// Result of the tag-based discovery pipeline. `primary_tag` is the tag
+/// the discovery was seeded with — frontends save dismissals keyed by
+/// it so a "thumbs down" stays sticky for that tag across artists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryResponse {
+    pub artists: Vec<DiscoveryArtist>,
+    pub primary_tag: String,
+}
+
 // ============ Musician Types ============
 
 /// Musician confidence level for MusicBrainz <-> Qobuz matching

@@ -981,6 +981,88 @@ export component ArtistPageView inherits Rectangle {
                                 }
                             }
                         }
+
+                        // --- Discovery: "You may also like" --------------
+                        if NetworkSidebarState.mb-available
+                            && (NetworkSidebarState.discovery-loading
+                                || NetworkSidebarState.discovery-artists.length > 0):
+                        VerticalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            padding-top: 12px;
+                            padding-bottom: 12px;
+                            spacing: 4px;
+
+                            Text {
+                                text: @tr("YOU MAY ALSO LIKE");
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                font-weight: Typography.semibold;
+                                letter-spacing: 0.5px;
+                            }
+
+                            if NetworkSidebarState.discovery-loading
+                                && NetworkSidebarState.discovery-artists.length == 0: Text {
+                                text: @tr("Loading…");
+                                color: Theme.text-muted;
+                                font-size: 12px;
+                            }
+
+                            // Each row: SidebarLink filling the row plus a
+                            // small thumbs-down button anchored to the
+                            // right. The link click navigates to the
+                            // Qobuz artist; the thumbs-down emits the
+                            // dismiss callback so the row drops out and
+                            // never reappears for this tag.
+                            for disc in NetworkSidebarState.discovery-artists:
+                            HorizontalLayout {
+                                spacing: 2px;
+
+                                SidebarLink {
+                                    horizontal-stretch: 1;
+                                    label: disc.name;
+                                    icon: @image-url("../assets/icons/user.svg");
+                                    tooltip: disc.name;
+                                    clicked => {
+                                        if (disc.qobuz-id != "") {
+                                            NetworkSidebarActions.artist-clicked(
+                                                disc.qobuz-id);
+                                        }
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
+                                    Rectangle {
+                                        width: 24px;
+                                        height: 24px;
+                                        border-radius: 4px;
+                                        background: dismiss-ta.has-hover
+                                            ? Theme.surface-elevated
+                                            : transparent;
+                                        QbzIcon {
+                                            source: @image-url(
+                                                "../assets/icons/thumbs-down.svg");
+                                            width: 12px;
+                                            height: 12px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            tint: dismiss-ta.has-hover
+                                                ? Theme.text-primary
+                                                : Theme.text-muted;
+                                        }
+                                        dismiss-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                NetworkSidebarActions
+                                                    .discovery-dismissed(
+                                                        disc.mbid, disc.name);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

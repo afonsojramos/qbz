@@ -20,6 +20,7 @@ mod artist;
 mod artwork;
 mod auth;
 mod commands;
+mod discovery_dismiss;
 mod home;
 mod nav;
 mod network_sidebar_prefs;
@@ -231,6 +232,11 @@ fn navigate_artist(
                 let artwork_url = data.artwork_url.clone();
                 let jobs = artist::artwork_jobs(&data);
                 let artist_name = data.name.clone();
+                let similar_names_for_discovery: Vec<String> = data
+                    .similar_artists
+                    .iter()
+                    .map(|s| s.name.clone())
+                    .collect();
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     artist::apply_artist(&w, data);
                     w.global::<ArtistState>().set_loading(false);
@@ -240,9 +246,9 @@ fn navigate_artist(
                 // Network sidebar — kick the MB enrichment off in
                 // parallel with artwork. Origin shows a loading state
                 // until the resolve + metadata calls return; on success
-                // the resolved mbid is used to fetch relationships in a
-                // second round-trip (the V2 cache, when wired, will
-                // make this single-shot for repeat visits).
+                // the resolved mbid is used to fetch relationships and
+                // discovery candidates in sequence (the V2 cache, when
+                // wired, will collapse repeat visits to a single shot).
                 let runtime_mb = runtime.clone();
                 let weak_mb = weak.clone();
                 tokio::spawn(async move {
@@ -250,6 +256,7 @@ fn navigate_artist(
                         let state = w.global::<NetworkSidebarState>();
                         state.set_origin_loading(true);
                         state.set_relationships_loading(true);
+                        state.set_discovery_loading(true);
                     });
                     match artist::load_mb_metadata(&runtime_mb, &artist_name).await {
                         Ok(Some(meta)) => {
@@ -268,6 +275,27 @@ fn navigate_artist(
                                     let _ = weak_mb.upgrade_in_event_loop(|w| {
                                         w.global::<NetworkSidebarState>()
                                             .set_relationships_loading(false);
+                                    });
+                                }
+                            }
+                            match artist::load_mb_discovery(
+                                &runtime_mb,
+                                &mbid,
+                                &artist_name,
+                                similar_names_for_discovery,
+                            )
+                            .await
+                            {
+                                Ok(disc) => {
+                                    let _ = weak_mb.upgrade_in_event_loop(move |w| {
+                                        artist::apply_mb_discovery(&w, disc);
+                                    });
+                                }
+                                Err(e) => {
+                                    log::warn!("[qbz-slint] MB discovery failed: {e}");
+                                    let _ = weak_mb.upgrade_in_event_loop(|w| {
+                                        w.global::<NetworkSidebarState>()
+                                            .set_discovery_loading(false);
                                     });
                                 }
                             }
@@ -1204,11 +1232,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "[qbz-slint] network sidebar: musician clicked name={name} role={role}"
             );
         });
-    window
-        .global::<NetworkSidebarActions>()
-        .on_discovery_dismissed(|mbid| {
-            log::info!("[qbz-slint] network sidebar: discovery dismissed mbid={mbid}");
-        });
+    // discovery-dismissed — persist the rejection under the current
+    // tag, then remove the row from the visible list.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<NetworkSidebarActions>()
+            .on_discovery_dismissed(move |mbid, name| {
+                if let Some(w) = weak.upgrade() {
+                    let tag = w
+                        .global::<NetworkSidebarState>()
+                        .get_discovery_tag()
+                        .to_string()
+                        .to_lowercase();
+                    if !tag.is_empty() {
+                        let normalized =
+                            qbz_core::normalize_artist_name(name.as_str());
+                        discovery_dismiss::dismiss(&tag, &normalized);
+                    }
+                    artist::remove_discovery_artist(&w, mbid.as_str());
+                }
+            });
+    }
 
     window.on_close_app(|| {
         log::info!("[qbz-slint] closing");

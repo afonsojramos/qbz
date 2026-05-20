@@ -322,9 +322,14 @@ export global NetworkSidebarState {
     in property <bool> relationships-loading: false;
     in property <MbRelationshipsData> relationships;
 
-    // Discovery (MB tag + LB similar) section — populated in phase 8.
+    // Discovery (MB tag-based) section — populated in phase 8.
     in property <bool> discovery-loading: false;
     in property <[DiscoveryArtist]> discovery-artists: [];
+    // Primary tag the current discovery batch was seeded with —
+    // delivered as the first argument of the discovery-dismissed
+    // callback so the Rust side can persist the dismiss under the
+    // right key.
+    in property <string> discovery-tag;
 }
 
 // Callbacks the sidebar emits. Each delivers the minimum payload the
@@ -342,7 +347,9 @@ export global NetworkSidebarActions {
     // Relationship row clicked — opens MusicianPage with the role.
     callback musician-clicked(string /* name */, string /* role */);
     // Discovery dismiss — removes the row and remembers the rejection.
-    callback discovery-dismissed(string /* mbid */);
+    // Carries both the MBID (model key for removal) and the name
+    // (persisted into the per-tag dismiss store after normalization).
+    callback discovery-dismissed(string /* mbid */, string /* name */);
     // Sidebar toggled — Rust persists the new open state.
     callback toggle();
 }

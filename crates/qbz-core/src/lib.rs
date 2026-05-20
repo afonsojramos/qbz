@@ -60,5 +60,5 @@ pub mod system_capabilities;
 pub use qbz_models::{CoreEvent, FrontendAdapter, LoggingAdapter, NoOpAdapter};
 
 // Re-exports from this crate
-pub use core::QbzCore;
+pub use core::{normalize_artist_name, QbzCore};
 pub use error::CoreError;
