@@ -501,11 +501,11 @@ export component ArtistPageView inherits Rectangle {
                     horizontal-stretch: 1;
                     spacing: 0px;
 
-            // 24px head spacing then straight into the loading state /
-            // Popular Tracks header — the in-page search now lives
-            // inside the JUMP TO bar (see jump-nav below), no longer
-            // a separate row in the body column.
-            Rectangle { height: 24px; }
+            // Reservation slot for the JUMP TO bar — the bar is an
+            // absolute-positioned overlay, so the body column has to
+            // skip its 44px (plus a small visual gap above and
+            // below) for content to land below it, not behind it.
+            Rectangle { height: 52px; }
 
             if ArtistState.loading && ArtistState.top-tracks.length == 0: Rectangle {
                 height: 280px;
@@ -689,7 +689,10 @@ export component ArtistPageView inherits Rectangle {
     // y is the row just below the artist header in the page layout
     // (NavButtons + spacer + artist header + small gap, ~290px).
     jump-nav := JumpNavBar {
-        property <length> natural-top: 290px;
+        // Sits in the 52px reservation slot at the top of the body
+        // column (artist header + 22 spacer + 4 gap = 291). Sticks
+        // to viewport top once the user scrolls past the header.
+        property <length> natural-top: 291px;
         property <length> sticky-top: 0px;
 
         x: 0;
@@ -720,12 +723,12 @@ export component ArtistPageView inherits Rectangle {
         // bottom edge is always flush with the now-playing bar
         // (height = root.height - y), so no gap appears when sticky.
         if NetworkSidebarState.open: sidebar-panel := Rectangle {
-            // 334px = jump-nav natural-top (290) + jump-nav height
+            // 335px = jump-nav natural-top (291) + jump-nav height
             // (44). Starts the sidebar flush with the bottom edge of
             // the JUMP TO bar, never sliding behind it. As the user
             // scrolls down, y tracks page-flickable.viewport-y until
             // it hits sticky-top.
-            property <length> natural-top: 334px;
+            property <length> natural-top: 335px;
             // 44px parks the sidebar just below the sticky JUMP TO
             // bar (jump-nav's height) once the header scrolls away.
             property <length> sticky-top: 44px;

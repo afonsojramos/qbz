@@ -125,11 +125,12 @@ export component JumpNavBar inherits Rectangle {
             // when it goes false. surface-main background fully
             // hides the tabs while expanded.
             search-overlay := Rectangle {
-                // Cap the expanded width so the open input reads as a
-                // compact box pinned to the right side of the bar
-                // (matches Tauri's `.search-input-container` width),
-                // not a full-bar slab. min() guards narrow viewports.
-                property <length> max-open-width: 360px;
+                // 216px (= 60% of the previous 360 cap) keeps the
+                // open input as a compact box pinned to the right
+                // side of the bar — wide enough to read a few words
+                // of query, narrow enough not to swallow the tabs
+                // visually. min() guards narrow viewports.
+                property <length> max-open-width: 216px;
                 x: parent.width - self.width;
                 y: 4px;
                 width: root.search-open
@@ -147,8 +148,9 @@ export component JumpNavBar inherits Rectangle {
 
                 HorizontalLayout {
                     padding-left: 12px;
-                    padding-right: 12px;
+                    padding-right: 6px;
                     spacing: 8px;
+                    // Leading magnifier glyph.
                     VerticalLayout {
                         alignment: center;
                         horizontal-stretch: 0;
@@ -159,6 +161,7 @@ export component JumpNavBar inherits Rectangle {
                             tint: Theme.text-muted;
                         }
                     }
+                    // Input + placeholder share a stretched cell.
                     Rectangle {
                         horizontal-stretch: 1;
                         search-input := TextInput {
@@ -183,38 +186,71 @@ export component JumpNavBar inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
+                    // Trailing X — clears the query and closes the
+                    // input. Lives INSIDE the input so the close
+                    // affordance reads as part of the search widget
+                    // (not a stray button hanging off the side of
+                    // the bar).
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        Rectangle {
+                            width: 24px;
+                            height: 24px;
+                            border-radius: 4px;
+                            background: clear-ta.has-hover
+                                ? Theme.surface-elevated
+                                : transparent;
+                            QbzIcon {
+                                source: @image-url("../assets/icons/x.svg");
+                                width: 12px;
+                                height: 12px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                tint: clear-ta.has-hover
+                                    ? Theme.text-primary
+                                    : Theme.text-muted;
+                            }
+                            clear-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.search-clicked();
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // Search toggle — opens / closes the inline input above.
-        // Stays accent-tinted while open.
+        // Outer search toggle — only visible when the input is
+        // closed. Opening it expands the inline input above (which
+        // carries its own X close button), so the bar never shows
+        // two competing search affordances.
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
+            visible: !root.search-open;
             Rectangle {
                 width: 32px;
                 height: 32px;
                 border-radius: 6px;
-                background: (search-ta.has-hover || root.search-open)
+                background: search-ta.has-hover
                     ? Theme.surface-elevated
                     : transparent;
                 QbzIcon {
-                    source: root.search-open
-                        ? @image-url("../assets/icons/x.svg")
-                        : @image-url("../assets/icons/search.svg");
+                    source: @image-url("../assets/icons/search.svg");
                     width: 16px;
                     height: 16px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    tint: root.search-open
-                        ? Theme.accent
-                        : (search-ta.has-hover
-                            ? Theme.text-primary
-                            : Theme.text-muted);
+                    tint: search-ta.has-hover
+                        ? Theme.text-primary
+                        : Theme.text-muted;
                 }
                 search-ta := TouchArea {
                     mouse-cursor: pointer;
+                    enabled: !root.search-open;
                     clicked => {
                         root.search-clicked();
                     }
