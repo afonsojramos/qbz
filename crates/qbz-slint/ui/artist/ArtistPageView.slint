@@ -264,8 +264,14 @@ export component ArtistPageView inherits Rectangle {
     callback open-album(string);
     callback media-action(string, string, string);
 
-    // Read-more toggle for the biography.
-    property <bool> bio-expanded: false;
+    // Whether the full-biography modal is open. Mirrors the album
+    // description Read-more pattern in AlbumPageView.
+    property <bool> show-bio: false;
+    // Width of the main content column — shrinks when the network
+    // sidebar opens, so the bio text wraps inside the visible band
+    // instead of being clipped by the sidebar.
+    property <length> content-width:
+        NetworkSidebarState.open ? root.width - 300px : root.width;
     // Popular Tracks shows the first 5; Load more expands to all.
     property <bool> top-tracks-expanded: false;
     property <int> top-tracks-preview: 5;
@@ -362,42 +368,38 @@ export component ArtistPageView inherits Rectangle {
                         overflow: elide;
                     }
 
-                    // Biography — single inline block matching Tauri's
-                    // structure: truncated body + Read more/less toggle +
-                    // optional "Source: <name>" line. The full text is
-                    // shown when `bio-expanded` flips.
+                    // Biography — truncated body fills the horizontal
+                    // band to the right of the artwork (subtracts page
+                    // padding 32+32 + artwork 200 + header gap 32 =
+                    // 296). Read more opens the full-bio modal, same
+                    // pattern as the album description in
+                    // AlbumPageView.
                     if ArtistState.bio != "": Rectangle { height: 12px; }
                     if ArtistState.bio != "": Text {
-                        text: root.bio-expanded ? ArtistState.bio : ArtistState.bio-short;
+                        width: root.content-width - 296px;
+                        text: ArtistState.bio-short;
                         color: Theme.text-secondary;
-                        font-size: Typography.body;
+                        font-size: Typography.legal;
                         wrap: word-wrap;
                     }
-                    if ArtistState.bio-truncated: Rectangle {
-                        height: 24px;
-                        width: read-more-text.preferred-width + 16px;
-                        read-more-text := Text {
-                            text: root.bio-expanded ? @tr("Read less") : @tr("Read more");
-                            color: read-more-ta.has-hover
-                                ? Theme.text-primary
-                                : Theme.accent;
-                            font-size: 13px;
-                            font-weight: Typography.medium;
-                            vertical-alignment: center;
-                            height: 100%;
+                    if ArtistState.bio-truncated: Rectangle { height: 4px; }
+                    if ArtistState.bio-truncated: read-more := TouchArea {
+                        width: read-more-row.preferred-width;
+                        height: 20px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.show-bio = true;
                         }
-                        read-more-ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.bio-expanded = !root.bio-expanded;
+                        read-more-row := HorizontalLayout {
+                            Text {
+                                text: @tr("Read more");
+                                color: read-more.has-hover
+                                    ? Theme.accent-hover
+                                    : Theme.accent;
+                                font-size: Typography.legal;
+                                vertical-alignment: center;
                             }
                         }
-                    }
-                    if ArtistState.bio-source != "": Rectangle { height: 4px; }
-                    if ArtistState.bio-source != "": Text {
-                        text: @tr("Source") + ": " + ArtistState.bio-source;
-                        color: Theme.text-muted;
-                        font-size: 11px;
                     }
 
                     Rectangle { height: 18px; }
@@ -599,7 +601,10 @@ export component ArtistPageView inherits Rectangle {
             width: 300px;
             spacing: 0px;
 
-            Rectangle { height: 22px; }
+            // 44px to clear the NavButtons row at the top of the
+            // artist body — mirrors Tauri's sticky jump-nav offset
+            // (`top: 44px`).
+            Rectangle { height: 44px; }
 
             sidebar-panel := Rectangle {
                 vertical-stretch: 1;
@@ -1068,7 +1073,96 @@ export component ArtistPageView inherits Rectangle {
             }
         }
 
-            Rectangle { height: 22px; }
+            // 32px gap above the now-playing bar — mirrors Tauri's
+            // height = calc(100vh - titlebar - jump-nav - nowplaying)
+            // which leaves a small margin above the bar.
+            Rectangle { height: 32px; }
+        }
+    }
+
+    // --- Full-biography modal ----------------------------------------------
+    // Same pattern as AlbumPageView's description modal: scrim that
+    // dismisses on click, centered panel with a Flickable so a long
+    // bio actually scrolls. Bio source (TiVo etc) appears as a small
+    // attribution line below the body.
+    if root.show-bio: Rectangle {
+        background: #000000bf;
+
+        TouchArea {
+            mouse-cursor: default;
+            clicked => {
+                root.show-bio = false;
+            }
+        }
+
+        Rectangle {
+            width: Math.min(root.width - 80px, 560px);
+            height: Math.min(root.height - 120px, 460px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: Radius.md;
+            background: Theme.surface-card;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            drop-shadow-blur: 32px;
+            drop-shadow-color: #00000080;
+
+            TouchArea { }
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+
+                HorizontalLayout {
+                    Text {
+                        text: @tr("About this artist");
+                        color: Theme.text-primary;
+                        font-size: Typography.heading;
+                        font-weight: Typography.semibold;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    close-bio := TouchArea {
+                        width: 28px;
+                        height: 28px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.show-bio = false;
+                        }
+                        QbzIcon {
+                            source: @image-url("../assets/icons/x.svg");
+                            width: 18px;
+                            height: 18px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            tint: close-bio.has-hover
+                                ? Theme.text-primary
+                                : Theme.text-muted;
+                        }
+                    }
+                }
+
+                Flickable {
+                    vertical-stretch: 1;
+                    viewport-width: self.width;
+                    viewport-height: bio-content.preferred-height;
+                    bio-content := VerticalLayout {
+                        width: parent.width;
+                        spacing: 12px;
+                        Text {
+                            text: ArtistState.bio;
+                            color: Theme.text-secondary;
+                            font-size: Typography.body;
+                            wrap: word-wrap;
+                        }
+                        if ArtistState.bio-source != "": Text {
+                            text: @tr("Source") + ": " + ArtistState.bio-source;
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                        }
+                    }
+                }
+            }
         }
     }
 }
