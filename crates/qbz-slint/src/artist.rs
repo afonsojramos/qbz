@@ -253,6 +253,7 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
             duration: track.duration.into(),
             quality_tier: track.quality_tier.into(),
             explicit: track.explicit,
+            selected: false,
         })
         .collect();
     let release_sections: Vec<DiscoverSection> = data

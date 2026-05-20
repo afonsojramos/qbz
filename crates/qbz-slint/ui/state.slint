@@ -52,6 +52,9 @@ export struct AlbumTrackItem {
     duration: string,
     quality-tier: string,
     explicit: bool,
+    // Multi-select state — set true when the row is in the user's
+    // selection. First used by the artist page's Popular Tracks.
+    selected: bool,
 }
 
 // Album detail screen state.

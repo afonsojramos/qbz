@@ -898,6 +898,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     });
                 }
+                ("track", "toggle-select") => {
+                    // Multi-select foundation — flips `selected` on the
+                    // matching row in ArtistState.top-tracks. Other
+                    // track-row contexts (album, search) will be wired as
+                    // selection lands there.
+                    if let Some(w) = weak.upgrade() {
+                        let model = w.global::<ArtistState>().get_top_tracks();
+                        if let Some(vm) = model
+                            .as_any()
+                            .downcast_ref::<slint::VecModel<AlbumTrackItem>>()
+                        {
+                            for i in 0..vm.row_count() {
+                                if let Some(mut item) = vm.row_data(i) {
+                                    if item.id == id.as_str() {
+                                        item.selected = !item.selected;
+                                        vm.set_row_data(i, item);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         });

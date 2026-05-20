@@ -261,6 +261,7 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
             duration: track.duration.into(),
             quality_tier: track.quality_tier.into(),
             explicit: track.explicit,
+            selected: false,
         })
         .collect();
 
