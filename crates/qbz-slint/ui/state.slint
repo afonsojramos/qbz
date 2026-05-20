@@ -194,6 +194,19 @@ export global NavState {
 }
 
 // Artist detail screen state.
+// One label row in the artist network sidebar's Labels section.
+export struct LabelEntry {
+    id: string,
+    name: string,
+}
+
+// One similar-artist row in the artist network sidebar's Similar
+// Artists section.
+export struct SimilarEntry {
+    id: string,
+    name: string,
+}
+
 export global ArtistState {
     in property <string> name;
     in property <string> bio;
@@ -210,6 +223,13 @@ export global ArtistState {
     in property <[AlbumTrackItem]> top-tracks: [];
     // Releases grouped into titled sections (Albums, EPs & Singles, ...).
     in property <[DiscoverSection]> release-sections: [];
+    // Labels collected from the artist's own album releases (deduped by
+    // id, alphabetically sorted) — feed the Labels section of the
+    // network sidebar.
+    in property <[LabelEntry]> labels: [];
+    // Similar artists from the /artist/page response — feed the Similar
+    // Artists section of the network sidebar.
+    in property <[SimilarEntry]> similar-artists: [];
     in property <bool> loading: false;
 }
 

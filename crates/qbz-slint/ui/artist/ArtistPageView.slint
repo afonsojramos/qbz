@@ -211,6 +211,55 @@ component SectionTitle inherits Text {
     font-weight: Typography.semibold;
 }
 
+// One row in the network sidebar — small leading icon + name. Used by
+// Labels (Disc icon), Similar Artists / Members / Discovery (User
+// icon), and Member-Of groups (Music icon). Mirrors Tauri's
+// `.sidebar-artist-link` rendering.
+component SidebarLink inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <string> tooltip;
+    callback clicked();
+
+    height: 28px;
+    border-radius: 4px;
+    background: link-ta.has-hover ? Theme.surface-elevated : transparent;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+        alignment: stretch;
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            QbzIcon {
+                source: root.icon;
+                width: 12px;
+                height: 12px;
+                tint: link-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+            }
+        }
+
+        Text {
+            text: root.label;
+            color: link-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+            font-size: 13px;
+            overflow: elide;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+
+    link-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 export component ArtistPageView inherits Rectangle {
     callback open-album(string);
     callback media-action(string, string, string);
@@ -765,6 +814,76 @@ export component ArtistPageView inherits Rectangle {
                                     horizontal-alignment: right;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
+                                }
+                            }
+                        }
+
+                        // --- Labels (Qobuz, deduped from own albums) ---
+                        VerticalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            padding-top: 12px;
+                            padding-bottom: 6px;
+                            spacing: 4px;
+
+                            Text {
+                                text: @tr("LABELS");
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                font-weight: Typography.semibold;
+                                letter-spacing: 0.5px;
+                            }
+
+                            if ArtistState.labels.length == 0: Text {
+                                text: @tr("No label info");
+                                color: Theme.text-muted;
+                                font-size: 12px;
+                            }
+                            for label in ArtistState.labels: SidebarLink {
+                                label: label.name;
+                                icon: @image-url("../assets/icons/disc.svg");
+                                tooltip: label.name;
+                                clicked => {
+                                    NetworkSidebarActions.label-clicked(
+                                        label.id, label.name);
+                                }
+                            }
+                        }
+
+                        // --- Similar Artists (Qobuz) ---
+                        VerticalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            padding-top: 12px;
+                            padding-bottom: 6px;
+                            spacing: 4px;
+
+                            Text {
+                                text: @tr("SIMILAR ARTISTS");
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                font-weight: Typography.semibold;
+                                letter-spacing: 0.5px;
+                            }
+
+                            if ArtistState.similar-artists.length == 0
+                                && !ArtistState.loading: Text {
+                                text: @tr("No similar artists found");
+                                color: Theme.text-muted;
+                                font-size: 12px;
+                            }
+                            if ArtistState.similar-artists.length == 0
+                                && ArtistState.loading: Text {
+                                text: @tr("Loading…");
+                                color: Theme.text-muted;
+                                font-size: 12px;
+                            }
+                            for similar in ArtistState.similar-artists: SidebarLink {
+                                label: similar.name;
+                                icon: @image-url("../assets/icons/user.svg");
+                                tooltip: similar.name;
+                                clicked => {
+                                    NetworkSidebarActions.artist-clicked(similar.id);
                                 }
                             }
                         }

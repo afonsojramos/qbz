@@ -4,7 +4,7 @@
 //! data on the worker thread, and applies it to the `ArtistState`
 //! global on the Slint event loop.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
@@ -18,8 +18,8 @@ use crate::album::TrackData;
 use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::home::CardData;
 use crate::{
-    AlbumCardItem, AlbumTrackItem, AppWindow, ArtistState, DiscoverSection, MbOriginData,
-    NetworkSidebarState,
+    AlbumCardItem, AlbumTrackItem, AppWindow, ArtistState, DiscoverSection, LabelEntry,
+    MbOriginData, NetworkSidebarState, SimilarEntry,
 };
 
 /// Plain, `Send` artist data produced on the worker thread.
@@ -36,6 +36,23 @@ pub struct ArtistData {
     pub top_tracks: Vec<TrackData>,
     /// Releases grouped into titled sections (Albums, EPs & Singles, ...).
     pub release_sections: Vec<ReleaseSection>,
+    /// Labels collected from the artist's own album releases (deduped
+    /// by id, sorted by name) — sidebar Labels section.
+    pub labels: Vec<LabelData>,
+    /// Similar artists from /artist/page — sidebar Similar Artists.
+    pub similar_artists: Vec<SimilarArtistData>,
+}
+
+#[derive(Clone)]
+pub struct LabelData {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Clone)]
+pub struct SimilarArtistData {
+    pub id: String,
+    pub name: String,
 }
 
 /// One titled group of artist releases.
@@ -122,9 +139,15 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
     let mut live_albums: Vec<CardData> = Vec::new();
     let mut others: Vec<CardData> = Vec::new();
     let mut seen_release_ids: HashSet<String> = HashSet::new();
+    // Labels collected while iterating the artist's own album releases.
+    // Tauri's extractLabelsFromPageReleases: only group.type == "album"
+    // (not the bucket result after the download re-categorization),
+    // only own releases, dedupe by label id.
+    let mut labels_by_id: BTreeMap<u64, String> = BTreeMap::new();
 
     for group in page.releases.into_iter().flatten() {
         let group_bucket = map_release_type(&group.release_type);
+        let is_album_group = group.release_type == "album";
         for release in group.items.into_iter() {
             // Foreign-artist filter — the page sometimes surfaces "appears
             // on" entries inside release groups; those don't belong here.
@@ -137,6 +160,15 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
                 continue;
             }
             seen_release_ids.insert(release.id.clone());
+
+            // Label collection — before consuming `release` into the card.
+            if is_album_group {
+                if let Some(label) = release.label.as_ref() {
+                    labels_by_id
+                        .entry(label.id)
+                        .or_insert_with(|| label.name.clone());
+                }
+            }
 
             let item_bucket = if group.release_type == "download" {
                 release
@@ -157,6 +189,28 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
             }
         }
     }
+
+    let mut labels: Vec<LabelData> = labels_by_id
+        .into_iter()
+        .map(|(id, name)| LabelData {
+            id: id.to_string(),
+            name,
+        })
+        .collect();
+    labels.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    let similar_artists: Vec<SimilarArtistData> = page
+        .similar_artists
+        .map(|s| {
+            s.items
+                .into_iter()
+                .map(|item| SimilarArtistData {
+                    id: item.id.to_string(),
+                    name: item.name.display,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Compilations come from tracks_appears_on — albums by other artists
     // that include this artist. Dedupe by album id.
@@ -212,6 +266,8 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
         artwork_url,
         top_tracks,
         release_sections,
+        labels,
+        similar_artists,
     }
 }
 
@@ -423,6 +479,23 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
         })
         .collect();
 
+    let labels: Vec<LabelEntry> = data
+        .labels
+        .into_iter()
+        .map(|label| LabelEntry {
+            id: label.id.into(),
+            name: label.name.into(),
+        })
+        .collect();
+    let similar_artists: Vec<SimilarEntry> = data
+        .similar_artists
+        .into_iter()
+        .map(|sa| SimilarEntry {
+            id: sa.id.into(),
+            name: sa.name.into(),
+        })
+        .collect();
+
     let state = window.global::<ArtistState>();
     state.set_name(data.name.into());
     state.set_bio(data.bio.into());
@@ -431,6 +504,8 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
     state.set_bio_source(data.bio_source.into());
     state.set_top_tracks(ModelRc::new(VecModel::from(top_tracks)));
     state.set_release_sections(ModelRc::new(VecModel::from(release_sections)));
+    state.set_labels(ModelRc::new(VecModel::from(labels)));
+    state.set_similar_artists(ModelRc::new(VecModel::from(similar_artists)));
 }
 
 /// Clear artist state before loading a new artist.
@@ -438,6 +513,8 @@ pub fn reset_artist(window: &AppWindow) {
     let state = window.global::<ArtistState>();
     state.set_top_tracks(ModelRc::new(VecModel::from(Vec::<AlbumTrackItem>::new())));
     state.set_release_sections(ModelRc::new(VecModel::from(Vec::<DiscoverSection>::new())));
+    state.set_labels(ModelRc::new(VecModel::from(Vec::<LabelEntry>::new())));
+    state.set_similar_artists(ModelRc::new(VecModel::from(Vec::<SimilarEntry>::new())));
     state.set_artwork(slint::Image::default());
     state.set_name("".into());
     state.set_bio("".into());

@@ -1152,11 +1152,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .on_label_clicked(|id, name| {
             log::info!("[qbz-slint] network sidebar: label clicked id={id} name={name}");
         });
-    window
-        .global::<NetworkSidebarActions>()
-        .on_artist_clicked(|id| {
-            log::info!("[qbz-slint] network sidebar: artist row clicked qobuz_id={id}");
-        });
+    // artist-clicked actually navigates — the target view (artist page)
+    // already exists in Slint, unlike LabelReleases / ArtistsByLocation /
+    // MusicianPage. Same flow as the top-level on_open_artist handler.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<NetworkSidebarActions>()
+            .on_artist_clicked(move |id| {
+                let artist_id = id.to_string();
+                nav::record(nav::NavEntry::Artist(artist_id.clone()));
+                navigate_artist(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    artist_id,
+                );
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
+            });
+    }
     window
         .global::<NetworkSidebarActions>()
         .on_musician_clicked(|name, role| {
