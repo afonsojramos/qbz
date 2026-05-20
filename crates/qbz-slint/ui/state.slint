@@ -233,6 +233,14 @@ export global ArtistState {
     in property <bool> loading: false;
 }
 
+// Artist-view actions wired to Rust callbacks.
+export global ArtistActions {
+    // Filter the visible Popular Tracks and release-section albums by
+    // a query string (client-side substring match, mirrors the album
+    // track search in AlbumActions).
+    callback search(string);
+}
+
 // Artist network sidebar — Origin / Labels / Similar / Relationships /
 // Discovery. The first three lists come from artist state already; this
 // global covers the MusicBrainz-driven sections plus the open/closed

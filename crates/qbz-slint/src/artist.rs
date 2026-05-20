@@ -429,6 +429,16 @@ fn card_to_item(card: CardData) -> AlbumCardItem {
     }
 }
 
+// Full (unfiltered) rendered models cached on the UI thread so the
+// in-page search can rebuild the visible models cheaply on every
+// keystroke. Mirrors album::FULL_TRACKS.
+thread_local! {
+    static FULL_TOP_TRACKS: std::cell::RefCell<Vec<AlbumTrackItem>> =
+        std::cell::RefCell::new(Vec::new());
+    static FULL_RELEASE_SECTIONS: std::cell::RefCell<Vec<DiscoverSection>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
 /// Apply artist data to the `ArtistState` global. Runs on the Slint event loop.
 pub fn apply_artist(window: &AppWindow, data: ArtistData) {
     let top_tracks: Vec<AlbumTrackItem> = data
@@ -473,6 +483,15 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
         })
         .collect();
 
+    // Cache the full models on the UI thread so the in-page search
+    // can rebuild filtered views without re-fetching the artist.
+    FULL_TOP_TRACKS.with(|cell| {
+        *cell.borrow_mut() = top_tracks.clone();
+    });
+    FULL_RELEASE_SECTIONS.with(|cell| {
+        *cell.borrow_mut() = release_sections.clone();
+    });
+
     let state = window.global::<ArtistState>();
     state.set_name(data.name.into());
     state.set_bio(data.bio.into());
@@ -483,6 +502,51 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
     state.set_release_sections(ModelRc::new(VecModel::from(release_sections)));
     state.set_labels(ModelRc::new(VecModel::from(labels)));
     state.set_similar_artists(ModelRc::new(VecModel::from(similar_artists)));
+}
+
+/// Filter the visible Popular Tracks (title or artist substring) and
+/// release-section albums (title substring) against `query`. An empty
+/// query restores the full unfiltered view. Runs on the Slint event
+/// loop; called by ArtistActions::on_search from main.rs.
+pub fn filter_artist(window: &AppWindow, query: &str) {
+    let needle = query.trim().to_lowercase();
+    let filtered_tracks: Vec<AlbumTrackItem> = FULL_TOP_TRACKS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .filter(|track| {
+                needle.is_empty()
+                    || track.title.as_str().to_lowercase().contains(&needle)
+                    || track.artist.as_str().to_lowercase().contains(&needle)
+            })
+            .cloned()
+            .collect()
+    });
+    let filtered_sections: Vec<DiscoverSection> = FULL_RELEASE_SECTIONS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .filter_map(|section| {
+                let kept: Vec<AlbumCardItem> = section
+                    .albums
+                    .iter()
+                    .filter(|album| {
+                        needle.is_empty()
+                            || album.title.as_str().to_lowercase().contains(&needle)
+                    })
+                    .collect();
+                if kept.is_empty() {
+                    return None;
+                }
+                Some(DiscoverSection {
+                    title: section.title.clone(),
+                    albums: ModelRc::new(VecModel::from(kept)),
+                })
+            })
+            .collect()
+    });
+
+    let state = window.global::<ArtistState>();
+    state.set_top_tracks(ModelRc::new(VecModel::from(filtered_tracks)));
+    state.set_release_sections(ModelRc::new(VecModel::from(filtered_sections)));
 }
 
 /// Clear artist state before loading a new artist.

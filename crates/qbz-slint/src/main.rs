@@ -1190,6 +1190,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // Artist in-page search — client-side filter over Popular Tracks
+    // and every release-section album.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<ArtistActions>()
+            .on_search(move |query| {
+                if let Some(w) = weak.upgrade() {
+                    artist::filter_artist(&w, query.as_str());
+                }
+            });
+    }
+
     // Artist network sidebar — no persistence. Default open, user can
     // close per-session, and reset_network_sidebar reopens it on every
     // artist navigation. The toggle callback stays a no-op on the

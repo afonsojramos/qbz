@@ -10,6 +10,7 @@ import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import {
     ArtistState,
+    ArtistActions,
     AlbumTrackItem,
     NavState,
     ContentView,
@@ -467,7 +468,64 @@ export component ArtistPageView inherits Rectangle {
                 }
             }
 
-            Rectangle { height: 36px; }
+            Rectangle { height: 24px; }
+
+            // --- In-page search ---------------------------------------------
+            // Single client-side substring filter — applied to Popular
+            // Tracks (title + artist) and to every release-section
+            // album title. Same pattern as Tauri's `.page-search` plus
+            // the AlbumActions.search wiring AlbumPageView uses for
+            // its track list.
+            if !ArtistState.loading || ArtistState.top-tracks.length > 0:
+            Rectangle {
+                height: 36px;
+                border-radius: Radius.sm;
+                background: Theme.surface-card;
+                border-width: 1px;
+                border-color: artist-search.has-focus
+                    ? Theme.border-subtle
+                    : transparent;
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        QbzIcon {
+                            source: @image-url("../assets/icons/search.svg");
+                            width: 14px;
+                            height: 14px;
+                            tint: Theme.text-muted;
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        artist-search := TextInput {
+                            width: 100%;
+                            height: 100%;
+                            color: Theme.text-primary;
+                            font-size: Typography.body;
+                            vertical-alignment: center;
+                            single-line: true;
+                            edited => {
+                                ArtistActions.search(self.text);
+                            }
+                        }
+                        Text {
+                            visible: artist-search.text == "";
+                            width: 100%;
+                            height: 100%;
+                            text: @tr("Search this page…");
+                            color: Theme.text-muted;
+                            font-size: Typography.body;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 12px; }
 
             if ArtistState.loading && ArtistState.top-tracks.length == 0: Rectangle {
                 height: 280px;
