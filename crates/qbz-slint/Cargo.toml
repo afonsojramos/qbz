@@ -38,6 +38,7 @@ qbz-audio = { path = "../qbz-audio" }
 qbz-core = { path = "../qbz-core" }
 qbz-models = { path = "../qbz-models" }
 qbz-integrations = { path = "../qbz-integrations" }
+rusqlite = { version = "0.31", features = ["bundled"] }
 qbz-cache = { path = "../qbz-cache" }
 qbz-credentials = { path = "../qbz-credentials" }
 

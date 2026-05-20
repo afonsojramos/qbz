@@ -1584,6 +1584,12 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         seed_name: &str,
         similar_names: &[String],
         dismissed_per_tag: &(dyn Fn(&str) -> std::collections::HashSet<String> + Send + Sync),
+        known_artists: &(dyn Fn() -> (
+            std::collections::HashSet<u64>,
+            std::collections::HashSet<String>,
+        )
+                       + Send
+                       + Sync),
     ) -> Result<DiscoveryResponse, CoreError> {
         use std::collections::HashSet;
 
@@ -1624,6 +1630,7 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         let similar_norm: HashSet<String> =
             similar_names.iter().map(|n| normalize_artist_name(n)).collect();
         let dismissed_primary = dismissed_per_tag(&primary_tag.to_lowercase());
+        let (known_ids, known_names) = known_artists();
 
         let mut candidates: Vec<(String, String)> = Vec::new();
         for artist in &mb_results.artists {
@@ -1632,6 +1639,7 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
                 || artist.id.eq_ignore_ascii_case(seed_mbid)
                 || similar_norm.contains(&n)
                 || dismissed_primary.contains(&n)
+                || known_names.contains(&n)
             {
                 continue;
             }
@@ -1643,7 +1651,7 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         let max_results = 8;
         let min_results = 5;
         let mut results = self
-            .validate_discovery_on_qobuz(&candidates, max_results)
+            .validate_discovery_on_qobuz(&candidates, max_results, &known_ids)
             .await;
 
         if results.len() < min_results && seed_tags.len() > 1 {
@@ -1664,6 +1672,7 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
                         || similar_norm.contains(&n)
                         || dismissed_primary.contains(&n)
                         || dismissed_secondary.contains(&n)
+                        || known_names.contains(&n)
                         || existing_mbids.contains(&a.id)
                     {
                         continue;
@@ -1673,7 +1682,11 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
                 shuffle_with_seed(&mut secondary_candidates, seed_mbid, Some(&secondary_tag));
                 let remaining = max_results.saturating_sub(results.len());
                 let mut more = self
-                    .validate_discovery_on_qobuz(&secondary_candidates, remaining)
+                    .validate_discovery_on_qobuz(
+                        &secondary_candidates,
+                        remaining,
+                        &known_ids,
+                    )
                     .await;
                 results.append(&mut more);
             }
@@ -1689,6 +1702,7 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         &self,
         candidates: &[(String, String)],
         max: usize,
+        known_ids: &std::collections::HashSet<u64>,
     ) -> Vec<DiscoveryArtist> {
         let mut out: Vec<DiscoveryArtist> = Vec::new();
         for (mbid, name) in candidates {
@@ -1702,6 +1716,12 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
                 continue;
             };
             if normalize_artist_name(&first.name) != normalize_artist_name(name) {
+                continue;
+            }
+            // Tauri's `!local_known_qobuz_ids.contains(&artist.id)`
+            // gate — never suggest an artist the user has already
+            // listened to >2 times.
+            if known_ids.contains(&first.id) {
                 continue;
             }
             out.push(DiscoveryArtist {

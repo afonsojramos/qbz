@@ -5163,6 +5163,7 @@ dependencies = [
  "qbz-integrations",
  "qbz-models",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "slint",

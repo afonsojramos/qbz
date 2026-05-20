@@ -280,6 +280,12 @@ async fn record_recent(runtime: &Runtime) {
         album_artist: track.artist.clone(),
         album_artwork_url: artwork,
     });
+    // Per-artist play count — feeds the discovery filter "skip
+    // artists I already know" (HavingCount > threshold). artist_id
+    // is optional on QueueTrack; skip when absent.
+    if let Some(artist_id) = track.artist_id {
+        crate::play_history::record_play(artist_id, &track.artist);
+    }
 }
 
 /// Play `album_id` from `start_index`: fetch the album, build the queue,

@@ -847,6 +847,10 @@ pub async fn load_mb_discovery<A>(
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
+    // Tauri's listen threshold: artists with strictly more than 2
+    // plays count as "already known" and are excluded from
+    // suggestions.
+    let known_threshold: u32 = 2;
     let response = runtime
         .core()
         .musicbrainz_discover_artists(
@@ -854,6 +858,7 @@ where
             seed_name,
             &similar_names,
             &|tag| crate::discovery_dismiss::dismissed_for_tag(tag),
+            &|| crate::play_history::known_artists(known_threshold),
         )
         .await
         .map_err(|e| e.to_string())?;

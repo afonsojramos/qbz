@@ -23,6 +23,7 @@ mod commands;
 mod discovery_dismiss;
 mod home;
 mod nav;
+mod play_history;
 mod playback;
 mod queue;
 mod recently;
