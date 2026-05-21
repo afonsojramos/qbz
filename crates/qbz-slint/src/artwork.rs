@@ -76,6 +76,12 @@ pub enum ArtworkTarget {
     ForYouTopArtist { index: usize },
     /// A tile in ForYouState.artists-to-follow[index].
     ForYouToFollow { index: usize },
+    /// A tile in ForYouState.radio-stations[index].
+    ForYouRadioStation { index: usize },
+    /// A card in ForYouState.more-from-library.albums[index].
+    ForYouMoreFromLibrary { index: usize },
+    /// A card in ForYouState.rediscover.albums[index].
+    ForYouRediscover { index: usize },
     /// The Spotlight artist portrait.
     ForYouSpotlightArtist,
     /// A card in ForYouState.spotlight-albums[index].
@@ -447,6 +453,27 @@ fn apply_artwork(
         }
         ArtworkTarget::ForYouToFollow { index } => {
             let model = window.global::<crate::ForYouState>().get_artists_to_follow();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ForYouRadioStation { index } => {
+            let model = window.global::<crate::ForYouState>().get_radio_stations();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ForYouMoreFromLibrary { index } => {
+            let model = window.global::<crate::ForYouState>().get_more_from_library().albums;
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ForYouRediscover { index } => {
+            let model = window.global::<crate::ForYouState>().get_rediscover().albums;
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);

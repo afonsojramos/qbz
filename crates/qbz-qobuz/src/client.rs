@@ -883,6 +883,62 @@ impl QobuzClient {
         })
     }
 
+    /// Albums similar to a seed album (`/album/suggest`). Ported from
+    /// the legacy api client.
+    pub async fn get_album_suggest(&self, album_id: &str) -> Result<AlbumSuggestResponse> {
+        let url = endpoints::build_url(paths::ALBUM_SUGGEST);
+        let http_response = self
+            .http
+            .get(&url)
+            .headers(self.api_headers().await?)
+            .query(&[("album_id", album_id)])
+            .send()
+            .await?;
+        let status = http_response.status();
+        if !status.is_success() {
+            return Err(ApiError::ApiResponse(format!(
+                "get_album_suggest({album_id}) status {status}"
+            )));
+        }
+        let response: Value = http_response.json().await?;
+        Ok(serde_json::from_value(response)?)
+    }
+
+    /// Qobuz radio for an artist (`/radio/artist`) — a generated track
+    /// list. Ported from the legacy api client.
+    pub async fn get_radio_artist(&self, artist_id: &str) -> Result<RadioResponse> {
+        self.get_radio(paths::RADIO_ARTIST, "artist_id", artist_id).await
+    }
+
+    /// Qobuz radio for a track (`/radio/track`).
+    pub async fn get_radio_track(&self, track_id: &str) -> Result<RadioResponse> {
+        self.get_radio(paths::RADIO_TRACK, "track_id", track_id).await
+    }
+
+    /// Qobuz radio for an album (`/radio/album`).
+    pub async fn get_radio_album(&self, album_id: &str) -> Result<RadioResponse> {
+        self.get_radio(paths::RADIO_ALBUM, "album_id", album_id).await
+    }
+
+    async fn get_radio(&self, path: &str, key: &str, id: &str) -> Result<RadioResponse> {
+        let url = endpoints::build_url(path);
+        let http_response = self
+            .http
+            .get(&url)
+            .headers(self.authenticated_headers().await?)
+            .query(&[(key, id)])
+            .send()
+            .await?;
+        let status = http_response.status();
+        if !status.is_success() {
+            return Err(ApiError::ApiResponse(format!(
+                "get_radio({path}, {id}) status {status}"
+            )));
+        }
+        let response: Value = http_response.json().await?;
+        Ok(serde_json::from_value(response)?)
+    }
+
     /// Get list of genres
     pub async fn get_genres(&self, parent_id: Option<u64>) -> Result<Vec<GenreInfo>> {
         let url = endpoints::build_url(paths::GENRE_LIST);

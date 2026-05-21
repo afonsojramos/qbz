@@ -665,6 +665,26 @@ pub struct SearchResultsPage<T> {
     pub limit: u32,
 }
 
+/// Response from `/album/suggest` — albums similar to a seed album.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumSuggestResponse {
+    #[serde(default)]
+    pub algorithm: Option<String>,
+    #[serde(default)]
+    pub albums: Option<SearchResultsPage<Album>>,
+}
+
+/// Response from the `/radio/*` endpoints — a generated track list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadioResponse {
+    #[serde(rename = "type", default)]
+    pub radio_type: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub tracks: Option<SearchResultsPage<Track>>,
+}
+
 /// One entry of the Qobuz `most_popular` block in a combined search.
 /// Serde tagging matches the legacy `V2MostPopularItem` so the Tauri
 /// command's response shape is unchanged.

@@ -1099,6 +1099,45 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             .map_err(CoreError::Api)
     }
 
+    /// Albums similar to a seed album (`/album/suggest`).
+    pub async fn get_album_suggest(
+        &self,
+        album_id: &str,
+    ) -> Result<qbz_models::AlbumSuggestResponse, CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+        client
+            .get_album_suggest(album_id)
+            .await
+            .map_err(CoreError::Api)
+    }
+
+    /// Qobuz artist radio (`/radio/artist`) — a generated track list.
+    pub async fn get_radio_artist(
+        &self,
+        artist_id: &str,
+    ) -> Result<qbz_models::RadioResponse, CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+        client
+            .get_radio_artist(artist_id)
+            .await
+            .map_err(CoreError::Api)
+    }
+
+    /// Qobuz album radio (`/radio/album`).
+    pub async fn get_radio_album(
+        &self,
+        album_id: &str,
+    ) -> Result<qbz_models::RadioResponse, CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+        client
+            .get_radio_album(album_id)
+            .await
+            .map_err(CoreError::Api)
+    }
+
     /// Get artist with albums (for album pagination)
     pub async fn get_artist_with_albums(
         &self,

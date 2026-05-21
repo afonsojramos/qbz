@@ -43,8 +43,10 @@ pub use playback::{PlaybackState, PlaybackStatus, QueueState, QueueTrack, Repeat
 pub use traits::{FrontendAdapter, LoggingAdapter, NoOpAdapter};
 pub use types::{
     Album,
+    AlbumSuggestResponse,
     AlbumSummary,
     Artist,
+    RadioResponse,
     ArtistAlbums,
     ArtistBiography,
     // Discover types

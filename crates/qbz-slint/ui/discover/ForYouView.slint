@@ -9,12 +9,14 @@
 // (More from library, Rediscover) are later increments.
 
 import { Theme } from "../foundation/semantic-colors.slint";
-import { ForYouState } from "../state.slint";
+import { Typography } from "../foundation/typography.slint";
+import { ForYouState, RadioStationItem } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
 import { ArtistCarousel } from "ArtistCarousel.slint";
 import { Spotlight } from "Spotlight.slint";
 import { QobuzMixesRow } from "QobuzMixesRow.slint";
+import { RadioCard } from "RadioCard.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 
 export component ForYouView inherits VerticalLayout {
@@ -24,6 +26,7 @@ export component ForYouView inherits VerticalLayout {
     callback play-track(string);
     callback play-top-tracks(string);
     callback start-radio(string);
+    callback start-radio-album(string);
     callback open-mix(string);
 
     spacing: 40px;
@@ -51,6 +54,43 @@ export component ForYouView inherits VerticalLayout {
         }
         media-action(kind, id, action) => {
             root.media-action(kind, id, action);
+        }
+    }
+
+    // 1b. Radio Stations — album-seeded radio tiles.
+    if ForYouState.radio-stations.length > 0: VerticalLayout {
+        spacing: 12px;
+        Text {
+            text: @tr("Radio Stations");
+            color: Theme.text-primary;
+            font-size: 18px;
+            font-weight: Typography.semibold;
+        }
+        Rectangle {
+            height: 234px;
+            clip: true;
+            radio-flick := Flickable {
+                width: 100%;
+                height: parent.height;
+                viewport-width: ForYouState.radio-stations.length * (180px + 32px);
+                viewport-height: self.height;
+                HorizontalLayout {
+                    spacing: 32px;
+                    alignment: start;
+                    for st in ForYouState.radio-stations: RadioCard {
+                        seed-title: st.title;
+                        seed-subtitle: st.artist;
+                        label: "RADIO";
+                        artwork: st.artwork;
+                        clicked => {
+                            root.start-radio-album(st.album-id);
+                        }
+                        play => {
+                            root.start-radio-album(st.album-id);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -86,7 +126,29 @@ export component ForYouView inherits VerticalLayout {
         }
     }
 
-    // 5. Artists to Follow.
+    // 5. More From Your Library.
+    if ForYouState.more-from-library.albums.length > 0: Carousel {
+        section: ForYouState.more-from-library;
+        album-clicked(id) => {
+            root.open-album(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
+        }
+    }
+
+    // 6. Rediscover Your Library.
+    if ForYouState.rediscover.albums.length > 0: Carousel {
+        section: ForYouState.rediscover;
+        album-clicked(id) => {
+            root.open-album(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
+        }
+    }
+
+    // 6. Artists to Follow.
     if ForYouState.artists-to-follow.length > 0: ArtistCarousel {
         title: @tr("Artists to Follow");
         artists: ForYouState.artists-to-follow;

@@ -61,12 +61,24 @@ export global HomeActions {
 // carousels), so it renders from its own state rather than the
 // uniform HomeState.sections used by Home / Editor's Picks.
 // Populated lazily by crate::foryou the first time the tab opens.
+// One album-seeded radio tile in the For You "Radio Stations" row.
+export struct RadioStationItem {
+    album-id: string,
+    title: string,
+    artist: string,
+    artwork-url: string,
+    artwork: image,
+}
+
 export global ForYouState {
     in property <DiscoverSection> release-watch;
+    in property <[RadioStationItem]> radio-stations: [];
     in property <DiscoverSection> recent-albums;
     in property <[SlimItem]> recent-tracks: [];
     in property <[SlimItem]> top-artists: [];
     in property <[SlimItem]> artists-to-follow: [];
+    in property <DiscoverSection> more-from-library;
+    in property <DiscoverSection> rediscover;
     // Spotlight — one favorite artist highlighted with a hero + a row
     // of their content (top tracks card, radio card, albums).
     in property <bool> spotlight-visible: false;

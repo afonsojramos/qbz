@@ -511,6 +511,88 @@ pub fn play_track_now(
     });
 }
 
+/// Build a queue from a Qobuz radio track list (each track carries its
+/// own album) and start it. Shared by artist + album radio.
+fn play_radio_response(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    tracks: Vec<qbz_models::Track>,
+) -> bool {
+    let queue: Vec<QueueTrack> = tracks
+        .iter()
+        .map(|track| {
+            let (album_id, album_title, album_artwork) = track
+                .album
+                .as_ref()
+                .map(|a| {
+                    (
+                        a.id.clone(),
+                        a.title.clone(),
+                        a.image.best().cloned().unwrap_or_default(),
+                    )
+                })
+                .unwrap_or_default();
+            let album_artist = track
+                .performer
+                .as_ref()
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            make_queue_track(track, &album_id, &album_title, &album_artist, &album_artwork)
+        })
+        .collect();
+    if queue.is_empty() {
+        return false;
+    }
+    let first_id = queue[0].id;
+    let handle = tokio::runtime::Handle::current();
+    handle.spawn(async move {
+        runtime.core().set_queue(queue, Some(0)).await;
+        after_track_change(&runtime, &weak, first_id).await;
+        refresh_sidebar(true);
+    });
+    true
+}
+
+/// Start a Qobuz artist radio (`/radio/artist`).
+pub fn play_artist_radio(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    artist_id: String,
+) {
+    handle.spawn(async move {
+        match runtime.core().get_radio_artist(&artist_id).await {
+            Ok(resp) => {
+                let tracks = resp.tracks.map(|p| p.items).unwrap_or_default();
+                if !play_radio_response(runtime, weak, tracks) {
+                    log::warn!("[qbz-slint] artist radio {artist_id} returned no tracks");
+                }
+            }
+            Err(e) => log::error!("[qbz-slint] artist radio {artist_id} failed: {e}"),
+        }
+    });
+}
+
+/// Start a Qobuz album radio (`/radio/album`).
+pub fn play_album_radio(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    album_id: String,
+) {
+    handle.spawn(async move {
+        match runtime.core().get_radio_album(&album_id).await {
+            Ok(resp) => {
+                let tracks = resp.tracks.map(|p| p.items).unwrap_or_default();
+                if !play_radio_response(runtime, weak, tracks) {
+                    log::warn!("[qbz-slint] album radio {album_id} returned no tracks");
+                }
+            }
+            Err(e) => log::error!("[qbz-slint] album radio {album_id} failed: {e}"),
+        }
+    });
+}
+
 /// Enqueue an album's tracks at the end of the current queue.
 pub fn enqueue_album(runtime: Runtime, _weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle, album_id: String) {
     handle.spawn(async move {

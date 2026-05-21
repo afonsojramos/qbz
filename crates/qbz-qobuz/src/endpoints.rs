@@ -20,6 +20,12 @@ pub mod paths {
     pub const ALBUM_GET: &str = "/album/get";
     pub const ALBUM_SEARCH: &str = "/album/search";
     pub const ALBUM_GET_FEATURED: &str = "/album/getFeatured";
+    pub const ALBUM_SUGGEST: &str = "/album/suggest";
+
+    // Radio (generated track lists)
+    pub const RADIO_ALBUM: &str = "/radio/album";
+    pub const RADIO_ARTIST: &str = "/radio/artist";
+    pub const RADIO_TRACK: &str = "/radio/track";
 
     // Artist
     pub const ARTIST_GET: &str = "/artist/get";

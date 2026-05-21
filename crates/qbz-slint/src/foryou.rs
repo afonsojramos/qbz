@@ -32,7 +32,22 @@ pub struct ForYouData {
     pub recent_tracks: Vec<TrackSlim>,
     pub top_artists: Vec<ArtistSlim>,
     pub artists_to_follow: Vec<ArtistSlim>,
+    /// Favorite albums not in the recent play-history — an
+    /// approximation of Tauri's reco-DB "forgotten favorites".
+    pub rediscover: Vec<AlbumCard>,
+    /// Albums similar to a recently-played / favorite seed album.
+    pub more_from_library: Vec<AlbumCard>,
+    /// Album-seeded radio tiles (recent + favorite albums).
+    pub radio_stations: Vec<RadioSeed>,
     pub spotlight: Option<SpotlightData>,
+}
+
+#[derive(Clone)]
+pub struct RadioSeed {
+    pub album_id: String,
+    pub title: String,
+    pub artist: String,
+    pub artwork_url: String,
 }
 
 pub struct SpotlightData {
@@ -192,6 +207,84 @@ where
         }
     }
 
+    // Favorite albums (full list) — feeds Rediscover + the More from
+    // your library seed.
+    let recent_album_list = crate::recently::load_albums();
+    let recent_ids: HashSet<String> =
+        recent_album_list.iter().map(|a| a.id.clone()).collect();
+    let fav_albums: Vec<Album> = match runtime.core().get_favorites("albums", 100, 0).await {
+        Ok(value) => {
+            let items = value
+                .get("albums")
+                .and_then(|b| b.get("items"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            serde_json::from_value(items).unwrap_or_default()
+        }
+        Err(_) => Vec::new(),
+    };
+
+    // Rediscover — favorite albums not in the recent play-history.
+    // (Tauri uses a reco DB tracking play recency; the Slint MVP
+    // approximates with the local recently-played album set.)
+    let rediscover: Vec<AlbumCard> = fav_albums
+        .iter()
+        .filter(|a| !recent_ids.contains(&a.id))
+        .take(18)
+        .cloned()
+        .map(map_album)
+        .collect();
+
+    // More from your library — albums similar to a seed (most recent
+    // played album, else first favorite) via /album/suggest.
+    let seed_id = recent_album_list
+        .first()
+        .map(|a| a.id.clone())
+        .or_else(|| fav_albums.first().map(|a| a.id.clone()));
+    let more_from_library: Vec<AlbumCard> = match seed_id {
+        Some(id) if !id.is_empty() => match runtime.core().get_album_suggest(&id).await {
+            Ok(resp) => resp
+                .albums
+                .map(|p| p.items)
+                .unwrap_or_default()
+                .into_iter()
+                .take(18)
+                .map(map_album)
+                .collect(),
+            Err(_) => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+
+    // Radio Stations — album-seeded radio tiles from recent +
+    // favorite albums, deduped, capped at 12.
+    let mut radio_seen: HashSet<String> = HashSet::new();
+    let mut radio_stations: Vec<RadioSeed> = Vec::new();
+    for a in &recent_album_list {
+        if radio_seen.insert(a.id.clone()) {
+            radio_stations.push(RadioSeed {
+                album_id: a.id.clone(),
+                title: a.title.clone(),
+                artist: a.artist.clone(),
+                artwork_url: a.artwork_url.clone(),
+            });
+        }
+    }
+    for a in &fav_albums {
+        if radio_stations.len() >= 12 {
+            break;
+        }
+        if radio_seen.insert(a.id.clone()) {
+            radio_stations.push(RadioSeed {
+                album_id: a.id.clone(),
+                title: a.title.clone(),
+                artist: a.artist.name.clone(),
+                artwork_url: a.image.best().cloned().unwrap_or_default(),
+            });
+        }
+    }
+    radio_stations.truncate(12);
+
     // Spotlight — highlight one favorite artist (rotated by time) with
     // their page (albums + whether they have top tracks).
     let spotlight = load_spotlight(runtime, &fav_artists).await;
@@ -202,6 +295,9 @@ where
         recent_tracks,
         top_artists,
         artists_to_follow: to_follow,
+        rediscover,
+        more_from_library,
+        radio_stations,
         spotlight,
     }
 }
@@ -366,6 +462,20 @@ pub fn apply_for_you(window: &AppWindow, data: &ForYouData) {
     state.set_artists_to_follow(ModelRc::new(VecModel::from(artist_items(
         &data.artists_to_follow,
     ))));
+    state.set_more_from_library(section("More From Your Library", &data.more_from_library));
+    state.set_rediscover(section("Rediscover Your Library", &data.rediscover));
+    let radio: Vec<crate::RadioStationItem> = data
+        .radio_stations
+        .iter()
+        .map(|r| crate::RadioStationItem {
+            album_id: r.album_id.clone().into(),
+            title: r.title.clone().into(),
+            artist: r.artist.clone().into(),
+            artwork_url: r.artwork_url.clone().into(),
+            artwork: slint::Image::default(),
+        })
+        .collect();
+    state.set_radio_stations(ModelRc::new(VecModel::from(radio)));
 
     if let Some(sp) = &data.spotlight {
         state.set_spotlight_visible(true);
@@ -426,6 +536,30 @@ pub fn artwork_jobs(data: &ForYouData) -> Vec<ArtworkJob> {
             jobs.push(ArtworkJob {
                 url: a.artwork_url.clone(),
                 target: ArtworkTarget::ForYouToFollow { index: i },
+            });
+        }
+    }
+    for (i, r) in data.radio_stations.iter().enumerate() {
+        if !r.artwork_url.is_empty() {
+            jobs.push(ArtworkJob {
+                url: r.artwork_url.clone(),
+                target: ArtworkTarget::ForYouRadioStation { index: i },
+            });
+        }
+    }
+    for (i, c) in data.more_from_library.iter().enumerate() {
+        if !c.artwork_url.is_empty() {
+            jobs.push(ArtworkJob {
+                url: c.artwork_url.clone(),
+                target: ArtworkTarget::ForYouMoreFromLibrary { index: i },
+            });
+        }
+    }
+    for (i, c) in data.rediscover.iter().enumerate() {
+        if !c.artwork_url.is_empty() {
+            jobs.push(ArtworkJob {
+                url: c.artwork_url.clone(),
+                target: ArtworkTarget::ForYouRediscover { index: i },
             });
         }
     }
