@@ -649,6 +649,23 @@ export struct FavoriteArtistItem {
     image: image,
 }
 
+// One playlist tile in the Favorites > Playlists grid.
+export struct FavoritePlaylistItem {
+    id: string,
+    name: string,
+    owner: string,
+    tracks-line: string,   // "N tracks"
+    cover-url: string,
+    cover: image,
+}
+
+// One label row in the Favorites > Labels list.
+export struct FavoriteLabelItem {
+    id: string,
+    name: string,
+    albums-line: string,   // "N releases"
+}
+
 // Library > Favorites state. The active tab decides which model is
 // shown; all are populated lazily by `crate::favorites` the first
 // time their tab is opened. Albums reuse AlbumCardItem, tracks reuse
@@ -661,9 +678,13 @@ export global FavoritesState {
     in property <[SearchTrackItem]> tracks: [];
     in property <[AlbumCardItem]> albums: [];
     in property <[FavoriteArtistItem]> artists: [];
+    in property <[FavoritePlaylistItem]> playlists: [];
+    in property <[FavoriteLabelItem]> labels: [];
     in property <int> tracks-total: 0;
     in property <int> albums-total: 0;
     in property <int> artists-total: 0;
+    in property <int> playlists-total: 0;
+    in property <int> labels-total: 0;
     in property <bool> loading: false;
 }
 
@@ -673,6 +694,8 @@ export global FavoritesActions {
     callback select-tab(string);
     callback open-album(string);
     callback open-artist(string);
+    callback open-label(string /* label id */, string /* name */);
+    callback open-playlist(string /* playlist id */);
     callback play-track(string /* track id */);
     callback track-action(string /* track id */, string /* action */);
 }

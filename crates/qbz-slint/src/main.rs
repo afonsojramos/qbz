@@ -1841,6 +1841,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<FavoritesActions>()
+            .on_open_label(move |id, name| {
+                let Ok(label_id) = id.parse::<u64>() else {
+                    return;
+                };
+                let name = name.to_string();
+                nav::record(nav::NavEntry::Label {
+                    id: label_id,
+                    name: name.clone(),
+                });
+                navigate_label(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    label_id,
+                    name,
+                );
+            });
+    }
+    {
+        // Favorite playlist click — no playlist detail view in the
+        // Slint MVP yet; logged until that lands.
+        window
+            .global::<FavoritesActions>()
+            .on_open_playlist(move |id| {
+                log::info!("[qbz-slint] favorites: playlist clicked id={id} (no view yet)");
+            });
+    }
+    {
         let weak = window.as_weak();
         window
             .global::<FavoritesActions>()

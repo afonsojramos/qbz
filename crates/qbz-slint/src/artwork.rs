@@ -64,6 +64,8 @@ pub enum ArtworkTarget {
     FavoriteAlbum { index: usize },
     /// A card in FavoritesState.artists[index].
     FavoriteArtist { index: usize },
+    /// A card in FavoritesState.playlists[index].
+    FavoritePlaylist { index: usize },
 }
 
 /// An artwork download job: which card, and the image URL.
@@ -391,6 +393,13 @@ fn apply_artwork(
             let model = window.global::<crate::FavoritesState>().get_artists();
             if let Some(mut item) = model.row_data(index) {
                 item.image = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::FavoritePlaylist { index } => {
+            let model = window.global::<crate::FavoritesState>().get_playlists();
+            if let Some(mut item) = model.row_data(index) {
+                item.cover = image;
                 model.set_row_data(index, item);
             }
         }

@@ -12,12 +12,14 @@ use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
-use qbz_models::{Album, Artist, Track};
+use qbz_models::{Album, Artist, Playlist, Track};
+use serde::Deserialize;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::{
-    AlbumCardItem, AppWindow, FavoriteArtistItem, FavoritesState, SearchTrackItem,
+    AlbumCardItem, AppWindow, FavoriteArtistItem, FavoriteLabelItem, FavoritePlaylistItem,
+    FavoritesState, SearchTrackItem,
 };
 
 /// Page size — matches Tauri's FAVORITES_PAGE_SIZE. We fetch one
@@ -31,16 +33,13 @@ pub enum FavTab {
     Tracks,
     Albums,
     Artists,
+    Playlists,
+    Labels,
 }
 
 impl FavTab {
     pub fn from_route(route: &str) -> Option<Self> {
-        match route {
-            "favorites-tracks" => Some(Self::Tracks),
-            "favorites-albums" => Some(Self::Albums),
-            "favorites-artists" => Some(Self::Artists),
-            _ => None,
-        }
+        Self::from_tab_id(route.strip_prefix("favorites-")?)
     }
 
     pub fn from_tab_id(id: &str) -> Option<Self> {
@@ -48,24 +47,44 @@ impl FavTab {
             "tracks" => Some(Self::Tracks),
             "albums" => Some(Self::Albums),
             "artists" => Some(Self::Artists),
+            "playlists" => Some(Self::Playlists),
+            "labels" => Some(Self::Labels),
             _ => None,
         }
     }
 
-    /// The Qobuz favType string + the JSON branch key.
+    /// The Qobuz favType string + the JSON branch key (for the
+    /// get_favorites-backed tabs).
     fn key(self) -> &'static str {
         match self {
             Self::Tracks => "tracks",
             Self::Albums => "albums",
             Self::Artists => "artists",
+            Self::Playlists => "playlists",
+            Self::Labels => "labels",
         }
     }
+}
+
+/// Favorites-labels response item — the qbz-models `Label` is just
+/// {id, name}, but the favorites payload carries an image + count,
+/// so parse into this richer local shape.
+#[derive(Deserialize)]
+struct FavLabel {
+    #[serde(default)]
+    id: u64,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    albums_count: Option<u32>,
 }
 
 pub enum FavData {
     Tracks { items: Vec<TrackCard>, total: usize },
     Albums { items: Vec<AlbumCard>, total: usize },
     Artists { items: Vec<ArtistCard>, total: usize },
+    Playlists { items: Vec<PlaylistCard>, total: usize },
+    Labels { items: Vec<LabelCard>, total: usize },
 }
 
 #[derive(Clone)]
@@ -98,6 +117,22 @@ pub struct ArtistCard {
     pub image_url: String,
 }
 
+#[derive(Clone)]
+pub struct PlaylistCard {
+    pub id: String,
+    pub name: String,
+    pub owner: String,
+    pub tracks_line: String,
+    pub cover_url: String,
+}
+
+#[derive(Clone)]
+pub struct LabelCard {
+    pub id: String,
+    pub name: String,
+    pub albums_line: String,
+}
+
 /// Fetch + parse one favorites tab.
 pub async fn load_favorites<A>(
     runtime: &Arc<AppRuntime<A>>,
@@ -106,6 +141,21 @@ pub async fn load_favorites<A>(
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
+    // Playlists come from /playlist/getUserPlaylists, not the
+    // getUserFavorites envelope — handle them first.
+    if tab == FavTab::Playlists {
+        let playlists = runtime
+            .core()
+            .get_user_playlists()
+            .await
+            .map_err(|e| e.to_string())?;
+        let total = playlists.len();
+        return Ok(FavData::Playlists {
+            items: playlists.into_iter().map(map_playlist).collect(),
+            total,
+        });
+    }
+
     let value = runtime
         .core()
         .get_favorites(tab.key(), PAGE_SIZE, 0)
@@ -144,6 +194,14 @@ where
                 total,
             }
         }
+        FavTab::Labels => {
+            let labels: Vec<FavLabel> = serde_json::from_value(items).unwrap_or_default();
+            FavData::Labels {
+                items: labels.into_iter().map(map_label).collect(),
+                total,
+            }
+        }
+        FavTab::Playlists => unreachable!("handled above"),
     })
 }
 
@@ -217,6 +275,36 @@ fn map_artist(artist: Artist) -> ArtistCard {
     }
 }
 
+fn map_playlist(playlist: Playlist) -> PlaylistCard {
+    // The highest-resolution non-empty cover list wins (images300 >
+    // images150 > images), first entry as the tile cover.
+    let cover_url = [&playlist.images300, &playlist.images150, &playlist.images]
+        .into_iter()
+        .flatten()
+        .find(|v| !v.is_empty())
+        .and_then(|list| list.first().cloned())
+        .unwrap_or_default();
+    PlaylistCard {
+        id: playlist.id.to_string(),
+        name: playlist.name,
+        owner: playlist.owner.name,
+        tracks_line: format!("{} tracks", playlist.tracks_count),
+        cover_url,
+    }
+}
+
+fn map_label(label: FavLabel) -> LabelCard {
+    let albums_line = match label.albums_count {
+        Some(n) if n > 0 => format!("{} releases", n),
+        _ => String::new(),
+    };
+    LabelCard {
+        id: label.id.to_string(),
+        name: label.name,
+        albums_line,
+    }
+}
+
 pub fn apply_favorites(window: &AppWindow, data: FavData) {
     let state = window.global::<FavoritesState>();
     match data {
@@ -271,6 +359,33 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
             state.set_artists(ModelRc::new(VecModel::from(cards)));
             state.set_artists_total(total as i32);
         }
+        FavData::Playlists { items, total } => {
+            let cards: Vec<FavoritePlaylistItem> = items
+                .into_iter()
+                .map(|p| FavoritePlaylistItem {
+                    id: p.id.into(),
+                    name: p.name.into(),
+                    owner: p.owner.into(),
+                    tracks_line: p.tracks_line.into(),
+                    cover_url: p.cover_url.into(),
+                    cover: slint::Image::default(),
+                })
+                .collect();
+            state.set_playlists(ModelRc::new(VecModel::from(cards)));
+            state.set_playlists_total(total as i32);
+        }
+        FavData::Labels { items, total } => {
+            let rows: Vec<FavoriteLabelItem> = items
+                .into_iter()
+                .map(|l| FavoriteLabelItem {
+                    id: l.id.into(),
+                    name: l.name.into(),
+                    albums_line: l.albums_line.into(),
+                })
+                .collect();
+            state.set_labels(ModelRc::new(VecModel::from(rows)));
+            state.set_labels_total(total as i32);
+        }
     }
     state.set_loading(false);
 }
@@ -309,5 +424,16 @@ pub fn artwork_jobs(data: &FavData) -> Vec<ArtworkJob> {
                 target: ArtworkTarget::FavoriteArtist { index: i },
             })
             .collect(),
+        FavData::Playlists { items, .. } => items
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !p.cover_url.is_empty())
+            .map(|(i, p)| ArtworkJob {
+                url: p.cover_url.clone(),
+                target: ArtworkTarget::FavoritePlaylist { index: i },
+            })
+            .collect(),
+        // Labels render an icon, no remote artwork.
+        FavData::Labels { .. } => Vec::new(),
     }
 }
