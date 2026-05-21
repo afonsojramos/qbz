@@ -56,9 +56,8 @@ export component SlimCarousel inherits VerticalLayout {
     // Cap at two pages (24 items); excess is not shown.
     property <int> total: Math.min(root.items.length, 2 * root.per-page);
     property <int> page-count: Math.max(1, Math.ceil(root.total / root.per-page));
-    property <int> page: 0;
-    // Self-correcting page index — stays valid if the window resizes.
-    property <int> current-page: Math.min(Math.max(0, root.page), root.page-count - 1);
+    // Max leftward scroll (viewport-x is 0 at start, negative scrolled).
+    property <length> max-scroll: Math.max(0px, (root.page-count - 1) * flick.width);
 
     spacing: 12px;
 
@@ -79,9 +78,9 @@ export component SlimCarousel inherits VerticalLayout {
                 alignment: center;
                 NavButton {
                     icon: @image-url("../assets/icons/chevron-left.svg");
-                    enabled: root.current-page > 0;
+                    enabled: flick.viewport-x < -1px;
                     clicked => {
-                        root.page = root.current-page - 1;
+                        flick.viewport-x = Math.min(0px, flick.viewport-x + flick.width);
                     }
                 }
             }
@@ -89,28 +88,31 @@ export component SlimCarousel inherits VerticalLayout {
                 alignment: center;
                 NavButton {
                     icon: @image-url("../assets/icons/chevron-right.svg");
-                    enabled: root.current-page < root.page-count - 1;
+                    enabled: flick.viewport-x > -root.max-scroll + 1px;
                     clicked => {
-                        root.page = root.current-page + 1;
+                        flick.viewport-x = Math.max(-root.max-scroll, flick.viewport-x - flick.width);
                     }
                 }
             }
         }
     }
 
-    // --- Track: clipped viewport, slides one page width at a time --------
+    // --- Track: a horizontal Flickable so the grid drags by page like
+    // the album carousel. Each page block is one viewport width wide; the
+    // 4x3 cards are positioned absolutely inside their page block. Card
+    // taps still register (Flickable separates flick from tap).
     viewport := Rectangle {
         height: root.rows * root.row-height + (root.rows - 1) * root.gap;
         clip: true;
 
-        property <length> cell-width:
-            (self.width - (root.columns - 1) * root.gap) / root.columns;
-
-        Rectangle {
-            x: -root.current-page * viewport.width;
-            width: root.page-count * viewport.width;
+        flick := Flickable {
+            width: 100%;
             height: parent.height;
-            animate x { duration: 220ms; easing: ease-in-out; }
+            viewport-width: root.page-count * self.width;
+            viewport-height: self.height;
+
+            property <length> cell-width:
+                (self.width - (root.columns - 1) * root.gap) / root.columns;
 
             for item[i] in root.items: SlimCard {
                 // Only the first `total` items are laid out; the rest
@@ -121,10 +123,10 @@ export component SlimCarousel inherits VerticalLayout {
                 property <int> slot-col: Math.mod(self.slot, root.columns);
                 property <int> slot-row: Math.floor(self.slot / root.columns);
                 visible: self.shown;
-                width: self.shown ? viewport.cell-width : 0px;
+                width: self.shown ? flick.cell-width : 0px;
                 height: root.row-height;
-                x: self.page-idx * viewport.width
-                    + self.slot-col * (viewport.cell-width + root.gap);
+                x: self.page-idx * flick.width
+                    + self.slot-col * (flick.cell-width + root.gap);
                 y: self.slot-row * (root.row-height + root.gap);
                 item: item;
                 clicked(id) => {
