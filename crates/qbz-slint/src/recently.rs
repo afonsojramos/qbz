@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 /// How many recent tracks to keep.
 const MAX_RECENT: usize = 24;
 
-/// One recently-played track, with the album it belongs to.
+/// One recently-played track, with the album it belongs to and enough
+/// context (quality, ids) that re-playing it or rendering its album
+/// card does not depend on a re-fetch.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecentTrack {
     pub id: String,
@@ -32,6 +34,15 @@ pub struct RecentTrack {
     pub album_artist: String,
     #[serde(default)]
     pub album_artwork_url: String,
+    /// "hires" | "cd" | "" — drives the album card quality badge.
+    #[serde(default)]
+    pub quality_tier: String,
+    /// "Hi-Res: 24-bit / 96 kHz" — quality badge hover tooltip.
+    #[serde(default)]
+    pub quality_label: String,
+    /// Artist id for navigation / scrobble context.
+    #[serde(default)]
+    pub artist_id: Option<u64>,
 }
 
 /// One recently-played album, derived from the track history.
@@ -41,6 +52,8 @@ pub struct RecentAlbum {
     pub title: String,
     pub artist: String,
     pub artwork_url: String,
+    pub quality_tier: String,
+    pub quality_label: String,
 }
 
 fn store_path() -> Option<PathBuf> {
@@ -72,6 +85,8 @@ pub fn load_albums() -> Vec<RecentAlbum> {
             title: track.album_title,
             artist: track.album_artist,
             artwork_url: track.album_artwork_url,
+            quality_tier: track.quality_tier,
+            quality_label: track.quality_label,
         });
     }
     albums

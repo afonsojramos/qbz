@@ -262,6 +262,29 @@ fn make_queue_track(
     }
 }
 
+/// Quality tier + exact-quality label from a queue track's bit depth /
+/// sample rate, matching the discover card badge format.
+fn recent_quality(bit_depth: Option<u32>, sample_rate: Option<f64>) -> (String, String) {
+    let tier = match bit_depth {
+        Some(d) if d >= 24 => "hires",
+        Some(_) => "cd",
+        None => "",
+    };
+    let label = match (bit_depth, sample_rate) {
+        (Some(bd), Some(sr)) => {
+            let t = if bd >= 24 { "Hi-Res" } else { "CD" };
+            let rate = if (sr.fract()).abs() < f64::EPSILON {
+                format!("{}", sr as i64)
+            } else {
+                format!("{sr}")
+            };
+            format!("{t}: {bd}-bit / {rate} kHz")
+        }
+        _ => String::new(),
+    };
+    (tier.to_string(), label)
+}
+
 /// Record the currently playing queue track in the recently-played store
 /// so the Discover "Recently Played" sections fill.
 async fn record_recent(runtime: &Runtime) {
@@ -270,6 +293,8 @@ async fn record_recent(runtime: &Runtime) {
         return;
     };
     let artwork = track.artwork_url.clone().unwrap_or_default();
+    let (quality_tier, quality_label) =
+        recent_quality(track.bit_depth, track.sample_rate);
     crate::recently::record(crate::recently::RecentTrack {
         id: track.id.to_string(),
         title: track.title.clone(),
@@ -279,6 +304,9 @@ async fn record_recent(runtime: &Runtime) {
         album_title: track.album.clone(),
         album_artist: track.artist.clone(),
         album_artwork_url: artwork,
+        quality_tier,
+        quality_label,
+        artist_id: track.artist_id,
     });
     // Per-artist play count — feeds the discovery filter "skip
     // artists I already know" (HavingCount > threshold). artist_id
