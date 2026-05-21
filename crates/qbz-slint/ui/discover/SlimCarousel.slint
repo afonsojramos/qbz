@@ -1,0 +1,136 @@
+// A paginated slim-card section (Recently Played Tracks, Popular
+// albums). 12 items per page (4 columns x 3 rows), capped at two
+// pages. The prev/next controls only appear when there is more than
+// one page; the track slides horizontally by a full viewport width.
+//
+// Mirrors the Tauri home: a 4x3 grid that pages rather than growing
+// into a tall wall of rows.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { SlimItem } from "../state.slint";
+import { SlimCard } from "SlimCard.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+
+component NavButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    opacity: root.enabled ? 1.0 : 0.4;
+    background: ta.has-hover && root.enabled
+        ? Theme.surface-hover
+        : Theme.surface-elevated;
+
+    QbzIcon {
+        source: root.icon;
+        width: 15px;
+        height: 15px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: root.enabled ? Theme.text-primary : Theme.text-muted;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component SlimCarousel inherits VerticalLayout {
+    in property <string> title;
+    in property <[SlimItem]> items;
+    callback item-clicked(string);
+
+    property <int> columns: 4;
+    property <int> rows: 3;
+    property <length> gap: 8px;
+    property <length> row-height: 60px;
+    property <int> per-page: root.columns * root.rows; // 12
+    // Cap at two pages (24 items); excess is not shown.
+    property <int> total: Math.min(root.items.length, 2 * root.per-page);
+    property <int> page-count: Math.max(1, Math.ceil(root.total / root.per-page));
+    property <int> page: 0;
+    // Self-correcting page index — stays valid if the window resizes.
+    property <int> current-page: Math.min(Math.max(0, root.page), root.page-count - 1);
+
+    spacing: 12px;
+
+    // --- Header: title + (conditional) page controls ---------------------
+    HorizontalLayout {
+        Text {
+            text: root.title;
+            color: Theme.text-primary;
+            font-size: 18px;
+            font-weight: Typography.semibold;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        // Only when there is a second page.
+        if root.total > root.per-page: HorizontalLayout {
+            spacing: 4px;
+            VerticalLayout {
+                alignment: center;
+                NavButton {
+                    icon: @image-url("../assets/icons/chevron-left.svg");
+                    enabled: root.current-page > 0;
+                    clicked => {
+                        root.page = root.current-page - 1;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                NavButton {
+                    icon: @image-url("../assets/icons/chevron-right.svg");
+                    enabled: root.current-page < root.page-count - 1;
+                    clicked => {
+                        root.page = root.current-page + 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Track: clipped viewport, slides one page width at a time --------
+    viewport := Rectangle {
+        height: root.rows * root.row-height + (root.rows - 1) * root.gap;
+        clip: true;
+
+        property <length> cell-width:
+            (self.width - (root.columns - 1) * root.gap) / root.columns;
+
+        Rectangle {
+            x: -root.current-page * viewport.width;
+            width: root.page-count * viewport.width;
+            height: parent.height;
+            animate x { duration: 220ms; easing: ease-in-out; }
+
+            for item[i] in root.items: SlimCard {
+                // Only the first `total` items are laid out; the rest
+                // (beyond two pages) collapse to zero and stay off-screen.
+                property <bool> shown: i < root.total;
+                property <int> slot: Math.mod(i, root.per-page);
+                property <int> page-idx: Math.floor(i / root.per-page);
+                property <int> slot-col: Math.mod(self.slot, root.columns);
+                property <int> slot-row: Math.floor(self.slot / root.columns);
+                visible: self.shown;
+                width: self.shown ? viewport.cell-width : 0px;
+                height: root.row-height;
+                x: self.page-idx * viewport.width
+                    + self.slot-col * (viewport.cell-width + root.gap);
+                y: self.slot-row * (root.row-height + root.gap);
+                item: item;
+                clicked(id) => {
+                    root.item-clicked(id);
+                }
+            }
+        }
+    }
+}

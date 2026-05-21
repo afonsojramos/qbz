@@ -122,11 +122,14 @@ where
         containers.album_of_the_week,
     );
 
+    // Capped at 24 (two carousel pages of 12) — the slim carousel
+    // does not show beyond that.
     let popular = containers
         .most_streamed
         .map(|container| container.data.items)
         .unwrap_or_default()
         .into_iter()
+        .take(24)
         .enumerate()
         .map(|(index, album)| map_slim(index, album))
         .collect();
@@ -148,8 +151,10 @@ where
 
     // Recently played comes from the local play-history store, not the
     // discover index. Empty until the playback session records plays.
+    // Capped at 24 (two carousel pages of 12).
     let recent = crate::recently::load()
         .into_iter()
+        .take(24)
         .map(|track| SlimData {
             id: track.id,
             title: track.title,

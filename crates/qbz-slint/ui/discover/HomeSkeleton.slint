@@ -1,0 +1,70 @@
+// Loading skeleton for the Discover home — grey placeholder blocks
+// shaped like the real carousels, gently pulsing (fade in/out) while
+// the first fetch is in flight. Replaces the spinner + "Loading…"
+// text so the first paint reads as the page filling in rather than a
+// generic loader.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Radius } from "../foundation/radius.slint";
+
+// A single shimmering block. Opacity breathes between two values on a
+// shared phase so the whole skeleton pulses in unison.
+component Shimmer inherits Rectangle {
+    in property <bool> phase;
+    background: Theme.surface-elevated;
+    border-radius: Radius.sm;
+    opacity: root.phase ? 0.85 : 0.4;
+    animate opacity { duration: 900ms; easing: ease-in-out; }
+}
+
+// One placeholder carousel: a short title bar over a row of card
+// blocks (square art + two text lines).
+component SkeletonRow inherits VerticalLayout {
+    in property <bool> phase;
+    in property <length> card-size: 220px;
+    spacing: 12px;
+
+    Shimmer {
+        phase: root.phase;
+        width: 180px;
+        height: 22px;
+    }
+    HorizontalLayout {
+        spacing: 32px;
+        for _ in [0, 1, 2, 3, 4]: VerticalLayout {
+            spacing: 8px;
+            Shimmer {
+                phase: root.phase;
+                width: root.card-size;
+                height: root.card-size;
+            }
+            Shimmer {
+                phase: root.phase;
+                width: root.card-size * 0.7;
+                height: 14px;
+            }
+            Shimmer {
+                phase: root.phase;
+                width: root.card-size * 0.45;
+                height: 12px;
+            }
+        }
+    }
+}
+
+export component HomeSkeleton inherits VerticalLayout {
+    property <bool> phase: false;
+    spacing: 40px;
+
+    // Drives the shared breathing phase.
+    Timer {
+        interval: 900ms;
+        running: true;
+        triggered => {
+            root.phase = !root.phase;
+        }
+    }
+
+    SkeletonRow { phase: root.phase; }
+    SkeletonRow { phase: root.phase; }
+}

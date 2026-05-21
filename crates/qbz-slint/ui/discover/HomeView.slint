@@ -10,10 +10,10 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { HomeState, HomeActions, NavState, ContentView } from "../state.slint";
 import { Carousel } from "Carousel.slint";
-import { GridSection } from "GridSection.slint";
+import { SlimCarousel } from "SlimCarousel.slint";
+import { HomeSkeleton } from "HomeSkeleton.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
-import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 
 // Header + hint shown for a recently-played module while it has no data
 // yet (the play history fills once the playback session records plays).
@@ -230,23 +230,7 @@ export component HomeView inherits Rectangle {
                 spacing: 40px;
                 alignment: start;
 
-                if HomeState.loading && HomeState.sections.length == 0: Rectangle {
-                    height: 320px;
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 18px;
-                        HorizontalLayout {
-                            alignment: center;
-                            LoadingSpinner { size: 36px; }
-                        }
-                        Text {
-                            text: @tr("Loading your music…");
-                            color: Theme.text-muted;
-                            font-size: 13px;
-                            horizontal-alignment: center;
-                        }
-                    }
-                }
+                if HomeState.loading && HomeState.sections.length == 0: HomeSkeleton { }
 
                 for section in HomeState.sections: Carousel {
                     section: section;
@@ -283,9 +267,10 @@ export component HomeView inherits Rectangle {
                     hint: @tr("Albums you play will appear here.");
                 }
 
-                // Recently Played Tracks — always present, same pattern.
+                // Recently Played Tracks — paginated 4x3 carousel
+                // (12 per page, up to two pages).
                 if HomeState.active-tab == "home"
-                    && HomeState.recent.length > 0: GridSection {
+                    && HomeState.recent.length > 0: SlimCarousel {
                     title: @tr("Recently Played Tracks");
                     items: HomeState.recent;
                     item-clicked(id) => {
@@ -299,7 +284,7 @@ export component HomeView inherits Rectangle {
                 }
 
                 if HomeState.active-tab == "home"
-                    && HomeState.popular.length > 0: GridSection {
+                    && HomeState.popular.length > 0: SlimCarousel {
                     title: @tr("Popular albums");
                     items: HomeState.popular;
                     item-clicked(id) => {
