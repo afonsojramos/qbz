@@ -15,10 +15,13 @@ use qbz_models::{
     UserSession,
 };
 use qbz_integrations::musicbrainz::cache::MusicBrainzCache;
+use qbz_integrations::musicbrainz::genre::{extract_affinity_seeds, genre_summary, is_broad_genre};
+use qbz_integrations::musicbrainz::location::compute_affinity_score;
 use qbz_integrations::musicbrainz::{
-    location, AlbumAppearance, ArtistMetadata, ArtistRelationships, DiscoveryArtist,
-    DiscoveryResponse, MusicBrainzClient, MusicianAppearances, MusicianConfidence, Period,
-    RelatedArtist, ResolvedArtist, ResolvedMusician,
+    location, AffinitySeeds, AlbumAppearance, ArtistMetadata, ArtistRelationships,
+    DiscoveryArtist, DiscoveryResponse, LocationCandidate, LocationDiscoveryResponse,
+    MusicBrainzClient, MusicianAppearances, MusicianConfidence, Period, RelatedArtist,
+    ResolvedArtist, ResolvedMusician, Tag,
 };
 use qbz_player::{PlaybackState, Player, QueueManager};
 use qbz_qobuz::QobuzClient;
@@ -1732,6 +1735,219 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             });
         }
         out
+    }
+}
+
+// ----- Location / scene discovery -------------------------------------------
+
+impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
+    /// "Artists from the same place" — given a source artist's MBID,
+    /// area and genre/tag seeds, find other artists from that area
+    /// who share the genres, validated against Qobuz. Ports
+    /// v2_discover_artists_by_location's core pipeline (the scene
+    /// cache + progress events are omitted; subdivision resolution
+    /// and affinity scoring are kept).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn discover_artists_by_location(
+        &self,
+        source_mbid: &str,
+        area_id: Option<&str>,
+        area_name: &str,
+        country: Option<&str>,
+        genres: Vec<String>,
+        tags: Vec<String>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<LocationDiscoveryResponse, CoreError> {
+        use std::collections::HashMap;
+
+        // Step 0: smart area resolution — city → parent subdivision
+        // for broader results (Leyton → England, Seattle →
+        // Washington).
+        let (search_name, display_name) = match area_id {
+            Some(aid) => match self.musicbrainz.resolve_parent_subdivision(aid).await {
+                Ok(Some((subdivision, _))) => {
+                    let display = country
+                        .map(|c| format!("{}, {}", c, subdivision))
+                        .unwrap_or_else(|| subdivision.clone());
+                    (subdivision, display)
+                }
+                _ => {
+                    let display = country
+                        .map(|c| format!("{}, {}", c, area_name))
+                        .unwrap_or_else(|| area_name.to_string());
+                    (area_name.to_string(), display)
+                }
+            },
+            None => {
+                let display = country
+                    .map(|c| format!("{}, {}", c, area_name))
+                    .unwrap_or_else(|| area_name.to_string());
+                (area_name.to_string(), display)
+            }
+        };
+
+        let source_seeds = AffinitySeeds {
+            genres: genres.clone(),
+            tags: tags.clone(),
+            normalized_seeds: genres.iter().chain(tags.iter()).cloned().collect(),
+        };
+
+        // Step 2: pick search genres, dropping overly broad tags that
+        // would return the whole country's catalog.
+        let mut search_genres: Vec<String> = if genres.is_empty() {
+            tags.iter()
+                .filter(|s| !is_broad_genre(s))
+                .take(3)
+                .cloned()
+                .collect()
+        } else {
+            genres
+                .iter()
+                .chain(tags.iter().take(2))
+                .filter(|s| !is_broad_genre(s))
+                .cloned()
+                .collect()
+        };
+        if search_genres.is_empty() {
+            // Everything was broad — fall back to the raw list.
+            search_genres = if genres.is_empty() {
+                tags.iter().take(3).cloned().collect()
+            } else {
+                genres.iter().take(3).cloned().collect()
+            };
+        }
+        if search_genres.is_empty() {
+            return Ok(LocationDiscoveryResponse {
+                artists: Vec::new(),
+                scene_label: format!("{} scene", display_name),
+                genre_summary: String::new(),
+                total_candidates: 0,
+                has_more: false,
+                next_offset: 0,
+            });
+        }
+
+        // Step 2/3: MB tag+area search per genre, dedupe + score.
+        // candidate_map: mbid -> (name, score_sum, genre_hits, tags)
+        let mut candidate_map: HashMap<String, (String, i32, usize, Vec<String>)> =
+            HashMap::new();
+        let per_genre_limit = 200usize;
+        for genre in &search_genres {
+            let result = self
+                .musicbrainz
+                .search_artists_by_tag_and_area(genre, &search_name, country, per_genre_limit, 0)
+                .await;
+            let Ok(response) = result else {
+                continue;
+            };
+            for artist in &response.artists {
+                if artist.id == source_mbid {
+                    continue;
+                }
+                let candidate_tags: Vec<String> = artist
+                    .tags
+                    .as_ref()
+                    .map(|list| {
+                        list.iter()
+                            .filter(|t| t.count.unwrap_or(0) > 0)
+                            .map(|t| t.name.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let same_city = artist
+                    .begin_area
+                    .as_ref()
+                    .map(|ba| {
+                        ba.name.eq_ignore_ascii_case(&search_name)
+                            || area_id.map(|aid| ba.id == aid).unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                let same_country = artist
+                    .area
+                    .as_ref()
+                    .map(|a| a.name.eq_ignore_ascii_case(&search_name))
+                    .unwrap_or(false);
+                let score =
+                    compute_affinity_score(&candidate_tags, &source_seeds, same_city, same_country);
+                let entry = candidate_map
+                    .entry(artist.id.clone())
+                    .or_insert_with(|| (artist.name.clone(), 0, 0, Vec::new()));
+                entry.1 += score;
+                entry.2 += 1;
+                for tag in &candidate_tags {
+                    if !entry.3.contains(tag) {
+                        entry.3.push(tag.clone());
+                    }
+                }
+            }
+        }
+
+        // Step 3: score + sort. Final = affinity + (genre_hits-1)*15.
+        let mut scored: Vec<(String, String, Vec<String>, i32)> = candidate_map
+            .into_iter()
+            .map(|(mbid, (name, score, genre_hits, tag_list))| {
+                let candidate_seeds = extract_affinity_seeds(
+                    &tag_list
+                        .iter()
+                        .map(|name| Tag {
+                            name: name.clone(),
+                            count: Some(1),
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                let multi_genre_bonus = ((genre_hits as i32) - 1) * 15;
+                (mbid, name, candidate_seeds.genres, score + multi_genre_bonus)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.0.cmp(&b.0)));
+
+        let total_candidates = scored.len();
+        let to_validate: Vec<_> = scored.into_iter().skip(offset).take(limit).collect();
+
+        // Step 4: validate against Qobuz (exact normalized-name match,
+        // pick the one with the most albums as a popularity proxy).
+        let mut validated: Vec<LocationCandidate> = Vec::new();
+        for (mbid, mb_name, candidate_genres, score) in &to_validate {
+            let Ok(results) = self.search_artists(mb_name, 5, 0, None).await else {
+                continue;
+            };
+            let mb_norm = normalize_artist_name(mb_name);
+            let best = results
+                .items
+                .iter()
+                .filter(|a| normalize_artist_name(&a.name) == mb_norm)
+                .max_by_key(|a| a.albums_count.unwrap_or(0));
+            if let Some(qobuz_artist) = best {
+                let image_url = qobuz_artist
+                    .image
+                    .as_ref()
+                    .and_then(|img| img.small.as_ref().or(img.thumbnail.as_ref()).cloned());
+                validated.push(LocationCandidate {
+                    mbid: mbid.clone(),
+                    mb_name: mb_name.clone(),
+                    qobuz_id: Some(qobuz_artist.id as i64),
+                    qobuz_name: Some(qobuz_artist.name.clone()),
+                    qobuz_image: image_url,
+                    score: *score,
+                    genres: candidate_genres.clone(),
+                    qobuz_albums_count: qobuz_artist.albums_count,
+                });
+            }
+        }
+
+        let scene_label = country
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| display_name.clone());
+        let next_offset = offset + to_validate.len();
+        Ok(LocationDiscoveryResponse {
+            artists: validated,
+            scene_label,
+            genre_summary: genre_summary(&source_seeds),
+            total_candidates,
+            has_more: next_offset < total_candidates,
+            next_offset,
+        })
     }
 }
 
