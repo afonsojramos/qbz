@@ -66,6 +66,16 @@ pub enum ArtworkTarget {
     FavoriteArtist { index: usize },
     /// A card in FavoritesState.playlists[index].
     FavoritePlaylist { index: usize },
+    /// A card in ForYouState.release-watch.albums[index].
+    ForYouReleaseWatch { index: usize },
+    /// A card in ForYouState.recent-albums.albums[index].
+    ForYouRecentAlbum { index: usize },
+    /// A row in ForYouState.recent-tracks[index].
+    ForYouRecentTrack { index: usize },
+    /// A tile in ForYouState.top-artists[index].
+    ForYouTopArtist { index: usize },
+    /// A tile in ForYouState.artists-to-follow[index].
+    ForYouToFollow { index: usize },
 }
 
 /// An artwork download job: which card, and the image URL.
@@ -400,6 +410,41 @@ fn apply_artwork(
             let model = window.global::<crate::FavoritesState>().get_playlists();
             if let Some(mut item) = model.row_data(index) {
                 item.cover = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ForYouReleaseWatch { index } => {
+            let model = window.global::<crate::ForYouState>().get_release_watch().albums;
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ForYouRecentAlbum { index } => {
+            let model = window.global::<crate::ForYouState>().get_recent_albums().albums;
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ForYouRecentTrack { index } => {
+            let model = window.global::<crate::ForYouState>().get_recent_tracks();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ForYouTopArtist { index } => {
+            let model = window.global::<crate::ForYouState>().get_top_artists();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ForYouToFollow { index } => {
+            let model = window.global::<crate::ForYouState>().get_artists_to_follow();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
                 model.set_row_data(index, item);
             }
         }

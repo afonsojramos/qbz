@@ -12,6 +12,7 @@ import { HomeState, HomeActions, GenreFilterState, NavState, ContentView } from 
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
 import { HomeSkeleton } from "HomeSkeleton.slint";
+import { ForYouView } from "ForYouView.slint";
 import { GenreFilterPopup } from "GenreFilterPopup.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
@@ -141,6 +142,7 @@ component GearButton inherits Rectangle {
 
 export component HomeView inherits Rectangle {
     callback album-clicked(string);
+    callback open-artist(string);
     callback media-action(string, string, string);
 
     background: Theme.surface-main;
@@ -246,7 +248,9 @@ export component HomeView inherits Rectangle {
                 spacing: 40px;
                 alignment: start;
 
-                if HomeState.loading && HomeState.sections.length == 0: HomeSkeleton { }
+                if HomeState.active-tab != "forYou"
+                    && HomeState.loading
+                    && HomeState.sections.length == 0: HomeSkeleton { }
 
                 for section in HomeState.sections: Carousel {
                     section: section;
@@ -255,6 +259,23 @@ export component HomeView inherits Rectangle {
                     }
                     media-action(kind, id, action) => {
                         root.media-action(kind, id, action);
+                    }
+                }
+
+                // For You renders its own ordered, heterogeneous
+                // sections from ForYouState.
+                if HomeState.active-tab == "forYou": ForYouView {
+                    open-album(id) => {
+                        root.album-clicked(id);
+                    }
+                    open-artist(id) => {
+                        root.open-artist(id);
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
+                    play-track(id) => {
+                        root.media-action("track", id, "play");
                     }
                 }
 

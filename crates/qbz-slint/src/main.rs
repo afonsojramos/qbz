@@ -23,6 +23,7 @@ mod commands;
 mod custom_artwork;
 mod discovery_dismiss;
 mod favorites;
+mod foryou;
 mod genre_filter;
 mod home;
 mod label;
@@ -123,10 +124,13 @@ async fn reload_home(
         Ok(data) => {
             // Artwork for the active tab's section set (Section-targeted,
             // so it lands in HomeState.sections once select_tab swaps it
-            // in below). Built before `data` is moved.
+            // in below). Built before `data` is moved. For You renders
+            // from its own view, so it has no discover-index section
+            // set here.
+            let empty: Vec<home::SectionData> = Vec::new();
             let active_set = match active_tab.as_str() {
                 "editorPicks" => &data.editor_sections,
-                "forYou" => &data.foryou_sections,
+                "forYou" => &empty,
                 _ => &data.sections,
             };
             let mut jobs = home::section_artwork_jobs(active_set);
@@ -175,6 +179,34 @@ fn update_nav_flags(window: &AppWindow) {
     let state = window.global::<NavState>();
     state.set_can_back(nav::can_back());
     state.set_can_forward(nav::can_forward());
+}
+
+/// Lazy-load the Discover > For You sections the first time the tab is
+/// opened. No-op once loaded (the data persists for the session).
+fn ensure_for_you_loaded(
+    runtime: &Arc<AppRuntime<SlintAdapter>>,
+    weak: &slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: &artwork::ImageCache,
+) {
+    let Some(w) = weak.upgrade() else {
+        return;
+    };
+    if w.global::<ForYouState>().get_loaded() {
+        return;
+    }
+    foryou::reset_loading(&w);
+    let runtime = runtime.clone();
+    let weak = weak.clone();
+    let image_cache = image_cache.clone();
+    handle.spawn(async move {
+        let data = foryou::load_for_you(&runtime).await;
+        let jobs = foryou::artwork_jobs(&data);
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            foryou::apply_for_you(&w, &data);
+        });
+        artwork::spawn_loads(jobs, weak, image_cache);
+    });
 }
 
 /// Load an album and show the album view, then fetch its artwork. Shared
@@ -404,13 +436,19 @@ fn apply_entry(
             });
         }
         nav::NavEntry::Discover { tab } => {
-            let weak = weak.clone();
-            let image_cache = image_cache.clone();
-            let _ = weak.clone().upgrade_in_event_loop(move |w| {
-                w.global::<NavState>().set_view(ContentView::Home);
-                let jobs = home::select_tab(&w, &tab);
-                artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
-            });
+            let for_you = tab == "forYou";
+            {
+                let weak = weak.clone();
+                let image_cache = image_cache.clone();
+                let _ = weak.clone().upgrade_in_event_loop(move |w| {
+                    w.global::<NavState>().set_view(ContentView::Home);
+                    let jobs = home::select_tab(&w, &tab);
+                    artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                });
+            }
+            if for_you {
+                ensure_for_you_loaded(runtime, weak, handle, image_cache);
+            }
         }
         nav::NavEntry::Settings => {
             let _ = weak.upgrade_in_event_loop(|w| {
@@ -1772,9 +1810,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Discover tab switch (the in-view Home / Editor's Picks / For
-    // You pill). Swaps the cached section set + re-fires artwork.
+    // You pill). Swaps the cached section set + re-fires artwork; For
+    // You lazy-loads its dedicated sections on first open.
     {
+        let runtime = app_runtime.clone();
         let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
         let image_cache = image_cache.clone();
         window
             .global::<HomeActions>()
@@ -1786,6 +1827,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let jobs = home::select_tab(&w, tab.as_str());
                     artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
                     update_nav_flags(&w);
+                    if tab.as_str() == "forYou" {
+                        ensure_for_you_loaded(&runtime, &weak, &handle, &image_cache);
+                    }
                 }
             });
     }
@@ -1957,6 +2001,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let jobs = home::select_tab(&w, &tab);
                     artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
                     update_nav_flags(&w);
+                    if tab == "forYou" {
+                        ensure_for_you_loaded(&runtime, &weak, &handle, &image_cache);
+                    }
                 }
                 return;
             }

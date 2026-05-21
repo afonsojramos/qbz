@@ -1,0 +1,88 @@
+// Discover > For You — dedicated, ordered layout for the For You tab.
+// Unlike Home / Editor's Picks (uniform album carousels from
+// HomeState.sections), For You mixes album carousels, a track
+// carousel, and artist carousels, so it renders from ForYouState.
+// Sections hide themselves when empty.
+//
+// Reuses the shared cards/carousels — no new card components here.
+// Qobuz Mixes, Radio Stations, Spotlight, and the reco-DB sections
+// (More from library, Rediscover) are later increments.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { ForYouState } from "../state.slint";
+import { Carousel } from "Carousel.slint";
+import { SlimCarousel } from "SlimCarousel.slint";
+import { ArtistCarousel } from "ArtistCarousel.slint";
+import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
+
+export component ForYouView inherits VerticalLayout {
+    callback open-album(string);
+    callback open-artist(string);
+    callback media-action(string, string, string);
+    callback play-track(string);
+
+    spacing: 40px;
+    alignment: start;
+
+    if ForYouState.loading
+        && ForYouState.release-watch.albums.length == 0
+        && ForYouState.top-artists.length == 0: HorizontalLayout {
+        alignment: center;
+        LoadingSpinner { size: 36px; }
+    }
+
+    // 1. Release Watch.
+    if ForYouState.release-watch.albums.length > 0: Carousel {
+        section: ForYouState.release-watch;
+        album-clicked(id) => {
+            root.open-album(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
+        }
+    }
+
+    // 2. Recently Played Tracks.
+    if ForYouState.recent-tracks.length > 0: SlimCarousel {
+        title: @tr("Recently Played Tracks");
+        items: ForYouState.recent-tracks;
+        item-clicked(id) => {
+            root.play-track(id);
+        }
+    }
+
+    // 3. Recently Played Albums.
+    if ForYouState.recent-albums.albums.length > 0: Carousel {
+        section: ForYouState.recent-albums;
+        album-clicked(id) => {
+            root.open-album(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
+        }
+    }
+
+    // 4. Your Top Artists.
+    if ForYouState.top-artists.length > 0: ArtistCarousel {
+        title: @tr("Your Top Artists");
+        artists: ForYouState.top-artists;
+        artist-clicked(id) => {
+            root.open-artist(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
+        }
+    }
+
+    // 5. Artists to Follow.
+    if ForYouState.artists-to-follow.length > 0: ArtistCarousel {
+        title: @tr("Artists to Follow");
+        artists: ForYouState.artists-to-follow;
+        artist-clicked(id) => {
+            root.open-artist(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
+        }
+    }
+}

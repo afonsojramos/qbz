@@ -11,7 +11,7 @@ use std::sync::Arc;
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
 use qbz_models::{
-    Album, AlbumAward, DiscoverAlbum, DiscoverAudioInfo, DiscoverContainer,
+    AlbumAward, DiscoverAlbum, DiscoverAudioInfo, DiscoverContainer,
 };
 use slint::{ComponentHandle, ModelRc, VecModel};
 
@@ -23,8 +23,6 @@ pub struct HomeData {
     pub sections: Vec<SectionData>,
     /// Editorial-only section set for the Editor's Picks tab.
     pub editor_sections: Vec<SectionData>,
-    /// Personalized section set for the For You tab.
-    pub foryou_sections: Vec<SectionData>,
     pub popular: Vec<SlimData>,
     pub recent: Vec<SlimData>,
     pub recent_albums: Vec<CardData>,
@@ -41,7 +39,6 @@ thread_local! {
 struct TabSections {
     home: Vec<SectionData>,
     editor: Vec<SectionData>,
-    foryou: Vec<SectionData>,
 }
 
 #[derive(Clone)]
@@ -138,64 +135,9 @@ where
         .map(|(index, album)| map_slim(index, album))
         .collect();
 
-    // For You — personalized sections built from the data sources the
-    // Slint MVP has: Release Watch (followed-artist new releases),
-    // Favorite Albums (the user's hearted albums), and Recently
-    // Played Albums (local play-history). The deeper Tauri sections
-    // (Qobuz mixes, similar albums, rediscover library, essentials by
-    // genre, artist spotlight) need the reco-DB backend, which the
-    // Slint MVP does not have yet.
-    let mut foryou_sections = Vec::new();
-    if let Ok(page) = runtime.core().get_release_watch("artists", 18, 0).await {
-        let albums: Vec<CardData> = page.items.into_iter().map(map_full_album).collect();
-        if !albums.is_empty() {
-            foryou_sections.push(SectionData {
-                title: "Release Watch".to_string(),
-                albums,
-            });
-        }
-    }
-    if let Ok(value) = runtime.core().get_favorites("albums", 24, 0).await {
-        let items = value
-            .get("albums")
-            .and_then(|b| b.get("items"))
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        let albums: Vec<CardData> = serde_json::from_value::<Vec<Album>>(items)
-            .unwrap_or_default()
-            .into_iter()
-            .map(map_full_album)
-            .collect();
-        if !albums.is_empty() {
-            foryou_sections.push(SectionData {
-                title: "Favorite Albums".to_string(),
-                albums,
-            });
-        }
-    }
-    {
-        let recents: Vec<CardData> = crate::recently::load_albums()
-            .into_iter()
-            .map(|album| CardData {
-                id: album.id,
-                title: album.title,
-                artist: album.artist,
-                genre: String::new(),
-                year: String::new(),
-                quality_tier: album.quality_tier,
-                quality_label: album.quality_label,
-                ribbon: String::new(),
-                ribbon_kind: String::new(),
-                artwork_url: album.artwork_url,
-            })
-            .collect();
-        if !recents.is_empty() {
-            foryou_sections.push(SectionData {
-                title: "Recently Played Albums".to_string(),
-                albums: recents,
-            });
-        }
-    }
+    // For You is loaded separately + lazily by crate::foryou into its
+    // own dedicated view, so the home load no longer builds a For You
+    // section set here.
 
     // Recently played comes from the local play-history store, not the
     // discover index. Empty until the playback session records plays.
@@ -230,7 +172,6 @@ where
     Ok(HomeData {
         sections,
         editor_sections,
-        foryou_sections,
         popular,
         recent,
         recent_albums,
@@ -271,39 +212,6 @@ fn push_section_ref(
         title: title.to_string(),
         albums: container.data.items.iter().cloned().map(map_album).collect(),
     });
-}
-
-/// Map a full catalog `Album` (release-watch result) to a card. Unlike
-/// `map_album` (which takes the discover-index `DiscoverAlbum`), this
-/// reads the standard Album shape.
-fn map_full_album(album: Album) -> CardData {
-    let year = album
-        .release_date_original
-        .as_deref()
-        .and_then(|s| s.get(..4).map(|y| y.to_string()))
-        .unwrap_or_default();
-    let quality_tier = match album.maximum_bit_depth {
-        Some(d) if d >= 24 => "hires",
-        Some(_) => "cd",
-        None => "",
-    }
-    .to_string();
-    let quality_label = match (album.maximum_bit_depth, album.maximum_sampling_rate) {
-        (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, sr),
-        _ => String::new(),
-    };
-    CardData {
-        id: album.id,
-        title: album.title,
-        artist: album.artist.name,
-        genre: album.genre.map(|g| g.name).unwrap_or_default(),
-        year,
-        quality_tier,
-        quality_label,
-        ribbon: String::new(),
-        ribbon_kind: String::new(),
-        artwork_url: album.image.best().cloned().unwrap_or_default(),
-    }
 }
 
 fn map_album(album: DiscoverAlbum) -> CardData {
@@ -480,16 +388,22 @@ pub fn section_artwork_jobs(sections: &[SectionData]) -> Vec<ArtworkJob> {
 /// HomeState.sections, and returns the artwork jobs to re-fire. No
 /// re-fetch — the sets were cached by the last apply_home.
 pub fn select_tab(window: &AppWindow, tab: &str) -> Vec<ArtworkJob> {
+    let state = window.global::<HomeState>();
+    state.set_active_tab(tab.into());
+    // For You renders from its own dedicated ForYouView/ForYouState,
+    // not HomeState.sections — clear the uniform section list so the
+    // home-content `for` renders nothing for that tab.
+    if tab == "forYou" {
+        state.set_sections(ModelRc::new(VecModel::from(Vec::<DiscoverSection>::new())));
+        return Vec::new();
+    }
     TAB_SECTIONS.with(|cell| {
         let cache = cell.borrow();
         let set = match tab {
             "editorPicks" => &cache.editor,
-            "forYou" => &cache.foryou,
             _ => &cache.home,
         };
-        let state = window.global::<HomeState>();
         state.set_sections(ModelRc::new(VecModel::from(build_sections(set))));
-        state.set_active_tab(tab.into());
         section_artwork_jobs(set)
     })
 }
@@ -499,12 +413,12 @@ pub fn select_tab(window: &AppWindow, tab: &str) -> Vec<ArtworkJob> {
 pub fn apply_home(window: &AppWindow, data: HomeData) {
     let sections: Vec<DiscoverSection> = build_sections(&data.sections);
 
-    // Cache all three tab section sets for instant tab switching.
+    // Cache the Home + Editor's Picks section sets for instant tab
+    // switching (For You has its own dedicated state/view).
     TAB_SECTIONS.with(|cell| {
         *cell.borrow_mut() = TabSections {
             home: data.sections.clone(),
             editor: data.editor_sections.clone(),
-            foryou: data.foryou_sections.clone(),
         };
     });
 

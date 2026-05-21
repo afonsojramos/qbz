@@ -56,6 +56,23 @@ export global HomeActions {
     callback select-tab(string);
 }
 
+// Discover > For You state. The For You tab has heterogeneous,
+// ordered sections (album carousels, a track carousel, artist
+// carousels), so it renders from its own state rather than the
+// uniform HomeState.sections used by Home / Editor's Picks.
+// Populated lazily by crate::foryou the first time the tab opens.
+export global ForYouState {
+    in property <DiscoverSection> release-watch;
+    in property <DiscoverSection> recent-albums;
+    in property <[SlimItem]> recent-tracks: [];
+    in property <[SlimItem]> top-artists: [];
+    in property <[SlimItem]> artists-to-follow: [];
+    in property <bool> loading: false;
+    // True once a load has completed, so the tab does not refetch on
+    // every visit.
+    in-out property <bool> loaded: false;
+}
+
 // One genre in the Filter-by-genre popup's simple grid.
 export struct GenreChip {
     id: string,
