@@ -403,6 +403,15 @@ fn apply_entry(
                 w.global::<NavState>().set_view(ContentView::Home);
             });
         }
+        nav::NavEntry::Discover { tab } => {
+            let weak = weak.clone();
+            let image_cache = image_cache.clone();
+            let _ = weak.clone().upgrade_in_event_loop(move |w| {
+                w.global::<NavState>().set_view(ContentView::Home);
+                let jobs = home::select_tab(&w, &tab);
+                artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+            });
+        }
         nav::NavEntry::Settings => {
             let _ = weak.upgrade_in_event_loop(|w| {
                 w.global::<NavState>().set_view(ContentView::Settings);
@@ -1771,8 +1780,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .global::<HomeActions>()
             .on_select_tab(move |tab| {
                 if let Some(w) = weak.upgrade() {
+                    nav::record(nav::NavEntry::Discover {
+                        tab: tab.to_string(),
+                    });
                     let jobs = home::select_tab(&w, tab.as_str());
                     artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                    update_nav_flags(&w);
                 }
             });
     }
@@ -1939,9 +1952,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(tab) = route.strip_prefix("discover-") {
                 let tab = tab.to_string();
                 if let Some(w) = weak.upgrade() {
+                    nav::record(nav::NavEntry::Discover { tab: tab.clone() });
                     w.global::<NavState>().set_view(ContentView::Home);
                     let jobs = home::select_tab(&w, &tab);
                     artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                    update_nav_flags(&w);
                 }
                 return;
             }

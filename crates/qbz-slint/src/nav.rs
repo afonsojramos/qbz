@@ -13,6 +13,12 @@ use std::cell::RefCell;
 #[derive(Clone, Debug, PartialEq)]
 pub enum NavEntry {
     Home,
+    /// A Discover tab page ("home" | "editorPicks" | "forYou"). Each
+    /// tab is its own history entry so back/forward moves between the
+    /// three Discover pages.
+    Discover {
+        tab: String,
+    },
     Album(String),
     Artist(String),
     Settings,
