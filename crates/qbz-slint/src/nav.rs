@@ -32,6 +32,16 @@ pub enum NavEntry {
         id: u64,
         name: String,
     },
+    /// ArtistsByLocationView — opened by the Origin section's
+    /// location link. Carries the full scene-discovery payload.
+    Location {
+        mbid: String,
+        area_id: String,
+        area_name: String,
+        country: String,
+        genres: Vec<String>,
+        tags: Vec<String>,
+    },
 }
 
 struct History {

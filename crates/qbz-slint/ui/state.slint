@@ -94,7 +94,7 @@ export global AlbumActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings, search, musician, label }
+export enum ContentView { home, album, artist, settings, search, musician, label, location }
 
 // Settings screen state. Audio and Playback preferences are loaded from
 // the persistence stores by the Rust settings controller and pushed here;
@@ -448,6 +448,32 @@ export global LabelState {
 }
 
 export global LabelActions {
+    callback load-more();
+}
+
+// One artist in the scene-discovery grid (artists from the same
+// place as the source artist).
+export struct LocationArtistItem {
+    qobuz-id: string,
+    name: string,
+    genres-line: string,
+    image-url: string,
+    image: image,
+}
+
+// ArtistsByLocationView state — opened from the Origin section's
+// location link. Populated by `crate::location_view`.
+export global LocationViewState {
+    in property <string> scene-label;
+    in property <string> genre-summary;
+    in property <[LocationArtistItem]> artists: [];
+    in property <int> total: 0;
+    in property <bool> loading: false;
+    in property <bool> load-more-loading: false;
+}
+
+export global LocationViewActions {
+    callback open-artist(string /* qobuz id */);
     callback load-more();
 }
 

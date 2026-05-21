@@ -24,6 +24,7 @@ mod custom_artwork;
 mod discovery_dismiss;
 mod home;
 mod label;
+mod location_view;
 mod musician;
 mod nav;
 mod play_history;
@@ -428,7 +429,58 @@ fn apply_entry(
         nav::NavEntry::Label { id, name } => {
             navigate_label(runtime.clone(), weak.clone(), handle, image_cache.clone(), id, name);
         }
+        nav::NavEntry::Location {
+            mbid,
+            area_id,
+            area_name,
+            country,
+            genres,
+            tags,
+        } => {
+            let params = artist::LocationParams {
+                mbid,
+                area_id,
+                area_name,
+                country,
+                genres,
+                tags,
+            };
+            navigate_location(runtime.clone(), weak.clone(), handle, image_cache.clone(), params);
+        }
     }
+}
+
+/// Open an ArtistsByLocationView for the given scene params. Runs the
+/// discovery on a worker, applies the validated artist grid, then
+/// fans out artwork jobs for the candidates' Qobuz thumbnails.
+fn navigate_location(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+    params: artist::LocationParams,
+) {
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            location_view::reset_scene(&w);
+            w.global::<NavState>().set_view(ContentView::Location);
+        });
+        match location_view::load_scene(&runtime, &params, 0).await {
+            Ok(data) => {
+                let jobs = location_view::artwork_jobs(&data);
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    location_view::apply_scene(&w, data);
+                });
+                artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+            }
+            Err(e) => {
+                log::error!("[qbz-slint] scene discovery failed: {e}");
+                let _ = weak.upgrade_in_event_loop(|w| {
+                    w.global::<LocationViewState>().set_loading(false);
+                });
+            }
+        }
+    });
 }
 
 /// Open a LabelReleasesView for `label_id`. Fetches the label header
@@ -1320,11 +1372,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // minimum payload the future target views (ArtistsByLocation,
     // LabelReleases, MusicianPage) will need. Logged-only until those
     // views land in Slint.
-    window
-        .global::<NetworkSidebarActions>()
-        .on_location_clicked(|mbid| {
-            log::info!("[qbz-slint] network sidebar: location clicked for mbid={mbid}");
-        });
+    // Location click — open ArtistsByLocationView using the cached
+    // location params from the Origin metadata (area, genres, tags).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<NetworkSidebarActions>()
+            .on_location_clicked(move |mbid| {
+                let Some(params) = artist::location_params() else {
+                    log::warn!(
+                        "[qbz-slint] location clicked but no cached params (mbid={mbid})"
+                    );
+                    return;
+                };
+                nav::record(nav::NavEntry::Location {
+                    mbid: params.mbid.clone(),
+                    area_id: params.area_id.clone(),
+                    area_name: params.area_name.clone(),
+                    country: params.country.clone(),
+                    genres: params.genres.clone(),
+                    tags: params.tags.clone(),
+                });
+                navigate_location(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    params,
+                );
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
+            });
+    }
     // Label click — open LabelReleasesView.
     {
         let runtime = app_runtime.clone();
@@ -1566,6 +1649,73 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             log::error!("[qbz-slint] label load-more failed: {e}");
                             let _ = weak.upgrade_in_event_loop(|w| {
                                 w.global::<LabelState>().set_load_more_loading(false);
+                            });
+                        }
+                    }
+                });
+            });
+    }
+
+    // Scene (location) view actions — open-artist routes to the
+    // artist page, load-more validates the next page of candidates.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<LocationViewActions>()
+            .on_open_artist(move |id| {
+                if id.is_empty() {
+                    return;
+                }
+                if let Some(w) = weak.upgrade() {
+                    w.invoke_open_artist(id);
+                }
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<LocationViewActions>()
+            .on_load_more(move || {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let Some(params) = artist::location_params() else {
+                    return;
+                };
+                let offset = w.global::<LocationViewState>().get_artists().row_count();
+                w.global::<LocationViewState>().set_load_more_loading(true);
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let image_cache = image_cache.clone();
+                handle.spawn(async move {
+                    match location_view::load_scene(&runtime, &params, offset).await {
+                        Ok(data) => {
+                            let jobs: Vec<artwork::ArtworkJob> = data
+                                .artists
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, a)| !a.image_url.is_empty())
+                                .map(|(i, a)| artwork::ArtworkJob {
+                                    url: a.image_url.clone(),
+                                    target: artwork::ArtworkTarget::LocationArtist {
+                                        index: offset + i,
+                                    },
+                                })
+                                .collect();
+                            let total = data.total;
+                            let artists = data.artists.clone();
+                            let _ = weak.upgrade_in_event_loop(move |w| {
+                                location_view::append_scene(&w, artists, total);
+                            });
+                            artwork::spawn_loads(jobs, weak, image_cache);
+                        }
+                        Err(e) => {
+                            log::error!("[qbz-slint] scene load-more failed: {e}");
+                            let _ = weak.upgrade_in_event_loop(|w| {
+                                w.global::<LocationViewState>().set_load_more_loading(false);
                             });
                         }
                     }

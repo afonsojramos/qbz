@@ -707,6 +707,11 @@ pub struct MbOrigin {
 /// sidebar always starts open on every artist visit (per user policy
 /// — close is per-session, never persisted).
 pub fn reset_network_sidebar(window: &AppWindow) {
+    // Drop the previous artist's cached location params so a stale
+    // scene-view click can't fire for the wrong artist.
+    if let Ok(mut guard) = LOCATION_PARAMS.lock() {
+        *guard = None;
+    }
     let state = window.global::<NetworkSidebarState>();
     state.set_open(true);
     state.set_mb_available(true);
@@ -753,10 +758,56 @@ where
         .await
         .map_err(|e| e.to_string())?;
 
+    // Cache the location params so the Origin location click can
+    // open ArtistsByLocationView without re-resolving. Stored in a
+    // cross-thread Mutex because the click handler runs on the UI
+    // thread while this loads on a worker.
+    store_location_params(&mbid, &meta);
+
     Ok(Some(MbMetadata {
         mbid: mbid.clone(),
         origin: map_origin(&meta),
     }))
+}
+
+/// Location parameters for the "artists from the same place" scene
+/// view, captured from the Origin metadata. None until an artist's
+/// metadata with a location resolves.
+#[derive(Clone, Default)]
+pub struct LocationParams {
+    pub mbid: String,
+    pub area_id: String,
+    pub area_name: String,
+    pub country: String,
+    pub genres: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+static LOCATION_PARAMS: std::sync::Mutex<Option<LocationParams>> =
+    std::sync::Mutex::new(None);
+
+fn store_location_params(mbid: &str, meta: &qbz_integrations::musicbrainz::ArtistMetadata) {
+    let params = meta.location.as_ref().map(|loc| LocationParams {
+        mbid: mbid.to_string(),
+        area_id: loc.area_id.clone().unwrap_or_default(),
+        area_name: loc
+            .city
+            .clone()
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| loc.display_name.clone()),
+        country: loc.country.clone().unwrap_or_default(),
+        genres: meta.affinity_seeds.genres.clone(),
+        tags: meta.affinity_seeds.tags.clone(),
+    });
+    if let Ok(mut guard) = LOCATION_PARAMS.lock() {
+        *guard = params;
+    }
+}
+
+/// The location params for the currently loaded artist, if it has a
+/// resolved MB location. Read by the Origin location-click handler.
+pub fn location_params() -> Option<LocationParams> {
+    LOCATION_PARAMS.lock().ok().and_then(|g| g.clone())
 }
 
 fn map_origin(meta: &qbz_integrations::musicbrainz::ArtistMetadata) -> MbOrigin {

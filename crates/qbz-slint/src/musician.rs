@@ -29,7 +29,6 @@ pub struct MusicianData {
     pub confidence: MusicianConfidence,
     pub appearances: Vec<AppearanceData>,
     pub total: usize,
-    pub offset: u32,
 }
 
 #[derive(Clone)]
@@ -75,7 +74,6 @@ where
             artwork_url: a.album_artwork,
         })
         .collect();
-    let count = appearances.len() as u32;
 
     Ok(MusicianData {
         name: resolved.name,
@@ -83,7 +81,6 @@ where
         confidence: resolved.confidence,
         appearances,
         total: page.total,
-        offset: count,
     })
 }
 

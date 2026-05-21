@@ -18,6 +18,7 @@ import { AlbumPageView } from "../album/AlbumPageView.slint";
 import { ArtistPageView } from "../artist/ArtistPageView.slint";
 import { MusicianPageView } from "../musician/MusicianPageView.slint";
 import { LabelReleasesView } from "../label/LabelReleasesView.slint";
+import { ArtistsByLocationView } from "../location/ArtistsByLocationView.slint";
 import { SettingsView } from "../settings/SettingsView.slint";
 import { SearchResultsView } from "../search/SearchResultsView.slint";
 
@@ -107,6 +108,11 @@ export component AppShell inherits Rectangle {
                     }
                     media-action(kind, id, action) => {
                         root.media-action(kind, id, action);
+                    }
+                }
+                if NavState.view == ContentView.location: ArtistsByLocationView {
+                    open-artist(id) => {
+                        root.open-artist(id);
                     }
                 }
                 if NavState.view == ContentView.settings: SettingsView {
