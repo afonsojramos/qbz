@@ -1762,6 +1762,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // Discover tab switch (the in-view Home / Editor's Picks / For
+    // You pill). Swaps the cached section set + re-fires artwork.
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window
+            .global::<HomeActions>()
+            .on_select_tab(move |tab| {
+                if let Some(w) = weak.upgrade() {
+                    let jobs = home::select_tab(&w, tab.as_str());
+                    artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                }
+            });
+    }
+
     // Header nav-menu navigation — currently routes the Library
     // dropdown rows into Library > Favorites tabs.
     {
@@ -1773,6 +1788,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if route == "home" {
                 if let Some(w) = weak.upgrade() {
                     w.global::<NavState>().set_view(ContentView::Home);
+                }
+                return;
+            }
+            // Discover tabs — switch to Home and select the tab. The
+            // section sets are already cached from the initial load,
+            // so this just swaps the visible set + re-fires artwork.
+            if let Some(tab) = route.strip_prefix("discover-") {
+                let tab = tab.to_string();
+                if let Some(w) = weak.upgrade() {
+                    w.global::<NavState>().set_view(ContentView::Home);
+                    let jobs = home::select_tab(&w, &tab);
+                    artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
                 }
                 return;
             }

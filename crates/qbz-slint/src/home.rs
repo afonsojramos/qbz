@@ -5,28 +5,52 @@
 //! loop — converts that into Slint models pushed onto the `HomeState`
 //! global. Domain types never reach the `.slint` files.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
-use qbz_models::{AlbumAward, DiscoverAlbum, DiscoverAudioInfo, DiscoverContainer};
+use qbz_models::{
+    Album, AlbumAward, DiscoverAlbum, DiscoverAudioInfo, DiscoverContainer,
+};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::{AlbumCardItem, AppWindow, DiscoverSection, HomeState, SlimItem};
 
 /// Plain, `Send` home data produced on the worker thread.
 pub struct HomeData {
     pub sections: Vec<SectionData>,
+    /// Editorial-only section set for the Editor's Picks tab.
+    pub editor_sections: Vec<SectionData>,
+    /// Personalized section set for the For You tab.
+    pub foryou_sections: Vec<SectionData>,
     pub popular: Vec<SlimData>,
     pub recent: Vec<SlimData>,
     pub recent_albums: Vec<CardData>,
 }
 
+thread_local! {
+    /// The per-tab section sets, cached on the UI thread after a load
+    /// so a tab switch can swap HomeState.sections without re-fetching.
+    /// (home, editor, foryou)
+    static TAB_SECTIONS: RefCell<TabSections> = RefCell::new(TabSections::default());
+}
+
+#[derive(Default)]
+struct TabSections {
+    home: Vec<SectionData>,
+    editor: Vec<SectionData>,
+    foryou: Vec<SectionData>,
+}
+
+#[derive(Clone)]
 pub struct SectionData {
     pub title: String,
     pub albums: Vec<CardData>,
 }
 
+#[derive(Clone)]
 pub struct CardData {
     pub id: String,
     pub title: String,
@@ -63,6 +87,26 @@ where
         .map_err(|e| e.to_string())?;
     let containers = response.containers;
 
+    // Editorial-only set for the Editor's Picks tab — built first
+    // (by cloning the containers) so the same data can also feed the
+    // Home set and the most-streamed slim grid below. Order mirrors
+    // Tauri's DEFAULT_PREFS.editorPicks.
+    let mut editor_sections = Vec::new();
+    push_section_ref(&mut editor_sections, "New Releases", &containers.new_releases);
+    push_section_ref(&mut editor_sections, "Qobuzissimes", &containers.qobuzissims);
+    push_section_ref(&mut editor_sections, "Press Accolades", &containers.press_awards);
+    push_section_ref(&mut editor_sections, "Most Streamed", &containers.most_streamed);
+    push_section_ref(
+        &mut editor_sections,
+        "Ideal Discography",
+        &containers.ideal_discography,
+    );
+    push_section_ref(
+        &mut editor_sections,
+        "Albums of the Week",
+        &containers.album_of_the_week,
+    );
+
     let mut sections = Vec::new();
     push_section(&mut sections, "New Releases", containers.new_releases);
     push_section(&mut sections, "Press Accolades", containers.press_awards);
@@ -86,6 +130,21 @@ where
         .enumerate()
         .map(|(index, album)| map_slim(index, album))
         .collect();
+
+    // For You — release watch (this week's releases from followed
+    // artists). The deeper personalized sections from Tauri (qobuz
+    // mixes, similar albums, spotlight) need reco-DB backend that the
+    // Slint MVP does not have yet; this is the honest first cut.
+    let mut foryou_sections = Vec::new();
+    if let Ok(page) = runtime.core().get_release_watch("artists", 18, 0).await {
+        let albums: Vec<CardData> = page.items.into_iter().map(map_full_album).collect();
+        if !albums.is_empty() {
+            foryou_sections.push(SectionData {
+                title: "Release Watch".to_string(),
+                albums,
+            });
+        }
+    }
 
     // Recently played comes from the local play-history store, not the
     // discover index. Empty until the playback session records plays.
@@ -117,6 +176,8 @@ where
 
     Ok(HomeData {
         sections,
+        editor_sections,
+        foryou_sections,
         popular,
         recent,
         recent_albums,
@@ -138,6 +199,58 @@ fn push_section(
         title: title.to_string(),
         albums: container.data.items.into_iter().map(map_album).collect(),
     });
+}
+
+/// Like `push_section` but borrows the container (clones the items)
+/// so the same data can feed more than one tab's section set.
+fn push_section_ref(
+    out: &mut Vec<SectionData>,
+    title: &str,
+    container: &Option<DiscoverContainer<DiscoverAlbum>>,
+) {
+    let Some(container) = container else {
+        return;
+    };
+    if container.data.items.is_empty() {
+        return;
+    }
+    out.push(SectionData {
+        title: title.to_string(),
+        albums: container.data.items.iter().cloned().map(map_album).collect(),
+    });
+}
+
+/// Map a full catalog `Album` (release-watch result) to a card. Unlike
+/// `map_album` (which takes the discover-index `DiscoverAlbum`), this
+/// reads the standard Album shape.
+fn map_full_album(album: Album) -> CardData {
+    let year = album
+        .release_date_original
+        .as_deref()
+        .and_then(|s| s.get(..4).map(|y| y.to_string()))
+        .unwrap_or_default();
+    let quality_tier = match album.maximum_bit_depth {
+        Some(d) if d >= 24 => "hires",
+        Some(_) => "cd",
+        None => "",
+    }
+    .to_string();
+    let quality_label = match (album.maximum_bit_depth, album.maximum_sampling_rate) {
+        (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, sr),
+        _ => String::new(),
+    };
+    CardData {
+        id: album.id,
+        title: album.title,
+        artist: album.artist.name,
+        genre: album.genre.map(|g| g.name).unwrap_or_default(),
+        year,
+        quality_tier,
+        quality_label,
+        ribbon: String::new(),
+        ribbon_kind: String::new(),
+        artwork_url: album.image.best().cloned().unwrap_or_default(),
+    }
 }
 
 fn map_album(album: DiscoverAlbum) -> CardData {
@@ -275,19 +388,72 @@ fn card_to_item(card: CardData) -> AlbumCardItem {
     }
 }
 
+/// Build the Slint section model for one tab's section set.
+fn build_sections(sections: &[SectionData]) -> Vec<DiscoverSection> {
+    sections
+        .iter()
+        .map(|section| DiscoverSection {
+            title: section.title.clone().into(),
+            albums: ModelRc::new(VecModel::from(
+                section.albums.iter().cloned().map(card_to_item).collect::<Vec<_>>(),
+            )),
+        })
+        .collect()
+}
+
+/// Artwork jobs for a tab's section set (Section-targeted, so they
+/// land in HomeState.sections — the model the active tab renders).
+pub fn section_artwork_jobs(sections: &[SectionData]) -> Vec<ArtworkJob> {
+    let mut jobs = Vec::new();
+    for (section_idx, section) in sections.iter().enumerate() {
+        for (album_idx, card) in section.albums.iter().enumerate() {
+            if card.artwork_url.is_empty() {
+                continue;
+            }
+            jobs.push(ArtworkJob {
+                target: ArtworkTarget::Section {
+                    section_idx,
+                    album_idx,
+                },
+                url: card.artwork_url.clone(),
+            });
+        }
+    }
+    jobs
+}
+
+/// Switch the visible Discover tab. Reads the cached section set for
+/// `tab` ("home" | "editorPicks" | "forYou"), swaps it into
+/// HomeState.sections, and returns the artwork jobs to re-fire. No
+/// re-fetch — the sets were cached by the last apply_home.
+pub fn select_tab(window: &AppWindow, tab: &str) -> Vec<ArtworkJob> {
+    TAB_SECTIONS.with(|cell| {
+        let cache = cell.borrow();
+        let set = match tab {
+            "editorPicks" => &cache.editor,
+            "forYou" => &cache.foryou,
+            _ => &cache.home,
+        };
+        let state = window.global::<HomeState>();
+        state.set_sections(ModelRc::new(VecModel::from(build_sections(set))));
+        state.set_active_tab(tab.into());
+        section_artwork_jobs(set)
+    })
+}
+
 /// Convert worker-thread home data into Slint models and push them onto
 /// the `HomeState` global. Must run on the Slint event loop.
 pub fn apply_home(window: &AppWindow, data: HomeData) {
-    let sections: Vec<DiscoverSection> = data
-        .sections
-        .into_iter()
-        .map(|section| DiscoverSection {
-            title: section.title.into(),
-            albums: ModelRc::new(VecModel::from(
-                section.albums.into_iter().map(card_to_item).collect::<Vec<_>>(),
-            )),
-        })
-        .collect();
+    let sections: Vec<DiscoverSection> = build_sections(&data.sections);
+
+    // Cache all three tab section sets for instant tab switching.
+    TAB_SECTIONS.with(|cell| {
+        *cell.borrow_mut() = TabSections {
+            home: data.sections.clone(),
+            editor: data.editor_sections.clone(),
+            foryou: data.foryou_sections.clone(),
+        };
+    });
 
     let to_slim_items = |items: Vec<SlimData>| -> Vec<SlimItem> {
         items

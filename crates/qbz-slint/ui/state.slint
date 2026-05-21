@@ -45,6 +45,15 @@ export global HomeState {
     in property <[SlimItem]> recent: [];
     in property <[AlbumCardItem]> recent-albums: [];
     in property <bool> loading: false;
+    // Active Discover tab: "home" | "editorPicks" | "forYou". The
+    // three tabs draw from the same fetch; switching swaps which
+    // cached section set is shown (see crate::home::select_tab).
+    in-out property <string> active-tab: "home";
+}
+
+// Discover tab switching. Wired in main.rs to crate::home::select_tab.
+export global HomeActions {
+    callback select-tab(string);
 }
 
 export struct AlbumTrackItem {

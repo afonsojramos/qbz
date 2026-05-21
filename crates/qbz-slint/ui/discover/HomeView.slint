@@ -8,7 +8,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { HomeState, NavState, ContentView } from "../state.slint";
+import { HomeState, HomeActions, NavState, ContentView } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { GridSection } from "GridSection.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
@@ -174,9 +174,21 @@ export component HomeView inherits Rectangle {
                     tab-row := HorizontalLayout {
                         padding: 3px;
                         spacing: 4px;
-                        Tab { label: @tr("Home"); active: true; }
-                        Tab { label: @tr("Editor's Picks"); }
-                        Tab { label: @tr("For You"); }
+                        Tab {
+                            label: @tr("Home");
+                            active: HomeState.active-tab == "home";
+                            clicked => { HomeActions.select-tab("home"); }
+                        }
+                        Tab {
+                            label: @tr("Editor's Picks");
+                            active: HomeState.active-tab == "editorPicks";
+                            clicked => { HomeActions.select-tab("editorPicks"); }
+                        }
+                        Tab {
+                            label: @tr("For You");
+                            active: HomeState.active-tab == "forYou";
+                            clicked => { HomeActions.select-tab("forYou"); }
+                        }
                     }
                 }
             }
@@ -246,9 +258,14 @@ export component HomeView inherits Rectangle {
                     }
                 }
 
+                // The Recently Played + Popular sections below belong
+                // to the Home tab only; Editor's Picks / For You show
+                // just their own cached section set above.
+
                 // Recently Played Albums — always present; shows a
                 // placeholder until the play history has data.
-                if HomeState.recent-albums.length > 0: Carousel {
+                if HomeState.active-tab == "home"
+                    && HomeState.recent-albums.length > 0: Carousel {
                     section: {
                         title: @tr("Recently Played Albums"),
                         albums: HomeState.recent-albums,
@@ -260,25 +277,29 @@ export component HomeView inherits Rectangle {
                         root.media-action(kind, id, action);
                     }
                 }
-                if HomeState.recent-albums.length == 0: RecentPlaceholder {
+                if HomeState.active-tab == "home"
+                    && HomeState.recent-albums.length == 0: RecentPlaceholder {
                     title: @tr("Recently Played Albums");
                     hint: @tr("Albums you play will appear here.");
                 }
 
                 // Recently Played Tracks — always present, same pattern.
-                if HomeState.recent.length > 0: GridSection {
+                if HomeState.active-tab == "home"
+                    && HomeState.recent.length > 0: GridSection {
                     title: @tr("Recently Played Tracks");
                     items: HomeState.recent;
                     item-clicked(id) => {
                         root.media-action("track", id, "play");
                     }
                 }
-                if HomeState.recent.length == 0: RecentPlaceholder {
+                if HomeState.active-tab == "home"
+                    && HomeState.recent.length == 0: RecentPlaceholder {
                     title: @tr("Recently Played Tracks");
                     hint: @tr("Tracks you play will appear here.");
                 }
 
-                if HomeState.popular.length > 0: GridSection {
+                if HomeState.active-tab == "home"
+                    && HomeState.popular.length > 0: GridSection {
                     title: @tr("Popular albums");
                     items: HomeState.popular;
                     item-clicked(id) => {

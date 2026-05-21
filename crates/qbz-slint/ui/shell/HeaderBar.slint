@@ -266,9 +266,9 @@ export component HeaderBar inherits Rectangle {
             show-icon: root.show-tab-icons;
             // Discover rows are text-only (no glyphs).
             items: [
-                { label: @tr("Home"), has-glyph: false, route: "home" },
-                { label: @tr("Editor's Picks"), has-glyph: false },
-                { label: @tr("For You"), has-glyph: false },
+                { label: @tr("Home"), has-glyph: false, route: "discover-home" },
+                { label: @tr("Editor's Picks"), has-glyph: false, route: "discover-editorPicks" },
+                { label: @tr("For You"), has-glyph: false, route: "discover-forYou" },
             ];
             // Row 0 = Home, the one working destination.
             home-item: 0;
