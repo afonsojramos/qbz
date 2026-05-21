@@ -78,14 +78,13 @@ export component Carousel inherits VerticalLayout {
     property <int> count: root.section.albums.length;
     property <int> per-page: Math.max(
         1,
-        Math.floor((viewport.width + root.gap) / (root.card-width + root.gap)));
-    property <int> page-count: Math.max(1, Math.ceil(root.count / root.per-page));
-    property <int> page: 0;
-    // Self-correcting page index — stays valid when the window resizes.
-    property <int> current-page: Math.min(Math.max(0, root.page), root.page-count - 1);
+        Math.floor((flick.width + root.gap) / (root.card-width + root.gap)));
     property <length> step: root.per-page * (root.card-width + root.gap);
     property <length> content-width:
         root.count * root.card-width + Math.max(0, root.count - 1) * root.gap;
+    // Max leftward scroll (viewport-x is 0 at start, negative when
+    // scrolled right). Zero when everything fits.
+    property <length> max-scroll: Math.max(0px, root.content-width - flick.width);
 
     spacing: 12px;
 
@@ -105,9 +104,9 @@ export component Carousel inherits VerticalLayout {
                 alignment: center;
                 NavButton {
                     icon: @image-url("../assets/icons/chevron-left.svg");
-                    enabled: root.current-page > 0;
+                    enabled: flick.viewport-x < -1px;
                     clicked => {
-                        root.page = root.current-page - 1;
+                        flick.viewport-x = Math.min(0px, flick.viewport-x + root.step);
                     }
                 }
             }
@@ -115,9 +114,9 @@ export component Carousel inherits VerticalLayout {
                 alignment: center;
                 NavButton {
                     icon: @image-url("../assets/icons/chevron-right.svg");
-                    enabled: root.current-page < root.page-count - 1;
+                    enabled: flick.viewport-x > -root.max-scroll + 1px;
                     clicked => {
-                        root.page = root.current-page + 1;
+                        flick.viewport-x = Math.max(-root.max-scroll, flick.viewport-x - root.step);
                     }
                 }
             }
@@ -132,17 +131,21 @@ export component Carousel inherits VerticalLayout {
         }
     }
 
-    // --- Track: clipped viewport, slides by page -------------------------
+    // --- Track: a horizontal Flickable so the row drags by touch /
+    // pointer (kinetic), while card taps still register — Flickable
+    // distinguishes a flick from a tap, unlike nested TouchAreas. The
+    // prev/next buttons nudge viewport-x by a page. viewport-height ==
+    // height pins it to horizontal-only so it never fights the home
+    // page's vertical Flickable.
     viewport := Rectangle {
         height: root.card-height;
         clip: true;
 
-        Rectangle {
-            x: -root.current-page * root.step;
-            y: 0px;
-            width: root.content-width;
+        flick := Flickable {
+            width: 100%;
             height: root.card-height;
-            animate x { duration: 220ms; easing: ease-in-out; }
+            viewport-width: root.content-width;
+            viewport-height: self.height;
 
             HorizontalLayout {
                 spacing: root.gap;
@@ -158,20 +161,20 @@ export component Carousel inherits VerticalLayout {
             }
         }
 
-        // Cider-style edge fades — clipped cards dissolve into the
-        // content background instead of being hard-cut.
+        // Cider-style edge fades — content dissolves into the page
+        // background at the scrolled edges instead of a hard cut.
         Rectangle {
             x: 0px;
             width: 56px;
             background: @linear-gradient(90deg, Theme.surface-main 0%, transparent 100%);
-            opacity: root.current-page > 0 ? 1.0 : 0.0;
+            opacity: flick.viewport-x < -1px ? 1.0 : 0.0;
             animate opacity { duration: 150ms; }
         }
         Rectangle {
             x: parent.width - self.width;
             width: 56px;
             background: @linear-gradient(90deg, transparent 0%, Theme.surface-main 100%);
-            opacity: root.current-page < root.page-count - 1 ? 1.0 : 0.0;
+            opacity: flick.viewport-x > -root.max-scroll + 1px ? 1.0 : 0.0;
             animate opacity { duration: 150ms; }
         }
     }
