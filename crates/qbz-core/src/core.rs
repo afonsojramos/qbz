@@ -1138,6 +1138,65 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             .map_err(CoreError::Api)
     }
 
+    /// Smart artist radio via the local `qbz-radio` pool builder — a
+    /// richer alternative to the Qobuz `/radio/artist` endpoint. Builds
+    /// a session pool (seed tracks + similar artists + second-degree)
+    /// in the local radio DB, pulls up to 50 track ids from the engine,
+    /// and resolves them to full tracks.
+    ///
+    /// The radio DB uses a `!Send` rusqlite connection, so the pool
+    /// build + pull run on blocking threads (mirroring the Tauri
+    /// command); the async builder is driven there via `block_on`.
+    pub async fn create_smart_artist_radio(
+        &self,
+        artist_id: u64,
+    ) -> Result<Vec<Track>, CoreError> {
+        let client = {
+            let guard = self.client.read().await;
+            guard.as_ref().ok_or(CoreError::NotInitialized)?.clone()
+        };
+
+        let build_client = client.clone();
+        let session_id = tokio::task::spawn_blocking(move || -> Result<String, String> {
+            let db = qbz_radio::RadioDb::open_default()?;
+            let builder = qbz_radio::RadioPoolBuilder::new(
+                &db,
+                &build_client,
+                qbz_radio::BuildRadioOptions::default(),
+            );
+            let session = tokio::runtime::Handle::current()
+                .block_on(builder.create_artist_radio(artist_id))?;
+            Ok(session.id)
+        })
+        .await
+        .map_err(|e| CoreError::Internal(format!("radio build task: {e}")))?
+        .map_err(CoreError::Internal)?;
+
+        let ids = tokio::task::spawn_blocking(move || -> Result<Vec<u64>, String> {
+            let db = qbz_radio::RadioDb::open_default()?;
+            let engine = qbz_radio::RadioEngine::new(db);
+            let mut ids = Vec::new();
+            for _ in 0..60 {
+                match engine.next_track(&session_id) {
+                    Ok(track) => ids.push(track.track_id),
+                    Err(_) => break,
+                }
+            }
+            Ok(ids.into_iter().take(50).collect())
+        })
+        .await
+        .map_err(|e| CoreError::Internal(format!("radio pull task: {e}")))?
+        .map_err(CoreError::Internal)?;
+
+        let mut tracks = Vec::new();
+        for id in ids {
+            if let Ok(track) = client.get_track(id).await {
+                tracks.push(track);
+            }
+        }
+        Ok(tracks)
+    }
+
     /// Get artist with albums (for album pagination)
     pub async fn get_artist_with_albums(
         &self,

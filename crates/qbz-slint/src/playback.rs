@@ -553,7 +553,11 @@ fn play_radio_response(
     true
 }
 
-/// Start a Qobuz artist radio (`/radio/artist`).
+/// Start a Qobuz artist radio (`/radio/artist`). Kept as the simpler
+/// alternative to the smart pool builder; the artist "radio" action
+/// uses the smart builder, this remains available for an explicit
+/// "Qobuz radio" choice.
+#[allow(dead_code)]
 pub fn play_artist_radio(
     runtime: Runtime,
     weak: slint::Weak<AppWindow>,
@@ -569,6 +573,30 @@ pub fn play_artist_radio(
                 }
             }
             Err(e) => log::error!("[qbz-slint] artist radio {artist_id} failed: {e}"),
+        }
+    });
+}
+
+/// Start a smart artist radio via the local qbz-radio pool builder
+/// (richer than the plain Qobuz `/radio/artist`).
+pub fn play_smart_artist_radio(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    artist_id: String,
+) {
+    handle.spawn(async move {
+        let Ok(aid) = artist_id.parse::<u64>() else {
+            log::warn!("[qbz-slint] smart radio: bad artist id {artist_id}");
+            return;
+        };
+        match runtime.core().create_smart_artist_radio(aid).await {
+            Ok(tracks) => {
+                if !play_radio_response(runtime, weak, tracks) {
+                    log::warn!("[qbz-slint] smart artist radio {aid} returned no tracks");
+                }
+            }
+            Err(e) => log::error!("[qbz-slint] smart artist radio {aid} failed: {e}"),
         }
     });
 }

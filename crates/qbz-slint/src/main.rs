@@ -1233,7 +1233,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle.clone(),
                     id.clone(),
                 ),
-                ("artist", "radio") => playback::play_artist_radio(
+                // Artist radio uses the smart qbz-radio pool builder
+                // (the Qobuz /radio/artist endpoint remains available
+                // via playback::play_artist_radio for an alternative).
+                ("artist", "radio") => playback::play_smart_artist_radio(
                     runtime.clone(),
                     weak.clone(),
                     handle.clone(),
