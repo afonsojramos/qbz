@@ -94,7 +94,7 @@ export global AlbumActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings, search }
+export enum ContentView { home, album, artist, settings, search, musician }
 
 // Settings screen state. Audio and Playback preferences are loaded from
 // the persistence stores by the Rust settings controller and pushed here;
@@ -393,6 +393,44 @@ export global NetworkSidebarActions {
     callback discovery-dismissed(string /* mbid */, string /* name */);
     // Sidebar toggled — Rust persists the new open state.
     callback toggle();
+}
+
+// One row of MusicianPageView's "Appears On" grid — same shape as
+// the album cards on Discover, plus a role label stamped onto each
+// album by the Qobuz search wrapping (e.g. "Drums" / "Guitar").
+export struct MusicianAppearanceItem {
+    album-id: string,
+    album-title: string,
+    artist-name: string,
+    year: string,
+    role-on-album: string,
+    artwork-url: string,
+    artwork: image,
+}
+
+// MusicianPageView state — opened by the artist network sidebar
+// when a relationship row is clicked and the musician has no
+// confident Qobuz artist match. Populated by `crate::musician`
+// from the resolve + appearances backend calls.
+export global MusicianState {
+    in property <string> name;
+    in property <string> role;
+    // "confirmed" | "contextual" | "weak" | "none" — the sidebar
+    // uses this to skip MusicianPageView entirely on Confirmed and
+    // navigate to the matched artist instead.
+    in property <string> confidence;
+    // Bands / projects from MusicBrainz; not yet populated but
+    // kept in the data shape so the section renders cleanly when
+    // wired.
+    in property <[string]> bands: [];
+    in property <[MusicianAppearanceItem]> appearances: [];
+    in property <int> total: 0;
+    in property <bool> loading: false;
+    in property <bool> load-more-loading: false;
+}
+
+export global MusicianActions {
+    callback load-more();
 }
 
 // Shell chrome state — collapsible left sidebar and right-side panels.

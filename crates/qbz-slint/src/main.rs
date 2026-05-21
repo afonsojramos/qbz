@@ -23,6 +23,7 @@ mod commands;
 mod custom_artwork;
 mod discovery_dismiss;
 mod home;
+mod musician;
 mod nav;
 mod play_history;
 mod strip_html;
@@ -413,7 +414,53 @@ fn apply_entry(
         nav::NavEntry::Search(query) => {
             navigate_search(runtime.clone(), weak.clone(), handle, image_cache.clone(), query);
         }
+        nav::NavEntry::Musician { name, role } => {
+            navigate_musician(
+                runtime.clone(),
+                weak.clone(),
+                handle,
+                image_cache.clone(),
+                name,
+                role,
+            );
+        }
     }
+}
+
+/// Open a MusicianPageView for `name + role`. Routes to the artist
+/// page instead when the resolved musician has a Confirmed Qobuz
+/// match (Tauri's `confidence === 'confirmed'` shortcut). Fetches
+/// the first page of appearances inline; subsequent pages come
+/// through the MusicianActions::load-more handler.
+fn navigate_musician(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+    name: String,
+    role: String,
+) {
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            musician::reset_musician(&w);
+            w.global::<NavState>().set_view(ContentView::Musician);
+        });
+        match musician::load_musician(&runtime, &name, &role).await {
+            Ok(data) => {
+                let jobs = musician::artwork_jobs(&data);
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    musician::apply_musician(&w, data);
+                });
+                artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+            }
+            Err(e) => {
+                log::error!("[qbz-slint] musician load failed: {e}");
+                let _ = weak.upgrade_in_event_loop(|w| {
+                    w.global::<MusicianState>().set_loading(false);
+                });
+            }
+        }
+    });
 }
 
 /// Resolve the desktop environment's UI font family. Reads the KDE
@@ -1261,13 +1308,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
     }
-    window
-        .global::<NetworkSidebarActions>()
-        .on_musician_clicked(|name, role| {
-            log::info!(
-                "[qbz-slint] network sidebar: musician clicked name={name} role={role}"
-            );
-        });
+    // Musician click — resolve the (name, role) first; if Qobuz has
+    // a confirmed exact match, jump straight to that artist's page.
+    // Otherwise open MusicianPageView (Contextual / Weak / None).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<NetworkSidebarActions>()
+            .on_musician_clicked(move |name, role| {
+                let name = name.to_string();
+                let role = role.to_string();
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                let image_cache = image_cache.clone();
+                tokio::spawn(async move {
+                    let resolved =
+                        runtime.core().musicbrainz_resolve_musician(&name, &role).await;
+                    match resolved {
+                        Ok(r) if matches!(
+                            r.confidence,
+                            qbz_integrations::musicbrainz::MusicianConfidence::Confirmed
+                        ) =>
+                        {
+                            if let Some(id) = r.qobuz_artist_id {
+                                let artist_id = id.to_string();
+                                let weak2 = weak.clone();
+                                let _ = weak.clone().upgrade_in_event_loop(move |_| {
+                                    nav::record(nav::NavEntry::Artist(artist_id.clone()));
+                                });
+                                navigate_artist(
+                                    runtime,
+                                    weak2,
+                                    &handle,
+                                    image_cache,
+                                    id.to_string(),
+                                );
+                                return;
+                            }
+                            log::warn!(
+                                "[qbz-slint] musician confirmed but no qobuz id"
+                            );
+                        }
+                        Ok(_) => {
+                            // Fall through to MusicianPageView for
+                            // Contextual / Weak / None.
+                        }
+                        Err(e) => {
+                            log::warn!("[qbz-slint] musician resolve failed: {e}");
+                        }
+                    }
+                    nav::record(nav::NavEntry::Musician {
+                        name: name.clone(),
+                        role: role.clone(),
+                    });
+                    navigate_musician(runtime, weak, &handle, image_cache, name, role);
+                });
+            });
+    }
     // discovery-dismissed — persist the rejection under the current
     // tag, then remove the row from the visible list.
     {
@@ -1288,6 +1389,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     artist::remove_discovery_artist(&w, mbid.as_str());
                 }
+            });
+    }
+
+    // Musician appearances pagination — Load more in
+    // MusicianPageView appends the next 20 albums onto the existing
+    // grid.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<MusicianActions>()
+            .on_load_more(move || {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let state = w.global::<MusicianState>();
+                let name = state.get_name().to_string();
+                let role = state.get_role().to_string();
+                let offset = state.get_appearances().row_count() as u32;
+                if name.is_empty() {
+                    return;
+                }
+                state.set_load_more_loading(true);
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                let image_cache = image_cache.clone();
+                handle.clone().spawn(async move {
+                    match musician::load_more_appearances(&runtime, &name, &role, offset).await {
+                        Ok((data, total)) => {
+                            let jobs: Vec<artwork::ArtworkJob> = data
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, a)| !a.artwork_url.is_empty())
+                                .map(|(i, a)| artwork::ArtworkJob {
+                                    url: a.artwork_url.clone(),
+                                    target: artwork::ArtworkTarget::MusicianAppearance {
+                                        index: offset as usize + i,
+                                    },
+                                })
+                                .collect();
+                            let _ = weak.upgrade_in_event_loop(move |w| {
+                                musician::append_appearances(&w, data, total);
+                            });
+                            artwork::spawn_loads(jobs, weak, image_cache);
+                        }
+                        Err(e) => {
+                            log::error!("[qbz-slint] musician load-more failed: {e}");
+                            let _ = weak.upgrade_in_event_loop(|w| {
+                                w.global::<MusicianState>().set_load_more_loading(false);
+                            });
+                        }
+                    }
+                });
             });
     }
 

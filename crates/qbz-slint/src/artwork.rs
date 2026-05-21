@@ -52,6 +52,8 @@ pub enum ArtworkTarget {
     /// A release card in `ArtistState.release-sections[section_idx]
     /// .albums[album_idx]`.
     ArtistRelease { section_idx: usize, album_idx: usize },
+    /// A card in MusicianState.appearances[index].
+    MusicianAppearance { index: usize },
 }
 
 /// An artwork download job: which card, and the image URL.
@@ -339,6 +341,13 @@ fn apply_artwork(
             };
             item.artwork = image;
             section.albums.set_row_data(album_idx, item);
+        }
+        ArtworkTarget::MusicianAppearance { index } => {
+            let model = window.global::<crate::MusicianState>().get_appearances();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
         }
     }
 }

@@ -18,6 +18,14 @@ pub enum NavEntry {
     Settings,
     /// A search results page; the string is the query.
     Search(String),
+    /// MusicianPageView — opened by the artist network sidebar when
+    /// the resolved musician does not have a confident Qobuz artist
+    /// match. Carries the musician name + the role for the
+    /// appearances query.
+    Musician {
+        name: String,
+        role: String,
+    },
 }
 
 struct History {
