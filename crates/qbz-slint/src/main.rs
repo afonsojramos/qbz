@@ -114,7 +114,9 @@ async fn reload_home(
     image_cache: &artwork::ImageCache,
     active_tab: String,
 ) {
-    let genre_ids = genre_filter::selected_ids();
+    // Expand the selection to descendants so a parent selection
+    // covers its child genres (the child-genre filtering recovery).
+    let genre_ids = genre_filter::filter_ids();
     let genre_ids = (!genre_ids.is_empty()).then_some(genre_ids);
 
     match home::load_home(runtime, genre_ids).await {
@@ -1786,6 +1788,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window
             .global::<GenreFilterActions>()
             .on_toggle(move |id| {
+                let was_selected = genre_filter::selected_ids()
+                    .iter()
+                    .any(|x| x.to_string() == id.as_str());
                 if !genre_filter::toggle(id.as_str()) {
                     return;
                 }
@@ -1795,12 +1800,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 genre_filter::apply_state(&w);
                 w.global::<HomeState>().set_loading(true);
                 let active = w.global::<HomeState>().get_active_tab().to_string();
+                let id = id.to_string();
                 let runtime = runtime.clone();
                 let weak = weak.clone();
                 let image_cache = image_cache.clone();
                 handle.spawn(async move {
+                    // On a newly-selected genre, eager-load its descendants
+                    // so filter_ids covers the child genres.
+                    if !was_selected {
+                        if let Ok(gid) = id.parse::<u64>() {
+                            genre_filter::load_descendants(&runtime, gid).await;
+                            let _ = weak.upgrade_in_event_loop(|w| {
+                                genre_filter::apply_state(&w);
+                            });
+                        }
+                    }
                     reload_home(&runtime, &weak, &image_cache, active).await;
                 });
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<GenreFilterActions>()
+            .on_toggle_expand(move |id| {
+                let now_expanded = genre_filter::toggle_expand(id.as_str());
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                genre_filter::apply_state(&w);
+                // Lazy-load the node's children the first time it expands.
+                if now_expanded {
+                    if let Ok(gid) = id.to_string().parse::<u64>() {
+                        if !genre_filter::children_loaded(gid) {
+                            let runtime = runtime.clone();
+                            let weak = weak.clone();
+                            handle.spawn(async move {
+                                genre_filter::load_children(&runtime, gid).await;
+                                let _ = weak.upgrade_in_event_loop(|w| {
+                                    genre_filter::apply_state(&w);
+                                });
+                            });
+                        }
+                    }
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<GenreFilterActions>()
+            .on_search(move |query| {
+                genre_filter::set_search(query.as_str());
+                if let Some(w) = weak.upgrade() {
+                    genre_filter::apply_state(&w);
+                }
             });
     }
     {
@@ -1838,12 +1894,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        let runtime = app_runtime.clone();
         let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
         window
             .global::<GenreFilterActions>()
             .on_set_advanced(move |v| {
-                if let Some(w) = weak.upgrade() {
-                    w.global::<GenreFilterState>().set_advanced(v);
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                w.global::<GenreFilterState>().set_advanced(v);
+                // First time advanced view opens, eager-load every
+                // parent's children so the tree shows child counts.
+                if v {
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    handle.spawn(async move {
+                        genre_filter::load_all_parent_children(&runtime).await;
+                        let _ = weak.upgrade_in_event_loop(|w| {
+                            genre_filter::apply_state(&w);
+                        });
+                    });
                 }
             });
     }

@@ -63,21 +63,37 @@ export struct GenreChip {
     selected: bool,
 }
 
+// One row of the advanced-view genre tree, flattened (level 0/1/2)
+// with only currently-visible rows emitted by the Rust side.
+export struct GenreTreeRow {
+    id: string,
+    name: string,
+    level: int,           // 0 parent, 1 child, 2 grandchild
+    selected: bool,
+    expanded: bool,
+    has-children: bool,
+    count: int,           // loaded child count (0 = none / unknown)
+}
+
 // Filter-by-genre state. The selection is shared across the three
 // Discover tabs (matching Tauri's single "home" genre context) — it
 // re-fetches the discover index with the chosen genre ids. Populated
 // by crate::genre_filter.
 export global GenreFilterState {
     in property <[GenreChip]> genres: [];
+    in property <[GenreTreeRow]> tree: [];
     in property <int> selected-count: 0;
     in-out property <bool> open: false;
     in-out property <bool> remember: true;
     in-out property <bool> advanced: false;
+    in-out property <string> search-query;
     in property <bool> loading: false;
 }
 
 export global GenreFilterActions {
     callback toggle(string /* genre id */);
+    callback toggle-expand(string /* genre id */);
+    callback search(string /* query */);
     callback clear();
     callback set-remember(bool);
     callback set-advanced(bool);
