@@ -67,6 +67,16 @@ export global ForYouState {
     in property <[SlimItem]> recent-tracks: [];
     in property <[SlimItem]> top-artists: [];
     in property <[SlimItem]> artists-to-follow: [];
+    // Spotlight — one favorite artist highlighted with a hero + a row
+    // of their content (top tracks card, radio card, albums).
+    in property <bool> spotlight-visible: false;
+    in property <string> spotlight-artist-id;
+    in property <string> spotlight-name;
+    in property <string> spotlight-category;
+    in property <string> spotlight-image-url;
+    in property <image> spotlight-image;
+    in property <bool> spotlight-has-top-tracks: false;
+    in property <[AlbumCardItem]> spotlight-albums: [];
     in property <bool> loading: false;
     // True once a load has completed, so the tab does not refetch on
     // every visit.

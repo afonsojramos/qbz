@@ -1227,6 +1227,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle.clone(),
                     id.clone(),
                 ),
+                ("artist", "radio") => {
+                    // Spotlight "start radio" — no artist-radio backend
+                    // in the Slint MVP yet; play top tracks as the
+                    // closest available behavior.
+                    log::info!("[qbz-slint] artist radio not wired; playing top tracks for {id}");
+                    playback::play_artist_top_tracks(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id.clone(),
+                    );
+                }
                 ("artist", "follow") => {
                     let runtime = runtime.clone();
                     let weak = weak.clone();

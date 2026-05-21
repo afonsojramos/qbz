@@ -13,6 +13,7 @@ import { ForYouState } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
 import { ArtistCarousel } from "ArtistCarousel.slint";
+import { Spotlight } from "Spotlight.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 
 export component ForYouView inherits VerticalLayout {
@@ -20,6 +21,8 @@ export component ForYouView inherits VerticalLayout {
     callback open-artist(string);
     callback media-action(string, string, string);
     callback play-track(string);
+    callback play-top-tracks(string);
+    callback start-radio(string);
 
     spacing: 40px;
     alignment: start;
@@ -80,6 +83,25 @@ export component ForYouView inherits VerticalLayout {
         artists: ForYouState.artists-to-follow;
         artist-clicked(id) => {
             root.open-artist(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
+        }
+    }
+
+    // 6. Spotlight.
+    if ForYouState.spotlight-visible: Spotlight {
+        open-artist(id) => {
+            root.open-artist(id);
+        }
+        open-album(id) => {
+            root.open-album(id);
+        }
+        play-top-tracks(id) => {
+            root.play-top-tracks(id);
+        }
+        start-radio(id) => {
+            root.start-radio(id);
         }
         media-action(kind, id, action) => {
             root.media-action(kind, id, action);

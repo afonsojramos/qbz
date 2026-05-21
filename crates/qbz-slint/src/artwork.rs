@@ -76,6 +76,10 @@ pub enum ArtworkTarget {
     ForYouTopArtist { index: usize },
     /// A tile in ForYouState.artists-to-follow[index].
     ForYouToFollow { index: usize },
+    /// The Spotlight artist portrait.
+    ForYouSpotlightArtist,
+    /// A card in ForYouState.spotlight-albums[index].
+    ForYouSpotlightAlbum { index: usize },
 }
 
 /// An artwork download job: which card, and the image URL.
@@ -443,6 +447,18 @@ fn apply_artwork(
         }
         ArtworkTarget::ForYouToFollow { index } => {
             let model = window.global::<crate::ForYouState>().get_artists_to_follow();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ForYouSpotlightArtist => {
+            window
+                .global::<crate::ForYouState>()
+                .set_spotlight_image(image);
+        }
+        ArtworkTarget::ForYouSpotlightAlbum { index } => {
+            let model = window.global::<crate::ForYouState>().get_spotlight_albums();
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);

@@ -277,6 +277,12 @@ export component HomeView inherits Rectangle {
                     play-track(id) => {
                         root.media-action("track", id, "play");
                     }
+                    play-top-tracks(id) => {
+                        root.media-action("artist", id, "play-top");
+                    }
+                    start-radio(id) => {
+                        root.media-action("artist", id, "radio");
+                    }
                 }
 
                 // The Recently Played + Popular sections below belong

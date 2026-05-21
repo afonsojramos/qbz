@@ -32,6 +32,16 @@ pub struct ForYouData {
     pub recent_tracks: Vec<TrackSlim>,
     pub top_artists: Vec<ArtistSlim>,
     pub artists_to_follow: Vec<ArtistSlim>,
+    pub spotlight: Option<SpotlightData>,
+}
+
+pub struct SpotlightData {
+    pub artist_id: String,
+    pub artist_name: String,
+    pub category: String,
+    pub image_url: String,
+    pub has_top_tracks: bool,
+    pub albums: Vec<AlbumCard>,
 }
 
 #[derive(Clone)]
@@ -182,13 +192,115 @@ where
         }
     }
 
+    // Spotlight — highlight one favorite artist (rotated by time) with
+    // their page (albums + whether they have top tracks).
+    let spotlight = load_spotlight(runtime, &fav_artists).await;
+
     ForYouData {
         release_watch,
         recent_albums,
         recent_tracks,
         top_artists,
         artists_to_follow: to_follow,
+        spotlight,
     }
+}
+
+async fn load_spotlight<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    favorites: &[Artist],
+) -> Option<SpotlightData>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    if favorites.is_empty() {
+        return None;
+    }
+    // Rotate among the top 5 favorites by wall-clock seconds.
+    let pool = favorites.len().min(5);
+    let idx = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as usize % pool)
+        .unwrap_or(0);
+    let seed = &favorites[idx];
+
+    let page = runtime.core().get_artist_page(seed.id, None).await.ok()?;
+    let image_url = page
+        .images
+        .as_ref()
+        .and_then(|i| i.portrait.as_ref())
+        .map(|p| {
+            format!(
+                "https://static.qobuz.com/images/artists/covers/medium/{}.{}",
+                p.hash, p.format
+            )
+        })
+        .unwrap_or_default();
+
+    // Up to 6 albums, preferring full albums then live/ep/compilation.
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut albums: Vec<AlbumCard> = Vec::new();
+    for want in ["album", "live", "ep-single", "compilation"] {
+        if albums.len() >= 6 {
+            break;
+        }
+        let Some(groups) = page.releases.as_ref() else {
+            break;
+        };
+        let Some(group) = groups.iter().find(|g| g.release_type == want) else {
+            continue;
+        };
+        for rel in &group.items {
+            if !seen.insert(rel.id.clone()) {
+                continue;
+            }
+            let year = rel
+                .dates
+                .as_ref()
+                .and_then(|d| d.original.as_deref())
+                .and_then(|s| s.get(..4).map(|y| y.to_string()))
+                .unwrap_or_default();
+            let bd = rel.audio_info.as_ref().and_then(|a| a.maximum_bit_depth);
+            let sr = rel.audio_info.as_ref().and_then(|a| a.maximum_sampling_rate);
+            albums.push(AlbumCard {
+                id: rel.id.clone(),
+                title: rel.title.clone(),
+                artist: rel
+                    .artist
+                    .as_ref()
+                    .map(|a| a.name.display.clone())
+                    .unwrap_or_else(|| page.name.display.clone()),
+                year,
+                quality_tier: match bd {
+                    Some(d) if d >= 24 => "hires",
+                    Some(_) => "cd",
+                    None => "",
+                }
+                .to_string(),
+                quality_label: match (bd, sr) {
+                    (Some(b), Some(r)) => format!("{}-bit / {} kHz", b, r),
+                    _ => String::new(),
+                },
+                artwork_url: rel
+                    .image
+                    .as_ref()
+                    .and_then(|img| img.best().cloned())
+                    .unwrap_or_default(),
+            });
+            if albums.len() >= 6 {
+                break;
+            }
+        }
+    }
+
+    Some(SpotlightData {
+        artist_id: seed.id.to_string(),
+        artist_name: page.name.display.clone(),
+        category: page.artist_category.clone().unwrap_or_default(),
+        image_url,
+        has_top_tracks: page.top_tracks.as_ref().map(|t| !t.is_empty()).unwrap_or(false),
+        albums,
+    })
 }
 
 fn album_items(cards: &[AlbumCard]) -> Vec<AlbumCardItem> {
@@ -254,6 +366,19 @@ pub fn apply_for_you(window: &AppWindow, data: &ForYouData) {
     state.set_artists_to_follow(ModelRc::new(VecModel::from(artist_items(
         &data.artists_to_follow,
     ))));
+
+    if let Some(sp) = &data.spotlight {
+        state.set_spotlight_visible(true);
+        state.set_spotlight_artist_id(sp.artist_id.clone().into());
+        state.set_spotlight_name(sp.artist_name.clone().into());
+        state.set_spotlight_category(sp.category.clone().into());
+        state.set_spotlight_image_url(sp.image_url.clone().into());
+        state.set_spotlight_has_top_tracks(sp.has_top_tracks);
+        state.set_spotlight_albums(ModelRc::new(VecModel::from(album_items(&sp.albums))));
+    } else {
+        state.set_spotlight_visible(false);
+    }
+
     state.set_loading(false);
     state.set_loaded(true);
 }
@@ -302,6 +427,22 @@ pub fn artwork_jobs(data: &ForYouData) -> Vec<ArtworkJob> {
                 url: a.artwork_url.clone(),
                 target: ArtworkTarget::ForYouToFollow { index: i },
             });
+        }
+    }
+    if let Some(sp) = &data.spotlight {
+        if !sp.image_url.is_empty() {
+            jobs.push(ArtworkJob {
+                url: sp.image_url.clone(),
+                target: ArtworkTarget::ForYouSpotlightArtist,
+            });
+        }
+        for (i, c) in sp.albums.iter().enumerate() {
+            if !c.artwork_url.is_empty() {
+                jobs.push(ArtworkJob {
+                    url: c.artwork_url.clone(),
+                    target: ArtworkTarget::ForYouSpotlightAlbum { index: i },
+                });
+            }
         }
     }
     jobs
