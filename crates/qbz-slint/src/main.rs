@@ -23,6 +23,7 @@ mod commands;
 mod custom_artwork;
 mod discovery_dismiss;
 mod favorites;
+mod genre_filter;
 mod home;
 mod label;
 mod location_view;
@@ -92,74 +93,71 @@ async fn enter_shell(
         });
     }
 
-    match home::load_home(&runtime).await {
+    // Load the genre-filter parents + persisted selection, then seed
+    // the popup state. Done before the discover load so the first
+    // fetch honors a remembered genre selection.
+    genre_filter::load_parents(&runtime).await;
+    let _ = weak.upgrade_in_event_loop(|w| {
+        genre_filter::apply_state(&w);
+    });
+
+    reload_home(&runtime, &weak, &image_cache, "home".to_string()).await;
+}
+
+/// Fetch the discover index (honoring the shared genre selection),
+/// apply all three tab section sets, show the requested tab, and fan
+/// out artwork. Shared by the initial shell load and genre-filter /
+/// tab re-fetches.
+async fn reload_home(
+    runtime: &Arc<AppRuntime<SlintAdapter>>,
+    weak: &slint::Weak<AppWindow>,
+    image_cache: &artwork::ImageCache,
+    active_tab: String,
+) {
+    let genre_ids = genre_filter::selected_ids();
+    let genre_ids = (!genre_ids.is_empty()).then_some(genre_ids);
+
+    match home::load_home(runtime, genre_ids).await {
         Ok(data) => {
-            // Collect artwork jobs before the data is consumed by apply_home.
-            let mut jobs: Vec<artwork::ArtworkJob> = data
-                .sections
-                .iter()
-                .enumerate()
-                .flat_map(|(section_idx, section)| {
-                    section
-                        .albums
-                        .iter()
-                        .enumerate()
-                        .filter_map(move |(album_idx, card)| {
-                            if card.artwork_url.is_empty() {
-                                None
-                            } else {
-                                Some(artwork::ArtworkJob {
-                                    target: artwork::ArtworkTarget::Section {
-                                        section_idx,
-                                        album_idx,
-                                    },
-                                    url: card.artwork_url.clone(),
-                                })
-                            }
-                        })
-                })
-                .collect();
+            // Artwork for the active tab's section set (Section-targeted,
+            // so it lands in HomeState.sections once select_tab swaps it
+            // in below). Built before `data` is moved.
+            let active_set = match active_tab.as_str() {
+                "editorPicks" => &data.editor_sections,
+                "forYou" => &data.foryou_sections,
+                _ => &data.sections,
+            };
+            let mut jobs = home::section_artwork_jobs(active_set);
+            // Home-only slim grids (their models are populated regardless
+            // of the visible tab; harmless to prefetch).
             jobs.extend(data.popular.iter().enumerate().filter_map(|(idx, slim)| {
-                if slim.artwork_url.is_empty() {
-                    None
-                } else {
-                    Some(artwork::ArtworkJob {
-                        target: artwork::ArtworkTarget::Popular { idx },
-                        url: slim.artwork_url.clone(),
-                    })
-                }
+                (!slim.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                    target: artwork::ArtworkTarget::Popular { idx },
+                    url: slim.artwork_url.clone(),
+                })
             }));
             jobs.extend(data.recent.iter().enumerate().filter_map(|(idx, slim)| {
-                if slim.artwork_url.is_empty() {
-                    None
-                } else {
-                    Some(artwork::ArtworkJob {
-                        target: artwork::ArtworkTarget::Recent { idx },
-                        url: slim.artwork_url.clone(),
-                    })
-                }
+                (!slim.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                    target: artwork::ArtworkTarget::Recent { idx },
+                    url: slim.artwork_url.clone(),
+                })
             }));
-            jobs.extend(
-                data.recent_albums
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, card)| {
-                        if card.artwork_url.is_empty() {
-                            None
-                        } else {
-                            Some(artwork::ArtworkJob {
-                                target: artwork::ArtworkTarget::RecentAlbum { idx },
-                                url: card.artwork_url.clone(),
-                            })
-                        }
-                    }),
-            );
+            jobs.extend(data.recent_albums.iter().enumerate().filter_map(|(idx, card)| {
+                (!card.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                    target: artwork::ArtworkTarget::RecentAlbum { idx },
+                    url: card.artwork_url.clone(),
+                })
+            }));
+
             let weak_for_artwork = weak.clone();
             let _ = weak.upgrade_in_event_loop(move |w| {
                 home::apply_home(&w, data);
+                // apply_home shows the home set; swap to the requested
+                // tab (no-op when it is "home").
+                home::select_tab(&w, &active_tab);
                 w.global::<HomeState>().set_loading(false);
             });
-            artwork::spawn_loads(jobs, weak_for_artwork, image_cache);
+            artwork::spawn_loads(jobs, weak_for_artwork, image_cache.clone());
         }
         Err(e) => {
             log::error!("[qbz-slint] discover load failed: {e}");
@@ -1773,6 +1771,79 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = weak.upgrade() {
                     let jobs = home::select_tab(&w, tab.as_str());
                     artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                }
+            });
+    }
+
+    // Genre filter — shared selection across the three Discover tabs.
+    // Toggling / clearing re-fetches the discover index with the new
+    // genre ids and rebuilds the section sets; the active tab stays.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<GenreFilterActions>()
+            .on_toggle(move |id| {
+                if !genre_filter::toggle(id.as_str()) {
+                    return;
+                }
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                genre_filter::apply_state(&w);
+                w.global::<HomeState>().set_loading(true);
+                let active = w.global::<HomeState>().get_active_tab().to_string();
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let image_cache = image_cache.clone();
+                handle.spawn(async move {
+                    reload_home(&runtime, &weak, &image_cache, active).await;
+                });
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<GenreFilterActions>()
+            .on_clear(move || {
+                genre_filter::clear();
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                genre_filter::apply_state(&w);
+                w.global::<HomeState>().set_loading(true);
+                let active = w.global::<HomeState>().get_active_tab().to_string();
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let image_cache = image_cache.clone();
+                handle.spawn(async move {
+                    reload_home(&runtime, &weak, &image_cache, active).await;
+                });
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<GenreFilterActions>()
+            .on_set_remember(move |v| {
+                genre_filter::set_remember(v);
+                if let Some(w) = weak.upgrade() {
+                    genre_filter::apply_state(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<GenreFilterActions>()
+            .on_set_advanced(move |v| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<GenreFilterState>().set_advanced(v);
                 }
             });
     }

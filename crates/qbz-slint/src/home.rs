@@ -75,14 +75,18 @@ pub struct SlimData {
     pub artwork_url: String,
 }
 
-/// Fetch the discover index and map it into Home sections.
-pub async fn load_home<A>(runtime: &Arc<AppRuntime<A>>) -> Result<HomeData, String>
+/// Fetch the discover index (optionally genre-filtered) and map it
+/// into the Home / Editor's Picks / For You section sets.
+pub async fn load_home<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    genre_ids: Option<Vec<u64>>,
+) -> Result<HomeData, String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
     let response = runtime
         .core()
-        .get_discover_index(None)
+        .get_discover_index(genre_ids)
         .await
         .map_err(|e| e.to_string())?;
     let containers = response.containers;

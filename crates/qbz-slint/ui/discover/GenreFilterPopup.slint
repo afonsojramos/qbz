@@ -1,0 +1,232 @@
+// Filter-by-genre popup — ported from Tauri's GenreFilterPopup.
+// Simple grid view (parent genres as selectable chips). The selection
+// is shared across the three Discover tabs and re-fetches the discover
+// index. The Advanced view (search + 3-level tree + counts) is a
+// later increment; its toggle is present but its body is a stub.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import { GenreFilterState, GenreFilterActions, GenreChip } from "../state.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { QbzToggle } from "../primitives/QbzToggle.slint";
+
+component GenreCard inherits Rectangle {
+    in property <GenreChip> chip;
+    callback clicked(string);
+
+    height: 38px;
+    border-radius: 6px;
+    background: root.chip.selected
+        ? Theme.accent
+        : (ta.has-hover ? Theme.surface-hover : Theme.surface-elevated);
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+        Text {
+            text: root.chip.name;
+            color: root.chip.selected ? #ffffff : Theme.text-secondary;
+            font-size: 13px;
+            font-weight: root.chip.selected ? Typography.medium : Typography.regular;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        // Check circle.
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                border-width: 1.5px;
+                border-color: root.chip.selected ? #ffffff : Theme.border-muted;
+                background: root.chip.selected ? #ffffff : transparent;
+                QbzIcon {
+                    visible: root.chip.selected;
+                    source: @image-url("../assets/icons/check.svg");
+                    width: 11px;
+                    height: 11px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: Theme.accent;
+                }
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked(root.chip.id);
+        }
+    }
+}
+
+export component GenreFilterPopup inherits Rectangle {
+    property <int> columns: 3;
+    property <length> grid-gap: 8px;
+    property <length> chip-height: 38px;
+
+    width: 470px;
+    background: Theme.surface-main;
+    border-radius: Radius.md;
+    border-width: 1px;
+    border-color: Theme.border-muted;
+    drop-shadow-blur: 28px;
+    drop-shadow-color: #00000080;
+    drop-shadow-offset-y: 8px;
+
+    // Height hugs the content.
+    VerticalLayout {
+        padding: 16px;
+        spacing: 14px;
+
+        // --- Header --------------------------------------------------
+        HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                QbzIcon {
+                    source: @image-url("../assets/icons/list-filter.svg");
+                    width: 16px;
+                    height: 16px;
+                    tint: Theme.text-secondary;
+                }
+            }
+            Text {
+                text: @tr("Filter by genre");
+                color: Theme.text-primary;
+                font-size: Typography.heading;
+                font-weight: Typography.semibold;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Rectangle {
+                width: 26px;
+                height: 26px;
+                border-radius: 6px;
+                background: close-ta.has-hover ? Theme.surface-hover : transparent;
+                QbzIcon {
+                    source: @image-url("../assets/icons/x.svg");
+                    width: 15px;
+                    height: 15px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: close-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                }
+                close-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        GenreFilterState.open = false;
+                    }
+                }
+            }
+        }
+
+        // --- Options row: Remember selection + Advanced view ---------
+        HorizontalLayout {
+            spacing: 16px;
+            HorizontalLayout {
+                spacing: 10px;
+                horizontal-stretch: 1;
+                Text {
+                    text: @tr("Remember selection");
+                    color: Theme.text-secondary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    QbzToggle {
+                        checked: GenreFilterState.remember;
+                        toggled(v) => {
+                            GenreFilterActions.set-remember(v);
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                horizontal-stretch: 1;
+                Text {
+                    text: @tr("Advanced view");
+                    color: Theme.text-secondary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    QbzToggle {
+                        checked: GenreFilterState.advanced;
+                        toggled(v) => {
+                            GenreFilterActions.set-advanced(v);
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Advanced view stub (tree/search/counts: next increment) -
+        if GenreFilterState.advanced: Rectangle {
+            height: 80px;
+            Text {
+                text: @tr("Advanced view coming soon.");
+                color: Theme.text-muted;
+                font-size: 13px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        // --- Simple grid: parent genres as chips ---------------------
+        if !GenreFilterState.advanced: grid := Rectangle {
+            property <int> count: GenreFilterState.genres.length;
+            property <int> rows: Math.ceil(self.count / root.columns);
+            property <length> cell-width:
+                (self.width - (root.columns - 1) * root.grid-gap) / root.columns;
+            height: self.rows > 0
+                ? self.rows * root.chip-height + Math.max(0, self.rows - 1) * root.grid-gap
+                : 0px;
+
+            for chip[i] in GenreFilterState.genres: GenreCard {
+                chip: chip;
+                width: grid.cell-width;
+                x: Math.mod(i, root.columns) * (grid.cell-width + root.grid-gap);
+                y: Math.floor(i / root.columns) * (root.chip-height + root.grid-gap);
+                clicked(id) => {
+                    GenreFilterActions.toggle(id);
+                }
+            }
+        }
+
+        // --- Footer: Clear filter ------------------------------------
+        Rectangle {
+            height: 34px;
+            border-radius: 6px;
+            background: clear-ta.has-hover && GenreFilterState.selected-count > 0
+                ? Theme.surface-hover
+                : Theme.surface-elevated;
+            opacity: GenreFilterState.selected-count > 0 ? 1.0 : 0.5;
+            Text {
+                text: @tr("Clear filter");
+                color: Theme.text-secondary;
+                font-size: 13px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+            clear-ta := TouchArea {
+                mouse-cursor: GenreFilterState.selected-count > 0 ? pointer : default;
+                clicked => {
+                    if (GenreFilterState.selected-count > 0) {
+                        GenreFilterActions.clear();
+                    }
+                }
+            }
+        }
+    }
+}

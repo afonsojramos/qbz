@@ -56,6 +56,33 @@ export global HomeActions {
     callback select-tab(string);
 }
 
+// One genre in the Filter-by-genre popup's simple grid.
+export struct GenreChip {
+    id: string,
+    name: string,
+    selected: bool,
+}
+
+// Filter-by-genre state. The selection is shared across the three
+// Discover tabs (matching Tauri's single "home" genre context) — it
+// re-fetches the discover index with the chosen genre ids. Populated
+// by crate::genre_filter.
+export global GenreFilterState {
+    in property <[GenreChip]> genres: [];
+    in property <int> selected-count: 0;
+    in-out property <bool> open: false;
+    in-out property <bool> remember: true;
+    in-out property <bool> advanced: false;
+    in property <bool> loading: false;
+}
+
+export global GenreFilterActions {
+    callback toggle(string /* genre id */);
+    callback clear();
+    callback set-remember(bool);
+    callback set-advanced(bool);
+}
+
 export struct AlbumTrackItem {
     id: string,
     number: string,
