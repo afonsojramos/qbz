@@ -138,10 +138,13 @@ where
         .map(|(index, album)| map_slim(index, album))
         .collect();
 
-    // For You — release watch (this week's releases from followed
-    // artists). The deeper personalized sections from Tauri (qobuz
-    // mixes, similar albums, spotlight) need reco-DB backend that the
-    // Slint MVP does not have yet; this is the honest first cut.
+    // For You — personalized sections built from the data sources the
+    // Slint MVP has: Release Watch (followed-artist new releases),
+    // Favorite Albums (the user's hearted albums), and Recently
+    // Played Albums (local play-history). The deeper Tauri sections
+    // (Qobuz mixes, similar albums, rediscover library, essentials by
+    // genre, artist spotlight) need the reco-DB backend, which the
+    // Slint MVP does not have yet.
     let mut foryou_sections = Vec::new();
     if let Ok(page) = runtime.core().get_release_watch("artists", 18, 0).await {
         let albums: Vec<CardData> = page.items.into_iter().map(map_full_album).collect();
@@ -149,6 +152,47 @@ where
             foryou_sections.push(SectionData {
                 title: "Release Watch".to_string(),
                 albums,
+            });
+        }
+    }
+    if let Ok(value) = runtime.core().get_favorites("albums", 24, 0).await {
+        let items = value
+            .get("albums")
+            .and_then(|b| b.get("items"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let albums: Vec<CardData> = serde_json::from_value::<Vec<Album>>(items)
+            .unwrap_or_default()
+            .into_iter()
+            .map(map_full_album)
+            .collect();
+        if !albums.is_empty() {
+            foryou_sections.push(SectionData {
+                title: "Favorite Albums".to_string(),
+                albums,
+            });
+        }
+    }
+    {
+        let recents: Vec<CardData> = crate::recently::load_albums()
+            .into_iter()
+            .map(|album| CardData {
+                id: album.id,
+                title: album.title,
+                artist: album.artist,
+                genre: String::new(),
+                year: String::new(),
+                quality_tier: album.quality_tier,
+                quality_label: album.quality_label,
+                ribbon: String::new(),
+                ribbon_kind: String::new(),
+                artwork_url: album.artwork_url,
+            })
+            .collect();
+        if !recents.is_empty() {
+            foryou_sections.push(SectionData {
+                title: "Recently Played Albums".to_string(),
+                albums: recents,
             });
         }
     }
