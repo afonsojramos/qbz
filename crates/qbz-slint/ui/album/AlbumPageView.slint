@@ -9,7 +9,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
-import { AlbumState, AlbumTrackItem, AlbumActions, NavState, ContentView } from "../state.slint";
+import { AlbumState, AlbumTrackItem, AlbumActions, ArtworkActions, NavState, ContentView } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
@@ -374,6 +374,71 @@ export component AlbumPageView inherits Rectangle {
                         height: 100%;
                         source: AlbumState.artwork;
                         image-fit: cover;
+                    }
+                    // Right-click → cover context menu (same pattern
+                    // as the artist portrait): Add/Change/Remove
+                    // custom cover, Open in browser, Save as.
+                    cover-ta := TouchArea {
+                        mouse-cursor: default;
+                        pointer-event(e) => {
+                            if (e.button == PointerEventButton.right
+                                && e.kind == PointerEventKind.up) {
+                                cover-menu.show();
+                            }
+                        }
+                    }
+                    cover-menu := PopupWindow {
+                        x: cover-ta.mouse-x;
+                        y: cover-ta.mouse-y;
+                        width: 220px;
+                        close-policy: close-on-click;
+                        ContextMenu {
+                            if !AlbumState.has-custom-cover: ContextMenuItem {
+                                icon: @image-url("../assets/icons/image-plus.svg");
+                                label: @tr("Add cover");
+                                clicked => {
+                                    ArtworkActions.add-custom(
+                                        "album", AlbumState.id);
+                                }
+                            }
+                            if AlbumState.has-custom-cover: ContextMenuItem {
+                                icon: @image-url("../assets/icons/image-plus.svg");
+                                label: @tr("Change cover");
+                                clicked => {
+                                    ArtworkActions.add-custom(
+                                        "album", AlbumState.id);
+                                }
+                            }
+                            if AlbumState.has-custom-cover: ContextMenuItem {
+                                icon: @image-url("../assets/icons/trash-2.svg");
+                                label: @tr("Remove cover");
+                                clicked => {
+                                    ArtworkActions.remove-custom(
+                                        "album", AlbumState.id);
+                                }
+                            }
+                            Rectangle {
+                                height: 1px;
+                                background: Theme.border-subtle;
+                            }
+                            ContextMenuItem {
+                                icon: @image-url("../assets/icons/external-link.svg");
+                                label: @tr("Open in browser");
+                                clicked => {
+                                    ArtworkActions.open-in-browser(
+                                        AlbumState.artwork-url);
+                                }
+                            }
+                            ContextMenuItem {
+                                icon: @image-url("../assets/icons/cloud-download.svg");
+                                label: @tr("Save as…");
+                                clicked => {
+                                    ArtworkActions.save-as(
+                                        AlbumState.artwork-url,
+                                        AlbumState.title + " - Cover.jpg");
+                                }
+                            }
+                        }
                     }
                 }
 

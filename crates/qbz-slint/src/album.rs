@@ -238,9 +238,14 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
     let awards: Vec<slint::SharedString> =
         data.awards.into_iter().map(Into::into).collect();
 
+    let has_custom_cover = crate::custom_artwork::album_cover(&data.id).is_some();
+    let artwork_url = data.artwork_url.clone();
+
     let state = window.global::<AlbumState>();
     state.set_id(data.id.into());
     state.set_title(data.title.into());
+    state.set_artwork_url(artwork_url.into());
+    state.set_has_custom_cover(has_custom_cover);
     state.set_artist(data.artist.into());
     state.set_artist_id(data.artist_id.into());
     state.set_info_line(data.info_line.into());

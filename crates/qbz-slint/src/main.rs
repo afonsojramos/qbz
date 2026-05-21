@@ -20,6 +20,7 @@ mod artist;
 mod artwork;
 mod auth;
 mod commands;
+mod custom_artwork;
 mod discovery_dismiss;
 mod home;
 mod nav;
@@ -1286,6 +1287,122 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         discovery_dismiss::dismiss(&tag, &normalized);
                     }
                     artist::remove_discovery_artist(&w, mbid.as_str());
+                }
+            });
+    }
+
+    // Artwork right-click menu wiring — Open in browser / Save as /
+    // Add custom / Remove custom. Mirrors the v2_library_* + native
+    // dialog flow Tauri uses on artist portraits + album covers.
+    window
+        .global::<ArtworkActions>()
+        .on_open_in_browser(|url| {
+            if url.is_empty() {
+                return;
+            }
+            if let Err(e) = open::that(url.as_str()) {
+                log::error!("[qbz-slint] artwork open-in-browser failed: {e}");
+            }
+        });
+    {
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<ArtworkActions>()
+            .on_save_as(move |url, default_name| {
+                if url.is_empty() {
+                    return;
+                }
+                let url = url.to_string();
+                let default = default_name.to_string();
+                handle.spawn(async move {
+                    let Some(dest) = rfd::AsyncFileDialog::new()
+                        .set_file_name(&default)
+                        .add_filter("Images", &["jpg", "jpeg", "png"])
+                        .save_file()
+                        .await
+                    else {
+                        return;
+                    };
+                    let bytes = match reqwest::get(&url).await {
+                        Ok(resp) => match resp.bytes().await {
+                            Ok(b) => b,
+                            Err(e) => {
+                                log::error!(
+                                    "[qbz-slint] artwork save-as fetch body: {e}"
+                                );
+                                return;
+                            }
+                        },
+                        Err(e) => {
+                            log::error!("[qbz-slint] artwork save-as request: {e}");
+                            return;
+                        }
+                    };
+                    if let Err(e) = tokio::fs::write(dest.path(), &bytes).await {
+                        log::error!("[qbz-slint] artwork save-as write: {e}");
+                    }
+                });
+            });
+    }
+    {
+        let handle = tokio_rt.handle().clone();
+        let weak = window.as_weak();
+        window
+            .global::<ArtworkActions>()
+            .on_add_custom(move |kind, key| {
+                let kind = kind.to_string();
+                let key = key.to_string();
+                let weak = weak.clone();
+                handle.spawn(async move {
+                    let Some(file) = rfd::AsyncFileDialog::new()
+                        .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+                        .pick_file()
+                        .await
+                    else {
+                        return;
+                    };
+                    let path = file.path().to_string_lossy().into_owned();
+                    match kind.as_str() {
+                        "artist" => {
+                            custom_artwork::set_artist_image(&key, &path);
+                            let _ = weak.upgrade_in_event_loop(|w| {
+                                w.global::<ArtistState>().set_has_custom_image(true);
+                            });
+                        }
+                        "album" => {
+                            custom_artwork::set_album_cover(&key, &path);
+                            let _ = weak.upgrade_in_event_loop(|w| {
+                                w.global::<AlbumState>().set_has_custom_cover(true);
+                            });
+                        }
+                        _ => log::warn!(
+                            "[qbz-slint] artwork add-custom: unknown kind {kind}"
+                        ),
+                    }
+                });
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<ArtworkActions>()
+            .on_remove_custom(move |kind, key| {
+                match kind.as_str() {
+                    "artist" => {
+                        custom_artwork::remove_artist_image(key.as_str());
+                        if let Some(w) = weak.upgrade() {
+                            w.global::<ArtistState>().set_has_custom_image(false);
+                        }
+                    }
+                    "album" => {
+                        custom_artwork::remove_album_cover(key.as_str());
+                        if let Some(w) = weak.upgrade() {
+                            w.global::<AlbumState>().set_has_custom_cover(false);
+                        }
+                    }
+                    _ => log::warn!(
+                        "[qbz-slint] artwork remove-custom: unknown kind {kind}"
+                    ),
                 }
             });
     }

@@ -66,6 +66,10 @@ export global AlbumState {
     in property <string> title;
     in property <string> artist;
     in property <string> artist-id;
+    // Network URL of the cover — used by the artwork right-click
+    // menu for Open-in-browser and Save-as actions.
+    in property <string> artwork-url;
+    in property <bool> has-custom-cover: false;
     in property <string> info-line;
     in property <string> quality-tier;
     // "24-bit / 96 kHz" — quality-badge detail line.
@@ -213,6 +217,13 @@ export struct SimilarEntry {
 export global ArtistState {
     in property <string> id;
     in property <string> name;
+    // Network URL of the portrait — used by the artwork right-click
+    // menu for Open-in-browser and Save-as actions.
+    in property <string> artwork-url;
+    // True when the user has registered a local image to override
+    // the Qobuz-supplied portrait. Drives the menu's
+    // "Add image" -> "Change image / Remove image" toggle.
+    in property <bool> has-custom-image: false;
     in property <string> bio;
     // Truncated bio (word-boundary cut + ellipsis) for the at-rest view;
     // the full bio in `bio` is shown when the Read-more toggle expands.
@@ -240,6 +251,19 @@ export global ArtistState {
     // ArtistPageView will scroll to when the tab is clicked.
     in property <[JumpNavTab]> jump-tabs: [];
     in property <bool> loading: false;
+}
+
+// Artwork right-click actions — shared by ArtistPageView and
+// AlbumPageView for their respective headers. `kind` is "artist" or
+// "album"; `key` is the artist name or album id; `url` is the
+// current network URL (for open-in-browser and save-as).
+export global ArtworkActions {
+    callback open-in-browser(string /* url */);
+    callback save-as(string /* url */, string /* default file name */);
+    // Opens the system file picker and registers the chosen image
+    // as the custom override for this artist/album.
+    callback add-custom(string /* kind */, string /* key */);
+    callback remove-custom(string /* kind */, string /* key */);
 }
 
 // Artist-view actions wired to Rust callbacks.

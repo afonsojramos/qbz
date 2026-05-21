@@ -11,6 +11,7 @@ import { Radius } from "../foundation/radius.slint";
 import {
     ArtistState,
     ArtistActions,
+    ArtworkActions,
     AlbumTrackItem,
     NavState,
     ContentView,
@@ -357,6 +358,72 @@ export component ArtistPageView inherits Rectangle {
                         source: ArtistState.artwork;
                         image-fit: cover;
                     }
+                    // Right-click → image context menu (Add/Change/
+                    // Remove custom image, Open in browser, Save as).
+                    // Left clicks pass through (no action on the
+                    // portrait itself).
+                    artwork-ta := TouchArea {
+                        mouse-cursor: default;
+                        pointer-event(e) => {
+                            if (e.button == PointerEventButton.right
+                                && e.kind == PointerEventKind.up) {
+                                artwork-menu.show();
+                            }
+                        }
+                    }
+                    artwork-menu := PopupWindow {
+                        x: artwork-ta.mouse-x;
+                        y: artwork-ta.mouse-y;
+                        width: 220px;
+                        close-policy: close-on-click;
+                        ContextMenu {
+                            if !ArtistState.has-custom-image: ContextMenuItem {
+                                icon: @image-url("../assets/icons/image-plus.svg");
+                                label: @tr("Add image");
+                                clicked => {
+                                    ArtworkActions.add-custom(
+                                        "artist", ArtistState.name);
+                                }
+                            }
+                            if ArtistState.has-custom-image: ContextMenuItem {
+                                icon: @image-url("../assets/icons/image-plus.svg");
+                                label: @tr("Change image");
+                                clicked => {
+                                    ArtworkActions.add-custom(
+                                        "artist", ArtistState.name);
+                                }
+                            }
+                            if ArtistState.has-custom-image: ContextMenuItem {
+                                icon: @image-url("../assets/icons/trash-2.svg");
+                                label: @tr("Remove image");
+                                clicked => {
+                                    ArtworkActions.remove-custom(
+                                        "artist", ArtistState.name);
+                                }
+                            }
+                            Rectangle {
+                                height: 1px;
+                                background: Theme.border-subtle;
+                            }
+                            ContextMenuItem {
+                                icon: @image-url("../assets/icons/external-link.svg");
+                                label: @tr("Open in browser");
+                                clicked => {
+                                    ArtworkActions.open-in-browser(
+                                        ArtistState.artwork-url);
+                                }
+                            }
+                            ContextMenuItem {
+                                icon: @image-url("../assets/icons/cloud-download.svg");
+                                label: @tr("Save as…");
+                                clicked => {
+                                    ArtworkActions.save-as(
+                                        ArtistState.artwork-url,
+                                        ArtistState.name + ".jpg");
+                                }
+                            }
+                        }
+                    }
                 }
 
                 VerticalLayout {
@@ -684,19 +751,22 @@ export component ArtistPageView inherits Rectangle {
     // y is the row just below the artist header in the page layout
     // (NavButtons + spacer + artist header + small gap, ~290px).
     jump-nav := JumpNavBar {
-        // Sits AT the body row's top, taking the 44 top pixels of
-        // the 52px reservation slot the body row's first child
-        // carves out — so the bar never overlaps the artist header
-        // above (header ends exactly at body-row.y) and never
-        // overlaps Popular Tracks below (Popular Tracks header
-        // starts 52px into the body row, an 8px gap below the bar).
+        // body-row.absolute-position.y already moves up with scroll
+        // (it's a window-coord lookup), so `natural-top` here is
+        // the LIVE viewport-relative y the bar wants to occupy at
+        // any given scroll position — not a static scroll=0 value.
+        // The sticky clamp just keeps it from going above the top
+        // of the page (sticky-top = 0); adding viewport-y to the
+        // formula would double-count the scroll and lift the bar
+        // ahead of the body row during the transition (visible gap
+        // + bar-over-header artifact during mid-scroll).
         property <length> natural-top:
             body-row.absolute-position.y
             - page-flickable.absolute-position.y;
         property <length> sticky-top: 0px;
 
         x: 0;
-        y: max(self.natural-top + page-flickable.viewport-y, self.sticky-top);
+        y: max(self.natural-top, self.sticky-top);
         width: root.width;
         tabs: ArtistState.jump-tabs;
         active-tab-id: root.active-jump-tab;
@@ -728,10 +798,12 @@ export component ArtistPageView inherits Rectangle {
         // bottom edge is always flush with the now-playing bar
         // (height = root.height - y), so no gap appears when sticky.
         if NetworkSidebarState.open: sidebar-panel := Rectangle {
-            // Anchored 44px below the body row's top (= bottom edge
-            // of the JUMP TO bar, which itself starts AT body row
-            // top). The +44 ensures the sidebar always begins
-            // flush with the bar's bottom edge, no overlap.
+            // natural-top is the LIVE viewport-relative y of the
+            // body-row top + 44 (= bottom edge of the JUMP TO bar,
+            // which itself starts AT body row top). Same reasoning
+            // as the bar: body-row.absolute-position.y already
+            // accounts for scroll, so the formula is just a
+            // max() clamp — no extra `+ viewport-y` here either.
             property <length> natural-top:
                 body-row.absolute-position.y - page-flickable.absolute-position.y
                 + jump-nav.height;
@@ -740,7 +812,7 @@ export component ArtistPageView inherits Rectangle {
             property <length> sticky-top: 44px;
 
             x: root.width - self.width;
-            y: max(self.natural-top + page-flickable.viewport-y, self.sticky-top);
+            y: max(self.natural-top, self.sticky-top);
             width: 300px;
             height: root.height - self.y;
             background: Theme.surface-card;

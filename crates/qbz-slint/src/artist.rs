@@ -524,8 +524,13 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
         *cell.borrow_mut() = release_sections.clone();
     });
 
+    let has_custom_image = crate::custom_artwork::artist_image(&data.name).is_some();
+    let artwork_url = data.artwork_url.clone();
+
     let state = window.global::<ArtistState>();
     state.set_name(data.name.into());
+    state.set_artwork_url(artwork_url.into());
+    state.set_has_custom_image(has_custom_image);
     state.set_bio(data.bio.into());
     state.set_bio_short(data.bio_short.into());
     state.set_bio_truncated(data.bio_truncated);
