@@ -160,6 +160,10 @@ export component GenreFilterPopup inherits Rectangle {
     property <length> chip-height: 38px;
 
     width: 470px;
+    // Hug the content vertically — without an explicit height a
+    // Rectangle child fills its parent (the whole view), which made
+    // the popup grow to full window height.
+    height: content.preferred-height;
     background: Theme.surface-main;
     border-radius: Radius.md;
     border-width: 1px;
@@ -168,8 +172,7 @@ export component GenreFilterPopup inherits Rectangle {
     drop-shadow-color: #00000080;
     drop-shadow-offset-y: 8px;
 
-    // Height hugs the content.
-    VerticalLayout {
+    content := VerticalLayout {
         padding: 16px;
         spacing: 14px;
 
