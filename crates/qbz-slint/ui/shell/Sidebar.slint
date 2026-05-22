@@ -12,45 +12,172 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Spacing } from "../foundation/spacing.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { ShellState, SidebarState, SidebarActions, SidebarPlaylistItem } from "../state.slint";
+import { ShellState, SidebarState, SidebarActions, SidebarEntry } from "../state.slint";
 import { ScrollView } from "std-widgets.slint";
 
-// One playlist row in the sidebar.
-component PlaylistRow inherits Rectangle {
-    in property <SidebarPlaylistItem> item;
-    in property <bool> active: false;
-    callback clicked(string);
-
-    height: 32px;
-    border-radius: 6px;
-    background: ta.has-hover || root.active ? Theme.surface-hover : transparent;
-
+// A single context-menu item row.
+component MenuItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger: false;
+    callback activated();
+    height: 30px;
+    border-radius: 5px;
+    background: mi-ta.has-hover ? Theme.surface-hover : transparent;
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
-        spacing: 8px;
-        VerticalLayout {
-            alignment: center;
-            QbzIcon {
-                source: @image-url("../assets/icons/list-music.svg");
-                width: 15px;
-                height: 15px;
-                tint: root.active ? Theme.text-primary : Theme.text-muted;
-            }
-        }
         Text {
-            text: root.item.name;
-            color: root.active ? Theme.text-primary : Theme.text-secondary;
+            text: root.label;
+            color: root.danger ? #ef4444 : Theme.text-secondary;
             font-size: 13px;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
         }
     }
+    mi-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.activated();
+        }
+    }
+}
+
+// One sidebar row — a folder header or a playlist (indented when in a
+// folder), driven by the entry's `kind`. A hover "..." button opens a
+// context popup: move-to-folder for playlists, delete for folders.
+component SidebarRow inherits Rectangle {
+    in property <SidebarEntry> entry;
+    in property <bool> active: false;
+    callback open-playlist(string);
+    callback toggle-folder(string);
+    callback move-playlist(string, string);
+    callback delete-folder(string);
+
+    property <bool> is-folder: root.entry.kind == "folder";
+    height: 32px;
+    border-radius: 6px;
+    background: ta.has-hover || more-ta.has-hover || root.active
+        ? Theme.surface-hover : transparent;
+
+    HorizontalLayout {
+        padding-left: root.entry.indent ? 24px : 8px;
+        padding-right: 6px;
+        spacing: 8px;
+        // Leading icon — chevron+folder for folders, list-music for
+        // playlists.
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.is-folder
+                    ? (root.entry.expanded
+                        ? @image-url("../assets/icons/folder-open.svg")
+                        : @image-url("../assets/icons/folder.svg"))
+                    : @image-url("../assets/icons/list-music.svg");
+                width: 15px;
+                height: 15px;
+                tint: root.active ? Theme.text-primary : Theme.text-muted;
+            }
+        }
+        Text {
+            text: root.entry.name;
+            color: root.active ? Theme.text-primary : Theme.text-secondary;
+            font-size: 13px;
+            font-weight: root.is-folder ? 600 : 400;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        // Folder playlist count.
+        if root.is-folder && root.entry.count > 0: Text {
+            text: root.entry.count;
+            color: Theme.text-muted;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+        // Context "..." button (hover).
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                opacity: (ta.has-hover || more-ta.has-hover) ? 1.0 : 0.0;
+                background: more-ta.has-hover ? Theme.surface-elevated : transparent;
+                QbzIcon {
+                    source: @image-url("../assets/icons/ellipsis.svg");
+                    width: 14px;
+                    height: 14px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: Theme.text-muted;
+                }
+                more-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        menu.show();
+                    }
+                }
+            }
+        }
+    }
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => {
-            root.clicked(root.item.id);
+            if (root.is-folder) {
+                root.toggle-folder(root.entry.id);
+            } else {
+                root.open-playlist(root.entry.id);
+            }
+        }
+    }
+
+    menu := PopupWindow {
+        x: root.width - 196px;
+        y: 28px;
+        width: 190px;
+        Rectangle {
+            background: Theme.surface-card;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            border-radius: 8px;
+            drop-shadow-blur: 20px;
+            drop-shadow-color: #00000080;
+            VerticalLayout {
+                padding: 6px;
+                spacing: 1px;
+                // Folder: delete.
+                if root.is-folder: MenuItem {
+                    label: @tr("Delete folder");
+                    danger: true;
+                    activated => {
+                        root.delete-folder(root.entry.id);
+                    }
+                }
+                // Playlist: move to folder. Wrapped so the `for` is not
+                // a direct child of an `if` (not allowed in Slint).
+                if !root.is-folder: VerticalLayout {
+                    spacing: 1px;
+                    Text {
+                        text: @tr("Move to folder");
+                        color: Theme.text-muted;
+                        font-size: 11px;
+                        horizontal-alignment: left;
+                    }
+                    MenuItem {
+                        label: @tr("No folder");
+                        activated => {
+                            root.move-playlist(root.entry.id, "");
+                        }
+                    }
+                    for f in SidebarState.folders: MenuItem {
+                        label: f.name;
+                        activated => {
+                            root.move-playlist(root.entry.id, f.id);
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -74,6 +201,7 @@ export component Sidebar inherits Rectangle {
         spacing: Spacing.md;
 
         HorizontalLayout {
+            spacing: 4px;
             Text {
                 text: @tr("PLAYLISTS");
                 color: Theme.text-muted;
@@ -82,6 +210,31 @@ export component Sidebar inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
+            // New folder.
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: folder-ta.has-hover ? Theme.surface-hover : transparent;
+                    QbzIcon {
+                        source: @image-url("../assets/icons/folder-plus.svg");
+                        width: 15px;
+                        height: 15px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: folder-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                    }
+                    folder-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            SidebarActions.create-folder();
+                        }
+                    }
+                }
+            }
+            // New playlist.
             VerticalLayout {
                 alignment: center;
                 Rectangle {
@@ -113,14 +266,23 @@ export component Sidebar inherits Rectangle {
             VerticalLayout {
                 spacing: 2px;
                 alignment: start;
-                for pl in SidebarState.playlists: PlaylistRow {
-                    item: pl;
-                    active: pl.id == SidebarState.active-id;
-                    clicked(id) => {
+                for entry in SidebarState.entries: SidebarRow {
+                    entry: entry;
+                    active: entry.kind == "playlist" && entry.id == SidebarState.active-id;
+                    open-playlist(id) => {
                         SidebarActions.open-playlist(id);
                     }
+                    toggle-folder(id) => {
+                        SidebarActions.toggle-folder(id);
+                    }
+                    move-playlist(pid, fid) => {
+                        SidebarActions.move-playlist(pid, fid);
+                    }
+                    delete-folder(id) => {
+                        SidebarActions.delete-folder(id);
+                    }
                 }
-                if SidebarState.playlists.length == 0 && !SidebarState.loading: Text {
+                if SidebarState.entries.length == 0 && !SidebarState.loading: Text {
                     text: @tr("No playlists yet.");
                     color: Theme.text-muted;
                     font-size: 12px;

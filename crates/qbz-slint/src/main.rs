@@ -35,6 +35,7 @@ mod play_history;
 mod strip_html;
 mod playback;
 mod queue;
+mod folders;
 mod library_db;
 mod playlist;
 mod playlist_picker;
@@ -694,9 +695,9 @@ fn load_sidebar_playlists(
 ) {
     let _ = weak.upgrade_in_event_loop(|w| sidebar::set_loading(&w, true));
     handle.spawn(async move {
-        let playlists = sidebar::load(&runtime).await;
+        let data = sidebar::load(&runtime).await;
         let _ = weak.upgrade_in_event_loop(move |w| {
-            sidebar::apply(&w, playlists);
+            sidebar::apply(&w, data);
         });
     });
 }
@@ -2610,6 +2611,119 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     w.global::<CreatePlaylistState>().set_creating(false);
                     w.global::<CreatePlaylistState>().set_open(true);
                 }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<CreateFolderActions>()
+            .on_close(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<CreateFolderState>().set_open(false);
+                }
+            });
+    }
+    {
+        // Create a folder, then refresh the sidebar.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<CreateFolderActions>()
+            .on_submit(move || {
+                let Some(w) = weak.upgrade() else { return; };
+                let name = w.global::<CreateFolderState>().get_name().to_string();
+                if name.trim().is_empty() || w.global::<CreateFolderState>().get_creating() {
+                    return;
+                }
+                w.global::<CreateFolderState>().set_creating(true);
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    let nm = name.trim().to_string();
+                    tokio::task::spawn_blocking(move || {
+                        folders::create_folder(&nm);
+                    })
+                    .await
+                    .ok();
+                    let r2 = runtime.clone();
+                    let w2 = weak.clone();
+                    let h2 = handle.clone();
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        w.global::<CreateFolderState>().set_creating(false);
+                        w.global::<CreateFolderState>().set_open(false);
+                        load_sidebar_playlists(r2, w2, &h2);
+                    });
+                });
+            });
+    }
+    {
+        // Toggle a folder's expanded state (cheap, rebuilds from cache).
+        let weak = window.as_weak();
+        window
+            .global::<SidebarActions>()
+            .on_toggle_folder(move |id| {
+                if let Some(w) = weak.upgrade() {
+                    sidebar::toggle_folder(&w, id.as_str());
+                }
+            });
+    }
+    {
+        // Open the create-folder modal.
+        let weak = window.as_weak();
+        window
+            .global::<SidebarActions>()
+            .on_create_folder(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<CreateFolderState>().set_name("".into());
+                    w.global::<CreateFolderState>().set_creating(false);
+                    w.global::<CreateFolderState>().set_open(true);
+                }
+            });
+    }
+    {
+        // Delete a folder (its playlists fall back to root via the
+        // library DB's ON DELETE SET NULL), then reload the sidebar.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<SidebarActions>()
+            .on_delete_folder(move |id| {
+                let id = id.to_string();
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    let fid = id.clone();
+                    tokio::task::spawn_blocking(move || folders::delete_folder(&fid))
+                        .await
+                        .ok();
+                    load_sidebar_playlists(runtime, weak, &handle);
+                });
+            });
+    }
+    {
+        // Move a playlist into a folder ("" = root). Optimistic local
+        // rebuild + a DB write.
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<SidebarActions>()
+            .on_move_playlist(move |playlist_id, folder_id| {
+                let Some(w) = weak.upgrade() else { return; };
+                let Ok(pid) = playlist_id.parse::<u64>() else { return; };
+                let fid = folder_id.to_string();
+                sidebar::move_playlist_local(&w, pid, &fid);
+                handle.spawn(async move {
+                    tokio::task::spawn_blocking(move || {
+                        let opt = if fid.is_empty() { None } else { Some(fid.as_str()) };
+                        folders::move_playlist(pid, opt);
+                    })
+                    .await
+                    .ok();
+                });
             });
     }
     {

@@ -198,16 +198,30 @@ export global AlbumActions {
 // Which content view the shell shows.
 export enum ContentView { home, album, artist, settings, search, musician, label, location, favorites, mix, playlist }
 
-// One row in the sidebar playlists list.
+// One row in the sidebar playlists list (also used for the folder
+// list in the move-to-folder menu).
 export struct SidebarPlaylistItem {
     id: string,
     name: string,
 }
 
-// The sidebar's playlists list (the user's own playlists). Populated
-// by crate::sidebar on shell entry and after create/delete.
+// One flattened entry in the sidebar nav list — a folder header or a
+// playlist row (indented when inside a folder).
+export struct SidebarEntry {
+    kind: string,       // "folder" | "playlist"
+    id: string,
+    name: string,
+    expanded: bool,     // folders
+    count: int,         // folder playlist count
+    indent: bool,       // playlist nested in a folder
+}
+
+// The sidebar's playlists + folders. Populated by crate::sidebar on
+// shell entry and after create/delete/move.
 export global SidebarState {
-    in property <[SidebarPlaylistItem]> playlists: [];
+    in property <[SidebarEntry]> entries: [];
+    // Flat folder list, for the move-to-folder menu.
+    in property <[SidebarPlaylistItem]> folders: [];
     in property <bool> loading: false;
     // The currently-open playlist id, for the active-row highlight.
     in property <string> active-id;
@@ -216,6 +230,11 @@ export global SidebarState {
 export global SidebarActions {
     callback open-playlist(string /* id */);
     callback create-playlist();
+    callback create-folder();
+    callback toggle-folder(string /* folder id */);
+    callback delete-folder(string /* folder id */);
+    // Move a playlist into a folder ("" folder id = root).
+    callback move-playlist(string /* playlist id */, string /* folder id */);
 }
 
 // "Create playlist" modal state.
@@ -227,6 +246,18 @@ export global CreatePlaylistState {
 }
 
 export global CreatePlaylistActions {
+    callback submit();
+    callback close();
+}
+
+// "Create folder" modal state.
+export global CreateFolderState {
+    in-out property <bool> open: false;
+    in-out property <string> name;
+    in property <bool> creating: false;
+}
+
+export global CreateFolderActions {
     callback submit();
     callback close();
 }
