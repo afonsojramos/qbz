@@ -20,7 +20,7 @@ use qbz_models::Track;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget};
-use crate::{AppWindow, MixState, MixTrackItem};
+use crate::{AppWindow, MixState, SearchTrackItem};
 
 /// The currently-loaded mix track list, kept so play-all / per-track
 /// play can build the queue without re-fetching.
@@ -124,14 +124,13 @@ fn mmss(secs: u32) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-fn to_item(index: usize, track: &Track) -> MixTrackItem {
+fn to_item(track: &Track) -> SearchTrackItem {
     let mut title = track.title.clone();
     if let Some(v) = track.version.as_ref().filter(|v| !v.is_empty()) {
         title = format!("{title} ({v})");
     }
-    MixTrackItem {
+    SearchTrackItem {
         id: track.id.to_string().into(),
-        number: (index + 1).to_string().into(),
         title: title.into(),
         artist: track
             .performer
@@ -176,11 +175,7 @@ fn total_duration(tracks: &[Track]) -> String {
 
 pub fn apply_mix(window: &AppWindow, kind: &str, tracks: Vec<Track>) {
     let (title, subtitle) = mix_meta(kind);
-    let items: Vec<MixTrackItem> = tracks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| to_item(i, t))
-        .collect();
+    let items: Vec<SearchTrackItem> = tracks.iter().map(to_item).collect();
     let count = tracks.len() as i32;
     let duration = total_duration(&tracks);
     if let Ok(mut cur) = CURRENT_MIX.lock() {
@@ -202,7 +197,7 @@ pub fn reset_mix(window: &AppWindow, kind: &str) {
     state.set_kind(kind.into());
     state.set_title(title.into());
     state.set_subtitle(subtitle.into());
-    state.set_tracks(ModelRc::new(VecModel::from(Vec::<MixTrackItem>::new())));
+    state.set_tracks(ModelRc::new(VecModel::from(Vec::<SearchTrackItem>::new())));
     state.set_track_count(0);
     state.set_total_duration("".into());
     state.set_loading(true);

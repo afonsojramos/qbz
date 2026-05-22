@@ -142,6 +142,9 @@ export component AppShell inherits Rectangle {
                     refresh => {
                         root.media-action("mix", "", "refresh");
                     }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
                 }
                 if NavState.view == ContentView.settings: SettingsView {
                     settings-bool(k, v) => {

@@ -17,6 +17,11 @@ export component SearchTrackRow inherits Rectangle {
     in property <SearchTrackItem> track;
     in property <int> index;
     in property <bool> show-artwork: true;
+    // Optional extra columns (mix / playlist-style rows): an album
+    // column and a standalone favorite button. Off by default so the
+    // search / favorites rows are unchanged.
+    in property <bool> show-album: false;
+    in property <bool> show-favorite: false;
     // kind ("track"), track id, action ("play" | "play-next" | "queue" | "favorite").
     callback media-action(string, string, string);
 
@@ -110,6 +115,16 @@ export component SearchTrackRow inherits Rectangle {
             }
         }
 
+        // Optional album column (mix / playlist rows).
+        if root.show-album: Text {
+            text: root.track.album;
+            width: 220px;
+            color: Theme.text-muted;
+            font-size: Typography.legal;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
         Text {
             text: root.track.duration;
             width: 70px;
@@ -127,6 +142,31 @@ export component SearchTrackRow inherits Rectangle {
             font-size: Typography.legal;
             horizontal-alignment: center;
             vertical-alignment: center;
+        }
+
+        // Optional standalone favorite button.
+        if root.show-favorite: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: Radius.sm;
+                background: fav-ta.has-hover ? Theme.surface-elevated : transparent;
+                QbzIcon {
+                    source: @image-url("../assets/icons/heart.svg");
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: fav-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                }
+                fav-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.media-action("track", root.track.id, "favorite");
+                    }
+                }
+            }
         }
 
         VerticalLayout {

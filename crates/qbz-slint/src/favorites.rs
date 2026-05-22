@@ -315,6 +315,7 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
                     id: t.id.into(),
                     title: t.title.into(),
                     artist: t.artist.into(),
+                    album: "".into(),
                     duration: t.duration.into(),
                     quality_tier: t.quality_tier.into(),
                     explicit: t.explicit,

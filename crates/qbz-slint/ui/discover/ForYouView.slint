@@ -17,7 +17,7 @@ import { ArtistCarousel } from "ArtistCarousel.slint";
 import { Spotlight } from "Spotlight.slint";
 import { QobuzMixesRow } from "QobuzMixesRow.slint";
 import { RadioCard } from "RadioCard.slint";
-import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
+import { HomeSkeleton } from "HomeSkeleton.slint";
 
 export component ForYouView inherits VerticalLayout {
     callback open-album(string);
@@ -29,15 +29,15 @@ export component ForYouView inherits VerticalLayout {
     callback start-radio-album(string);
     callback open-mix(string);
 
+    // While the first lazy load is in flight, show the same pulsing
+    // skeleton Home uses (the Qobuz Mixes tiles stay — they're static).
+    property <bool> show-skeleton:
+        ForYouState.loading
+        && ForYouState.release-watch.albums.length == 0
+        && ForYouState.top-artists.length == 0;
+
     spacing: 40px;
     alignment: start;
-
-    if ForYouState.loading
-        && ForYouState.release-watch.albums.length == 0
-        && ForYouState.top-artists.length == 0: HorizontalLayout {
-        alignment: center;
-        LoadingSpinner { size: 36px; }
-    }
 
     // 0. Qobuz Mixes (static navigation tiles).
     QobuzMixesRow {
@@ -45,6 +45,8 @@ export component ForYouView inherits VerticalLayout {
             root.open-mix(which);
         }
     }
+
+    if root.show-skeleton: HomeSkeleton { }
 
     // 1. Release Watch.
     if ForYouState.release-watch.albums.length > 0: Carousel {

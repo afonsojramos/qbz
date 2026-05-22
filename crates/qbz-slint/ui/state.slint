@@ -707,6 +707,9 @@ export struct SearchTrackItem {
     id: string,
     title: string,
     artist: string,
+    // Album title — shown only by rows with show-album (e.g. the mix
+    // views); empty elsewhere.
+    album: string,
     duration: string,
     quality-tier: string,
     explicit: bool,
@@ -791,28 +794,15 @@ export global FavoritesActions {
     callback track-action(string /* track id */, string /* action */);
 }
 
-// One track row in a Qobuz mix detail page — carries an album column
-// (mix tracks span many albums, unlike an album view).
-export struct MixTrackItem {
-    id: string,
-    number: string,
-    title: string,
-    artist: string,
-    album: string,
-    duration: string,
-    quality-tier: string,
-    explicit: bool,
-    artwork-url: string,
-    artwork: image,
-}
-
 // A Qobuz mix detail page (DailyQ / WeeklyQ / FavQ / TopQ), opened
-// from the For You Qobuz Mixes tiles. Populated by crate::mix.
+// from the For You Qobuz Mixes tiles. Populated by crate::mix. Rows
+// reuse the shared SearchTrackRow (with show-album), so the track
+// context menu works here too.
 export global MixState {
     in property <string> kind;       // daily | weekly | fav | top
     in property <string> title;
     in property <string> subtitle;
-    in property <[MixTrackItem]> tracks: [];
+    in property <[SearchTrackItem]> tracks: [];
     in property <int> track-count: 0;
     in property <string> total-duration;
     in property <bool> loading: false;

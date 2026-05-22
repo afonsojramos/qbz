@@ -8,9 +8,9 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { MixState, MixTrackItem } from "../state.slint";
+import { MixState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
+import { SearchTrackRow } from "../search/SearchTrackRow.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 
@@ -47,164 +47,12 @@ component CircleAction inherits Rectangle {
     }
 }
 
-component MixTrackRow inherits Rectangle {
-    in property <MixTrackItem> track;
-    in property <int> index;
-    callback play(string);
-
-    property <bool> row-hovered: ta.has-hover || play-cell.hovered || fav-ta.has-hover || more-ta.has-hover;
-
-    height: 56px;
-    border-radius: 8px;
-    background: root.row-hovered
-        ? #ffffff16
-        : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
-
-    ta := TouchArea {
-        mouse-cursor: default;
-    }
-
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 16px;
-
-        VerticalLayout {
-            alignment: center;
-            play-cell := TrackPlayCell {
-                track-id: root.track.id;
-                number: root.track.number;
-                artwork: root.track.artwork;
-                show-artwork: true;
-                row-hovered: root.row-hovered;
-                play => {
-                    root.play(root.track.id);
-                }
-            }
-        }
-
-        // Title + artist.
-        VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 1;
-            spacing: 2px;
-            HorizontalLayout {
-                alignment: start;
-                spacing: 6px;
-                Text {
-                    text: root.track.title;
-                    color: Theme.text-primary;
-                    font-size: Typography.body;
-                    font-weight: Typography.medium;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-                if root.track.explicit: VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 16px;
-                        height: 16px;
-                        border-radius: 3px;
-                        background: Theme.surface-elevated;
-                        Text {
-                            text: "E";
-                            color: Theme.text-muted;
-                            font-size: 9px;
-                            font-weight: Typography.semibold;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-            Text {
-                text: root.track.artist;
-                visible: root.track.artist != "";
-                color: Theme.text-muted;
-                font-size: Typography.link;
-                overflow: elide;
-            }
-        }
-
-        // Album column.
-        Text {
-            text: root.track.album;
-            width: 220px;
-            color: Theme.text-muted;
-            font-size: Typography.legal;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        // Duration.
-        Text {
-            text: root.track.duration;
-            width: 64px;
-            color: Theme.text-muted;
-            font-size: Typography.body;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-        // Quality.
-        Text {
-            text: root.track.quality-tier == "hires"
-                ? "Hi-Res"
-                : (root.track.quality-tier == "cd" ? "CD" : "");
-            width: 64px;
-            color: Theme.text-muted;
-            font-size: Typography.legal;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-        // Favorite.
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 28px;
-                height: 28px;
-                border-radius: Radius.sm;
-                background: fav-ta.has-hover ? Theme.surface-elevated : transparent;
-                QbzIcon {
-                    source: @image-url("../assets/icons/heart.svg");
-                    width: 16px;
-                    height: 16px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    tint: fav-ta.has-hover ? Theme.text-primary : Theme.text-muted;
-                }
-                fav-ta := TouchArea {
-                    mouse-cursor: pointer;
-                }
-            }
-        }
-        // More.
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 32px;
-                height: 32px;
-                border-radius: Radius.sm;
-                background: more-ta.has-hover ? Theme.surface-elevated : transparent;
-                QbzIcon {
-                    source: @image-url("../assets/icons/ellipsis.svg");
-                    width: 16px;
-                    height: 16px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    tint: more-ta.has-hover ? Theme.text-primary : Theme.text-muted;
-                }
-                more-ta := TouchArea {
-                    mouse-cursor: pointer;
-                }
-            }
-        }
-    }
-}
-
 export component MixView inherits Rectangle {
     callback play-track(string);
     callback play-all();
     callback shuffle();
     callback refresh();
+    callback media-action(string, string, string);
 
     // Per-mix header gradient, matching the QobuzMixesRow tiles.
     property <brush> mix-gradient:
@@ -393,11 +241,21 @@ export component MixView inherits Rectangle {
             }
             Rectangle { height: 6px; }
 
-            for track[i] in MixState.tracks: MixTrackRow {
+            // Reuses the shared SearchTrackRow (album column + favorite
+            // + track context menu). A row "play" starts the mix from
+            // that track; menu actions bubble up as media-action.
+            for track[i] in MixState.tracks: SearchTrackRow {
                 track: track;
                 index: i;
-                play(id) => {
-                    root.play-track(id);
+                show-artwork: true;
+                show-album: true;
+                show-favorite: true;
+                media-action(kind, id, action) => {
+                    if (action == "play") {
+                        root.play-track(id);
+                    } else {
+                        root.media-action(kind, id, action);
+                    }
                 }
             }
         }

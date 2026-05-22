@@ -340,6 +340,7 @@ fn track_item(row: TrackRow) -> SearchTrackItem {
         id: row.id.into(),
         title: row.title.into(),
         artist: row.artist.into(),
+        album: "".into(),
         duration: row.duration.into(),
         quality_tier: row.quality_tier.into(),
         explicit: row.explicit,
