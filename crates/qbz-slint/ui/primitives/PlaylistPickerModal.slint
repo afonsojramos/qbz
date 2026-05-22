@@ -1,0 +1,153 @@
+// "Add to playlist" picker — a global modal overlay. Lists the user's
+// playlists; clicking one adds the pending track to it. Opened from
+// the track context menu (PlaylistPickerState.open).
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import { PlaylistPickerState, PlaylistPickerActions, PlaylistPickItem } from "../state.slint";
+import { QbzIcon } from "QbzIcon.slint";
+import { LoadingSpinner } from "LoadingSpinner.slint";
+
+component PickRow inherits Rectangle {
+    in property <PlaylistPickItem> item;
+    in property <int> index;
+    callback clicked(string);
+    height: 52px;
+    border-radius: 8px;
+    background: ta.has-hover
+        ? #ffffff16
+        : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 34px;
+                height: 34px;
+                border-radius: 6px;
+                background: Theme.surface-elevated;
+                QbzIcon {
+                    source: @image-url("../assets/icons/list-music.svg");
+                    width: 18px;
+                    height: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: Theme.text-muted;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.item.name;
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: Typography.medium;
+                overflow: elide;
+            }
+            if root.item.tracks-line != "": Text {
+                text: root.item.tracks-line;
+                color: Theme.text-muted;
+                font-size: Typography.legal;
+            }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked(root.item.id);
+        }
+    }
+}
+
+export component PlaylistPickerModal inherits Rectangle {
+    visible: PlaylistPickerState.open;
+
+    if PlaylistPickerState.open: Rectangle {
+        background: #000000bf;
+        // Scrim — click outside to dismiss.
+        TouchArea {
+            mouse-cursor: default;
+            clicked => {
+                PlaylistPickerActions.close();
+            }
+        }
+        Rectangle {
+            width: Math.min(root.width - 80px, 460px);
+            height: Math.min(root.height - 120px, 520px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: Radius.md;
+            background: Theme.surface-card;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            drop-shadow-blur: 32px;
+            drop-shadow-color: #00000080;
+            // Swallow clicks so they don't reach the scrim.
+            TouchArea { }
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 14px;
+
+                HorizontalLayout {
+                    Text {
+                        text: @tr("Add to playlist");
+                        color: Theme.text-primary;
+                        font-size: Typography.heading;
+                        font-weight: Typography.semibold;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    close-x := TouchArea {
+                        width: 28px;
+                        height: 28px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            PlaylistPickerActions.close();
+                        }
+                        QbzIcon {
+                            source: @image-url("../assets/icons/x.svg");
+                            width: 17px;
+                            height: 17px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            tint: close-x.has-hover ? Theme.text-primary : Theme.text-muted;
+                        }
+                    }
+                }
+
+                if PlaylistPickerState.loading: HorizontalLayout {
+                    alignment: center;
+                    LoadingSpinner { size: 30px; }
+                }
+                if !PlaylistPickerState.loading
+                    && PlaylistPickerState.playlists.length == 0: Text {
+                    text: @tr("No playlists yet.");
+                    color: Theme.text-muted;
+                    font-size: Typography.body;
+                }
+
+                Flickable {
+                    vertical-stretch: 1;
+                    viewport-width: self.width;
+                    viewport-height: list.preferred-height;
+                    list := VerticalLayout {
+                        spacing: 2px;
+                        for pl[i] in PlaylistPickerState.playlists: PickRow {
+                            item: pl;
+                            index: i;
+                            clicked(id) => {
+                                PlaylistPickerActions.pick(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

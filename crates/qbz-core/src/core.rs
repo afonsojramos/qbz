@@ -1138,6 +1138,19 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             .map_err(CoreError::Api)
     }
 
+    /// Qobuz track radio (`/radio/track`).
+    pub async fn get_radio_track(
+        &self,
+        track_id: &str,
+    ) -> Result<qbz_models::RadioResponse, CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+        client
+            .get_radio_track(track_id)
+            .await
+            .map_err(CoreError::Api)
+    }
+
     /// Dynamic mix suggestions (`/dynamic/suggest`) seeded from
     /// recently-listened track ids. Returns the suggested tracks.
     pub async fn get_dynamic_suggest(

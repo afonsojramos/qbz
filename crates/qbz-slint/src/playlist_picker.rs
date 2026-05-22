@@ -1,0 +1,63 @@
+//! "Add to playlist" picker controller. Loads the user's playlists
+//! into PlaylistPickerState for the global picker modal; the pick
+//! handler in main.rs adds the pending track to the chosen playlist.
+
+use qbz_app::shell::AppRuntime;
+use qbz_core::FrontendAdapter;
+use slint::{ComponentHandle, ModelRc, VecModel};
+
+use crate::{AppWindow, PlaylistPickItem, PlaylistPickerState};
+
+pub struct PickPlaylist {
+    pub id: String,
+    pub name: String,
+    pub tracks: u32,
+}
+
+/// Open the picker for `track_id` and mark it loading. UI thread.
+pub fn open(window: &AppWindow, track_id: &str) {
+    let state = window.global::<PlaylistPickerState>();
+    state.set_track_id(track_id.into());
+    state.set_playlists(ModelRc::new(VecModel::from(Vec::<PlaylistPickItem>::new())));
+    state.set_loading(true);
+    state.set_open(true);
+}
+
+/// Fetch the user's playlists (worker thread).
+pub async fn load<A>(runtime: &AppRuntime<A>) -> Vec<PickPlaylist>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    match runtime.core().get_user_playlists().await {
+        Ok(playlists) => playlists
+            .into_iter()
+            .map(|p| PickPlaylist {
+                id: p.id.to_string(),
+                name: p.name,
+                tracks: p.tracks_count,
+            })
+            .collect(),
+        Err(e) => {
+            log::warn!("[qbz-slint] playlist picker load failed: {e}");
+            Vec::new()
+        }
+    }
+}
+
+pub fn apply(window: &AppWindow, playlists: Vec<PickPlaylist>) {
+    let items: Vec<PlaylistPickItem> = playlists
+        .into_iter()
+        .map(|p| PlaylistPickItem {
+            id: p.id.into(),
+            name: p.name.into(),
+            tracks_line: if p.tracks > 0 {
+                format!("{} tracks", p.tracks).into()
+            } else {
+                "".into()
+            },
+        })
+        .collect();
+    let state = window.global::<PlaylistPickerState>();
+    state.set_playlists(ModelRc::new(VecModel::from(items)));
+    state.set_loading(false);
+}

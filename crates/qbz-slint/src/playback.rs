@@ -614,6 +614,26 @@ pub fn play_smart_artist_radio(
     });
 }
 
+/// Start a Qobuz track radio (`/radio/track`).
+pub fn play_track_radio(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    track_id: String,
+) {
+    handle.spawn(async move {
+        match runtime.core().get_radio_track(&track_id).await {
+            Ok(resp) => {
+                let tracks = resp.tracks.map(|p| p.items).unwrap_or_default();
+                if !play_radio_response(runtime, weak, tracks) {
+                    log::warn!("[qbz-slint] track radio {track_id} returned no tracks");
+                }
+            }
+            Err(e) => log::error!("[qbz-slint] track radio {track_id} failed: {e}"),
+        }
+    });
+}
+
 /// Start a Qobuz album radio (`/radio/album`).
 pub fn play_album_radio(
     runtime: Runtime,

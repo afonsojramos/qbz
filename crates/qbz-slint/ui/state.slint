@@ -10,6 +10,7 @@ export struct AlbumCardItem {
     id: string,
     title: string,
     artist: string,
+    artist-id: string,     // for the clickable artist name -> artist page
     genre: string,         // shown in the hover overlay
     year: string,          // shown in the hover overlay
     quality-tier: string,  // "hires" | "cd" | "" — drives the badge icon
@@ -710,6 +711,28 @@ export global QueueState {
 
     // Reflects whether infinite-play is currently enabled.
     in property <bool> infinite-play: false;
+}
+
+// One row in the "Add to playlist" picker.
+export struct PlaylistPickItem {
+    id: string,
+    name: string,
+    tracks-line: string,   // "N tracks"
+}
+
+// "Add to playlist" picker — a global overlay opened from the track
+// context menu. Holds the pending track id while the user picks a
+// destination playlist. Populated by crate::playlist_picker.
+export global PlaylistPickerState {
+    in-out property <bool> open: false;
+    in property <string> track-id;
+    in property <[PlaylistPickItem]> playlists: [];
+    in property <bool> loading: false;
+}
+
+export global PlaylistPickerActions {
+    callback pick(string /* playlist id */);
+    callback close();
 }
 
 // A playlist result in search. Qobuz returns up to four cover URLs per

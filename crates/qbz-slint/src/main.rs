@@ -35,9 +35,11 @@ mod play_history;
 mod strip_html;
 mod playback;
 mod queue;
+mod playlist_picker;
 mod recently;
 mod search;
 mod settings;
+mod share;
 mod ui_prefs;
 
 use std::sync::Arc;
@@ -1256,6 +1258,96 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                 }
+                ("track", "favorite") => {
+                    let runtime = runtime.clone();
+                    let track_id = id.clone();
+                    handle.spawn(async move {
+                        if let Err(e) = runtime.core().add_favorite("track", &track_id).await {
+                            log::error!("[qbz-slint] favorite track failed: {e}");
+                        }
+                    });
+                }
+                ("track", "create-radio") => playback::play_track_radio(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id.clone(),
+                ),
+                ("track", "add-to-playlist") => {
+                    // Open the global picker for this track + load the
+                    // user's playlists.
+                    let Some(w) = weak.upgrade() else {
+                        return;
+                    };
+                    playlist_picker::open(&w, &id);
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    handle.spawn(async move {
+                        let playlists = playlist_picker::load(&runtime).await;
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            playlist_picker::apply(&w, playlists);
+                        });
+                    });
+                }
+                ("track", "share-qobuz") => {
+                    share::copy_to_clipboard(share::qobuz_track_url(&id));
+                    log::info!("[qbz-slint] copied Qobuz link for track {id}");
+                }
+                ("track", "share-songlink") => {
+                    let source = share::qobuz_track_url(&id);
+                    let track = id.clone();
+                    handle.spawn(async move {
+                        match share::songlink_url(&source).await {
+                            Some(url) => {
+                                share::copy_to_clipboard(url);
+                                log::info!("[qbz-slint] copied Song.link for track {track}");
+                            }
+                            None => log::warn!("[qbz-slint] Song.link resolution failed for {track}"),
+                        }
+                    });
+                }
+                ("track", "go-to-album") => {
+                    // The menu only carries the track id — resolve the
+                    // track to find its album, then open it.
+                    if let Ok(track_id) = id.parse::<u64>() {
+                        let runtime = runtime.clone();
+                        let weak = weak.clone();
+                        handle.spawn(async move {
+                            if let Ok(track) = runtime.core().get_track(track_id).await {
+                                if let Some(album_id) =
+                                    track.album.as_ref().map(|a| a.id.clone())
+                                {
+                                    let _ = weak.upgrade_in_event_loop(move |w| {
+                                        w.invoke_open_album(album_id.into());
+                                    });
+                                }
+                            }
+                        });
+                    }
+                }
+                ("track", "go-to-artist") => {
+                    if let Ok(track_id) = id.parse::<u64>() {
+                        let runtime = runtime.clone();
+                        let weak = weak.clone();
+                        handle.spawn(async move {
+                            if let Ok(track) = runtime.core().get_track(track_id).await {
+                                if let Some(artist_id) =
+                                    track.performer.as_ref().map(|p| p.id)
+                                {
+                                    let _ = weak.upgrade_in_event_loop(move |w| {
+                                        w.invoke_open_artist(artist_id.to_string().into());
+                                    });
+                                }
+                            }
+                        });
+                    }
+                }
+                // Clickable artist name (album cards) -> artist page.
+                ("artist", "open") => {
+                    if let Some(w) = weak.upgrade() {
+                        w.invoke_open_artist(id.clone().into());
+                    }
+                }
                 ("artist", "play-top") => playback::play_artist_top_tracks(
                     runtime.clone(),
                     weak.clone(),
@@ -2125,6 +2217,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Favorites view actions — tab switch (lazy-load), open album /
     // artist, and per-row track actions routed to the media-action
+    // "Add to playlist" picker — pick adds the pending track to the
+    // chosen playlist; close dismisses.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PlaylistPickerActions>()
+            .on_pick(move |playlist_id| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let track_id = w.global::<PlaylistPickerState>().get_track_id().to_string();
+                w.global::<PlaylistPickerState>().set_open(false);
+                let (Ok(pid), Ok(tid)) =
+                    (playlist_id.parse::<u64>(), track_id.parse::<u64>())
+                else {
+                    return;
+                };
+                let runtime = runtime.clone();
+                handle.spawn(async move {
+                    if let Err(e) = runtime.core().add_tracks_to_playlist(pid, &[tid]).await {
+                        log::error!("[qbz-slint] add to playlist failed: {e}");
+                    }
+                });
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistPickerActions>()
+            .on_close(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<PlaylistPickerState>().set_open(false);
+                }
+            });
+    }
+
     // handler.
     {
         let runtime = app_runtime.clone();
