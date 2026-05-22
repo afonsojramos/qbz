@@ -1,18 +1,220 @@
-// Qobuz mix detail view (DailyQ / WeeklyQ / FavQ / TopQ). Header with
-// the mix name + description + a Play all button, over the mix's
-// track list (reusing the shared SearchTrackRow).
+// Qobuz mix detail view (DailyQ / WeeklyQ / FavQ / TopQ). Ported to
+// the AlbumView level: a header (gradient artwork + "Qobuz Mixes"
+// label + title + description + "N tracks • duration" info line +
+// circular action buttons) over a track list with a column header
+// and rich rows (artwork + title/artist + album + duration + quality
+// + favorite + more).
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { MixState } from "../state.slint";
-import { SearchTrackRow } from "../search/SearchTrackRow.slint";
+import { Radius } from "../foundation/radius.slint";
+import { MixState, MixTrackItem } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
+
+// Circular header action button (Play / Shuffle / Save / Refresh).
+component CircleAction inherits Rectangle {
+    in property <image> icon;
+    in property <bool> primary: false;
+    in property <length> diameter: 38px;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: root.diameter;
+    height: root.diameter;
+    border-radius: root.diameter / 2;
+    opacity: root.enabled ? 1.0 : 0.4;
+    background: root.primary
+        ? (ta.has-hover ? #ffffffd6 : Theme.accent)
+        : (ta.has-hover ? Theme.surface-hover : Theme.surface-elevated);
+    QbzIcon {
+        source: root.icon;
+        width: root.primary ? 18px : 16px;
+        height: root.primary ? 18px : 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: root.primary ? #ffffff : Theme.text-secondary;
+    }
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+component MixTrackRow inherits Rectangle {
+    in property <MixTrackItem> track;
+    in property <int> index;
+    callback play(string);
+
+    property <bool> row-hovered: ta.has-hover || play-cell.hovered || fav-ta.has-hover || more-ta.has-hover;
+
+    height: 56px;
+    border-radius: 8px;
+    background: root.row-hovered
+        ? #ffffff16
+        : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
+
+    ta := TouchArea {
+        mouse-cursor: default;
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 16px;
+
+        VerticalLayout {
+            alignment: center;
+            play-cell := TrackPlayCell {
+                track-id: root.track.id;
+                number: root.track.number;
+                artwork: root.track.artwork;
+                show-artwork: true;
+                row-hovered: root.row-hovered;
+                play => {
+                    root.play(root.track.id);
+                }
+            }
+        }
+
+        // Title + artist.
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 2px;
+            HorizontalLayout {
+                alignment: start;
+                spacing: 6px;
+                Text {
+                    text: root.track.title;
+                    color: Theme.text-primary;
+                    font-size: Typography.body;
+                    font-weight: Typography.medium;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.track.explicit: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 3px;
+                        background: Theme.surface-elevated;
+                        Text {
+                            text: "E";
+                            color: Theme.text-muted;
+                            font-size: 9px;
+                            font-weight: Typography.semibold;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+            Text {
+                text: root.track.artist;
+                visible: root.track.artist != "";
+                color: Theme.text-muted;
+                font-size: Typography.link;
+                overflow: elide;
+            }
+        }
+
+        // Album column.
+        Text {
+            text: root.track.album;
+            width: 220px;
+            color: Theme.text-muted;
+            font-size: Typography.legal;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        // Duration.
+        Text {
+            text: root.track.duration;
+            width: 64px;
+            color: Theme.text-muted;
+            font-size: Typography.body;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        // Quality.
+        Text {
+            text: root.track.quality-tier == "hires"
+                ? "Hi-Res"
+                : (root.track.quality-tier == "cd" ? "CD" : "");
+            width: 64px;
+            color: Theme.text-muted;
+            font-size: Typography.legal;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        // Favorite.
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: Radius.sm;
+                background: fav-ta.has-hover ? Theme.surface-elevated : transparent;
+                QbzIcon {
+                    source: @image-url("../assets/icons/heart.svg");
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: fav-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                }
+                fav-ta := TouchArea {
+                    mouse-cursor: pointer;
+                }
+            }
+        }
+        // More.
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: Radius.sm;
+                background: more-ta.has-hover ? Theme.surface-elevated : transparent;
+                QbzIcon {
+                    source: @image-url("../assets/icons/ellipsis.svg");
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: more-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                }
+                more-ta := TouchArea {
+                    mouse-cursor: pointer;
+                }
+            }
+        }
+    }
+}
 
 export component MixView inherits Rectangle {
     callback play-track(string);
     callback play-all();
+    callback shuffle();
+    callback refresh();
+
+    // Per-mix header gradient, matching the QobuzMixesRow tiles.
+    property <brush> mix-gradient:
+        MixState.kind == "daily"
+            ? @linear-gradient(135deg, #1e3a8a 0%, #6366f1 50%, #c084fc 100%)
+        : MixState.kind == "weekly"
+            ? @linear-gradient(135deg, #065f46 0%, #10b981 50%, #fbbf24 100%)
+        : MixState.kind == "fav"
+            ? @linear-gradient(135deg, #7f1d1d 0%, #ef4444 50%, #fb923c 100%)
+            : @linear-gradient(135deg, #1f2937 0%, #4b5563 50%, #fbbf24 100%);
 
     background: Theme.surface-main;
 
@@ -38,65 +240,94 @@ export component MixView inherits Rectangle {
 
             // --- Header ------------------------------------------------
             HorizontalLayout {
-                spacing: 20px;
+                spacing: 32px;
                 alignment: start;
+                // Gradient artwork.
                 Rectangle {
-                    width: 120px;
-                    height: 120px;
-                    border-radius: 8px;
-                    background: @linear-gradient(135deg, #1e3a8a 0%, #6366f1 50%, #c084fc 100%);
+                    width: 224px;
+                    height: 224px;
+                    border-radius: Radius.md;
+                    background: root.mix-gradient;
                     Text {
                         text: MixState.title;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                         color: #ffffff;
-                        font-size: 18px;
+                        font-size: 34px;
                         font-weight: Typography.bold;
                     }
                 }
+                // Metadata.
                 VerticalLayout {
-                    alignment: center;
-                    spacing: 8px;
+                    alignment: start;
+                    padding-top: 4px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: @tr("Qobuz Mixes");
+                        color: Theme.text-muted;
+                        font-size: 11px;
+                        font-weight: Typography.semibold;
+                        letter-spacing: 1.5px;
+                    }
+                    Rectangle { height: 6px; }
                     Text {
                         text: MixState.title;
                         color: Theme.text-primary;
                         font-size: Typography.title;
                         font-weight: Typography.bold;
                     }
+                    Rectangle { height: 8px; }
                     Text {
+                        width: root.width - 320px;
                         text: MixState.subtitle;
-                        color: Theme.text-muted;
+                        color: Theme.text-secondary;
                         font-size: Typography.body;
+                        wrap: word-wrap;
                     }
-                    if MixState.tracks.length > 0: Rectangle {
-                        width: play-row.preferred-width + 28px;
-                        height: 36px;
-                        border-radius: 18px;
-                        background: play-ta.has-hover ? #ffffffd6 : Theme.accent;
-                        play-row := HorizontalLayout {
-                            x: (parent.width - self.preferred-width) / 2;
-                            spacing: 8px;
-                            VerticalLayout {
-                                alignment: center;
-                                QbzIcon {
-                                    source: @image-url("../assets/icons/play-fill.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    tint: #ffffff;
-                                }
-                            }
-                            Text {
-                                text: @tr("Play all");
-                                color: #ffffff;
-                                font-size: 14px;
-                                font-weight: Typography.semibold;
-                                vertical-alignment: center;
-                            }
-                        }
-                        play-ta := TouchArea {
-                            mouse-cursor: pointer;
+                    Rectangle { height: 10px; }
+                    if MixState.track-count > 0: Text {
+                        text: MixState.track-count + " " + @tr("tracks") + "  •  " + MixState.total-duration;
+                        color: Theme.text-secondary;
+                        font-size: Typography.legal;
+                    }
+                    Rectangle { height: 20px; }
+                    // Action buttons.
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 12px;
+                        CircleAction {
+                            icon: @image-url("../assets/icons/play-fill.svg");
+                            primary: true;
+                            diameter: 44px;
+                            enabled: MixState.tracks.length > 0;
                             clicked => {
                                 root.play-all();
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/shuffle.svg");
+                                enabled: MixState.tracks.length > 0;
+                                clicked => {
+                                    root.shuffle();
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/list-plus.svg");
+                                enabled: MixState.tracks.length > 0;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/home-gear.svg");
+                                clicked => {
+                                    root.refresh();
+                                }
                             }
                         }
                     }
@@ -115,11 +346,57 @@ export component MixView inherits Rectangle {
                 font-size: Typography.body;
             }
 
-            for track[i] in MixState.tracks: SearchTrackRow {
+            // --- Track list column header ------------------------------
+            if MixState.tracks.length > 0: HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 16px;
+                Text {
+                    text: "#";
+                    width: 40px;
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: @tr("Title");
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: @tr("Album");
+                    width: 220px;
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                }
+                Text {
+                    text: @tr("Duration");
+                    width: 64px;
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: @tr("Quality");
+                    width: 64px;
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    horizontal-alignment: center;
+                }
+                Rectangle { width: 28px; }
+                Rectangle { width: 32px; }
+            }
+            if MixState.tracks.length > 0: Rectangle {
+                height: 1px;
+                background: Theme.border-subtle;
+            }
+            Rectangle { height: 6px; }
+
+            for track[i] in MixState.tracks: MixTrackRow {
                 track: track;
                 index: i;
-                show-artwork: true;
-                media-action(kind, id, action) => {
+                play(id) => {
                     root.play-track(id);
                 }
             }

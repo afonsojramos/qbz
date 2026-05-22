@@ -1311,6 +1311,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                // The mix tile sends id = mix kind, action = "open".
+                ("mix", "open") => {
+                    nav::record(nav::NavEntry::Mix { kind: id.clone() });
+                    navigate_mix(
+                        runtime.clone(),
+                        weak.clone(),
+                        &handle,
+                        image_cache.clone(),
+                        id.clone(),
+                    );
+                    if let Some(w) = weak.upgrade() {
+                        update_nav_flags(&w);
+                    }
+                }
                 ("mix", "play-all") => {
                     let runtime = runtime.clone();
                     let weak = weak.clone();
@@ -1319,6 +1333,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let tracks = mix::current_tracks();
                         playback::play_tracks(runtime, weak, handle, tracks, 0);
                     });
+                }
+                ("mix", "shuffle") => {
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let handle = handle.clone();
+                    handle.clone().spawn(async move {
+                        let tracks = mix::shuffled_tracks();
+                        playback::play_tracks(runtime, weak, handle, tracks, 0);
+                    });
+                }
+                ("mix", "refresh") => {
+                    // Re-load the current mix (re-fetch its tracks).
+                    if let Some(w) = weak.upgrade() {
+                        let kind = w.global::<MixState>().get_kind().to_string();
+                        if !kind.is_empty() {
+                            navigate_mix(
+                                runtime.clone(),
+                                weak.clone(),
+                                &handle,
+                                image_cache.clone(),
+                                kind,
+                            );
+                        }
+                    }
                 }
                 ("mix-track", track_id) => {
                     let idx = mix::index_of(track_id);
@@ -1329,20 +1367,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let tracks = mix::current_tracks();
                         playback::play_tracks(runtime, weak, handle, tracks, idx);
                     });
-                }
-                ("mix", which) => {
-                    // A Qobuz Mixes tile — open its detail view.
-                    nav::record(nav::NavEntry::Mix { kind: which.to_string() });
-                    navigate_mix(
-                        runtime.clone(),
-                        weak.clone(),
-                        &handle,
-                        image_cache.clone(),
-                        which.to_string(),
-                    );
-                    if let Some(w) = weak.upgrade() {
-                        update_nav_flags(&w);
-                    }
                 }
                 _ => {}
             }

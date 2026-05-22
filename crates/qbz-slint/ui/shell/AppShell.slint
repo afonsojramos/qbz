@@ -136,6 +136,12 @@ export component AppShell inherits Rectangle {
                     play-all => {
                         root.media-action("mix", "", "play-all");
                     }
+                    shuffle => {
+                        root.media-action("mix", "", "shuffle");
+                    }
+                    refresh => {
+                        root.media-action("mix", "", "refresh");
+                    }
                 }
                 if NavState.view == ContentView.settings: SettingsView {
                     settings-bool(k, v) => {

@@ -20,7 +20,7 @@ use qbz_models::Track;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget};
-use crate::{AppWindow, MixState, SearchTrackItem};
+use crate::{AppWindow, MixState, MixTrackItem};
 
 /// The currently-loaded mix track list, kept so play-all / per-track
 /// play can build the queue without re-fetching.
@@ -124,18 +124,25 @@ fn mmss(secs: u32) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-fn to_item(track: &Track) -> SearchTrackItem {
+fn to_item(index: usize, track: &Track) -> MixTrackItem {
     let mut title = track.title.clone();
     if let Some(v) = track.version.as_ref().filter(|v| !v.is_empty()) {
         title = format!("{title} ({v})");
     }
-    SearchTrackItem {
+    MixTrackItem {
         id: track.id.to_string().into(),
+        number: (index + 1).to_string().into(),
         title: title.into(),
         artist: track
             .performer
             .as_ref()
             .map(|p| p.name.clone())
+            .unwrap_or_default()
+            .into(),
+        album: track
+            .album
+            .as_ref()
+            .map(|a| a.title.clone())
             .unwrap_or_default()
             .into(),
         duration: mmss(track.duration).into(),
@@ -156,9 +163,26 @@ fn to_item(track: &Track) -> SearchTrackItem {
     }
 }
 
+/// Human total duration: "1 h 23 min" or "23 min".
+fn total_duration(tracks: &[Track]) -> String {
+    let secs: u64 = tracks.iter().map(|t| t.duration as u64).sum();
+    let mins = secs / 60;
+    if mins >= 60 {
+        format!("{} h {} min", mins / 60, mins % 60)
+    } else {
+        format!("{} min", mins)
+    }
+}
+
 pub fn apply_mix(window: &AppWindow, kind: &str, tracks: Vec<Track>) {
     let (title, subtitle) = mix_meta(kind);
-    let items: Vec<SearchTrackItem> = tracks.iter().map(to_item).collect();
+    let items: Vec<MixTrackItem> = tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| to_item(i, t))
+        .collect();
+    let count = tracks.len() as i32;
+    let duration = total_duration(&tracks);
     if let Ok(mut cur) = CURRENT_MIX.lock() {
         *cur = tracks;
     }
@@ -167,6 +191,8 @@ pub fn apply_mix(window: &AppWindow, kind: &str, tracks: Vec<Track>) {
     state.set_title(title.into());
     state.set_subtitle(subtitle.into());
     state.set_tracks(ModelRc::new(VecModel::from(items)));
+    state.set_track_count(count);
+    state.set_total_duration(duration.into());
     state.set_loading(false);
 }
 
@@ -176,13 +202,23 @@ pub fn reset_mix(window: &AppWindow, kind: &str) {
     state.set_kind(kind.into());
     state.set_title(title.into());
     state.set_subtitle(subtitle.into());
-    state.set_tracks(ModelRc::new(VecModel::from(Vec::<SearchTrackItem>::new())));
+    state.set_tracks(ModelRc::new(VecModel::from(Vec::<MixTrackItem>::new())));
+    state.set_track_count(0);
+    state.set_total_duration("".into());
     state.set_loading(true);
 }
 
 /// The cached mix track list (for play-all / per-track play).
 pub fn current_tracks() -> Vec<Track> {
     CURRENT_MIX.lock().map(|c| c.clone()).unwrap_or_default()
+}
+
+/// The current mix tracks in a fresh random order (for the Shuffle
+/// action) — does not mutate the displayed list.
+pub fn shuffled_tracks() -> Vec<Track> {
+    let mut tracks = current_tracks();
+    shuffle(&mut tracks);
+    tracks
 }
 
 /// Index of `track_id` within the current mix (for play-from-here).
