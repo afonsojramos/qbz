@@ -35,6 +35,7 @@ mod play_history;
 mod strip_html;
 mod playback;
 mod queue;
+mod library_db;
 mod playlist;
 mod playlist_picker;
 mod recently;
@@ -68,6 +69,10 @@ async fn enter_shell(
     settings_ctx: Arc<settings::SettingsCtx>,
     session: auth::SessionInfo,
 ) {
+    // Bind the local library DB to this user (folders / playlist
+    // settings live in the per-user library.db).
+    library_db::set_user(session.user_id);
+
     let _ = weak.upgrade_in_event_loop(move |w| {
         let state = w.global::<SessionState>();
         state.set_user_name(session.display_name.into());
@@ -1604,15 +1609,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                ("playlist", "set-artwork") => {
+                    // Pick an image, copy it into the artwork cache, store
+                    // it as the playlist's custom cover, then reload.
+                    if let Some(w) = weak.upgrade() {
+                        let pid = w.global::<PlaylistState>().get_id().to_string();
+                        if let Ok(pid) = pid.parse::<u64>() {
+                            let runtime = runtime.clone();
+                            let weak = weak.clone();
+                            let handle = handle.clone();
+                            let image_cache = image_cache.clone();
+                            handle.clone().spawn(async move {
+                                let Some(file) = rfd::AsyncFileDialog::new()
+                                    .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+                                    .pick_file()
+                                    .await
+                                else {
+                                    return;
+                                };
+                                let src = file.path().to_string_lossy().into_owned();
+                                let ok = tokio::task::spawn_blocking(move || {
+                                    playlist::set_custom_artwork(pid, &src).is_some()
+                                })
+                                .await
+                                .unwrap_or(false);
+                                if ok {
+                                    navigate_playlist(
+                                        runtime, weak, &handle, image_cache, pid.to_string(),
+                                    );
+                                }
+                            });
+                        }
+                    }
+                }
+                ("playlist", "clear-artwork") => {
+                    if let Some(w) = weak.upgrade() {
+                        let pid = w.global::<PlaylistState>().get_id().to_string();
+                        if let Ok(pid) = pid.parse::<u64>() {
+                            let runtime = runtime.clone();
+                            let weak = weak.clone();
+                            let handle = handle.clone();
+                            let image_cache = image_cache.clone();
+                            handle.clone().spawn(async move {
+                                tokio::task::spawn_blocking(move || {
+                                    playlist::clear_custom_artwork(pid);
+                                })
+                                .await
+                                .ok();
+                                navigate_playlist(
+                                    runtime, weak, &handle, image_cache, pid.to_string(),
+                                );
+                            });
+                        }
+                    }
+                }
                 ("playlist", "edit") => {
                     // Open the edit modal, prefilled from the open playlist.
                     if let Some(w) = weak.upgrade() {
                         let ps = w.global::<PlaylistState>();
                         let pid = ps.get_id();
                         let name = ps.get_name();
+                        let desc = ps.get_description();
                         let es = w.global::<EditPlaylistState>();
                         es.set_id(pid);
                         es.set_name(name);
+                        es.set_description(desc);
                         es.set_open(true);
                     }
                 }
@@ -2443,6 +2504,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let Some(w) = weak.upgrade() else { return; };
                 let es = w.global::<EditPlaylistState>();
                 let name = es.get_name().to_string();
+                let description = es.get_description().to_string();
                 let id = es.get_id().to_string();
                 if name.trim().is_empty() || es.get_busy() {
                     return;
@@ -2452,19 +2514,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let weak = weak.clone();
                 let handle = handle.clone();
                 handle.clone().spawn(async move {
-                    match runtime.core().update_playlist(pid, Some(name.trim()), None, None).await {
+                    let desc_opt = Some(description.trim());
+                    match runtime
+                        .core()
+                        .update_playlist(pid, Some(name.trim()), desc_opt, None)
+                        .await
+                    {
                         Ok(_) => {
                             let nm = name.trim().to_string();
+                            let ds = description.trim().to_string();
                             let r2 = runtime.clone();
                             let w2 = weak.clone();
                             let h2 = handle.clone();
                             let _ = weak.upgrade_in_event_loop(move |w| {
                                 w.global::<PlaylistState>().set_name(nm.into());
+                                w.global::<PlaylistState>().set_description(ds.into());
                                 w.global::<EditPlaylistState>().set_open(false);
                                 load_sidebar_playlists(r2, w2, &h2);
                             });
                         }
-                        Err(e) => log::error!("[qbz-slint] rename playlist failed: {e}"),
+                        Err(e) => log::error!("[qbz-slint] update playlist failed: {e}"),
                     }
                 });
             });

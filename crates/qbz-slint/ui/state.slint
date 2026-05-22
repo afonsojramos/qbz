@@ -242,6 +242,9 @@ export global PlaylistState {
     in property <string> total-duration;
     in property <string> cover-url;
     in property <image> cover;
+    // True when a user-set custom artwork is shown (overrides the
+    // track-cover collage).
+    in property <bool> has-custom: false;
     in property <bool> is-favorite: false;
     // True when the playlist is one of the user's own (editable).
     in property <bool> is-owner: false;
@@ -253,11 +256,12 @@ export global PlaylistState {
     in property <bool> loading: false;
 }
 
-// "Edit playlist" modal state (rename + delete).
+// "Edit playlist" modal state (rename + description + delete).
 export global EditPlaylistState {
     in-out property <bool> open: false;
     in property <string> id;
     in-out property <string> name;
+    in-out property <string> description;
     in property <bool> busy: false;
 }
 

@@ -26,6 +26,9 @@ pub struct PlaylistData {
     pub owner: String,
     pub description: String,
     pub cover_url: String,
+    /// Local custom artwork path (from playlist_settings), if the user
+    /// set one — overrides the collage / server image.
+    pub custom_artwork_path: Option<String>,
     pub tracks: Vec<Track>,
 }
 
@@ -54,6 +57,16 @@ where
                 .and_then(|a| a.image.best().cloned())
         })
         .unwrap_or_default();
+    // Local custom artwork (shared with the Tauri app via library.db).
+    let custom_artwork_path = tokio::task::spawn_blocking(move || {
+        crate::library_db::with_db(|db| db.get_playlist_settings(playlist_id))
+            .flatten()
+            .and_then(|s| s.custom_artwork_path)
+            .filter(|p| !p.is_empty())
+    })
+    .await
+    .ok()
+    .flatten();
     Some(PlaylistData {
         id: pl.id.to_string(),
         name: pl.name,
@@ -63,6 +76,7 @@ where
             .map(|d| crate::strip_html::strip_html(&d))
             .unwrap_or_default(),
         cover_url,
+        custom_artwork_path,
         tracks,
     })
 }
@@ -137,12 +151,26 @@ pub fn apply(window: &AppWindow, data: PlaylistData) {
     if let Ok(mut cur) = CURRENT.lock() {
         *cur = data.tracks;
     }
+    // Custom artwork overrides the collage / server image. Load the
+    // local file directly (it lives in the artwork cache on disk).
+    let custom = data
+        .custom_artwork_path
+        .as_ref()
+        .filter(|p| std::path::Path::new(p).exists())
+        .and_then(|p| slint::Image::load_from_path(std::path::Path::new(p)).ok());
     let state = window.global::<PlaylistState>();
     state.set_id(data.id.into());
     state.set_name(data.name.into());
     state.set_owner(data.owner.into());
     state.set_description(data.description.into());
-    state.set_cover_url(data.cover_url.into());
+    if let Some(img) = custom {
+        state.set_cover(img);
+        state.set_cover_url(data.custom_artwork_path.clone().unwrap_or_default().into());
+        state.set_has_custom(true);
+    } else {
+        state.set_cover_url(data.cover_url.into());
+        state.set_has_custom(false);
+    }
     state.set_tracks(ModelRc::new(VecModel::from(items)));
     state.set_track_count(count);
     state.set_total_duration(duration.into());
@@ -166,7 +194,9 @@ pub fn artwork_jobs(data: &PlaylistData) -> Vec<ArtworkJob> {
                 })
         })
         .collect();
-    if !data.cover_url.is_empty() {
+    // Skip the server-cover job when a local custom artwork is set
+    // (it's already loaded in apply and cover_url holds a file path).
+    if data.custom_artwork_path.is_none() && !data.cover_url.is_empty() {
         jobs.push(ArtworkJob {
             url: data.cover_url.clone(),
             target: ArtworkTarget::PlaylistCover,
@@ -203,6 +233,37 @@ pub fn index_of(track_id: &str) -> usize {
         .ok()
         .and_then(|c| c.iter().position(|t| t.id.to_string() == track_id))
         .unwrap_or(0)
+}
+
+// ==================== Custom artwork ====================
+
+/// Copy `src` into the artwork cache and store it as this playlist's
+/// custom artwork (shared with Tauri via library.db). Returns the
+/// stored path. Blocking — run on a worker thread.
+pub fn set_custom_artwork(playlist_id: u64, src: &str) -> Option<String> {
+    let cache = crate::library_db::artwork_cache_dir()?;
+    std::fs::create_dir_all(&cache).ok()?;
+    let ext = std::path::Path::new(src)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("jpg");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dest = cache.join(format!("playlist_{playlist_id}_{ts}.{ext}"));
+    if let Err(e) = std::fs::copy(src, &dest) {
+        log::error!("[qbz-slint] copy custom artwork failed: {e}");
+        return None;
+    }
+    let dest_str = dest.to_string_lossy().to_string();
+    crate::library_db::with_db(|db| db.update_playlist_artwork(playlist_id, Some(&dest_str)))?;
+    Some(dest_str)
+}
+
+/// Clear this playlist's custom artwork. Blocking.
+pub fn clear_custom_artwork(playlist_id: u64) {
+    crate::library_db::with_db(|db| db.update_playlist_artwork(playlist_id, None));
 }
 
 // ==================== Multi-select edit mode ====================

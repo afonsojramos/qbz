@@ -6,7 +6,7 @@ import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { EditPlaylistState, EditPlaylistActions } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
-import { LineEdit } from "std-widgets.slint";
+import { LineEdit, TextEdit } from "std-widgets.slint";
 
 export component EditPlaylistModal inherits Rectangle {
     visible: EditPlaylistState.open;
@@ -69,6 +69,17 @@ export component EditPlaylistModal inherits Rectangle {
                     accepted => {
                         EditPlaylistActions.save();
                     }
+                }
+
+                Text {
+                    text: @tr("Description");
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                }
+                desc-input := TextEdit {
+                    height: 90px;
+                    wrap: word-wrap;
+                    text <=> EditPlaylistState.description;
                 }
 
                 HorizontalLayout {
