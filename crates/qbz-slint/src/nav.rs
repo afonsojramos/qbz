@@ -23,6 +23,8 @@ pub enum NavEntry {
     Mix {
         kind: String,
     },
+    /// A playlist detail page; the string is the playlist id.
+    Playlist(String),
     Album(String),
     Artist(String),
     Settings,

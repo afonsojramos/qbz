@@ -35,6 +35,7 @@ mod play_history;
 mod strip_html;
 mod playback;
 mod queue;
+mod playlist;
 mod playlist_picker;
 mod recently;
 mod search;
@@ -483,6 +484,9 @@ fn apply_entry(
         nav::NavEntry::Mix { kind } => {
             navigate_mix(runtime.clone(), weak.clone(), handle, image_cache.clone(), kind);
         }
+        nav::NavEntry::Playlist(id) => {
+            navigate_playlist(runtime.clone(), weak.clone(), handle, image_cache.clone(), id);
+        }
         nav::NavEntry::Location {
             mbid,
             area_id,
@@ -639,6 +643,32 @@ fn navigate_mix(
             mix::apply_mix(&w, &kind, tracks);
         });
         artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+    });
+}
+
+fn navigate_playlist(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+    playlist_id: String,
+) {
+    let Ok(id) = playlist_id.parse::<u64>() else {
+        log::warn!("[qbz-slint] navigate_playlist: bad id {playlist_id}");
+        return;
+    };
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            playlist::reset(&w);
+            w.global::<NavState>().set_view(ContentView::Playlist);
+        });
+        if let Some(data) = playlist::load(&runtime, id).await {
+            let jobs = playlist::artwork_jobs(&data);
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                playlist::apply(&w, data);
+            });
+            artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+        }
     });
 }
 
@@ -1457,6 +1487,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let handle = handle.clone();
                     handle.clone().spawn(async move {
                         let tracks = mix::current_tracks();
+                        playback::play_tracks(runtime, weak, handle, tracks, idx);
+                    });
+                }
+                ("playlist", "play-all") => {
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let handle = handle.clone();
+                    handle.clone().spawn(async move {
+                        let tracks = playlist::current_tracks();
+                        playback::play_tracks(runtime, weak, handle, tracks, 0);
+                    });
+                }
+                ("playlist", "shuffle") => {
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let handle = handle.clone();
+                    handle.clone().spawn(async move {
+                        let tracks = playlist::shuffled_tracks();
+                        playback::play_tracks(runtime, weak, handle, tracks, 0);
+                    });
+                }
+                ("playlist", "favorite") => {
+                    // Favorite/unfavorite the open playlist.
+                    if let Some(w) = weak.upgrade() {
+                        let pid = w.global::<PlaylistState>().get_id().to_string();
+                        let was_fav = w.global::<PlaylistState>().get_is_favorite();
+                        w.global::<PlaylistState>().set_is_favorite(!was_fav);
+                        let runtime = runtime.clone();
+                        handle.spawn(async move {
+                            let res = if was_fav {
+                                runtime.core().remove_favorite("playlist", &pid).await
+                            } else {
+                                runtime.core().add_favorite("playlist", &pid).await
+                            };
+                            if let Err(e) = res {
+                                log::error!("[qbz-slint] toggle playlist favorite failed: {e}");
+                            }
+                        });
+                    }
+                }
+                ("playlist-track", track_id) => {
+                    let idx = playlist::index_of(track_id);
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let handle = handle.clone();
+                    handle.clone().spawn(async move {
+                        let tracks = playlist::current_tracks();
                         playback::play_tracks(runtime, weak, handle, tracks, idx);
                     });
                 }
@@ -2329,12 +2406,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
-        // Favorite playlist click — no playlist detail view in the
-        // Slint MVP yet; logged until that lands.
+        // Favorite playlist click — open the playlist detail view.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
         window
             .global::<FavoritesActions>()
             .on_open_playlist(move |id| {
-                log::info!("[qbz-slint] favorites: playlist clicked id={id} (no view yet)");
+                nav::record(nav::NavEntry::Playlist(id.to_string()));
+                navigate_playlist(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    id.to_string(),
+                );
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
             });
     }
     {

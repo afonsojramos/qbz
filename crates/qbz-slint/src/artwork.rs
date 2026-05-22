@@ -88,6 +88,10 @@ pub enum ArtworkTarget {
     ForYouSpotlightAlbum { index: usize },
     /// A row in MixState.tracks[index].
     MixTrack { index: usize },
+    /// A row in PlaylistState.tracks[index].
+    PlaylistTrack { index: usize },
+    /// The PlaylistState header cover.
+    PlaylistCover,
 }
 
 /// An artwork download job: which card, and the image URL.
@@ -499,6 +503,16 @@ fn apply_artwork(
                 item.artwork = image;
                 model.set_row_data(index, item);
             }
+        }
+        ArtworkTarget::PlaylistTrack { index } => {
+            let model = window.global::<crate::PlaylistState>().get_tracks();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::PlaylistCover => {
+            window.global::<crate::PlaylistState>().set_cover(image);
         }
     }
 }

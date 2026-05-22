@@ -22,6 +22,7 @@ import { LabelReleasesView } from "../label/LabelReleasesView.slint";
 import { ArtistsByLocationView } from "../location/ArtistsByLocationView.slint";
 import { FavoritesView } from "../favorites/FavoritesView.slint";
 import { MixView } from "../mix/MixView.slint";
+import { PlaylistView } from "../playlist/PlaylistView.slint";
 import { SettingsView } from "../settings/SettingsView.slint";
 import { SearchResultsView } from "../search/SearchResultsView.slint";
 
@@ -142,6 +143,23 @@ export component AppShell inherits Rectangle {
                     }
                     refresh => {
                         root.media-action("mix", "", "refresh");
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
+                }
+                if NavState.view == ContentView.playlist: PlaylistView {
+                    play-track(id) => {
+                        root.media-action("playlist-track", id, "play");
+                    }
+                    play-all => {
+                        root.media-action("playlist", "", "play-all");
+                    }
+                    shuffle => {
+                        root.media-action("playlist", "", "shuffle");
+                    }
+                    toggle-favorite => {
+                        root.media-action("playlist", "", "favorite");
                     }
                     media-action(kind, id, action) => {
                         root.media-action(kind, id, action);

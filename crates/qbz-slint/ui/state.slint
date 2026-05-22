@@ -196,7 +196,23 @@ export global AlbumActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings, search, musician, label, location, favorites, mix }
+export enum ContentView { home, album, artist, settings, search, musician, label, location, favorites, mix, playlist }
+
+// Playlist detail screen state. Rows reuse the shared TrackRow
+// (show-artwork + show-album); populated by crate::playlist.
+export global PlaylistState {
+    in property <string> id;
+    in property <string> name;
+    in property <string> owner;
+    in property <string> description;
+    in property <int> track-count: 0;
+    in property <string> total-duration;
+    in property <string> cover-url;
+    in property <image> cover;
+    in property <bool> is-favorite: false;
+    in property <[TrackItem]> tracks: [];
+    in property <bool> loading: false;
+}
 
 // Settings screen state. Audio and Playback preferences are loaded from
 // the persistence stores by the Rust settings controller and pushed here;
