@@ -45,6 +45,7 @@ pub struct AlbumRow {
     pub id: String,
     pub title: String,
     pub artist: String,
+    pub artist_id: String,
     pub genre: String,
     pub year: String,
     pub quality_tier: String,
@@ -181,6 +182,7 @@ pub fn map_album(album: Album) -> AlbumRow {
         id: album.id,
         title: album.title,
         artist: album.artist.name,
+        artist_id: album.artist.id.to_string(),
         genre: album
             .genre
             .map(|g| g.name)
@@ -324,6 +326,7 @@ fn album_item(row: AlbumRow) -> AlbumCardItem {
         id: row.id.into(),
         title: row.title.into(),
         artist: row.artist.into(),
+        artist_id: row.artist_id.into(),
         genre: row.genre.into(),
         year: row.year.into(),
         quality_tier: row.quality_tier.into(),

@@ -64,6 +64,7 @@ pub struct AlbumCard {
     pub id: String,
     pub title: String,
     pub artist: String,
+    pub artist_id: String,
     pub year: String,
     pub quality_tier: String,
     pub quality_label: String,
@@ -106,6 +107,7 @@ fn map_album(album: Album) -> AlbumCard {
         id: album.id,
         title: album.title,
         artist: album.artist.name,
+        artist_id: album.artist.id.to_string(),
         year,
         quality_tier,
         quality_label,
@@ -146,6 +148,7 @@ where
             id: a.id,
             title: a.title,
             artist: a.artist,
+            artist_id: String::new(),
             year: String::new(),
             quality_tier: a.quality_tier,
             quality_label: a.quality_label,
@@ -366,6 +369,11 @@ where
                     .as_ref()
                     .map(|a| a.name.display.clone())
                     .unwrap_or_else(|| page.name.display.clone()),
+                artist_id: rel
+                    .artist
+                    .as_ref()
+                    .map(|a| a.id.to_string())
+                    .unwrap_or_default(),
                 year,
                 quality_tier: match bd {
                     Some(d) if d >= 24 => "hires",
@@ -406,6 +414,7 @@ fn album_items(cards: &[AlbumCard]) -> Vec<AlbumCardItem> {
             id: c.id.clone().into(),
             title: c.title.clone().into(),
             artist: c.artist.clone().into(),
+            artist_id: c.artist_id.clone().into(),
             genre: "".into(),
             year: c.year.clone().into(),
             quality_tier: c.quality_tier.clone().into(),

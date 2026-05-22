@@ -52,6 +52,9 @@ pub struct CardData {
     pub id: String,
     pub title: String,
     pub artist: String,
+    /// Artist id for the clickable artist name; empty = not clickable
+    /// (e.g. artist-page release cards, whose subtitle slot is the year).
+    pub artist_id: String,
     pub genre: String,
     pub year: String,
     /// "hires" | "cd" | "" — drives the icon-only quality badge.
@@ -159,6 +162,7 @@ where
             id: album.id,
             title: album.title,
             artist: album.artist,
+            artist_id: String::new(),
             genre: String::new(),
             year: String::new(),
             quality_tier: album.quality_tier,
@@ -220,6 +224,11 @@ fn map_album(album: DiscoverAlbum) -> CardData {
         .first()
         .map(|a| a.name.clone())
         .unwrap_or_default();
+    let artist_id = album
+        .artists
+        .first()
+        .map(|a| a.id.to_string())
+        .unwrap_or_default();
     let genre = album.genre.map(|g| g.name).unwrap_or_default();
     let year = album
         .dates
@@ -241,6 +250,7 @@ fn map_album(album: DiscoverAlbum) -> CardData {
         id: album.id,
         title: album.title,
         artist,
+        artist_id,
         genre,
         year,
         quality_tier,
@@ -338,6 +348,7 @@ fn card_to_item(card: CardData) -> AlbumCardItem {
         id: card.id.into(),
         title: card.title.into(),
         artist: card.artist.into(),
+        artist_id: card.artist_id.into(),
         genre: card.genre.into(),
         year: card.year.into(),
         quality_tier: card.quality_tier.into(),

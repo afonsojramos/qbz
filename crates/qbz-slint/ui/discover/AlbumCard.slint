@@ -286,13 +286,26 @@ export component AlbumCard inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                 }
-                Text {
-                    text: root.album.artist;
+                // Artist name — clickable when an artist id is known,
+                // navigating to the artist page (1:1 with Tauri).
+                artist-area := TouchArea {
                     height: 18px;
-                    color: Theme.text-muted;
-                    font-size: Typography.link;
-                    vertical-alignment: center;
-                    overflow: elide;
+                    width: artist-text.preferred-width;
+                    mouse-cursor: root.album.artist-id != "" ? pointer : default;
+                    clicked => {
+                        if (root.album.artist-id != "") {
+                            root.media-action("artist", root.album.artist-id, "open");
+                        }
+                    }
+                    artist-text := Text {
+                        text: root.album.artist;
+                        color: root.album.artist-id != "" && artist-area.has-hover
+                            ? Theme.text-primary
+                            : Theme.text-muted;
+                        font-size: Typography.link;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
                 }
             }
 

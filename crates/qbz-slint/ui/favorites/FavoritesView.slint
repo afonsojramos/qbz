@@ -355,6 +355,11 @@ export component FavoritesView inherits Rectangle {
                     height: root.album-h;
                     album: album;
                     clicked(id) => { root.open-album(id); }
+                    media-action(kind, id, action) => {
+                        if (kind == "artist") {
+                            root.open-artist(id);
+                        }
+                    }
                 }
             }
 
