@@ -52,6 +52,7 @@ export component PlaylistView inherits Rectangle {
     callback play-all();
     callback shuffle();
     callback toggle-favorite();
+    callback edit();
     callback media-action(string, string, string);
 
     background: Theme.surface-main;
@@ -170,6 +171,16 @@ export component PlaylistView inherits Rectangle {
                                 active: PlaylistState.is-favorite;
                                 clicked => {
                                     root.toggle-favorite();
+                                }
+                            }
+                        }
+                        // Edit (rename / delete) — only the user's own.
+                        if PlaylistState.is-owner: VerticalLayout {
+                            alignment: center;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/pen-line.svg");
+                                clicked => {
+                                    root.edit();
                                 }
                             }
                         }

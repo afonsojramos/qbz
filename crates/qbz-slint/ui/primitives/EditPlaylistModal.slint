@@ -1,0 +1,132 @@
+// "Edit playlist" modal — rename + delete. Opened from the playlist
+// detail header's edit button (EditPlaylistState.open).
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import { EditPlaylistState, EditPlaylistActions } from "../state.slint";
+import { QbzIcon } from "QbzIcon.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component EditPlaylistModal inherits Rectangle {
+    visible: EditPlaylistState.open;
+
+    if EditPlaylistState.open: Rectangle {
+        background: #000000bf;
+        TouchArea {
+            mouse-cursor: default;
+            clicked => {
+                EditPlaylistActions.close();
+            }
+        }
+        Rectangle {
+            width: Math.min(root.width - 80px, 420px);
+            height: panel.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: Radius.md;
+            background: Theme.surface-card;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            drop-shadow-blur: 32px;
+            drop-shadow-color: #00000080;
+            TouchArea { }
+
+            panel := VerticalLayout {
+                padding: 20px;
+                spacing: 16px;
+
+                HorizontalLayout {
+                    Text {
+                        text: @tr("Edit playlist");
+                        color: Theme.text-primary;
+                        font-size: Typography.heading;
+                        font-weight: Typography.semibold;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    close-x := TouchArea {
+                        width: 28px;
+                        height: 28px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            EditPlaylistActions.close();
+                        }
+                        QbzIcon {
+                            source: @image-url("../assets/icons/x.svg");
+                            width: 17px;
+                            height: 17px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            tint: close-x.has-hover ? Theme.text-primary : Theme.text-muted;
+                        }
+                    }
+                }
+
+                name-input := LineEdit {
+                    placeholder-text: @tr("Playlist name");
+                    text <=> EditPlaylistState.name;
+                    accepted => {
+                        EditPlaylistActions.save();
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    // Delete (destructive, left).
+                    Rectangle {
+                        width: del-label.preferred-width + 28px;
+                        height: 36px;
+                        border-radius: Radius.sm;
+                        background: del-ta.has-hover ? #ef444433 : transparent;
+                        border-width: 1px;
+                        border-color: #ef4444;
+                        del-label := Text {
+                            text: @tr("Delete");
+                            color: #ef4444;
+                            font-size: Typography.body;
+                            font-weight: Typography.medium;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        del-ta := TouchArea {
+                            mouse-cursor: EditPlaylistState.busy ? default : pointer;
+                            clicked => {
+                                if (!EditPlaylistState.busy) {
+                                    EditPlaylistActions.delete();
+                                }
+                            }
+                        }
+                    }
+                    // Spacer.
+                    Rectangle { horizontal-stretch: 1; }
+                    // Save (right).
+                    Rectangle {
+                        width: save-label.preferred-width + 36px;
+                        height: 36px;
+                        border-radius: Radius.sm;
+                        opacity: (EditPlaylistState.name != "" && !EditPlaylistState.busy) ? 1.0 : 0.5;
+                        background: save-ta.has-hover ? #ffffffd6 : Theme.accent;
+                        save-label := Text {
+                            text: @tr("Save");
+                            color: #ffffff;
+                            font-size: Typography.body;
+                            font-weight: Typography.semibold;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        save-ta := TouchArea {
+                            mouse-cursor: (EditPlaylistState.name != "" && !EditPlaylistState.busy)
+                                ? pointer : default;
+                            clicked => {
+                                if (EditPlaylistState.name != "" && !EditPlaylistState.busy) {
+                                    EditPlaylistActions.save();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

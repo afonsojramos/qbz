@@ -670,8 +670,11 @@ fn navigate_playlist(
         });
         if let Some(data) = playlist::load(&runtime, id).await {
             let jobs = playlist::artwork_jobs(&data);
+            let pid = data.id.clone();
             let _ = weak.upgrade_in_event_loop(move |w| {
                 playlist::apply(&w, data);
+                let owned = sidebar::contains(&w, &pid);
+                w.global::<PlaylistState>().set_is_owner(owned);
             });
             artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
         }
@@ -1548,6 +1551,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                     }
                 }
+                ("playlist", "edit") => {
+                    // Open the edit modal, prefilled from the open playlist.
+                    if let Some(w) = weak.upgrade() {
+                        let ps = w.global::<PlaylistState>();
+                        let pid = ps.get_id();
+                        let name = ps.get_name();
+                        let es = w.global::<EditPlaylistState>();
+                        es.set_id(pid);
+                        es.set_name(name);
+                        es.set_open(true);
+                    }
+                }
                 ("playlist-track", track_id) => {
                     let idx = playlist::index_of(track_id);
                     let runtime = runtime.clone();
@@ -2350,6 +2365,93 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = weak.upgrade() {
                     w.global::<PlaylistPickerState>().set_open(false);
                 }
+            });
+    }
+
+    // Edit playlist (rename / delete).
+    {
+        let weak = window.as_weak();
+        window
+            .global::<EditPlaylistActions>()
+            .on_close(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<EditPlaylistState>().set_open(false);
+                }
+            });
+    }
+    {
+        // Rename the playlist, then refresh the detail header + sidebar.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<EditPlaylistActions>()
+            .on_save(move || {
+                let Some(w) = weak.upgrade() else { return; };
+                let es = w.global::<EditPlaylistState>();
+                let name = es.get_name().to_string();
+                let id = es.get_id().to_string();
+                if name.trim().is_empty() || es.get_busy() {
+                    return;
+                }
+                let (Ok(pid),) = (id.parse::<u64>(),) else { return; };
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    match runtime.core().update_playlist(pid, Some(name.trim()), None, None).await {
+                        Ok(_) => {
+                            let nm = name.trim().to_string();
+                            let r2 = runtime.clone();
+                            let w2 = weak.clone();
+                            let h2 = handle.clone();
+                            let _ = weak.upgrade_in_event_loop(move |w| {
+                                w.global::<PlaylistState>().set_name(nm.into());
+                                w.global::<EditPlaylistState>().set_open(false);
+                                load_sidebar_playlists(r2, w2, &h2);
+                            });
+                        }
+                        Err(e) => log::error!("[qbz-slint] rename playlist failed: {e}"),
+                    }
+                });
+            });
+    }
+    {
+        // Delete the playlist, then navigate back + refresh the sidebar.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<EditPlaylistActions>()
+            .on_delete(move || {
+                let Some(w) = weak.upgrade() else { return; };
+                let id = w.global::<EditPlaylistState>().get_id().to_string();
+                let Ok(pid) = id.parse::<u64>() else { return; };
+                w.global::<EditPlaylistState>().set_busy(true);
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    match runtime.core().delete_playlist(pid).await {
+                        Ok(()) => {
+                            let r2 = runtime.clone();
+                            let w2 = weak.clone();
+                            let h2 = handle.clone();
+                            let _ = weak.upgrade_in_event_loop(move |w| {
+                                w.global::<EditPlaylistState>().set_busy(false);
+                                w.global::<EditPlaylistState>().set_open(false);
+                                load_sidebar_playlists(r2, w2, &h2);
+                                w.global::<NavState>().invoke_request_back();
+                            });
+                        }
+                        Err(e) => {
+                            log::error!("[qbz-slint] delete playlist failed: {e}");
+                            let _ = weak.upgrade_in_event_loop(|w| {
+                                w.global::<EditPlaylistState>().set_busy(false);
+                            });
+                        }
+                    }
+                });
             });
     }
 

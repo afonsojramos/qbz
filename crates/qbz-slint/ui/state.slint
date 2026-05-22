@@ -243,8 +243,24 @@ export global PlaylistState {
     in property <string> cover-url;
     in property <image> cover;
     in property <bool> is-favorite: false;
+    // True when the playlist is one of the user's own (editable).
+    in property <bool> is-owner: false;
     in property <[TrackItem]> tracks: [];
     in property <bool> loading: false;
+}
+
+// "Edit playlist" modal state (rename + delete).
+export global EditPlaylistState {
+    in-out property <bool> open: false;
+    in property <string> id;
+    in-out property <string> name;
+    in property <bool> busy: false;
+}
+
+export global EditPlaylistActions {
+    callback save();
+    callback delete();
+    callback close();
 }
 
 // Settings screen state. Audio and Playback preferences are loaded from

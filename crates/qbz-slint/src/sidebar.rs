@@ -54,3 +54,14 @@ pub fn apply(window: &AppWindow, playlists: Vec<SidebarPlaylist>) {
 pub fn set_active(window: &AppWindow, id: &str) {
     window.global::<SidebarState>().set_active_id(id.into());
 }
+
+/// Whether `id` is one of the user's own playlists (in the sidebar
+/// list) — used to gate playlist editing.
+pub fn contains(window: &AppWindow, id: &str) -> bool {
+    use slint::Model;
+    window
+        .global::<SidebarState>()
+        .get_playlists()
+        .iter()
+        .any(|p| p.id == id)
+}
