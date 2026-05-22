@@ -60,10 +60,12 @@ export component TrackRow inherits Rectangle {
             alignment: center;
             Text {
                 text: root.number-text;
-                width: 20px;
+                // Wide enough for 4-digit positions (big playlists).
+                width: 32px;
                 color: Theme.text-muted;
                 font-size: Typography.body;
                 horizontal-alignment: center;
+                overflow: elide;
             }
         }
 
@@ -73,14 +75,14 @@ export component TrackRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Rectangle {
-                width: root.show-artwork ? 40px : 28px;
+                width: root.show-artwork ? 40px : 32px;
                 height: root.show-artwork ? 40px : 28px;
                 play-cell := TrackPlayCell {
                     track-id: root.track.id;
                     number: root.number-text;
                     artwork: root.track.artwork;
                     show-artwork: root.show-artwork;
-                    number-width: 28px;
+                    number-width: 32px;
                     row-hovered: root.row-hovered && !root.multi-select-mode;
                     visible: !root.multi-select-mode;
                     play => {

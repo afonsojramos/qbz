@@ -11,6 +11,7 @@ import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
+import { ListView } from "std-widgets.slint";
 
 component CircleAction inherits Rectangle {
     in property <image> icon;
@@ -57,16 +58,10 @@ export component PlaylistView inherits Rectangle {
 
     background: Theme.surface-main;
 
-    Flickable {
-        viewport-width: self.width;
-        viewport-height: page.preferred-height;
-
-        page := VerticalLayout {
-            width: parent.width;
+    page := VerticalLayout {
             padding-left: 32px;
             padding-right: 32px;
             padding-top: 11px;
-            padding-bottom: 100px;
             spacing: 0px;
             alignment: start;
 
@@ -91,6 +86,12 @@ export component PlaylistView inherits Rectangle {
                     border-radius: Radius.md;
                     background: Theme.surface-elevated;
                     clip: true;
+
+                    // Hover state — drives the artwork buttons (only
+                    // shown on mouse-over). OR'd with the buttons so
+                    // moving onto a button keeps them visible.
+                    property <bool> hovered:
+                        cover-hover.has-hover || set-ta.has-hover || clr-ta.has-hover;
 
                     // Custom artwork / single server image.
                     property <bool> show-single:
@@ -155,8 +156,17 @@ export component PlaylistView inherits Rectangle {
                         tint: Theme.text-muted;
                     }
 
-                    // Set custom artwork (owner only) — bottom-right.
-                    if PlaylistState.is-owner: Rectangle {
+                    // Hover detector (below the buttons so they stay
+                    // clickable). Owner only.
+                    cover-hover := TouchArea {
+                        mouse-cursor: PlaylistState.is-owner ? pointer : default;
+                        enabled: PlaylistState.is-owner;
+                    }
+
+                    // Set custom artwork (owner only) — bottom-right,
+                    // shown on hover.
+                    Rectangle {
+                        visible: PlaylistState.is-owner && cover-box.hovered;
                         width: 32px;
                         height: 32px;
                         border-radius: 16px;
@@ -178,8 +188,10 @@ export component PlaylistView inherits Rectangle {
                             }
                         }
                     }
-                    // Clear custom artwork — top-right, only when set.
-                    if PlaylistState.is-owner && PlaylistState.has-custom: Rectangle {
+                    // Clear custom artwork — top-right, shown on hover
+                    // when a custom image is set.
+                    Rectangle {
+                        visible: PlaylistState.is-owner && PlaylistState.has-custom && cover-box.hovered;
                         width: 28px;
                         height: 28px;
                         border-radius: 14px;
@@ -317,7 +329,7 @@ export component PlaylistView inherits Rectangle {
                 spacing: 14px;
                 Text {
                     text: "#";
-                    width: 20px;
+                    width: 32px;
                     color: Theme.text-muted;
                     font-size: Typography.legal;
                     horizontal-alignment: center;
@@ -422,20 +434,53 @@ export component PlaylistView inherits Rectangle {
             }
             if PlaylistState.multi-select-mode: Rectangle { height: 8px; }
 
-            for track[i] in PlaylistState.tracks: TrackRow {
-                track: track;
-                index: i;
-                show-artwork: true;
-                show-album: true;
-                show-favorite: true;
-                multi-select-mode: PlaylistState.multi-select-mode;
-                media-action(kind, id, action) => {
-                    if (action == "play") {
-                        root.play-track(id);
-                    } else {
-                        root.media-action(kind, id, action);
+            // Virtualized track list — only the visible rows are
+            // instantiated, so a 2000-track playlist stays smooth.
+            track-list := ListView {
+                vertical-stretch: 1;
+                for track[i] in PlaylistState.tracks: TrackRow {
+                    track: track;
+                    index: i;
+                    show-artwork: true;
+                    show-album: true;
+                    show-favorite: true;
+                    multi-select-mode: PlaylistState.multi-select-mode;
+                    media-action(kind, id, action) => {
+                        if (action == "play") {
+                            root.play-track(id);
+                        } else {
+                            root.media-action(kind, id, action);
+                        }
                     }
                 }
+            }
+    }
+
+    // Back to top — appears once the list is scrolled past one
+    // viewport. A shared rule for big lists (playlists, library, ...).
+    if track-list.viewport-y < -track-list.visible-height: Rectangle {
+        width: 44px;
+        height: 44px;
+        border-radius: 22px;
+        x: parent.width - self.width - 24px;
+        y: parent.height - self.height - 24px;
+        background: btt-ta.has-hover ? Theme.accent : Theme.surface-elevated;
+        border-width: 1px;
+        border-color: Theme.border-subtle;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: #00000066;
+        QbzIcon {
+            source: @image-url("../assets/icons/chevron-up.svg");
+            width: 20px;
+            height: 20px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            tint: btt-ta.has-hover ? #ffffff : Theme.text-secondary;
+        }
+        btt-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                track-list.viewport-y = 0;
             }
         }
     }

@@ -94,6 +94,22 @@ pub enum ArtworkTarget {
     PlaylistCover,
 }
 
+impl ArtworkTarget {
+    /// Pixel size to decode the cover to. List-row thumbnails are tiny
+    /// (~40px), so decoding them to the card size (264) would retain
+    /// huge buffers in the model — a 2000-row playlist would hold
+    /// hundreds of MB. Decode row thumbnails small.
+    fn decode_size(&self) -> u32 {
+        match self {
+            ArtworkTarget::SearchTrack { .. }
+            | ArtworkTarget::FavoriteTrack { .. }
+            | ArtworkTarget::MixTrack { .. }
+            | ArtworkTarget::PlaylistTrack { .. } => 96,
+            _ => DECODE_SIZE,
+        }
+    }
+}
+
 /// An artwork download job: which card, and the image URL.
 pub struct ArtworkJob {
     pub target: ArtworkTarget,
@@ -165,8 +181,9 @@ pub fn spawn_loads(jobs: Vec<ArtworkJob>, window: slint::Weak<AppWindow>, cache:
         let cache = cache.clone();
         tokio::spawn(async move {
             let _permit = semaphore.acquire().await.ok()?;
+            let decode_size = job.target.decode_size();
             let (pixels, width, height) =
-                fetch_and_decode(&job.url, &cache, DECODE_SIZE).await?;
+                fetch_and_decode(&job.url, &cache, decode_size).await?;
             let target = job.target;
             let _ = window.upgrade_in_event_loop(move |w| {
                 apply_artwork(&w, target, &pixels, width, height);

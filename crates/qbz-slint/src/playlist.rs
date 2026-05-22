@@ -125,10 +125,12 @@ fn to_item(track: &Track) -> TrackItem {
         .into(),
         explicit: track.parental_warning,
         selected: false,
+        // Smallest variant — these are 40px row thumbnails; best()
+        // would download mega/large covers (2000-row perf killer).
         artwork_url: track
             .album
             .as_ref()
-            .and_then(|a| a.image.best().cloned())
+            .and_then(|a| a.image.smallest().cloned())
             .unwrap_or_default()
             .into(),
         artwork: slint::Image::default(),
@@ -187,7 +189,7 @@ pub fn artwork_jobs(data: &PlaylistData) -> Vec<ArtworkJob> {
         .filter_map(|(i, t)| {
             t.album
                 .as_ref()
-                .and_then(|a| a.image.best().cloned())
+                .and_then(|a| a.image.smallest().cloned())
                 .map(|url| ArtworkJob {
                     url,
                     target: ArtworkTarget::PlaylistTrack { index: i },
