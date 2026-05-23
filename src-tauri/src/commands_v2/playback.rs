@@ -73,6 +73,41 @@ fn v2_prefetch_count(quality: qbz_models::Quality) -> usize {
     throttled_cap
 }
 
+/// Lightweight offline-availability check used by the frontend queue guard
+/// (issue #467). A track counts as available offline if it is in the
+/// in-memory playback cache (covers the currently-playing, fully-buffered
+/// track and any prefetched upcoming tracks) OR has a ready file in the
+/// persistent offline cache. This stops the offline queue walk from skipping
+/// tracks that are actually playable.
+#[tauri::command]
+pub async fn v2_is_track_cached(
+    track_id: u64,
+    offline_cache: State<'_, OfflineCacheState>,
+    app_state: State<'_, AppState>,
+) -> Result<bool, RuntimeError> {
+    // In-memory playback cache: the currently-playing track and prefetched
+    // upcoming tracks live here.
+    if app_state.audio_cache.contains(track_id) {
+        return Ok(true);
+    }
+
+    // Persistent offline cache: a downloaded track whose file is still on disk.
+    let cached_path = {
+        let db_opt = offline_cache.db.lock().await;
+        match db_opt.as_ref() {
+            Some(db) => db.get_file_path(track_id).ok().flatten(),
+            None => None,
+        }
+    };
+    if let Some(path) = cached_path {
+        if std::path::Path::new(&path).exists() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 /// How far ahead to look for tracks to prefetch (to handle mixed playlists
 /// with local/offline tracks interspersed with Qobuz tracks)
 const V2_PREFETCH_LOOKAHEAD: usize = 15;
