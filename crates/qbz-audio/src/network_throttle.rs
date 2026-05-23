@@ -73,6 +73,10 @@ struct ThrottleInner {
     /// Timestamp of the most recent audio underrun. `None` means we have
     /// not observed one this session.
     last_underrun: Option<Instant>,
+    /// Timestamp of the most recent successful segment download. `None`
+    /// until the first segment lands. Used as a positive liveness signal
+    /// for the offline detector (issue #467).
+    last_successful_download: Option<Instant>,
 }
 
 pub struct ThrottleState {
@@ -92,14 +96,18 @@ impl ThrottleState {
     /// Feed a fresh per-segment bandwidth measurement (MB/s). Called from
     /// the CMAF streaming loop every few segments.
     pub fn record_segment_bandwidth(&self, mbps: f64) {
-        if !mbps.is_finite() || mbps <= 0.0 {
-            return;
-        }
         if let Ok(mut inner) = self.inner.write() {
-            inner.bandwidth_ema_mbps = Some(match inner.bandwidth_ema_mbps {
-                Some(prev) => prev * (1.0 - BANDWIDTH_EMA_ALPHA) + mbps * BANDWIDTH_EMA_ALPHA,
-                None => mbps,
-            });
+            // Liveness signal (issue #467): reaching this path means a segment
+            // batch just downloaded — bytes are flowing, so we are online,
+            // independent of whether the throughput sample is usable for the
+            // EMA. Recorded before the validity guard on purpose.
+            inner.last_successful_download = Some(Instant::now());
+            if mbps.is_finite() && mbps > 0.0 {
+                inner.bandwidth_ema_mbps = Some(match inner.bandwidth_ema_mbps {
+                    Some(prev) => prev * (1.0 - BANDWIDTH_EMA_ALPHA) + mbps * BANDWIDTH_EMA_ALPHA,
+                    None => mbps,
+                });
+            }
         }
     }
 
@@ -114,6 +122,18 @@ impl ThrottleState {
     /// Current EMA bandwidth in MB/s, or `None` if no samples yet.
     pub fn current_bandwidth_mbps(&self) -> Option<f64> {
         self.inner.read().ok().and_then(|i| i.bandwidth_ema_mbps)
+    }
+
+    /// Seconds since the last successful segment download, or `None` if no
+    /// bytes have been pulled this session. Positive liveness signal for the
+    /// offline detector (issue #467): if segments are flowing we are online
+    /// by definition, regardless of what a connectivity probe reports.
+    pub fn seconds_since_download(&self) -> Option<u64> {
+        self.inner
+            .read()
+            .ok()
+            .and_then(|i| i.last_successful_download)
+            .map(|t| t.elapsed().as_secs())
     }
 
     /// True when an underrun was recorded within `PANIC_WINDOW_SECS`.
