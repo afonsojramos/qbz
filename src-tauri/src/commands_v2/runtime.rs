@@ -447,7 +447,10 @@ pub async fn v2_start_oauth_login(
     .inner_size(520.0, 720.0)
     .resizable(true)
     .on_navigation(move |url| {
-        log::info!("[OAuth] on_navigation: {}", url);
+        log::info!(
+            "[OAuth] on_navigation: {}",
+            crate::log_sanitize::redact_url(url.as_str())
+        );
         // Intercept redirect to play.qobuz.com/discover?code_autorisation=...
         if url.host_str() == Some("play.qobuz.com") {
             for (key, value) in url.query_pairs() {
@@ -478,7 +481,7 @@ pub async fn v2_start_oauth_login(
         let label = format!("qobuz-oauth-popup-{}", popup_id);
         log::info!(
             "[OAuth] New popup window requested: {} (label={})",
-            url,
+            crate::log_sanitize::redact_url(url.as_str()),
             label
         );
 
@@ -497,7 +500,11 @@ pub async fn v2_start_oauth_login(
         .inner_size(520.0, 720.0)
         .resizable(true)
         .on_navigation(move |popup_url| {
-            log::info!("[OAuth] popup({}) on_navigation: {}", label_p, popup_url);
+            log::info!(
+                "[OAuth] popup({}) on_navigation: {}",
+                label_p,
+                crate::log_sanitize::redact_url(popup_url.as_str())
+            );
             if popup_url.host_str() == Some("play.qobuz.com") {
                 for (key, value) in popup_url.query_pairs() {
                     if key == "code_autorisation" || key == "code" {
