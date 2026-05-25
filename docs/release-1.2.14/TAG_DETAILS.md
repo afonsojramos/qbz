@@ -2,7 +2,9 @@
 
 No new features this time. 1.2.14 is a maintenance release: the headline is that audio now **just works out of the box** for everyone, including people who never touched an audio setting.
 
-The new **System** output plays through your system's default device and mixes with other apps like any normal player — no DAC, no bit-perfect, no `pactl` required. Audiophiles keep their explicit PipeWire and ALSA Direct setups exactly as they were.
+The new **System** output plays through your system's default device and mixes with other apps like any normal player — no DAC, no bit-perfect, no `pactl` required. Audio focused users keep their explicit PipeWire and ALSA Direct setups exactly as they were.
+
+If you have a DAC or you've already touched your audio settings, nothing changes for you. I focused all the development effort on bit-perfect from the very first release and completely forgot about everyone who just wants to play music without caring about quality, bit depth, etc. Sorry for the small-world mindset.
 
 The rest is a steady round of bug fixes, a coordinated audio-dependency update, and groundwork under the hood.
 
