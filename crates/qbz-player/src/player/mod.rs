@@ -759,16 +759,16 @@ fn try_init_stream_with_backend(
     channels: u16,
     state: &SharedState,
 ) -> Option<Result<StreamType, String>> {
-    // Check if backend system is configured.
-    // On macOS, default to SystemDefault when not explicitly set,
-    // so CoreAudio device probing and sample rate switching are active.
-    let backend_type = audio_settings.backend_type.or_else(|| {
-        if cfg!(target_os = "macos") {
-            Some(qbz_audio::AudioBackendType::SystemDefault)
-        } else {
-            None
-        }
-    })?;
+    // A None backend_type means "Auto" / unset. Resolve it to SystemDefault on
+    // every platform instead of returning None — returning None made the caller
+    // fall through to the legacy CPAL path, which forced the track rate onto the
+    // shared default device: that froze the seekbar with no audio AND left a
+    // process-wide stuck audio handle that survived Reset (#470). "Auto" is
+    // resolved to a concrete backend in the UI; this is the backend-side safety
+    // net for any remaining None (legacy installs, headless callers).
+    let backend_type = audio_settings
+        .backend_type
+        .unwrap_or(qbz_audio::AudioBackendType::SystemDefault);
 
     log::info!(
         "Using backend system: {:?} (device: {:?}, plugin: {:?})",
