@@ -2145,7 +2145,7 @@
       "syncAudioOnStartup": "Synchroniser la configuration audio au démarrage",
       "syncAudioOnStartupDesc": "Recharge la configuration audio depuis la base de données au démarrage de l'application. Activez si votre appareil ou vos paramètres audio semblent incorrects après le lancement.",
       "audioBackend": "Backend audio",
-      "audioBackendDesc": "Choisissez le système audio : Auto (recommandé), PipeWire (moderne), ALSA Direct (bit-perfect, exclusif) ou PulseAudio (ancien).",
+      "audioBackendDesc": "Choisissez le système audio : System (par défaut — sortie partagée comme toute app, pas de bit-perfect), Auto (recommandé — choisit le meilleur backend disponible ; vous devrez peut-être encore sélectionner votre DAC), PipeWire (moderne), ALSA Direct (bit-perfect, exclusif) ou PulseAudio (ancien).",
       "currentSampleRate": "Taux d'échantillonnage actuel",
       "noActivePlayback": "Pas de lecture en cours",
       "loadingDevices": "Chargement des appareils...",

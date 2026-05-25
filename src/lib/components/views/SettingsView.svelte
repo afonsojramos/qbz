@@ -3358,11 +3358,26 @@
   }
 
   async function handleBackendChange(backendName: string) {
+    // "Auto" is a resolve-and-set action, not a persisted mode. Pick the best
+    // available backend — PipeWire if available (best quality + device routing),
+    // otherwise System (always works) — and continue exactly as if the user had
+    // selected that concrete backend. This keeps backend_type always concrete: it
+    // never stays null, which on Linux fell through to the legacy CPAL path that
+    // froze the seekbar with no audio and left a process-wide stuck audio handle
+    // surviving Reset (#470). The dropdown then shows what was chosen, and the
+    // device picker lets the user correct the DAC if the auto pick isn't theirs.
+    if (backendName === 'Auto') {
+      const pipewire = availableBackends.find(
+        b => b.backend_type === 'PipeWire' && b.is_available
+      );
+      const system = availableBackends.find(b => b.backend_type === 'SystemDefault');
+      backendName = (pipewire ?? system)?.name ?? 'System';
+    }
     selectedBackend = backendName;
 
-    // Map UI name to backend type
+    // Map UI name to backend type (always concrete after the Auto resolution above)
     const backend = availableBackends.find(b => b.name === backendName);
-    const backendType = backendName === 'Auto' ? null : backend?.backend_type ?? null;
+    const backendType = backend?.backend_type ?? null;
 
     // Auto-disable incompatible features
     // DAC Passthrough and PW force bit-perfect only work with PipeWire
