@@ -290,7 +290,6 @@ export component AlbumCard inherits Rectangle {
                 // navigating to the artist page (1:1 with Tauri).
                 artist-area := TouchArea {
                     height: 18px;
-                    width: artist-text.preferred-width;
                     mouse-cursor: root.album.artist-id != "" ? pointer : default;
                     clicked => {
                         if (root.album.artist-id != "") {
@@ -298,6 +297,12 @@ export component AlbumCard inherits Rectangle {
                         }
                     }
                     artist-text := Text {
+                        // Fill the title column and elide. Binding the TouchArea
+                        // width to this text's preferred-width clamped the whole
+                        // title column to the (often short) artist name, which
+                        // truncated titles to a few letters and shoved the quality
+                        // badge inward instead of letting it float right.
+                        width: 100%;
                         text: root.album.artist;
                         color: root.album.artist-id != "" && artist-area.has-hover
                             ? Theme.text-primary
