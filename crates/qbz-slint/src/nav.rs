@@ -19,6 +19,12 @@ pub enum NavEntry {
     Discover {
         tab: String,
     },
+    /// A Library > Favorites tab page ("tracks" | "albums" | "artists" |
+    /// "playlists" | "labels"). Each tab is its own history entry so
+    /// back/forward moves between the favorites pages, mirroring Discover.
+    Favorites {
+        tab: String,
+    },
     /// A Qobuz mix detail page ("daily" | "weekly" | "fav" | "top").
     Mix {
         kind: String,

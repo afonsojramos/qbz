@@ -22,6 +22,7 @@ import { AlbumCard } from "../discover/AlbumCard.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
+import { NavButtons } from "../shell/NavButtons.slint";
 
 // One tab in the favorites tab bar.
 component FavTab inherits Rectangle {
@@ -256,15 +257,26 @@ export component FavoritesView inherits Rectangle {
             width: parent.width;
             padding-left: 32px;
             padding-right: 32px;
-            padding-top: 20px;
+            padding-top: 11px;
             padding-bottom: 100px;
             spacing: 0px;
             alignment: start;
 
+            // Back / forward nav buttons — same position as every other
+            // page (11px top padding, then a 22px gap to the header).
+            HorizontalLayout {
+                alignment: start;
+                NavButtons { }
+            }
+
+            Rectangle { height: 22px; }
+
+            // Page title — same size as the album name in AlbumView
+            // (Typography.section), not the larger Typography.title.
             Text {
                 text: @tr("Favorites");
                 color: Theme.text-primary;
-                font-size: Typography.title;
+                font-size: Typography.section;
                 font-weight: Typography.bold;
             }
 

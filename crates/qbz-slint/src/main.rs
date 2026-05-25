@@ -465,6 +465,18 @@ fn apply_entry(
                 ensure_for_you_loaded(runtime, weak, handle, image_cache);
             }
         }
+        nav::NavEntry::Favorites { tab } => {
+            if let Some(fav_tab) = favorites::FavTab::from_tab_id(&tab) {
+                navigate_favorites(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle,
+                    image_cache.clone(),
+                    fav_tab,
+                    &tab,
+                );
+            }
+        }
         nav::NavEntry::Settings => {
             let _ = weak.upgrade_in_event_loop(|w| {
                 w.global::<NavState>().set_view(ContentView::Settings);
@@ -2476,7 +2488,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(tab) = favorites::FavTab::from_route(route.as_str()) {
                 let tab_id = route.strip_prefix("favorites-").unwrap_or("tracks");
-                nav::record(nav::NavEntry::Home); // favorites is not yet a history entry
+                nav::record(nav::NavEntry::Favorites {
+                    tab: tab_id.to_string(),
+                });
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
                 navigate_favorites(
                     runtime.clone(),
                     weak.clone(),
@@ -2948,6 +2965,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     return;
                 };
+                // Each favorites tab is its own history page (mirrors the
+                // Discover tabs) so back/forward moves between them.
+                nav::record(nav::NavEntry::Favorites { tab: id.to_string() });
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
                 navigate_favorites(
                     runtime.clone(),
                     weak.clone(),
