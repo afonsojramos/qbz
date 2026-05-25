@@ -80,14 +80,17 @@ impl Default for AudioSettings {
             exclusive_mode: false,
             dac_passthrough: false,
             preferred_sample_rate: None,
-            // Default to a per-OS-correct backend (PipeWire on Linux, SystemDefault
-            // elsewhere) instead of None. None used to mean "auto-detect" but it
-            // actually fell through to the legacy CPAL path in init_device, which
-            // has a known race against rodio's DeviceSink drop on resume — visible
-            // as "audio doesn't come back after pause" (#375). Picking a concrete
-            // backend here puts new installs on the proper backend init path; the
-            // runtime still degrades gracefully if the chosen backend isn't
-            // available on the host.
+            // OOTB default is "System" (Some(SystemDefault)): play through the OS
+            // default output, shared with other apps like any normal player — no
+            // bit-perfect, no `pactl`. See AudioBackendType::default(). "Auto"
+            // (None) and explicit backends (PipeWire / ALSA) are honored as-is;
+            // this only sets what a fresh install and the Reset action land on.
+            //
+            // History: this defaulted to Some(PipeWire) on Linux to dodge a rodio
+            // DeviceSink-drop-on-resume race on the CPAL path (#375), but that
+            // hard-required `pactl` and froze OOTB playback without it (#470). The
+            // #375 race is covered by the cpal 0.17.3 / alsa 0.11 stream-drop
+            // fixes, and "System" is the app-like default audiophiles override.
             backend_type: Some(AudioBackendType::default()),
             alsa_plugin: Some(AlsaPlugin::Hw), // Default to hw (bit-perfect)
             alsa_hardware_volume: false, // Disabled by default (maximum compatibility)
@@ -138,9 +141,7 @@ impl AudioSettingsStore {
                 alsa_hardware_volume INTEGER NOT NULL DEFAULT 0,
                 stream_first_track INTEGER NOT NULL DEFAULT 1,
                 stream_buffer_seconds INTEGER NOT NULL DEFAULT 2
-            );
-            INSERT OR IGNORE INTO audio_settings (id, exclusive_mode, dac_passthrough)
-            VALUES (1, 0, 0);",
+            );",
         )
         .map_err(|e| format!("Failed to create audio settings table: {}", e))?;
 
@@ -215,29 +216,23 @@ impl AudioSettingsStore {
             [],
         );
 
-        // Migration (#375): existing installs persisted backend_type = NULL when
-        // the user never explicitly picked a backend. NULL fell through to the
-        // legacy CPAL path in the player, which has a race against rodio's
-        // DeviceSink drop on resume that produces silent streams after pause.
-        // Backfill NULL rows with the per-OS default so those installs move onto
-        // the proper backend init path. set_backend_type is the canonical writer
-        // (it serialises via serde_json), so we go through the same JSON shape
-        // here for the row read path to round-trip cleanly.
+        // Seed the single settings row on first run with the OOTB default backend
+        // ("System"). INSERT OR IGNORE is a one-time seed: it only fires when the
+        // row does not exist yet, so existing installs are never rewritten on
+        // later launches (settings are only reset by the explicit Reset action,
+        // never just by restarting).
+        //
+        // There is deliberately NO backfill of existing NULL backend_type rows: a
+        // NULL backend_type means "Auto" and is preserved as-is. (An earlier #375
+        // workaround backfilled NULL -> PipeWire on every open, which hard-required
+        // `pactl` and froze OOTB playback without it, #470.)
         let default_backend_json = serde_json::to_string(&AudioBackendType::default())
-            .unwrap_or_else(|_| {
-                // Fallback only matters if serde_json::to_string fails for a
-                // unit-variant enum, which it can't — but keep a sane string in
-                // case the enum gains a non-trivial variant in the future.
-                if cfg!(target_os = "linux") {
-                    "\"PipeWire\"".to_string()
-                } else {
-                    "\"SystemDefault\"".to_string()
-                }
-            });
-        let _ = conn.execute(
-            "UPDATE audio_settings SET backend_type = ?1 WHERE id = 1 AND backend_type IS NULL",
+            .map_err(|e| format!("Failed to serialize default backend: {}", e))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO audio_settings (id, exclusive_mode, dac_passthrough, backend_type) VALUES (1, 0, 0, ?1)",
             params![default_backend_json],
-        );
+        )
+        .map_err(|e| format!("Failed to seed audio settings row: {}", e))?;
 
         Ok(Self { conn })
     }
@@ -781,7 +776,8 @@ mod tests {
     fn audio_settings_default_values_are_stable() {
         let settings = AudioSettings::default();
 
-        assert_eq!(settings.backend_type, Some(AudioBackendType::default()));
+        // OOTB default is "System" — the OS default output (#470).
+        assert_eq!(settings.backend_type, Some(AudioBackendType::SystemDefault));
         assert_eq!(settings.alsa_plugin, Some(AlsaPlugin::Hw));
         assert!(settings.gapless_enabled);
         assert!(!settings.sync_audio_on_startup);
@@ -797,7 +793,8 @@ mod tests {
 
         let settings = store.get_settings().expect("get settings");
 
-        assert_eq!(settings.backend_type, Some(AudioBackendType::default()));
+        // Fresh store is seeded with the OOTB default backend "System" (#470).
+        assert_eq!(settings.backend_type, Some(AudioBackendType::SystemDefault));
         assert_eq!(settings.alsa_plugin, None);
         assert!(!settings.gapless_enabled);
         assert_eq!(settings.quality_fallback_behavior, "ask");
@@ -806,8 +803,13 @@ mod tests {
     }
 
     #[test]
-    fn backend_null_is_backfilled_to_default_backend() {
-        let dir = unique_test_dir("backend-backfill");
+    fn backend_null_stays_auto_on_reopen() {
+        // A NULL backend_type means "Auto" (system default output). It must be
+        // preserved across restarts — never backfilled to a concrete backend on
+        // store open (the old #375 backfill hard-coded PipeWire and froze OOTB
+        // playback on hosts without `pactl`, #470). Only the explicit Reset
+        // action rewrites settings.
+        let dir = unique_test_dir("backend-null-auto");
         {
             let store = AudioSettingsStore::new_at(&dir).expect("open store");
             store
@@ -816,13 +818,13 @@ mod tests {
                     "UPDATE audio_settings SET backend_type = NULL WHERE id = 1",
                     [],
                 )
-                .expect("force legacy null backend");
+                .expect("force null (Auto) backend");
         }
 
         let reopened = AudioSettingsStore::new_at(&dir).expect("reopen store");
         let settings = reopened.get_settings().expect("get settings");
 
-        assert_eq!(settings.backend_type, Some(AudioBackendType::default()));
+        assert_eq!(settings.backend_type, None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

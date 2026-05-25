@@ -4,7 +4,8 @@
 //! allowing users to choose their preferred audio stack.
 
 use rodio::MixerDeviceSink;
-#[cfg(not(target_os = "linux"))]
+// CPAL traits + DeviceSinkBuilder are used by the cross-platform CpalDefaultBackend
+// ("System") on every OS, including Linux where it opens the ALSA "default" PCM.
 use rodio::{
     cpal::traits::{DeviceTrait, HostTrait},
     DeviceSinkBuilder,
@@ -40,11 +41,11 @@ pub enum AudioBackendType {
 
 impl Default for AudioBackendType {
     fn default() -> Self {
-        if cfg!(target_os = "linux") {
-            AudioBackendType::PipeWire
-        } else {
-            AudioBackendType::SystemDefault
-        }
+        // "System" everywhere: the OOTB default plays through the OS default
+        // output, shared with other apps (no bit-perfect, no `pactl`). Audiophile
+        // users opt into PipeWire / ALSA explicitly. This was PipeWire on Linux,
+        // which hard-required `pactl` and froze OOTB playback without it (#470).
+        AudioBackendType::SystemDefault
     }
 }
 
@@ -269,6 +270,10 @@ impl BackendManager {
 
         #[cfg(target_os = "linux")]
         {
+            // System default (always available): shared OS default output via the
+            // ALSA "default" PCM. The app-like OOTB choice; listed first.
+            backends.push(AudioBackendType::SystemDefault);
+
             // PipeWire (check if running)
             if Self::is_pipewire_available() {
                 backends.push(AudioBackendType::PipeWire);
@@ -314,14 +319,12 @@ impl BackendManager {
                 }
             }
             AudioBackendType::SystemDefault => {
-                #[cfg(not(target_os = "linux"))]
-                {
-                    Ok(Box::new(CpalDefaultBackend::new()?))
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    Err("SystemDefault backend is not available on Linux; use PipeWire, ALSA, or Pulse".to_string())
-                }
+                // "System": play through the OS default output via CPAL's default
+                // host — CoreAudio/WASAPI off-Linux, the ALSA "default" PCM on Linux
+                // (routes to PipeWire/Pulse/dmix for shared mixing). Opens at the
+                // device's negotiated rate (rodio resamples); shared, no exclusivity,
+                // no `pactl`. Available on every platform.
+                Ok(Box::new(CpalDefaultBackend::new()?))
             }
             AudioBackendType::Alsa => {
                 #[cfg(target_os = "linux")]
@@ -350,9 +353,26 @@ impl BackendManager {
 
     #[cfg(target_os = "linux")]
     fn is_pipewire_available() -> bool {
-        // Check if PipeWire/PulseAudio is available using pactl
-        // PipeWire provides PulseAudio compatibility, so pactl works for both
-        // This is more reliable than pw-cli, especially in sandboxed environments (Flatpak)
+        // Detect PipeWire via its runtime socket ($XDG_RUNTIME_DIR/pipewire-0),
+        // which exists whenever PipeWire is running. Unlike `pactl`, this does
+        // NOT require pulseaudio-utils to be installed — PipeWire-only systems
+        // frequently lack it, which used to hide the PipeWire backend entirely
+        // (issue #466). pw-cli / pactl remain as fallbacks for unusual setups
+        // (e.g. a non-default socket name, or Flatpak where the socket path
+        // differs but the pulse shim is bridged).
+        if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+            if std::path::Path::new(&runtime_dir).join("pipewire-0").exists() {
+                return true;
+            }
+        }
+        if std::process::Command::new("pw-cli")
+            .args(["info", "0"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return true;
+        }
         std::process::Command::new("pactl")
             .arg("info")
             .output()
@@ -371,14 +391,15 @@ impl BackendManager {
     }
 }
 
-/// CPAL default backend for non-Linux platforms (macOS CoreAudio, Windows WASAPI).
-/// Uses the system default audio device via CPAL without any platform-specific commands.
-#[cfg(not(target_os = "linux"))]
+/// CPAL default backend ("System"): plays through the OS default output via
+/// CPAL's default host — CoreAudio (macOS), WASAPI (Windows), and the ALSA
+/// "default" PCM (Linux, which routes to PipeWire/Pulse/dmix for shared mixing).
+/// No platform-specific commands (no `pactl`); opens at the device's negotiated
+/// rate with rodio resampling, so it mixes with other apps like any normal player.
 pub struct CpalDefaultBackend {
     host: rodio::cpal::Host,
 }
 
-#[cfg(not(target_os = "linux"))]
 impl CpalDefaultBackend {
     pub fn new() -> BackendResult<Self> {
         Ok(Self {
@@ -387,7 +408,6 @@ impl CpalDefaultBackend {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
 impl AudioBackend for CpalDefaultBackend {
     fn backend_type(&self) -> AudioBackendType {
         AudioBackendType::SystemDefault
@@ -515,6 +535,22 @@ impl AudioBackend for CpalDefaultBackend {
         let builder = DeviceSinkBuilder::from_device(device)
             .map_err(|e| format!("Failed to create device sink builder: {}", e))?;
 
+        // MixerDeviceSink has zero internal buffering, so CPAL's buffer is the
+        // ONLY buffer between the mixer and the hardware. With the bare CPAL/ALSA
+        // default (no explicit size) the stream can underrun immediately on Linux:
+        // the node links to the audio server but stays suspended and never feeds
+        // audio (#470 — "System" shared output silent). Give it ~100ms, matching
+        // the PipeWire/ALSA backends. We deliberately do NOT pin the sample rate
+        // (no with_supported_config): the device keeps its negotiated rate and
+        // rodio resamples, which is the whole point of shared "System" output.
+        #[cfg(target_os = "linux")]
+        let mixer_sink = builder
+            .with_buffer_size(rodio::cpal::BufferSize::Fixed(
+                (config.sample_rate / 10).clamp(1024, 19200),
+            ))
+            .open_stream()
+            .map_err(|e| format!("Failed to create output stream: {}", e))?;
+        #[cfg(not(target_os = "linux"))]
         let mixer_sink = builder
             .open_stream()
             .map_err(|e| format!("Failed to create output stream: {}", e))?;

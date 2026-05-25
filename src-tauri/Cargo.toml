@@ -1,6 +1,6 @@
 [package]
 name = "qbz-nix"
-version = "1.2.13"
+version = "1.2.14"
 description = "Native high-fidelity client for Qobuz™ subscribers on Linux with Hi-Fi audio support (uses the Qobuz API; not certified by Qobuz)"
 authors = ["blitzkriegfc"]
 edition = "2021"
@@ -38,7 +38,6 @@ qbz-library = { path = "../crates/qbz-library" }
 qbz-cast = { path = "../crates/qbz-cast" }
 qbz-cmaf = { path = "../crates/qbz-cmaf" }
 qbz-secrets = { path = "../crates/qbz-secrets" }
-mdns-sd = "0.19"
 qconnect-app = { path = "../crates/qconnect-app" }
 qconnect-core = { path = "../crates/qconnect-core" }
 qconnect-transport-ws = { path = "../crates/qconnect-transport-ws" }
