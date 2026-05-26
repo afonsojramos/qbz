@@ -938,6 +938,16 @@ fn wire_playlist_manager(
         let weak = window.as_weak();
         window
             .global::<PlaylistManagerActions>()
+            .on_search_folders(move |query| {
+                if let Some(w) = weak.upgrade() {
+                    playlist_manager::search_menu_folders(&w, &query);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
             .on_set_filter(move |value| {
                 if let Some(w) = weak.upgrade() {
                     w.global::<PlaylistManagerState>().set_filter(value);

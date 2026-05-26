@@ -36,6 +36,8 @@ struct PmPlaylist {
     name: String,
     /// Remote (Qobuz) track count.
     tracks_count: u32,
+    /// Total playlist duration in seconds (Qobuz `duration`).
+    duration: u32,
     /// Local (non-Qobuz) track count.
     local_count: u32,
     play_count: u32,
@@ -125,6 +127,7 @@ where
                 id: p.id,
                 name: p.name.clone(),
                 tracks_count: p.tracks_count,
+                duration: p.duration,
                 local_count: local_counts.get(&p.id).copied().unwrap_or(0),
                 play_count: play_counts.get(&p.id).copied().unwrap_or(0),
                 is_favorite: s.is_favorite,
@@ -220,6 +223,21 @@ fn parse_color(s: &str) -> Option<slint::Color> {
     Some(slint::Color::from_rgb_u8(r, g, b))
 }
 
+/// Total-playtime label, e.g. "1h 43m" or "12m" (mirrors Tauri's
+/// `formatDuration`). Empty when the duration is zero.
+fn format_duration(seconds: u32) -> String {
+    if seconds == 0 {
+        return String::new();
+    }
+    let hours = seconds / 3600;
+    let mins = (seconds % 3600) / 60;
+    if hours > 0 {
+        format!("{hours}h {mins}m")
+    } else {
+        format!("{mins}m")
+    }
+}
+
 fn folder_item(f: &FolderFull, count: usize) -> PmFolderItem {
     let color = parse_color(&f.icon_color);
     PmFolderItem {
@@ -256,6 +274,7 @@ fn playlist_item(p: &PmPlaylist) -> PmPlaylistItem {
         id: p.id.to_string().into(),
         name: p.name.clone().into(),
         tracks_line: format!("{} tracks", p.total_count()).into(),
+        duration_line: format_duration(p.duration).into(),
         local_line: local_line.into(),
         local_count: p.local_count as i32,
         total_count: p.total_count() as i32,
@@ -320,13 +339,49 @@ pub fn rebuild(window: &AppWindow) {
         Vec::new()
     };
 
+    // The list-row move-to-folder menu starts unfiltered (= the full set);
+    // its search box narrows it via `search_menu_folders`.
+    let menu_folders: Vec<PmFolderItem> = data
+        .folders
+        .iter()
+        .map(|f| folder_item(f, folder_counts.get(&f.id).copied().unwrap_or(0)))
+        .collect();
+
     state.set_folders(ModelRc::new(VecModel::from(folders)));
+    state.set_menu_folders(ModelRc::new(VecModel::from(menu_folders)));
     state.set_playlists(ModelRc::new(VecModel::from(playlist_items)));
     state.set_tree(ModelRc::new(VecModel::from(tree)));
     state.set_folder_count(data.folders.len() as i32);
     state.set_playlist_count(visible_count as i32);
     state.set_can_reorder(sort == "custom" && query.is_empty());
     state.set_loading(false);
+}
+
+/// Filter the list-row move-to-folder menu's folder list by a
+/// case-insensitive substring (Slint strings have no `contains`, so this
+/// lives in Rust). An empty query restores the full list. Counts mirror the
+/// `rebuild` computation. UI thread only.
+pub fn search_menu_folders(window: &AppWindow, query: &str) {
+    let q = query.trim().to_lowercase();
+    let data = CACHE.lock().map(|c| c.clone()).unwrap_or_default();
+
+    let mut folder_counts: HashMap<String, usize> = HashMap::new();
+    for p in &data.playlists {
+        if let Some(fid) = &p.folder_id {
+            *folder_counts.entry(fid.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let filtered: Vec<PmFolderItem> = data
+        .folders
+        .iter()
+        .filter(|f| q.is_empty() || f.name.to_lowercase().contains(&q))
+        .map(|f| folder_item(f, folder_counts.get(&f.id).copied().unwrap_or(0)))
+        .collect();
+
+    window
+        .global::<PlaylistManagerState>()
+        .set_menu_folders(ModelRc::new(VecModel::from(filtered)));
 }
 
 /// Flatten folders + their (expanded) playlists + root playlists into the

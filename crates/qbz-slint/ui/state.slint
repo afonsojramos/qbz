@@ -502,6 +502,8 @@ export struct PmPlaylistItem {
     name: string,
     // "12 tracks" — total (remote + local).
     tracks-line: string,
+    // "1h 43m" — total playtime, "" when zero (list-row meta only).
+    duration-line: string,
     // "(3 local)" — local-only suffix, "" when none.
     local-line: string,
     local-count: int,
@@ -537,6 +539,10 @@ export struct PmTreeRow {
 
 export global PlaylistManagerState {
     in property <[PmFolderItem]> folders: [];
+    // Filtered folder list for the list-row move-to-folder menu. Starts as
+    // the full folder set; the menu's search box narrows it via
+    // `search-folders` (Slint strings have no `contains`, so Rust filters).
+    in property <[PmFolderItem]> menu-folders: [];
     in property <[PmPlaylistItem]> playlists: [];   // the filtered+sorted grid/list set
     in property <[PmTreeRow]> tree: [];
     // Header counters: total folders / total playlists (post-filter for
@@ -568,6 +574,9 @@ export global PlaylistManagerActions {
     callback set-filter(string);
     callback set-sort(string);
     callback set-view-mode(string);
+    // Filter the list-row move-to-folder menu's folder list (substring,
+    // case-insensitive). Empty query restores the full list.
+    callback search-folders(string /* query */);
     callback toggle-folder-mode();
     callback toggle-folders-collapsed();
     // Tree-view folder expand/collapse.
@@ -1417,6 +1426,10 @@ export global SearchState {
     in property <AlbumCardItem> most-popular-album;
     in property <SlimItem> most-popular-artist;
     in property <TrackItem> most-popular-track;
+    // Detailed quality label for the most-popular TRACK hero, e.g.
+    // "Hi-Res 24-bit / 192 kHz". Shown as text (the hero dropped the icon
+    // badge). "" when unknown / not a track.
+    in property <string> most-popular-quality-label;
     // Active searchType filter, as a dropdown index (0 = no filter).
     // The controller owns the index -> API-value mapping.
     in property <int> filter-index: 0;

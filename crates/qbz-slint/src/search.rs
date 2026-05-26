@@ -61,6 +61,9 @@ pub struct TrackRowData {
     pub artist: String,
     pub duration: String,
     pub quality_tier: String,
+    /// Detailed quality label, e.g. "Hi-Res 24-bit / 192 kHz". Used by the
+    /// most-popular track hero (shown as text instead of an icon badge).
+    pub quality_label: String,
     pub explicit: bool,
     pub artwork_url: String,
 }
@@ -211,6 +214,7 @@ pub fn map_track(track: Track) -> TrackRowData {
         artist: track.performer.map(|p| p.name).unwrap_or_default(),
         duration: mmss(track.duration),
         quality_tier: tier(track.maximum_bit_depth).to_string(),
+        quality_label: quality_label(track.maximum_bit_depth, track.maximum_sampling_rate),
         explicit: track.parental_warning,
         artwork_url,
     }
@@ -422,6 +426,8 @@ pub fn apply_search(window: &AppWindow, data: SearchData) {
     state.set_artists_total(data.artists_total as i32);
     state.set_playlists_total(data.playlists_total as i32);
 
+    // Default the hero quality label off; only the track branch sets it.
+    state.set_most_popular_quality_label("".into());
     match data.most_popular {
         MostPopularRow::Album(row) => {
             state.set_most_popular_kind("album".into());
@@ -433,6 +439,7 @@ pub fn apply_search(window: &AppWindow, data: SearchData) {
         }
         MostPopularRow::Track(row) => {
             state.set_most_popular_kind("track".into());
+            state.set_most_popular_quality_label(row.quality_label.clone().into());
             state.set_most_popular_track(track_item(row));
         }
         MostPopularRow::None => {
@@ -454,6 +461,7 @@ pub fn reset_search(window: &AppWindow) {
     state.set_artists_total(0);
     state.set_playlists_total(0);
     state.set_most_popular_kind("".into());
+    state.set_most_popular_quality_label("".into());
     state.set_filter_index(0);
     state.set_loading(true);
 }

@@ -491,6 +491,7 @@ export component SearchResultsView inherits Rectangle {
                         }
                         if SearchState.most-popular-kind == "track": SearchTrackHero {
                             track: SearchState.most-popular-track;
+                            quality-label: SearchState.most-popular-quality-label;
                             media-action(k, i, a) => { root.media-action(k, i, a); }
                         }
                     }

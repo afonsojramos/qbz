@@ -8,6 +8,7 @@
 // ready-to-render models, so this view does no per-row map lookups.
 // Backend is reused via the PlaylistManagerActions callbacks.
 
+import { ScrollView, LineEdit } from "std-widgets.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
@@ -107,8 +108,12 @@ component PmSearch inherits Rectangle {
 component PmMenuItem inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
+    // Collapse property — `for x: if c: El` is disallowed in Slint 1.16, so
+    // a hidden item collapses to zero height instead (the sidebar pattern).
+    in property <bool> shown: true;
     callback activated();
-    height: 30px;
+    height: root.shown ? 30px : 0px;
+    visible: root.shown;
     border-radius: 5px;
     background: mi-ta.has-hover ? Theme.surface-hover : transparent;
     HorizontalLayout {
@@ -272,7 +277,10 @@ component PmFolderCard inherits Rectangle {
     // icon/name/count column. Hover reveals the edit pencil (opacity 0->1)
     // and lifts the surface — same affordance as Tauri.
     width: 160px;
-    height: 128px;
+    // Tall enough for the 64px icon + name + count + 16px padding without
+    // overflowing (128px squeezed the count to the bottom edge); matches
+    // Tauri's content-driven `.folder-card`. Keep in sync with `folder-h`.
+    height: 150px;
     border-radius: 10px;
     background: ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
     opacity: root.folder.is-hidden ? 0.6 : 1.0;
@@ -345,6 +353,99 @@ component PmFolderCard inherits Rectangle {
     }
 }
 
+// Compact folder CHIP — the LIST-mode folder representation. Mirrors
+// Tauri's `.folder-list-item`: a rounded surface row with a small tinted
+// icon square (36px / 20px glyph) + folder name (13px) + playlist count
+// (11px, hover-revealed) + a hover-revealed edit pencil (12px). Used in a
+// wrapping row, so it sizes to its content.
+component PmFolderChip inherits Rectangle {
+    in property <PmFolderItem> folder;
+    callback open();
+    callback edit();
+    height: 52px;
+    width: chip-row.preferred-width;
+    border-radius: 8px;
+    background: ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+    opacity: root.folder.is-hidden ? 0.6 : 1.0;
+
+    chip-row := HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+        // Tinted icon square.
+        VerticalLayout {
+            alignment: center;
+            PmFolderIcon {
+                folder: root.folder;
+                size: 36px;
+                glyph-size: 20px;
+                radius: 8px;
+            }
+        }
+        // Folder name (capped width so very long names elide instead of
+        // stretching the chip — matches `.folder-list-name` max-width 120px).
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.folder.name;
+                color: Theme.text-primary;
+                font-size: 13px;
+                font-weight: Typography.medium;
+                vertical-alignment: center;
+                overflow: elide;
+                max-width: 120px;
+            }
+        }
+        // Playlist count — revealed on hover (matches `.folder-list-count`).
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.folder.count;
+                color: Theme.text-muted;
+                font-size: 11px;
+                vertical-alignment: center;
+                opacity: ta.has-hover ? 1.0 : 0.0;
+                animate opacity { duration: 150ms; }
+            }
+        }
+        // Edit pencil — revealed on hover (matches `.folder-list-edit`).
+        VerticalLayout {
+            alignment: center;
+            edit-btn := Rectangle {
+                width: 24px;
+                height: 24px;
+                border-radius: 4px;
+                opacity: (ta.has-hover || edit-ta.has-hover) ? 1.0 : 0.0;
+                animate opacity { duration: 150ms; }
+                background: edit-ta.has-hover ? Theme.surface-card : transparent;
+                QbzIcon {
+                    source: @image-url("../assets/icons/pen-line.svg");
+                    width: 12px;
+                    height: 12px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: edit-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                }
+                edit-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.edit();
+                    }
+                }
+            }
+        }
+    }
+    ta := TouchArea {
+        // Covers the icon + name region; the edit pencil keeps its own click.
+        width: parent.width - 32px;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => {
+            root.open();
+        }
+    }
+}
+
 // --- Playlist grid card -------------------------------------------------
 
 component PmGridCard inherits Rectangle {
@@ -372,6 +473,11 @@ component PmGridCard inherits Rectangle {
     VerticalLayout {
         padding: 10px;
         spacing: 8px;
+        // Pack children at the top so the footer sits right under the name
+        // (matching Tauri's `.grid-item` flex column — no justify-content,
+        // 8px gaps). Without this the layout stretches and pushes the footer
+        // to the bottom edge, leaving a large gap after the name.
+        alignment: start;
 
         // Optional reorder header (custom sort only).
         if root.can-reorder: HorizontalLayout {
@@ -498,6 +604,8 @@ component PmListRow inherits Rectangle {
     in property <bool> can-reorder: false;
     // Folder list for the move-to-folder menu ([] = no folders).
     in property <[PmFolderItem]> folders;
+    // Local text binding for the menu's folder-search box.
+    property <string> folder-query;
     callback open();
     callback favorite();
     callback visibility();
@@ -557,12 +665,24 @@ component PmListRow inherits Rectangle {
                 font-weight: Typography.medium;
                 overflow: elide;
             }
-            // Meta line — 12px muted (matches `.list-item .meta`).
+            // Meta line — 12px muted (matches `.list-item .meta`):
+            // "N tracks · 1h 43m  (3 local)".
             HorizontalLayout {
                 spacing: 6px;
                 alignment: start;
                 Text {
                     text: root.item.tracks-line;
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                }
+                // Dot + total playtime (Tauri shows this only in the list row).
+                if root.item.duration-line != "": Text {
+                    text: "·";
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                }
+                if root.item.duration-line != "": Text {
+                    text: root.item.duration-line;
                     color: Theme.text-muted;
                     font-size: 12px;
                 }
@@ -635,15 +755,20 @@ component PmListRow inherits Rectangle {
                 // Move-to-folder "..." (only when folders exist).
                 if root.folders.length > 0: more-btn := PmActionButton {
                     icon: @image-url("../assets/icons/ellipsis.svg");
-                    clicked => { folder-menu.show(); }
+                    clicked => {
+                        // Reset the filter to the full list each open.
+                        root.folder-query = "";
+                        PlaylistManagerActions.search-folders("");
+                        folder-menu.show();
+                    }
                 }
             }
         }
     }
     folder-menu := PopupWindow {
-        x: root.width - 206px;
+        x: root.width - 226px;
         y: 30px;
-        width: 200px;
+        width: 220px;
         Rectangle {
             background: Theme.surface-card;
             border-width: 1px;
@@ -660,15 +785,41 @@ component PmListRow inherits Rectangle {
                     font-size: 11px;
                     horizontal-alignment: left;
                 }
+                // Folder search — only with enough folders to warrant it
+                // (matches the sidebar's >=8 threshold). The substring filter
+                // runs in Rust into `menu-folders` (Slint has no `contains`).
+                if root.folders.length >= 8: Rectangle {
+                    height: 32px;
+                    LineEdit {
+                        height: 28px;
+                        width: parent.width;
+                        placeholder-text: @tr("Search folders");
+                        text <=> root.folder-query;
+                        edited => {
+                            PlaylistManagerActions.search-folders(self.text);
+                        }
+                    }
+                }
                 PmMenuItem {
                     label: @tr("No folder");
                     selected: root.item.folder-id == "";
                     activated => { root.move-to-folder(""); }
                 }
-                for f in root.folders: PmMenuItem {
-                    label: f.name;
-                    selected: root.item.folder-id == f.id;
-                    activated => { root.move-to-folder(f.id); }
+                // Cap the visible folders at 4 rows (30px each), then scroll.
+                ScrollView {
+                    height: min(PlaylistManagerState.menu-folders.length * 30px, 120px);
+                    vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
+                    horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                    VerticalLayout {
+                        for f in PlaylistManagerState.menu-folders: PmMenuItem {
+                            // Hide the playlist's current folder (the sidebar's
+                            // current-folder exclusion).
+                            shown: f.id != root.item.folder-id;
+                            label: f.name;
+                            selected: root.item.folder-id == f.id;
+                            activated => { root.move-to-folder(f.id); }
+                        }
+                    }
                 }
             }
         }
@@ -874,7 +1025,12 @@ component PmSectionHeader inherits Rectangle {
 export component PlaylistManagerView inherits Rectangle {
     property <length> grid-gap: 16px;
     property <length> folder-w: 160px;
-    property <length> folder-h: 128px;
+    property <length> folder-h: 150px;
+    // Compact folder-chip cell (LIST mode). Wrapping row of uniform-width
+    // chips (Slint has no flex-wrap); 8px gap matches Tauri's `.folders-list`.
+    property <length> chip-w: 184px;
+    property <length> chip-h: 52px;
+    property <length> chip-gap: 8px;
     property <length> card-w: 160px;
     // Card height depends on whether reorder controls show (matches
     // PmGridCard's height).
@@ -1130,7 +1286,9 @@ export component PlaylistManagerView inherits Rectangle {
                         collapsed: PlaylistManagerState.folders-collapsed;
                         toggle => { PlaylistManagerActions.toggle-folders-collapsed(); }
                     }
-                    if !PlaylistManagerState.folders-collapsed: folders-grid := Rectangle {
+                    // GRID mode: the big folder cards.
+                    if !PlaylistManagerState.folders-collapsed
+                        && PlaylistManagerState.view-mode == "grid": folders-grid := Rectangle {
                         property <int> columns: Math.max(1,
                             Math.floor((self.width + root.grid-gap) / (root.folder-w + root.grid-gap)));
                         property <int> rows: Math.ceil(PlaylistManagerState.folders.length / self.columns);
@@ -1140,6 +1298,26 @@ export component PlaylistManagerView inherits Rectangle {
                         for folder[i] in PlaylistManagerState.folders: PmFolderCard {
                             x: Math.mod(i, folders-grid.columns) * (root.folder-w + root.grid-gap);
                             y: Math.floor(i / folders-grid.columns) * (root.folder-h + root.grid-gap);
+                            folder: folder;
+                            open => { PlaylistManagerActions.edit-folder(folder.id); }
+                            edit => { PlaylistManagerActions.edit-folder(folder.id); }
+                        }
+                    }
+                    // LIST mode: a wrapping row of compact folder chips
+                    // (Tauri's `.folders-list`). Uniform-width cells since
+                    // Slint has no flex-wrap.
+                    if !PlaylistManagerState.folders-collapsed
+                        && PlaylistManagerState.view-mode == "list": folders-chips := Rectangle {
+                        property <int> columns: Math.max(1,
+                            Math.floor((self.width + root.chip-gap) / (root.chip-w + root.chip-gap)));
+                        property <int> rows: Math.ceil(PlaylistManagerState.folders.length / self.columns);
+                        height: self.rows > 0
+                            ? self.rows * root.chip-h + Math.max(0, self.rows - 1) * root.chip-gap
+                            : 0px;
+                        for folder[i] in PlaylistManagerState.folders: PmFolderChip {
+                            x: Math.mod(i, folders-chips.columns) * (root.chip-w + root.chip-gap);
+                            y: Math.floor(i / folders-chips.columns) * (root.chip-h + root.chip-gap);
+                            width: root.chip-w;
                             folder: folder;
                             open => { PlaylistManagerActions.edit-folder(folder.id); }
                             edit => { PlaylistManagerActions.edit-folder(folder.id); }
