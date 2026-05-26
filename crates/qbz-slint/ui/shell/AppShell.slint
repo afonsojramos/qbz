@@ -14,11 +14,13 @@ import { PlaylistPickerModal } from "../primitives/PlaylistPickerModal.slint";
 import { CreatePlaylistModal } from "../primitives/CreatePlaylistModal.slint";
 import { EditPlaylistModal } from "../primitives/EditPlaylistModal.slint";
 import { CreateFolderModal } from "../primitives/CreateFolderModal.slint";
+import { FolderEditModal } from "../primitives/FolderEditModal.slint";
 import { DragGhost } from "../primitives/DragGhost.slint";
 import { PlayerBar } from "PlayerBar.slint";
 import { QueueSidebar } from "QueueSidebar.slint";
 import { LyricsSidebar } from "LyricsSidebar.slint";
 import { HomeView } from "../discover/HomeView.slint";
+import { DiscoverBrowseView } from "../discover/DiscoverBrowseView.slint";
 import { AlbumPageView } from "../album/AlbumPageView.slint";
 import { ArtistPageView } from "../artist/ArtistPageView.slint";
 import { MusicianPageView } from "../musician/MusicianPageView.slint";
@@ -27,6 +29,7 @@ import { ArtistsByLocationView } from "../location/ArtistsByLocationView.slint";
 import { FavoritesView } from "../favorites/FavoritesView.slint";
 import { MixView } from "../mix/MixView.slint";
 import { PlaylistView } from "../playlist/PlaylistView.slint";
+import { PlaylistManagerView } from "../playlist/PlaylistManagerView.slint";
 import { SettingsView } from "../settings/SettingsView.slint";
 import { SearchResultsView } from "../search/SearchResultsView.slint";
 
@@ -35,6 +38,7 @@ export component AppShell inherits Rectangle {
     callback open-artist(string);
     callback media-action(string, string, string);
     callback header-menu-navigate(string);
+    callback discover-view-all(string, string);
     callback settings-bool(string, bool);
     callback settings-select(string, int);
     callback settings-slider(string, int);
@@ -92,6 +96,20 @@ export component AppShell inherits Rectangle {
                     media-action(kind, id, action) => {
                         root.media-action(kind, id, action);
                     }
+                    discover-view-all(e, t) => {
+                        root.discover-view-all(e, t);
+                    }
+                }
+                if NavState.view == ContentView.discover-browse: DiscoverBrowseView {
+                    open-album(id) => {
+                        root.open-album(id);
+                    }
+                    open-artist(id) => {
+                        root.open-artist(id);
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
                 }
                 if NavState.view == ContentView.album: AlbumPageView {
                     open-artist(id) => {
@@ -135,6 +153,7 @@ export component AppShell inherits Rectangle {
                         root.open-artist(id);
                     }
                 }
+                if NavState.view == ContentView.playlist-manager: PlaylistManagerView { }
                 if NavState.view == ContentView.mix: MixView {
                     play-track(id) => {
                         root.media-action("mix-track", id, "play");
@@ -238,6 +257,9 @@ export component AppShell inherits Rectangle {
 
     // Global "Create folder" modal.
     CreateFolderModal { }
+
+    // Global "Folder editor" modal (Playlist Manager create/edit folder).
+    FolderEditModal { }
 
     // Floating track-drag ghost (follows the cursor, on top of all).
     DragGhost { }

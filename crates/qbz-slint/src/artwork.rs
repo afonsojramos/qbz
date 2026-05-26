@@ -47,6 +47,8 @@ pub enum ArtworkTarget {
     SearchArtist { idx: usize },
     /// One collage cover slot (0-3) of `SearchState.playlists[idx]`.
     SearchPlaylistCover { idx: usize, slot: usize },
+    /// One micro-collage cover slot (0-3) of `SidebarState.entries[idx]`.
+    SidebarPlaylistCover { idx: usize, slot: usize },
     /// The most-popular search hero (its kind is read from SearchState).
     SearchMostPopular,
     /// A release card in `ArtistState.release-sections[section_idx]
@@ -62,6 +64,8 @@ pub enum ArtworkTarget {
     FavoriteTrack { index: usize },
     /// A card in FavoritesState.albums[index].
     FavoriteAlbum { index: usize },
+    /// A card in DiscoverBrowseState.albums[index].
+    DiscoverBrowseAlbum { index: usize },
     /// A card in FavoritesState.artists[index].
     FavoriteArtist { index: usize },
     /// A card in FavoritesState.playlists[index].
@@ -92,6 +96,12 @@ pub enum ArtworkTarget {
     PlaylistTrack { index: usize },
     /// The PlaylistState header cover.
     PlaylistCover,
+    /// One collage cover slot (0-3) of
+    /// `PlaylistManagerState.playlists[index]`.
+    PmPlaylistCover { index: usize, slot: usize },
+    /// One collage cover slot (0-3) of a tree row's playlist
+    /// (`PlaylistManagerState.tree[index].playlist`).
+    PmTreeCover { index: usize, slot: usize },
 }
 
 impl ArtworkTarget {
@@ -105,6 +115,10 @@ impl ArtworkTarget {
             | ArtworkTarget::FavoriteTrack { .. }
             | ArtworkTarget::MixTrack { .. }
             | ArtworkTarget::PlaylistTrack { .. } => 96,
+            // Sidebar micro-collage tiles render at ~10-20px; decode tiny.
+            ArtworkTarget::SidebarPlaylistCover { .. } => 48,
+            // Playlist Manager collage tiles render at ~70-140px.
+            ArtworkTarget::PmPlaylistCover { .. } | ArtworkTarget::PmTreeCover { .. } => 160,
             _ => DECODE_SIZE,
         }
     }
@@ -362,6 +376,19 @@ fn apply_artwork(
                 model.set_row_data(idx, item);
             }
         }
+        ArtworkTarget::SidebarPlaylistCover { idx, slot } => {
+            let model = window.global::<crate::SidebarState>().get_entries();
+            if let Some(mut item) = model.row_data(idx) {
+                match slot {
+                    0 => item.cover1 = image,
+                    1 => item.cover2 = image,
+                    2 => item.cover3 = image,
+                    3 => item.cover4 = image,
+                    _ => return,
+                }
+                model.set_row_data(idx, item);
+            }
+        }
         ArtworkTarget::SearchMostPopular => {
             let state = window.global::<SearchState>();
             match state.get_most_popular_kind().as_str() {
@@ -427,6 +454,13 @@ fn apply_artwork(
         }
         ArtworkTarget::FavoriteAlbum { index } => {
             let model = window.global::<crate::FavoritesState>().get_albums();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::DiscoverBrowseAlbum { index } => {
+            let model = window.global::<crate::DiscoverBrowseState>().get_albums();
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);
@@ -528,6 +562,32 @@ fn apply_artwork(
         }
         ArtworkTarget::PlaylistCover => {
             window.global::<crate::PlaylistState>().set_cover(image);
+        }
+        ArtworkTarget::PmPlaylistCover { index, slot } => {
+            let model = window.global::<crate::PlaylistManagerState>().get_playlists();
+            if let Some(mut item) = model.row_data(index) {
+                match slot {
+                    0 => item.cover1 = image,
+                    1 => item.cover2 = image,
+                    2 => item.cover3 = image,
+                    3 => item.cover4 = image,
+                    _ => return,
+                }
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::PmTreeCover { index, slot } => {
+            let model = window.global::<crate::PlaylistManagerState>().get_tree();
+            if let Some(mut row) = model.row_data(index) {
+                match slot {
+                    0 => row.playlist.cover1 = image,
+                    1 => row.playlist.cover2 = image,
+                    2 => row.playlist.cover3 = image,
+                    3 => row.playlist.cover4 = image,
+                    _ => return,
+                }
+                model.set_row_data(index, row);
+            }
         }
     }
 }

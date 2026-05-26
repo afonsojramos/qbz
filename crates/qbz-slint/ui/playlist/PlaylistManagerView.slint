@@ -1,0 +1,1208 @@
+// Playlist Manager — the full playlist + folder organization surface
+// (Tauri's PlaylistManagerView). A fixed header/toolbar (Back/NavButtons +
+// title + search + filter/sort dropdowns + folder/flat toggle + view-mode
+// cycle + New folder + counter) over a scrolling FOLDERS section and a
+// PLAYLISTS section with three view modes (grid / list / tree).
+//
+// Rows are precomputed in Rust (crate::playlist_manager) and pushed as
+// ready-to-render models, so this view does no per-row map lookups.
+// Backend is reused via the PlaylistManagerActions callbacks.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import {
+    PlaylistManagerState,
+    PlaylistManagerActions,
+    PmFolderItem,
+    PmPlaylistItem,
+    PmTreeRow,
+} from "../state.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
+import { NavButtons } from "../shell/NavButtons.slint";
+import { PmCollage } from "../primitives/PmCollage.slint";
+import { PmFolderIcon } from "../primitives/PmFolderIcon.slint";
+
+// --- Toolbar bits -------------------------------------------------------
+
+// Search field — leading magnifier, input, trailing X to clear.
+component PmSearch inherits Rectangle {
+    height: 34px;
+    width: 240px;
+    border-radius: 6px;
+    background: Theme.surface-elevated;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.border-subtle;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 6px;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: @image-url("../assets/icons/search.svg");
+                width: 15px;
+                height: 15px;
+                tint: Theme.text-muted;
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            clip: true;
+            input := TextInput {
+                width: 100%;
+                height: 100%;
+                color: Theme.text-primary;
+                font-size: 13px;
+                vertical-alignment: center;
+                single-line: true;
+                text <=> PlaylistManagerState.search-query;
+                edited => {
+                    PlaylistManagerActions.search-changed(self.text);
+                }
+            }
+            Text {
+                visible: input.text == "";
+                width: 100%;
+                height: 100%;
+                text: @tr("Search playlists…");
+                color: Theme.text-muted;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                visible: PlaylistManagerState.search-query != "";
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                background: clear-ta.has-hover ? Theme.surface-hover : transparent;
+                QbzIcon {
+                    source: @image-url("../assets/icons/x.svg");
+                    width: 12px;
+                    height: 12px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: clear-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                }
+                clear-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        PlaylistManagerState.search-query = "";
+                        PlaylistManagerActions.search-changed("");
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One dropdown-menu row.
+component PmMenuItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    callback activated();
+    height: 30px;
+    border-radius: 5px;
+    background: mi-ta.has-hover ? Theme.surface-hover : transparent;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+        Text {
+            text: root.label;
+            color: root.selected ? Theme.accent : Theme.text-secondary;
+            font-size: 13px;
+            font-weight: root.selected ? 600 : 400;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        if root.selected: VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: @image-url("../assets/icons/check.svg");
+                width: 13px;
+                height: 13px;
+                tint: Theme.accent;
+            }
+        }
+    }
+    mi-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.activated();
+        }
+    }
+}
+
+// A toolbar icon button with a small text label (the dropdown triggers
+// and the New-folder button).
+component PmToolButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked();
+    height: 34px;
+    width: row.preferred-width + 22px;
+    border-radius: 6px;
+    background: root.active
+        ? Theme.accent
+        : (ta.has-hover ? Theme.surface-hover : Theme.surface-elevated);
+    row := HorizontalLayout {
+        x: 11px;
+        y: 0;
+        height: parent.height;
+        spacing: 7px;
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.icon;
+                width: 15px;
+                height: 15px;
+                tint: root.active ? #ffffff : Theme.text-secondary;
+            }
+        }
+        if root.label != "": VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.label;
+                color: root.active ? #ffffff : Theme.text-secondary;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A square icon-only toggle (folder/flat + view-mode cycle).
+component PmIconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active: false;
+    callback clicked();
+    width: 34px;
+    height: 34px;
+    border-radius: 6px;
+    background: root.active
+        ? Theme.accent
+        : (ta.has-hover ? Theme.surface-hover : Theme.surface-elevated);
+    QbzIcon {
+        source: root.icon;
+        width: 16px;
+        height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: root.active ? #ffffff : Theme.text-secondary;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A small hover action button on cards / rows (favorite / visibility /
+// edit / mixtape / reorder arrows).
+component PmActionButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> filled: false;
+    in property <length> btn-size: 26px;
+    in property <length> glyph: 15px;
+    callback clicked();
+    width: root.btn-size;
+    height: root.btn-size;
+    border-radius: 5px;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+    QbzIcon {
+        source: root.icon;
+        width: root.glyph;
+        height: root.glyph;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: root.filled ? Theme.accent : (ta.has-hover ? Theme.text-primary : Theme.text-muted);
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// Local-availability badge (all-local green Wifi / partial amber Cloud).
+component PmLocalBadge inherits Rectangle {
+    in property <string> status;
+    visible: root.status == "all_local" || root.status == "some_local";
+    width: 22px;
+    height: 22px;
+    border-radius: 11px;
+    background: #00000099;
+    QbzIcon {
+        source: root.status == "all_local"
+            ? @image-url("../assets/icons/wifi.svg")
+            : @image-url("../assets/icons/cloud-download.svg");
+        width: 13px;
+        height: 13px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: root.status == "all_local" ? #22c55e : #f59e0b;
+    }
+}
+
+// --- Folder card / chip -------------------------------------------------
+
+component PmFolderCard inherits Rectangle {
+    in property <PmFolderItem> folder;
+    callback open();
+    callback edit();
+    width: 160px;
+    height: 128px;
+    border-radius: 10px;
+    background: ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+    opacity: root.folder.is-hidden ? 0.6 : 1.0;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        PmFolderIcon {
+            folder: root.folder;
+            size: 64px;
+        }
+        Text {
+            text: root.folder.name;
+            color: Theme.text-primary;
+            font-size: Typography.body;
+            font-weight: Typography.medium;
+            overflow: elide;
+        }
+        Text {
+            text: root.folder.count == 1
+                ? @tr("1 playlist")
+                : @tr("{} playlists", root.folder.count);
+            color: Theme.text-muted;
+            font-size: Typography.legal;
+            overflow: elide;
+        }
+    }
+    // Hover edit pencil (top-right).
+    edit-btn := Rectangle {
+        x: parent.width - self.width - 8px;
+        y: 8px;
+        width: 26px;
+        height: 26px;
+        border-radius: 6px;
+        opacity: (ta.has-hover || edit-ta.has-hover) ? 1.0 : 0.0;
+        background: edit-ta.has-hover ? Theme.surface-card : #00000066;
+        QbzIcon {
+            source: @image-url("../assets/icons/pen-line.svg");
+            width: 14px;
+            height: 14px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            tint: Theme.text-primary;
+        }
+        edit-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.edit();
+            }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.open();
+        }
+    }
+}
+
+// --- Playlist grid card -------------------------------------------------
+
+component PmGridCard inherits Rectangle {
+    in property <PmPlaylistItem> item;
+    in property <int> index;
+    in property <int> total;
+    in property <bool> can-reorder: false;
+    callback open();
+    callback favorite();
+    callback visibility();
+    callback edit();
+    callback mixtape();
+    callback move-up();
+    callback move-down();
+
+    width: 160px;
+    // pad(10) + [reorder 22 + gap 8] + collage 140 + gap 8 + name 36 +
+    // gap 8 + footer 24 + pad(10).
+    height: root.can-reorder ? 266px : 236px;
+    border-radius: 8px;
+    background: ta.has-hover ? Theme.surface-hover : Theme.surface-card;
+    opacity: root.item.is-hidden ? 0.6 : 1.0;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 8px;
+
+        // Optional reorder header (custom sort only).
+        if root.can-reorder: HorizontalLayout {
+            height: 22px;
+            alignment: space-between;
+            PmActionButton {
+                icon: @image-url("../assets/icons/chevron-up.svg");
+                btn-size: 22px;
+                glyph: 14px;
+                clicked => { root.move-up(); }
+            }
+            VerticalLayout {
+                alignment: center;
+                QbzIcon {
+                    source: @image-url("../assets/icons/grip-vertical.svg");
+                    width: 13px;
+                    height: 13px;
+                    tint: Theme.text-muted;
+                }
+            }
+            PmActionButton {
+                icon: @image-url("../assets/icons/chevron-down.svg");
+                btn-size: 22px;
+                glyph: 14px;
+                clicked => { root.move-down(); }
+            }
+        }
+
+        // Artwork + availability badge.
+        Rectangle {
+            width: 140px;
+            height: 140px;
+            PmCollage {
+                item: root.item;
+                size: 140px;
+            }
+            PmLocalBadge {
+                x: parent.width - self.width - 6px;
+                y: 6px;
+                status: root.item.local-status;
+            }
+        }
+
+        Text {
+            text: root.item.name;
+            color: Theme.text-primary;
+            font-size: Typography.body;
+            font-weight: Typography.medium;
+            wrap: word-wrap;
+            overflow: elide;
+            width: 140px;
+            height: 36px;
+        }
+
+        // Footer: meta + actions.
+        HorizontalLayout {
+            width: 140px;
+            alignment: space-between;
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: root.item.tracks-line;
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    overflow: elide;
+                }
+            }
+            HorizontalLayout {
+                spacing: 0px;
+                PmActionButton {
+                    icon: root.item.is-favorite
+                        ? @image-url("../assets/icons/heart-filled.svg")
+                        : @image-url("../assets/icons/heart.svg");
+                    filled: root.item.is-favorite;
+                    btn-size: 24px;
+                    glyph: 14px;
+                    clicked => { root.favorite(); }
+                }
+                PmActionButton {
+                    icon: root.item.is-hidden
+                        ? @image-url("../assets/icons/eye-off.svg")
+                        : @image-url("../assets/icons/eye.svg");
+                    btn-size: 24px;
+                    glyph: 14px;
+                    clicked => { root.visibility(); }
+                }
+                PmActionButton {
+                    icon: @image-url("../assets/icons/pen-line.svg");
+                    btn-size: 24px;
+                    glyph: 14px;
+                    clicked => { root.edit(); }
+                }
+                PmActionButton {
+                    icon: @image-url("../assets/icons/cassette-tape.svg");
+                    btn-size: 24px;
+                    glyph: 14px;
+                    clicked => { root.mixtape(); }
+                }
+            }
+        }
+    }
+    ta := TouchArea {
+        // Covers the collage + name region (above the footer actions) so a
+        // card-body click opens the playlist while the footer buttons keep
+        // their own clicks. Sits below the reorder header when present.
+        width: parent.width;
+        // pad(10) + collage(140) + gap(8) + name(36) = 194.
+        height: 194px;
+        y: root.can-reorder ? 30px : 0px;
+        mouse-cursor: pointer;
+        clicked => {
+            root.open();
+        }
+    }
+}
+
+// --- Playlist list row --------------------------------------------------
+
+component PmListRow inherits Rectangle {
+    in property <PmPlaylistItem> item;
+    in property <int> index;
+    in property <bool> can-reorder: false;
+    // Folder list for the move-to-folder menu ([] = no folders).
+    in property <[PmFolderItem]> folders;
+    callback open();
+    callback favorite();
+    callback visibility();
+    callback edit();
+    callback mixtape();
+    callback move-up();
+    callback move-down();
+    callback move-to-folder(string /* folder id, "" = root */);
+
+    height: 64px;
+    border-radius: 8px;
+    background: ta.has-hover
+        ? Theme.surface-hover
+        : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
+    opacity: root.item.is-hidden ? 0.6 : 1.0;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 12px;
+        spacing: 12px;
+
+        // Reorder controls (custom sort only).
+        if root.can-reorder: VerticalLayout {
+            alignment: center;
+            spacing: 0px;
+            PmActionButton {
+                icon: @image-url("../assets/icons/chevron-up.svg");
+                btn-size: 20px;
+                glyph: 13px;
+                clicked => { root.move-up(); }
+            }
+            PmActionButton {
+                icon: @image-url("../assets/icons/chevron-down.svg");
+                btn-size: 20px;
+                glyph: 13px;
+                clicked => { root.move-down(); }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            PmCollage {
+                item: root.item;
+                size: 48px;
+                radius: 6px;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.item.name;
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: Typography.medium;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.item.tracks-line;
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                }
+                if root.item.local-line != "": Text {
+                    text: root.item.local-line;
+                    color: #22c55e;
+                    font-size: Typography.legal;
+                }
+            }
+        }
+        // Play-count badge.
+        if root.item.play-count > 0: VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 4px;
+                VerticalLayout {
+                    alignment: center;
+                    QbzIcon {
+                        source: @image-url("../assets/icons/chart-no-axes-column.svg");
+                        width: 13px;
+                        height: 13px;
+                        tint: Theme.text-muted;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.item.play-count;
+                        color: Theme.text-muted;
+                        font-size: Typography.legal;
+                    }
+                }
+            }
+        }
+        // Actions (hover).
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 0px;
+                opacity: ta.has-hover ? 1.0 : 0.35;
+                PmActionButton {
+                    icon: root.item.is-favorite
+                        ? @image-url("../assets/icons/heart-filled.svg")
+                        : @image-url("../assets/icons/heart.svg");
+                    filled: root.item.is-favorite;
+                    clicked => { root.favorite(); }
+                }
+                PmActionButton {
+                    icon: root.item.is-hidden
+                        ? @image-url("../assets/icons/eye-off.svg")
+                        : @image-url("../assets/icons/eye.svg");
+                    clicked => { root.visibility(); }
+                }
+                PmActionButton {
+                    icon: @image-url("../assets/icons/pen-line.svg");
+                    clicked => { root.edit(); }
+                }
+                PmActionButton {
+                    icon: @image-url("../assets/icons/cassette-tape.svg");
+                    clicked => { root.mixtape(); }
+                }
+                // Move-to-folder "..." (only when folders exist).
+                if root.folders.length > 0: more-btn := PmActionButton {
+                    icon: @image-url("../assets/icons/ellipsis.svg");
+                    clicked => { folder-menu.show(); }
+                }
+            }
+        }
+    }
+    folder-menu := PopupWindow {
+        x: root.width - 206px;
+        y: 30px;
+        width: 200px;
+        Rectangle {
+            background: Theme.surface-card;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            border-radius: 8px;
+            drop-shadow-blur: 20px;
+            drop-shadow-color: #00000080;
+            VerticalLayout {
+                padding: 6px;
+                spacing: 1px;
+                Text {
+                    text: @tr("Move to folder");
+                    color: Theme.text-muted;
+                    font-size: 11px;
+                    horizontal-alignment: left;
+                }
+                PmMenuItem {
+                    label: @tr("No folder");
+                    selected: root.item.folder-id == "";
+                    activated => { root.move-to-folder(""); }
+                }
+                for f in root.folders: PmMenuItem {
+                    label: f.name;
+                    selected: root.item.folder-id == f.id;
+                    activated => { root.move-to-folder(f.id); }
+                }
+            }
+        }
+    }
+    ta := TouchArea {
+        width: parent.width - 184px;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => {
+            root.open();
+        }
+    }
+}
+
+// --- Tree rows ----------------------------------------------------------
+
+component PmTreeFolderRow inherits Rectangle {
+    in property <PmTreeRow> entry;
+    callback toggle();
+    callback edit();
+    height: 44px;
+    border-radius: 8px;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 12px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.entry.expanded
+                    ? @image-url("../assets/icons/chevron-down.svg")
+                    : @image-url("../assets/icons/chevron-right.svg");
+                width: 15px;
+                height: 15px;
+                tint: Theme.text-muted;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            PmFolderIcon {
+                folder: root.entry.folder;
+                size: 28px;
+                glyph-size: 15px;
+                radius: 6px;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.entry.folder.name;
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: Typography.semibold;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.entry.folder.count;
+                color: Theme.text-muted;
+                font-size: Typography.legal;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            PmActionButton {
+                icon: @image-url("../assets/icons/pen-line.svg");
+                clicked => { root.edit(); }
+            }
+        }
+    }
+    ta := TouchArea {
+        width: parent.width - 40px;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggle();
+        }
+    }
+}
+
+component PmTreePlaylistRow inherits Rectangle {
+    in property <PmTreeRow> entry;
+    callback open();
+    callback favorite();
+    callback edit();
+    height: 40px;
+    border-radius: 6px;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+    opacity: root.entry.playlist.is-hidden ? 0.6 : 1.0;
+    HorizontalLayout {
+        padding-left: root.entry.indent ? 36px : 10px;
+        padding-right: 12px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            PmCollage {
+                item: root.entry.playlist;
+                size: 28px;
+                radius: 5px;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.entry.playlist.name;
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.entry.playlist.tracks-line;
+                color: Theme.text-muted;
+                font-size: Typography.legal;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 0px;
+                opacity: ta.has-hover ? 1.0 : 0.0;
+                PmActionButton {
+                    icon: root.entry.playlist.is-favorite
+                        ? @image-url("../assets/icons/heart-filled.svg")
+                        : @image-url("../assets/icons/heart.svg");
+                    filled: root.entry.playlist.is-favorite;
+                    clicked => { root.favorite(); }
+                }
+                PmActionButton {
+                    icon: @image-url("../assets/icons/pen-line.svg");
+                    clicked => { root.edit(); }
+                }
+            }
+        }
+    }
+    ta := TouchArea {
+        width: parent.width - 90px;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => {
+            root.open();
+        }
+    }
+}
+
+// --- Section header (collapsible) --------------------------------------
+
+component PmSectionHeader inherits Rectangle {
+    in property <string> title;
+    in property <bool> collapsible: false;
+    in property <bool> collapsed: false;
+    callback toggle();
+    height: 28px;
+    HorizontalLayout {
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.title;
+                color: Theme.text-secondary;
+                font-size: Typography.section;
+                font-weight: Typography.semibold;
+            }
+        }
+        if root.collapsible: VerticalLayout {
+            alignment: center;
+            chev := Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                background: chev-ta.has-hover ? Theme.surface-hover : transparent;
+                QbzIcon {
+                    source: root.collapsed
+                        ? @image-url("../assets/icons/chevron-right.svg")
+                        : @image-url("../assets/icons/chevron-down.svg");
+                    width: 14px;
+                    height: 14px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: Theme.text-muted;
+                }
+                chev-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.toggle();
+                    }
+                }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+}
+
+// === Main view ==========================================================
+
+export component PlaylistManagerView inherits Rectangle {
+    property <length> grid-gap: 16px;
+    property <length> folder-w: 160px;
+    property <length> folder-h: 128px;
+    property <length> card-w: 160px;
+    // Card height depends on whether reorder controls show (matches
+    // PmGridCard's height).
+    property <length> card-h: PlaylistManagerState.can-reorder ? 266px : 236px;
+
+    // The view-mode cycle button shows the NEXT mode's icon (Tauri).
+    property <image> next-view-icon:
+        PlaylistManagerState.view-mode == "grid"
+            ? @image-url("../assets/icons/list.svg")
+        : PlaylistManagerState.view-mode == "list"
+            ? (PlaylistManagerState.folder-mode
+                ? @image-url("../assets/icons/network.svg")
+                : @image-url("../assets/icons/layout-grid.svg"))
+        : @image-url("../assets/icons/layout-grid.svg");
+
+    background: Theme.surface-main;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // --- Fixed header / toolbar ------------------------------------
+        Rectangle {
+            height: 56px;
+            background: Theme.surface-main;
+
+            // Left: nav buttons + title.
+            HorizontalLayout {
+                x: 32px;
+                y: 25px - self.height / 2;
+                width: self.preferred-width;
+                height: self.preferred-height;
+                spacing: 16px;
+                VerticalLayout {
+                    alignment: center;
+                    NavButtons { }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("Playlist manager");
+                        color: Theme.text-primary;
+                        font-size: Typography.section;
+                        font-weight: Typography.bold;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Right: toolbar tools.
+            HorizontalLayout {
+                x: parent.width - self.preferred-width - 32px;
+                y: 25px - self.height / 2;
+                width: self.preferred-width;
+                height: self.preferred-height;
+                spacing: 8px;
+
+                VerticalLayout { alignment: center; PmSearch { } }
+
+                // Filter dropdown.
+                VerticalLayout {
+                    alignment: center;
+                    filter-btn := PmToolButton {
+                        icon: @image-url("../assets/icons/list-filter.svg");
+                        label: PlaylistManagerState.filter == "visible"
+                            ? @tr("Visible")
+                            : (PlaylistManagerState.filter == "hidden" ? @tr("Hidden") : @tr("All"));
+                        clicked => { filter-menu.show(); }
+                    }
+                    filter-menu := PopupWindow {
+                        x: 0; y: 38px; width: 160px;
+                        Rectangle {
+                            background: Theme.surface-card;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            border-radius: 8px;
+                            drop-shadow-blur: 20px;
+                            drop-shadow-color: #00000080;
+                            VerticalLayout {
+                                padding: 6px;
+                                spacing: 1px;
+                                PmMenuItem {
+                                    label: @tr("All");
+                                    selected: PlaylistManagerState.filter == "all";
+                                    activated => { PlaylistManagerActions.set-filter("all"); }
+                                }
+                                PmMenuItem {
+                                    label: @tr("Visible");
+                                    selected: PlaylistManagerState.filter == "visible";
+                                    activated => { PlaylistManagerActions.set-filter("visible"); }
+                                }
+                                PmMenuItem {
+                                    label: @tr("Hidden");
+                                    selected: PlaylistManagerState.filter == "hidden";
+                                    activated => { PlaylistManagerActions.set-filter("hidden"); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Sort dropdown.
+                VerticalLayout {
+                    alignment: center;
+                    sort-btn := PmToolButton {
+                        icon: @image-url("../assets/icons/arrow-up-down.svg");
+                        label: PlaylistManagerState.sort == "recent" ? @tr("Recent")
+                            : PlaylistManagerState.sort == "playcount" ? @tr("Play Count")
+                            : PlaylistManagerState.sort == "tracks" ? @tr("Track Count")
+                            : PlaylistManagerState.sort == "custom" ? @tr("Custom")
+                            : @tr("Name A-Z");
+                        clicked => { sort-menu.show(); }
+                    }
+                    sort-menu := PopupWindow {
+                        x: 0; y: 38px; width: 180px;
+                        Rectangle {
+                            background: Theme.surface-card;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            border-radius: 8px;
+                            drop-shadow-blur: 20px;
+                            drop-shadow-color: #00000080;
+                            VerticalLayout {
+                                padding: 6px;
+                                spacing: 1px;
+                                PmMenuItem {
+                                    label: @tr("Name A-Z");
+                                    selected: PlaylistManagerState.sort == "name";
+                                    activated => { PlaylistManagerActions.set-sort("name"); }
+                                }
+                                PmMenuItem {
+                                    label: @tr("Recent");
+                                    selected: PlaylistManagerState.sort == "recent";
+                                    activated => { PlaylistManagerActions.set-sort("recent"); }
+                                }
+                                PmMenuItem {
+                                    label: @tr("Play Count");
+                                    selected: PlaylistManagerState.sort == "playcount";
+                                    activated => { PlaylistManagerActions.set-sort("playcount"); }
+                                }
+                                PmMenuItem {
+                                    label: @tr("Track Count");
+                                    selected: PlaylistManagerState.sort == "tracks";
+                                    activated => { PlaylistManagerActions.set-sort("tracks"); }
+                                }
+                                PmMenuItem {
+                                    label: @tr("Custom");
+                                    selected: PlaylistManagerState.sort == "custom";
+                                    activated => { PlaylistManagerActions.set-sort("custom"); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Folder / flat toggle.
+                VerticalLayout {
+                    alignment: center;
+                    PmIconButton {
+                        icon: PlaylistManagerState.folder-mode
+                            ? @image-url("../assets/icons/folder-open.svg")
+                            : @image-url("../assets/icons/rows-3.svg");
+                        active: PlaylistManagerState.folder-mode;
+                        clicked => { PlaylistManagerActions.toggle-folder-mode(); }
+                    }
+                }
+
+                // View-mode cycle (shows next mode's icon).
+                VerticalLayout {
+                    alignment: center;
+                    PmIconButton {
+                        icon: root.next-view-icon;
+                        clicked => {
+                            if (PlaylistManagerState.folder-mode) {
+                                PlaylistManagerActions.set-view-mode(
+                                    PlaylistManagerState.view-mode == "grid" ? "list"
+                                    : PlaylistManagerState.view-mode == "list" ? "tree" : "grid");
+                            } else {
+                                PlaylistManagerActions.set-view-mode(
+                                    PlaylistManagerState.view-mode == "list" ? "grid" : "list");
+                            }
+                        }
+                    }
+                }
+
+                // New folder (folder mode only).
+                if PlaylistManagerState.folder-mode: VerticalLayout {
+                    alignment: center;
+                    PmToolButton {
+                        icon: @image-url("../assets/icons/folder-plus.svg");
+                        label: @tr("New folder");
+                        clicked => { PlaylistManagerActions.new-folder(); }
+                    }
+                }
+            }
+        }
+
+        // --- Scrolling content -----------------------------------------
+        Flickable {
+            vertical-stretch: 1;
+            viewport-width: self.width;
+            viewport-height: page.preferred-height;
+
+            page := VerticalLayout {
+                width: parent.width;
+                padding-left: 32px;
+                padding-right: 32px;
+                padding-top: 6px;
+                padding-bottom: 100px;
+                spacing: 0px;
+                alignment: start;
+
+                // Counter + drag hint.
+                HorizontalLayout {
+                    height: 24px;
+                    spacing: 12px;
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: @tr("{} folders, {} playlists",
+                                PlaylistManagerState.folder-count,
+                                PlaylistManagerState.playlist-count);
+                            color: Theme.text-muted;
+                            font-size: Typography.legal;
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    if PlaylistManagerState.can-reorder: VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: @tr("Use the arrows to reorder playlists");
+                            color: Theme.text-muted;
+                            font-size: Typography.legal;
+                        }
+                    }
+                }
+
+                Rectangle { height: 14px; }
+
+                if PlaylistManagerState.loading: HorizontalLayout {
+                    alignment: center;
+                    LoadingSpinner { size: 36px; }
+                }
+
+                // --- FOLDERS section (folder mode, non-tree) -----------
+                if !PlaylistManagerState.loading
+                    && PlaylistManagerState.folder-mode
+                    && PlaylistManagerState.view-mode != "tree"
+                    && PlaylistManagerState.folders.length > 0: VerticalLayout {
+                    spacing: 12px;
+                    PmSectionHeader {
+                        title: @tr("Folders ({})", PlaylistManagerState.folders.length);
+                        collapsible: true;
+                        collapsed: PlaylistManagerState.folders-collapsed;
+                        toggle => { PlaylistManagerActions.toggle-folders-collapsed(); }
+                    }
+                    if !PlaylistManagerState.folders-collapsed: folders-grid := Rectangle {
+                        property <int> columns: Math.max(1,
+                            Math.floor((self.width + root.grid-gap) / (root.folder-w + root.grid-gap)));
+                        property <int> rows: Math.ceil(PlaylistManagerState.folders.length / self.columns);
+                        height: self.rows > 0
+                            ? self.rows * root.folder-h + Math.max(0, self.rows - 1) * root.grid-gap
+                            : 0px;
+                        for folder[i] in PlaylistManagerState.folders: PmFolderCard {
+                            x: Math.mod(i, folders-grid.columns) * (root.folder-w + root.grid-gap);
+                            y: Math.floor(i / folders-grid.columns) * (root.folder-h + root.grid-gap);
+                            folder: folder;
+                            open => { PlaylistManagerActions.edit-folder(folder.id); }
+                            edit => { PlaylistManagerActions.edit-folder(folder.id); }
+                        }
+                    }
+                    Rectangle { height: 24px; }
+                }
+
+                // --- PLAYLISTS section header (non-tree) ---------------
+                if !PlaylistManagerState.loading
+                    && PlaylistManagerState.view-mode != "tree": PmSectionHeader {
+                    title: @tr("Playlists ({})", PlaylistManagerState.playlist-count);
+                }
+                if !PlaylistManagerState.loading
+                    && PlaylistManagerState.view-mode != "tree": Rectangle { height: 14px; }
+
+                // Empty state.
+                if !PlaylistManagerState.loading
+                    && PlaylistManagerState.playlists.length == 0
+                    && PlaylistManagerState.view-mode != "tree": Text {
+                    text: @tr("No playlists found.");
+                    color: Theme.text-muted;
+                    font-size: Typography.body;
+                }
+
+                // --- PLAYLISTS grid ------------------------------------
+                if !PlaylistManagerState.loading
+                    && PlaylistManagerState.view-mode == "grid": pl-grid := Rectangle {
+                    property <int> columns: Math.max(1,
+                        Math.floor((self.width + root.grid-gap) / (root.card-w + root.grid-gap)));
+                    property <int> rows: Math.ceil(PlaylistManagerState.playlists.length / self.columns);
+                    height: self.rows > 0
+                        ? self.rows * root.card-h + Math.max(0, self.rows - 1) * root.grid-gap
+                        : 0px;
+                    for item[i] in PlaylistManagerState.playlists: PmGridCard {
+                        x: Math.mod(i, pl-grid.columns) * (root.card-w + root.grid-gap);
+                        y: Math.floor(i / pl-grid.columns) * (root.card-h + root.grid-gap);
+                        item: item;
+                        index: i;
+                        total: PlaylistManagerState.playlists.length;
+                        can-reorder: PlaylistManagerState.can-reorder;
+                        open => { PlaylistManagerActions.open-playlist(item.id); }
+                        favorite => { PlaylistManagerActions.toggle-favorite(item.id); }
+                        visibility => { PlaylistManagerActions.toggle-hidden(item.id); }
+                        edit => { PlaylistManagerActions.edit-playlist(item.id); }
+                        mixtape => { PlaylistManagerActions.add-to-mixtape(item.id); }
+                        move-up => { PlaylistManagerActions.move-up(item.id); }
+                        move-down => { PlaylistManagerActions.move-down(item.id); }
+                    }
+                }
+
+                // --- PLAYLISTS list ------------------------------------
+                if !PlaylistManagerState.loading
+                    && PlaylistManagerState.view-mode == "list": VerticalLayout {
+                    spacing: 4px;
+                    for item[i] in PlaylistManagerState.playlists: PmListRow {
+                        item: item;
+                        index: i;
+                        can-reorder: PlaylistManagerState.can-reorder;
+                        folders: PlaylistManagerState.folders;
+                        open => { PlaylistManagerActions.open-playlist(item.id); }
+                        favorite => { PlaylistManagerActions.toggle-favorite(item.id); }
+                        visibility => { PlaylistManagerActions.toggle-hidden(item.id); }
+                        edit => { PlaylistManagerActions.edit-playlist(item.id); }
+                        mixtape => { PlaylistManagerActions.add-to-mixtape(item.id); }
+                        move-up => { PlaylistManagerActions.move-up(item.id); }
+                        move-down => { PlaylistManagerActions.move-down(item.id); }
+                        move-to-folder(fid) => { PlaylistManagerActions.move-to-folder(item.id, fid); }
+                    }
+                }
+
+                // --- TREE view -----------------------------------------
+                if !PlaylistManagerState.loading
+                    && PlaylistManagerState.view-mode == "tree": VerticalLayout {
+                    spacing: 2px;
+                    for tree-row[i] in PlaylistManagerState.tree: VerticalLayout {
+                        if tree-row.kind == "folder": PmTreeFolderRow {
+                            entry: tree-row;
+                            toggle => { PlaylistManagerActions.toggle-tree-folder(tree-row.folder.id); }
+                            edit => { PlaylistManagerActions.edit-folder(tree-row.folder.id); }
+                        }
+                        if tree-row.kind == "playlist": PmTreePlaylistRow {
+                            entry: tree-row;
+                            open => { PlaylistManagerActions.open-playlist(tree-row.playlist.id); }
+                            favorite => { PlaylistManagerActions.toggle-favorite(tree-row.playlist.id); }
+                            edit => { PlaylistManagerActions.edit-playlist(tree-row.playlist.id); }
+                        }
+                    }
+                    if PlaylistManagerState.tree.length == 0: Text {
+                        text: @tr("No playlists found.");
+                        color: Theme.text-muted;
+                        font-size: Typography.body;
+                    }
+                }
+            }
+        }
+    }
+}

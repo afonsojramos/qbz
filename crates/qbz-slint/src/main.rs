@@ -22,6 +22,7 @@ mod auth;
 mod commands;
 mod custom_artwork;
 mod dates;
+mod discover_browse;
 mod discovery_dismiss;
 mod favorites;
 mod foryou;
@@ -40,6 +41,7 @@ mod drag;
 mod folders;
 mod library_db;
 mod playlist;
+mod playlist_manager;
 mod playlist_picker;
 mod recently;
 mod search;
@@ -121,6 +123,14 @@ async fn enter_shell(
     reload_home(&runtime, &weak, &image_cache, "home".to_string()).await;
 }
 
+/// The shared genre-filter selection expanded to descendant ids, as the
+/// `Option<Vec<u64>>` the discover endpoints take (None = no filter).
+/// Shared by the home re-fetch and the DiscoverBrowse "View all" page.
+fn current_genre_filter() -> Option<Vec<u64>> {
+    let ids = genre_filter::filter_ids();
+    (!ids.is_empty()).then_some(ids)
+}
+
 /// Fetch the discover index (honoring the shared genre selection),
 /// apply all three tab section sets, show the requested tab, and fan
 /// out artwork. Shared by the initial shell load and genre-filter /
@@ -188,6 +198,22 @@ async fn reload_home(
             });
         }
     }
+}
+
+/// Read the current DiscoverBrowse "View all" target when that page is
+/// the active view, so a genre-filter change can re-navigate it instead
+/// of the Discover home index (the selection is shared across surfaces).
+/// Returns None when any other view is showing. UI thread only.
+fn current_browse_target(window: &AppWindow) -> Option<(String, String)> {
+    if window.global::<NavState>().get_view() != ContentView::DiscoverBrowse {
+        return None;
+    }
+    let state = window.global::<DiscoverBrowseState>();
+    let endpoint = state.get_endpoint().to_string();
+    if endpoint.is_empty() {
+        return None;
+    }
+    Some((endpoint, state.get_title().to_string()))
 }
 
 /// Push the navigation history flags onto `NavState`. UI thread only.
@@ -505,11 +531,30 @@ fn apply_entry(
         nav::NavEntry::Label { id, name } => {
             navigate_label(runtime.clone(), weak.clone(), handle, image_cache.clone(), id, name);
         }
+        nav::NavEntry::DiscoverBrowse { endpoint, title } => {
+            discover_browse::navigate(
+                runtime.clone(),
+                weak.clone(),
+                handle,
+                image_cache.clone(),
+                endpoint,
+                title,
+                current_genre_filter(),
+            );
+        }
         nav::NavEntry::Mix { kind } => {
             navigate_mix(runtime.clone(), weak.clone(), handle, image_cache.clone(), kind);
         }
         nav::NavEntry::Playlist(id) => {
             navigate_playlist(runtime.clone(), weak.clone(), handle, image_cache.clone(), id);
+        }
+        nav::NavEntry::PlaylistManager => {
+            playlist_manager::navigate(
+                runtime.clone(),
+                weak.clone(),
+                handle,
+                image_cache.clone(),
+            );
         }
         nav::NavEntry::Location {
             mbid,
@@ -737,8 +782,585 @@ fn load_sidebar_playlists(
         let data = sidebar::load(&runtime).await;
         let _ = weak.upgrade_in_event_loop(move |w| {
             sidebar::apply(&w, data);
+            refresh_sidebar_covers(&w);
         });
     });
+}
+
+/// (Re)spawn the per-playlist micro-collage cover downloads for the
+/// current `SidebarState.entries`. Called after any rebuild that replaces
+/// the rows (load / toggle / move / sort / search), since `set_row_data`
+/// resets the decoded cover images. Each completion updates only its own
+/// row (see artwork.rs), and the shared image cache means already-fetched
+/// covers resolve from disk without a re-download.
+fn refresh_sidebar_covers(window: &AppWindow) {
+    if let Some(cache) = artwork::shared_cache() {
+        let jobs = sidebar::artwork_jobs(window);
+        if !jobs.is_empty() {
+            artwork::spawn_loads(jobs, window.as_weak(), cache);
+        }
+    }
+}
+
+/// Re-fire the artwork pipeline for the Playlist Manager's currently
+/// rendered cards (after a rebuild swaps the models).
+fn refresh_pm_covers(window: &AppWindow) {
+    if let Some(cache) = artwork::shared_cache() {
+        let jobs = playlist_manager::artwork_jobs(window);
+        if !jobs.is_empty() {
+            artwork::spawn_loads(jobs, window.as_weak(), cache);
+        }
+        let handle = tokio::runtime::Handle::current();
+        playlist_manager::load_folder_custom_images(window.as_weak(), &handle);
+    }
+}
+
+/// Build the folder-editor icon-preset + solid-color models (matches
+/// Tauri's FolderEditModal presets). Run once when wiring the editor.
+fn folder_editor_presets() -> (Vec<PmIconPreset>, Vec<PmColorSwatch>) {
+    // The icon glyphs are resolved in the .slint by id (a `@image-url`
+    // chain keyed on `preset.id`), so the model only carries the id; the
+    // image field stays default.
+    let presets: Vec<PmIconPreset> =
+        ["heart", "star", "music", "folder", "disc", "library", "headphones"]
+            .iter()
+            .map(|id| PmIconPreset {
+                id: (*id).into(),
+                icon: slint::Image::default(),
+            })
+            .collect();
+
+    let parse = |hex: &str| -> slint::Color {
+        let h = hex.trim_start_matches('#');
+        let v = u32::from_str_radix(h, 16).unwrap_or(0);
+        slint::Color::from_rgb_u8(
+            ((v >> 16) & 0xff) as u8,
+            ((v >> 8) & 0xff) as u8,
+            (v & 0xff) as u8,
+        )
+    };
+    let mut swatches = vec![PmColorSwatch {
+        value: "".into(),
+        color: slint::Color::default(),
+        is_accent: true,
+    }];
+    for hex in [
+        "#ef4444", "#f97316", "#f59e0b", "#10b981", "#06b6d4", "#3b82f6", "#a855f7", "#ec4899",
+        "#f43f5e", "#64748b",
+    ] {
+        swatches.push(PmColorSwatch {
+            value: hex.into(),
+            color: parse(hex),
+            is_accent: false,
+        });
+    }
+    (presets, swatches)
+}
+
+/// Wire all Playlist Manager + folder-editor callbacks. Mirrors the
+/// favorites + sidebar wiring: optimistic local mutations (rebuild from
+/// cache) plus a backend write on a blocking thread.
+fn wire_playlist_manager(
+    window: &AppWindow,
+    app_runtime: &Arc<AppRuntime<SlintAdapter>>,
+    tokio_rt: &tokio::runtime::Runtime,
+    image_cache: &artwork::ImageCache,
+) {
+    // The folder-editor preset + color grids (built once, never change).
+    {
+        let (presets, swatches) = folder_editor_presets();
+        let fes = window.global::<FolderEditState>();
+        fes.set_icon_presets(slint::ModelRc::new(slint::VecModel::from(presets)));
+        fes.set_color_swatches(slint::ModelRc::new(slint::VecModel::from(swatches)));
+    }
+
+    // --- Open playlist ---------------------------------------------------
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_open_playlist(move |id| {
+                nav::record(nav::NavEntry::Playlist(id.to_string()));
+                navigate_playlist(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    id.to_string(),
+                );
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
+            });
+    }
+
+    // --- Toolbar ---------------------------------------------------------
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_search_changed(move |query| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<PlaylistManagerState>().set_search_query(query);
+                    playlist_manager::rebuild(&w);
+                    refresh_pm_covers(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_set_filter(move |value| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<PlaylistManagerState>().set_filter(value);
+                    playlist_manager::rebuild(&w);
+                    refresh_pm_covers(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_set_sort(move |value| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<PlaylistManagerState>().set_sort(value);
+                    playlist_manager::rebuild(&w);
+                    refresh_pm_covers(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_set_view_mode(move |value| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<PlaylistManagerState>().set_view_mode(value);
+                    playlist_manager::rebuild(&w);
+                    refresh_pm_covers(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_toggle_folder_mode(move || {
+                if let Some(w) = weak.upgrade() {
+                    let st = w.global::<PlaylistManagerState>();
+                    let next = !st.get_folder_mode();
+                    st.set_folder_mode(next);
+                    // Leaving folder mode while in tree falls back to grid.
+                    if !next && st.get_view_mode() == "tree" {
+                        st.set_view_mode("grid".into());
+                    }
+                    playlist_manager::rebuild(&w);
+                    refresh_pm_covers(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_toggle_folders_collapsed(move || {
+                if let Some(w) = weak.upgrade() {
+                    let st = w.global::<PlaylistManagerState>();
+                    st.set_folders_collapsed(!st.get_folders_collapsed());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_toggle_tree_folder(move |id| {
+                if let Some(w) = weak.upgrade() {
+                    playlist_manager::toggle_tree_folder(&w, id.as_str());
+                    refresh_pm_covers(&w);
+                }
+            });
+    }
+
+    // --- Per-card playlist actions --------------------------------------
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_toggle_favorite(move |id| {
+                let Some(w) = weak.upgrade() else { return };
+                let Ok(pid) = id.parse::<u64>() else { return };
+                let value = playlist_manager::toggle_favorite_local(&w, pid);
+                refresh_pm_covers(&w);
+                handle.spawn(async move {
+                    tokio::task::spawn_blocking(move || folders::set_favorite(pid, value))
+                        .await
+                        .ok();
+                });
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_toggle_hidden(move |id| {
+                let Some(w) = weak.upgrade() else { return };
+                let Ok(pid) = id.parse::<u64>() else { return };
+                let value = playlist_manager::toggle_hidden_local(&w, pid);
+                refresh_pm_covers(&w);
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    tokio::task::spawn_blocking(move || folders::set_hidden(pid, value))
+                        .await
+                        .ok();
+                    // The sidebar reflects hidden playlists, so refresh it.
+                    load_sidebar_playlists(runtime, weak, &handle);
+                });
+            });
+    }
+    {
+        // Open the shared edit-playlist modal, prefilled from the card.
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_edit_playlist(move |id| {
+                use slint::Model;
+                let Some(w) = weak.upgrade() else { return };
+                let model = w.global::<PlaylistManagerState>().get_playlists();
+                let name = (0..model.row_count())
+                    .filter_map(|i| model.row_data(i))
+                    .find(|it| it.id == id)
+                    .map(|it| it.name)
+                    .unwrap_or_default();
+                let es = w.global::<EditPlaylistState>();
+                es.set_id(id);
+                es.set_name(name);
+                es.set_description("".into());
+                es.set_open(true);
+            });
+    }
+    {
+        // Add-to-mixtape — the mixtape system is not yet ported to Slint;
+        // log and no-op (matches the deferred mixtape surface).
+        window
+            .global::<PlaylistManagerActions>()
+            .on_add_to_mixtape(move |id| {
+                log::info!("[qbz-slint] add-to-mixtape not yet implemented (playlist {id})");
+            });
+    }
+
+    // --- Arrow reorder (custom sort) ------------------------------------
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_move_up(move |id| {
+                let Some(w) = weak.upgrade() else { return };
+                let Ok(pid) = id.parse::<u64>() else { return };
+                let order = playlist_manager::move_up(&w, pid);
+                refresh_pm_covers(&w);
+                if !order.is_empty() {
+                    handle.spawn(async move {
+                        tokio::task::spawn_blocking(move || folders::reorder_playlists(&order))
+                            .await
+                            .ok();
+                    });
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_move_down(move |id| {
+                let Some(w) = weak.upgrade() else { return };
+                let Ok(pid) = id.parse::<u64>() else { return };
+                let order = playlist_manager::move_down(&w, pid);
+                refresh_pm_covers(&w);
+                if !order.is_empty() {
+                    handle.spawn(async move {
+                        tokio::task::spawn_blocking(move || folders::reorder_playlists(&order))
+                            .await
+                            .ok();
+                    });
+                }
+            });
+    }
+    {
+        // Move a playlist into a folder ("" = root).
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_move_to_folder(move |playlist_id, folder_id| {
+                let Some(w) = weak.upgrade() else { return };
+                let Ok(pid) = playlist_id.parse::<u64>() else { return };
+                let fid = folder_id.to_string();
+                playlist_manager::move_to_folder_local(&w, pid, &fid);
+                refresh_pm_covers(&w);
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    let opt = fid.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let o = if opt.is_empty() { None } else { Some(opt.as_str()) };
+                        folders::move_playlist(pid, o);
+                    })
+                    .await
+                    .ok();
+                    load_sidebar_playlists(runtime, weak, &handle);
+                });
+            });
+    }
+
+    // --- Folder editor: open (new + edit) -------------------------------
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_new_folder(move || {
+                if let Some(w) = weak.upgrade() {
+                    let fes = w.global::<FolderEditState>();
+                    fes.set_id("".into());
+                    fes.set_name("".into());
+                    fes.set_icon_preset("folder".into());
+                    fes.set_icon_color("".into());
+                    fes.set_is_hidden(false);
+                    fes.set_custom_image_path("".into());
+                    fes.set_open(true);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistManagerActions>()
+            .on_edit_folder(move |id| {
+                let Some(w) = weak.upgrade() else { return };
+                let fid = id.to_string();
+                if let Some(f) = playlist_manager::folder_for_edit(&fid) {
+                    let fes = w.global::<FolderEditState>();
+                    fes.set_id(id);
+                    fes.set_name(f.name.into());
+                    fes.set_icon_preset(f.icon_preset.into());
+                    fes.set_icon_color(f.icon_color.into());
+                    fes.set_is_hidden(f.is_hidden);
+                    fes.set_custom_image_path(
+                        f.custom_image_path.clone().unwrap_or_default().into(),
+                    );
+                    fes.set_open(true);
+                    // Decode the existing custom image, if any.
+                    if let Some(path) = f.custom_image_path {
+                        playlist_manager::load_editor_custom_image(w.as_weak(), path);
+                    }
+                }
+            });
+    }
+
+    // --- Folder editor: field changes -----------------------------------
+    {
+        let weak = window.as_weak();
+        window
+            .global::<FolderEditActions>()
+            .on_select_preset(move |id| {
+                if let Some(w) = weak.upgrade() {
+                    let fes = w.global::<FolderEditState>();
+                    fes.set_icon_preset(id);
+                    // Choosing a preset clears the custom image.
+                    fes.set_custom_image_path("".into());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<FolderEditActions>()
+            .on_select_color(move |hex| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<FolderEditState>().set_icon_color(hex);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<FolderEditActions>()
+            .on_pick_image(move || {
+                let weak = weak.clone();
+                handle.spawn(async move {
+                    let Some(file) = rfd::AsyncFileDialog::new()
+                        .add_filter("Images", &["png", "jpg", "jpeg", "webp", "gif"])
+                        .pick_file()
+                        .await
+                    else {
+                        return;
+                    };
+                    let path = file.path().to_string_lossy().to_string();
+                    let path2 = path.clone();
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        w.global::<FolderEditState>().set_custom_image_path(path2.into());
+                        playlist_manager::load_editor_custom_image(w.as_weak(), path);
+                    });
+                });
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<FolderEditActions>()
+            .on_clear_image(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<FolderEditState>().set_custom_image_path("".into());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<FolderEditActions>()
+            .on_toggle_hidden(move || {
+                if let Some(w) = weak.upgrade() {
+                    let fes = w.global::<FolderEditState>();
+                    fes.set_is_hidden(!fes.get_is_hidden());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<FolderEditActions>()
+            .on_close(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<FolderEditState>().set_open(false);
+                }
+            });
+    }
+    {
+        // Save (create or update) the folder, then reload PM + sidebar.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<FolderEditActions>()
+            .on_save(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let fes = w.global::<FolderEditState>();
+                let id = fes.get_id().to_string();
+                let name = fes.get_name().to_string();
+                if name.trim().is_empty() {
+                    return;
+                }
+                let preset = fes.get_icon_preset().to_string();
+                let color = fes.get_icon_color().to_string();
+                let hidden = fes.get_is_hidden();
+                let image_path = fes.get_custom_image_path().to_string();
+                fes.set_open(false);
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                let image_cache = image_cache.clone();
+                handle.clone().spawn(async move {
+                    let nm = name.trim().to_string();
+                    tokio::task::spawn_blocking(move || {
+                        if id.is_empty() {
+                            folders::create_folder_full(&nm, &preset, &color);
+                            // A custom image on a brand-new folder: set it
+                            // in a follow-up update once we have the id.
+                            // (Rare path; the create flow defaults to a
+                            // preset icon — image edits use the edit path.)
+                        } else {
+                            let icon_type = if image_path.is_empty() { "preset" } else { "custom" };
+                            let img = if image_path.is_empty() {
+                                Some(None)
+                            } else {
+                                Some(Some(image_path.as_str()))
+                            };
+                            folders::update_folder_full(
+                                &id, &nm, icon_type, &preset, &color, img, hidden,
+                            );
+                        }
+                    })
+                    .await
+                    .ok();
+                    // Reload the manager data + sidebar.
+                    let data = playlist_manager::load(&runtime).await;
+                    let weak2 = weak.clone();
+                    let r2 = runtime.clone();
+                    let h2 = handle.clone();
+                    let ic = image_cache.clone();
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        playlist_manager::apply(&w, data);
+                        refresh_pm_covers(&w);
+                        load_sidebar_playlists(r2, weak2, &h2);
+                        let _ = ic;
+                    });
+                });
+            });
+    }
+    {
+        // Delete the folder (Tauri ask() confirm), then reload.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<FolderEditActions>()
+            .on_delete(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let id = w.global::<FolderEditState>().get_id().to_string();
+                let name = w.global::<FolderEditState>().get_name().to_string();
+                if id.is_empty() {
+                    return;
+                }
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    let confirmed = rfd::AsyncMessageDialog::new()
+                        .set_title("Delete folder")
+                        .set_description(format!(
+                            "Delete the folder \u{201c}{name}\u{201d}? Its playlists move back to the root."
+                        ))
+                        .set_buttons(rfd::MessageButtons::YesNo)
+                        .show()
+                        .await;
+                    if confirmed != rfd::MessageDialogResult::Yes {
+                        return;
+                    }
+                    let fid = id.clone();
+                    tokio::task::spawn_blocking(move || folders::delete_folder(&fid))
+                        .await
+                        .ok();
+                    let _ = weak.upgrade_in_event_loop(|w| {
+                        w.global::<FolderEditState>().set_open(false);
+                    });
+                    let data = playlist_manager::load(&runtime).await;
+                    let weak2 = weak.clone();
+                    let r2 = runtime.clone();
+                    let h2 = handle.clone();
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        playlist_manager::apply(&w, data);
+                        refresh_pm_covers(&w);
+                        load_sidebar_playlists(r2, weak2, &h2);
+                    });
+                });
+            });
+    }
 }
 
 /// Open a MusicianPageView for `name + role`. Routes to the artist
@@ -2335,12 +2957,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 };
                 genre_filter::apply_state(&w);
-                w.global::<HomeState>().set_loading(true);
+                // When the DiscoverBrowse "View all" page is showing, the
+                // genre change re-fetches THAT page; otherwise it reloads
+                // the Discover home index.
+                let browse_target = current_browse_target(&w);
+                if browse_target.is_none() {
+                    w.global::<HomeState>().set_loading(true);
+                }
                 let active = w.global::<HomeState>().get_active_tab().to_string();
                 let id = id.to_string();
                 let runtime = runtime.clone();
                 let weak = weak.clone();
                 let image_cache = image_cache.clone();
+                let handle2 = handle.clone();
                 handle.spawn(async move {
                     // On a newly-selected genre, eager-load its descendants
                     // so filter_ids covers the child genres.
@@ -2352,7 +2981,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             });
                         }
                     }
-                    reload_home(&runtime, &weak, &image_cache, active).await;
+                    if let Some((endpoint, title)) = browse_target {
+                        discover_browse::navigate(
+                            runtime.clone(),
+                            weak.clone(),
+                            &handle2,
+                            image_cache.clone(),
+                            endpoint,
+                            title,
+                            current_genre_filter(),
+                        );
+                    } else {
+                        reload_home(&runtime, &weak, &image_cache, active).await;
+                    }
                 });
             });
     }
@@ -2409,13 +3050,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 };
                 genre_filter::apply_state(&w);
-                w.global::<HomeState>().set_loading(true);
+                let browse_target = current_browse_target(&w);
+                if browse_target.is_none() {
+                    w.global::<HomeState>().set_loading(true);
+                }
                 let active = w.global::<HomeState>().get_active_tab().to_string();
                 let runtime = runtime.clone();
                 let weak = weak.clone();
                 let image_cache = image_cache.clone();
+                let handle2 = handle.clone();
                 handle.spawn(async move {
-                    reload_home(&runtime, &weak, &image_cache, active).await;
+                    if let Some((endpoint, title)) = browse_target {
+                        discover_browse::navigate(
+                            runtime.clone(),
+                            weak.clone(),
+                            &handle2,
+                            image_cache.clone(),
+                            endpoint,
+                            title,
+                            current_genre_filter(),
+                        );
+                    } else {
+                        reload_home(&runtime, &weak, &image_cache, active).await;
+                    }
                 });
             });
     }
@@ -2505,6 +3162,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         });
+    }
+
+    // Discover "View all" — open the full-list page for a section,
+    // recording it as a history entry (mirrors the favorites branch
+    // of on_header_menu_navigate).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.on_discover_view_all(move |endpoint, title| {
+            nav::record(nav::NavEntry::DiscoverBrowse {
+                endpoint: endpoint.to_string(),
+                title: title.to_string(),
+            });
+            if let Some(w) = weak.upgrade() {
+                update_nav_flags(&w);
+            }
+            discover_browse::navigate(
+                runtime.clone(),
+                weak.clone(),
+                &handle,
+                image_cache.clone(),
+                endpoint.to_string(),
+                title.to_string(),
+                current_genre_filter(),
+            );
+        });
+    }
+
+    // Discover "View all" pagination — load the next album page when
+    // the grid scrolls near the bottom.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<DiscoverBrowseActions>()
+            .on_load_more(move || {
+                discover_browse::load_more(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    current_genre_filter(),
+                );
+            });
+    }
+
+    // Discover "View all" search — re-filter the loaded albums
+    // client-side after the search box changes (UI thread).
+    {
+        let weak = window.as_weak();
+        window
+            .global::<DiscoverBrowseActions>()
+            .on_search_changed(move || {
+                if let Some(w) = weak.upgrade() {
+                    discover_browse::apply_filter(&w);
+                }
+            });
     }
 
     // Favorites view actions — tab switch (lazy-load), open album /
@@ -2768,10 +3486,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .global::<SidebarActions>()
             .on_create_playlist(move || {
                 if let Some(w) = weak.upgrade() {
-                    w.global::<CreatePlaylistState>().set_name("".into());
-                    w.global::<CreatePlaylistState>().set_is_public(false);
-                    w.global::<CreatePlaylistState>().set_creating(false);
-                    w.global::<CreatePlaylistState>().set_open(true);
+                    use slint::Model;
+                    let cps = w.global::<CreatePlaylistState>();
+                    cps.set_name("".into());
+                    cps.set_description("".into());
+                    cps.set_is_public(false);
+                    cps.set_creating(false);
+                    cps.set_folder_index(0);
+                    // Build the folder dropdown from the sidebar's folder
+                    // list: index 0 = "No folder" (id ""), then each folder.
+                    let folders = w.global::<SidebarState>().get_folders();
+                    let mut opts: Vec<slint::SharedString> = vec!["No folder".into()];
+                    let mut ids: Vec<slint::SharedString> = vec!["".into()];
+                    for i in 0..folders.row_count() {
+                        if let Some(f) = folders.row_data(i) {
+                            opts.push(f.name);
+                            ids.push(f.id);
+                        }
+                    }
+                    cps.set_folder_options(slint::ModelRc::new(slint::VecModel::from(opts)));
+                    cps.set_folder_ids(slint::ModelRc::new(slint::VecModel::from(ids)));
+                    cps.set_open(true);
                 }
             });
     }
@@ -2828,6 +3563,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_toggle_folder(move |id| {
                 if let Some(w) = weak.upgrade() {
                     sidebar::toggle_folder(&w, id.as_str());
+                    refresh_sidebar_covers(&w);
                 }
             });
     }
@@ -2878,6 +3614,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let Ok(pid) = playlist_id.parse::<u64>() else { return; };
                 let fid = folder_id.to_string();
                 sidebar::move_playlist_local(&w, pid, &fid);
+                refresh_sidebar_covers(&w);
                 handle.spawn(async move {
                     tokio::task::spawn_blocking(move || {
                         let opt = if fid.is_empty() { None } else { Some(fid.as_str()) };
@@ -2888,6 +3625,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             });
     }
+    {
+        // Pick a playlist sort option (name/recent/tracks/playcount/custom).
+        let weak = window.as_weak();
+        window
+            .global::<SidebarActions>()
+            .on_set_sort(move |option| {
+                if let Some(w) = weak.upgrade() {
+                    sidebar::set_sort(&w, option.as_str());
+                    refresh_sidebar_covers(&w);
+                }
+            });
+    }
+    {
+        // Re-run the playlist-name filter as the search input edits.
+        let weak = window.as_weak();
+        window
+            .global::<SidebarActions>()
+            .on_search_changed(move |query| {
+                if let Some(w) = weak.upgrade() {
+                    sidebar::set_search(&w, query.as_str());
+                    refresh_sidebar_covers(&w);
+                }
+            });
+    }
+    {
+        // Refresh — re-fetch the playlist list from the network.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<SidebarActions>()
+            .on_refresh_playlists(move || {
+                load_sidebar_playlists(runtime.clone(), weak.clone(), &handle);
+            });
+    }
+    {
+        // Manage playlists — open the full Playlist Manager view.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<SidebarActions>()
+            .on_manage_playlists(move || {
+                nav::record(nav::NavEntry::PlaylistManager);
+                playlist_manager::navigate(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                );
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
+            });
+    }
+
+    // === Playlist Manager actions ======================================
+    wire_playlist_manager(&window, &app_runtime, &tokio_rt, &image_cache);
     {
         let weak = window.as_weak();
         window
@@ -2910,9 +3706,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let Some(w) = weak.upgrade() else {
                     return;
                 };
+                use slint::Model;
                 let state = w.global::<CreatePlaylistState>();
                 let name = state.get_name().to_string();
+                let description = state.get_description().to_string();
                 let is_public = state.get_is_public();
+                // Resolve the selected folder id ("" = No folder).
+                let folder_idx = state.get_folder_index();
+                let folder_id = state
+                    .get_folder_ids()
+                    .row_data(folder_idx.max(0) as usize)
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 if name.trim().is_empty() || state.get_creating() {
                     return;
                 }
@@ -2922,9 +3727,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let handle = handle.clone();
                 let image_cache = image_cache.clone();
                 handle.clone().spawn(async move {
-                    match runtime.core().create_playlist(name.trim(), None, is_public).await {
+                    let desc = description.trim();
+                    let desc_opt = if desc.is_empty() { None } else { Some(desc) };
+                    match runtime.core().create_playlist(name.trim(), desc_opt, is_public).await {
                         Ok(playlist) => {
                             let new_id = playlist.id.to_string();
+                            // Assign to the chosen folder (local DB) before
+                            // the sidebar reloads, mirroring Tauri.
+                            if !folder_id.is_empty() {
+                                let pid = playlist.id;
+                                let fid = folder_id.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    folders::move_playlist(pid, Some(fid.as_str()));
+                                })
+                                .await
+                                .ok();
+                            }
                             let weak2 = weak.clone();
                             let r2 = runtime.clone();
                             let h2 = handle.clone();

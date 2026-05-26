@@ -12,17 +12,27 @@ export struct AlbumCardItem {
     artist: string,
     artist-id: string,     // for the clickable artist name -> artist page
     genre: string,         // shown in the hover overlay
-    year: string,          // shown in the hover overlay
+    year: string,          // localized "MMM D, YYYY" — shown in the hover overlay
     quality-tier: string,  // "hires" | "cd" | "" — drives the badge icon
     quality-label: string, // "Hi-Res: 24-bit / 96 kHz" — badge hover tooltip
     ribbon: string,
     ribbon-kind: string,   // "press" | "qobuzissime" | "albumOfTheWeek" | ""
     artwork-url: string,
     artwork: image,        // empty until the artwork pipeline resolves it
+    // --- List-row extras (AlbumListRow; ignored by the grid AlbumCard) ----
+    release-type: string,  // "Album" | "EP" | "Single" | "Live" | "Compilation"
+    source: string,        // "qobuz" | "local" | "plex" | "" — hideable column
+    quality-detail: string,// "24-bit / 96 kHz" — bare detail for QualityBadgeFull
+    track-count: string,   // "12" — TRACKS column
+    plain-year: string,    // "1973" — bare year for the list-row YEAR column
 }
 
 export struct DiscoverSection {
     title: string,
+    // Discover endpoint path this section maps to (e.g. "/discover/newReleases").
+    // Empty for sections with no full-list page; non-empty shows the "View all"
+    // link and drives the DiscoverBrowse page.
+    endpoint: string,
     albums: [AlbumCardItem],
 }
 
@@ -55,6 +65,39 @@ export global HomeState {
 // Discover tab switching. Wired in main.rs to crate::home::select_tab.
 export global HomeActions {
     callback select-tab(string);
+}
+
+// Discover "View all" full-list page — one album module (new releases,
+// qobuzissimes, ...) opened from a Carousel's See-All link. Paginated.
+export global DiscoverBrowseState {
+    in-out property <string> title;
+    // Rust-managed: the /discover/<x> endpoint + the next page offset, so
+    // DiscoverBrowseActions.load-more knows what to fetch next.
+    in-out property <string> endpoint;
+    in-out property <int> next-offset;
+    // Full (unfiltered) loaded page set. The view binds to `visible`
+    // below; the Rust side rebuilds `visible` from `albums` whenever the
+    // search query changes (client-side title/artist filter).
+    in-out property <[AlbumCardItem]> albums;
+    // The albums actually rendered — equals `albums` with no search, or a
+    // filtered subset while the search box is non-empty.
+    in-out property <[AlbumCardItem]> visible;
+    in-out property <bool> loading;
+    in-out property <bool> loading-more;
+    in-out property <bool> has-more;
+    // Header tools (1:1 with Tauri DiscoverBrowseView).
+    // Client-side search over the loaded albums; while non-empty,
+    // infinite-scroll load-more is disabled (Tauri does the same).
+    in-out property <string> search-query;
+    // "grid" | "list" — the view toggle.
+    in-out property <string> view-mode: "grid";
+}
+
+export global DiscoverBrowseActions {
+    // Fetch the next page (offset = DiscoverBrowseState.next-offset).
+    callback load-more();
+    // Re-filter `visible` after `search-query` changed (UI thread).
+    callback search-changed();
 }
 
 // Discover > For You state. The For You tab has heterogeneous,
@@ -222,7 +265,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings, search, musician, label, location, favorites, mix, playlist }
+export enum ContentView { home, album, artist, settings, search, musician, label, location, favorites, mix, playlist, discover-browse, playlist-manager }
 
 // One row in the sidebar playlists list (also used for the folder
 // list in the move-to-folder menu).
@@ -233,6 +276,12 @@ export struct SidebarPlaylistItem {
 
 // One flattened entry in the sidebar nav list — a folder header or a
 // playlist row (indented when inside a folder).
+//
+// Playlist rows carry up to four cover-art URLs + decoded images so the
+// row can render a micro-collage instead of the generic list-music glyph
+// (mirrors Tauri's `sidebarPlaylistCollage`). The covers come from the
+// same `get_user_playlists()` payload (images300 / images150 / images),
+// so no extra per-playlist fetch is needed.
 export struct SidebarEntry {
     kind: string,       // "folder" | "playlist"
     id: string,
@@ -240,6 +289,15 @@ export struct SidebarEntry {
     expanded: bool,     // folders
     count: int,         // folder playlist count
     indent: bool,       // playlist nested in a folder
+    cover-count: int,   // number of cover images, 0-4 (playlists)
+    url1: string,
+    url2: string,
+    url3: string,
+    url4: string,
+    cover1: image,
+    cover2: image,
+    cover3: image,
+    cover4: image,
 }
 
 // The sidebar's playlists + folders. Populated by crate::sidebar on
@@ -251,6 +309,20 @@ export global SidebarState {
     in property <bool> loading: false;
     // The currently-open playlist id, for the active-row highlight.
     in property <string> active-id;
+    // PLAYLISTS section collapse (the folder+playlist list hides). Mirrors
+    // Tauri's `playlistsCollapsed`.
+    in-out property <bool> playlists-collapsed: false;
+    // Inline playlist-name search in the header. When open the title is
+    // hidden and the input takes the full header width.
+    in-out property <bool> search-open: false;
+    in-out property <string> search-query;
+    // Active sort option: "name" | "recent" | "tracks" | "playcount"
+    // | "custom" (mirrors Tauri's SortOption). Persisted by crate::sidebar.
+    in-out property <string> sort-option: "name";
+    // Micro-collage of track covers on playlist rows. Opt-out (ON by
+    // default) to match Tauri's `sidebarPlaylistCollage`. The Settings >
+    // Appearance toggle wires into this in a later step.
+    in-out property <bool> playlist-collage: true;
 }
 
 export global SidebarActions {
@@ -261,14 +333,32 @@ export global SidebarActions {
     callback delete-folder(string /* folder id */);
     // Move a playlist into a folder ("" folder id = root).
     callback move-playlist(string /* playlist id */, string /* folder id */);
+    // Pick a sort option (re-sorts the list). Same five values as Tauri.
+    callback set-sort(string /* option */);
+    // Re-run the playlist-name filter (called as the search input edits).
+    callback search-changed(string /* query */);
+    // Re-fetch the playlist list from the network.
+    callback refresh-playlists();
+    // Open the full Playlist Manager view.
+    callback manage-playlists();
 }
 
-// "Create playlist" modal state.
+// "Create playlist" modal state. Mirrors Tauri's PlaylistModal (create
+// mode): name, optional description, target folder, public flag.
 export global CreatePlaylistState {
     in-out property <bool> open: false;
     in-out property <string> name;
+    in-out property <string> description;
     in-out property <bool> is-public: false;
     in property <bool> creating: false;
+    // Folder dropdown options — index 0 is always "No folder", the rest
+    // are the user's folder names (parallel to `folder-ids`). Built by
+    // the create-playlist handler from the sidebar folder list.
+    in property <[string]> folder-options: ["No folder"];
+    // Folder ids parallel to `folder-options` ("" for "No folder").
+    in property <[string]> folder-ids: [""];
+    // Selected index into `folder-options` (0 = No folder).
+    in-out property <int> folder-index: 0;
 }
 
 export global CreatePlaylistActions {
@@ -342,6 +432,177 @@ export global EditPlaylistActions {
     callback close();
 }
 
+// === Playlist Manager ===================================================
+// A full playlist + folder organization surface (Tauri's
+// PlaylistManagerView). Rows are precomputed in Rust (crate::playlist_manager)
+// and pushed as ready-to-render models — no per-row map lookups in .slint.
+
+// One folder card / chip / tree-folder. `icon-color` is a solid hex (or
+// "" → use the accent). Gradient folder colors are not supported here
+// (Slint brush limitation); a gradient string falls back to the accent.
+export struct PmFolderItem {
+    id: string,
+    name: string,
+    count: int,            // playlists in this folder
+    // "preset" or "custom".
+    icon-type: string,
+    // Lucide preset name ("heart" | "star" | "music" | "folder" | "disc"
+    // | "library" | "headphones"); drives which glyph the card shows.
+    icon-preset: string,
+    // Resolved solid color for the icon square (parsed from the stored
+    // hex by the Rust controller). When `has-color` is false the card
+    // uses the accent instead (gradient / empty / unparseable colors
+    // fall back to accent — Slint has no gradient-brush-in-struct).
+    icon-color: color,
+    has-color: bool,
+    is-hidden: bool,
+    // Decoded custom image (icon-type == "custom"); empty otherwise.
+    custom-image: image,
+    has-custom-image: bool,
+}
+
+// One playlist card / list-row / tree-row. All display strings are
+// precomputed (track line, local line) so the view never does lookups.
+export struct PmPlaylistItem {
+    id: string,            // playlist id (may be negative for offline pending)
+    name: string,
+    // "12 tracks" — total (remote + local).
+    tracks-line: string,
+    // "(3 local)" — local-only suffix, "" when none.
+    local-line: string,
+    local-count: int,
+    total-count: int,
+    play-count: int,
+    // "" | "all_local" | "some_local" | "no" — availability badge.
+    local-status: string,
+    is-favorite: bool,
+    is-hidden: bool,
+    folder-id: string,     // "" = root
+    // Micro-collage covers (same 0-4 scheme as the sidebar).
+    cover-count: int,
+    url1: string,
+    url2: string,
+    url3: string,
+    url4: string,
+    cover1: image,
+    cover2: image,
+    cover3: image,
+    cover4: image,
+}
+
+// One flattened row of the tree view — a folder header or a nested /
+// root playlist. The Rust side emits only currently-visible rows
+// (collapsed folders hide their children).
+export struct PmTreeRow {
+    kind: string,          // "folder" | "playlist"
+    expanded: bool,        // folders
+    folder: PmFolderItem,  // populated when kind == "folder"
+    playlist: PmPlaylistItem, // populated when kind == "playlist"
+    indent: bool,          // playlist nested under a folder
+}
+
+export global PlaylistManagerState {
+    in property <[PmFolderItem]> folders: [];
+    in property <[PmPlaylistItem]> playlists: [];   // the filtered+sorted grid/list set
+    in property <[PmTreeRow]> tree: [];
+    // Header counters: total folders / total playlists (post-filter for
+    // the visible playlist count).
+    in property <int> folder-count: 0;
+    in property <int> playlist-count: 0;
+    in property <bool> loading: false;
+    // Toolbar state (session-scoped; persisted per-user where cheap).
+    in-out property <string> search-query;
+    // "all" | "visible" | "hidden".
+    in-out property <string> filter: "all";
+    // "name" | "recent" | "playcount" | "tracks" | "custom".
+    in-out property <string> sort: "name";
+    // "grid" | "list" | "tree".
+    in-out property <string> view-mode: "grid";
+    // Folder mode on (folders shown + folder filtering) vs flat.
+    in-out property <bool> folder-mode: true;
+    // Folders section collapse.
+    in-out property <bool> folders-collapsed: false;
+    // Reorder is only allowed when sort == "custom".
+    in property <bool> can-reorder: false;
+}
+
+export global PlaylistManagerActions {
+    // Open a playlist (-> PlaylistView).
+    callback open-playlist(string /* id */);
+    // Toolbar.
+    callback search-changed(string /* query */);
+    callback set-filter(string);
+    callback set-sort(string);
+    callback set-view-mode(string);
+    callback toggle-folder-mode();
+    callback toggle-folders-collapsed();
+    // Tree-view folder expand/collapse.
+    callback toggle-tree-folder(string /* folder id */);
+    // Folder CRUD — "new folder" opens the editor in create mode; edit
+    // opens it for an existing folder.
+    callback new-folder();
+    callback edit-folder(string /* folder id */);
+    // Per-card playlist actions.
+    callback toggle-favorite(string /* playlist id */);
+    callback toggle-hidden(string /* playlist id */);
+    callback edit-playlist(string /* playlist id */);
+    callback add-to-mixtape(string /* playlist id */);
+    // Arrow reorder (custom sort only): move a playlist up / down within
+    // the current visible order, persisting the new order.
+    callback move-up(string /* playlist id */);
+    callback move-down(string /* playlist id */);
+    // Move a playlist into a folder ("" = root). Used by the tree's
+    // folder rows and the future DnD path.
+    callback move-to-folder(string /* playlist id */, string /* folder id */);
+}
+
+// Folder editor modal — create + edit (icon preset, solid color, custom
+// image, hidden toggle, delete). Ports Tauri's FolderEditModal. Gradient
+// color presets are intentionally omitted (Slint brush limitation).
+export struct PmIconPreset {
+    id: string,
+    icon: image,
+}
+
+export struct PmColorSwatch {
+    // The stored hex value ("" = the "Accent" preset), used as the
+    // selection key and persisted into the folder record.
+    value: string,
+    // Resolved Slint color for the swatch fill (ignored when is-accent).
+    color: color,
+    is-accent: bool,
+}
+
+export global FolderEditState {
+    in-out property <bool> open: false;
+    // Empty id = create mode; non-empty = editing that folder.
+    in property <string> id: "";
+    in-out property <string> name;
+    in-out property <string> icon-preset: "folder";
+    // Selected solid color hex; "" = accent.
+    in-out property <string> icon-color: "";
+    in-out property <bool> is-hidden: false;
+    // Custom image path (icon-type == "custom" when set) + decoded image.
+    in-out property <string> custom-image-path: "";
+    in property <image> custom-image;
+    in property <bool> busy: false;
+    // The icon-preset grid + the solid-color swatch grid, built once by
+    // the Rust controller.
+    in property <[PmIconPreset]> icon-presets: [];
+    in property <[PmColorSwatch]> color-swatches: [];
+}
+
+export global FolderEditActions {
+    callback select-preset(string /* preset id */);
+    callback select-color(string /* color hex, "" = accent */);
+    callback pick-image();
+    callback clear-image();
+    callback toggle-hidden();
+    callback save();
+    callback delete();
+    callback close();
+}
+
 // Settings screen state. Audio and Playback preferences are loaded from
 // the persistence stores by the Rust settings controller and pushed here;
 // changes flow back through the settings-bool / settings-select /
@@ -405,6 +666,134 @@ export global SettingsState {
     // Playback — "When quality retries fail" dropdown.
     in-out property <[string]> retry-behaviors: [];
     in-out property <int> retry-behavior-index: 0;
+}
+
+// Appearance settings — backs the Settings > Appearance panel. 1:1 with
+// Tauri's appearance section. This is a visual/structural replica: every
+// row is bound to a property here, but the Rust side does NOT yet persist
+// or apply most of them (wiring is a later step). The few that map onto an
+// existing, already-functional flag are wired through (see notes inline).
+//
+// Dropdowns follow the same pattern as SettingsState: an option list paired
+// with a selected index; the Rust controller (when wired) owns the
+// index -> value mapping. Lists are populated with sensible defaults below
+// so the UI renders standalone even while unwired.
+export global AppearanceState {
+    // --- THEME -------------------------------------------------------------
+    in-out property <[string]> themes: [
+        "Dark", "OLED Black", "Light", "System",
+        "Warm", "Nord", "Dracula", "Tokyo Night", "Catppuccin Mocha",
+        "Breeze Dark", "Adwaita Dark", "Alucard", "Aurora", "Ikari",
+        "Ayanami", "Iscariot", "Stratego", "Rumi", "Zoey", "Mira",
+        "Rose Pine Dawn", "Breeze Light", "Adwaita Light", "Duotone Snow",
+        "Snow Storm", "Frost", "Langley", "Kurosaki",
+        "WCAG Light", "WCAG Dark", "High Contrast", "Colorblind"
+    ];
+    in-out property <int> theme-index: 0;
+    // Theme list filter cycle: 0 = All, 1 = Dark, 2 = Light. Mirrors the
+    // SunMoon/Moon/Sun toggle button next to the theme dropdown.
+    in-out property <int> theme-filter: 0;
+
+    in-out property <bool> album-header-gradient: true;
+
+    // Auto-Theme (shown when the "System" theme is selected). Source:
+    // 0 = System Colors, 1 = Wallpaper Sync, 2 = Custom Image.
+    in-out property <bool> theme-is-system: false;
+    in-out property <[string]> auto-theme-sources: ["System Colors", "Wallpaper Sync", "Custom Image"];
+    in-out property <int> auto-theme-source-index: 0;
+    in-out property <string> auto-theme-custom-path: "";
+    in-out property <bool> auto-theme-generating: false;
+    in-out property <string> auto-theme-detected-de: "";
+
+    // --- TYPOGRAPHY / SCALE / LANGUAGE -------------------------------------
+    in-out property <[string]> languages: ["Auto", "English", "Español", "Français", "Deutsch", "Português"];
+    in-out property <int> language-index: 0;
+    in-out property <[string]> fonts: ["LINE Seed JP", "Montserrat", "Noto Sans", "Source Sans 3", "System"];
+    in-out property <int> font-index: 0;
+    in-out property <[string]> ui-scales: ["80%", "85%", "90%", "95%", "100%", "110%", "125%", "150%", "175%"];
+    in-out property <int> ui-scale-index: 4;
+
+    // --- VISUAL EXTRAS -----------------------------------------------------
+    // sidebar-playlist-collage is wired to SidebarState.playlist-collage in
+    // the panel (the only already-functional flag here).
+    in-out property <bool> sidebar-playlist-collage: true;
+    in-out property <bool> local-library-track-artwork: false;
+
+    // --- NOTIFICATIONS -----------------------------------------------------
+    in-out property <bool> in-app-toasts: true;
+    in-out property <bool> system-notifications: true;
+
+    // --- WINDOW TITLE ------------------------------------------------------
+    in-out property <bool> window-title-show: false;
+    in-out property <string> window-title-template: "";
+
+    // --- TITLE BAR / WINDOW CHROME -----------------------------------------
+    in-out property <bool> use-system-title-bar: false;
+    in-out property <bool> hide-title-bar: false;
+    in-out property <bool> match-system-chrome: false;
+    // True when GPU acceleration is on (gates match-system-chrome). Default
+    // true so the row is interactive in the unwired replica.
+    in-out property <bool> hardware-accel-enabled: true;
+    in-out property <bool> search-in-title-bar: false;
+
+    // Navigation-in-title-bar group: the parent label row plus per-target
+    // toggles (Discover/Home, Favorites, Library, My QBZ, Purchases).
+    in-out property <bool> nav-tb-discover: false;
+    in-out property <bool> nav-tb-favorites: false;
+    in-out property <bool> nav-tb-library: false;
+    in-out property <bool> nav-tb-myqbz: false;
+    in-out property <bool> nav-tb-purchases: false;
+    // Nav buttons position: 0 = Auto, 1 = Left, 2 = Right.
+    in-out property <[string]> nav-tb-positions: ["Auto (opposite to window controls)", "Left", "Right"];
+    in-out property <int> nav-tb-position-index: 0;
+
+    // Window controls group.
+    in-out property <[string]> wc-positions: ["Left", "Right"];
+    in-out property <int> wc-position-index: 1;
+    in-out property <[string]> wc-styles: ["Rectangular", "Full-height rounded", "Circular", "Square"];
+    in-out property <int> wc-style-index: 0;
+    in-out property <[string]> wc-sizes: ["Small", "Normal", "Large"];
+    in-out property <int> wc-size-index: 1;
+    in-out property <[string]> wc-color-presets: ["Default", "macOS", "Adwaita", "Monochrome", "Custom"];
+    in-out property <int> wc-color-preset-index: 0;
+    in-out property <bool> show-window-controls: true;
+
+    // --- MINIPLAYER --------------------------------------------------------
+    in-out property <[string]> miniplayer-views: ["Remember last used", "Micro", "Compact", "Artwork", "Queue", "Lyrics"];
+    in-out property <int> miniplayer-view-index: 0;
+
+    // --- STARTUP -----------------------------------------------------------
+    in-out property <[string]> startup-pages: ["Home", "Where you left off"];
+    in-out property <int> startup-page-index: 0;
+
+    in-out property <bool> show-purchases: false;
+
+    // --- SYSTEM TRAY -------------------------------------------------------
+    in-out property <bool> tray-enable: true;
+    in-out property <bool> tray-minimize-to-tray: false;
+    in-out property <bool> tray-close-to-tray: false;
+    in-out property <[string]> tray-icon-themes: ["Auto", "Mono light", "Mono dark", "Color"];
+    in-out property <int> tray-icon-theme-index: 0;
+
+    // --- IMMERSIVE ---------------------------------------------------------
+    in-out property <[string]> immersive-views: [
+        "Remember last used", "Coverflow", "Static", "Vinyl", "Visualizer",
+        "Neon Flow", "Tunnel", "Comet", "Lyrics", "Queue",
+        "Split: Lyrics", "Split: Track Info", "Split: Suggestions", "Split: Queue"
+    ];
+    in-out property <int> immersive-view-index: 0;
+    in-out property <[string]> immersive-background-modes: ["Full", "Lite", "Off"];
+    in-out property <int> immersive-background-mode-index: 0;
+    // Collapsible sub-panels (collapsed by default, matching Tauri).
+    in-out property <bool> immersive-panels-collapsed: true;
+    in-out property <bool> immersive-fps-collapsed: true;
+
+    // Callbacks. Unwired in this replica — the Rust side may bind them
+    // later. Kept generic (key + value) so the controller can dispatch.
+    callback appearance-bool(string /* key */, bool /* value */);
+    callback appearance-select(string /* key */, int /* index */);
+    callback appearance-text(string /* key */, string /* value */);
+    callback appearance-action(string /* key */);
 }
 
 // One entry of a nav-tab dropdown.

@@ -25,12 +25,25 @@ pub enum NavEntry {
     Favorites {
         tab: String,
     },
+    /// A Discover "View all" full-list page — one album module
+    /// (new releases, qobuzissimes, ...) opened from a Carousel's
+    /// "View all" link. Carries the /discover/<x> endpoint + the
+    /// section title used as the page heading.
+    DiscoverBrowse {
+        endpoint: String,
+        title: String,
+    },
     /// A Qobuz mix detail page ("daily" | "weekly" | "fav" | "top").
     Mix {
         kind: String,
     },
     /// A playlist detail page; the string is the playlist id.
     Playlist(String),
+    /// The Playlist Manager — the full playlist + folder organization
+    /// surface (Tauri's PlaylistManagerView). Toolbar state
+    /// (filter/sort/view/folder-mode) is session-scoped in the
+    /// controller, so the entry carries no payload.
+    PlaylistManager,
     Album(String),
     Artist(String),
     Settings,
