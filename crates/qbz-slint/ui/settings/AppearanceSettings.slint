@@ -128,6 +128,7 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("THEME"); }
 
     SettingRow {
+        unsupported: true;
         label: @tr("Theme");
         HorizontalLayout {
             spacing: 8px;
@@ -170,6 +171,7 @@ export component AppearanceSettings inherits VerticalLayout {
     }
 
     SettingRow {
+        unsupported: true;
         label: @tr("Album header gradient");
         description: @tr("Use the album cover's dominant color as a backdrop in album detail views.");
         QbzToggle {
@@ -183,6 +185,7 @@ export component AppearanceSettings inherits VerticalLayout {
 
     // Auto-Theme controls — only when the "System" theme is selected.
     if AppearanceState.theme-is-system: SettingRow {
+        unsupported: true;
         label: @tr("Source");
         description: @tr("Generate a color theme from your system wallpaper or a custom image");
         QbzSelect {
@@ -196,6 +199,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     if AppearanceState.theme-is-system && AppearanceState.auto-theme-source-index == 2: SettingRow {
+        unsupported: true;
         label: AppearanceState.auto-theme-custom-path != ""
             ? AppearanceState.auto-theme-custom-path
             : @tr("Select Image...");
@@ -211,6 +215,7 @@ export component AppearanceSettings inherits VerticalLayout {
         description: @tr("Experimental: theme may not match your system exactly.");
     }
     if AppearanceState.theme-is-system: SettingRow {
+        unsupported: true;
         label: @tr("Regenerate");
         SecondaryButton {
             label: @tr("Regenerate");
@@ -231,6 +236,7 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("TYPOGRAPHY & LANGUAGE"); }
 
     SettingRow {
+        unsupported: true;
         label: @tr("Language");
         QbzSelect {
             menu-width: 200px;
@@ -243,6 +249,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Font");
         QbzSelect {
             menu-width: 200px;
@@ -255,6 +262,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("UI Scale");
         QbzSelect {
             menu-width: 140px;
@@ -290,6 +298,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Show album artwork in Local Library track list");
         description: @tr("Display the album cover thumbnail next to each track in the Tracks and Folders views. Off by default — large libraries pay a per-row image-decode cost.");
         QbzToggle {
@@ -311,6 +320,7 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("NOTIFICATIONS"); }
 
     SettingRow {
+        unsupported: true;
         label: @tr("In-app toasts notifications");
         QbzToggle {
             checked: AppearanceState.in-app-toasts;
@@ -321,6 +331,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("System Notifications");
         QbzToggle {
             checked: AppearanceState.system-notifications;
@@ -341,6 +352,7 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("WINDOW TITLE"); }
 
     SettingRow {
+        unsupported: true;
         label: @tr("Show track in window title");
         QbzToggle {
             checked: AppearanceState.window-title-show;
@@ -351,6 +363,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     if AppearanceState.window-title-show: SettingRow {
+        unsupported: true;
         label: @tr("Title template");
         description: @tr("Placeholders: {{artist}}, {{track}}, {{album}}");
         HorizontalLayout {
@@ -620,6 +633,7 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("PLAYER VIEWS"); }
 
     SettingRow {
+        unsupported: true;
         label: @tr("Mini player default view");
         QbzSelect {
             menu-width: 200px;
@@ -632,6 +646,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Startup page");
         description: @tr("Choose which page to show when the app starts");
         QbzSelect {
@@ -645,6 +660,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Show Purchases");
         description: @tr("Show the Purchases section in the sidebar for browsing and downloading your purchased music");
         QbzToggle {
@@ -666,6 +682,7 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("SYSTEM TRAY"); }
 
     SettingRow {
+        unsupported: true;
         label: @tr("Enable tray icon");
         description: @tr("Show icon in system tray (requires restart)");
         QbzToggle {
@@ -677,6 +694,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Minimize to tray");
         description: @tr("Hide window to tray when minimizing");
         enabled: AppearanceState.tray-enable;
@@ -690,6 +708,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Close to tray");
         description: @tr("Hide window to tray instead of quitting");
         enabled: AppearanceState.tray-enable;
@@ -703,6 +722,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Tray icon variant");
         description: @tr("Pick a mono glyph to match your panel (Plasma, GNOME's permanently dark top bar) or the full colour vinyl logo");
         QbzSelect {
@@ -726,6 +746,7 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("IMMERSIVE"); }
 
     SettingRow {
+        unsupported: true;
         label: @tr("Immersive default view");
         QbzSelect {
             menu-width: 220px;
@@ -738,6 +759,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Background effect");
         description: @tr("Controls how the blurred artwork background is rendered in immersive mode.");
         QbzSelect {
