@@ -13,6 +13,7 @@ import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { AudioSettings } from "AudioSettings.slint";
 import { PlaybackSettings } from "PlaybackSettings.slint";
+import { AppearanceSettings } from "AppearanceSettings.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component SubNavItem inherits Rectangle {
@@ -121,6 +122,14 @@ export component SettingsView inherits Rectangle {
                             SettingsState.section = 1;
                         }
                     }
+                    SubNavItem {
+                        icon: @image-url("../assets/icons/layers.svg");
+                        label: @tr("Appearance");
+                        active: SettingsState.section == 2;
+                        clicked => {
+                            SettingsState.section = 2;
+                        }
+                    }
                 }
             }
 
@@ -163,6 +172,10 @@ export component SettingsView inherits Rectangle {
                             root.settings-slider(k, v);
                         }
                     }
+                    // Appearance — a structural replica; rows bind to
+                    // AppearanceState and emit its own callbacks, so no
+                    // SettingsView-level callback forwarding is needed here.
+                    if !SettingsState.loading && SettingsState.section == 2: AppearanceSettings { }
                 }
             }
         }

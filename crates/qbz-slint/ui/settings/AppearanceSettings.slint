@@ -1,0 +1,773 @@
+// Appearance settings panel — theme, typography, language, window chrome,
+// notifications, player views, system tray, and immersive options. A 1:1
+// structural replica of the Tauri app's Settings > Appearance section.
+//
+// This is primarily an UNWIRED replica: rows are bound to AppearanceState
+// and emit generic appearance-bool / appearance-select / appearance-text /
+// appearance-action callbacks, but the Rust side does not yet persist or
+// apply most of them. The single exception is the sidebar-playlist-collage
+// toggle, which is wired straight through to SidebarState.playlist-collage
+// (an already-functional flag). Conditional rows are `if`-gated on the same
+// flags Tauri gates on (System theme, title-bar mode, etc.).
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import { AppearanceState, SidebarState } from "../state.slint";
+import { QbzToggle } from "../primitives/QbzToggle.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { SettingRow } from "SettingRow.slint";
+import { LineEdit } from "std-widgets.slint";
+
+component GroupHeader inherits Text {
+    color: Theme.text-muted;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    font-weight: Typography.semibold;
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border-subtle;
+}
+
+// A small secondary-style button used for "Select Image…" / "Regenerate".
+component SecondaryButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: 160px;
+    height: 34px;
+    border-radius: Radius.sm;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+    background: ta.has-hover && root.enabled ? Theme.surface-hover : Theme.surface-elevated;
+    opacity: root.enabled ? 1.0 : 0.4;
+
+    Text {
+        text: root.label;
+        color: Theme.text-secondary;
+        font-size: Typography.body;
+        font-weight: Typography.medium;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+// A collapsible sub-section header (Immersive Panels / Animation Frame Rate).
+component CollapsibleHeader inherits Rectangle {
+    in property <string> title;
+    in property <string> summary;
+    in property <bool> collapsed: true;
+    callback toggled();
+
+    height: 56px;
+    HorizontalLayout {
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 3px;
+            Text {
+                text: root.title;
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: Typography.semibold;
+            }
+            Text {
+                text: root.summary;
+                color: Theme.text-muted;
+                font-size: 12px;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.collapsed
+                    ? @image-url("../assets/icons/chevron-down.svg")
+                    : @image-url("../assets/icons/chevron-up.svg");
+                width: 16px;
+                height: 16px;
+                tint: Theme.text-secondary;
+            }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+}
+
+export component AppearanceSettings inherits VerticalLayout {
+    spacing: 4px;
+
+    // Derived: title-bar customization rows are disabled when the title bar
+    // is hidden or the system title bar is used (mirrors Tauri).
+    property <bool> tb-locked: AppearanceState.hide-title-bar || AppearanceState.use-system-title-bar;
+    // Any nav-in-title-bar target enabled — gates the nav position dropdown.
+    property <bool> nav-tb-any:
+        AppearanceState.nav-tb-discover || AppearanceState.nav-tb-favorites
+        || AppearanceState.nav-tb-library || AppearanceState.nav-tb-myqbz
+        || AppearanceState.nav-tb-purchases;
+
+    // ===================================================================
+    // THEME
+    // ===================================================================
+    GroupHeader { text: @tr("THEME"); }
+
+    SettingRow {
+        label: @tr("Theme");
+        HorizontalLayout {
+            spacing: 8px;
+            // Theme list filter cycle (All / Dark / Light).
+            filter-btn := Rectangle {
+                width: 34px;
+                height: 34px;
+                border-radius: Radius.sm;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+                background: filter-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+                QbzIcon {
+                    source: AppearanceState.theme-filter == 1
+                        ? @image-url("../assets/icons/disc.svg")
+                        : AppearanceState.theme-filter == 2
+                        ? @image-url("../assets/icons/disc.svg")
+                        : @image-url("../assets/icons/disc.svg");
+                    width: 16px;
+                    height: 16px;
+                    tint: Theme.text-secondary;
+                }
+                filter-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        AppearanceState.theme-filter = Math.mod(AppearanceState.theme-filter + 1, 3);
+                        AppearanceState.appearance-select("theme-filter", AppearanceState.theme-filter);
+                    }
+                }
+            }
+            QbzSelect {
+                menu-width: 200px;
+                options: AppearanceState.themes;
+                current-index: AppearanceState.theme-index;
+                selected(i) => {
+                    AppearanceState.theme-index = i;
+                    AppearanceState.appearance-select("theme", i);
+                }
+            }
+        }
+    }
+
+    SettingRow {
+        label: @tr("Album header gradient");
+        description: @tr("Use the album cover's dominant color as a backdrop in album detail views.");
+        QbzToggle {
+            checked: AppearanceState.album-header-gradient;
+            toggled(v) => {
+                AppearanceState.album-header-gradient = v;
+                AppearanceState.appearance-bool("album-header-gradient", v);
+            }
+        }
+    }
+
+    // Auto-Theme controls — only when the "System" theme is selected.
+    if AppearanceState.theme-is-system: SettingRow {
+        label: @tr("Source");
+        description: @tr("Generate a color theme from your system wallpaper or a custom image");
+        QbzSelect {
+            menu-width: 200px;
+            options: AppearanceState.auto-theme-sources;
+            current-index: AppearanceState.auto-theme-source-index;
+            selected(i) => {
+                AppearanceState.auto-theme-source-index = i;
+                AppearanceState.appearance-select("auto-theme-source", i);
+            }
+        }
+    }
+    if AppearanceState.theme-is-system && AppearanceState.auto-theme-source-index == 2: SettingRow {
+        label: AppearanceState.auto-theme-custom-path != ""
+            ? AppearanceState.auto-theme-custom-path
+            : @tr("Select Image...");
+        SecondaryButton {
+            label: @tr("Select Image...");
+            clicked => {
+                AppearanceState.appearance-action("auto-theme-select-image");
+            }
+        }
+    }
+    if AppearanceState.theme-is-system && AppearanceState.auto-theme-detected-de != "": SettingRow {
+        label: @tr("Detected: ") + AppearanceState.auto-theme-detected-de;
+        description: @tr("Experimental: theme may not match your system exactly.");
+    }
+    if AppearanceState.theme-is-system: SettingRow {
+        label: @tr("Regenerate");
+        SecondaryButton {
+            label: @tr("Regenerate");
+            enabled: !AppearanceState.auto-theme-generating;
+            clicked => {
+                AppearanceState.appearance-action("auto-theme-regenerate");
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    // ===================================================================
+    // TYPOGRAPHY & LANGUAGE
+    // ===================================================================
+    GroupHeader { text: @tr("TYPOGRAPHY & LANGUAGE"); }
+
+    SettingRow {
+        label: @tr("Language");
+        QbzSelect {
+            menu-width: 200px;
+            options: AppearanceState.languages;
+            current-index: AppearanceState.language-index;
+            selected(i) => {
+                AppearanceState.language-index = i;
+                AppearanceState.appearance-select("language", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Font");
+        QbzSelect {
+            menu-width: 200px;
+            options: AppearanceState.fonts;
+            current-index: AppearanceState.font-index;
+            selected(i) => {
+                AppearanceState.font-index = i;
+                AppearanceState.appearance-select("font", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("UI Scale");
+        QbzSelect {
+            menu-width: 140px;
+            options: AppearanceState.ui-scales;
+            current-index: AppearanceState.ui-scale-index;
+            selected(i) => {
+                AppearanceState.ui-scale-index = i;
+                AppearanceState.appearance-select("ui-scale", i);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    // ===================================================================
+    // LIBRARY & VISUALS
+    // ===================================================================
+    GroupHeader { text: @tr("LIBRARY & VISUALS"); }
+
+    SettingRow {
+        label: @tr("Show playlist cover collages in sidebar");
+        description: @tr("Render a 2×2 thumbnail of track covers next to each playlist. Disable on low-end machines to skip the extra images.");
+        QbzToggle {
+            // Wired: this toggle drives the already-functional sidebar collage flag.
+            checked: SidebarState.playlist-collage;
+            toggled(v) => {
+                SidebarState.playlist-collage = v;
+                AppearanceState.sidebar-playlist-collage = v;
+                AppearanceState.appearance-bool("sidebar-playlist-collage", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Show album artwork in Local Library track list");
+        description: @tr("Display the album cover thumbnail next to each track in the Tracks and Folders views. Off by default — large libraries pay a per-row image-decode cost.");
+        QbzToggle {
+            checked: AppearanceState.local-library-track-artwork;
+            toggled(v) => {
+                AppearanceState.local-library-track-artwork = v;
+                AppearanceState.appearance-bool("local-library-track-artwork", v);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    // ===================================================================
+    // NOTIFICATIONS
+    // ===================================================================
+    GroupHeader { text: @tr("NOTIFICATIONS"); }
+
+    SettingRow {
+        label: @tr("In-app toasts notifications");
+        QbzToggle {
+            checked: AppearanceState.in-app-toasts;
+            toggled(v) => {
+                AppearanceState.in-app-toasts = v;
+                AppearanceState.appearance-bool("in-app-toasts", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("System Notifications");
+        QbzToggle {
+            checked: AppearanceState.system-notifications;
+            toggled(v) => {
+                AppearanceState.system-notifications = v;
+                AppearanceState.appearance-bool("system-notifications", v);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    // ===================================================================
+    // WINDOW TITLE
+    // ===================================================================
+    GroupHeader { text: @tr("WINDOW TITLE"); }
+
+    SettingRow {
+        label: @tr("Show track in window title");
+        QbzToggle {
+            checked: AppearanceState.window-title-show;
+            toggled(v) => {
+                AppearanceState.window-title-show = v;
+                AppearanceState.appearance-bool("window-title-show", v);
+            }
+        }
+    }
+    if AppearanceState.window-title-show: SettingRow {
+        label: @tr("Title template");
+        description: @tr("Placeholders: {{artist}}, {{track}}, {{album}}");
+        HorizontalLayout {
+            width: 240px;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                LineEdit {
+                    text: AppearanceState.window-title-template;
+                    placeholder-text: "{artist} - {track}";
+                    edited(s) => {
+                        AppearanceState.window-title-template = s;
+                        AppearanceState.appearance-text("window-title-template", s);
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    // ===================================================================
+    // TITLE BAR
+    // ===================================================================
+    GroupHeader { text: @tr("TITLE BAR"); }
+
+    SettingRow {
+        label: @tr("Use system title bar");
+        description: @tr("Replace QBZ custom title bar with your system's native window decorations. Changing this will restart the app.");
+        QbzToggle {
+            checked: AppearanceState.use-system-title-bar;
+            toggled(v) => {
+                AppearanceState.use-system-title-bar = v;
+                AppearanceState.appearance-bool("use-system-title-bar", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Hide title bar");
+        description: @tr("Hide the title bar completely (for tiling window manager users)");
+        enabled: !AppearanceState.use-system-title-bar;
+        QbzToggle {
+            checked: AppearanceState.hide-title-bar;
+            enabled: !AppearanceState.use-system-title-bar;
+            toggled(v) => {
+                AppearanceState.hide-title-bar = v;
+                AppearanceState.appearance-bool("hide-title-bar", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Match system window chrome");
+        description: AppearanceState.hardware-accel-enabled
+            ? @tr("Round the window corners and add a subtle edge so QBZ blends with your desktop theme. Takes effect after restarting the app (the window is rebuilt transparent so the corners don't show white).")
+            : @tr("Available only with GPU acceleration.");
+        enabled: !root.tb-locked && AppearanceState.hardware-accel-enabled;
+        QbzToggle {
+            checked: AppearanceState.match-system-chrome && AppearanceState.hardware-accel-enabled;
+            enabled: !root.tb-locked && AppearanceState.hardware-accel-enabled;
+            toggled(v) => {
+                AppearanceState.match-system-chrome = v;
+                AppearanceState.appearance-bool("match-system-chrome", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Search in title bar");
+        description: @tr("Show the search field in the title bar instead of the sidebar");
+        enabled: !root.tb-locked;
+        QbzToggle {
+            checked: AppearanceState.search-in-title-bar;
+            enabled: !root.tb-locked;
+            toggled(v) => {
+                AppearanceState.search-in-title-bar = v;
+                AppearanceState.appearance-bool("search-in-title-bar", v);
+            }
+        }
+    }
+
+    // Navigation in title bar — a label row + per-target indented toggles.
+    SettingRow {
+        label: @tr("Navigation in title bar");
+        description: @tr("Show Discover, Library, and Local Library buttons in the title bar");
+    }
+    SettingRow {
+        label: @tr("Home");
+        enabled: !root.tb-locked;
+        QbzToggle {
+            checked: AppearanceState.nav-tb-discover;
+            enabled: !root.tb-locked;
+            toggled(v) => {
+                AppearanceState.nav-tb-discover = v;
+                AppearanceState.appearance-bool("nav-tb-discover", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Favorites");
+        enabled: !root.tb-locked;
+        QbzToggle {
+            checked: AppearanceState.nav-tb-favorites;
+            enabled: !root.tb-locked;
+            toggled(v) => {
+                AppearanceState.nav-tb-favorites = v;
+                AppearanceState.appearance-bool("nav-tb-favorites", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Library");
+        enabled: !root.tb-locked;
+        QbzToggle {
+            checked: AppearanceState.nav-tb-library;
+            enabled: !root.tb-locked;
+            toggled(v) => {
+                AppearanceState.nav-tb-library = v;
+                AppearanceState.appearance-bool("nav-tb-library", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("My QBZ");
+        enabled: !root.tb-locked;
+        QbzToggle {
+            checked: AppearanceState.nav-tb-myqbz;
+            enabled: !root.tb-locked;
+            toggled(v) => {
+                AppearanceState.nav-tb-myqbz = v;
+                AppearanceState.appearance-bool("nav-tb-myqbz", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Purchases");
+        enabled: !root.tb-locked;
+        QbzToggle {
+            checked: AppearanceState.nav-tb-purchases;
+            enabled: !root.tb-locked;
+            toggled(v) => {
+                AppearanceState.nav-tb-purchases = v;
+                AppearanceState.appearance-bool("nav-tb-purchases", v);
+            }
+        }
+    }
+    if root.nav-tb-any && !root.tb-locked: SettingRow {
+        label: @tr("Navigation buttons position");
+        description: @tr("Where to place the navigation buttons in the title bar");
+        QbzSelect {
+            menu-width: 260px;
+            options: AppearanceState.nav-tb-positions;
+            current-index: AppearanceState.nav-tb-position-index;
+            selected(i) => {
+                AppearanceState.nav-tb-position-index = i;
+                AppearanceState.appearance-select("nav-tb-position", i);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    // ===================================================================
+    // WINDOW CONTROLS
+    // ===================================================================
+    GroupHeader { text: @tr("WINDOW CONTROLS"); }
+
+    SettingRow {
+        label: @tr("Window controls position");
+        description: @tr("Place the window control buttons on the left or right side of the title bar");
+        enabled: !root.tb-locked;
+        QbzSelect {
+            menu-width: 160px;
+            options: AppearanceState.wc-positions;
+            current-index: AppearanceState.wc-position-index;
+            enabled: !root.tb-locked;
+            selected(i) => {
+                AppearanceState.wc-position-index = i;
+                AppearanceState.appearance-select("wc-position", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Window controls style");
+        description: @tr("Choose the shape of the window control buttons");
+        enabled: !root.tb-locked;
+        QbzSelect {
+            menu-width: 200px;
+            options: AppearanceState.wc-styles;
+            current-index: AppearanceState.wc-style-index;
+            enabled: !root.tb-locked;
+            selected(i) => {
+                AppearanceState.wc-style-index = i;
+                AppearanceState.appearance-select("wc-style", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Window controls size");
+        description: @tr("Adjust the size of the window control buttons");
+        enabled: !root.tb-locked;
+        QbzSelect {
+            menu-width: 160px;
+            options: AppearanceState.wc-sizes;
+            current-index: AppearanceState.wc-size-index;
+            enabled: !root.tb-locked;
+            selected(i) => {
+                AppearanceState.wc-size-index = i;
+                AppearanceState.appearance-select("wc-size", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Window controls color preset");
+        description: @tr("Choose a color scheme for the window control buttons");
+        enabled: !root.tb-locked;
+        QbzSelect {
+            menu-width: 180px;
+            options: AppearanceState.wc-color-presets;
+            current-index: AppearanceState.wc-color-preset-index;
+            enabled: !root.tb-locked;
+            selected(i) => {
+                AppearanceState.wc-color-preset-index = i;
+                AppearanceState.appearance-select("wc-color-preset", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Show window controls");
+        description: @tr("Show minimize, maximize, and close buttons in the title bar. Disable if your window manager handles these.");
+        enabled: !root.tb-locked;
+        QbzToggle {
+            checked: AppearanceState.show-window-controls;
+            enabled: !root.tb-locked;
+            toggled(v) => {
+                AppearanceState.show-window-controls = v;
+                AppearanceState.appearance-bool("show-window-controls", v);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    // ===================================================================
+    // PLAYER VIEWS / STARTUP
+    // ===================================================================
+    GroupHeader { text: @tr("PLAYER VIEWS"); }
+
+    SettingRow {
+        label: @tr("Mini player default view");
+        QbzSelect {
+            menu-width: 200px;
+            options: AppearanceState.miniplayer-views;
+            current-index: AppearanceState.miniplayer-view-index;
+            selected(i) => {
+                AppearanceState.miniplayer-view-index = i;
+                AppearanceState.appearance-select("miniplayer-view", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Startup page");
+        description: @tr("Choose which page to show when the app starts");
+        QbzSelect {
+            menu-width: 200px;
+            options: AppearanceState.startup-pages;
+            current-index: AppearanceState.startup-page-index;
+            selected(i) => {
+                AppearanceState.startup-page-index = i;
+                AppearanceState.appearance-select("startup-page", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Show Purchases");
+        description: @tr("Show the Purchases section in the sidebar for browsing and downloading your purchased music");
+        QbzToggle {
+            checked: AppearanceState.show-purchases;
+            toggled(v) => {
+                AppearanceState.show-purchases = v;
+                AppearanceState.appearance-bool("show-purchases", v);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    // ===================================================================
+    // SYSTEM TRAY
+    // ===================================================================
+    GroupHeader { text: @tr("SYSTEM TRAY"); }
+
+    SettingRow {
+        label: @tr("Enable tray icon");
+        description: @tr("Show icon in system tray (requires restart)");
+        QbzToggle {
+            checked: AppearanceState.tray-enable;
+            toggled(v) => {
+                AppearanceState.tray-enable = v;
+                AppearanceState.appearance-bool("tray-enable", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Minimize to tray");
+        description: @tr("Hide window to tray when minimizing");
+        enabled: AppearanceState.tray-enable;
+        QbzToggle {
+            checked: AppearanceState.tray-minimize-to-tray;
+            enabled: AppearanceState.tray-enable;
+            toggled(v) => {
+                AppearanceState.tray-minimize-to-tray = v;
+                AppearanceState.appearance-bool("tray-minimize-to-tray", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Close to tray");
+        description: @tr("Hide window to tray instead of quitting");
+        enabled: AppearanceState.tray-enable;
+        QbzToggle {
+            checked: AppearanceState.tray-close-to-tray;
+            enabled: AppearanceState.tray-enable;
+            toggled(v) => {
+                AppearanceState.tray-close-to-tray = v;
+                AppearanceState.appearance-bool("tray-close-to-tray", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Tray icon variant");
+        description: @tr("Pick a mono glyph to match your panel (Plasma, GNOME's permanently dark top bar) or the full colour vinyl logo");
+        QbzSelect {
+            menu-width: 160px;
+            options: AppearanceState.tray-icon-themes;
+            current-index: AppearanceState.tray-icon-theme-index;
+            selected(i) => {
+                AppearanceState.tray-icon-theme-index = i;
+                AppearanceState.appearance-select("tray-icon-theme", i);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    // ===================================================================
+    // IMMERSIVE
+    // ===================================================================
+    GroupHeader { text: @tr("IMMERSIVE"); }
+
+    SettingRow {
+        label: @tr("Immersive default view");
+        QbzSelect {
+            menu-width: 220px;
+            options: AppearanceState.immersive-views;
+            current-index: AppearanceState.immersive-view-index;
+            selected(i) => {
+                AppearanceState.immersive-view-index = i;
+                AppearanceState.appearance-select("immersive-view", i);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Background effect");
+        description: @tr("Controls how the blurred artwork background is rendered in immersive mode.");
+        QbzSelect {
+            menu-width: 160px;
+            options: AppearanceState.immersive-background-modes;
+            current-index: AppearanceState.immersive-background-mode-index;
+            selected(i) => {
+                AppearanceState.immersive-background-mode-index = i;
+                AppearanceState.appearance-select("immersive-background-mode", i);
+            }
+        }
+    }
+
+    // Collapsible: Immersive Panels (per-panel enable/disable lives behind
+    // this header in Tauri; here the header is replicated, body deferred).
+    CollapsibleHeader {
+        title: @tr("Immersive Panels");
+        summary: @tr("Enable or disable individual immersive view panels");
+        collapsed: AppearanceState.immersive-panels-collapsed;
+        toggled => {
+            AppearanceState.immersive-panels-collapsed = !AppearanceState.immersive-panels-collapsed;
+        }
+    }
+    if !AppearanceState.immersive-panels-collapsed: Text {
+        text: @tr("Disabled panels are hidden from the visualizer menu so you don't land on them by mistake.");
+        color: Theme.text-muted;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+
+    // Collapsible: Animation Frame Rate (per-panel FPS lives behind this
+    // header in Tauri; here the header is replicated, body deferred).
+    CollapsibleHeader {
+        title: @tr("Animation Frame Rate");
+        summary: @tr("Per-animation FPS control for immersive mode");
+        collapsed: AppearanceState.immersive-fps-collapsed;
+        toggled => {
+            AppearanceState.immersive-fps-collapsed = !AppearanceState.immersive-fps-collapsed;
+        }
+    }
+    if !AppearanceState.immersive-fps-collapsed: Text {
+        text: @tr("Configure frame rate per animation. Lower values save CPU. Requires re-entering immersive mode to apply.");
+        color: Theme.text-muted;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+
+    Rectangle { height: 40px; }
+}
