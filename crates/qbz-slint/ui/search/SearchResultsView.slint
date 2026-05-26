@@ -19,6 +19,7 @@ import { AlbumCard } from "../discover/AlbumCard.slint";
 import { ArtistCard } from "../discover/ArtistCard.slint";
 import { PlaylistCard } from "../discover/PlaylistCard.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
+import { SearchTrackHero } from "../primitives/SearchTrackHero.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -279,141 +280,151 @@ export component SearchResultsView inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        // --- Toolbar: history nav pair ----------------------------------
+        // --- Row 1: NavButtons + "Search" title (left), searchType filter
+        // radios floated right. Same toolbar bar as DiscoverBrowseView — the
+        // back/forward buttons keep the same screen position as every page
+        // (center at y=25 = 11px top + 14px half-button). The title sits
+        // inline right after the nav pair.
         Rectangle {
             height: 56px;
             background: Theme.surface-main;
+
+            // Left cluster — nav buttons then the title, inline.
             HorizontalLayout {
                 x: 32px;
                 y: 25px - self.height / 2;
                 width: self.preferred-width;
                 height: self.preferred-height;
+                spacing: 16px;
                 VerticalLayout {
                     alignment: center;
                     NavButtons { }
                 }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("Search");
+                        color: Theme.text-primary;
+                        font-size: Typography.section;
+                        font-weight: Typography.bold;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Right cluster — searchType filter radios as one group, anchored
+            // right. Shown once results exist (mirrors the previous gate).
+            if root.has-results: HorizontalLayout {
+                x: parent.width - self.preferred-width - 32px;
+                y: 25px - self.height / 2;
+                width: self.preferred-width;
+                height: self.preferred-height;
+                spacing: 16px;
+                VerticalLayout {
+                    alignment: center;
+                    FilterRadio {
+                        label: @tr("Main Artist");
+                        selected: SearchState.filter-index == 1;
+                        clicked => { SearchActions.filter-changed(1); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    FilterRadio {
+                        label: @tr("Performer");
+                        selected: SearchState.filter-index == 2;
+                        clicked => { SearchActions.filter-changed(2); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    FilterRadio {
+                        label: @tr("Composer");
+                        selected: SearchState.filter-index == 3;
+                        clicked => { SearchActions.filter-changed(3); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    FilterRadio {
+                        label: @tr("Label");
+                        selected: SearchState.filter-index == 4;
+                        clicked => { SearchActions.filter-changed(4); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    FilterRadio {
+                        label: @tr("Release Name");
+                        selected: SearchState.filter-index == 5;
+                        clicked => { SearchActions.filter-changed(5); }
+                    }
+                }
+                // Clear-filter button — visible only when a filter is set.
+                if SearchState.filter-index != 0: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 24px;
+                        height: 24px;
+                        border-radius: 12px;
+                        background: clear-ta.has-hover
+                            ? Theme.surface-hover
+                            : Theme.surface-elevated;
+                        QbzIcon {
+                            source: @image-url("../assets/icons/x.svg");
+                            width: 13px;
+                            height: 13px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            tint: clear-ta.has-hover
+                                ? Theme.text-primary
+                                : Theme.text-muted;
+                        }
+                        clear-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { SearchActions.filter-changed(0); }
+                        }
+                    }
+                }
             }
         }
 
-        // --- Fixed header: title, tabs + filter radios ------------------
-        // Collapsed during the initial load so the empty title + tabs do
-        // not show through behind the loading state.
-        if !(SearchState.loading && !root.has-results): VerticalLayout {
-            padding-left: 32px;
-            padding-right: 32px;
-            padding-bottom: 12px;
-            spacing: 16px;
-
-            Text {
-                text: @tr("Search Results");
-                color: Theme.text-primary;
-                font-size: 24px;
-                font-weight: 700;
-            }
-
+        // --- Row 2: the five-tab strip on its own row -------------------
+        // Collapsed during the initial load so the empty tabs do not show
+        // through behind the loading state. Gated only on the initial load
+        // (loading && no results); once any results exist the strip stays
+        // visible across tab switches and re-searches.
+        if !(SearchState.loading && !root.has-results): Rectangle {
+            height: 40px;
             HorizontalLayout {
-                // Tabs, left.
-                HorizontalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 22px;
-                    alignment: start;
-                    SearchTab {
-                        label: @tr("All");
-                        active: SearchState.tab == 0;
-                        clicked => { SearchActions.tab-changed(0); }
-                    }
-                    SearchTab {
-                        label: @tr("Albums");
-                        active: SearchState.tab == 1;
-                        clicked => { SearchActions.tab-changed(1); }
-                    }
-                    SearchTab {
-                        label: @tr("Tracks");
-                        active: SearchState.tab == 2;
-                        clicked => { SearchActions.tab-changed(2); }
-                    }
-                    SearchTab {
-                        label: @tr("Artists");
-                        active: SearchState.tab == 3;
-                        clicked => { SearchActions.tab-changed(3); }
-                    }
-                    SearchTab {
-                        label: @tr("Playlists");
-                        active: SearchState.tab == 4;
-                        clicked => { SearchActions.tab-changed(4); }
-                    }
+                x: 32px;
+                padding-bottom: 8px;
+                spacing: 22px;
+                alignment: start;
+                SearchTab {
+                    label: @tr("All");
+                    active: SearchState.tab == 0;
+                    clicked => { SearchActions.tab-changed(0); }
                 }
-
-                // searchType filter radios, right.
-                if root.has-results: HorizontalLayout {
-                    spacing: 16px;
-                    alignment: end;
-                    VerticalLayout {
-                        alignment: center;
-                        FilterRadio {
-                            label: @tr("Main Artist");
-                            selected: SearchState.filter-index == 1;
-                            clicked => { SearchActions.filter-changed(1); }
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        FilterRadio {
-                            label: @tr("Performer");
-                            selected: SearchState.filter-index == 2;
-                            clicked => { SearchActions.filter-changed(2); }
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        FilterRadio {
-                            label: @tr("Composer");
-                            selected: SearchState.filter-index == 3;
-                            clicked => { SearchActions.filter-changed(3); }
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        FilterRadio {
-                            label: @tr("Label");
-                            selected: SearchState.filter-index == 4;
-                            clicked => { SearchActions.filter-changed(4); }
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        FilterRadio {
-                            label: @tr("Release Name");
-                            selected: SearchState.filter-index == 5;
-                            clicked => { SearchActions.filter-changed(5); }
-                        }
-                    }
-                    // Clear-filter button — visible only when a filter is set.
-                    if SearchState.filter-index != 0: VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 24px;
-                            height: 24px;
-                            border-radius: 12px;
-                            background: clear-ta.has-hover
-                                ? Theme.surface-hover
-                                : Theme.surface-elevated;
-                            QbzIcon {
-                                source: @image-url("../assets/icons/x.svg");
-                                width: 13px;
-                                height: 13px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                tint: clear-ta.has-hover
-                                    ? Theme.text-primary
-                                    : Theme.text-muted;
-                            }
-                            clear-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { SearchActions.filter-changed(0); }
-                            }
-                        }
-                    }
+                SearchTab {
+                    label: @tr("Albums");
+                    active: SearchState.tab == 1;
+                    clicked => { SearchActions.tab-changed(1); }
+                }
+                SearchTab {
+                    label: @tr("Tracks");
+                    active: SearchState.tab == 2;
+                    clicked => { SearchActions.tab-changed(2); }
+                }
+                SearchTab {
+                    label: @tr("Artists");
+                    active: SearchState.tab == 3;
+                    clicked => { SearchActions.tab-changed(3); }
+                }
+                SearchTab {
+                    label: @tr("Playlists");
+                    active: SearchState.tab == 4;
+                    clicked => { SearchActions.tab-changed(4); }
                 }
             }
         }
@@ -478,15 +489,9 @@ export component SearchResultsView inherits Rectangle {
                             clicked(id) => { root.open-album(id); }
                             media-action(k, i, a) => { root.media-action(k, i, a); }
                         }
-                        if SearchState.most-popular-kind == "track": Rectangle {
-                            width: 320px;
-                            height: 56px;
-                            TrackRow {
-                                width: 320px;
-                                track: SearchState.most-popular-track;
-                                index: 0;
-                                media-action(k, i, a) => { root.media-action(k, i, a); }
-                            }
+                        if SearchState.most-popular-kind == "track": SearchTrackHero {
+                            track: SearchState.most-popular-track;
+                            media-action(k, i, a) => { root.media-action(k, i, a); }
                         }
                     }
 

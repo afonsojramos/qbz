@@ -7,9 +7,15 @@ import { QbzIcon } from "QbzIcon.slint";
 export component ContextMenuItem inherits Rectangle {
     in property <image> icon;
     in property <string> label;
+    // When false the row collapses to zero height and stops rendering /
+    // capturing input — lets a `for` build a filtered list without an
+    // inner `if` (which Slint does not allow as a direct `for` child).
+    in property <bool> shown: true;
     callback clicked();
 
-    height: 33px;
+    height: root.shown ? 33px : 0px;
+    visible: root.shown;
+    clip: true;
     background: ta.has-hover ? Theme.surface-hover : transparent;
 
     HorizontalLayout {

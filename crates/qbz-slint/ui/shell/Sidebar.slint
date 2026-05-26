@@ -13,6 +13,8 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Spacing } from "../foundation/spacing.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SidebarPlaylistCollage } from "../primitives/SidebarPlaylistCollage.slint";
+import { ContextMenu } from "../primitives/ContextMenu.slint";
+import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { ShellState, SidebarState, SidebarActions, SidebarEntry, DragState } from "../state.slint";
 import { ScrollView, LineEdit } from "std-widgets.slint";
 
@@ -113,8 +115,14 @@ component SidebarRow inherits Rectangle {
     callback toggle-folder(string);
     callback move-playlist(string, string);
     callback delete-folder(string);
+    callback edit-playlist(string);
+    callback edit-folder(string);
+    callback hide-playlist(string);
+    callback hide-folder(string);
 
     property <bool> is-folder: root.entry.kind == "folder";
+    // Live filter for the move-to-folder list (per-row search input).
+    property <string> folder-query;
 
     // Track-drag drop target: a playlist row self-detects whether the
     // global drag pointer is within its bounds (the source grabs the
@@ -234,33 +242,10 @@ component SidebarRow inherits Rectangle {
                 }
             }
         }
-        // Playlist "..." (hover) — move-to-folder only. Folders use just
-        // the open/close chevron; folder management lives in the Playlist
-        // Manager, so folders show no "..." here.
-        if !root.is-folder: VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 22px;
-                height: 22px;
-                border-radius: 4px;
-                opacity: (ta.has-hover || more-ta.has-hover) ? 1.0 : 0.0;
-                background: more-ta.has-hover ? Theme.surface-elevated : transparent;
-                QbzIcon {
-                    source: @image-url("../assets/icons/ellipsis.svg");
-                    width: 14px;
-                    height: 14px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    tint: Theme.text-muted;
-                }
-                more-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        menu.show();
-                    }
-                }
-            }
-        }
+        // Playlists no longer show a hover "..." button (it cluttered the
+        // row, like the folders' removed one). Move-to-folder is reached by
+        // right-clicking the row instead (see the `ta` pointer-event below);
+        // folder management itself lives in the Playlist Manager.
     }
     ta := TouchArea {
         mouse-cursor: pointer;
@@ -271,44 +256,153 @@ component SidebarRow inherits Rectangle {
                 root.open-playlist(root.entry.id);
             }
         }
+        // Right-click any row (folder or playlist) to open its context
+        // menu. The old hover "..." button lived at the row's right edge,
+        // where the scrollbar overlapped it and ate the click — so it was
+        // removed and the menu rehomed here, reachable from anywhere on
+        // the row.
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right
+                && event.kind == PointerEventKind.up) {
+                root.folder-query = "";
+                // Reset the filtered folder list to the full set (Rust
+                // owns the substring filter; an empty query = everything).
+                SidebarActions.search-folders("");
+                menu.show();
+            }
+        }
     }
 
+    // Right-click context menu — a folder menu (Edit / Hide) or a
+    // playlist menu (Edit / Hide / divider / Move-to-folder). Ports the
+    // Tauri sidebar row menus 1:1.
     menu := PopupWindow {
-        x: root.width - 196px;
+        x: root.width - 210px;
         y: 28px;
-        width: 190px;
-        Rectangle {
-            background: Theme.surface-card;
-            border-width: 1px;
-            border-color: Theme.border-subtle;
-            border-radius: 8px;
-            drop-shadow-blur: 20px;
-            drop-shadow-color: #00000080;
-            VerticalLayout {
-                padding: 6px;
-                spacing: 1px;
-                // Playlist: move to folder. Wrapped so the `for` is not
-                // a direct child of an `if` (not allowed in Slint).
-                if !root.is-folder: VerticalLayout {
-                    spacing: 1px;
-                    Text {
-                        text: @tr("Move to folder");
-                        color: Theme.text-muted;
-                        font-size: 11px;
-                        horizontal-alignment: left;
+        width: 210px;
+        // Default close-policy closes on ANY click (even inside), which
+        // dismissed the menu the instant you clicked the folder-search
+        // input. Close only on outside clicks; items still close it
+        // explicitly via menu.close().
+        close-policy: PopupClosePolicy.close-on-click-outside;
+        ContextMenu {
+            // ---- Folder menu --------------------------------------------
+            if root.is-folder: ContextMenuItem {
+                icon: @image-url("../assets/icons/pencil.svg");
+                label: @tr("Edit folder");
+                clicked => {
+                    root.edit-folder(root.entry.id);
+                    menu.close();
+                }
+            }
+            if root.is-folder: ContextMenuItem {
+                icon: @image-url("../assets/icons/eye-off.svg");
+                label: @tr("Hide from sidebar");
+                clicked => {
+                    root.hide-folder(root.entry.id);
+                    menu.close();
+                }
+            }
+
+            // ---- Playlist menu ------------------------------------------
+            if !root.is-folder: ContextMenuItem {
+                icon: @image-url("../assets/icons/pencil.svg");
+                label: @tr("Edit playlist");
+                clicked => {
+                    root.edit-playlist(root.entry.id);
+                    menu.close();
+                }
+            }
+            if !root.is-folder: ContextMenuItem {
+                icon: @image-url("../assets/icons/eye-off.svg");
+                label: @tr("Hide from sidebar");
+                clicked => {
+                    root.hide-playlist(root.entry.id);
+                    menu.close();
+                }
+            }
+            // Divider before the move-to-folder section.
+            if !root.is-folder: Rectangle {
+                height: 7px;
+                Rectangle {
+                    height: 1px;
+                    y: (parent.height - self.height) / 2;
+                    background: Theme.border-subtle;
+                }
+            }
+            // MOVE TO FOLDER section (wrapped so the `for` is not a direct
+            // child of an `if`, which Slint disallows).
+            if !root.is-folder: VerticalLayout {
+                padding-left: 11px;
+                padding-right: 16px;
+                padding-bottom: 3px;
+                Text {
+                    text: @tr("Move to folder");
+                    color: Theme.text-muted;
+                    font-size: 11px;
+                    horizontal-alignment: left;
+                    height: 18px;
+                    vertical-alignment: center;
+                }
+            }
+            // Folder search input — only when there are enough folders to
+            // warrant it. No auto-focus (calling focus() in init panics
+            // with "Recursion detected"). The substring filter runs in
+            // Rust (Slint strings have no `contains`); it fills
+            // `menu-folders`, which the list below iterates.
+            if !root.is-folder && SidebarState.folders.length >= 8: HorizontalLayout {
+                padding-left: 11px;
+                padding-right: 16px;
+                padding-bottom: 4px;
+                LineEdit {
+                    height: 26px;
+                    placeholder-text: @tr("Search folders");
+                    text <=> root.folder-query;
+                    edited => {
+                        SidebarActions.search-folders(self.text);
                     }
-                    MenuItem {
-                        label: @tr("No folder");
-                        activated => {
-                            root.move-playlist(root.entry.id, "");
-                        }
-                    }
-                    for f in SidebarState.folders: MenuItem {
+                }
+            }
+            // The folder list — each folder except the playlist's current
+            // one. The query filter is already applied to `menu-folders`
+            // by Rust; the current-folder exclusion stays in markup.
+            if !root.is-folder: ScrollView {
+                // Cap the list at ~5 rows (33px each); the rest scroll.
+                height: min(SidebarState.menu-folders.length * 33px, 165px);
+                vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                VerticalLayout {
+                    for f in SidebarState.menu-folders: ContextMenuItem {
+                        shown: f.id != root.entry.folder-id;
+                        icon: @image-url("../assets/icons/folder.svg");
                         label: f.name;
-                        activated => {
+                        clicked => {
                             root.move-playlist(root.entry.id, f.id);
+                            menu.close();
                         }
                     }
+                }
+            }
+            // Move to root — only when the playlist is currently in a folder.
+            if !root.is-folder && root.entry.folder-id != "": ContextMenuItem {
+                icon: @image-url("../assets/icons/chevron-left.svg");
+                label: @tr("Move to root");
+                clicked => {
+                    root.move-playlist(root.entry.id, "");
+                    menu.close();
+                }
+            }
+            // No folders at all.
+            if !root.is-folder && SidebarState.folders.length == 0: HorizontalLayout {
+                padding-left: 11px;
+                padding-right: 16px;
+                padding-bottom: 4px;
+                Text {
+                    text: @tr("No folders yet.");
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                    height: 22px;
+                    vertical-alignment: center;
                 }
             }
         }
@@ -352,19 +446,31 @@ export component Sidebar inherits Rectangle {
             // Inline search input — takes the full header width to the
             // left of the actions when open. Filters playlists (the
             // filter is applied in crate::sidebar, recursively across
-            // folders).
-            if SidebarState.search-open: search-edit := LineEdit {
-                placeholder-text: @tr("Search playlists");
-                text <=> SidebarState.search-query;
+            // folders). Wrapped in a Rectangle so the auto-focus can be
+            // deferred: calling self.focus() directly from the LineEdit's
+            // `init` re-enters property evaluation during the mount/layout
+            // pass and panics with "Recursion detected" (i-slint-core
+            // properties.rs). A single-shot Timer fires the focus on a
+            // later event-loop tick, after the element tree has settled
+            // (same end effect as Tauri's focus()).
+            if SidebarState.search-open: Rectangle {
                 horizontal-stretch: 1;
-                height: 22px;
-                // Auto-focus when the input mounts (it is re-created each
-                // time the search opens), matching Tauri's focus().
-                init => {
-                    self.focus();
+                search-edit := LineEdit {
+                    width: 100%;
+                    height: 22px;
+                    placeholder-text: @tr("Search playlists");
+                    text <=> SidebarState.search-query;
+                    edited => {
+                        SidebarActions.search-changed(self.text);
+                    }
                 }
-                edited => {
-                    SidebarActions.search-changed(self.text);
+                focus-timer := Timer {
+                    interval: 1ms;
+                    running: true;
+                    triggered => {
+                        search-edit.focus();
+                        self.running = false;
+                    }
                 }
             }
 
@@ -488,7 +594,7 @@ export component Sidebar inherits Rectangle {
                         MenuItem {
                             label: @tr("Refresh");
                             has-icon: true;
-                            icon: @image-url("../assets/icons/list-music.svg");
+                            icon: @image-url("../assets/icons/refresh-cw.svg");
                             activated => { SidebarActions.refresh-playlists(); }
                         }
                     }
@@ -518,6 +624,18 @@ export component Sidebar inherits Rectangle {
                     }
                     delete-folder(id) => {
                         SidebarActions.delete-folder(id);
+                    }
+                    edit-playlist(id) => {
+                        SidebarActions.edit-playlist(id);
+                    }
+                    edit-folder(id) => {
+                        SidebarActions.edit-folder(id);
+                    }
+                    hide-playlist(id) => {
+                        SidebarActions.hide-playlist(id);
+                    }
+                    hide-folder(id) => {
+                        SidebarActions.hide-folder(id);
                     }
                 }
                 if SidebarState.entries.length == 0 && !SidebarState.loading: Text {

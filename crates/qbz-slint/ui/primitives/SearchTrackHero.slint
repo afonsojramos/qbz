@@ -1,0 +1,240 @@
+// Most-popular hero card for a TRACK top result.
+//
+// Mirrors the Tauri SearchView `.popular-card` track case: a vertical
+// card with a square artwork on top (hover scrim + favorite / play /
+// more overlay buttons), then a tight title / artist stack alongside an
+// icon-only quality badge. Sized to match the search-dashboard ArtistCard
+// (160x220) so the Most-popular slot sits proportionate next to the
+// Artists carousel cards. Tauri's `.most-popular-card` is 160x220 with a
+// 142x142 artwork (`.popular-card-artwork`), padding 6px — replicated here.
+//
+// Reusable: takes a TrackItem and bubbles every interaction up through one
+// media-action(kind, id, action) — "play" | "favorite" | the context-menu
+// actions — keyed by "track".
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import { Spacing } from "../foundation/spacing.slint";
+import { TrackItem } from "../state.slint";
+import { QbzIcon } from "QbzIcon.slint";
+import { QualityBadge } from "QualityBadge.slint";
+import { TrackContextMenu } from "TrackContextMenu.slint";
+
+// Circular hover-overlay action button — identical visual to AlbumCard's
+// OverlayButton so the hero cards share one look.
+component OverlayButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> primary: false;
+    in property <length> diameter: 36px;
+    in property <length> icon-size: 16px;
+    out property <bool> hovered: ta.has-hover;
+    callback clicked();
+
+    width: root.diameter;
+    height: root.diameter;
+    border-radius: root.diameter / 2;
+    background: root.primary
+        ? (ta.has-hover ? #ffffffd6 : #ffffff)
+        : (ta.has-hover ? #ffffff3d : #ffffff24);
+    border-width: root.primary ? 0px : 1.5px;
+    border-color: #ffffffcc;
+
+    QbzIcon {
+        source: root.icon;
+        width: root.icon-size;
+        height: root.icon-size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: root.primary ? #000000 : #ffffff;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component SearchTrackHero inherits Rectangle {
+    in property <TrackItem> track;
+    // kind ("track"), track id, action ("play" | "favorite" | menu actions).
+    callback media-action(string, string, string);
+
+    // Match the search-dashboard ArtistCard footprint (160x220) so the
+    // Most-popular hero is proportionate next to the artist cards. Tauri's
+    // `.popular-card`: 160 wide, 6px padding, 142x142 artwork.
+    width: 160px;
+    height: 220px;
+    border-radius: 12px;
+    background: hover.has-hover || root.overlay-on
+        ? Theme.surface-elevated
+        : Theme.surface-card;
+    animate background { duration: 150ms; }
+    clip: true;
+
+    // Overlay stays up while the pointer is over the artwork OR a button.
+    property <bool> overlay-on: hover.has-hover
+        || fav-btn.hovered || play-btn.hovered || more-btn.hovered;
+
+    VerticalLayout {
+        padding: 6px;
+        alignment: start;
+        spacing: 0px;
+
+        // --- Artwork + hover overlay -------------------------------------
+        Rectangle {
+            width: 142px;
+            height: 142px;
+            border-radius: Radius.sm;
+            background: Theme.surface-elevated;
+            clip: true;
+
+            // Cover art (track's album cover). Empty until the artwork
+            // pipeline resolves it, leaving the placeholder visible.
+            Image {
+                width: 100%;
+                height: 100%;
+                source: root.track.artwork;
+                image-fit: cover;
+            }
+            // Placeholder music glyph behind the cover.
+            if root.track.artwork.width == 0: QbzIcon {
+                source: @image-url("../assets/icons/music.svg");
+                width: 30px;
+                height: 30px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                tint: Theme.text-muted;
+            }
+
+            // Hover scrim.
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                background: #000000;
+                opacity: root.overlay-on ? 0.6 : 0.0;
+                animate opacity { duration: 150ms; }
+            }
+
+            // Card-open (play) + hover detector. Declared before the action
+            // buttons so those, when interactive, win the pointer.
+            hover := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.media-action("track", root.track.id, "play");
+                }
+            }
+
+            // Hover action buttons — favorite / play / more. Centered in
+            // the 142px artwork.
+            HorizontalLayout {
+                x: 0px;
+                y: (142px - self.height) / 2;
+                width: 142px;
+                height: 38px;
+                alignment: center;
+                spacing: 8px;
+                opacity: root.overlay-on ? 1.0 : 0.0;
+                animate opacity { duration: 150ms; }
+
+                VerticalLayout {
+                    alignment: center;
+                    fav-btn := OverlayButton {
+                        icon: @image-url("../assets/icons/heart.svg");
+                        diameter: 30px;
+                        icon-size: 14px;
+                        clicked => {
+                            root.media-action("track", root.track.id, "favorite");
+                        }
+                    }
+                }
+                play-btn := OverlayButton {
+                    icon: @image-url("../assets/icons/play-fill.svg");
+                    primary: true;
+                    diameter: 38px;
+                    icon-size: 16px;
+                    clicked => {
+                        root.media-action("track", root.track.id, "play");
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    more-btn := OverlayButton {
+                        icon: @image-url("../assets/icons/ellipsis.svg");
+                        diameter: 30px;
+                        icon-size: 14px;
+                        clicked => {
+                            track-menu.show();
+                        }
+                    }
+                }
+            }
+
+            // Context menu for the "more" button — the shared track menu.
+            track-menu := TrackContextMenu {
+                x: 20px;
+                y: 48px;
+                track-id: root.track.id;
+                media-action(k, i, a) => {
+                    root.media-action(k, i, a);
+                }
+            }
+        }
+
+        Rectangle { height: 6px; }
+
+        // --- Title / artist + quality badge ------------------------------
+        // 142px wide to align with the artwork. The badge is given a fixed
+        // column so it stays inside the card; the title/artist stack takes
+        // the remaining width and elides.
+        HorizontalLayout {
+            width: 142px;
+            height: 52px;
+            spacing: 6px;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 1px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: root.track.title;
+                    width: 100%;
+                    height: 18px;
+                    color: Theme.text-primary;
+                    font-size: 13px;
+                    font-weight: Typography.medium;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.track.artist != "": Text {
+                    text: root.track.artist;
+                    width: 100%;
+                    height: 16px;
+                    color: Theme.text-muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+
+            // Icon-only quality badge — fixed-width column, kept inside the
+            // card (the hi-res badge is 42px wide).
+            VerticalLayout {
+                alignment: center;
+                width: 44px;
+                HorizontalLayout {
+                    alignment: end;
+                    QualityBadge {
+                        tier: root.track.quality-tier;
+                        label: "";
+                    }
+                }
+            }
+        }
+    }
+}

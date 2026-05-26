@@ -14,7 +14,10 @@ pub struct FolderInfo {
     pub name: String,
 }
 
-/// All folders, ordered by their stored position.
+/// All folders, ordered by their stored position. The sidebar now uses
+/// `load_folders_full` (it needs the hidden flag to exclude hidden
+/// folders); kept as a lightweight id+name helper for other callers.
+#[allow(dead_code)]
 pub fn load_folders() -> Vec<FolderInfo> {
     library_db::with_db(|db| db.get_all_playlist_folders())
         .unwrap_or_default()
@@ -208,6 +211,13 @@ pub fn set_favorite(playlist_id: u64, favorite: bool) {
 /// Set a playlist's hidden flag.
 pub fn set_hidden(playlist_id: u64, hidden: bool) {
     library_db::with_db(|db| db.set_playlist_hidden(playlist_id, hidden));
+}
+
+/// Set a folder's hidden flag (leaves all other fields unchanged).
+pub fn set_folder_hidden(id: &str, hidden: bool) {
+    library_db::with_db(|db| {
+        db.update_playlist_folder(id, None, None, None, None, None, Some(hidden))
+    });
 }
 
 /// Persist a custom playlist order (custom-sort positions).

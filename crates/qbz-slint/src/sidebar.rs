@@ -18,6 +18,9 @@ use crate::{AppWindow, SidebarEntry, SidebarPlaylistItem, SidebarState};
 pub struct SidebarPlaylist {
     pub id: u64,
     pub name: String,
+    /// Playlist description (Qobuz). Empty when none. Used to prefill the
+    /// edit-playlist modal opened from the sidebar context menu.
+    pub description: String,
     /// Total track count (Qobuz). Used by the "# of tracks" sort.
     pub tracks_count: u32,
     /// Up to four cover-art URLs for the micro-collage, sourced from the
@@ -56,6 +59,8 @@ pub struct SidebarData {
     pub playlists: Vec<SidebarPlaylist>,
     pub folders: Vec<FolderInfo>,
     pub folder_map: HashMap<u64, String>,
+    /// Playlist ids the user has hidden from the sidebar (local settings).
+    pub hidden_playlists: HashSet<u64>,
 }
 
 /// Session-only folder expand state (matches Tauri — not persisted).
@@ -69,6 +74,11 @@ static SORT: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new("name".to_str
 /// Active playlist-name search query (lowercased), mirrored from
 /// `SidebarState.search-query`. Filters the rebuilt list recursively.
 static SEARCH: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
+/// playlist id -> (name, description) from the last loaded payload, so the
+/// sidebar context menu can prefill the edit-playlist modal without a
+/// refetch.
+static NAME_DESC: LazyLock<Mutex<HashMap<u64, (String, String)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn set_loading(window: &AppWindow, loading: bool) {
     window.global::<SidebarState>().set_loading(loading);
@@ -126,6 +136,7 @@ where
             .map(|p| SidebarPlaylist {
                 id: p.id,
                 name: p.name.clone(),
+                description: p.description.clone().unwrap_or_default(),
                 tracks_count: p.tracks_count,
                 cover_urls: playlist_cover_urls(&p),
                 position: 0,
@@ -136,28 +147,60 @@ where
             Vec::new()
         }
     };
-    // Folders + folder membership + per-playlist custom-sort positions
-    // (all local, library.db).
-    let (folders, folder_map, positions) = tokio::task::spawn_blocking(|| {
-        (
-            crate::folders::load_folders(),
-            crate::folders::playlist_folder_map(),
-            crate::folders::playlist_positions(),
-        )
-    })
-    .await
-    .unwrap_or_default();
+    // Folders (hidden folders excluded) + folder membership +
+    // per-playlist custom-sort positions + hidden-playlist set (all
+    // local, library.db).
+    let (folders, folder_map, positions, hidden_playlists) =
+        tokio::task::spawn_blocking(|| {
+            let folders: Vec<FolderInfo> = crate::folders::load_folders_full()
+                .into_iter()
+                .filter(|f| !f.is_hidden)
+                .map(|f| FolderInfo {
+                    id: f.id,
+                    name: f.name,
+                })
+                .collect();
+            let hidden_playlists: HashSet<u64> = crate::folders::playlist_settings_map()
+                .into_iter()
+                .filter(|(_, s)| s.hidden)
+                .map(|(id, _)| id)
+                .collect();
+            (
+                folders,
+                crate::folders::playlist_folder_map(),
+                crate::folders::playlist_positions(),
+                hidden_playlists,
+            )
+        })
+        .await
+        .unwrap_or_default();
     let mut playlists = playlists;
     for p in &mut playlists {
         if let Some(pos) = positions.get(&p.id) {
             p.position = *pos;
         }
     }
+    // Cache the loaded playlists' name+description for the sidebar
+    // context-menu edit modal (no extra fetch on right-click).
+    if let Ok(mut nd) = NAME_DESC.lock() {
+        nd.clear();
+        for p in &playlists {
+            nd.insert(p.id, (p.name.clone(), p.description.clone()));
+        }
+    }
     SidebarData {
         playlists,
         folders,
         folder_map,
+        hidden_playlists,
     }
+}
+
+/// Name + description for `id`, from the last loaded playlist payload.
+/// Used by the sidebar context menu to prefill the edit-playlist modal
+/// without a refetch. Returns None when the playlist is unknown.
+pub fn playlist_name_desc(id: u64) -> Option<(String, String)> {
+    NAME_DESC.lock().ok().and_then(|nd| nd.get(&id).cloned())
 }
 
 /// Store the freshly-loaded data and render it.
@@ -171,7 +214,7 @@ pub fn apply(window: &AppWindow, data: SidebarData) {
 /// Build a playlist `SidebarEntry` (with its cover URLs for the
 /// micro-collage). The decoded `cover*` images stay default here and are
 /// filled asynchronously by the artwork pipeline (see `artwork_jobs`).
-fn playlist_entry(p: &SidebarPlaylist, indent: bool) -> SidebarEntry {
+fn playlist_entry(p: &SidebarPlaylist, indent: bool, folder_id: &str) -> SidebarEntry {
     let url = |i: usize| -> slint::SharedString {
         p.cover_urls.get(i).cloned().unwrap_or_default().into()
     };
@@ -182,6 +225,7 @@ fn playlist_entry(p: &SidebarPlaylist, indent: bool) -> SidebarEntry {
         expanded: false,
         count: 0,
         indent,
+        folder_id: folder_id.into(),
         cover_count: p.cover_urls.len().min(4) as i32,
         url1: url(0),
         url2: url(1),
@@ -215,6 +259,7 @@ pub fn rebuild(window: &AppWindow) {
             .iter()
             .filter(|p| data.folder_map.get(&p.id).map(|f| f == &folder.id).unwrap_or(false))
             .filter(|p| matches(p))
+            .filter(|p| !data.hidden_playlists.contains(&p.id))
             .collect();
         // While searching, skip folders with no matching playlists
         // (mirrors Tauri's `if (isSearching && folderPlaylists.length === 0) continue`).
@@ -230,6 +275,7 @@ pub fn rebuild(window: &AppWindow) {
             expanded: is_exp,
             count: members.len() as i32,
             indent: false,
+            folder_id: "".into(),
             cover_count: 0,
             url1: Default::default(),
             url2: Default::default(),
@@ -242,7 +288,7 @@ pub fn rebuild(window: &AppWindow) {
         });
         if is_exp {
             for p in members {
-                entries.push(playlist_entry(p, true));
+                entries.push(playlist_entry(p, true, &folder.id));
             }
         }
     }
@@ -253,8 +299,8 @@ pub fn rebuild(window: &AppWindow) {
             .get(&p.id)
             .map(|f| folder_ids.contains(f))
             .unwrap_or(false);
-        if !in_folder && matches(p) {
-            entries.push(playlist_entry(p, false));
+        if !in_folder && matches(p) && !data.hidden_playlists.contains(&p.id) {
+            entries.push(playlist_entry(p, false, ""));
         }
     }
 
@@ -269,8 +315,31 @@ pub fn rebuild(window: &AppWindow) {
 
     let state = window.global::<SidebarState>();
     state.set_entries(ModelRc::new(VecModel::from(entries)));
-    state.set_folders(ModelRc::new(VecModel::from(folders)));
+    state.set_folders(ModelRc::new(VecModel::from(folders.clone())));
+    // The move-to-folder menu starts unfiltered (= the full folder set);
+    // the search box narrows it via `search_menu_folders`.
+    state.set_menu_folders(ModelRc::new(VecModel::from(folders)));
     state.set_loading(false);
+}
+
+/// Filter the move-to-folder menu's folder list by a case-insensitive
+/// substring of the search query (Slint strings have no `contains`, so
+/// this lives in Rust). An empty query restores the full list.
+pub fn search_menu_folders(window: &AppWindow, query: &str) {
+    let q = query.trim().to_lowercase();
+    let data = CACHE.lock().map(|c| c.clone()).unwrap_or_default();
+    let filtered: Vec<SidebarPlaylistItem> = data
+        .folders
+        .iter()
+        .filter(|f| q.is_empty() || f.name.to_lowercase().contains(&q))
+        .map(|f| SidebarPlaylistItem {
+            id: f.id.clone().into(),
+            name: f.name.clone().into(),
+        })
+        .collect();
+    window
+        .global::<SidebarState>()
+        .set_menu_folders(ModelRc::new(VecModel::from(filtered)));
 }
 
 /// Build artwork-download jobs for every playlist row's collage covers,

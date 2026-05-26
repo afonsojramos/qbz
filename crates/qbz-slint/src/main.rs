@@ -48,6 +48,7 @@ mod search;
 mod settings;
 mod share;
 mod sidebar;
+mod toast;
 mod ui_prefs;
 
 use std::sync::Arc;
@@ -802,6 +803,29 @@ fn refresh_sidebar_covers(window: &AppWindow) {
     }
 }
 
+/// Open the folder editor modal for an existing folder, populating
+/// `FolderEditState` from the stored record. Shared by the Playlist
+/// Manager edit-folder action and the sidebar context menu so both open
+/// the same editor. The icon-preset/color grids are populated once at
+/// startup, so the editor works from anywhere.
+fn open_folder_editor(window: &AppWindow, id: slint::SharedString) {
+    let fid = id.to_string();
+    if let Some(f) = playlist_manager::folder_for_edit(&fid) {
+        let fes = window.global::<FolderEditState>();
+        fes.set_id(id);
+        fes.set_name(f.name.into());
+        fes.set_icon_preset(f.icon_preset.into());
+        fes.set_icon_color(f.icon_color.into());
+        fes.set_is_hidden(f.is_hidden);
+        fes.set_custom_image_path(f.custom_image_path.clone().unwrap_or_default().into());
+        fes.set_open(true);
+        // Decode the existing custom image, if any.
+        if let Some(path) = f.custom_image_path {
+            playlist_manager::load_editor_custom_image(window.as_weak(), path);
+        }
+    }
+}
+
 /// Re-fire the artwork pipeline for the Playlist Manager's currently
 /// rendered cards (after a rebuild swaps the models).
 fn refresh_pm_covers(window: &AppWindow) {
@@ -1151,23 +1175,7 @@ fn wire_playlist_manager(
             .global::<PlaylistManagerActions>()
             .on_edit_folder(move |id| {
                 let Some(w) = weak.upgrade() else { return };
-                let fid = id.to_string();
-                if let Some(f) = playlist_manager::folder_for_edit(&fid) {
-                    let fes = w.global::<FolderEditState>();
-                    fes.set_id(id);
-                    fes.set_name(f.name.into());
-                    fes.set_icon_preset(f.icon_preset.into());
-                    fes.set_icon_color(f.icon_color.into());
-                    fes.set_is_hidden(f.is_hidden);
-                    fes.set_custom_image_path(
-                        f.custom_image_path.clone().unwrap_or_default().into(),
-                    );
-                    fes.set_open(true);
-                    // Decode the existing custom image, if any.
-                    if let Some(path) = f.custom_image_path {
-                        playlist_manager::load_editor_custom_image(w.as_weak(), path);
-                    }
-                }
+                open_folder_editor(&w, id);
             });
     }
 
@@ -3679,6 +3687,88 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = weak.upgrade() {
                     update_nav_flags(&w);
                 }
+            });
+    }
+    {
+        // Edit playlist (sidebar context menu) — open the edit-playlist
+        // modal, prefilled from the cached name + description.
+        let weak = window.as_weak();
+        window
+            .global::<SidebarActions>()
+            .on_edit_playlist(move |id| {
+                let Some(w) = weak.upgrade() else { return };
+                let (name, description) = id
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(sidebar::playlist_name_desc)
+                    .unwrap_or_else(|| (id.to_string(), String::new()));
+                let es = w.global::<EditPlaylistState>();
+                es.set_id(id);
+                es.set_name(name.into());
+                es.set_description(description.into());
+                es.set_busy(false);
+                es.set_open(true);
+            });
+    }
+    {
+        // Edit folder (sidebar context menu) — open the folder editor.
+        let weak = window.as_weak();
+        window
+            .global::<SidebarActions>()
+            .on_edit_folder(move |id| {
+                let Some(w) = weak.upgrade() else { return };
+                open_folder_editor(&w, id);
+            });
+    }
+    {
+        // Filter the move-to-folder menu list by a substring query.
+        let weak = window.as_weak();
+        window
+            .global::<SidebarActions>()
+            .on_search_folders(move |query| {
+                if let Some(w) = weak.upgrade() {
+                    sidebar::search_menu_folders(&w, query.as_str());
+                }
+            });
+    }
+    {
+        // Hide playlist from the sidebar (local setting), then reload.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<SidebarActions>()
+            .on_hide_playlist(move |id| {
+                let Ok(pid) = id.parse::<u64>() else { return };
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    tokio::task::spawn_blocking(move || folders::set_hidden(pid, true))
+                        .await
+                        .ok();
+                    load_sidebar_playlists(runtime, weak, &handle);
+                });
+            });
+    }
+    {
+        // Hide folder from the sidebar (local setting), then reload.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<SidebarActions>()
+            .on_hide_folder(move |id| {
+                let fid = id.to_string();
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    tokio::task::spawn_blocking(move || folders::set_folder_hidden(&fid, true))
+                        .await
+                        .ok();
+                    load_sidebar_playlists(runtime, weak, &handle);
+                });
             });
     }
 

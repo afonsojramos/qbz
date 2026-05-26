@@ -267,6 +267,24 @@ export global DragActions {
 // Which content view the shell shows.
 export enum ContentView { home, album, artist, settings, search, musician, label, location, favorites, mix, playlist, discover-browse, playlist-manager }
 
+// In-app toast (transient notification). Mirrors Tauri's toastStore:
+// a single toast at a time (a new one replaces the current), auto-hidden
+// by the Rust layer per kind. `buffering` is persistent (no auto-hide).
+export enum ToastKind { success, error, info, warning, buffering }
+
+// Global toast state, driven by crate::toast. The Toast overlay (mounted
+// at the app root) renders whatever is here. The Rust layer owns timing
+// (show + auto-hide); the UI only sets `visible = false` on the close
+// button. `enabled` gates non-error toasts (errors always show), to match
+// Tauri's "in-app notifications" preference.
+export global ToastState {
+    in-out property <bool> visible: false;
+    in-out property <string> message;
+    in-out property <ToastKind> kind: ToastKind.info;
+    in-out property <bool> persistent: false;
+    in-out property <bool> enabled: true;
+}
+
 // One row in the sidebar playlists list (also used for the folder
 // list in the move-to-folder menu).
 export struct SidebarPlaylistItem {
@@ -289,6 +307,7 @@ export struct SidebarEntry {
     expanded: bool,     // folders
     count: int,         // folder playlist count
     indent: bool,       // playlist nested in a folder
+    folder-id: string,  // playlist's current folder id ("" = root; folders "")
     cover-count: int,   // number of cover images, 0-4 (playlists)
     url1: string,
     url2: string,
@@ -306,6 +325,13 @@ export global SidebarState {
     in property <[SidebarEntry]> entries: [];
     // Flat folder list, for the move-to-folder menu.
     in property <[SidebarPlaylistItem]> folders: [];
+    // Folder list filtered by the move-to-folder search box. Equals
+    // `folders` when the query is empty; a case-insensitive substring
+    // subset otherwise. Filled by the Rust side (Slint strings have no
+    // `contains`, so the substring filter can't live in markup). The
+    // context menu iterates this; the current-folder exclusion stays in
+    // markup via the per-row `folder-id`.
+    in property <[SidebarPlaylistItem]> menu-folders: [];
     in property <bool> loading: false;
     // The currently-open playlist id, for the active-row highlight.
     in property <string> active-id;
@@ -333,6 +359,14 @@ export global SidebarActions {
     callback delete-folder(string /* folder id */);
     // Move a playlist into a folder ("" folder id = root).
     callback move-playlist(string /* playlist id */, string /* folder id */);
+    // Right-click context menu actions (folder + playlist rows).
+    callback edit-playlist(string /* id */);
+    callback edit-folder(string /* id */);
+    callback hide-playlist(string /* id */);
+    callback hide-folder(string /* id */);
+    // Filter `menu-folders` by a case-insensitive substring of the
+    // move-to-folder search box (Rust does the substring match).
+    callback search-folders(string /* query */);
     // Pick a sort option (re-sorts the list). Same five values as Tauri.
     callback set-sort(string /* option */);
     // Re-run the playlist-name filter (called as the search input edits).

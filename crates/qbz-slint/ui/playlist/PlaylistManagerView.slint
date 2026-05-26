@@ -29,7 +29,8 @@ import { PmFolderIcon } from "../primitives/PmFolderIcon.slint";
 // Search field — leading magnifier, input, trailing X to clear.
 component PmSearch inherits Rectangle {
     height: 34px;
-    width: 240px;
+    // 70% of the former 240px width (task: shrink the PM search input).
+    width: 168px;
     border-radius: 6px;
     background: Theme.surface-elevated;
     border-width: 1px;
@@ -267,6 +268,9 @@ component PmFolderCard inherits Rectangle {
     in property <PmFolderItem> folder;
     callback open();
     callback edit();
+    // Matches Tauri's `.folder-card`: 160 wide, 16px padding, centered
+    // icon/name/count column. Hover reveals the edit pencil (opacity 0->1)
+    // and lifts the surface — same affordance as Tauri.
     width: 160px;
     height: 128px;
     border-radius: 10px;
@@ -275,43 +279,56 @@ component PmFolderCard inherits Rectangle {
 
     VerticalLayout {
         padding: 16px;
-        spacing: 10px;
-        PmFolderIcon {
-            folder: root.folder;
-            size: 64px;
+        spacing: 8px;
+        alignment: center;
+        // Centered icon.
+        HorizontalLayout {
+            alignment: center;
+            PmFolderIcon {
+                folder: root.folder;
+                size: 64px;
+            }
         }
+        // Centered single-line name (13px, elided — matches `.folder-name`).
         Text {
             text: root.folder.name;
             color: Theme.text-primary;
-            font-size: Typography.body;
+            font-size: 13px;
             font-weight: Typography.medium;
+            horizontal-alignment: center;
             overflow: elide;
+            height: 18px;
+            vertical-alignment: center;
         }
+        // Centered count (12px — matches `.folder-count`).
         Text {
             text: root.folder.count == 1
                 ? @tr("1 playlist")
                 : @tr("{} playlists", root.folder.count);
             color: Theme.text-muted;
-            font-size: Typography.legal;
+            font-size: 12px;
+            horizontal-alignment: center;
             overflow: elide;
         }
     }
-    // Hover edit pencil (top-right).
+    // Hover edit pencil (top-right). Hidden until the card (or the button)
+    // is hovered, exactly like Tauri's `.folder-card:hover .folder-edit-btn`.
     edit-btn := Rectangle {
         x: parent.width - self.width - 8px;
         y: 8px;
-        width: 26px;
-        height: 26px;
-        border-radius: 6px;
+        width: 24px;
+        height: 24px;
+        border-radius: 4px;
         opacity: (ta.has-hover || edit-ta.has-hover) ? 1.0 : 0.0;
-        background: edit-ta.has-hover ? Theme.surface-card : #00000066;
+        animate opacity { duration: 150ms; }
+        background: edit-ta.has-hover ? Theme.surface-card : Theme.surface-elevated;
         QbzIcon {
             source: @image-url("../assets/icons/pen-line.svg");
-            width: 14px;
-            height: 14px;
+            width: 12px;
+            height: 12px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            tint: Theme.text-primary;
+            tint: edit-ta.has-hover ? Theme.text-primary : Theme.text-muted;
         }
         edit-ta := TouchArea {
             mouse-cursor: pointer;
@@ -344,9 +361,10 @@ component PmGridCard inherits Rectangle {
     callback move-down();
 
     width: 160px;
-    // pad(10) + [reorder 22 + gap 8] + collage 140 + gap 8 + name 36 +
-    // gap 8 + footer 24 + pad(10).
-    height: root.can-reorder ? 266px : 236px;
+    // pad(10) + [reorder 22 + gap 8] + collage 140 + gap 8 + name 18 +
+    // gap 8 + footer 22 + pad(10). Tauri's name is a single-line 13px
+    // title (the .grid-item .name); we elide instead of 2-line clamp.
+    height: root.can-reorder ? 250px : 220px;
     border-radius: 8px;
     background: ta.has-hover ? Theme.surface-hover : Theme.surface-card;
     opacity: root.item.is-hidden ? 0.6 : 1.0;
@@ -400,24 +418,26 @@ component PmGridCard inherits Rectangle {
         Text {
             text: root.item.name;
             color: Theme.text-primary;
-            font-size: Typography.body;
+            font-size: 13px;
             font-weight: Typography.medium;
-            wrap: word-wrap;
             overflow: elide;
             width: 140px;
-            height: 36px;
+            height: 18px;
+            vertical-alignment: center;
         }
 
         // Footer: meta + actions.
         HorizontalLayout {
             width: 140px;
+            height: 22px;
             alignment: space-between;
             VerticalLayout {
                 alignment: center;
+                horizontal-stretch: 1;
                 Text {
                     text: root.item.tracks-line;
                     color: Theme.text-muted;
-                    font-size: Typography.legal;
+                    font-size: 11px;
                     overflow: elide;
                 }
             }
@@ -460,8 +480,8 @@ component PmGridCard inherits Rectangle {
         // card-body click opens the playlist while the footer buttons keep
         // their own clicks. Sits below the reorder header when present.
         width: parent.width;
-        // pad(10) + collage(140) + gap(8) + name(36) = 194.
-        height: 194px;
+        // pad(10) + collage(140) + gap(8) + name(18) = 176.
+        height: 176px;
         y: root.can-reorder ? 30px : 0px;
         mouse-cursor: pointer;
         clicked => {
@@ -487,11 +507,11 @@ component PmListRow inherits Rectangle {
     callback move-down();
     callback move-to-folder(string /* folder id, "" = root */);
 
+    // Matches Tauri's `.list-item`: a solid surface row (bg-secondary),
+    // hover lifts to bg-tertiary. Compact: 8px/12px padding, 48px collage.
     height: 64px;
-    border-radius: 8px;
-    background: ta.has-hover
-        ? Theme.surface-hover
-        : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
+    border-radius: 6px;
+    background: ta.has-hover ? Theme.surface-hover : Theme.surface-card;
     opacity: root.item.is-hidden ? 0.6 : 1.0;
 
     HorizontalLayout {
@@ -528,57 +548,69 @@ component PmListRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
+            spacing: 2px;
+            // Name — single-line 14px elided (matches `.list-item .name`).
             Text {
                 text: root.item.name;
                 color: Theme.text-primary;
-                font-size: Typography.body;
+                font-size: 14px;
                 font-weight: Typography.medium;
                 overflow: elide;
             }
+            // Meta line — 12px muted (matches `.list-item .meta`).
             HorizontalLayout {
                 spacing: 6px;
+                alignment: start;
                 Text {
                     text: root.item.tracks-line;
                     color: Theme.text-muted;
-                    font-size: Typography.legal;
+                    font-size: 12px;
                 }
                 if root.item.local-line != "": Text {
                     text: root.item.local-line;
                     color: #22c55e;
-                    font-size: Typography.legal;
+                    font-size: 12px;
                 }
             }
         }
-        // Play-count badge.
+        // Play-count badge — rounded chip (matches `.play-count-badge`).
         if root.item.play-count > 0: VerticalLayout {
             alignment: center;
-            HorizontalLayout {
-                spacing: 4px;
-                VerticalLayout {
-                    alignment: center;
-                    QbzIcon {
-                        source: @image-url("../assets/icons/chart-no-axes-column.svg");
-                        width: 13px;
-                        height: 13px;
-                        tint: Theme.text-muted;
+            Rectangle {
+                width: pc-row.preferred-width + 16px;
+                height: 22px;
+                border-radius: 6px;
+                background: Theme.surface-elevated;
+                pc-row := HorizontalLayout {
+                    x: 8px;
+                    width: self.preferred-width;
+                    height: parent.height;
+                    spacing: 4px;
+                    VerticalLayout {
+                        alignment: center;
+                        QbzIcon {
+                            source: @image-url("../assets/icons/chart-no-axes-column.svg");
+                            width: 12px;
+                            height: 12px;
+                            tint: Theme.text-muted;
+                        }
                     }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    Text {
-                        text: root.item.play-count;
-                        color: Theme.text-muted;
-                        font-size: Typography.legal;
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.item.play-count;
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                        }
                     }
                 }
             }
         }
-        // Actions (hover).
+        // Actions — always visible (matches Tauri's `.list-item` buttons).
         VerticalLayout {
             alignment: center;
             HorizontalLayout {
                 spacing: 0px;
-                opacity: ta.has-hover ? 1.0 : 0.35;
                 PmActionButton {
                     icon: root.item.is-favorite
                         ? @image-url("../assets/icons/heart-filled.svg")
@@ -846,7 +878,7 @@ export component PlaylistManagerView inherits Rectangle {
     property <length> card-w: 160px;
     // Card height depends on whether reorder controls show (matches
     // PmGridCard's height).
-    property <length> card-h: PlaylistManagerState.can-reorder ? 266px : 236px;
+    property <length> card-h: PlaylistManagerState.can-reorder ? 250px : 220px;
 
     // The view-mode cycle button shows the NEXT mode's icon (Tauri).
     property <image> next-view-icon:

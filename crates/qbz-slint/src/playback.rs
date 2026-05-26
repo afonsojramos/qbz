@@ -370,6 +370,7 @@ pub fn play_album(
             Ok(album) => album,
             Err(e) => {
                 log::error!("[qbz-slint] playback: get_album {album_id} failed: {e}");
+                crate::toast::error_weak(&weak, "Couldn't load this album");
                 return;
             }
         };
@@ -400,6 +401,7 @@ pub fn play_album(
 
         if tracks.is_empty() {
             log::warn!("[qbz-slint] playback: album {album_id} has no tracks");
+            crate::toast::error_weak(&weak, "This album has no playable tracks");
             return;
         }
 
@@ -434,6 +436,7 @@ pub fn play_artist_top_tracks(
             Ok(page) => page,
             Err(e) => {
                 log::error!("[qbz-slint] play-top: get_artist_page failed: {e}");
+                crate::toast::error_weak(&weak, "Couldn't load this artist");
                 return;
             }
         };
@@ -446,6 +449,7 @@ pub fn play_artist_top_tracks(
             .collect();
         if tracks.is_empty() {
             log::warn!("[qbz-slint] play-top: artist {artist_id} has no top tracks");
+            crate::toast::error_weak(&weak, "No top tracks available for this artist");
             return;
         }
         let start_track_id = tracks[0].id;
