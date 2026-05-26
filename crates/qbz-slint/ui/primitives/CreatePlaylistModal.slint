@@ -1,4 +1,8 @@
-// "Create playlist" modal — name field + public toggle + Create.
+// "Create playlist" modal — 1:1 with Tauri's PlaylistModal (create
+// mode): Name, optional multiline Description, a Folder dropdown
+// ("No folder" + the user's folders), a "Make playlist public"
+// checkbox, and Cancel / Create buttons.
+//
 // Opened from the sidebar "+" button (CreatePlaylistState.open).
 
 import { Theme } from "../foundation/semantic-colors.slint";
@@ -6,7 +10,8 @@ import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { CreatePlaylistState, CreatePlaylistActions } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
-import { LineEdit } from "std-widgets.slint";
+import { QbzSelect } from "QbzSelect.slint";
+import { LineEdit, TextEdit } from "std-widgets.slint";
 
 export component CreatePlaylistModal inherits Rectangle {
     visible: CreatePlaylistState.open;
@@ -63,15 +68,62 @@ export component CreatePlaylistModal inherits Rectangle {
                     }
                 }
 
-                name-input := LineEdit {
-                    placeholder-text: @tr("Playlist name");
-                    text <=> CreatePlaylistState.name;
-                    accepted => {
-                        CreatePlaylistActions.submit();
+                // Name.
+                VerticalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: @tr("Name");
+                        color: Theme.text-secondary;
+                        font-size: Typography.legal;
+                        font-weight: Typography.medium;
+                    }
+                    name-input := LineEdit {
+                        placeholder-text: @tr("My Playlist");
+                        text <=> CreatePlaylistState.name;
+                        accepted => {
+                            CreatePlaylistActions.submit();
+                        }
                     }
                 }
 
-                // Public toggle row.
+                // Description (optional, multiline).
+                VerticalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: @tr("Description (optional)");
+                        color: Theme.text-secondary;
+                        font-size: Typography.legal;
+                        font-weight: Typography.medium;
+                    }
+                    desc-input := TextEdit {
+                        height: 80px;
+                        wrap: word-wrap;
+                        text <=> CreatePlaylistState.description;
+                    }
+                }
+
+                // Folder dropdown — only shown when the user has folders
+                // (mirrors Tauri, which hides the row when folders.length
+                // === 0).
+                if CreatePlaylistState.folder-options.length > 1: VerticalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: @tr("Folder");
+                        color: Theme.text-secondary;
+                        font-size: Typography.legal;
+                        font-weight: Typography.medium;
+                    }
+                    QbzSelect {
+                        options: CreatePlaylistState.folder-options;
+                        current-index: CreatePlaylistState.folder-index;
+                        menu-width: 380px;
+                        selected(i) => {
+                            CreatePlaylistState.folder-index = i;
+                        }
+                    }
+                }
+
+                // Public checkbox row.
                 HorizontalLayout {
                     spacing: 10px;
                     toggle := TouchArea {
@@ -101,7 +153,7 @@ export component CreatePlaylistModal inherits Rectangle {
                         }
                     }
                     Text {
-                        text: @tr("Public playlist");
+                        text: @tr("Make playlist public");
                         color: Theme.text-secondary;
                         font-size: Typography.body;
                         vertical-alignment: center;
@@ -109,10 +161,31 @@ export component CreatePlaylistModal inherits Rectangle {
                     }
                 }
 
-                // Create button.
+                // Cancel + Create.
                 HorizontalLayout {
                     alignment: end;
                     spacing: 10px;
+                    // Cancel.
+                    Rectangle {
+                        width: cancel-label.preferred-width + 28px;
+                        height: 36px;
+                        border-radius: Radius.sm;
+                        background: cancel-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+                        cancel-label := Text {
+                            text: @tr("Cancel");
+                            color: Theme.text-primary;
+                            font-size: Typography.body;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        cancel-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                CreatePlaylistActions.close();
+                            }
+                        }
+                    }
+                    // Create.
                     Rectangle {
                         width: create-label.preferred-width + 36px;
                         height: 36px;

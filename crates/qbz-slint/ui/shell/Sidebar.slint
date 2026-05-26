@@ -12,13 +12,17 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Spacing } from "../foundation/spacing.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { SidebarPlaylistCollage } from "../primitives/SidebarPlaylistCollage.slint";
 import { ShellState, SidebarState, SidebarActions, SidebarEntry, DragState } from "../state.slint";
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView, LineEdit } from "std-widgets.slint";
 
 // A single context-menu item row.
 component MenuItem inherits Rectangle {
     in property <string> label;
     in property <bool> danger: false;
+    in property <bool> selected: false;
+    in property <image> icon;
+    in property <bool> has-icon: false;
     callback activated();
     height: 30px;
     border-radius: 5px;
@@ -26,13 +30,34 @@ component MenuItem inherits Rectangle {
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
+        spacing: 8px;
+        if root.has-icon: VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.icon;
+                width: 14px;
+                height: 14px;
+                tint: root.danger ? #ef4444 : Theme.text-secondary;
+            }
+        }
         Text {
             text: root.label;
             color: root.danger ? #ef4444 : Theme.text-secondary;
             font-size: 13px;
+            font-weight: root.selected ? 600 : 400;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
+        }
+        // Selected check (sort options).
+        if root.selected: VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: @image-url("../assets/icons/check.svg");
+                width: 13px;
+                height: 13px;
+                tint: Theme.accent;
+            }
         }
     }
     mi-ta := TouchArea {
@@ -43,12 +68,47 @@ component MenuItem inherits Rectangle {
     }
 }
 
+// A square header toolbar button (search / + / ... / collapse).
+component HeaderIconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active: false;
+    in property <length> icon-size: 15px;
+    callback clicked();
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    background: (btn-ta.has-hover || root.active) ? Theme.surface-hover : transparent;
+    QbzIcon {
+        source: root.icon;
+        width: root.icon-size;
+        height: root.icon-size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: (btn-ta.has-hover || root.active) ? Theme.text-primary : Theme.text-muted;
+    }
+    btn-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 // One sidebar row — a folder header or a playlist (indented when in a
-// folder), driven by the entry's `kind`. A hover "..." button opens a
-// context popup: move-to-folder for playlists, delete for folders.
+// folder), driven by the entry's `kind`.
+//
+// Folders: the leading icon is accent-tinted; the row's primary
+// affordance is a trailing chevron that opens/closes the folder. The
+// playlist count is hidden until the row is hovered. Folder actions
+// (delete) remain reachable through the hover "..." button.
+//
+// Playlists: render a micro-collage of track covers (opt-out, via
+// SidebarState.playlist-collage) in place of the list-music glyph; a
+// hover "..." button opens the move-to-folder menu.
 component SidebarRow inherits Rectangle {
     in property <SidebarEntry> entry;
     in property <bool> active: false;
+    in property <bool> show-collage: true;
     callback open-playlist(string);
     callback toggle-folder(string);
     callback move-playlist(string, string);
@@ -87,11 +147,17 @@ component SidebarRow inherits Rectangle {
     changed drag-py => { root.recompute-drop(); }
     changed drag-on => { root.recompute-drop(); }
 
+    // True when this playlist row should show its micro-collage instead
+    // of the generic glyph (opt-out + at least one cover available).
+    property <bool> use-collage: !root.is-folder
+        && root.show-collage
+        && root.entry.cover-count > 0;
+
     height: 32px;
     border-radius: 6px;
     background: root.drop-hot
         ? #22c55e26
-        : (ta.has-hover || more-ta.has-hover || root.active
+        : (ta.has-hover || root.active
             ? Theme.surface-hover : transparent);
     border-width: root.drop-hot ? 1px : 0px;
     border-color: #22c55e66;
@@ -100,16 +166,25 @@ component SidebarRow inherits Rectangle {
         padding-left: root.entry.indent ? 24px : 8px;
         padding-right: 6px;
         spacing: 8px;
-        // Leading icon — chevron+folder for folders, list-music for
-        // playlists.
+        // Leading icon — accent-tinted folder for folders, micro-collage
+        // (or list-music fallback) for playlists.
         VerticalLayout {
             alignment: center;
-            QbzIcon {
-                source: root.is-folder
-                    ? (root.entry.expanded
-                        ? @image-url("../assets/icons/folder-open.svg")
-                        : @image-url("../assets/icons/folder.svg"))
-                    : @image-url("../assets/icons/list-music.svg");
+            if root.is-folder: QbzIcon {
+                source: root.entry.expanded
+                    ? @image-url("../assets/icons/folder-open.svg")
+                    : @image-url("../assets/icons/folder.svg");
+                width: 15px;
+                height: 15px;
+                // Folder icon tinted accent; the name keeps text color.
+                tint: Theme.accent;
+            }
+            if !root.is-folder && root.use-collage: SidebarPlaylistCollage {
+                entry: root.entry;
+                size: 20px;
+            }
+            if !root.is-folder && !root.use-collage: QbzIcon {
+                source: @image-url("../assets/icons/list-music.svg");
                 width: 15px;
                 height: 15px;
                 tint: root.active ? Theme.text-primary : Theme.text-muted;
@@ -124,15 +199,45 @@ component SidebarRow inherits Rectangle {
             horizontal-stretch: 1;
             overflow: elide;
         }
-        // Folder playlist count.
+        // Folder playlist count — only visible on hover.
         if root.is-folder && root.entry.count > 0: Text {
             text: root.entry.count;
             color: Theme.text-muted;
             font-size: 11px;
             vertical-alignment: center;
+            opacity: ta.has-hover ? 1.0 : 0.0;
         }
-        // Context "..." button (hover).
-        VerticalLayout {
+        // Folder open/close chevron — the primary affordance. Reflects
+        // the open/closed state (down = open, right = closed).
+        if root.is-folder: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                background: chevron-ta.has-hover ? Theme.surface-elevated : transparent;
+                QbzIcon {
+                    source: root.entry.expanded
+                        ? @image-url("../assets/icons/chevron-down.svg")
+                        : @image-url("../assets/icons/chevron-right.svg");
+                    width: 14px;
+                    height: 14px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: chevron-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                }
+                chevron-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.toggle-folder(root.entry.id);
+                    }
+                }
+            }
+        }
+        // Playlist "..." (hover) — move-to-folder only. Folders use just
+        // the open/close chevron; folder management lives in the Playlist
+        // Manager, so folders show no "..." here.
+        if !root.is-folder: VerticalLayout {
             alignment: center;
             Rectangle {
                 width: 22px;
@@ -182,14 +287,6 @@ component SidebarRow inherits Rectangle {
             VerticalLayout {
                 padding: 6px;
                 spacing: 1px;
-                // Folder: delete.
-                if root.is-folder: MenuItem {
-                    label: @tr("Delete folder");
-                    danger: true;
-                    activated => {
-                        root.delete-folder(root.entry.id);
-                    }
-                }
                 // Playlist: move to folder. Wrapped so the `for` is not
                 // a direct child of an `if` (not allowed in Slint).
                 if !root.is-folder: VerticalLayout {
@@ -236,67 +333,171 @@ export component Sidebar inherits Rectangle {
         padding: Spacing.md;
         spacing: Spacing.md;
 
+        // ---- Header toolbar ----------------------------------------
         HorizontalLayout {
             spacing: 4px;
-            Text {
+            height: 22px;
+
+            // Title (hidden while the search input is open). 1pt smaller
+            // + tighter letter-spacing than the rest of the muted caps.
+            if !SidebarState.search-open: Text {
                 text: @tr("PLAYLISTS");
                 color: Theme.text-muted;
-                font-size: 11px;
-                letter-spacing: 1.5px;
+                font-size: 10px;
+                letter-spacing: 1px;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
-            // New folder.
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 22px;
-                    height: 22px;
-                    border-radius: 4px;
-                    background: folder-ta.has-hover ? Theme.surface-hover : transparent;
-                    QbzIcon {
-                        source: @image-url("../assets/icons/folder-plus.svg");
-                        width: 15px;
-                        height: 15px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        tint: folder-ta.has-hover ? Theme.text-primary : Theme.text-muted;
-                    }
-                    folder-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            SidebarActions.create-folder();
-                        }
+
+            // Inline search input — takes the full header width to the
+            // left of the actions when open. Filters playlists (the
+            // filter is applied in crate::sidebar, recursively across
+            // folders).
+            if SidebarState.search-open: search-edit := LineEdit {
+                placeholder-text: @tr("Search playlists");
+                text <=> SidebarState.search-query;
+                horizontal-stretch: 1;
+                height: 22px;
+                // Auto-focus when the input mounts (it is re-created each
+                // time the search opens), matching Tauri's focus().
+                init => {
+                    self.focus();
+                }
+                edited => {
+                    SidebarActions.search-changed(self.text);
+                }
+            }
+
+            // Search toggle.
+            HeaderIconButton {
+                icon: @image-url("../assets/icons/search.svg");
+                active: SidebarState.search-open;
+                clicked => {
+                    SidebarState.search-open = !SidebarState.search-open;
+                    if (!SidebarState.search-open) {
+                        SidebarState.search-query = "";
+                        SidebarActions.search-changed("");
                     }
                 }
             }
-            // New playlist.
-            VerticalLayout {
-                alignment: center;
+            // New playlist (+).
+            HeaderIconButton {
+                icon: @image-url("../assets/icons/plus.svg");
+                icon-size: 16px;
+                clicked => {
+                    SidebarActions.create-playlist();
+                }
+            }
+            // Sort / more (...).
+            sort-btn := HeaderIconButton {
+                icon: @image-url("../assets/icons/ellipsis.svg");
+                clicked => {
+                    sort-menu.show();
+                }
+            }
+            // Collapse chevron (down = expanded, right = collapsed).
+            HeaderIconButton {
+                icon: SidebarState.playlists-collapsed
+                    ? @image-url("../assets/icons/chevron-right.svg")
+                    : @image-url("../assets/icons/chevron-down.svg");
+                clicked => {
+                    SidebarState.playlists-collapsed = !SidebarState.playlists-collapsed;
+                }
+            }
+
+            // Sort + actions context menu. Anchored under the "..."
+            // button. Sort options mirror Tauri exactly.
+            sort-menu := PopupWindow {
+                x: parent.width - 210px;
+                y: 26px;
+                width: 200px;
                 Rectangle {
-                    width: 22px;
-                    height: 22px;
-                    border-radius: 4px;
-                    background: plus-ta.has-hover ? Theme.surface-hover : transparent;
-                    QbzIcon {
-                        source: @image-url("../assets/icons/plus.svg");
-                        width: 16px;
-                        height: 16px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        tint: plus-ta.has-hover ? Theme.text-primary : Theme.text-muted;
-                    }
-                    plus-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            SidebarActions.create-playlist();
+                    background: Theme.surface-card;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+                    border-radius: 8px;
+                    drop-shadow-blur: 20px;
+                    drop-shadow-color: #00000080;
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 1px;
+                        // "Sort by" section label.
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-top: 4px;
+                            padding-bottom: 2px;
+                            spacing: 6px;
+                            QbzIcon {
+                                source: @image-url("../assets/icons/arrow-up-down.svg");
+                                width: 13px;
+                                height: 13px;
+                                tint: Theme.text-muted;
+                            }
+                            Text {
+                                text: @tr("Sort by");
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        MenuItem {
+                            label: @tr("Name (A-Z)");
+                            selected: SidebarState.sort-option == "name";
+                            activated => { SidebarActions.set-sort("name"); }
+                        }
+                        MenuItem {
+                            label: @tr("Recent");
+                            selected: SidebarState.sort-option == "recent";
+                            activated => { SidebarActions.set-sort("recent"); }
+                        }
+                        MenuItem {
+                            label: @tr("# of tracks");
+                            selected: SidebarState.sort-option == "tracks";
+                            activated => { SidebarActions.set-sort("tracks"); }
+                        }
+                        MenuItem {
+                            label: @tr("Play Count");
+                            selected: SidebarState.sort-option == "playcount";
+                            activated => { SidebarActions.set-sort("playcount"); }
+                        }
+                        MenuItem {
+                            label: @tr("Custom");
+                            selected: SidebarState.sort-option == "custom";
+                            activated => { SidebarActions.set-sort("custom"); }
+                        }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-subtle;
+                        }
+                        // New folder.
+                        MenuItem {
+                            label: @tr("New folder");
+                            has-icon: true;
+                            icon: @image-url("../assets/icons/folder-plus.svg");
+                            activated => { SidebarActions.create-folder(); }
+                        }
+                        // Manage playlists — open the full Playlist Manager.
+                        MenuItem {
+                            label: @tr("Manage playlists");
+                            has-icon: true;
+                            icon: @image-url("../assets/icons/library-big.svg");
+                            activated => { SidebarActions.manage-playlists(); }
+                        }
+                        // Refresh — re-fetch the playlist list.
+                        MenuItem {
+                            label: @tr("Refresh");
+                            has-icon: true;
+                            icon: @image-url("../assets/icons/list-music.svg");
+                            activated => { SidebarActions.refresh-playlists(); }
                         }
                     }
                 }
             }
         }
 
-        ScrollView {
+        // ---- Playlist list (hidden when the section is collapsed) ----
+        if !SidebarState.playlists-collapsed: ScrollView {
             vertical-stretch: 1;
             horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
             VerticalLayout {
@@ -305,6 +506,7 @@ export component Sidebar inherits Rectangle {
                 for entry in SidebarState.entries: SidebarRow {
                     entry: entry;
                     active: entry.kind == "playlist" && entry.id == SidebarState.active-id;
+                    show-collage: SidebarState.playlist-collage;
                     open-playlist(id) => {
                         SidebarActions.open-playlist(id);
                     }
@@ -325,6 +527,10 @@ export component Sidebar inherits Rectangle {
                     wrap: word-wrap;
                 }
             }
+        }
+        // Keep the layout stretching even while collapsed.
+        if SidebarState.playlists-collapsed: Rectangle {
+            vertical-stretch: 1;
         }
     }
 
