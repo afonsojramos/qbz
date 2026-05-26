@@ -161,6 +161,9 @@ fn to_item(card: AlbumCard) -> AlbumCardItem {
         ribbon_kind: "".into(),
         artwork_url: card.artwork_url.into(),
         artwork: slint::Image::default(),
+        // Label grid cards render as grid AlbumCards only — list-row
+        // extras stay default.
+        ..Default::default()
     }
 }
 

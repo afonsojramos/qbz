@@ -10,12 +10,51 @@
 //! sections that read it hide themselves — the data path exists end to
 //! end so playback only has to call `record`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
 
 /// How many recent tracks to keep.
 const MAX_RECENT: usize = 24;
+
+/// Album-level metadata captured when an album is fetched for playback,
+/// keyed by album id. The queue track itself (a `qbz_models::QueueTrack`)
+/// carries no genre / release-date and — for the `album/get` path — no
+/// per-track quality, so `record_recent` looks the album up here to stamp
+/// the Recently Played card with genre, release date, and quality badge.
+/// Matches Tauri's `album_to_card_meta`, which reads these off the `Album`.
+#[derive(Clone, Debug, Default)]
+pub struct AlbumMeta {
+    pub genre: String,
+    /// Raw ISO release date (e.g. "2021-05-14"); localized at render time.
+    pub release_date: String,
+    /// "hires" | "cd" | "" — drives the album card quality badge.
+    pub quality_tier: String,
+    /// "Hi-Res: 24-bit / 96 kHz" — quality badge hover tooltip.
+    pub quality_label: String,
+}
+
+static ALBUM_META: LazyLock<Mutex<HashMap<String, AlbumMeta>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Cache album-level metadata for `album_id`, so a subsequent play of any
+/// of its tracks records genre / release date / quality on the recent card.
+/// Called from the playback album-fetch paths.
+pub fn remember_album_meta(album_id: &str, meta: AlbumMeta) {
+    if album_id.is_empty() {
+        return;
+    }
+    if let Ok(mut map) = ALBUM_META.lock() {
+        map.insert(album_id.to_string(), meta);
+    }
+}
+
+/// Look up cached album-level metadata for `album_id` (if any).
+pub fn album_meta(album_id: &str) -> Option<AlbumMeta> {
+    ALBUM_META.lock().ok().and_then(|map| map.get(album_id).cloned())
+}
 
 /// One recently-played track, with the album it belongs to and enough
 /// context (quality, ids) that re-playing it or rendering its album
@@ -40,6 +79,14 @@ pub struct RecentTrack {
     /// "Hi-Res: 24-bit / 96 kHz" — quality badge hover tooltip.
     #[serde(default)]
     pub quality_label: String,
+    /// Album genre, for the Recently Played album card overlay. Empty for
+    /// entries recorded before genre capture (serde default).
+    #[serde(default)]
+    pub genre: String,
+    /// Raw ISO album release date, localized to "MMM D, YYYY" at render.
+    /// Empty for entries recorded before release-date capture.
+    #[serde(default)]
+    pub release_date: String,
     /// Artist id for navigation / scrobble context.
     #[serde(default)]
     pub artist_id: Option<u64>,
@@ -54,6 +101,9 @@ pub struct RecentAlbum {
     pub artwork_url: String,
     pub quality_tier: String,
     pub quality_label: String,
+    pub genre: String,
+    /// Raw ISO release date; localized at render time.
+    pub release_date: String,
 }
 
 fn store_path() -> Option<PathBuf> {
@@ -87,6 +137,8 @@ pub fn load_albums() -> Vec<RecentAlbum> {
             artwork_url: track.album_artwork_url,
             quality_tier: track.quality_tier,
             quality_label: track.quality_label,
+            genre: track.genre,
+            release_date: track.release_date,
         });
     }
     albums

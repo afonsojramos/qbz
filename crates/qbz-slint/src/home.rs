@@ -44,10 +44,12 @@ struct TabSections {
 #[derive(Clone)]
 pub struct SectionData {
     pub title: String,
+    /// Discover endpoint path for the "View all" page ("" = no full-list page).
+    pub endpoint: String,
     pub albums: Vec<CardData>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CardData {
     pub id: String,
     pub title: String,
@@ -64,6 +66,17 @@ pub struct CardData {
     pub ribbon: String,
     pub ribbon_kind: String,
     pub artwork_url: String,
+    // --- List-row extras (AlbumListRow); empty/default for grid-only data.
+    /// "Album" | "EP" | "Single" | "Live" | "Compilation".
+    pub release_type: String,
+    /// "qobuz" | "local" | "plex" | "" — the hideable SOURCE column.
+    pub source: String,
+    /// "24-bit / 96 kHz" — the bare detail line for QualityBadgeFull.
+    pub quality_detail: String,
+    /// Track count, as a display string ("" = unknown).
+    pub track_count: String,
+    /// Bare 4-digit year for the list-row YEAR column ("" = unknown).
+    pub plain_year: String,
 }
 
 /// A compact ranked item for the slim grid sections.
@@ -96,33 +109,37 @@ where
     // Home set and the most-streamed slim grid below. Order mirrors
     // Tauri's DEFAULT_PREFS.editorPicks.
     let mut editor_sections = Vec::new();
-    push_section_ref(&mut editor_sections, "New Releases", &containers.new_releases);
-    push_section_ref(&mut editor_sections, "Qobuzissimes", &containers.qobuzissims);
-    push_section_ref(&mut editor_sections, "Press Accolades", &containers.press_awards);
-    push_section_ref(&mut editor_sections, "Most Streamed", &containers.most_streamed);
+    push_section_ref(&mut editor_sections, "New Releases", "/discover/newReleases", &containers.new_releases);
+    push_section_ref(&mut editor_sections, "Qobuzissimes", "/discover/qobuzissims", &containers.qobuzissims);
+    push_section_ref(&mut editor_sections, "Press Accolades", "/discover/pressAward", &containers.press_awards);
+    push_section_ref(&mut editor_sections, "Most Streamed", "/discover/mostStreamed", &containers.most_streamed);
     push_section_ref(
         &mut editor_sections,
         "Ideal Discography",
+        "/discover/idealDiscography",
         &containers.ideal_discography,
     );
     push_section_ref(
         &mut editor_sections,
         "Albums of the Week",
+        "/discover/albumOfTheWeek",
         &containers.album_of_the_week,
     );
 
     let mut sections = Vec::new();
-    push_section(&mut sections, "New Releases", containers.new_releases);
-    push_section(&mut sections, "Press Accolades", containers.press_awards);
+    push_section(&mut sections, "New Releases", "/discover/newReleases", containers.new_releases);
+    push_section(&mut sections, "Press Accolades", "/discover/pressAward", containers.press_awards);
     push_section(
         &mut sections,
         "Ideal Discography",
+        "/discover/idealDiscography",
         containers.ideal_discography,
     );
-    push_section(&mut sections, "Qobuzissimes", containers.qobuzissims);
+    push_section(&mut sections, "Qobuzissimes", "/discover/qobuzissims", containers.qobuzissims);
     push_section(
         &mut sections,
         "Albums of the Week",
+        "/discover/albumOfTheWeek",
         containers.album_of_the_week,
     );
 
@@ -163,13 +180,22 @@ where
             title: album.title,
             artist: album.artist,
             artist_id: String::new(),
-            genre: String::new(),
-            year: String::new(),
+            genre: album.genre,
+            // Localize the stored ISO release date to "MMM D, YYYY" the
+            // same way the discover cards do (empty stays empty).
+            year: if album.release_date.is_empty() {
+                String::new()
+            } else {
+                crate::dates::release_label(Some(&album.release_date))
+            },
             quality_tier: album.quality_tier,
             quality_label: album.quality_label,
             ribbon: String::new(),
             ribbon_kind: String::new(),
             artwork_url: album.artwork_url,
+            // Recently-played cards render in the grid only — list-row
+            // extras stay default.
+            ..CardData::default()
         })
         .collect();
 
@@ -185,6 +211,7 @@ where
 fn push_section(
     out: &mut Vec<SectionData>,
     title: &str,
+    endpoint: &str,
     container: Option<DiscoverContainer<DiscoverAlbum>>,
 ) {
     let Some(container) = container else {
@@ -195,6 +222,7 @@ fn push_section(
     }
     out.push(SectionData {
         title: title.to_string(),
+        endpoint: endpoint.to_string(),
         albums: container.data.items.into_iter().map(map_album).collect(),
     });
 }
@@ -204,6 +232,7 @@ fn push_section(
 fn push_section_ref(
     out: &mut Vec<SectionData>,
     title: &str,
+    endpoint: &str,
     container: &Option<DiscoverContainer<DiscoverAlbum>>,
 ) {
     let Some(container) = container else {
@@ -214,11 +243,12 @@ fn push_section_ref(
     }
     out.push(SectionData {
         title: title.to_string(),
+        endpoint: endpoint.to_string(),
         albums: container.data.items.iter().cloned().map(map_album).collect(),
     });
 }
 
-fn map_album(album: DiscoverAlbum) -> CardData {
+pub(crate) fn map_album(album: DiscoverAlbum) -> CardData {
     let artist = album
         .artists
         .first()
@@ -240,12 +270,25 @@ fn map_album(album: DiscoverAlbum) -> CardData {
     let (ribbon, ribbon_kind) = pick_ribbon(album.awards.as_deref());
     let quality_tier = quality_tier(album.audio_info.as_ref()).to_string();
     let quality_label = quality_label(album.audio_info.as_ref());
+    let quality_detail = quality_detail(album.audio_info.as_ref());
     let artwork_url = album
         .image
         .large
         .or(album.image.thumbnail)
         .or(album.image.small)
         .unwrap_or_default();
+    // Bare 4-digit year for the list-row YEAR column (the grid uses the
+    // localized `year`); plus a track-count display string and a release
+    // type heuristic for the list-row TYPE column.
+    let plain_year = album
+        .dates
+        .as_ref()
+        .and_then(|d| d.original.as_ref().or(d.download.as_ref()).or(d.stream.as_ref()))
+        .and_then(|s| s.get(0..4))
+        .unwrap_or_default()
+        .to_string();
+    let track_count = album.track_count.map(|n| n.to_string()).unwrap_or_default();
+    let release_type = classify_release_type(album.track_count).to_string();
     CardData {
         id: album.id,
         title: album.title,
@@ -258,7 +301,42 @@ fn map_album(album: DiscoverAlbum) -> CardData {
         ribbon,
         ribbon_kind,
         artwork_url,
+        release_type,
+        // Discover is always the Qobuz catalog.
+        source: "qobuz".to_string(),
+        quality_detail,
+        track_count,
+        plain_year,
     }
+}
+
+/// Classify a Discover album's release type for the list-row TYPE column.
+/// The Discover index carries no explicit release_type, so this mirrors
+/// DiscographyBuilderView's track-count fallback heuristic (<=3 = Single,
+/// <=6 = EP, otherwise Album).
+fn classify_release_type(track_count: Option<u32>) -> &'static str {
+    match track_count {
+        Some(n) if n <= 3 => "Single",
+        Some(n) if n <= 6 => "EP",
+        _ => "Album",
+    }
+}
+
+/// Bare exact-quality detail for QualityBadgeFull's detail line, e.g.
+/// "24-bit / 96 kHz" (no "Hi-Res:" prefix — the badge supplies the tier
+/// label itself). Empty when the entry carries no audio info.
+fn quality_detail(audio: Option<&DiscoverAudioInfo>) -> String {
+    let Some(audio) = audio else {
+        return String::new();
+    };
+    let hi_res = matches!(audio.maximum_bit_depth, Some(depth) if depth >= 24);
+    let depth = audio
+        .maximum_bit_depth
+        .unwrap_or(if hi_res { 24 } else { 16 });
+    let rate = audio
+        .maximum_sampling_rate
+        .unwrap_or(if hi_res { 96.0 } else { 44.1 });
+    format!("{depth}-bit / {} kHz", format_rate(rate))
 }
 
 fn map_slim(index: usize, album: DiscoverAlbum) -> SlimData {
@@ -343,7 +421,7 @@ fn format_rate(rate: f64) -> String {
 }
 
 /// Convert one `CardData` into the Slint `AlbumCardItem`.
-fn card_to_item(card: CardData) -> AlbumCardItem {
+pub(crate) fn card_to_item(card: CardData) -> AlbumCardItem {
     AlbumCardItem {
         id: card.id.into(),
         title: card.title.into(),
@@ -357,6 +435,11 @@ fn card_to_item(card: CardData) -> AlbumCardItem {
         ribbon_kind: card.ribbon_kind.into(),
         artwork_url: card.artwork_url.into(),
         artwork: slint::Image::default(),
+        release_type: card.release_type.into(),
+        source: card.source.into(),
+        quality_detail: card.quality_detail.into(),
+        track_count: card.track_count.into(),
+        plain_year: card.plain_year.into(),
     }
 }
 
@@ -366,6 +449,7 @@ fn build_sections(sections: &[SectionData]) -> Vec<DiscoverSection> {
         .iter()
         .map(|section| DiscoverSection {
             title: section.title.clone().into(),
+            endpoint: section.endpoint.clone().into(),
             albums: ModelRc::new(VecModel::from(
                 section.albums.iter().cloned().map(card_to_item).collect::<Vec<_>>(),
             )),
@@ -474,6 +558,24 @@ mod tests {
     #[test]
     fn quality_tier_hires_for_24_bit() {
         assert_eq!(quality_tier(Some(&audio(Some(24)))), "hires");
+    }
+
+    #[test]
+    fn classify_release_type_track_count_heuristic() {
+        assert_eq!(classify_release_type(Some(1)), "Single");
+        assert_eq!(classify_release_type(Some(3)), "Single");
+        assert_eq!(classify_release_type(Some(4)), "EP");
+        assert_eq!(classify_release_type(Some(6)), "EP");
+        assert_eq!(classify_release_type(Some(12)), "Album");
+        assert_eq!(classify_release_type(None), "Album");
+    }
+
+    #[test]
+    fn quality_detail_bare_without_tier_prefix() {
+        // The list-row QualityBadgeFull supplies the tier label itself,
+        // so the detail line is just "<depth>-bit / <rate> kHz".
+        assert_eq!(quality_detail(Some(&audio(Some(24)))), "24-bit / 96 kHz");
+        assert_eq!(quality_detail(None), "");
     }
 
     #[test]

@@ -349,6 +349,7 @@ fn map_compilation_album(album: PageArtistTrackAlbum) -> CardData {
         ribbon: String::new(),
         ribbon_kind: String::new(),
         artwork_url,
+        ..CardData::default()
     }
 }
 
@@ -406,6 +407,7 @@ fn map_release(release: PageArtistRelease) -> CardData {
         ribbon: String::new(),
         ribbon_kind: String::new(),
         artwork_url,
+        ..CardData::default()
     }
 }
 
@@ -450,6 +452,7 @@ fn card_to_item(card: CardData) -> AlbumCardItem {
         ribbon_kind: card.ribbon_kind.into(),
         artwork_url: card.artwork_url.into(),
         artwork: slint::Image::default(),
+        ..Default::default()
     }
 }
 
@@ -496,6 +499,8 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
         .into_iter()
         .map(|section| DiscoverSection {
             title: section.title.into(),
+            // Artist release sections have no Discover full-list page.
+            endpoint: "".into(),
             albums: ModelRc::new(VecModel::from(
                 section.cards.into_iter().map(card_to_item).collect::<Vec<_>>(),
             )),
@@ -649,6 +654,7 @@ pub fn filter_artist(window: &AppWindow, query: &str) {
                 }
                 Some(DiscoverSection {
                     title: section.title.clone(),
+                    endpoint: section.endpoint.clone(),
                     albums: ModelRc::new(VecModel::from(kept)),
                 })
             })

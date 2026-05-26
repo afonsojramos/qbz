@@ -49,8 +49,10 @@ component ViewAllLink inherits Rectangle {
     border-radius: 4px;
     background: ta.has-hover ? Theme.surface-hover : transparent;
     link-text := Text {
-        text: @tr("View all");
-        color: Theme.accent;
+        // Muted, close to normal text (not the theme accent), with the
+        // trailing arrow — matches Tauri's "See all →".
+        text: @tr("View all →");
+        color: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
         font-size: 14px;
         font-weight: Typography.medium;
         x: (parent.width - self.width) / 2;
@@ -100,6 +102,16 @@ export component Carousel inherits VerticalLayout {
         }
         HorizontalLayout {
             spacing: 4px;
+            // "View all" sits to the LEFT of the carousel page chevrons,
+            // matching the Tauri DiscoverySection header.
+            if root.show-view-all: VerticalLayout {
+                alignment: center;
+                ViewAllLink {
+                    clicked => {
+                        root.view-all-clicked();
+                    }
+                }
+            }
             VerticalLayout {
                 alignment: center;
                 NavButton {
@@ -117,14 +129,6 @@ export component Carousel inherits VerticalLayout {
                     enabled: flick.viewport-x > -root.max-scroll + 1px;
                     clicked => {
                         flick.viewport-x = Math.max(-root.max-scroll, flick.viewport-x - root.step);
-                    }
-                }
-            }
-            if root.show-view-all: VerticalLayout {
-                alignment: center;
-                ViewAllLink {
-                    clicked => {
-                        root.view-all-clicked();
                     }
                 }
             }

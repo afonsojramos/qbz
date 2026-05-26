@@ -335,6 +335,7 @@ fn album_item(row: AlbumRow) -> AlbumCardItem {
         ribbon_kind: Default::default(),
         artwork_url: row.artwork_url.into(),
         artwork: slint::Image::default(),
+        ..Default::default()
     }
 }
 

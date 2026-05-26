@@ -345,6 +345,7 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
                     ribbon_kind: "".into(),
                     artwork_url: a.artwork_url.into(),
                     artwork: slint::Image::default(),
+                    ..Default::default()
                 })
                 .collect();
             state.set_albums(ModelRc::new(VecModel::from(cards)));

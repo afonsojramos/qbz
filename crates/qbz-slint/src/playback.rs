@@ -262,6 +262,30 @@ fn make_queue_track(
     }
 }
 
+/// Build the album-level metadata (genre, release date, quality) captured
+/// when an album is fetched for playback, so `record_recent` can stamp the
+/// Recently Played card with the same genre + release date + quality badge
+/// the Discover carousels show. Mirrors Tauri's `album_to_card_meta`, which
+/// reads these straight off the `Album`.
+fn album_card_meta(album: &qbz_models::Album) -> crate::recently::AlbumMeta {
+    let genre = album
+        .genre
+        .as_ref()
+        .map(|g| g.name.clone())
+        .unwrap_or_default();
+    let release_date = album.release_date_original.clone().unwrap_or_default();
+    // The album summary carries its own max bit depth / sample rate, which
+    // are more reliable than a single track's for the card badge.
+    let (quality_tier, quality_label) =
+        recent_quality(album.maximum_bit_depth, album.maximum_sampling_rate);
+    crate::recently::AlbumMeta {
+        genre,
+        release_date,
+        quality_tier,
+        quality_label,
+    }
+}
+
 /// Quality tier + exact-quality label from a queue track's bit depth /
 /// sample rate, matching the discover card badge format.
 fn recent_quality(bit_depth: Option<u32>, sample_rate: Option<f64>) -> (String, String) {
@@ -293,19 +317,35 @@ async fn record_recent(runtime: &Runtime) {
         return;
     };
     let artwork = track.artwork_url.clone().unwrap_or_default();
-    let (quality_tier, quality_label) =
-        recent_quality(track.bit_depth, track.sample_rate);
+    let album_id = track.album_id.clone().unwrap_or_default();
+    // Prefer the album-level metadata captured at album-fetch time (genre,
+    // release date, and the album's own max quality) over the single
+    // track's values — the `album/get` track summaries are often partial.
+    let meta = crate::recently::album_meta(&album_id).unwrap_or_default();
+    let (track_tier, track_label) = recent_quality(track.bit_depth, track.sample_rate);
+    let quality_tier = if !meta.quality_tier.is_empty() {
+        meta.quality_tier
+    } else {
+        track_tier
+    };
+    let quality_label = if !meta.quality_label.is_empty() {
+        meta.quality_label
+    } else {
+        track_label
+    };
     crate::recently::record(crate::recently::RecentTrack {
         id: track.id.to_string(),
         title: track.title.clone(),
         subtitle: track.artist.clone(),
         artwork_url: artwork.clone(),
-        album_id: track.album_id.clone().unwrap_or_default(),
+        album_id,
         album_title: track.album.clone(),
         album_artist: track.artist.clone(),
         album_artwork_url: artwork,
         quality_tier,
         quality_label,
+        genre: meta.genre,
+        release_date: meta.release_date,
         artist_id: track.artist_id,
     });
     // Per-artist play count — feeds the discovery filter "skip
@@ -337,6 +377,9 @@ pub fn play_album(
         let album_title = album.title.clone();
         let album_artist = album.artist.name.clone();
         let album_artwork = album.image.best().cloned().unwrap_or_default();
+        // Cache the album's genre / release date / quality so the Recently
+        // Played card the play records below carries them (no extra fetch).
+        crate::recently::remember_album_meta(&album.id, album_card_meta(&album));
 
         let tracks: Vec<QueueTrack> = album
             .tracks
@@ -667,6 +710,7 @@ pub fn enqueue_album(runtime: Runtime, _weak: slint::Weak<AppWindow>, handle: to
         let album_title = album.title.clone();
         let album_artist = album.artist.name.clone();
         let album_artwork = album.image.best().cloned().unwrap_or_default();
+        crate::recently::remember_album_meta(&album.id, album_card_meta(&album));
         let tracks: Vec<QueueTrack> = album
             .tracks
             .as_ref()
@@ -707,6 +751,7 @@ pub fn enqueue_album_next(
         let album_title = album.title.clone();
         let album_artist = album.artist.name.clone();
         let album_artwork = album.image.best().cloned().unwrap_or_default();
+        crate::recently::remember_album_meta(&album.id, album_card_meta(&album));
         let tracks: Vec<QueueTrack> = album
             .tracks
             .as_ref()

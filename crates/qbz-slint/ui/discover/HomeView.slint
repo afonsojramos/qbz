@@ -144,6 +144,10 @@ export component HomeView inherits Rectangle {
     callback album-clicked(string);
     callback open-artist(string);
     callback media-action(string, string, string);
+    // Open the Discover "View all" full-list page for a section
+    // (endpoint, title). Only sections with a non-empty endpoint show
+    // the link.
+    callback discover-view-all(string, string);
 
     background: Theme.surface-main;
 
@@ -254,11 +258,15 @@ export component HomeView inherits Rectangle {
 
                 for section in HomeState.sections: Carousel {
                     section: section;
+                    show-view-all: section.endpoint != "";
                     album-clicked(id) => {
                         root.album-clicked(id);
                     }
                     media-action(kind, id, action) => {
                         root.media-action(kind, id, action);
+                    }
+                    view-all-clicked => {
+                        root.discover-view-all(section.endpoint, section.title);
                     }
                 }
 

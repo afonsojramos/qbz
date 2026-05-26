@@ -423,6 +423,7 @@ fn album_items(cards: &[AlbumCard]) -> Vec<AlbumCardItem> {
             ribbon_kind: "".into(),
             artwork_url: c.artwork_url.clone().into(),
             artwork: slint::Image::default(),
+            ..Default::default()
         })
         .collect()
 }
@@ -445,6 +446,8 @@ fn artist_items(artists: &[ArtistSlim]) -> Vec<SlimItem> {
 fn section(title: &str, cards: &[AlbumCard]) -> DiscoverSection {
     DiscoverSection {
         title: title.into(),
+        // For You sections have no Discover full-list page.
+        endpoint: "".into(),
         albums: ModelRc::new(VecModel::from(album_items(cards))),
     }
 }
