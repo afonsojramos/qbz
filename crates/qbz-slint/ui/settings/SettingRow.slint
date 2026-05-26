@@ -8,6 +8,10 @@ export component SettingRow inherits HorizontalLayout {
     in property <string> label;
     in property <string> description;
     in property <bool> enabled: true;
+    // Audit marker: when true, the label renders red to flag a setting
+    // that is NOT wired and will NOT survive the Tauri -> Slint migration
+    // (a dead-end placeholder, not pending work). Default false.
+    in property <bool> unsupported: false;
 
     height: root.description == "" ? 52px : 64px;
     spacing: 24px;
@@ -19,7 +23,7 @@ export component SettingRow inherits HorizontalLayout {
         opacity: root.enabled ? 1.0 : 0.45;
         Text {
             text: root.label;
-            color: Theme.text-primary;
+            color: root.unsupported ? #ef4444 : Theme.text-primary;
             font-size: Typography.body;
             font-weight: Typography.medium;
         }

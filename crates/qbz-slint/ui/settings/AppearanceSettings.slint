@@ -380,6 +380,7 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("TITLE BAR"); }
 
     SettingRow {
+        unsupported: true;
         label: @tr("Use system title bar");
         description: @tr("Replace QBZ custom title bar with your system's native window decorations. Changing this will restart the app.");
         QbzToggle {
@@ -391,6 +392,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Hide title bar");
         description: @tr("Hide the title bar completely (for tiling window manager users)");
         enabled: !AppearanceState.use-system-title-bar;
@@ -404,6 +406,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Match system window chrome");
         description: AppearanceState.hardware-accel-enabled
             ? @tr("Round the window corners and add a subtle edge so QBZ blends with your desktop theme. Takes effect after restarting the app (the window is rebuilt transparent so the corners don't show white).")
@@ -419,6 +422,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Search in title bar");
         description: @tr("Show the search field in the title bar instead of the sidebar");
         enabled: !root.tb-locked;
@@ -434,10 +438,12 @@ export component AppearanceSettings inherits VerticalLayout {
 
     // Navigation in title bar — a label row + per-target indented toggles.
     SettingRow {
+        unsupported: true;
         label: @tr("Navigation in title bar");
         description: @tr("Show Discover, Library, and Local Library buttons in the title bar");
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Home");
         enabled: !root.tb-locked;
         QbzToggle {
@@ -450,6 +456,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Favorites");
         enabled: !root.tb-locked;
         QbzToggle {
@@ -462,6 +469,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Library");
         enabled: !root.tb-locked;
         QbzToggle {
@@ -474,6 +482,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("My QBZ");
         enabled: !root.tb-locked;
         QbzToggle {
@@ -486,6 +495,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Purchases");
         enabled: !root.tb-locked;
         QbzToggle {
@@ -498,6 +508,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     if root.nav-tb-any && !root.tb-locked: SettingRow {
+        unsupported: true;
         label: @tr("Navigation buttons position");
         description: @tr("Where to place the navigation buttons in the title bar");
         QbzSelect {
@@ -521,6 +532,7 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("WINDOW CONTROLS"); }
 
     SettingRow {
+        unsupported: true;
         label: @tr("Window controls position");
         description: @tr("Place the window control buttons on the left or right side of the title bar");
         enabled: !root.tb-locked;
@@ -536,6 +548,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Window controls style");
         description: @tr("Choose the shape of the window control buttons");
         enabled: !root.tb-locked;
@@ -551,6 +564,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Window controls size");
         description: @tr("Adjust the size of the window control buttons");
         enabled: !root.tb-locked;
@@ -566,6 +580,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Window controls color preset");
         description: @tr("Choose a color scheme for the window control buttons");
         enabled: !root.tb-locked;
@@ -581,6 +596,7 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
+        unsupported: true;
         label: @tr("Show window controls");
         description: @tr("Show minimize, maximize, and close buttons in the title bar. Disable if your window manager handles these.");
         enabled: !root.tb-locked;
