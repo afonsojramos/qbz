@@ -18,7 +18,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { TrackItem, DragActions } from "../state.slint";
+import { TrackItem, DragActions, NowPlayingState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { TrackPlayCell } from "TrackPlayCell.slint";
 import { TrackContextMenu } from "TrackContextMenu.slint";
@@ -58,6 +58,16 @@ export component TrackRow inherits Rectangle {
     // arriving even once the pointer leaves the row.
     ta := TouchArea {
         mouse-cursor: default;
+        // Double-click the row body = play the track (or toggle play/pause
+        // if it's already the current track) — mirrors the play-cell click,
+        // applied to every TrackRow across the app.
+        double-clicked => {
+            if (NowPlayingState.has-track && NowPlayingState.track-id == root.track.id) {
+                NowPlayingState.toggle-play();
+            } else {
+                root.media-action("track", root.track.id, "play");
+            }
+        }
         property <length> down-x;
         property <length> down-y;
         property <bool> dragging: false;
