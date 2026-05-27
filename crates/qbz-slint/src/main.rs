@@ -138,6 +138,13 @@ async fn enter_shell(
     });
 
     reload_home(&runtime, &weak, &image_cache, "home".to_string()).await;
+
+    // Seed the favorites tab counts so the badges are ready before the
+    // user opens each tab (they otherwise only count on first visit).
+    let counts = favorites::load_counts(&runtime).await;
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        favorites::apply_counts(&w, counts);
+    });
 }
 
 /// The shared genre-filter selection expanded to descendant ids, as the
