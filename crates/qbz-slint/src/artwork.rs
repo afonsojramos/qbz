@@ -56,8 +56,20 @@ pub enum ArtworkTarget {
     ArtistRelease { section_idx: usize, album_idx: usize },
     /// A card in MusicianState.appearances[index].
     MusicianAppearance { index: usize },
-    /// A card in LabelState.albums[index].
+    /// A card in LabelState.albums[index] (releases sub-view grid).
     LabelAlbum { index: usize },
+    /// A row in LabelState.top-tracks[index] (landing).
+    LabelTopTrack { index: usize },
+    /// A card in LabelState.releases-section.albums[index] (landing).
+    LabelReleaseAlbum { index: usize },
+    /// A card in LabelState.critics-section.albums[index] (landing).
+    LabelCriticsAlbum { index: usize },
+    /// The cover of LabelState.playlists[index] (landing).
+    LabelPlaylistCover { index: usize },
+    /// A card in LabelState.artists[index] (landing).
+    LabelArtist { index: usize },
+    /// A card in LabelState.more-labels[index] (landing).
+    LabelMoreLabel { index: usize },
     /// A card in LocationViewState.artists[index].
     LocationArtist { index: usize },
     /// A row in FavoritesState.tracks[index].
@@ -433,6 +445,48 @@ fn apply_artwork(
         }
         ArtworkTarget::LabelAlbum { index } => {
             let model = window.global::<crate::LabelState>().get_albums();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LabelTopTrack { index } => {
+            let model = window.global::<crate::LabelState>().get_top_tracks();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LabelReleaseAlbum { index } => {
+            let model = window.global::<crate::LabelState>().get_releases_section().albums;
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LabelCriticsAlbum { index } => {
+            let model = window.global::<crate::LabelState>().get_critics_section().albums;
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LabelPlaylistCover { index } => {
+            let model = window.global::<crate::LabelState>().get_playlists();
+            if let Some(mut item) = model.row_data(index) {
+                item.cover1 = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LabelArtist { index } => {
+            let model = window.global::<crate::LabelState>().get_artists();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LabelMoreLabel { index } => {
+            let model = window.global::<crate::LabelState>().get_more_labels();
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);

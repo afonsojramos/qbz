@@ -1,0 +1,41 @@
+// Ghost circular action button — translucent fill with a faint ring,
+// icon tinted on hover/active (never a solid accent fill, mirroring the
+// Tauri transport controls). Shared by the artist + label page headers
+// and their Popular Tracks clusters (Play all / Select / More).
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { QbzIcon } from "QbzIcon.slint";
+
+export component CircleAction inherits Rectangle {
+    in property <image> icon;
+    in property <bool> primary: false;
+    // Stays "pressed" — same surface as hover, icon tinted accent.
+    in property <bool> active: false;
+    in property <length> diameter: 40px;
+    callback clicked();
+
+    width: root.diameter;
+    height: root.diameter;
+    border-radius: root.diameter / 2;
+    background: (ta.has-hover || root.active) ? Theme.surface-hover : transparent;
+    border-width: 1px;
+    border-color: (ta.has-hover || root.active) ? Theme.text-disabled : Theme.border-subtle;
+
+    QbzIcon {
+        source: root.icon;
+        width: root.primary ? 19px : 17px;
+        height: root.primary ? 19px : 17px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: root.active
+            ? Theme.accent
+            : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

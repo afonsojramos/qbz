@@ -25,6 +25,7 @@ import { AlbumPageView } from "../album/AlbumPageView.slint";
 import { ArtistPageView } from "../artist/ArtistPageView.slint";
 import { MusicianPageView } from "../musician/MusicianPageView.slint";
 import { LabelReleasesView } from "../label/LabelReleasesView.slint";
+import { LabelPageView } from "../label/LabelPageView.slint";
 import { ArtistsByLocationView } from "../location/ArtistsByLocationView.slint";
 import { FavoritesView } from "../favorites/FavoritesView.slint";
 import { MixView } from "../mix/MixView.slint";
@@ -132,7 +133,18 @@ export component AppShell inherits Rectangle {
                         root.open-album(id);
                     }
                 }
-                if NavState.view == ContentView.label: LabelReleasesView {
+                if NavState.view == ContentView.label: LabelPageView {
+                    open-album(id) => {
+                        root.open-album(id);
+                    }
+                    open-artist(id) => {
+                        root.open-artist(id);
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
+                }
+                if NavState.view == ContentView.label-releases: LabelReleasesView {
                     open-album(id) => {
                         root.open-album(id);
                     }

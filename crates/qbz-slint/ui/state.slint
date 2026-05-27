@@ -49,6 +49,25 @@ export struct SlimItem {
     following: bool,
 }
 
+// A playlist result in search (and the label landing's Playlists row).
+// Qobuz returns up to four cover URLs per playlist; the card renders them
+// as a count-based collage. Defined here (before LabelState) so the label
+// landing can reuse it — Slint structs must be declared before first use.
+export struct SearchPlaylistItem {
+    id: string,
+    title: string,
+    subtitle: string,      // owner name + track count
+    cover-count: int,      // number of cover images, 0-4
+    url1: string,
+    url2: string,
+    url3: string,
+    url4: string,
+    cover1: image,
+    cover2: image,
+    cover3: image,
+    cover4: image,
+}
+
 // Discover / Home screen state.
 export global HomeState {
     in property <[DiscoverSection]> sections: [];
@@ -273,7 +292,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings, search, musician, label, location, favorites, mix, playlist, discover-browse, playlist-manager }
+export enum ContentView { home, album, artist, settings, search, musician, label, label-releases, location, favorites, mix, playlist, discover-browse, playlist-manager }
 
 // In-app toast (transient notification). Mirrors Tauri's toastStore:
 // a single toast at a time (a new one replaces the current), auto-hidden
@@ -1131,17 +1150,77 @@ export global LabelState {
     in property <string> name;
     in property <string> image-url;
     in property <image> image;
+    // Releases sub-view (LabelReleasesView) — the paginated album grid.
+    // `albums` is the full loaded catalog + the artwork-pipeline target
+    // (stable indices); `visible` is the sorted/filtered/searched subset
+    // the view actually renders (shares `albums` when no filter is active,
+    // so artwork stays live — mirrors DiscoverBrowseState).
     in property <[AlbumCardItem]> albums: [];
+    in property <[AlbumCardItem]> visible: [];
     in property <int> total: 0;
     in property <bool> loading: false;
     in property <bool> load-more-loading: false;
     // "grid" | "list" — the view toggle (mirrors DiscoverBrowseView).
     // UI-owned, like Discover's; no Rust round-trip needed.
     in-out property <string> view-mode: "grid";
+
+    // --- Landing page (LabelPageView) -----------------------------------
+    // Header description (HTML-stripped) + truncated form + the flag that
+    // gates the READ MORE affordance (same pattern as ArtistState.bio).
+    in property <string> description;
+    in property <string> description-short;
+    in property <bool> description-truncated: false;
+    // Header follow state — true when the label is in the user's favorites.
+    in property <bool> is-following: false;
+    // Popular tracks (album-thumbnail rows, multi-select capable).
+    in property <[TrackItem]> top-tracks: [];
+    // Releases + Critics' Picks carousels (reuse Carousel).
+    in property <DiscoverSection> releases-section;
+    in property <DiscoverSection> critics-section;
+    // Playlists / Artists / More-labels carousels. More-labels reuses
+    // ArtistCarousel (SlimItem already carries `following`).
+    in property <[SearchPlaylistItem]> playlists: [];
+    in property <[SlimItem]> artists: [];
+    in property <[SlimItem]> more-labels: [];
+    // Sticky JUMP TO tabs — only the sections that have content.
+    in property <[JumpNavTab]> jump-tabs: [];
+    // True once the landing page-data load resolves (gates the spinner).
+    in property <bool> page-loaded: false;
+
+    // --- Releases sub-view toolbar (UI-owned, like Discover) ------------
+    // "newest" | "oldest" | "title-asc" | "title-desc" | "artist-asc".
+    in-out property <string> sort-by: "newest";
+    in-out property <bool> filter-hires: false;
+    in-out property <bool> group-by-artist: false;
+    // Releases sub-view in-view search query (drives the count line).
+    in-out property <string> search-query: "";
+    // Group-by-artist rendering — one section per artist (reuses the
+    // DiscoverSection + grid pattern). Empty unless group-by-artist is on.
+    in property <[DiscoverSection]> grouped: [];
+    // Count of albums actually shown after filter/search (for the count line).
+    in property <int> shown: 0;
+    // Count of Hi-Res albums in the loaded catalog (count line).
+    in property <int> hires-count: 0;
 }
 
 export global LabelActions {
+    // Releases sub-view: fetch the next album page.
     callback load-more();
+    // Landing: toggle follow on the header label or a more-labels card.
+    callback toggle-follow(string /* label id */);
+    // Landing: play all popular tracks.
+    callback play-top();
+    // Landing: top-tracks header overflow menu (play-next / queue / shuffle).
+    callback top-tracks-menu();
+    // Landing: enter/leave multi-select for popular tracks (select-all).
+    callback select-all-top-tracks();
+    // Landing: open the full releases sub-view ("See all").
+    callback open-releases();
+    // Releases sub-view toolbar.
+    callback set-sort(string /* option */);
+    callback set-hires(bool);
+    callback set-group(bool);
+    callback search(string /* query */);
 }
 
 // One artist in the scene-discovery grid (artists from the same
@@ -1320,23 +1399,6 @@ export global PlaylistPickerState {
 export global PlaylistPickerActions {
     callback pick(string /* playlist id */);
     callback close();
-}
-
-// A playlist result in search. Qobuz returns up to four cover URLs per
-// playlist; the card renders them as a count-based collage.
-export struct SearchPlaylistItem {
-    id: string,
-    title: string,
-    subtitle: string,      // owner name + track count
-    cover-count: int,      // number of cover images, 0-4
-    url1: string,
-    url2: string,
-    url3: string,
-    url4: string,
-    cover1: image,
-    cover2: image,
-    cover3: image,
-    cover4: image,
 }
 
 // One artist tile in the Favorites > Artists grid.

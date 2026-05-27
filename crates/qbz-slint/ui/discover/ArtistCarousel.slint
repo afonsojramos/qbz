@@ -65,6 +65,10 @@ export component ArtistCarousel inherits VerticalLayout {
     in property <string> title;
     in property <[SlimItem]> artists;
     in property <bool> show-view-all: false;
+    // Follow-chip behavior + kind for the cards (see ArtistCard).
+    // Defaults keep the artist-search usage unchanged.
+    in property <string> card-follow-mode: "auto";
+    in property <string> card-follow-kind: "artist";
     callback artist-clicked(string);
     callback media-action(string, string, string);
     callback view-all-clicked();
@@ -141,6 +145,8 @@ export component ArtistCarousel inherits VerticalLayout {
                 spacing: root.gap;
                 for artist in root.artists: ArtistCard {
                     artist: artist;
+                    follow-mode: root.card-follow-mode;
+                    follow-kind: root.card-follow-kind;
                     clicked(id) => {
                         root.artist-clicked(id);
                     }

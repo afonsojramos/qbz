@@ -31,6 +31,10 @@ export struct JumpNavTab {
 export component JumpNavBar inherits Rectangle {
     in property <[JumpNavTab]> tabs;
     in property <string> active-tab-id;
+    // Whether the inline page-search affordance is offered. Artist pages
+    // have it; the label page does not (Tauri's label jump-nav has no
+    // search), so the label view passes show-search: false.
+    in property <bool> show-search: true;
     in-out property <bool> search-open: false;
     in-out property <string> search-text;
 
@@ -244,7 +248,7 @@ export component JumpNavBar inherits Rectangle {
         // expanded input run all the way to the bar's right padding
         // (right where the user just clicked the lupa). The inline
         // input carries its own X close button.
-        if !root.search-open: VerticalLayout {
+        if root.show-search && !root.search-open: VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
             Rectangle {

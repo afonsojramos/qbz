@@ -582,6 +582,16 @@ fn apply_entry(
         nav::NavEntry::Label { id, name } => {
             navigate_label(runtime.clone(), weak.clone(), handle, image_cache.clone(), id, name);
         }
+        nav::NavEntry::LabelReleases { id, name } => {
+            navigate_label_releases(
+                runtime.clone(),
+                weak.clone(),
+                handle,
+                image_cache.clone(),
+                id,
+                name,
+            );
+        }
         nav::NavEntry::DiscoverBrowse { endpoint, title } => {
             discover_browse::navigate(
                 runtime.clone(),
@@ -661,8 +671,9 @@ fn navigate_location(
     });
 }
 
-/// Open a LabelReleasesView for `label_id`. Fetches the label header
-/// + first album page, then the header image.
+/// Open the LabelView landing — the rich label page (header + popular
+/// tracks + releases/critics/playlists/artists/more-labels carousels).
+/// Reached by clicking a label anywhere.
 fn navigate_label(
     runtime: Arc<AppRuntime<SlintAdapter>>,
     weak: slint::Weak<AppWindow>,
@@ -673,8 +684,53 @@ fn navigate_label(
 ) {
     handle.spawn(async move {
         let _ = weak.upgrade_in_event_loop(|w| {
-            label::reset_label(&w);
+            label::reset_label_page(&w);
             w.global::<NavState>().set_view(ContentView::Label);
+        });
+        match label::load_label_page(&runtime, label_id, &name).await {
+            Ok(payload) => {
+                let jobs = label::page_artwork_jobs(&payload);
+                let image_url = payload.image_url.clone();
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    label::apply_label_page(&w, payload);
+                });
+                artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                if !image_url.is_empty() {
+                    if let Some((pixels, width, height)) =
+                        artwork::fetch_and_decode(&image_url, &image_cache, 240).await
+                    {
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            label::apply_image(&w, &pixels, width, height);
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("[qbz-slint] label page load failed: {e}");
+                let _ = weak.upgrade_in_event_loop(|w| {
+                    let s = w.global::<LabelState>();
+                    s.set_loading(false);
+                    s.set_page_loaded(true);
+                });
+            }
+        }
+    });
+}
+
+/// Open the full "See all releases" sub-view for `label_id`. Fetches the
+/// label header + first album page, then the header image.
+fn navigate_label_releases(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+    label_id: u64,
+    name: String,
+) {
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            label::reset_label(&w);
+            w.global::<NavState>().set_view(ContentView::LabelReleases);
         });
         match label::load_label(&runtime, label_id, &name).await {
             Ok(data) => {
@@ -695,7 +751,7 @@ fn navigate_label(
                 }
             }
             Err(e) => {
-                log::error!("[qbz-slint] label load failed: {e}");
+                log::error!("[qbz-slint] label releases load failed: {e}");
                 let _ = weak.upgrade_in_event_loop(|w| {
                     w.global::<LabelState>().set_loading(false);
                 });
@@ -2193,15 +2249,99 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     });
                 }
+                // === Label landing actions ===============================
+                ("label", "follow") => {
+                    // Toggle the label favorite, optimistically flipping the
+                    // header + any matching More-Labels card.
+                    if let Some(w) = weak.upgrade() {
+                        let make = !label::label_following_state(&w, &id);
+                        label::mark_label_followed(&w, &id, make);
+                        let runtime = runtime.clone();
+                        let weak = weak.clone();
+                        let label_id = id.clone();
+                        handle.spawn(async move {
+                            let res = if make {
+                                runtime.core().add_favorite("label", &label_id).await
+                            } else {
+                                runtime.core().remove_favorite("label", &label_id).await
+                            };
+                            if let Err(e) = res {
+                                log::error!("[qbz-slint] toggle label favorite failed: {e}");
+                                let _ = weak.upgrade_in_event_loop(move |w| {
+                                    label::mark_label_followed(&w, &label_id, !make);
+                                });
+                            }
+                        });
+                    }
+                }
+                ("label", "play-top") => {
+                    // Popular tracks are cached on the UI thread by
+                    // apply_label_page; read them here (UI thread) + queue.
+                    let tracks = label::top_tracks_for_play();
+                    if tracks.is_empty() {
+                        crate::toast::error_weak(&weak, "No popular tracks for this label");
+                    } else {
+                        playback::play_tracks(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            tracks,
+                            0,
+                        );
+                    }
+                }
+                // More-Labels card click -> open that label's landing.
+                ("label", "open") => {
+                    if let Ok(label_id) = id.parse::<u64>() {
+                        let name = weak
+                            .upgrade()
+                            .map(|w| label::more_label_name(&w, &id))
+                            .unwrap_or_default();
+                        nav::record(nav::NavEntry::Label {
+                            id: label_id,
+                            name: name.clone(),
+                        });
+                        navigate_label(
+                            runtime.clone(),
+                            weak.clone(),
+                            &handle,
+                            image_cache.clone(),
+                            label_id,
+                            name,
+                        );
+                        if let Some(w) = weak.upgrade() {
+                            update_nav_flags(&w);
+                        }
+                    }
+                }
+                // "See all" -> the full releases sub-view for the open label.
+                ("label", "see-all-releases") => {
+                    if let (Some(w), Ok(label_id)) = (weak.upgrade(), id.parse::<u64>()) {
+                        let name = w.global::<LabelState>().get_name().to_string();
+                        nav::record(nav::NavEntry::LabelReleases {
+                            id: label_id,
+                            name: name.clone(),
+                        });
+                        navigate_label_releases(
+                            runtime.clone(),
+                            weak.clone(),
+                            &handle,
+                            image_cache.clone(),
+                            label_id,
+                            name,
+                        );
+                        update_nav_flags(&w);
+                    }
+                }
                 ("track", "toggle-select") => {
                     // Flip `selected` on the matching row, in whichever
-                    // multi-select surface is showing: the playlist
-                    // detail or the artist Popular Tracks.
+                    // multi-select surface is showing: the playlist detail,
+                    // the artist Popular Tracks, or the label Popular Tracks.
                     if let Some(w) = weak.upgrade() {
-                        let model = if w.global::<NavState>().get_view() == ContentView::Playlist {
-                            w.global::<PlaylistState>().get_tracks()
-                        } else {
-                            w.global::<ArtistState>().get_top_tracks()
+                        let model = match w.global::<NavState>().get_view() {
+                            ContentView::Playlist => w.global::<PlaylistState>().get_tracks(),
+                            ContentView::Label => w.global::<LabelState>().get_top_tracks(),
+                            _ => w.global::<ArtistState>().get_top_tracks(),
                         };
                         if let Some(vm) = model
                             .as_any()
@@ -2934,6 +3074,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 });
             });
+    }
+
+    // Label releases sub-view toolbar — sort / Hi-Res filter /
+    // group-by-artist / search. The markup updates the bound LabelState
+    // property first; each callback just re-derives the rendered list
+    // (local filter over the loaded catalog).
+    {
+        let weak = window.as_weak();
+        window.global::<LabelActions>().on_set_sort(move |_| {
+            if let Some(w) = weak.upgrade() {
+                label::derive_releases(&w);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<LabelActions>().on_set_hires(move |_| {
+            if let Some(w) = weak.upgrade() {
+                label::derive_releases(&w);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<LabelActions>().on_set_group(move |_| {
+            if let Some(w) = weak.upgrade() {
+                label::derive_releases(&w);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<LabelActions>().on_search(move |_| {
+            if let Some(w) = weak.upgrade() {
+                label::derive_releases(&w);
+            }
+        });
     }
 
     // Scene (location) view actions — open-artist routes to the

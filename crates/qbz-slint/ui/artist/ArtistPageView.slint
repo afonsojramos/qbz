@@ -30,43 +30,7 @@ import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { ReleaseGrid } from "ReleaseGrid.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { JumpNavBar, JumpNavTab } from "../primitives/JumpNavBar.slint";
-
-component CircleAction inherits Rectangle {
-    in property <image> icon;
-    in property <bool> primary: false;
-    // Stays "pressed" — same surface as a hover, icon tinted accent.
-    // Used by the Network button while the sidebar is open.
-    in property <bool> active: false;
-    in property <length> diameter: 40px;
-    callback clicked();
-
-    width: root.diameter;
-    height: root.diameter;
-    border-radius: root.diameter / 2;
-    // Ghost circle — translucent fill with a faint ring, never a solid
-    // accent fill (mirrors the Tauri transport controls).
-    background: (ta.has-hover || root.active) ? Theme.surface-hover : transparent;
-    border-width: 1px;
-    border-color: (ta.has-hover || root.active) ? Theme.text-disabled : Theme.border-subtle;
-
-    QbzIcon {
-        source: root.icon;
-        width: root.primary ? 19px : 17px;
-        height: root.primary ? 19px : 17px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        tint: root.active
-            ? Theme.accent
-            : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
+import { CircleAction } from "../primitives/CircleAction.slint";
 
 component SectionTitle inherits Text {
     color: Theme.text-primary;

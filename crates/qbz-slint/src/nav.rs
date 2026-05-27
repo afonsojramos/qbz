@@ -57,9 +57,16 @@ pub enum NavEntry {
         name: String,
         role: String,
     },
-    /// LabelReleasesView — opened by the artist network sidebar's
-    /// Labels section. Carries the label id + name fallback.
+    /// LabelView landing — the rich label page (header + popular tracks +
+    /// releases / critics / playlists / artists / more-labels carousels).
+    /// Reached by clicking a label anywhere. Carries the id + name fallback.
     Label {
+        id: u64,
+        name: String,
+    },
+    /// LabelReleasesView — the "See all releases" sub-view reached from the
+    /// landing's Releases carousel. Carries the label id + name fallback.
+    LabelReleases {
         id: u64,
         name: String,
     },
