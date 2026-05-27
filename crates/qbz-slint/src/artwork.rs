@@ -80,10 +80,11 @@ pub enum ArtworkTarget {
     DiscoverBrowseAlbum { index: usize },
     /// A card in FavoritesState.artists[index].
     FavoriteArtist { index: usize },
-    /// A card in FavoritesState.playlists[index].
-    FavoritePlaylist { index: usize },
     /// A card in FavoritesState.labels[index].
     FavoriteLabel { index: usize },
+    /// One collage cover slot (0-3) of a favorites playlist card. `following`
+    /// picks the sub-tab source model (Following vs Library/favorites).
+    FavPlaylistCover { following: bool, index: usize, slot: usize },
     /// A card in ForYouState.release-watch.albums[index].
     ForYouReleaseWatch { index: usize },
     /// A card in ForYouState.recent-albums.albums[index].
@@ -536,18 +537,31 @@ fn apply_artwork(
                 model.set_row_data(index, item);
             }
         }
-        ArtworkTarget::FavoritePlaylist { index } => {
-            let model = window.global::<crate::FavoritesState>().get_playlists();
-            if let Some(mut item) = model.row_data(index) {
-                item.cover = image;
-                model.set_row_data(index, item);
-            }
-        }
         ArtworkTarget::FavoriteLabel { index } => {
             let model = window.global::<crate::FavoritesState>().get_labels();
             if let Some(mut item) = model.row_data(index) {
                 item.image = image;
                 model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::FavPlaylistCover { following, index, slot } => {
+            let st = window.global::<crate::FavoritesState>();
+            let model = if following {
+                st.get_playlists_following()
+            } else {
+                st.get_playlists_favorites()
+            };
+            if let Some(mut item) = model.row_data(index) {
+                let id = item.id.to_string();
+                match slot {
+                    0 => item.cover1 = image.clone(),
+                    1 => item.cover2 = image.clone(),
+                    2 => item.cover3 = image.clone(),
+                    _ => item.cover4 = image.clone(),
+                }
+                model.set_row_data(index, item);
+                // Also reach the rendered (possibly search-filtered) model.
+                crate::favorites::set_playlist_cover(window, &id, slot, image);
             }
         }
         ArtworkTarget::ForYouReleaseWatch { index } => {

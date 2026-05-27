@@ -387,7 +387,7 @@ fn artist_item(row: ArtistRow) -> SlimItem {
     }
 }
 
-fn playlist_item(row: PlaylistRow) -> SearchPlaylistItem {
+pub(crate) fn playlist_item(row: PlaylistRow) -> SearchPlaylistItem {
     let url = |i: usize| -> slint::SharedString {
         row.cover_urls.get(i).cloned().unwrap_or_default().into()
     };

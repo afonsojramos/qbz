@@ -29,6 +29,11 @@ fn user_id() -> Option<u64> {
     CURRENT_USER_ID.lock().ok().and_then(|g| *g)
 }
 
+/// The active user id (for the favorites Following filter `owner.id != uid`).
+pub fn current_user_id() -> Option<u64> {
+    user_id()
+}
+
 /// `<data_dir>/qbz/users/<user_id>/library.db` — matches the Tauri
 /// per-user path so the local organization data is shared.
 fn db_path() -> Option<PathBuf> {

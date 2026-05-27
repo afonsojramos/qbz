@@ -20,9 +20,10 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::album_map::{self, map_album, to_item, AlbumCard};
 use crate::artwork::{ArtworkJob, ArtworkTarget};
+use crate::search::{self, PlaylistRow};
 use crate::{
     AlbumCardItem, AlphaJump, AppWindow, DiscoverSection, FavoriteArtistItem, FavoriteLabelItem,
-    FavoritePlaylistItem, FavoritesState, TrackItem,
+    FavoritesState, SearchPlaylistItem, TrackItem,
 };
 
 /// Page size — matches Tauri's FAVORITES_PAGE_SIZE. We fetch one
@@ -105,7 +106,7 @@ pub enum FavData {
     Tracks { items: Vec<TrackCard>, play: Vec<Track>, total: usize },
     Albums { items: Vec<AlbumCard>, total: usize },
     Artists { items: Vec<ArtistCard>, total: usize },
-    Playlists { items: Vec<PlaylistCard>, total: usize },
+    Playlists { favorites: Vec<PlaylistRow>, following: Vec<PlaylistRow> },
     Labels { items: Vec<LabelCard>, total: usize },
 }
 
@@ -133,15 +134,6 @@ pub struct ArtistCard {
 }
 
 #[derive(Clone)]
-pub struct PlaylistCard {
-    pub id: String,
-    pub name: String,
-    pub owner: String,
-    pub tracks_line: String,
-    pub cover_url: String,
-}
-
-#[derive(Clone)]
 pub struct LabelCard {
     pub id: String,
     pub name: String,
@@ -157,19 +149,41 @@ pub async fn load_favorites<A>(
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
-    // Playlists come from /playlist/getUserPlaylists, not the
-    // getUserFavorites envelope — handle them first.
+    // Playlists has two sub-tabs from two different sources (mirror Tauri):
+    //   - Following = playlists the user follows on Qobuz but does NOT own
+    //     (`get_user_playlists` filtered by `owner.id != current_user_id`).
+    //   - Library   = LOCALLY-favorited playlist ids (SQLite), in favorited
+    //     order. We intersect the already-fetched `get_user_playlists` set
+    //     (cheap, no extra fetch); for a favorited id not in that set we fall
+    //     back to a single `get_playlist`.
     if tab == FavTab::Playlists {
-        let playlists = runtime
+        let all = runtime
             .core()
             .get_user_playlists()
             .await
             .map_err(|e| e.to_string())?;
-        let total = playlists.len();
-        return Ok(FavData::Playlists {
-            items: playlists.into_iter().map(map_playlist).collect(),
-            total,
-        });
+        let uid = crate::library_db::current_user_id();
+        let following: Vec<PlaylistRow> = match uid {
+            Some(uid) => all
+                .iter()
+                .filter(|p| p.owner.id != uid)
+                .cloned()
+                .map(search::map_playlist)
+                .collect(),
+            None => Vec::new(),
+        };
+        let fav_ids =
+            crate::library_db::with_db(|db| db.get_favorite_playlist_ids()).unwrap_or_default();
+        let by_id: HashMap<u64, &Playlist> = all.iter().map(|p| (p.id, p)).collect();
+        let mut favorites: Vec<PlaylistRow> = Vec::with_capacity(fav_ids.len());
+        for fid in fav_ids {
+            if let Some(p) = by_id.get(&fid) {
+                favorites.push(search::map_playlist((**p).clone()));
+            } else if let Ok(p) = runtime.core().get_playlist(fid).await {
+                favorites.push(search::map_playlist(p));
+            }
+        }
+        return Ok(FavData::Playlists { favorites, following });
     }
 
     // Page through the favorites until the API is exhausted (mirrors
@@ -279,11 +293,10 @@ where
     let albums = total_for(runtime, "albums").await;
     let artists = total_for(runtime, "artists").await;
     let labels = total_for(runtime, "labels").await;
-    let playlists = runtime
-        .core()
-        .get_user_playlists()
-        .await
-        .map(|p| p.len() as i32)
+    // The tab badge counts the LOCAL Library (favorited) playlists, matching
+    // the "favorites" semantics (cheap local read, no network).
+    let playlists = crate::library_db::with_db(|db| db.get_favorite_playlist_ids())
+        .map(|ids| ids.len() as i32)
         .unwrap_or(0);
     FavCounts {
         tracks,
@@ -362,24 +375,6 @@ fn map_artist(artist: Artist) -> ArtistCard {
             .image
             .and_then(|img| img.best().cloned())
             .unwrap_or_default(),
-    }
-}
-
-fn map_playlist(playlist: Playlist) -> PlaylistCard {
-    // The highest-resolution non-empty cover list wins (images300 >
-    // images150 > images), first entry as the tile cover.
-    let cover_url = [&playlist.images300, &playlist.images150, &playlist.images]
-        .into_iter()
-        .flatten()
-        .find(|v| !v.is_empty())
-        .and_then(|list| list.first().cloned())
-        .unwrap_or_default();
-    PlaylistCard {
-        id: playlist.id.to_string(),
-        name: playlist.name,
-        owner: playlist.owner.name,
-        tracks_line: format!("{} tracks", playlist.tracks_count),
-        cover_url,
     }
 }
 
@@ -478,20 +473,20 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
             state.set_artists(ModelRc::new(VecModel::from(cards)));
             state.set_artists_total(total as i32);
         }
-        FavData::Playlists { items, total } => {
-            let cards: Vec<FavoritePlaylistItem> = items
-                .into_iter()
-                .map(|p| FavoritePlaylistItem {
-                    id: p.id.into(),
-                    name: p.name.into(),
-                    owner: p.owner.into(),
-                    tracks_line: p.tracks_line.into(),
-                    cover_url: p.cover_url.into(),
-                    cover: slint::Image::default(),
-                })
-                .collect();
-            state.set_playlists(ModelRc::new(VecModel::from(cards)));
-            state.set_playlists_total(total as i32);
+        FavData::Playlists { favorites, following } => {
+            let fav_items: Vec<SearchPlaylistItem> =
+                favorites.into_iter().map(search::playlist_item).collect();
+            let following_items: Vec<SearchPlaylistItem> =
+                following.into_iter().map(search::playlist_item).collect();
+            // Tab badge = Library (favorited) count; Following badge separate.
+            state.set_playlists_total(fav_items.len() as i32);
+            state.set_playlists_following_count(following_items.len() as i32);
+            state.set_playlists_favorites(ModelRc::new(VecModel::from(fav_items)));
+            state.set_playlists_following(ModelRc::new(VecModel::from(following_items)));
+            state.set_playlists_search("".into());
+            // Seed `playlists-visible` for the current sub-tab (shares the
+            // source model until a search forks it, so collage artwork stays live).
+            derive_playlists(window);
         }
         FavData::Labels { items, total } => {
             let rows: Vec<FavoriteLabelItem> = items
@@ -599,6 +594,34 @@ pub fn derive_labels(window: &AppWindow) {
         .filter(|l| l.name.to_lowercase().contains(query))
         .collect();
     state.set_labels_visible(ModelRc::new(VecModel::from(filtered)));
+}
+
+/// Re-derive the rendered Playlists grid/list (`playlists-visible`) from the
+/// active sub-tab source (`playlists-favorites` / `playlists-following`) and
+/// the search query. Empty query shares the source model so collage artwork
+/// stays live; a query forks a name/owner-filtered clone (mirrors Tauri's
+/// filteredPlaylists, which matches name OR owner — the owner is part of the
+/// item subtitle). No sort, no group (Tauri has none).
+pub fn derive_playlists(window: &AppWindow) {
+    let state = window.global::<FavoritesState>();
+    let source = if state.get_playlists_sub_tab().as_str() == "following" {
+        state.get_playlists_following()
+    } else {
+        state.get_playlists_favorites()
+    };
+    let query_owned = state.get_playlists_search().to_lowercase();
+    let query = query_owned.trim();
+    if query.is_empty() {
+        state.set_playlists_visible(source);
+        return;
+    }
+    let filtered: Vec<SearchPlaylistItem> = (0..source.row_count())
+        .filter_map(|i| source.row_data(i))
+        .filter(|p| {
+            p.title.to_lowercase().contains(query) || p.subtitle.to_lowercase().contains(query)
+        })
+        .collect();
+    state.set_playlists_visible(ModelRc::new(VecModel::from(filtered)));
 }
 
 /// The loaded favorite tracks as a play-ready queue (Play all).
@@ -861,6 +884,27 @@ pub fn set_album_artwork(window: &AppWindow, id: &str, image: slint::Image) {
     }
 }
 
+/// Set a freshly-decoded collage cover (by id + slot) on the rendered
+/// favorites playlists model (`playlists-visible`), which is a clone of the
+/// active sub-tab source whenever a search filter is active.
+pub fn set_playlist_cover(window: &AppWindow, id: &str, slot: usize, image: slint::Image) {
+    let model = window.global::<FavoritesState>().get_playlists_visible();
+    for i in 0..model.row_count() {
+        if let Some(mut item) = model.row_data(i) {
+            if item.id.as_str() == id {
+                match slot {
+                    0 => item.cover1 = image,
+                    1 => item.cover2 = image,
+                    2 => item.cover3 = image,
+                    _ => item.cover4 = image,
+                }
+                model.set_row_data(i, item);
+                break;
+            }
+        }
+    }
+}
+
 /// Same for the rendered favorites tracks model (`tracks-visible`).
 pub fn set_track_artwork(window: &AppWindow, id: &str, image: slint::Image) {
     let model = window.global::<FavoritesState>().get_tracks_visible();
@@ -995,15 +1039,24 @@ pub fn artwork_jobs(data: &FavData) -> Vec<ArtworkJob> {
                 target: ArtworkTarget::FavoriteArtist { index: i },
             })
             .collect(),
-        FavData::Playlists { items, .. } => items
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| !p.cover_url.is_empty())
-            .map(|(i, p)| ArtworkJob {
-                url: p.cover_url.clone(),
-                target: ArtworkTarget::FavoritePlaylist { index: i },
-            })
-            .collect(),
+        FavData::Playlists { favorites, following } => {
+            fn push(rows: &[PlaylistRow], following: bool, jobs: &mut Vec<ArtworkJob>) {
+                for (index, row) in rows.iter().enumerate() {
+                    for (slot, url) in row.cover_urls.iter().enumerate().take(4) {
+                        if !url.is_empty() {
+                            jobs.push(ArtworkJob {
+                                url: url.clone(),
+                                target: ArtworkTarget::FavPlaylistCover { following, index, slot },
+                            });
+                        }
+                    }
+                }
+            }
+            let mut jobs: Vec<ArtworkJob> = Vec::new();
+            push(favorites, false, &mut jobs);
+            push(following, true, &mut jobs);
+            jobs
+        }
         FavData::Labels { items, .. } => items
             .iter()
             .enumerate()
