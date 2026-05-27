@@ -502,15 +502,22 @@ fn apply_artwork(
         ArtworkTarget::FavoriteTrack { index } => {
             let model = window.global::<crate::FavoritesState>().get_tracks();
             if let Some(mut item) = model.row_data(index) {
-                item.artwork = image;
+                item.artwork = image.clone();
+                let id = item.id.to_string();
                 model.set_row_data(index, item);
+                // Also reach the rendered (possibly sorted/grouped) model.
+                crate::favorites::set_track_artwork(window, &id, image);
             }
         }
         ArtworkTarget::FavoriteAlbum { index } => {
             let model = window.global::<crate::FavoritesState>().get_albums();
             if let Some(mut item) = model.row_data(index) {
-                item.artwork = image;
+                item.artwork = image.clone();
+                let id = item.id.to_string();
                 model.set_row_data(index, item);
+                // Also reach the rendered visible/grouped model (clones when
+                // a sort/group is active — they don't share `albums`).
+                crate::favorites::set_album_artwork(window, &id, image);
             }
         }
         ArtworkTarget::DiscoverBrowseAlbum { index } => {
