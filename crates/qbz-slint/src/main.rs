@@ -16,6 +16,7 @@ slint::include_modules!();
 
 mod adapter;
 mod album;
+mod album_map;
 mod artist;
 mod artwork;
 mod auth;

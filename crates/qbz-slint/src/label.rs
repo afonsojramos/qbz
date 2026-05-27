@@ -16,6 +16,7 @@ use qbz_models::{Album, LabelExploreResponse, Track};
 use serde_json::Value;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
+use crate::album_map::{map_album, sort_album_items, tier, to_item, AlbumCard};
 use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::{
     AlbumCardItem, AppWindow, DiscoverSection, JumpNavTab, LabelState, SearchPlaylistItem,
@@ -33,24 +34,6 @@ pub struct LabelData {
     pub albums: Vec<AlbumCard>,
     pub total: usize,
     pub has_more: bool,
-}
-
-#[derive(Clone)]
-pub struct AlbumCard {
-    pub id: String,
-    pub title: String,
-    pub artist: String,
-    pub artist_id: String,
-    pub genre: String,
-    pub year: String,
-    pub quality_tier: String,
-    pub quality_label: String,
-    pub artwork_url: String,
-    // List-row extras (AlbumListRow columns; ignored by the grid card).
-    pub release_type: String,   // "Album" | "EP" | "Single" (TYPE column)
-    pub quality_detail: String, // "24-bit / 96 kHz"
-    pub track_count: String,    // "12"
-    pub plain_year: String,     // "1973"
 }
 
 /// Fetch the label page (name + image) and the first album page.
@@ -127,140 +110,6 @@ where
     Ok((albums, total, has_more))
 }
 
-fn map_album(album: Album) -> AlbumCard {
-    // /label/getAlbums (and the page release containers) return the V2
-    // nested album shape — quality under `audio_info`, dates under `dates`,
-    // count as `track_count`, artist in the `artists[]` array — so prefer
-    // those, falling back to the flat fields for other endpoints.
-    let bit_depth = album
-        .audio_info
-        .as_ref()
-        .and_then(|a| a.maximum_bit_depth)
-        .or(album.maximum_bit_depth);
-    let sample_rate = album
-        .audio_info
-        .as_ref()
-        .and_then(|a| a.maximum_sampling_rate)
-        .or(album.maximum_sampling_rate);
-    let quality_tier = tier_hires(bit_depth, album.hires || album.hires_streamable).to_string();
-    let quality_label = match (bit_depth, sample_rate) {
-        (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, sr),
-        _ => String::new(),
-    };
-    let quality_detail = quality_label.clone();
-
-    // Release date — nested `dates` first (original > download > stream),
-    // else the flat `release_date_original`.
-    let date = album
-        .dates
-        .as_ref()
-        .and_then(|d| {
-            d.original
-                .clone()
-                .or_else(|| d.download.clone())
-                .or_else(|| d.stream.clone())
-        })
-        .or_else(|| album.release_date_original.clone());
-    let year = crate::dates::release_label(date.as_deref());
-    let plain_year = date
-        .as_deref()
-        .and_then(|s| s.get(..4).map(|y| y.to_string()))
-        .unwrap_or_default();
-
-    let tc = album.track_count.or(album.tracks_count);
-    let track_count = tc
-        .filter(|n| *n > 0)
-        .map(|n| n.to_string())
-        .unwrap_or_default();
-    let release_type = release_type_label(album.release_type.as_deref(), tc);
-    // Borrow `album` (artist) before any owned field is moved out below.
-    let (artist, artist_id) = album_artist(&album);
-    let genre = album.genre.map(|g| g.name).unwrap_or_default();
-    AlbumCard {
-        id: album.id,
-        title: album.title,
-        artist,
-        artist_id,
-        genre,
-        year,
-        quality_tier,
-        quality_label,
-        artwork_url: album.image.best().cloned().unwrap_or_default(),
-        release_type,
-        quality_detail,
-        track_count,
-        plain_year,
-    }
-}
-
-fn tier(bit_depth: Option<u32>) -> &'static str {
-    match bit_depth {
-        Some(b) if b > 16 => "hires",
-        Some(_) => "cd",
-        None => "",
-    }
-}
-
-/// Quality tier from a resolved bit depth, with a `hires` boolean fallback
-/// for payloads that omit the bit depth but still flag the release hi-res.
-fn tier_hires(bit_depth: Option<u32>, hires: bool) -> &'static str {
-    match bit_depth {
-        Some(b) if b > 16 => "hires",
-        Some(_) => "cd",
-        None if hires => "hires",
-        None => "",
-    }
-}
-
-/// Display label for the TYPE column — the explicit `release_type` when the
-/// payload provides a known one, else a track-count heuristic.
-fn release_type_label(release_type: Option<&str>, track_count: Option<u32>) -> String {
-    match release_type {
-        Some("album") | Some("download") => "Album".to_string(),
-        Some("ep") | Some("epSingle") => "EP".to_string(),
-        Some("single") => "Single".to_string(),
-        Some("live") => "Live".to_string(),
-        Some("compilation") => "Compilation".to_string(),
-        _ => classify_release_type(track_count).to_string(),
-    }
-}
-
-/// Album artist name + id. Many /label/getAlbums items leave the `artist`
-/// object empty and only populate the `artists` credit array, which left
-/// group-by-artist showing "Unknown Artist". Fall back to the main-artist
-/// credit (else the first) — mirrors artist.rs map_release.
-fn album_artist(album: &Album) -> (String, String) {
-    if !album.artist.name.is_empty() {
-        return (album.artist.name.clone(), album.artist.id.to_string());
-    }
-    if let Some(list) = album.artists.as_ref() {
-        let pick = list
-            .iter()
-            .find(|a| {
-                a.roles
-                    .as_ref()
-                    .map(|r| r.iter().any(|role| role == "main-artist"))
-                    .unwrap_or(false)
-            })
-            .or_else(|| list.first());
-        if let Some(a) = pick {
-            return (a.name.clone(), a.id.to_string());
-        }
-    }
-    (String::new(), String::new())
-}
-
-/// Classify the list-row TYPE column from the album's track count. The
-/// /label/getAlbums payload carries no explicit release_type, so this
-/// mirrors home.rs's Discover heuristic (<=3 = Single, <=6 = EP, else Album).
-fn classify_release_type(track_count: Option<u32>) -> &'static str {
-    match track_count {
-        Some(n) if n <= 3 => "Single",
-        Some(n) if n <= 6 => "EP",
-        _ => "Album",
-    }
-}
-
 /// Extract the best URL from /label/page's flexible image value. It
 /// can be a bare string or an object with mega/extralarge/large/...
 /// keys (mirrors the Svelte extraction order).
@@ -277,31 +126,6 @@ fn extract_label_image(image: Option<&serde_json::Value>) -> String {
         }
     }
     String::new()
-}
-
-fn to_item(card: AlbumCard) -> AlbumCardItem {
-    AlbumCardItem {
-        id: card.id.into(),
-        title: card.title.into(),
-        artist: card.artist.into(),
-        artist_id: card.artist_id.into(),
-        genre: card.genre.into(),
-        year: card.year.into(),
-        quality_tier: card.quality_tier.into(),
-        quality_label: card.quality_label.into(),
-        ribbon: "".into(),
-        ribbon_kind: "".into(),
-        artwork_url: card.artwork_url.into(),
-        artwork: slint::Image::default(),
-        // List-row extras — feed the AlbumListRow columns (TYPE / QUALITY /
-        // TRACKS / YEAR) for the list view toggle. SOURCE is hidden in
-        // this single-source (Qobuz) context.
-        release_type: card.release_type.into(),
-        quality_detail: card.quality_detail.into(),
-        track_count: card.track_count.into(),
-        plain_year: card.plain_year.into(),
-        ..Default::default()
-    }
 }
 
 pub fn apply_label(window: &AppWindow, data: LabelData) {
@@ -395,19 +219,6 @@ pub fn derive_releases(window: &AppWindow) {
     }
     state.set_shown(shown as i32);
     state.set_hires_count(hires_count as i32);
-}
-
-fn sort_album_items(items: &mut [AlbumCardItem], sort: &str) {
-    match sort {
-        "oldest" => items.sort_by(|a, b| a.plain_year.as_str().cmp(b.plain_year.as_str())),
-        "newest" => items.sort_by(|a, b| b.plain_year.as_str().cmp(a.plain_year.as_str())),
-        "title-asc" => items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
-        "title-desc" => items.sort_by(|a, b| b.title.to_lowercase().cmp(&a.title.to_lowercase())),
-        "artist-asc" => {
-            items.sort_by(|a, b| a.artist.to_lowercase().cmp(&b.artist.to_lowercase()))
-        }
-        _ => {}
-    }
 }
 
 pub fn append_albums(window: &AppWindow, albums: Vec<AlbumCard>, total: usize, has_more: bool) {
