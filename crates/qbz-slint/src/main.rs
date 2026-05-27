@@ -4265,6 +4265,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        // Favorite album card actions (play / queue / favorite / go-to)
+        // route through the album media-action arms.
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_album_action(move |id, action| {
+                if let Some(w) = weak.upgrade() {
+                    w.invoke_media_action("album".into(), id, action);
+                }
+            });
+    }
+    {
         // Local search over the loaded favorite tracks (title / artist /
         // album), re-deriving the rendered list.
         let weak = window.as_weak();

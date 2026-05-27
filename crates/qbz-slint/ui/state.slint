@@ -1457,6 +1457,7 @@ export global FavoritesState {
     in-out property <bool> tracks-multi-select: false;
     in property <int> tracks-selected-count: 0;
     in property <[AlbumCardItem]> albums: [];
+    in-out property <string> albums-view-mode: "grid"; // "grid" | "list"
     in property <[FavoriteArtistItem]> artists: [];
     in property <[FavoritePlaylistItem]> playlists: [];
     in property <[FavoriteLabelItem]> labels: [];
@@ -1483,6 +1484,7 @@ export global FavoritesActions {
     callback shuffle-tracks();
     callback toggle-multi-select();
     callback bulk-action(string /* select-all | remove-selected | clear */);
+    callback album-action(string /* album id */, string /* action */);
 }
 
 // A Qobuz mix detail page (DailyQ / WeeklyQ / FavQ / TopQ), opened

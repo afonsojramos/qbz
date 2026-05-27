@@ -18,11 +18,12 @@ import {
     FavoriteLabelItem,
     DragState,
 } from "../state.slint";
-import { AlbumCard } from "../discover/AlbumCard.slint";
+import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
+import { ToggleButton } from "../primitives/ToggleButton.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
@@ -458,30 +459,68 @@ export component FavoritesView inherits Rectangle {
 
             // --- Albums tab --------------------------------------------
             if !FavoritesState.loading
-                && FavoritesState.active-tab == "albums": albums-grid := Rectangle {
-                property <int> columns: Math.max(
-                    1,
-                    Math.floor((self.width + root.gap) / (root.album-w + root.gap)));
-                property <int> rows: Math.ceil(FavoritesState.albums.length / self.columns);
-                height: self.rows > 0
-                    ? self.rows * root.album-h + Math.max(0, self.rows - 1) * root.gap
-                    : 0px;
+                && FavoritesState.active-tab == "albums": VerticalLayout {
+                spacing: 0px;
+                // Toolbar — count (left) + grid/list segmented toggle (right).
+                if FavoritesState.albums.length > 0: HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: FavoritesState.albums.length + " " + @tr("albums");
+                            color: Theme.text-muted;
+                            font-size: Typography.legal;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 68px;
+                            height: 34px;
+                            border-radius: 6px;
+                            background: Theme.surface-elevated;
+                            clip: true;
+                            HorizontalLayout {
+                                ToggleButton {
+                                    icon: @image-url("../assets/icons/layout-grid.svg");
+                                    active: FavoritesState.albums-view-mode == "grid";
+                                    clicked => {
+                                        FavoritesState.albums-view-mode = "grid";
+                                    }
+                                }
+                                ToggleButton {
+                                    icon: @image-url("../assets/icons/list.svg");
+                                    active: FavoritesState.albums-view-mode == "list";
+                                    clicked => {
+                                        FavoritesState.albums-view-mode = "list";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if FavoritesState.albums.length > 0: Rectangle { height: 12px; }
+
                 if FavoritesState.albums.length == 0: Text {
                     text: @tr("No favorite albums yet.");
                     color: Theme.text-muted;
                     font-size: Typography.body;
                 }
-                for album[i] in FavoritesState.albums: AlbumCard {
-                    x: Math.mod(i, albums-grid.columns) * (root.album-w + root.gap);
-                    y: Math.floor(i / albums-grid.columns) * (root.album-h + root.gap);
-                    width: root.album-w;
-                    height: root.album-h;
-                    album: album;
-                    clicked(id) => { root.open-album(id); }
+
+                AlbumCollectionView {
+                    albums: FavoritesState.albums;
+                    view-mode: FavoritesState.albums-view-mode;
+                    is-grouped: false;
+                    show-source: false;
+                    open-album(id) => {
+                        root.open-album(id);
+                    }
+                    open-artist(id) => {
+                        root.open-artist(id);
+                    }
                     media-action(kind, id, action) => {
-                        if (kind == "artist") {
-                            root.open-artist(id);
-                        }
+                        FavoritesActions.album-action(id, action);
                     }
                 }
             }
