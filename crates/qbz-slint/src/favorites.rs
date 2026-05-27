@@ -28,6 +28,10 @@ use crate::{
 /// pagination can come later).
 pub const PAGE_SIZE: u32 = 500;
 
+/// Hard ceiling on favorites pulled across all pages (mirrors Tauri's
+/// FAVORITES_PAGE_SIZE * FAVORITES_MAX_PAGES ceiling).
+const MAX_ITEMS: usize = 10_000;
+
 /// Which favorites tab to load.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FavTab {
@@ -149,21 +153,40 @@ where
         });
     }
 
-    let value = runtime
-        .core()
-        .get_favorites(tab.key(), PAGE_SIZE, 0)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let branch = value.get(tab.key());
-    let total = branch
-        .and_then(|b| b.get("total"))
-        .and_then(|t| t.as_u64())
-        .unwrap_or(0) as usize;
-    let items = branch
-        .and_then(|b| b.get("items"))
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
+    // Page through the favorites until the API is exhausted (mirrors
+    // Tauri's fetchAllFavorites: keep pulling until a short page or
+    // offset >= total), capped at MAX_ITEMS so a pathological library
+    // can't loop forever.
+    let mut total: usize;
+    let mut all_items: Vec<serde_json::Value> = Vec::new();
+    let mut offset = 0u32;
+    loop {
+        let value = runtime
+            .core()
+            .get_favorites(tab.key(), PAGE_SIZE, offset)
+            .await
+            .map_err(|e| e.to_string())?;
+        let branch = value.get(tab.key());
+        total = branch
+            .and_then(|b| b.get("total"))
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0) as usize;
+        let page: Vec<serde_json::Value> = branch
+            .and_then(|b| b.get("items"))
+            .and_then(|i| i.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let page_len = page.len();
+        all_items.extend(page);
+        offset += page_len as u32;
+        let exhausted = page_len < PAGE_SIZE as usize
+            || (total > 0 && offset as usize >= total)
+            || all_items.len() >= MAX_ITEMS;
+        if exhausted {
+            break;
+        }
+    }
+    let items = serde_json::Value::Array(all_items);
 
     Ok(match tab {
         FavTab::Tracks => {
