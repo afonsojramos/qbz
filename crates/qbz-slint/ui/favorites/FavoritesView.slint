@@ -394,10 +394,10 @@ component FavArtistCard inherits Rectangle {
     VerticalLayout {
         spacing: 10px;
         Rectangle {
-            width: 140px;
-            height: 140px;
+            width: 120px;
+            height: 120px;
             x: (parent.width - self.width) / 2;
-            border-radius: 70px;
+            border-radius: 60px;
             background: Theme.surface-elevated;
             clip: true;
             Image {
@@ -421,6 +421,7 @@ component FavArtistCard inherits Rectangle {
                 }
             }
         }
+        // albums_count line intentionally omitted (Tauri #169).
         Text {
             text: root.item.name;
             color: Theme.text-primary;
@@ -428,13 +429,6 @@ component FavArtistCard inherits Rectangle {
             font-weight: Typography.medium;
             horizontal-alignment: center;
             overflow: elide;
-            width: 160px;
-        }
-        if root.item.albums-line != "": Text {
-            text: root.item.albums-line;
-            color: Theme.text-muted;
-            font-size: Typography.legal;
-            horizontal-alignment: center;
             width: 160px;
         }
     }

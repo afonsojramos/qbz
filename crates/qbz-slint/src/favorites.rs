@@ -129,7 +129,6 @@ pub struct TrackCard {
 pub struct ArtistCard {
     pub id: String,
     pub name: String,
-    pub albums_line: String,
     pub image_url: String,
 }
 
@@ -363,14 +362,11 @@ fn map_track(track: Track) -> TrackCard {
 }
 
 fn map_artist(artist: Artist) -> ArtistCard {
-    let albums_line = match artist.albums_count {
-        Some(n) if n > 0 => format!("{} albums", n),
-        _ => String::new(),
-    };
+    // albums_count is deliberately NOT shown (Tauri #169: Qobuz's count
+    // includes compilations/tributes and is misleadingly high).
     ArtistCard {
         id: artist.id.to_string(),
         name: artist.name,
-        albums_line,
         image_url: artist
             .image
             .and_then(|img| img.best().cloned())
@@ -465,13 +461,16 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
                 .map(|a| FavoriteArtistItem {
                     id: a.id.into(),
                     name: a.name.into(),
-                    albums_line: a.albums_line.into(),
                     image_url: a.image_url.into(),
                     image: slint::Image::default(),
                 })
                 .collect();
-            state.set_artists(ModelRc::new(VecModel::from(cards)));
+            let model = ModelRc::new(VecModel::from(cards));
+            state.set_artists(model.clone());
+            state.set_artists_visible(model);
             state.set_artists_total(total as i32);
+            state.set_artists_search("".into());
+            derive_artists(window);
         }
         FavData::Playlists { favorites, following } => {
             let fav_items: Vec<SearchPlaylistItem> =
@@ -622,6 +621,27 @@ pub fn derive_playlists(window: &AppWindow) {
         })
         .collect();
     state.set_playlists_visible(ModelRc::new(VecModel::from(filtered)));
+}
+
+/// Re-derive the rendered Artists grid (`artists-visible`) from the full
+/// `artists` set + the search query (name substring; mirrors Tauri's
+/// filteredArtists). A-Z grouping + the alpha strip are layered on later.
+pub fn derive_artists(window: &AppWindow) {
+    let state = window.global::<FavoritesState>();
+    let query_owned = state.get_artists_search().to_lowercase();
+    let query = query_owned.trim();
+    let all = state.get_artists();
+    if query.is_empty() {
+        state.set_artists_shown(all.row_count() as i32);
+        state.set_artists_visible(all);
+        return;
+    }
+    let filtered: Vec<FavoriteArtistItem> = (0..all.row_count())
+        .filter_map(|i| all.row_data(i))
+        .filter(|a| a.name.to_lowercase().contains(query))
+        .collect();
+    state.set_artists_shown(filtered.len() as i32);
+    state.set_artists_visible(ModelRc::new(VecModel::from(filtered)));
 }
 
 /// The loaded favorite tracks as a play-ready queue (Play all).
