@@ -4377,6 +4377,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        // Group the favorite artists (off / A-Z) — persisted.
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_artists_set_group(move |g| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<FavoritesState>()
+                        .set_artists_group_enabled(g == "alpha");
+                    favorites::derive_artists(&w);
+                    favorites_prefs::save(&w);
+                }
+            });
+    }
+    {
         // Playlist card actions: play / play-next / queue / share / favorite.
         let runtime = app_runtime.clone();
         let weak = window.as_weak();

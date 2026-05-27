@@ -22,8 +22,8 @@ use crate::album_map::{self, map_album, to_item, AlbumCard};
 use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::search::{self, PlaylistRow};
 use crate::{
-    AlbumCardItem, AlphaJump, AppWindow, DiscoverSection, FavoriteArtistItem, FavoriteLabelItem,
-    FavoritesState, SearchPlaylistItem, TrackItem,
+    AlbumCardItem, AlphaJump, AppWindow, DiscoverSection, FavArtistSection, FavoriteArtistItem,
+    FavoriteLabelItem, FavoritesState, SearchPlaylistItem, TrackItem,
 };
 
 /// Page size — matches Tauri's FAVORITES_PAGE_SIZE. We fetch one
@@ -630,18 +630,68 @@ pub fn derive_artists(window: &AppWindow) {
     let state = window.global::<FavoritesState>();
     let query_owned = state.get_artists_search().to_lowercase();
     let query = query_owned.trim();
+    let group = state.get_artists_group_enabled();
     let all = state.get_artists();
+
+    // Flat (search-filtered) model. Share `all` when no query so artwork
+    // keeps updating in place; a query forks a filtered clone.
+    let filtered: Vec<FavoriteArtistItem> = if query.is_empty() {
+        (0..all.row_count()).filter_map(|i| all.row_data(i)).collect()
+    } else {
+        (0..all.row_count())
+            .filter_map(|i| all.row_data(i))
+            .filter(|a| a.name.to_lowercase().contains(query))
+            .collect()
+    };
+    state.set_artists_shown(filtered.len() as i32);
     if query.is_empty() {
-        state.set_artists_shown(all.row_count() as i32);
         state.set_artists_visible(all);
+    } else {
+        state.set_artists_visible(ModelRc::new(VecModel::from(filtered.clone())));
+    }
+
+    // A-Z grouping (grid grouped mode): bucket by first letter, sections
+    // ordered (# first then A-Z), with an alpha jump per section.
+    if !group {
+        state.set_artists_grouped(ModelRc::new(VecModel::from(Vec::<FavArtistSection>::new())));
+        state.set_artists_alpha(ModelRc::new(VecModel::from(Vec::<AlphaJump>::new())));
         return;
     }
-    let filtered: Vec<FavoriteArtistItem> = (0..all.row_count())
-        .filter_map(|i| all.row_data(i))
-        .filter(|a| a.name.to_lowercase().contains(query))
+    let mut sorted = filtered;
+    sorted.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    let mut map: Vec<(String, Vec<FavoriteArtistItem>)> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for item in sorted {
+        let key = album_alpha_key(item.name.as_str());
+        let idx = *index.entry(key.clone()).or_insert_with(|| {
+            map.push((key.clone(), Vec::new()));
+            map.len() - 1
+        });
+        map[idx].1.push(item);
+    }
+    map.sort_by(|(a, _), (b, _)| match (a == "#", b == "#") {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.cmp(b),
+    });
+    let alpha: Vec<AlphaJump> = map
+        .iter()
+        .enumerate()
+        .map(|(i, (k, _))| AlphaJump {
+            letter: k.clone().into(),
+            index: i as i32,
+        })
         .collect();
-    state.set_artists_shown(filtered.len() as i32);
-    state.set_artists_visible(ModelRc::new(VecModel::from(filtered)));
+    let sections: Vec<FavArtistSection> = map
+        .into_iter()
+        .map(|(key, artists)| FavArtistSection {
+            key: key.clone().into(),
+            title: key.into(),
+            artists: ModelRc::new(VecModel::from(artists)),
+        })
+        .collect();
+    state.set_artists_alpha(ModelRc::new(VecModel::from(alpha)));
+    state.set_artists_grouped(ModelRc::new(VecModel::from(sections)));
 }
 
 /// The loaded favorite tracks as a play-ready queue (Play all).
