@@ -382,8 +382,9 @@ export component LabelReleasesView inherits Rectangle {
             }
 
             // --- Load more -----------------------------------------------
-            if LabelState.albums.length > 0
-                && LabelState.albums.length < LabelState.total: HorizontalLayout {
+            // Driven by `has-more` — /label/getAlbums caps each page well
+            // below the catalog, so `total` is an unreliable gate.
+            if LabelState.albums.length > 0 && LabelState.has-more: HorizontalLayout {
                 alignment: center;
                 Rectangle {
                     width: load-more-text.preferred-width + 24px;

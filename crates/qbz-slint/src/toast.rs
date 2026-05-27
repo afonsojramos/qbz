@@ -103,3 +103,8 @@ pub fn warning(window: &AppWindow, message: impl Into<String>) {
 pub fn error_weak(weak: &Weak<AppWindow>, message: impl Into<String>) {
     show_weak(weak, message, ToastKind::Error);
 }
+
+/// Success toast from any thread.
+pub fn success_weak(weak: &Weak<AppWindow>, message: impl Into<String>) {
+    show_weak(weak, message, ToastKind::Success);
+}

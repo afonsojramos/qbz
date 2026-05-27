@@ -32,6 +32,7 @@ pub struct LabelData {
     pub image_url: String,
     pub albums: Vec<AlbumCard>,
     pub total: usize,
+    pub has_more: bool,
 }
 
 #[derive(Clone)]
@@ -79,7 +80,14 @@ where
         page.name
     };
     let image_url = extract_label_image(page.image.as_ref());
-    let total = albums_page.total.unwrap_or(albums_page.items.len() as u32) as usize;
+    let item_count = albums_page.items.len();
+    let total = albums_page
+        .total
+        .map(|t| t as usize)
+        .unwrap_or(item_count);
+    // /label/getAlbums caps each page below the full catalog; trust the
+    // `has_more` flag, falling back to a total comparison when it's absent.
+    let has_more = albums_page.has_more.unwrap_or(total > item_count);
     let albums = albums_page.items.into_iter().map(map_album).collect();
 
     Ok(LabelData {
@@ -88,15 +96,17 @@ where
         image_url,
         albums,
         total,
+        has_more,
     })
 }
 
-/// Fetch one more album page for the load-more affordance.
+/// Fetch one more album page for the load-more affordance. Returns the
+/// new cards, the (best-known) total, and whether more pages remain.
 pub async fn load_more_albums<A>(
     runtime: &Arc<AppRuntime<A>>,
     label_id: u64,
     offset: u32,
-) -> Result<(Vec<AlbumCard>, usize), String>
+) -> Result<(Vec<AlbumCard>, usize, bool), String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
@@ -105,47 +115,81 @@ where
         .get_label_albums(label_id, PAGE_SIZE, offset, None, None, None, None, None)
         .await
         .map_err(|e| e.to_string())?;
-    let total = page.total.unwrap_or(0) as usize;
+    let item_count = page.items.len();
+    let loaded = offset as usize + item_count;
+    let total = page.total.map(|t| t as usize).unwrap_or(loaded);
+    // More pages remain when the API says so, or when this page came back
+    // full (a short page means the catalog is exhausted).
+    let has_more = page
+        .has_more
+        .unwrap_or(item_count >= PAGE_SIZE as usize || total > loaded);
     let albums = page.items.into_iter().map(map_album).collect();
-    Ok((albums, total))
+    Ok((albums, total, has_more))
 }
 
 fn map_album(album: Album) -> AlbumCard {
-    let year = album
-        .release_date_original
+    // /label/getAlbums (and the page release containers) return the V2
+    // nested album shape — quality under `audio_info`, dates under `dates`,
+    // count as `track_count`, artist in the `artists[]` array — so prefer
+    // those, falling back to the flat fields for other endpoints.
+    let bit_depth = album
+        .audio_info
+        .as_ref()
+        .and_then(|a| a.maximum_bit_depth)
+        .or(album.maximum_bit_depth);
+    let sample_rate = album
+        .audio_info
+        .as_ref()
+        .and_then(|a| a.maximum_sampling_rate)
+        .or(album.maximum_sampling_rate);
+    let quality_tier = tier_hires(bit_depth, album.hires || album.hires_streamable).to_string();
+    let quality_label = match (bit_depth, sample_rate) {
+        (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, sr),
+        _ => String::new(),
+    };
+    let quality_detail = quality_label.clone();
+
+    // Release date — nested `dates` first (original > download > stream),
+    // else the flat `release_date_original`.
+    let date = album
+        .dates
+        .as_ref()
+        .and_then(|d| {
+            d.original
+                .clone()
+                .or_else(|| d.download.clone())
+                .or_else(|| d.stream.clone())
+        })
+        .or_else(|| album.release_date_original.clone());
+    let year = crate::dates::release_label(date.as_deref());
+    let plain_year = date
         .as_deref()
         .and_then(|s| s.get(..4).map(|y| y.to_string()))
         .unwrap_or_default();
-    let quality_tier = tier(album.maximum_bit_depth).to_string();
-    let quality_label = match (album.maximum_bit_depth, album.maximum_sampling_rate) {
-        (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, sr),
-        _ => String::new(),
-    };
-    let genre = album.genre.map(|g| g.name).unwrap_or_default();
-    let quality_detail = match (album.maximum_bit_depth, album.maximum_sampling_rate) {
-        (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, sr),
-        _ => String::new(),
-    };
-    let track_count = album
-        .tracks_count
+
+    let tc = album.track_count.or(album.tracks_count);
+    let track_count = tc
         .filter(|n| *n > 0)
         .map(|n| n.to_string())
         .unwrap_or_default();
-    let release_type = classify_release_type(album.tracks_count).to_string();
+    let release_type = release_type_label(album.release_type.as_deref(), tc);
+    // Borrow `album` (artist) before any owned field is moved out below.
+    let (artist, artist_id) = album_artist(&album);
+    let genre = album.genre.map(|g| g.name).unwrap_or_default();
     AlbumCard {
         id: album.id,
         title: album.title,
-        artist: album.artist.name,
-        artist_id: album.artist.id.to_string(),
+        artist,
+        artist_id,
         genre,
-        year: year.clone(),
+        year,
         quality_tier,
         quality_label,
         artwork_url: album.image.best().cloned().unwrap_or_default(),
         release_type,
         quality_detail,
         track_count,
-        plain_year: year,
+        plain_year,
     }
 }
 
@@ -155,6 +199,55 @@ fn tier(bit_depth: Option<u32>) -> &'static str {
         Some(_) => "cd",
         None => "",
     }
+}
+
+/// Quality tier from a resolved bit depth, with a `hires` boolean fallback
+/// for payloads that omit the bit depth but still flag the release hi-res.
+fn tier_hires(bit_depth: Option<u32>, hires: bool) -> &'static str {
+    match bit_depth {
+        Some(b) if b > 16 => "hires",
+        Some(_) => "cd",
+        None if hires => "hires",
+        None => "",
+    }
+}
+
+/// Display label for the TYPE column — the explicit `release_type` when the
+/// payload provides a known one, else a track-count heuristic.
+fn release_type_label(release_type: Option<&str>, track_count: Option<u32>) -> String {
+    match release_type {
+        Some("album") | Some("download") => "Album".to_string(),
+        Some("ep") | Some("epSingle") => "EP".to_string(),
+        Some("single") => "Single".to_string(),
+        Some("live") => "Live".to_string(),
+        Some("compilation") => "Compilation".to_string(),
+        _ => classify_release_type(track_count).to_string(),
+    }
+}
+
+/// Album artist name + id. Many /label/getAlbums items leave the `artist`
+/// object empty and only populate the `artists` credit array, which left
+/// group-by-artist showing "Unknown Artist". Fall back to the main-artist
+/// credit (else the first) — mirrors artist.rs map_release.
+fn album_artist(album: &Album) -> (String, String) {
+    if !album.artist.name.is_empty() {
+        return (album.artist.name.clone(), album.artist.id.to_string());
+    }
+    if let Some(list) = album.artists.as_ref() {
+        let pick = list
+            .iter()
+            .find(|a| {
+                a.roles
+                    .as_ref()
+                    .map(|r| r.iter().any(|role| role == "main-artist"))
+                    .unwrap_or(false)
+            })
+            .or_else(|| list.first());
+        if let Some(a) = pick {
+            return (a.name.clone(), a.id.to_string());
+        }
+    }
+    (String::new(), String::new())
 }
 
 /// Classify the list-row TYPE column from the album's track count. The
@@ -219,6 +312,7 @@ pub fn apply_label(window: &AppWindow, data: LabelData) {
     state.set_image_url(data.image_url.into());
     state.set_albums(ModelRc::new(VecModel::from(items)));
     state.set_total(data.total as i32);
+    state.set_has_more(data.has_more);
     state.set_loading(false);
     derive_releases(window);
 }
@@ -316,7 +410,7 @@ fn sort_album_items(items: &mut [AlbumCardItem], sort: &str) {
     }
 }
 
-pub fn append_albums(window: &AppWindow, albums: Vec<AlbumCard>, total: usize) {
+pub fn append_albums(window: &AppWindow, albums: Vec<AlbumCard>, total: usize, has_more: bool) {
     let state = window.global::<LabelState>();
     let model = state.get_albums();
     let mut combined: Vec<AlbumCardItem> = (0..model.row_count())
@@ -325,6 +419,7 @@ pub fn append_albums(window: &AppWindow, albums: Vec<AlbumCard>, total: usize) {
     combined.extend(albums.into_iter().map(to_item));
     state.set_albums(ModelRc::new(VecModel::from(combined)));
     state.set_total(total as i32);
+    state.set_has_more(has_more);
     state.set_load_more_loading(false);
     derive_releases(window);
 }
@@ -350,6 +445,7 @@ pub fn reset_label(window: &AppWindow) {
     state.set_visible(ModelRc::new(VecModel::from(Vec::<AlbumCardItem>::new())));
     state.set_grouped(ModelRc::new(VecModel::from(Vec::<DiscoverSection>::new())));
     state.set_total(0);
+    state.set_has_more(false);
     state.set_loading(true);
     state.set_load_more_loading(false);
     // Reset the toolbar to defaults for the fresh label.

@@ -1158,6 +1158,10 @@ export global LabelState {
     in property <[AlbumCardItem]> albums: [];
     in property <[AlbumCardItem]> visible: [];
     in property <int> total: 0;
+    // Whether the catalog has more pages to fetch (drives Load more). The
+    // /label/getAlbums endpoint caps each page well below the full catalog,
+    // so this is the reliable signal — `total` is often unset/underset.
+    in property <bool> has-more: false;
     in property <bool> loading: false;
     in property <bool> load-more-loading: false;
     // "grid" | "list" — the view toggle (mirrors DiscoverBrowseView).

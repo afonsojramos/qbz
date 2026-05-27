@@ -280,6 +280,23 @@ pub struct Album {
     pub hires_streamable: bool,
     pub maximum_sampling_rate: Option<f64>,
     pub maximum_bit_depth: Option<u32>,
+    /// V2 nested quality block. The modern album shape returned by
+    /// `/label/getAlbums` (DiscographyAlbumDto) and `/discover`-style items
+    /// nests quality here; preferred over the flat `maximum_*` fields.
+    #[serde(default)]
+    pub audio_info: Option<DiscoverAudioInfo>,
+    /// V2 nested release dates (`{original, download, stream}`); preferred
+    /// over the flat `release_date_original` when present.
+    #[serde(default)]
+    pub dates: Option<DiscoverAlbumDates>,
+    /// The V2 wire spells the album track count `track_count` (no trailing
+    /// `s`); the flat shape uses `tracks_count`.
+    #[serde(default)]
+    pub track_count: Option<u32>,
+    /// Explicit release type when provided ("album" | "ep" | "single" |
+    /// "live" | "compilation" | ...).
+    #[serde(default)]
+    pub release_type: Option<String>,
     #[serde(default)]
     pub tracks: Option<TracksContainer>,
     /// Universal Product Code for the album

@@ -2093,6 +2093,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle.clone(),
                     id.clone(),
                 ),
+                ("album", "favorite") => {
+                    // Add the album to the user's favorites. The album cards
+                    // (grid hover heart + the "…" menu) all bubble this; the
+                    // shared component means one handler covers the app.
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let album_id = id.clone();
+                    handle.spawn(async move {
+                        match runtime.core().add_favorite("album", &album_id).await {
+                            Ok(()) => {
+                                crate::toast::success_weak(&weak, "Added to favorites");
+                            }
+                            Err(e) => {
+                                log::error!("[qbz-slint] favorite album failed: {e}");
+                                crate::toast::error_weak(&weak, "Couldn't add to favorites");
+                            }
+                        }
+                    });
+                }
                 ("track", "play-next") => {
                     if let Ok(track_id) = id.parse::<u64>() {
                         playback::play_track_next(
@@ -3048,7 +3067,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let image_cache = image_cache.clone();
                 handle.spawn(async move {
                     match label::load_more_albums(&runtime, label_id, offset).await {
-                        Ok((data, total)) => {
+                        Ok((data, total, has_more)) => {
                             let jobs: Vec<artwork::ArtworkJob> = data
                                 .iter()
                                 .enumerate()
@@ -3061,7 +3080,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 })
                                 .collect();
                             let _ = weak.upgrade_in_event_loop(move |w| {
-                                label::append_albums(&w, data, total);
+                                label::append_albums(&w, data, total, has_more);
                             });
                             artwork::spawn_loads(jobs, weak, image_cache);
                         }
