@@ -62,8 +62,10 @@ export component QbzSelect inherits Rectangle {
 
     width: root.menu-width;
     height: root.sm ? 30px : 34px;
-    border-radius: Radius.sm;
-    border-width: 1px;
+    // sm matches the favorites toolbar buttons (6px, no outline); the
+    // standard size keeps the settings-style bordered look.
+    border-radius: root.sm ? 6px : Radius.sm;
+    border-width: root.sm ? 0px : 1px;
     border-color: Theme.border-subtle;
     background: ta.has-hover && root.enabled ? Theme.surface-hover : Theme.surface-elevated;
     opacity: root.enabled ? 1.0 : 0.4;
@@ -77,7 +79,7 @@ export component QbzSelect inherits Rectangle {
                 ? root.options[root.current-index]
                 : "";
             color: Theme.text-primary;
-            font-size: Typography.body;
+            font-size: root.sm ? 12px : Typography.body;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;

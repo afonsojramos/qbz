@@ -23,8 +23,10 @@ export component ToggleButton inherits Rectangle {
         source: root.icon;
         width: root.sm ? 15px : 17px;
         height: root.sm ? 15px : 17px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        // Snap the centered position to whole pixels so the icon stays
+        // crisp (same treatment as the HeaderBar / QueueSidebar icons).
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.active ? Theme.text-primary : Theme.text-muted;
     }
 

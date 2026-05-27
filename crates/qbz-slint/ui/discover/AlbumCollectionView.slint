@@ -65,9 +65,13 @@ export component AlbumCollectionView inherits VerticalLayout {
 
     spacing: 0px;
 
-    // --- Grouped (sections; always grid within a section) --------------
+    // --- Grouped (sections) — each section follows the grid/list mode --
     if root.is-grouped && root.grouped.length > 0: VerticalLayout {
         spacing: 0px;
+        // In list mode the column header sits once above all sections.
+        if root.view-mode == "list": AlbumListHeader {
+            show-source: root.show-source;
+        }
         for section[s] in root.grouped: VerticalLayout {
             spacing: 12px;
             if s > 0: Rectangle { height: 24px; }
@@ -77,7 +81,27 @@ export component AlbumCollectionView inherits VerticalLayout {
                 font-size: Typography.heading;
                 font-weight: Typography.semibold;
             }
-            AlbumGrid {
+            // List view: rows for this section.
+            if root.view-mode == "list": VerticalLayout {
+                spacing: root.list-row-gap;
+                for album[i] in section.albums: AlbumListRow {
+                    album: album;
+                    index: i;
+                    show-source: root.show-source;
+                    clicked(id) => {
+                        root.open-album(id);
+                    }
+                    media-action(kind, id, action) => {
+                        if (kind == "artist") {
+                            root.open-artist(id);
+                        } else {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                }
+            }
+            // Grid view: a card grid for this section.
+            if root.view-mode != "list": AlbumGrid {
                 albums: section.albums;
                 card-width: root.card-width;
                 card-height: root.card-height;
