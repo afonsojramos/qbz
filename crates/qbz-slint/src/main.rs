@@ -4301,6 +4301,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        // Group the favorite albums (off / alpha / artist).
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_albums_set_group(move |g| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<FavoritesState>().set_albums_group_mode(g);
+                    favorites::derive_albums(&w);
+                }
+            });
+    }
+    {
         // Play a random album from the visible favorites set.
         let weak = window.as_weak();
         window

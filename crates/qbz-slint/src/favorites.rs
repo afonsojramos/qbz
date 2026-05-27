@@ -8,6 +8,7 @@
 //! relevant branch into typed qbz-models items and maps them to the
 //! Slint row/card structs.
 
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use qbz_app::shell::AppRuntime;
@@ -19,8 +20,8 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use crate::album_map::{self, map_album, to_item, AlbumCard};
 use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::{
-    AlbumCardItem, AppWindow, FavoriteArtistItem, FavoriteLabelItem, FavoritePlaylistItem,
-    FavoritesState, TrackItem,
+    AlbumCardItem, AppWindow, DiscoverSection, FavoriteArtistItem, FavoriteLabelItem,
+    FavoritePlaylistItem, FavoritesState, TrackItem,
 };
 
 /// Page size — matches Tauri's FAVORITES_PAGE_SIZE. We fetch one
@@ -363,11 +364,14 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
             // (what the grid/list renders) shares it until a search/sort
             // forks it, so artwork stays live.
             let model = ModelRc::new(VecModel::from(cards));
+            let n = model.row_count() as i32;
             state.set_albums(model.clone());
             state.set_albums_visible(model);
             state.set_albums_total(total as i32);
+            state.set_albums_shown(n);
             state.set_albums_search("".into());
             state.set_albums_sort_by("default".into());
+            state.set_albums_group_mode("off".into());
         }
         FavData::Artists { items, total } => {
             let cards: Vec<FavoriteArtistItem> = items
@@ -472,11 +476,19 @@ pub fn derive_albums(window: &AppWindow) {
     let query_owned = state.get_albums_search().to_lowercase();
     let query = query_owned.trim();
     let sort = state.get_albums_sort_by().to_string();
+    let group = state.get_albums_group_mode().to_string();
     let all = state.get_albums();
-    if query.is_empty() && sort == "default" {
+    let empty_sections = || ModelRc::new(VecModel::from(Vec::<DiscoverSection>::new()));
+
+    // Fast path: no filter, default order, no grouping -> share full model.
+    if query.is_empty() && sort == "default" && group == "off" {
+        let n = all.row_count() as i32;
         state.set_albums_visible(all);
+        state.set_albums_grouped(empty_sections());
+        state.set_albums_shown(n);
         return;
     }
+
     let mut filtered: Vec<AlbumCardItem> = (0..all.row_count())
         .filter_map(|i| all.row_data(i))
         .filter(|a| {
@@ -486,7 +498,59 @@ pub fn derive_albums(window: &AppWindow) {
         })
         .collect();
     album_map::sort_album_items(&mut filtered, &sort);
-    state.set_albums_visible(ModelRc::new(VecModel::from(filtered)));
+    state.set_albums_shown(filtered.len() as i32);
+
+    if group == "off" {
+        state.set_albums_visible(ModelRc::new(VecModel::from(filtered)));
+        state.set_albums_grouped(empty_sections());
+        return;
+    }
+
+    // Grouped: bucket by artist name, or by the title's first letter
+    // (# bucket for non-alphabetic), sections ordered alphabetically.
+    let mut map: Vec<(String, Vec<AlbumCardItem>)> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for item in filtered {
+        let key = if group == "artist" {
+            let a = item.artist.to_string();
+            if a.is_empty() {
+                "Unknown".to_string()
+            } else {
+                a
+            }
+        } else {
+            album_alpha_key(item.title.as_str())
+        };
+        let idx = *index.entry(key.clone()).or_insert_with(|| {
+            map.push((key.clone(), Vec::new()));
+            map.len() - 1
+        });
+        map[idx].1.push(item);
+    }
+    map.sort_by(|(a, _), (b, _)| match (a == "#", b == "#") {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.to_lowercase().cmp(&b.to_lowercase()),
+    });
+    let sections: Vec<DiscoverSection> = map
+        .into_iter()
+        .map(|(key, items)| DiscoverSection {
+            title: key.into(),
+            endpoint: "".into(),
+            albums: ModelRc::new(VecModel::from(items)),
+        })
+        .collect();
+    state.set_albums_grouped(ModelRc::new(VecModel::from(sections)));
+    state.set_albums_visible(ModelRc::new(VecModel::from(Vec::<AlbumCardItem>::new())));
+}
+
+/// First-letter bucket key for alpha grouping (# for non-alphabetic).
+fn album_alpha_key(title: &str) -> String {
+    match title.trim().chars().next() {
+        Some(c) if c.is_ascii_alphabetic() => c.to_ascii_uppercase().to_string(),
+        Some(c) if c.is_alphabetic() => c.to_uppercase().to_string(),
+        _ => "#".to_string(),
+    }
 }
 
 /// A random album id from the currently-visible set (Shuffle / random).

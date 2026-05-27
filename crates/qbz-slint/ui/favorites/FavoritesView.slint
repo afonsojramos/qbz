@@ -486,7 +486,7 @@ export component FavoritesView inherits Rectangle {
                         alignment: center;
                         horizontal-stretch: 1;
                         Text {
-                            text: FavoritesState.albums-visible.length
+                            text: FavoritesState.albums-shown
                                 + (FavoritesState.albums-search != ""
                                     ? " / " + FavoritesState.albums.length
                                     : "")
@@ -502,6 +502,24 @@ export component FavoritesView inherits Rectangle {
                             query <=> FavoritesState.albums-search;
                             edited(q) => {
                                 FavoritesActions.albums-search(q);
+                            }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        QbzSelect {
+                            menu-width: 150px;
+                            options: [
+                                @tr("Group: Off"),
+                                @tr("Group: A-Z"),
+                                @tr("Group: Artist"),
+                            ];
+                            current-index: FavoritesState.albums-group-mode == "off" ? 0
+                                : FavoritesState.albums-group-mode == "alpha" ? 1
+                                : 2;
+                            selected(i) => {
+                                FavoritesActions.albums-set-group(
+                                    i == 0 ? "off" : i == 1 ? "alpha" : "artist");
                             }
                         }
                     }
@@ -563,7 +581,7 @@ export component FavoritesView inherits Rectangle {
                     font-size: Typography.body;
                 }
                 if FavoritesState.albums.length > 0
-                    && FavoritesState.albums-visible.length == 0: Text {
+                    && FavoritesState.albums-shown == 0: Text {
                     text: @tr("No albums match your search.");
                     color: Theme.text-muted;
                     font-size: Typography.body;
@@ -571,8 +589,9 @@ export component FavoritesView inherits Rectangle {
 
                 AlbumCollectionView {
                     albums: FavoritesState.albums-visible;
+                    grouped: FavoritesState.albums-grouped;
                     view-mode: FavoritesState.albums-view-mode;
-                    is-grouped: false;
+                    is-grouped: FavoritesState.albums-group-mode != "off";
                     show-source: false;
                     open-album(id) => {
                         root.open-album(id);
