@@ -765,6 +765,24 @@ pub fn selected_ids(window: &AppWindow) -> Vec<String> {
         .collect()
 }
 
+/// The selected favorite tracks as full Track objects (for bulk enqueue),
+/// in favorites order.
+pub fn selected_tracks(window: &AppWindow) -> Vec<Track> {
+    let ids = selected_ids(window);
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    FAV_CURRENT
+        .lock()
+        .map(|c| {
+            c.iter()
+                .filter(|t| ids.contains(&t.id.to_string()))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn reset_loading(window: &AppWindow) {
     let state = window.global::<FavoritesState>();
     state.set_loading(true);

@@ -18,6 +18,18 @@ pub struct PickPlaylist {
 pub fn open(window: &AppWindow, track_id: &str) {
     let state = window.global::<PlaylistPickerState>();
     state.set_track_id(track_id.into());
+    state.set_track_ids(ModelRc::new(VecModel::from(Vec::<slint::SharedString>::new())));
+    state.set_playlists(ModelRc::new(VecModel::from(Vec::<PlaylistPickItem>::new())));
+    state.set_loading(true);
+    state.set_open(true);
+}
+
+/// Open the picker for a batch of track ids (favorites bulk add). UI thread.
+pub fn open_multi(window: &AppWindow, ids: &[String]) {
+    let state = window.global::<PlaylistPickerState>();
+    state.set_track_id("".into());
+    let model: Vec<slint::SharedString> = ids.iter().map(|s| s.clone().into()).collect();
+    state.set_track_ids(ModelRc::new(VecModel::from(model)));
     state.set_playlists(ModelRc::new(VecModel::from(Vec::<PlaylistPickItem>::new())));
     state.set_loading(true);
     state.set_open(true);

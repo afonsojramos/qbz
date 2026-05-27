@@ -3586,16 +3586,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let Some(w) = weak.upgrade() else {
                     return;
                 };
-                let track_id = w.global::<PlaylistPickerState>().get_track_id().to_string();
-                w.global::<PlaylistPickerState>().set_open(false);
-                let (Ok(pid), Ok(tid)) =
-                    (playlist_id.parse::<u64>(), track_id.parse::<u64>())
-                else {
+                let picker = w.global::<PlaylistPickerState>();
+                // Bulk add (favorites) carries track-ids; single add carries
+                // track-id.
+                let ids_model = picker.get_track_ids();
+                let mut ids: Vec<u64> = (0..ids_model.row_count())
+                    .filter_map(|i| ids_model.row_data(i))
+                    .filter_map(|s| s.parse::<u64>().ok())
+                    .collect();
+                if ids.is_empty() {
+                    if let Ok(tid) = picker.get_track_id().parse::<u64>() {
+                        ids.push(tid);
+                    }
+                }
+                picker.set_open(false);
+                let (Ok(pid), false) = (playlist_id.parse::<u64>(), ids.is_empty()) else {
                     return;
                 };
                 let runtime = runtime.clone();
                 handle.spawn(async move {
-                    if let Err(e) = runtime.core().add_tracks_to_playlist(pid, &[tid]).await {
+                    if let Err(e) = runtime.core().add_tracks_to_playlist(pid, &ids).await {
                         log::error!("[qbz-slint] add to playlist failed: {e}");
                     }
                 });
@@ -4563,6 +4573,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match action.as_str() {
                     "select-all" => favorites::select_all(&w),
                     "clear" => favorites::clear_selection(&w),
+                    "queue" => {
+                        let tracks = favorites::selected_tracks(&w);
+                        playback::enqueue_tracks(runtime.clone(), handle.clone(), tracks, false);
+                    }
+                    "play-next" => {
+                        let tracks = favorites::selected_tracks(&w);
+                        playback::enqueue_tracks(runtime.clone(), handle.clone(), tracks, true);
+                    }
+                    "add-to-playlist" => {
+                        let ids = favorites::selected_ids(&w);
+                        if !ids.is_empty() {
+                            playlist_picker::open_multi(&w, &ids);
+                            let runtime = runtime.clone();
+                            let weak = weak.clone();
+                            handle.spawn(async move {
+                                let playlists = playlist_picker::load(&runtime).await;
+                                let _ = weak.upgrade_in_event_loop(move |w| {
+                                    playlist_picker::apply(&w, playlists);
+                                });
+                            });
+                        }
+                    }
                     "remove-selected" => {
                         let ids = favorites::selected_ids(&w);
                         if ids.is_empty() {

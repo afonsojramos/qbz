@@ -842,6 +842,54 @@ pub fn play_track_next(
     });
 }
 
+/// Append (or insert-next) a batch of already-fetched tracks to the queue
+/// without re-fetching them. Used by the favorites bulk bar.
+pub fn enqueue_tracks(
+    runtime: Runtime,
+    handle: tokio::runtime::Handle,
+    tracks: Vec<qbz_models::Track>,
+    next: bool,
+) {
+    if tracks.is_empty() {
+        return;
+    }
+    handle.spawn(async move {
+        // For "play next" each insert lands right after the current track,
+        // so reverse the batch to preserve the selection's order.
+        let ordered: Vec<qbz_models::Track> = if next {
+            tracks.into_iter().rev().collect()
+        } else {
+            tracks
+        };
+        for track in ordered {
+            let (album_id, album_title, album_artwork) = track
+                .album
+                .as_ref()
+                .map(|a| {
+                    (
+                        a.id.clone(),
+                        a.title.clone(),
+                        a.image.best().cloned().unwrap_or_default(),
+                    )
+                })
+                .unwrap_or_default();
+            let album_artist = track
+                .performer
+                .as_ref()
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            let qt =
+                make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork);
+            if next {
+                runtime.core().add_track_next(qt).await;
+            } else {
+                runtime.core().add_track(qt).await;
+            }
+        }
+        refresh_sidebar(false);
+    });
+}
+
 /// Toggle play / pause on the live player.
 pub fn toggle_play_pause(runtime: Runtime, handle: tokio::runtime::Handle) {
     handle.spawn(async move {

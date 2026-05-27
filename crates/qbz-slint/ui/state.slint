@@ -1411,6 +1411,7 @@ export struct PlaylistPickItem {
 export global PlaylistPickerState {
     in-out property <bool> open: false;
     in property <string> track-id;
+    in property <[string]> track-ids: []; // bulk add (favorites multi-select)
     in property <[PlaylistPickItem]> playlists: [];
     in property <bool> loading: false;
 }
