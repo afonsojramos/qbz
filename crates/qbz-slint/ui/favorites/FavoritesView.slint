@@ -185,59 +185,64 @@ component FavPlaylistCard inherits Rectangle {
     }
 }
 
-component FavLabelRow inherits Rectangle {
+// One label tile in the Favorites > Labels grid — a circular cover (or
+// an indigo->violet gradient + disc placeholder), name, and album count.
+// Mirrors FavArtistCard; the gradient placeholder is the 1:1 match with
+// Tauri's label card.
+component FavLabelCard inherits Rectangle {
     in property <FavoriteLabelItem> item;
-    in property <int> index;
     callback clicked(string, string);
 
-    height: 52px;
-    border-radius: 8px;
-    background: ta.has-hover
-        ? #ffffff16
-        : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
+    width: 160px;
+    height: 200px;
 
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 12px;
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 32px;
-                height: 32px;
-                border-radius: 6px;
-                background: Theme.surface-elevated;
-                QbzIcon {
-                    source: @image-url("../assets/icons/disc-3.svg");
-                    width: 18px;
-                    height: 18px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    tint: Theme.text-muted;
+    VerticalLayout {
+        spacing: 10px;
+        Rectangle {
+            width: 140px;
+            height: 140px;
+            x: (parent.width - self.width) / 2;
+            border-radius: 70px;
+            background: root.item.image-url == ""
+                ? @linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)
+                : Theme.surface-elevated;
+            clip: true;
+            Image {
+                width: 100%;
+                height: 100%;
+                source: root.item.image;
+                image-fit: cover;
+            }
+            if root.item.image-url == "": QbzIcon {
+                source: @image-url("../assets/icons/disc-3.svg");
+                width: 44px;
+                height: 44px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                tint: #ffffff;
+            }
+            ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.clicked(root.item.id, root.item.name);
                 }
             }
         }
-        VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 1;
-            Text {
-                text: root.item.name;
-                color: Theme.text-primary;
-                font-size: Typography.body;
-                font-weight: Typography.medium;
-                overflow: elide;
-            }
-            if root.item.albums-line != "": Text {
-                text: root.item.albums-line;
-                color: Theme.text-muted;
-                font-size: Typography.legal;
-            }
+        Text {
+            text: root.item.name;
+            color: Theme.text-primary;
+            font-size: Typography.body;
+            font-weight: Typography.medium;
+            horizontal-alignment: center;
+            overflow: elide;
+            width: 160px;
         }
-    }
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked(root.item.id, root.item.name);
+        if root.item.albums-line != "": Text {
+            text: root.item.albums-line;
+            color: Theme.text-muted;
+            font-size: Typography.legal;
+            horizontal-alignment: center;
+            width: 160px;
         }
     }
 }
@@ -894,16 +899,29 @@ export component FavoritesView inherits Rectangle {
                         }
 
                         // --- Labels tab ---
-                        if FavoritesState.active-tab == "labels": VerticalLayout {
-                            spacing: 0px;
+                        if FavoritesState.active-tab == "labels": labels-grid := Rectangle {
+                            property <int> columns: Math.max(
+                                1,
+                                Math.floor((self.width + root.gap) / (root.artist-w + root.gap)));
+                            property <int> rows: Math.ceil(FavoritesState.labels-visible.length / self.columns);
+                            height: self.rows > 0
+                                ? self.rows * root.artist-h + Math.max(0, self.rows - 1) * root.gap
+                                : 0px;
                             if FavoritesState.labels.length == 0: Text {
                                 text: @tr("No favorite labels yet.");
                                 color: Theme.text-muted;
                                 font-size: Typography.body;
                             }
-                            for label[i] in FavoritesState.labels: FavLabelRow {
+                            if FavoritesState.labels.length > 0
+                                && FavoritesState.labels-visible.length == 0: Text {
+                                text: @tr("No labels match your search.");
+                                color: Theme.text-muted;
+                                font-size: Typography.body;
+                            }
+                            for label[i] in FavoritesState.labels-visible: FavLabelCard {
+                                x: Math.mod(i, labels-grid.columns) * (root.artist-w + root.gap);
+                                y: Math.floor(i / labels-grid.columns) * (root.artist-h + root.gap);
                                 item: label;
-                                index: i;
                                 clicked(id, name) => { FavoritesActions.open-label(id, name); }
                             }
                         }
