@@ -18,6 +18,7 @@ import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { ToggleButton } from "../primitives/ToggleButton.slint";
 
 // Search field — a leading magnifier, the input, and a trailing X that
 // clears (mirrors Tauri's .search-wrapper).
@@ -134,35 +135,6 @@ component GenreButton inherits Rectangle {
             font-weight: root.active ? Typography.medium : Typography.regular;
             vertical-alignment: center;
         }
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
-
-// One half of the grid/list segmented toggle.
-component ToggleButton inherits Rectangle {
-    in property <image> icon;
-    in property <bool> active: false;
-    callback clicked();
-
-    width: 34px;
-    height: 34px;
-    background: root.active
-        ? Theme.surface-hover
-        : (ta.has-hover ? Theme.surface-elevated : transparent);
-
-    QbzIcon {
-        source: root.icon;
-        width: 17px;
-        height: 17px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        tint: root.active ? Theme.text-primary : Theme.text-muted;
     }
 
     ta := TouchArea {

@@ -18,37 +18,8 @@ import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
+import { ToggleButton } from "../primitives/ToggleButton.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
-
-// One half of a segmented toggle (grid/list) or a standalone toolbar
-// toggle (group / Hi-Res). Identical surface to DiscoverBrowseView's.
-component ToggleButton inherits Rectangle {
-    in property <image> icon;
-    in property <bool> active: false;
-    callback clicked();
-
-    width: 34px;
-    height: 34px;
-    background: root.active
-        ? Theme.surface-hover
-        : (ta.has-hover ? Theme.surface-elevated : transparent);
-
-    QbzIcon {
-        source: root.icon;
-        width: 17px;
-        height: 17px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        tint: root.active ? Theme.text-primary : Theme.text-muted;
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
 
 // Wrapping album grid over a model — shared by the flat view and each
 // group-by-artist section so the column math lives in one place.

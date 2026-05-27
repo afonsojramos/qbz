@@ -1,0 +1,35 @@
+// One half of a segmented toggle (grid/list) or a standalone toolbar
+// toggle (group-by / Hi-Res / filter). Shared by every album-toolbar
+// view (Discover Browse, Label Releases, Favorites). 34px square icon
+// button: highlighted when active, surface-elevated on hover.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { QbzIcon } from "QbzIcon.slint";
+
+export component ToggleButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active: false;
+    callback clicked();
+
+    width: 34px;
+    height: 34px;
+    background: root.active
+        ? Theme.surface-hover
+        : (ta.has-hover ? Theme.surface-elevated : transparent);
+
+    QbzIcon {
+        source: root.icon;
+        width: 17px;
+        height: 17px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: root.active ? Theme.text-primary : Theme.text-muted;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
