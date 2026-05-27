@@ -851,6 +851,24 @@ pub fn remove_album_row(window: &AppWindow, id: &str) {
     }
 }
 
+/// Remove a playlist from the Library (favorites) source after a local
+/// un-favorite, then re-derive the rendered model + update the tab badge.
+/// Following is untouched (a followed playlist stays followed).
+pub fn remove_playlist_row(window: &AppWindow, id: &str) {
+    let state = window.global::<FavoritesState>();
+    let model = state.get_playlists_favorites();
+    if let Some(vm) = model.as_any().downcast_ref::<VecModel<SearchPlaylistItem>>() {
+        for i in 0..vm.row_count() {
+            if vm.row_data(i).map(|p| p.id == id).unwrap_or(false) {
+                vm.remove(i);
+                break;
+            }
+        }
+    }
+    state.set_playlists_total(model.row_count() as i32);
+    derive_playlists(window);
+}
+
 // ---- Artwork propagation -----------------------------------------------
 // The artwork pipeline writes a decoded cover into the SOURCE model
 // (`albums` / `tracks`) by index, but the views render the derived

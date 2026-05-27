@@ -4315,6 +4315,99 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        // Switch the Playlists sub-tab (Library / Following) + re-derive.
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_playlists_set_sub_tab(move |sub| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<FavoritesState>().set_playlists_sub_tab(sub);
+                    favorites::derive_playlists(&w);
+                }
+            });
+    }
+    {
+        // Local search over the loaded favorite playlists (name | owner).
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_search_playlists(move |q| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<FavoritesState>().set_playlists_search(q);
+                    favorites::derive_playlists(&w);
+                }
+            });
+    }
+    {
+        // Playlist card actions: play / play-next / queue / share / favorite.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<FavoritesActions>()
+            .on_playlist_action(move |id, action| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                match action.as_str() {
+                    "share" => share::copy_to_clipboard(share::qobuz_playlist_url(&id)),
+                    "favorite" => {
+                        // Library sub-tab: un-favorite in place (remove the
+                        // local favorite + drop the row). Following sub-tab:
+                        // add to the local Library (per user decision).
+                        let library = w
+                            .global::<FavoritesState>()
+                            .get_playlists_sub_tab()
+                            .to_string()
+                            != "following";
+                        if let Ok(pid) = id.parse::<u64>() {
+                            let fav = !library;
+                            handle.spawn_blocking(move || {
+                                crate::library_db::with_db(|db| db.set_playlist_favorite(pid, fav));
+                            });
+                        }
+                        if library {
+                            favorites::remove_playlist_row(&w, &id);
+                        }
+                    }
+                    act => {
+                        // play / play-next / queue: fetch the playlist's tracks,
+                        // then play or enqueue.
+                        let Ok(pid) = id.parse::<u64>() else {
+                            return;
+                        };
+                        let runtime = runtime.clone();
+                        let weak2 = weak.clone();
+                        let handle2 = handle.clone();
+                        let act = act.to_string();
+                        handle.spawn(async move {
+                            let tracks = match runtime.core().get_playlist(pid).await {
+                                Ok(p) => p.tracks.map(|t| t.items).unwrap_or_default(),
+                                Err(e) => {
+                                    log::error!("[qbz-slint] playlist {pid} load failed: {e}");
+                                    return;
+                                }
+                            };
+                            if tracks.is_empty() {
+                                return;
+                            }
+                            match act.as_str() {
+                                "play-next" => {
+                                    playback::enqueue_tracks(runtime, handle2, tracks, true)
+                                }
+                                "queue" => {
+                                    playback::enqueue_tracks(runtime, handle2, tracks, false)
+                                }
+                                _ => {
+                                    playback::play_tracks(runtime, weak2, handle2, tracks, 0);
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+    }
+    {
         let weak = window.as_weak();
         window
             .global::<FavoritesActions>()
