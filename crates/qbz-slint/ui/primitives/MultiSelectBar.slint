@@ -1,0 +1,80 @@
+// Multi-select bulk action bar — a "N selected" count label plus a row
+// of action buttons driven by a [BulkAction] model, so the bar's chrome
+// lives in one place. Shared by PlaylistView and the Favorites tracks
+// tab. Emits the chosen action's id via `action(id)`; the surrounding
+// view maps that id to a command. ADR-008: these are bordered/hover
+// buttons, not pills.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import { BulkAction } from "../state.slint";
+
+// One action button — borderless hover for a normal action, red-bordered
+// for a danger action, dimmed + non-interactive when it needs a selection
+// and there is none.
+component BulkButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger: false;
+    in property <bool> enabled-when: true;
+    callback clicked();
+
+    width: lbl.preferred-width + 24px;
+    height: 30px;
+    border-radius: Radius.sm;
+    opacity: root.enabled-when ? 1.0 : 0.5;
+    background: root.danger
+        ? (ta.has-hover ? #ef444433 : transparent)
+        : (ta.has-hover ? Theme.surface-hover : transparent);
+    border-width: root.danger ? 1px : 0px;
+    border-color: #ef4444;
+
+    lbl := Text {
+        text: root.label;
+        color: root.danger ? #ef4444 : Theme.text-secondary;
+        font-size: Typography.legal;
+        font-weight: root.danger ? Typography.medium : Typography.regular;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: root.enabled-when ? pointer : default;
+        clicked => {
+            if (root.enabled-when) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+export component MultiSelectBar inherits Rectangle {
+    in property <int> selected-count: 0;
+    in property <[BulkAction]> actions;
+    callback action(string);
+
+    height: 44px;
+    border-radius: 8px;
+    background: Theme.surface-elevated;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 10px;
+        spacing: 12px;
+        Text {
+            text: root.selected-count + " " + @tr("selected");
+            color: Theme.text-secondary;
+            font-size: Typography.body;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        for act in root.actions: BulkButton {
+            label: act.label;
+            danger: act.danger;
+            enabled-when: !act.needs-selection || root.selected-count > 0;
+            clicked => {
+                root.action(act.id);
+            }
+        }
+    }
+}

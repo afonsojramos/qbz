@@ -27,6 +27,14 @@ export struct AlbumCardItem {
     plain-year: string,    // "1973" — bare year for the list-row YEAR column
 }
 
+// One button in the shared multi-select bulk bar (MultiSelectBar).
+export struct BulkAction {
+    id: string,             // emitted verbatim via MultiSelectBar.action(id)
+    label: string,          // already-translated button label
+    danger: bool,           // red-bordered destructive button (e.g. Remove)
+    needs-selection: bool,  // dimmed + disabled while nothing is selected
+}
+
 export struct DiscoverSection {
     title: string,
     // Discover endpoint path this section maps to (e.g. "/discover/newReleases").
