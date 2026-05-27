@@ -27,6 +27,7 @@ mod discover_browse;
 mod discovery_dismiss;
 mod fav_cache;
 mod favorites;
+mod favorites_prefs;
 mod foryou;
 mod genre_filter;
 mod home;
@@ -784,6 +785,9 @@ fn navigate_favorites(
             // toolbar genre button shows the favorites selection count.
             genre_filter::set_context("favorites");
             genre_filter::apply_state(&w);
+            // Restore persisted toolbar choices before the data applies +
+            // derives, so the loaded view honors them.
+            favorites_prefs::load(&w);
         });
         match favorites::load_favorites(&runtime, tab).await {
             Ok(data) => {
@@ -4346,6 +4350,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = weak.upgrade() {
                     w.global::<FavoritesState>().set_albums_sort_by(s);
                     favorites::derive_albums(&w);
+                    favorites_prefs::save(&w);
+                }
+            });
+    }
+    {
+        // Albums grid/list view toggle (persisted).
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_albums_set_view(move |v| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<FavoritesState>().set_albums_view_mode(v);
+                    favorites_prefs::save(&w);
                 }
             });
     }
@@ -4358,6 +4375,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = weak.upgrade() {
                     w.global::<FavoritesState>().set_albums_group_mode(g);
                     favorites::derive_albums(&w);
+                    favorites_prefs::save(&w);
                 }
             });
     }
@@ -4480,6 +4498,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = weak.upgrade() {
                     w.global::<FavoritesState>().set_tracks_group_mode(g);
                     favorites::derive_tracks(&w);
+                    favorites_prefs::save(&w);
                 }
             });
     }

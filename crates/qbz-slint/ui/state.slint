@@ -1502,6 +1502,7 @@ export global FavoritesActions {
     callback bulk-action(string /* select-all | remove-selected | clear */);
     callback album-action(string /* album id */, string /* action */);
     callback albums-search(string /* query */);
+    callback albums-set-view(string /* grid | list */);
     callback albums-set-sort(string /* sort key */);
     callback albums-set-group(string /* off | alpha | artist */);
     callback albums-shuffle();

@@ -681,14 +681,14 @@ export component FavoritesView inherits Rectangle {
                                     icon: @image-url("../assets/icons/layout-grid.svg");
                                     active: FavoritesState.albums-view-mode == "grid";
                                     clicked => {
-                                        FavoritesState.albums-view-mode = "grid";
+                                        FavoritesActions.albums-set-view("grid");
                                     }
                                 }
                                 ToggleButton {
                                     icon: @image-url("../assets/icons/list.svg");
                                     active: FavoritesState.albums-view-mode == "list";
                                     clicked => {
-                                        FavoritesState.albums-view-mode = "list";
+                                        FavoritesActions.albums-set-view("list");
                                     }
                                 }
                             }

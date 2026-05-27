@@ -367,6 +367,8 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
             state.set_tracks_visible(model);
             state.set_tracks_total(total as i32);
             state.set_tracks_search("".into());
+            // Apply the (persisted) group mode to the freshly loaded set.
+            derive_tracks(window);
         }
         FavData::Albums { items, total } => {
             // Everything in the Albums tab is a favorite -> filled heart.
@@ -388,8 +390,8 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
             state.set_albums_total(total as i32);
             state.set_albums_shown(n);
             state.set_albums_search("".into());
-            state.set_albums_sort_by("default".into());
-            state.set_albums_group_mode("off".into());
+            // Apply the (persisted) sort + group to the freshly loaded set.
+            derive_albums(window);
         }
         FavData::Artists { items, total } => {
             let cards: Vec<FavoriteArtistItem> = items
