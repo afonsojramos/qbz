@@ -15,6 +15,7 @@ import {
     TrackItem,
     FavoriteArtistItem,
     FavoriteLabelItem,
+    SearchPlaylistItem,
     DragState,
     GenreFilterState,
     GenreFilterActions,
@@ -30,6 +31,8 @@ import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { ToggleButton } from "../primitives/ToggleButton.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { ContextMenu } from "../primitives/ContextMenu.slint";
+import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
@@ -171,6 +174,150 @@ component PlaylistSubTab inherits Rectangle {
         mouse-cursor: pointer;
         clicked => {
             FavoritesActions.playlists-set-sub-tab(root.tab-id);
+        }
+    }
+}
+
+// Compact list row for the Favorites Playlists list view (Slint-better;
+// Tauri ships grid only). Thumb + name + owner·tracks + play + more-menu.
+component PlaylistListRow inherits Rectangle {
+    in property <SearchPlaylistItem> playlist;
+    in property <int> index;
+    callback media-action(string, string, string);
+    property <bool> row-hover: body-ta.has-hover || play-ta.has-hover || more-ta.has-hover;
+
+    height: 60px;
+    border-radius: 8px;
+    background: root.row-hover
+        ? #ffffff14
+        : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
+
+    // Full-row click target (behind the action buttons) -> open the playlist.
+    body-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.media-action("playlist", root.playlist.id, "open");
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: 6px;
+                background: Theme.surface-elevated;
+                clip: true;
+                Image {
+                    width: 100%;
+                    height: 100%;
+                    image-fit: cover;
+                    source: root.playlist.cover1;
+                }
+                if root.playlist.cover-count == 0: QbzIcon {
+                    source: @image-url("../assets/icons/list-music.svg");
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: Theme.text-muted;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.playlist.title;
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: Typography.medium;
+                overflow: elide;
+            }
+            Text {
+                text: root.playlist.subtitle;
+                color: Theme.text-muted;
+                font-size: Typography.legal;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            play-ta := TouchArea {
+                width: 30px;
+                height: 30px;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.media-action("playlist", root.playlist.id, "play");
+                }
+                QbzIcon {
+                    source: @image-url("../assets/icons/play-fill.svg");
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: root.row-hover ? Theme.text-primary : Theme.text-muted;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            more-ta := TouchArea {
+                width: 30px;
+                height: 30px;
+                mouse-cursor: pointer;
+                clicked => {
+                    row-menu.show();
+                }
+                QbzIcon {
+                    source: @image-url("../assets/icons/ellipsis.svg");
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: Theme.text-secondary;
+                }
+                row-menu := PopupWindow {
+                    x: -166px;
+                    y: 32px;
+                    width: 196px;
+                    height: 150px;
+                    ContextMenu {
+                        ContextMenuItem {
+                            icon: @image-url("../assets/icons/play.svg");
+                            label: @tr("Play");
+                            clicked => {
+                                root.media-action("playlist", root.playlist.id, "play");
+                            }
+                        }
+                        ContextMenuItem {
+                            icon: @image-url("../assets/icons/list-plus.svg");
+                            label: @tr("Play next");
+                            clicked => {
+                                root.media-action("playlist", root.playlist.id, "play-next");
+                            }
+                        }
+                        ContextMenuItem {
+                            icon: @image-url("../assets/icons/list-end.svg");
+                            label: @tr("Add to queue");
+                            clicked => {
+                                root.media-action("playlist", root.playlist.id, "queue");
+                            }
+                        }
+                        ContextMenuItem {
+                            icon: @image-url("../assets/icons/heart.svg");
+                            label: @tr("Favorite");
+                            clicked => {
+                                root.media-action("playlist", root.playlist.id, "favorite");
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -337,8 +484,11 @@ component FavGenreButton inherits Rectangle {
     }
 }
 
-// Grid/list segmented toggle (albums toolbar).
+// Grid/list segmented toggle. Parameterized so albums + playlists can both
+// drive it with their own view-mode state.
 component ViewToggle inherits Rectangle {
+    in property <string> view-mode;   // current "grid" | "list"
+    callback set-view(string);
     width: 60px;
     height: 30px;
     border-radius: 6px;
@@ -347,18 +497,18 @@ component ViewToggle inherits Rectangle {
     HorizontalLayout {
         ToggleButton {
             icon: @image-url("../assets/icons/layout-grid.svg");
-            active: FavoritesState.albums-view-mode == "grid";
+            active: root.view-mode == "grid";
             sm: true;
             clicked => {
-                FavoritesActions.albums-set-view("grid");
+                root.set-view("grid");
             }
         }
         ToggleButton {
             icon: @image-url("../assets/icons/list.svg");
-            active: FavoritesState.albums-view-mode == "list";
+            active: root.view-mode == "list";
             sm: true;
             clicked => {
-                FavoritesActions.albums-set-view("list");
+                root.set-view("list");
             }
         }
     }
@@ -601,7 +751,12 @@ export component FavoritesView inherits Rectangle {
                 }
                 VerticalLayout {
                     alignment: center;
-                    ViewToggle { }
+                    ViewToggle {
+                        view-mode: FavoritesState.albums-view-mode;
+                        set-view(v) => {
+                            FavoritesActions.albums-set-view(v);
+                        }
+                    }
                 }
             }
             if FavoritesState.active-tab == "labels"
@@ -631,6 +786,15 @@ export component FavoritesView inherits Rectangle {
                         query <=> FavoritesState.playlists-search;
                         edited(q) => {
                             FavoritesActions.search-playlists(q);
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    ViewToggle {
+                        view-mode: FavoritesState.playlists-view-mode;
+                        set-view(v) => {
+                            FavoritesActions.playlists-set-view(v);
                         }
                     }
                 }
@@ -933,7 +1097,7 @@ export component FavoritesView inherits Rectangle {
                                 color: Theme.text-muted;
                                 font-size: Typography.body;
                             }
-                            playlists-grid := Rectangle {
+                            if FavoritesState.playlists-view-mode != "list": playlists-grid := Rectangle {
                                 property <length> pl-w: 220px;
                                 property <length> pl-h: 266px;
                                 property <int> columns: Math.max(
@@ -948,6 +1112,20 @@ export component FavoritesView inherits Rectangle {
                                     y: Math.floor(i / playlists-grid.columns) * (playlists-grid.pl-h + root.gap);
                                     playlist: pl;
                                     body-opens: true;
+                                    media-action(k, id, a) => {
+                                        if (a == "open") {
+                                            FavoritesActions.open-playlist(id);
+                                        } else {
+                                            FavoritesActions.playlist-action(id, a);
+                                        }
+                                    }
+                                }
+                            }
+                            if FavoritesState.playlists-view-mode == "list": VerticalLayout {
+                                spacing: 2px;
+                                for pl[i] in FavoritesState.playlists-visible: PlaylistListRow {
+                                    playlist: pl;
+                                    index: i;
                                     media-action(k, id, a) => {
                                         if (a == "open") {
                                             FavoritesActions.open-playlist(id);
