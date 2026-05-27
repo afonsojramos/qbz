@@ -157,7 +157,7 @@ export component QbzSelect inherits Rectangle {
                             Text {
                                 text: opt;
                                 color: i == root.current-index ? Theme.accent : Theme.text-secondary;
-                                font-size: Typography.body;
+                                font-size: root.sm ? 12px : Typography.body;
                                 vertical-alignment: center;
                                 horizontal-stretch: 1;
                                 overflow: elide;
