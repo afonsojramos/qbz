@@ -85,6 +85,9 @@ pub enum ArtworkTarget {
     /// One collage cover slot (0-3) of a favorites playlist card. `following`
     /// picks the sub-tab source model (Following vs Library/favorites).
     FavPlaylistCover { following: bool, index: usize, slot: usize },
+    /// An album card in the favorites Artists sidepanel — section `section`
+    /// of `FavoritesState.selected-artist-sections`, album `index`.
+    FavoriteArtistAlbum { section: usize, index: usize },
     /// A card in ForYouState.release-watch.albums[index].
     ForYouReleaseWatch { index: usize },
     /// A card in ForYouState.recent-albums.albums[index].
@@ -562,6 +565,17 @@ fn apply_artwork(
                 model.set_row_data(index, item);
                 // Also reach the rendered (possibly search-filtered) model.
                 crate::favorites::set_playlist_cover(window, &id, slot, image);
+            }
+        }
+        ArtworkTarget::FavoriteArtistAlbum { section, index } => {
+            let sections = window
+                .global::<crate::FavoritesState>()
+                .get_selected_artist_sections();
+            if let Some(sec) = sections.row_data(section) {
+                if let Some(mut item) = sec.albums.row_data(index) {
+                    item.artwork = image;
+                    sec.albums.set_row_data(index, item);
+                }
             }
         }
         ArtworkTarget::ForYouReleaseWatch { index } => {

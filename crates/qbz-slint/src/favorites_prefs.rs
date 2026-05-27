@@ -24,6 +24,8 @@ struct Prefs {
     playlists_view: String,
     #[serde(default)]
     artists_group: bool,
+    #[serde(default = "d_grid")]
+    artists_view: String,
 }
 
 impl Default for Prefs {
@@ -35,6 +37,7 @@ impl Default for Prefs {
             tracks_group: d_off(),
             playlists_view: d_grid(),
             artists_group: false,
+            artists_view: d_grid(),
         }
     }
 }
@@ -73,6 +76,7 @@ pub fn load(window: &AppWindow) {
     st.set_tracks_group_mode(p.tracks_group.into());
     st.set_playlists_view_mode(p.playlists_view.into());
     st.set_artists_group_enabled(p.artists_group);
+    st.set_artists_view_mode(p.artists_view.into());
 }
 
 /// Persist the current toolbar choices read from `FavoritesState`.
@@ -88,6 +92,7 @@ pub fn save(window: &AppWindow) {
         tracks_group: st.get_tracks_group_mode().into(),
         playlists_view: st.get_playlists_view_mode().into(),
         artists_group: st.get_artists_group_enabled(),
+        artists_view: st.get_artists_view_mode().into(),
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);

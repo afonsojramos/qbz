@@ -440,7 +440,7 @@ fn mmss(secs: u32) -> String {
 // previous artist-local helper produced one long paragraph for
 // multi-paragraph biographies — gone with this refactor.
 
-fn card_to_item(card: CardData) -> AlbumCardItem {
+pub(crate) fn card_to_item(card: CardData) -> AlbumCardItem {
     // On the artist page the card subtitle slot should show the
     // release year — the artist is redundant since we're already on
     // their page. The AlbumCard reads `artist` for its subtitle line,
