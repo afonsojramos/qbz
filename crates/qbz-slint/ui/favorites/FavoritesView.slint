@@ -635,6 +635,19 @@ export component FavoritesView inherits Rectangle {
                     }
                 }
             }
+            if FavoritesState.active-tab == "artists"
+                && FavoritesState.artists-visible.length > 0: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/shuffle.svg");
+                        clicked => {
+                            FavoritesActions.artists-shuffle();
+                        }
+                    }
+                }
+            }
 
             Rectangle { horizontal-stretch: 1; }
 

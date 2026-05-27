@@ -4363,6 +4363,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        // Artists header Shuffle = open a random visible artist (random
+        // ARTIST, not a random album — matches Tauri).
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_artists_shuffle(move || {
+                if let Some(w) = weak.upgrade() {
+                    if let Some(id) = favorites::random_visible_artist(&w) {
+                        w.invoke_open_artist(id.into());
+                    }
+                }
+            });
+    }
+    {
         // Playlist card actions: play / play-next / queue / share / favorite.
         let runtime = app_runtime.clone();
         let weak = window.as_weak();

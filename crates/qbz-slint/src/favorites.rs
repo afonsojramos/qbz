@@ -809,6 +809,22 @@ pub fn random_visible_album(window: &AppWindow) -> Option<String> {
     model.row_data(idx).map(|a| a.id.to_string())
 }
 
+/// A random artist id from the currently-visible favorites set. Tauri's
+/// Artists header Shuffle opens a random ARTIST (not a random album).
+pub fn random_visible_artist(window: &AppWindow) -> Option<String> {
+    let model = window.global::<FavoritesState>().get_artists_visible();
+    let n = model.row_count();
+    if n == 0 {
+        return None;
+    }
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
+    let idx = (seed % n as u64) as usize;
+    model.row_data(idx).map(|a| a.id.to_string())
+}
+
 // ---- Un-favorite in place: fade (set `removing`) then remove -----------
 
 /// Flag the matching track row(s) as removing so they fade out.
