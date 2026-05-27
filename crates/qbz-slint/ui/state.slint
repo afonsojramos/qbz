@@ -1487,6 +1487,17 @@ export global FavoritesState {
     in property <int> albums-shown: 0; // count after filter (grouped or flat)
     in property <[FavoriteArtistItem]> artists: [];
     in property <[FavoritePlaylistItem]> playlists: [];
+    // Playlists has two internal sub-tabs (mirror Tauri favoritePlaylists /
+    // followingPlaylists), both rendered with the rich SearchPlaylistItem
+    // (4-cover collage). `playlists-visible` is the current sub-tab after the
+    // search filter (what the grid/list renders).
+    in property <[SearchPlaylistItem]> playlists-favorites: []; // Library (locally favorited)
+    in property <[SearchPlaylistItem]> playlists-following: []; // Qobuz-followed, not owned
+    in property <[SearchPlaylistItem]> playlists-visible: [];
+    in-out property <string> playlists-sub-tab: "favorites"; // "favorites" | "following" (transient)
+    in-out property <string> playlists-search: "";
+    in-out property <string> playlists-view-mode: "grid"; // "grid" | "list" (persisted)
+    in property <int> playlists-following-count: 0; // Following sub-tab badge
     in property <[FavoriteLabelItem]> labels: [];
     in property <[FavoriteLabelItem]> labels-visible: []; // after search filter (rendered)
     in-out property <string> labels-search: "";
@@ -1518,6 +1529,10 @@ export global FavoritesActions {
     callback album-action(string /* album id */, string /* action */);
     callback albums-search(string /* query */);
     callback search-labels(string /* query */);
+    callback playlists-set-sub-tab(string /* favorites | following */);
+    callback search-playlists(string /* query */);
+    callback playlists-set-view(string /* grid | list */);
+    callback playlist-action(string /* playlist id */, string /* play | play-next | queue | share | favorite */);
     callback albums-set-view(string /* grid | list */);
     callback albums-set-sort(string /* sort key */);
     callback albums-set-group(string /* off | alpha | artist */);
