@@ -630,7 +630,10 @@ pub fn derive_artists(window: &AppWindow) {
     let state = window.global::<FavoritesState>();
     let query_owned = state.get_artists_search().to_lowercase();
     let query = query_owned.trim();
-    let group = state.get_artists_group_enabled();
+    // The sidepanel left list is ALWAYS A-Z grouped (independent of the grid
+    // group toggle), so it shows letter headers + the alpha jump strip.
+    let group = state.get_artists_group_enabled()
+        || state.get_artists_view_mode().as_str() == "sidepanel";
     let all = state.get_artists();
 
     // Flat (search-filtered) model. Share `all` when no query so artwork

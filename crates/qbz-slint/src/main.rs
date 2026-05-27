@@ -4403,6 +4403,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if v == "grid" {
                         st.set_selected_artist_id("".into());
                     }
+                    // Rebuild grouped/alpha for the new mode (the sidepanel
+                    // left list is always grouped).
+                    favorites::derive_artists(&w);
                     favorites_prefs::save(&w);
                 }
             });
