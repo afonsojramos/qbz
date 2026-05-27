@@ -1,0 +1,137 @@
+// Album collection content — renders a flat grid, a flat list, or
+// group-by sections (each a title + grid). The surrounding view owns the
+// toolbar and the loading / empty / load-more states; this component is
+// purely the rendered collection, so the grid column math and the list
+// header+rows live in one place. Shared by Discover Browse, Label
+// Releases, and Favorites albums.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { AlbumCardItem, DiscoverSection } from "../state.slint";
+import { AlbumCard } from "AlbumCard.slint";
+import { AlbumListRow, AlbumListHeader } from "../primitives/AlbumListRow.slint";
+
+// Wrapping album grid over a model — column math in one place, shared by
+// the flat grid and each group-by section.
+component AlbumGrid inherits Rectangle {
+    in property <[AlbumCardItem]> albums;
+    in property <length> card-width: 220px;
+    in property <length> card-height: 266px;
+    in property <length> card-gap: 24px;
+    callback open-album(string);
+    callback open-artist(string);
+    callback media-action(string, string, string);
+
+    property <int> columns: Math.max(
+        1,
+        Math.floor((self.width + root.card-gap) / (root.card-width + root.card-gap)));
+    property <int> rows: Math.ceil(root.albums.length / self.columns);
+    height: self.rows > 0
+        ? self.rows * root.card-height + Math.max(0, self.rows - 1) * root.card-gap
+        : 0px;
+
+    for album[i] in root.albums: AlbumCard {
+        x: Math.mod(i, root.columns) * (root.card-width + root.card-gap);
+        y: Math.floor(i / root.columns) * (root.card-height + root.card-gap);
+        width: root.card-width;
+        height: root.card-height;
+        album: album;
+        clicked(id) => {
+            root.open-album(id);
+        }
+        media-action(kind, id, action) => {
+            if (kind == "artist") {
+                root.open-artist(id);
+            } else {
+                root.media-action(kind, id, action);
+            }
+        }
+    }
+}
+
+export component AlbumCollectionView inherits VerticalLayout {
+    in property <[AlbumCardItem]> albums;        // flat set (grid/list)
+    in property <[DiscoverSection]> grouped;      // group-by sections
+    in property <bool> is-grouped: false;
+    in property <string> view-mode: "grid";       // "grid" | "list"
+    in property <bool> show-source: false;
+    in property <length> card-width: 220px;
+    in property <length> card-height: 266px;
+    in property <length> card-gap: 24px;
+    in property <length> list-row-gap: 4px;
+    callback open-album(string);
+    callback open-artist(string);
+    callback media-action(string, string, string);
+
+    spacing: 0px;
+
+    // --- Grouped (sections; always grid within a section) --------------
+    if root.is-grouped && root.grouped.length > 0: VerticalLayout {
+        spacing: 0px;
+        for section[s] in root.grouped: VerticalLayout {
+            spacing: 12px;
+            if s > 0: Rectangle { height: 24px; }
+            Text {
+                text: section.title;
+                color: Theme.text-primary;
+                font-size: Typography.heading;
+                font-weight: Typography.semibold;
+            }
+            AlbumGrid {
+                albums: section.albums;
+                card-width: root.card-width;
+                card-height: root.card-height;
+                card-gap: root.card-gap;
+                open-album(id) => {
+                    root.open-album(id);
+                }
+                open-artist(id) => {
+                    root.open-artist(id);
+                }
+                media-action(kind, id, action) => {
+                    root.media-action(kind, id, action);
+                }
+            }
+        }
+    }
+
+    // --- Flat grid -----------------------------------------------------
+    if !root.is-grouped && root.view-mode == "grid" && root.albums.length > 0: AlbumGrid {
+        albums: root.albums;
+        card-width: root.card-width;
+        card-height: root.card-height;
+        card-gap: root.card-gap;
+        open-album(id) => {
+            root.open-album(id);
+        }
+        open-artist(id) => {
+            root.open-artist(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
+        }
+    }
+
+    // --- Flat list -----------------------------------------------------
+    if !root.is-grouped && root.view-mode == "list" && root.albums.length > 0: VerticalLayout {
+        spacing: root.list-row-gap;
+        AlbumListHeader {
+            show-source: root.show-source;
+        }
+        for album[i] in root.albums: AlbumListRow {
+            album: album;
+            index: i;
+            show-source: root.show-source;
+            clicked(id) => {
+                root.open-album(id);
+            }
+            media-action(kind, id, action) => {
+                if (kind == "artist") {
+                    root.open-artist(id);
+                } else {
+                    root.media-action(kind, id, action);
+                }
+            }
+        }
+    }
+}

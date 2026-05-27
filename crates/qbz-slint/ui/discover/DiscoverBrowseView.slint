@@ -10,9 +10,8 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { DiscoverBrowseState, DiscoverBrowseActions, GenreFilterState, AlbumCardItem } from "../state.slint";
-import { AlbumCard } from "AlbumCard.slint";
-import { AlbumListRow, AlbumListHeader } from "../primitives/AlbumListRow.slint";
+import { DiscoverBrowseState, DiscoverBrowseActions, GenreFilterState } from "../state.slint";
+import { AlbumCollectionView } from "AlbumCollectionView.slint";
 import { GenreFilterPopup } from "GenreFilterPopup.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
@@ -289,54 +288,20 @@ export component DiscoverBrowseView inherits Rectangle {
                     }
                 }
 
-                // --- Album grid ----------------------------------------
-                if !DiscoverBrowseState.loading
-                    && DiscoverBrowseState.view-mode == "grid": grid := Rectangle {
-                    property <int> columns: Math.max(
-                        1,
-                        Math.floor((self.width + root.gap) / (root.album-w + root.gap)));
-                    property <int> rows: Math.ceil(DiscoverBrowseState.visible.length / self.columns);
-                    height: self.rows > 0
-                        ? self.rows * root.album-h + Math.max(0, self.rows - 1) * root.gap
-                        : 0px;
-                    for album[i] in DiscoverBrowseState.visible: AlbumCard {
-                        x: Math.mod(i, grid.columns) * (root.album-w + root.gap);
-                        y: Math.floor(i / grid.columns) * (root.album-h + root.gap);
-                        width: root.album-w;
-                        height: root.album-h;
-                        album: album;
-                        clicked(id) => { root.open-album(id); }
-                        media-action(kind, id, action) => {
-                            if (kind == "artist") {
-                                root.open-artist(id);
-                            } else {
-                                root.media-action(kind, id, action);
-                            }
-                        }
-                    }
-                }
-
-                // --- Album list ----------------------------------------
-                // Reusable AlbumListRow; SOURCE column hidden (single-source
-                // discover catalog). Header labels the columns.
-                if !DiscoverBrowseState.loading
-                    && DiscoverBrowseState.view-mode == "list": VerticalLayout {
-                    spacing: root.list-row-gap;
-                    AlbumListHeader {
-                        show-source: false;
-                    }
-                    for album[i] in DiscoverBrowseState.visible: AlbumListRow {
-                        album: album;
-                        index: i;
-                        show-source: false;
-                        clicked(id) => { root.open-album(id); }
-                        media-action(kind, id, action) => {
-                            if (kind == "artist") {
-                                root.open-artist(id);
-                            } else {
-                                root.media-action(kind, id, action);
-                            }
-                        }
+                // --- Album collection (grid / list) --------------------
+                if !DiscoverBrowseState.loading: AlbumCollectionView {
+                    albums: DiscoverBrowseState.visible;
+                    view-mode: DiscoverBrowseState.view-mode;
+                    is-grouped: false;
+                    show-source: false;
+                    card-width: root.album-w;
+                    card-height: root.album-h;
+                    card-gap: root.gap;
+                    list-row-gap: root.list-row-gap;
+                    open-album(id) => { root.open-album(id); }
+                    open-artist(id) => { root.open-artist(id); }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
                     }
                 }
 

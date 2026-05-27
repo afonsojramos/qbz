@@ -10,9 +10,8 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { LabelState, LabelActions, AlbumCardItem, DiscoverSection } from "../state.slint";
-import { AlbumCard } from "../discover/AlbumCard.slint";
-import { AlbumListRow, AlbumListHeader } from "../primitives/AlbumListRow.slint";
+import { LabelState, LabelActions } from "../state.slint";
+import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
@@ -20,44 +19,6 @@ import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ToggleButton } from "../primitives/ToggleButton.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
-
-// Wrapping album grid over a model — shared by the flat view and each
-// group-by-artist section so the column math lives in one place.
-component AlbumGrid inherits Rectangle {
-    in property <[AlbumCardItem]> albums;
-    in property <length> card-width: 220px;
-    in property <length> card-height: 266px;
-    in property <length> card-gap: 24px;
-    callback open-album(string);
-    callback open-artist(string);
-    callback media-action(string, string, string);
-
-    property <int> columns: Math.max(
-        1,
-        Math.floor((self.width + root.card-gap) / (root.card-width + root.card-gap)));
-    property <int> rows: Math.ceil(root.albums.length / self.columns);
-    height: self.rows > 0
-        ? self.rows * root.card-height + Math.max(0, self.rows - 1) * root.card-gap
-        : 0px;
-
-    for album[i] in root.albums: AlbumCard {
-        x: Math.mod(i, root.columns) * (root.card-width + root.card-gap);
-        y: Math.floor(i / root.columns) * (root.card-height + root.card-gap);
-        width: root.card-width;
-        height: root.card-height;
-        album: album;
-        clicked(id) => {
-            root.open-album(id);
-        }
-        media-action(kind, id, action) => {
-            if (kind == "artist") {
-                root.open-artist(id);
-            } else {
-                root.media-action(kind, id, action);
-            }
-        }
-    }
-}
 
 export component LabelReleasesView inherits Rectangle {
     callback open-album(string);
@@ -286,37 +247,14 @@ export component LabelReleasesView inherits Rectangle {
                 }
             }
 
-            // --- Grouped by artist ---------------------------------------
-            if LabelState.group-by-artist: VerticalLayout {
-                spacing: 0px;
-                for section[s] in LabelState.grouped: VerticalLayout {
-                    spacing: 12px;
-                    if s > 0: Rectangle { height: 24px; }
-                    Text {
-                        text: section.title;
-                        color: Theme.text-primary;
-                        font-size: Typography.heading;
-                        font-weight: Typography.semibold;
-                    }
-                    AlbumGrid {
-                        albums: section.albums;
-                        open-album(id) => {
-                            root.open-album(id);
-                        }
-                        open-artist(id) => {
-                            root.open-artist(id);
-                        }
-                        media-action(kind, id, action) => {
-                            root.media-action(kind, id, action);
-                        }
-                    }
-                }
-            }
-
-            // --- Flat grid -----------------------------------------------
-            if !LabelState.group-by-artist && LabelState.visible.length > 0
-                && LabelState.view-mode == "grid": AlbumGrid {
+            // --- Album collection (grouped / flat grid / flat list) ------
+            AlbumCollectionView {
+                is-grouped: LabelState.group-by-artist;
                 albums: LabelState.visible;
+                grouped: LabelState.grouped;
+                view-mode: LabelState.view-mode;
+                show-source: false;
+                list-row-gap: root.list-row-gap;
                 open-album(id) => {
                     root.open-album(id);
                 }
@@ -325,30 +263,6 @@ export component LabelReleasesView inherits Rectangle {
                 }
                 media-action(kind, id, action) => {
                     root.media-action(kind, id, action);
-                }
-            }
-
-            // --- Flat list -----------------------------------------------
-            if !LabelState.group-by-artist && LabelState.visible.length > 0
-                && LabelState.view-mode == "list": VerticalLayout {
-                spacing: root.list-row-gap;
-                AlbumListHeader {
-                    show-source: false;
-                }
-                for album[i] in LabelState.visible: AlbumListRow {
-                    album: album;
-                    index: i;
-                    show-source: false;
-                    clicked(id) => {
-                        root.open-album(id);
-                    }
-                    media-action(kind, id, action) => {
-                        if (kind == "artist") {
-                            root.open-artist(id);
-                        } else {
-                            root.media-action(kind, id, action);
-                        }
-                    }
                 }
             }
 
