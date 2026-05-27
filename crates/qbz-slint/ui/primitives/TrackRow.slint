@@ -25,6 +25,9 @@ import { TrackContextMenu } from "TrackContextMenu.slint";
 
 export component TrackRow inherits Rectangle {
     in property <TrackItem> track;
+    // Fade out when the row is being removed (favorites un-favorite).
+    opacity: root.track.removing ? 0.0 : 1.0;
+    animate opacity { duration: 250ms; }
     in property <int> index;
     in property <bool> show-artwork: true;
     in property <bool> show-album: false;

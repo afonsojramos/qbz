@@ -133,6 +133,9 @@ export component AlbumListHeader inherits Rectangle {
 
 export component AlbumListRow inherits Rectangle {
     in property <AlbumCardItem> album;
+    // Fade out when the row is being removed (favorites un-favorite).
+    opacity: root.album.removing ? 0.0 : 1.0;
+    animate opacity { duration: 250ms; }
     // Row index — drives the even/odd zebra striping (coherent with TrackRow).
     in property <int> index;
     // Optional leading rank ("#1" etc) for ranked lists (Most Streamed).
@@ -366,8 +369,12 @@ export component AlbumListRow inherits Rectangle {
                             }
                         }
                         ContextMenuItem {
-                            icon: @image-url("../assets/icons/heart.svg");
-                            label: @tr("Add to favorites");
+                            icon: root.album.is-favorite
+                                ? @image-url("../assets/icons/heart-filled.svg")
+                                : @image-url("../assets/icons/heart.svg");
+                            label: root.album.is-favorite
+                                ? @tr("Remove from favorites")
+                                : @tr("Add to favorites");
                             clicked => {
                                 root.media-action("album", root.album.id, "favorite");
                             }

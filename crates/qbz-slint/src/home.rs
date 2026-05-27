@@ -440,6 +440,8 @@ pub(crate) fn card_to_item(card: CardData) -> AlbumCardItem {
         quality_detail: card.quality_detail.into(),
         track_count: card.track_count.into(),
         plain_year: card.plain_year.into(),
+        is_favorite: false,
+        removing: false,
     }
 }
 

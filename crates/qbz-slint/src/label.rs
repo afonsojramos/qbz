@@ -761,6 +761,7 @@ fn top_track_to_item(t: &TopTrack) -> TrackItem {
         is_favorite: crate::fav_cache::is_favorite(&t.id),
         artist_id: t.artist_id.clone().into(),
         album_id: t.album_id.clone().into(),
+        removing: false,
     }
 }
 

@@ -502,6 +502,7 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
             is_favorite: crate::fav_cache::is_favorite(&track.id),
             artist_id: track.artist_id.into(),
             album_id: track.album_id.into(),
+            removing: false,
         })
         .collect();
     let release_sections: Vec<DiscoverSection> = data

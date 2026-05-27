@@ -19,6 +19,8 @@ export struct AlbumCardItem {
     ribbon-kind: string,   // "press" | "qobuzissime" | "albumOfTheWeek" | ""
     artwork-url: string,
     artwork: image,        // empty until the artwork pipeline resolves it
+    is-favorite: bool,     // filled accent heart on the card when favorited
+    removing: bool,        // fading out (un-favorited in the favorites view)
     // --- List-row extras (AlbumListRow; ignored by the grid AlbumCard) ----
     release-type: string,  // "Album" | "EP" | "Single" | "Live" | "Compilation"
     source: string,        // "qobuz" | "local" | "plex" | "" — hideable column
@@ -238,6 +240,8 @@ export struct TrackItem {
     // album view, both via the media-action bubble channel.
     artist-id: string,
     album-id: string,
+    // Fading out (un-favorited in the favorites view) before removal.
+    removing: bool,
 }
 
 // Album detail screen state.
@@ -1491,6 +1495,8 @@ export global FavoritesActions {
     callback albums-search(string /* query */);
     callback albums-set-sort(string /* sort key */);
     callback albums-shuffle();
+    callback unfavorite-track(string /* track id */);
+    callback unfavorite-album(string /* album id */);
 }
 
 // A Qobuz mix detail page (DailyQ / WeeklyQ / FavQ / TopQ), opened

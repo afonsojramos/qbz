@@ -27,6 +27,7 @@ component OverlayButton inherits Rectangle {
     in property <bool> primary: false;
     in property <length> diameter: 36px;
     in property <length> icon-size: 16px;
+    in property <bool> active: false;
     out property <bool> hovered: ta.has-hover;
     callback clicked();
 
@@ -45,7 +46,9 @@ component OverlayButton inherits Rectangle {
         height: root.icon-size;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        tint: root.primary ? #000000 : #ffffff;
+        tint: root.active
+            ? Theme.accent
+            : (root.primary ? #000000 : #ffffff);
     }
 
     ta := TouchArea {
@@ -58,6 +61,9 @@ component OverlayButton inherits Rectangle {
 
 export component AlbumCard inherits Rectangle {
     in property <AlbumCardItem> album;
+    // Fade out when the card is being removed (favorites un-favorite).
+    opacity: root.album.removing ? 0.0 : 1.0;
+    animate opacity { duration: 250ms; }
     callback clicked(string);
     // kind ("album") , album id, action ("play" | "queue" | "favorite").
     callback media-action(string, string, string);
@@ -153,7 +159,10 @@ export component AlbumCard inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     fav-btn := OverlayButton {
-                        icon: @image-url("../assets/icons/heart.svg");
+                        icon: root.album.is-favorite
+                            ? @image-url("../assets/icons/heart-filled.svg")
+                            : @image-url("../assets/icons/heart.svg");
+                        active: root.album.is-favorite;
                         clicked => {
                             root.media-action("album", root.album.id, "favorite");
                         }

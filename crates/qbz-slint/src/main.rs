@@ -4314,6 +4314,66 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        // Un-favorite a track from the favorites list: fade the row, remove
+        // the favorite on the server, then drop the row after the fade.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<FavoritesActions>()
+            .on_unfavorite_track(move |id| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                favorites::mark_track_removing(&w, &id);
+                if let Ok(tid) = id.parse::<u64>() {
+                    crate::fav_cache::set(tid, false);
+                }
+                let id_srv = id.to_string();
+                let runtime = runtime.clone();
+                handle.spawn(async move {
+                    if let Err(e) = runtime.core().remove_favorite("track", &id_srv).await {
+                        log::error!("[qbz-slint] unfavorite track {id_srv} failed: {e}");
+                    }
+                });
+                let weak2 = weak.clone();
+                let id_rm = id.to_string();
+                slint::Timer::single_shot(std::time::Duration::from_millis(280), move || {
+                    if let Some(w) = weak2.upgrade() {
+                        favorites::remove_track_row(&w, &id_rm);
+                    }
+                });
+            });
+    }
+    {
+        // Un-favorite an album from the favorites list (same fade + remove).
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<FavoritesActions>()
+            .on_unfavorite_album(move |id| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                favorites::mark_album_removing(&w, &id);
+                let id_srv = id.to_string();
+                let runtime = runtime.clone();
+                handle.spawn(async move {
+                    if let Err(e) = runtime.core().remove_favorite("album", &id_srv).await {
+                        log::error!("[qbz-slint] unfavorite album {id_srv} failed: {e}");
+                    }
+                });
+                let weak2 = weak.clone();
+                let id_rm = id.to_string();
+                slint::Timer::single_shot(std::time::Duration::from_millis(280), move || {
+                    if let Some(w) = weak2.upgrade() {
+                        favorites::remove_album_row(&w, &id_rm);
+                    }
+                });
+            });
+    }
+    {
         // Local search over the loaded favorite tracks (title / artist /
         // album), re-deriving the rendered list.
         let weak = window.as_weak();

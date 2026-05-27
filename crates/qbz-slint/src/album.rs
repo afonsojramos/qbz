@@ -256,6 +256,7 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
             is_favorite: crate::fav_cache::is_favorite(&track.id),
             artist_id: track.artist_id.into(),
             album_id: album_id.clone(),
+            removing: false,
         })
         .collect();
 

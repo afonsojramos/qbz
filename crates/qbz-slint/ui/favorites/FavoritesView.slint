@@ -465,6 +465,9 @@ export component FavoritesView inherits Rectangle {
                             FavoritesActions.open-album(id);
                         } else if (kind == "artist" && action == "open") {
                             FavoritesActions.open-artist(id);
+                        } else if (action == "favorite") {
+                            // In the favorites list, un-favorite + fade out.
+                            FavoritesActions.unfavorite-track(id);
                         } else {
                             FavoritesActions.track-action(id, action);
                         }
@@ -578,7 +581,12 @@ export component FavoritesView inherits Rectangle {
                         root.open-artist(id);
                     }
                     media-action(kind, id, action) => {
-                        FavoritesActions.album-action(id, action);
+                        if (action == "favorite") {
+                            // In the favorites list, un-favorite + fade out.
+                            FavoritesActions.unfavorite-album(id);
+                        } else {
+                            FavoritesActions.album-action(id, action);
+                        }
                     }
                 }
             }

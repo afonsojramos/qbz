@@ -337,6 +337,7 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
                     is_favorite: true,
                     artist_id: t.artist_id.into(),
                     album_id: t.album_id.into(),
+                    removing: false,
                 })
                 .collect();
             // `tracks` is the full set the artwork pipeline targets;
@@ -349,7 +350,15 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
             state.set_tracks_search("".into());
         }
         FavData::Albums { items, total } => {
-            let cards: Vec<AlbumCardItem> = items.into_iter().map(to_item).collect();
+            // Everything in the Albums tab is a favorite -> filled heart.
+            let cards: Vec<AlbumCardItem> = items
+                .into_iter()
+                .map(|c| {
+                    let mut it = to_item(c);
+                    it.is_favorite = true;
+                    it
+                })
+                .collect();
             // `albums` is the full set (artwork target); `albums-visible`
             // (what the grid/list renders) shares it until a search/sort
             // forks it, so artwork stays live.
@@ -493,6 +502,68 @@ pub fn random_visible_album(window: &AppWindow) -> Option<String> {
         .unwrap_or(1);
     let idx = (seed % n as u64) as usize;
     model.row_data(idx).map(|a| a.id.to_string())
+}
+
+// ---- Un-favorite in place: fade (set `removing`) then remove -----------
+
+/// Flag the matching track row(s) as removing so they fade out.
+pub fn mark_track_removing(window: &AppWindow, id: &str) {
+    let state = window.global::<FavoritesState>();
+    for model in [state.get_tracks_visible(), state.get_tracks()] {
+        for i in 0..model.row_count() {
+            if let Some(mut item) = model.row_data(i) {
+                if item.id == id && !item.removing {
+                    item.removing = true;
+                    model.set_row_data(i, item);
+                }
+            }
+        }
+    }
+}
+
+/// Remove the track row from both the rendered + full models (after fade).
+pub fn remove_track_row(window: &AppWindow, id: &str) {
+    let state = window.global::<FavoritesState>();
+    for model in [state.get_tracks_visible(), state.get_tracks()] {
+        if let Some(vm) = model.as_any().downcast_ref::<VecModel<TrackItem>>() {
+            for i in 0..vm.row_count() {
+                if vm.row_data(i).map(|t| t.id == id).unwrap_or(false) {
+                    vm.remove(i);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Flag the matching album card(s) as removing so they fade out.
+pub fn mark_album_removing(window: &AppWindow, id: &str) {
+    let state = window.global::<FavoritesState>();
+    for model in [state.get_albums_visible(), state.get_albums()] {
+        for i in 0..model.row_count() {
+            if let Some(mut item) = model.row_data(i) {
+                if item.id == id && !item.removing {
+                    item.removing = true;
+                    model.set_row_data(i, item);
+                }
+            }
+        }
+    }
+}
+
+/// Remove the album card from both the rendered + full models (after fade).
+pub fn remove_album_row(window: &AppWindow, id: &str) {
+    let state = window.global::<FavoritesState>();
+    for model in [state.get_albums_visible(), state.get_albums()] {
+        if let Some(vm) = model.as_any().downcast_ref::<VecModel<AlbumCardItem>>() {
+            for i in 0..vm.row_count() {
+                if vm.row_data(i).map(|a| a.id == id).unwrap_or(false) {
+                    vm.remove(i);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // ---- Tracks multi-select (mirrors playlist.rs) -------------------------

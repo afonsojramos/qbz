@@ -174,6 +174,7 @@ fn to_item(track: &Track) -> TrackItem {
             .map(|a| a.id.clone())
             .unwrap_or_default()
             .into(),
+        removing: false,
     }
 }
 

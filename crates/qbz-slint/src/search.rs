@@ -371,6 +371,7 @@ fn track_item(row: TrackRowData) -> TrackItem {
         is_favorite,
         artist_id: row.artist_id.into(),
         album_id: row.album_id.into(),
+        removing: false,
     }
 }
 
