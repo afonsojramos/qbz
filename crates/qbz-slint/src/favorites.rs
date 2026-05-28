@@ -419,6 +419,9 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
                     artist_id: t.artist_id.into(),
                     album_id: t.album_id.into(),
                     removing: false,
+                    cache_status: 0,
+                    cache_progress: 0.0,
+                    unlocking: false,
                 })
                 .collect();
             // `tracks` is the full set the artwork pipeline targets;

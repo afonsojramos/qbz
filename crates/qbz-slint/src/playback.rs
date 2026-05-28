@@ -54,7 +54,7 @@ pub async fn after_track_change(
 ) {
     refresh_now_playing_meta(runtime, weak).await;
     record_recent(runtime).await;
-    play_audible(runtime, track_id).await;
+    play_audible(runtime, weak, track_id).await;
     // Warm the cache for the upcoming tracks so the next transition can be
     // gapless (a cached track plays via `play_data`, which the audio
     // engine's gapless engine supports; a streamed track does not).
@@ -129,14 +129,16 @@ type Runtime = Arc<AppRuntime<SlintAdapter>>;
 /// Run the audible step for `track_id`: grab the Qobuz client and call
 /// the player's self-contained `play_track`. Errors are logged, not
 /// surfaced — the poll loop keeps the UI consistent regardless.
-async fn play_audible(runtime: &Runtime, track_id: u64) {
+async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id: u64) {
     // Route through the shared tier-walk: an offline-cached copy is preferred
     // (decrypted to FLAC and played via play_data) before the player's own
-    // L1/L2 -> network path. The offline handle is None before login.
+    // L1/L2 -> network path. The offline handle is None before login. The
+    // sink drives the padlock animation while the CMAF bundle decrypts.
     let offline = crate::offline::get().await;
+    let sink = crate::offline_cache::row_sink(weak.clone());
     if let Err(e) = runtime
         .core()
-        .play_track_resolved(track_id, PLAYBACK_QUALITY, offline.as_deref(), None)
+        .play_track_resolved(track_id, PLAYBACK_QUALITY, offline.as_deref(), Some(&sink))
         .await
     {
         log::error!("[qbz-slint] playback: play_track {track_id} failed: {e}");
@@ -1144,18 +1146,20 @@ pub fn start_poll_loop(
                     if next.id != track_id && !next.is_local {
                         gapless_requested_for = track_id;
                         let runtime = runtime.clone();
+                        let weak = weak.clone();
                         let next_id = next.id;
                         tokio::spawn(async move {
                             // Shared tier-walk: L1/L2 (player cache) -> offline
                             // -> network, then hand the bytes to play_next.
                             let offline = crate::offline::get().await;
+                            let sink = crate::offline_cache::row_sink(weak.clone());
                             if let Some(data) = runtime
                                 .core()
                                 .fetch_for_gapless_resolved(
                                     next_id,
                                     PLAYBACK_QUALITY,
                                     offline.as_deref(),
-                                    None,
+                                    Some(&sink),
                                 )
                                 .await
                             {

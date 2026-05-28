@@ -175,6 +175,9 @@ fn to_item(track: &Track) -> TrackItem {
             .unwrap_or_default()
             .into(),
         removing: false,
+        cache_status: 0,
+        cache_progress: 0.0,
+        unlocking: false,
     }
 }
 

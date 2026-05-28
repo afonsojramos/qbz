@@ -763,6 +763,9 @@ fn top_track_to_item(t: &TopTrack) -> TrackItem {
         artist_id: t.artist_id.clone().into(),
         album_id: t.album_id.clone().into(),
         removing: false,
+        cache_status: 0,
+        cache_progress: 0.0,
+        unlocking: false,
     }
 }
 

@@ -372,6 +372,9 @@ fn track_item(row: TrackRowData) -> TrackItem {
         artist_id: row.artist_id.into(),
         album_id: row.album_id.into(),
         removing: false,
+        cache_status: 0,
+        cache_progress: 0.0,
+        unlocking: false,
     }
 }
 

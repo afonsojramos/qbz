@@ -253,6 +253,14 @@ export struct TrackItem {
     album-id: string,
     // Fading out (un-favorited in the favorites view) before removal.
     removing: bool,
+    // Offline-cache status: 0 none, 1 queued, 2 downloading, 3 ready, 4 failed.
+    // Drives the per-row offline affordance (make-offline / ring / check / warn).
+    cache-status: int,
+    // Download progress 0.0..1.0 — meaningful only while cache-status == 2.
+    cache-progress: float,
+    // True while this track's offline CMAF bundle is being decrypted for
+    // playback — drives the padlock glyph (swaps the play/equalizer icon).
+    unlocking: bool,
 }
 
 // Album detail screen state.
