@@ -146,8 +146,11 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
 }
 
 /// Resolve the now-playing cover and apply it to `NowPlayingState`.
-fn load_now_playing_artwork(weak: slint::Weak<AppWindow>, url: String) {
-    if url.is_empty() {
+///
+/// Takes a source-aware [`qbz_models::ArtworkRef`] so local-library and Plex
+/// covers reach the now-playing bar, not just remote Qobuz URLs.
+fn load_now_playing_artwork(weak: slint::Weak<AppWindow>, art: qbz_models::ArtworkRef) {
+    if art.is_empty() {
         return;
     }
     let Some(cache) = crate::artwork::shared_cache() else {
@@ -155,7 +158,7 @@ fn load_now_playing_artwork(weak: slint::Weak<AppWindow>, url: String) {
     };
     tokio::spawn(async move {
         let Some((pixels, w, h)) =
-            crate::artwork::fetch_and_decode(&url, &cache, 160).await
+            crate::artwork::fetch_and_decode_ref(&art, &cache, 160).await
         else {
             return;
         };
@@ -199,7 +202,7 @@ async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindo
     let artist_id = track.artist_id.map(|id| id.to_string()).unwrap_or_default();
     let track_id = track.id.to_string();
     let duration = track.duration_secs;
-    let artwork_url = track.artwork_url.clone().unwrap_or_default();
+    let artwork = track.artwork_ref();
 
     let _ = weak.upgrade_in_event_loop(move |w| {
         let np = w.global::<NowPlayingState>();
@@ -222,7 +225,7 @@ async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindo
         np.set_artwork(slint::Image::default());
     });
 
-    load_now_playing_artwork(weak.clone(), artwork_url);
+    load_now_playing_artwork(weak.clone(), artwork);
 }
 
 /// Build a `QueueTrack` for the queue from the catalog `Track`, filling

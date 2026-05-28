@@ -33,6 +33,7 @@ pub mod error;
 pub mod events;
 pub mod mixtape;
 pub mod playback;
+pub mod source;
 pub mod traits;
 pub mod types;
 
@@ -40,6 +41,7 @@ pub mod types;
 pub use error::{QbzError, QbzResult};
 pub use events::CoreEvent;
 pub use playback::{PlaybackState, PlaybackStatus, QueueState, QueueTrack, RepeatMode};
+pub use source::{ArtworkRef, PlaybackSource};
 pub use traits::{FrontendAdapter, LoggingAdapter, NoOpAdapter};
 pub use types::{
     Album,

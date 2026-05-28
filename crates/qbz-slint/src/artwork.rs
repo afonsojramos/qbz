@@ -9,6 +9,7 @@
 use std::sync::{Arc, Mutex};
 
 use qbz_cache::ImageCacheService;
+use qbz_models::ArtworkRef;
 use slint::{ComponentHandle, Model};
 use tokio::sync::Semaphore;
 
@@ -225,21 +226,16 @@ pub fn spawn_loads(jobs: Vec<ArtworkJob>, window: slint::Weak<AppWindow>, cache:
     }
 }
 
-/// Resolve one cover image to raw RGBA8 pixels, downscaled to `decode_size`.
-/// Reads from the shared cache on a hit; on a miss downloads, stores, and
-/// uses the bytes. Runs on a worker thread; the result tuple is `Send`.
-pub async fn fetch_and_decode(
-    url: &str,
-    cache: &ImageCache,
-    decode_size: u32,
-) -> Option<(Vec<u8>, u32, u32)> {
+/// Resolve a remote URL to raw bytes via the shared disk cache: a hit reads
+/// from disk, a miss downloads and stores. HTTP(S) only.
+async fn fetch_cached_http(url: &str, cache: &ImageCache) -> Option<Vec<u8>> {
     let cached_path = {
         let guard = cache.lock().ok()?;
         guard.as_ref().and_then(|service| service.get(url))
     };
 
-    let bytes: Vec<u8> = match cached_path {
-        Some(path) => tokio::fs::read(&path).await.ok()?,
+    match cached_path {
+        Some(path) => tokio::fs::read(&path).await.ok(),
         None => {
             let downloaded = reqwest::get(url).await.ok()?.bytes().await.ok()?.to_vec();
             if let Ok(guard) = cache.lock() {
@@ -247,16 +243,62 @@ pub async fn fetch_and_decode(
                     let _ = service.store(url, &downloaded);
                 }
             }
-            downloaded
+            Some(downloaded)
         }
-    };
+    }
+}
 
-    let rgba = image::load_from_memory(&bytes)
+/// Decode raw image bytes to RGBA8, downscaled to `decode_size`.
+fn decode_rgba(bytes: &[u8], decode_size: u32) -> Option<(Vec<u8>, u32, u32)> {
+    let rgba = image::load_from_memory(bytes)
         .ok()?
         .thumbnail(decode_size, decode_size)
         .to_rgba8();
     let (width, height) = rgba.dimensions();
     Some((rgba.into_raw(), width, height))
+}
+
+/// Resolve an [`ArtworkRef`] to raw RGBA8 pixels, downscaled to
+/// `decode_size`, regardless of origin. This is the source-aware entry
+/// point that fixes local/Plex artwork never reaching the UI: HTTP and Plex
+/// thumbnails go through the disk cache, local files are read directly, and
+/// embedded bytes decode in place. Runs on a worker thread; the result tuple
+/// is `Send`.
+pub async fn fetch_and_decode_ref(
+    art: &ArtworkRef,
+    cache: &ImageCache,
+    decode_size: u32,
+) -> Option<(Vec<u8>, u32, u32)> {
+    if art.is_empty() {
+        return None;
+    }
+    let bytes: Vec<u8> = match art {
+        ArtworkRef::None => return None,
+        ArtworkRef::Embedded(b) => b.clone(),
+        ArtworkRef::LocalFile(path) => tokio::fs::read(path).await.ok()?,
+        ArtworkRef::Remote(url) => fetch_cached_http(url, cache).await?,
+        ArtworkRef::PlexThumb {
+            base_url,
+            token,
+            path,
+        } => {
+            let sep = if path.contains('?') { '&' } else { '?' };
+            let url = format!("{base_url}{path}{sep}X-Plex-Token={token}");
+            fetch_cached_http(&url, cache).await?
+        }
+    };
+    decode_rgba(&bytes, decode_size)
+}
+
+/// Resolve one cover image (by remote URL) to raw RGBA8 pixels. Kept for the
+/// many card/row jobs that already hold a URL; source-aware call sites
+/// (local library, Plex) use [`fetch_and_decode_ref`].
+pub async fn fetch_and_decode(
+    url: &str,
+    cache: &ImageCache,
+    decode_size: u32,
+) -> Option<(Vec<u8>, u32, u32)> {
+    fetch_and_decode_ref(&ArtworkRef::Remote(url.to_string()), cache, decode_size).await
 }
 
 /// Representative color of decoded RGBA pixels for the header gradient.
