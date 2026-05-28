@@ -518,6 +518,60 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         track
     }
 
+    /// Play `track_id` preferring an offline-cached copy (the offline tier of
+    /// the shared playback tier-walk) before the player's own L1/L2 → network
+    /// path. `offline` is the frontend's open `OfflineCacheState` (None = no
+    /// offline tier); `sink` optionally drives the unlock animation.
+    ///
+    /// The player is untouched: an offline hit is handed to `play_data` (which
+    /// warms L1), a miss falls through to `Player::play_track`.
+    pub async fn play_track_resolved(
+        &self,
+        track_id: u64,
+        quality: Quality,
+        offline: Option<&qbz_offline_cache::OfflineCacheState>,
+        sink: Option<&qbz_offline_cache::CacheEventSink>,
+    ) -> Result<(), String> {
+        if let Some(off) = offline {
+            if let Some(bytes) =
+                crate::offline_resolve::resolve_offline_bytes(track_id, off, sink).await
+            {
+                log::info!("[Core] track {} served from OFFLINE cache", track_id);
+                return self.player.play_data(bytes, track_id);
+            }
+        }
+        let guard = self.client.read().await;
+        let client = guard
+            .as_ref()
+            .ok_or_else(|| "No Qobuz client available".to_string())?;
+        self.player.play_track(client, track_id, quality).await
+    }
+
+    /// Resolve the bytes for a GAPLESS successor. Tier order L1/L2 → offline →
+    /// network: the offline tier is checked only when the track is NOT already
+    /// in the player's cache (the CMAF decrypt is slow, ~5-7 s, so a cached
+    /// copy wins). Returns bytes to hand to `Player::play_next`, or None.
+    pub async fn fetch_for_gapless_resolved(
+        &self,
+        track_id: u64,
+        quality: Quality,
+        offline: Option<&qbz_offline_cache::OfflineCacheState>,
+        sink: Option<&qbz_offline_cache::CacheEventSink>,
+    ) -> Option<Vec<u8>> {
+        if !self.player.is_track_cached(track_id) {
+            if let Some(off) = offline {
+                if let Some(bytes) =
+                    crate::offline_resolve::resolve_offline_bytes(track_id, off, sink).await
+                {
+                    return Some(bytes);
+                }
+            }
+        }
+        let guard = self.client.read().await;
+        let client = guard.as_ref()?;
+        self.player.fetch_for_gapless(client, track_id, quality).await
+    }
+
     /// Advance to next track in queue
     pub async fn next_track(&self) -> Option<QueueTrack> {
         let queue = self.queue.write().await;
