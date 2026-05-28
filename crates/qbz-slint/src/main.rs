@@ -3288,6 +3288,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let weak = window.as_weak();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_select_artist(move |name| {
+                offline_manager::select_artist(weak.clone(), handle.clone(), name.to_string());
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_set_sort(move |i| {
+                offline_manager::set_sort(weak.clone(), handle.clone(), i);
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_toggle_failed(move || {
+                offline_manager::toggle_failed(weak.clone(), handle.clone());
+            });
+    }
+    {
+        let weak = window.as_weak();
         let runtime = runtime.clone();
         let handle = handle.clone();
         window
@@ -3295,7 +3322,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_remove_track(move |id| {
                 if let Ok(tid) = id.parse::<u64>() {
                     offline_cache::remove_cached(runtime.clone(), weak.clone(), handle.clone(), tid);
-                    offline_manager::reload_soon(weak.clone(), handle.clone());
                 }
             });
     }
@@ -3306,7 +3332,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .global::<OfflineManagerActions>()
             .on_remove_album(move |aid| {
                 offline_cache::remove_album(weak.clone(), handle.clone(), aid.to_string());
-                offline_manager::reload_soon(weak.clone(), handle.clone());
             });
     }
     {
@@ -3323,7 +3348,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         handle.clone(),
                         tid,
                     );
-                    offline_manager::reload_soon(weak.clone(), handle.clone());
                 }
             });
     }
@@ -3341,7 +3365,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     aid.to_string(),
                     false,
                 );
-                offline_manager::reload_soon(weak.clone(), handle.clone());
             });
     }
     {
@@ -3358,7 +3381,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     aid.to_string(),
                     true,
                 );
-                offline_manager::reload_soon(weak.clone(), handle.clone());
             });
     }
     {
@@ -3375,7 +3397,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let handle = handle.clone();
         window.global::<OfflineManagerActions>().on_clear_all(move || {
             offline_cache::clear_all(weak.clone(), handle.clone());
-            offline_manager::reload_soon(weak.clone(), handle.clone());
         });
     }
     {

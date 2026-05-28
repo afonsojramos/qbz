@@ -58,6 +58,11 @@ pub async fn activate(user_id: u64) {
         log::error!("[qbz-slint] offline: init_at failed: {e}");
         return;
     }
+    // Restore the persisted cache size limit (written by the manager's
+    // edit-limit). Falls back to the 5 GB default when absent.
+    if let Some(bytes) = read_persisted_limit(&state.get_cache_path()) {
+        state.apply_persisted_limit(Some(bytes)).await;
+    }
     if let Err(e) = state.init_library_connection(&data_dir).await {
         // Non-fatal: cached playback still resolves from index.db; only the
         // library-row sync (show-in-library) needs this connection.
@@ -66,6 +71,28 @@ pub async fn activate(user_id: u64) {
 
     *slot().lock().await = Some(Arc::new(state));
     log::info!("[qbz-slint] offline cache activated for user {user_id}");
+}
+
+/// The on-disk limit file (next to index.db, in the per-user audio dir).
+fn limit_file(audio_dir: &str) -> std::path::PathBuf {
+    std::path::Path::new(audio_dir).join("offline_limit")
+}
+
+fn read_persisted_limit(audio_dir: &str) -> Option<u64> {
+    std::fs::read_to_string(limit_file(audio_dir))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+/// Persist the cache size limit (bytes) to disk for the active cache, so the
+/// manager's edit-limit survives restarts.
+pub async fn persist_limit(bytes: u64) {
+    if let Some(off) = get().await {
+        let path = limit_file(&off.get_cache_path());
+        if let Err(e) = std::fs::write(&path, bytes.to_string()) {
+            log::warn!("[qbz-slint] offline: persist limit failed: {e}");
+        }
+    }
 }
 
 /// Tear down the offline cache on logout.

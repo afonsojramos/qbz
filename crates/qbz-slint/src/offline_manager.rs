@@ -1,15 +1,52 @@
-//! Offline Cache Manager controller — loads the cached-tracks rollup + stats
-//! into `OfflineManagerState`. Per-item actions reuse `offline_cache::*`
-//! (Slice 3); this module owns the data load + the size-limit edit.
+//! Offline Cache Manager controller — loads the artist→album→track rollup +
+//! stats into `OfflineManagerState`. Per-item actions reuse `offline_cache::*`
+//! (Slice 3); this module owns the data load, the toolbar filters (artist
+//! rail / sort / show-only-failed), the album covers, and the size-limit edit.
 
 use std::collections::BTreeMap;
+use std::sync::{Mutex as StdMutex, OnceLock};
 
 use qbz_offline_cache::{CachedTrackInfo, OfflineCacheStatus};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
-use crate::{AppWindow, OfflineManagerState, OfflineRow};
+use crate::{AppWindow, OfflineArtist, OfflineManagerState, OfflineRow};
 
 const GB: u64 = 1024 * 1024 * 1024;
+
+// --- Toolbar filter state (Rust-side source of truth) -------------------
+// The rebuild runs on a tokio task and can't read Slint props cross-thread,
+// so the artist selection / sort / show-only-failed live here. The UI
+// actions update these + trigger a rebuild; the rebuild mirrors them back
+// onto OfflineManagerState for the dropdown / toggle / rail display.
+
+#[derive(Clone)]
+struct Filters {
+    selected_artist: String, // "" = all
+    sort: i32,               // 0 alpha / 1 recent / 2 largest / 3 smallest
+    show_only_failed: bool,
+}
+
+impl Default for Filters {
+    fn default() -> Self {
+        Self {
+            selected_artist: String::new(),
+            sort: 0,
+            show_only_failed: false,
+        }
+    }
+}
+
+static FILTERS: OnceLock<StdMutex<Filters>> = OnceLock::new();
+
+fn filters() -> &'static StdMutex<Filters> {
+    FILTERS.get_or_init(|| StdMutex::new(Filters::default()))
+}
+
+fn current_filters() -> Filters {
+    filters().lock().map(|f| f.clone()).unwrap_or_default()
+}
+
+// --- Formatting ---------------------------------------------------------
 
 fn human_size(bytes: u64) -> String {
     let b = bytes as f64;
@@ -28,7 +65,7 @@ fn track_status_int(s: &OfflineCacheStatus) -> i32 {
     match s {
         OfflineCacheStatus::Ready => 3,
         OfflineCacheStatus::Failed => 4,
-        _ => 2, // queued / downloading
+        _ => 2,
     }
 }
 
@@ -36,48 +73,128 @@ fn fmt_duration(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-/// Read the index.db, build the album→track rollup + stats, and push them to
-/// `OfflineManagerState`.
-async fn rebuild(weak: slint::Weak<AppWindow>) {
+fn album_size(group: &[CachedTrackInfo]) -> u64 {
+    group.iter().map(|t| t.file_size_bytes).sum()
+}
+
+/// Path of an album's on-disk `cover.jpg` (next to one track's CMAF bundle),
+/// or "" when it doesn't exist. Computed on the worker (a `String` is `Send`);
+/// the image itself is loaded on the UI thread (`slint::Image` is NOT `Send`).
+fn cover_path(cache_path: &str, track_id: u64) -> String {
+    let p = std::path::Path::new(cache_path)
+        .join("tracks-cmaf")
+        .join(track_id.to_string())
+        .join("cover.jpg");
+    if p.exists() {
+        p.to_string_lossy().to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Load a cover image from a path on the UI thread (empty path / missing -> default).
+fn load_cover(path: &str) -> slint::Image {
+    if path.is_empty() {
+        return slint::Image::default();
+    }
+    slint::Image::load_from_path(std::path::Path::new(path)).unwrap_or_default()
+}
+
+/// Worker-built, `Send` row data. Converted to the (non-`Send`) `OfflineRow`
+/// on the UI thread, where the cover image is decoded.
+struct RowData {
+    kind: &'static str,
+    album_id: String,
+    track_id: String,
+    title: String,
+    subtitle: String,
+    meta: String,
+    status: i32,
+    progress: f32,
+    cover_path: String,
+}
+
+// --- Data load ----------------------------------------------------------
+
+/// Read the index.db, build the artist→album→track rollup + stats (applying
+/// the current toolbar filters), and push them to `OfflineManagerState`.
+/// `pub` so the cache mutation fns refresh the manager after their DB op.
+pub async fn rebuild(weak: slint::Weak<AppWindow>) {
+    let f = current_filters();
     let off = crate::offline::get().await;
-    let (tracks, limit): (Vec<CachedTrackInfo>, Option<u64>) = match off {
+    let (tracks, limit, cache_path): (Vec<CachedTrackInfo>, Option<u64>, String) = match off {
         Some(ref o) => {
             let limit = *o.limit_bytes.lock().await;
+            let cp = o.get_cache_path();
             let guard = o.db.lock().await;
             let tracks = guard
                 .as_ref()
                 .and_then(|db| db.get_all_tracks().ok())
                 .unwrap_or_default();
-            (tracks, limit)
+            (tracks, limit, cp)
         }
-        None => (Vec::new(), None),
+        None => (Vec::new(), None, String::new()),
     };
 
     let total_size: u64 = tracks.iter().map(|t| t.file_size_bytes).sum();
     let tracks_count = tracks.len() as i32;
 
-    // Group by album_id, remembering first-seen order.
-    let mut order: Vec<String> = Vec::new();
-    let mut groups: BTreeMap<String, (String, String, Vec<CachedTrackInfo>)> = BTreeMap::new();
+    // album_id -> (artist, album_title, tracks), first-seen order (the DB
+    // already returns rows most-recently-accessed first, so this order is
+    // the "recent" sort).
+    let mut album_order: Vec<String> = Vec::new();
+    let mut albums: BTreeMap<String, (String, String, Vec<CachedTrackInfo>)> = BTreeMap::new();
     for t in tracks {
         let aid = t.album_id.clone().unwrap_or_else(|| "__singles__".to_string());
-        if !groups.contains_key(&aid) {
-            order.push(aid.clone());
+        if !albums.contains_key(&aid) {
+            album_order.push(aid.clone());
         }
-        let album = t.album.clone().unwrap_or_else(|| "Singles".to_string());
-        groups
+        let title = t.album.clone().unwrap_or_else(|| "Singles".to_string());
+        albums
             .entry(aid)
-            .or_insert_with(|| (album, t.artist.clone(), Vec::new()))
+            .or_insert_with(|| (t.artist.clone(), title, Vec::new()))
             .2
             .push(t);
     }
 
-    let mut rows: Vec<OfflineRow> = Vec::new();
+    // Artist rail: name -> (album_count, track_count), A-Z (BTreeMap order).
+    let mut artist_stats: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for aid in &album_order {
+        let (artist, _title, group) = &albums[aid];
+        let e = artist_stats.entry(artist.clone()).or_insert((0, 0));
+        e.0 += 1;
+        e.1 += group.len();
+    }
+    let artists: Vec<OfflineArtist> = artist_stats
+        .iter()
+        .map(|(name, (albums_n, tracks_n))| OfflineArtist {
+            name: name.clone().into(),
+            meta: format!("{} albums · {} tracks", albums_n, tracks_n).into(),
+            selected: *name == f.selected_artist,
+        })
+        .collect();
+
+    // Album display order per the sort.
+    let mut order = album_order.clone();
+    match f.sort {
+        0 => order.sort_by(|a, b| albums[a].1.to_lowercase().cmp(&albums[b].1.to_lowercase())),
+        2 => order.sort_by(|a, b| album_size(&albums[b].2).cmp(&album_size(&albums[a].2))),
+        3 => order.sort_by(|a, b| album_size(&albums[a].2).cmp(&album_size(&albums[b].2))),
+        _ => {} // 1 recent — keep the DB's last_accessed_at DESC order
+    }
+
+    let mut rows: Vec<RowData> = Vec::new();
     for aid in &order {
-        let (album, artist, group) = groups.get(aid).unwrap();
+        let (artist, title, group) = &albums[aid];
+        if !f.selected_artist.is_empty() && *artist != f.selected_artist {
+            continue;
+        }
         let any_failed = group
             .iter()
             .any(|t| matches!(t.status, OfflineCacheStatus::Failed));
+        if f.show_only_failed && !any_failed {
+            continue;
+        }
         let any_active = group.iter().any(|t| {
             matches!(
                 t.status,
@@ -96,27 +213,35 @@ async fn rebuild(weak: slint::Weak<AppWindow>) {
         } else {
             0
         };
-        let album_size: u64 = group.iter().map(|t| t.file_size_bytes).sum();
-        rows.push(OfflineRow {
-            kind: "album".into(),
-            album_id: aid.clone().into(),
-            track_id: SharedString::new(),
-            title: album.clone().into(),
-            subtitle: artist.clone().into(),
-            meta: format!("{} tracks · {}", group.len(), human_size(album_size)).into(),
+        let cover_path = group
+            .first()
+            .map(|t| cover_path(&cache_path, t.track_id))
+            .unwrap_or_default();
+        rows.push(RowData {
+            kind: "album",
+            album_id: aid.clone(),
+            track_id: String::new(),
+            title: title.clone(),
+            subtitle: artist.clone(),
+            meta: format!("{} tracks · {}", group.len(), human_size(album_size(group))),
             status: album_status,
             progress: 0.0,
+            cover_path,
         });
         for t in group {
-            rows.push(OfflineRow {
-                kind: "track".into(),
-                album_id: aid.clone().into(),
-                track_id: t.track_id.to_string().into(),
-                title: t.title.clone().into(),
-                subtitle: t.artist.clone().into(),
-                meta: fmt_duration(t.duration_secs).into(),
+            if f.show_only_failed && !matches!(t.status, OfflineCacheStatus::Failed) {
+                continue;
+            }
+            rows.push(RowData {
+                kind: "track",
+                album_id: aid.clone(),
+                track_id: t.track_id.to_string(),
+                title: t.title.clone(),
+                subtitle: t.artist.clone(),
+                meta: fmt_duration(t.duration_secs),
                 status: track_status_int(&t.status),
                 progress: t.progress_percent as f32 / 100.0,
+                cover_path: String::new(),
             });
         }
     }
@@ -133,12 +258,32 @@ async fn rebuild(weak: slint::Weak<AppWindow>) {
 
     let _ = weak.upgrade_in_event_loop(move |w| {
         let st = w.global::<OfflineManagerState>();
-        st.set_rows(ModelRc::new(VecModel::from(rows)));
+        // Build OfflineRow on the UI thread (decodes the cover images here —
+        // slint::Image is not Send, so it can't be built on the worker).
+        let offline_rows: Vec<OfflineRow> = rows
+            .into_iter()
+            .map(|rd| OfflineRow {
+                kind: rd.kind.into(),
+                album_id: rd.album_id.into(),
+                track_id: rd.track_id.into(),
+                title: rd.title.into(),
+                subtitle: rd.subtitle.into(),
+                meta: rd.meta.into(),
+                status: rd.status,
+                progress: rd.progress,
+                cover: load_cover(&rd.cover_path),
+            })
+            .collect();
+        st.set_rows(ModelRc::new(VecModel::from(offline_rows)));
+        st.set_artists(ModelRc::new(VecModel::from(artists)));
         st.set_tracks_count(tracks_count);
         st.set_size_text(SharedString::from(size_text));
         st.set_limit_text(SharedString::from(limit_text));
         st.set_usage(usage);
         st.set_limit_gb(limit_gb);
+        st.set_selected_artist(SharedString::from(f.selected_artist));
+        st.set_sort_index(f.sort);
+        st.set_show_only_failed(f.show_only_failed);
         st.set_loading(false);
     });
 }
@@ -151,22 +296,37 @@ pub fn load(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
     handle.spawn(rebuild(weak));
 }
 
-/// Rebuild after a brief delay — used after a manager mutation (remove /
-/// re-download) so the list reflects the async DB op without a manual refresh.
-pub fn reload_soon(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
-    handle.spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        rebuild(weak).await;
-    });
+// --- Toolbar actions ----------------------------------------------------
+
+pub fn select_artist(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle, name: String) {
+    if let Ok(mut f) = filters().lock() {
+        f.selected_artist = name;
+    }
+    handle.spawn(rebuild(weak));
 }
 
-/// Set the in-memory cache size limit (GB) and refresh. (Session-scoped for
-/// now — Slint-side persistence is a follow-up.)
+pub fn set_sort(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle, index: i32) {
+    if let Ok(mut f) = filters().lock() {
+        f.sort = index;
+    }
+    handle.spawn(rebuild(weak));
+}
+
+pub fn toggle_failed(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    if let Ok(mut f) = filters().lock() {
+        f.show_only_failed = !f.show_only_failed;
+    }
+    handle.spawn(rebuild(weak));
+}
+
+/// Set the cache size limit (GB), persist it to disk, and refresh.
 pub fn set_limit(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle, gb: i32) {
     handle.spawn(async move {
+        let bytes = (gb.max(1) as u64) * GB;
         if let Some(off) = crate::offline::get().await {
-            *off.limit_bytes.lock().await = Some((gb.max(1) as u64) * GB);
+            *off.limit_bytes.lock().await = Some(bytes);
         }
+        crate::offline::persist_limit(bytes).await;
         rebuild(weak).await;
     });
 }

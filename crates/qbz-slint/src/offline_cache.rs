@@ -379,6 +379,7 @@ pub fn remove_album(
             }
         });
         crate::toast::success_weak(&weak, "Removed album from offline");
+        crate::offline_manager::rebuild(weak.clone()).await;
     });
 }
 
@@ -419,6 +420,7 @@ pub fn redownload_track(
             row_sink(weak.clone()),
             off.cache_semaphore.clone(),
         );
+        crate::offline_manager::rebuild(weak.clone()).await;
     });
 }
 
@@ -468,6 +470,7 @@ pub fn redownload_album(
                 off.cache_semaphore.clone(),
             );
         }
+        crate::offline_manager::rebuild(weak.clone()).await;
     });
 }
 
@@ -504,6 +507,7 @@ pub fn clear_all(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
             s.clear();
         }
         crate::toast::success_weak(&weak, "Offline cache cleared");
+        crate::offline_manager::rebuild(weak.clone()).await;
     });
 }
 
@@ -551,5 +555,6 @@ pub fn remove_cached(
         mark_cached(id, false);
         push_status(&weak, id, 0, 0.0);
         crate::toast::success_weak(&weak, "Removed from offline");
+        crate::offline_manager::rebuild(weak.clone()).await;
     });
 }

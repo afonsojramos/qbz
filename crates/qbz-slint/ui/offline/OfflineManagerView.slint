@@ -1,17 +1,20 @@
 // Offline Cache Manager — the standalone manage-downloads surface (Tauri's
-// OfflineCacheManagerView). Fixed header (Back + title) + a stats bar (totals
-// / usage bar / edit-limit / open-folder / clear-all) over a scrolling list
-// of album-header + track rows (per-row remove / re-download).
+// OfflineCacheManagerView). Header (Back + title) + a stats bar (totals /
+// usage bar / edit-limit / open-folder / clear-all) + a toolbar (sort
+// dropdown / show-only-failed) over a two-pane body: a left A-Z artist rail
+// and a right scrolling list of album-header (with cover) + track rows
+// (per-row remove / re-download).
 //
-// Rows are precomputed in Rust (crate::offline_manager) and pushed as a flat
-// [OfflineRow] model; actions go through OfflineManagerActions.
+// Rows + artists are precomputed in Rust (crate::offline_manager) and pushed
+// as models; actions go through OfflineManagerActions.
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { OfflineManagerState, OfflineManagerActions, OfflineRow } from "../state.slint";
+import { OfflineManagerState, OfflineManagerActions, OfflineRow, OfflineArtist } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 
@@ -40,8 +43,7 @@ component IconBtn inherits Rectangle {
     }
 }
 
-// The cache-status glyph: 2 downloading (spinning loader) / 3 ready (check) /
-// 4 failed (alert) / else cloud.
+// The cache-status glyph (downloading spins).
 component StatusIcon inherits Rectangle {
     in property <int> status;
     width: 18px;
@@ -69,14 +71,52 @@ component StatusIcon inherits Rectangle {
     }
 }
 
+// One artist-rail row.
+component ArtistRailRow inherits Rectangle {
+    in property <string> name;
+    in property <string> meta;
+    in property <bool> active;
+    callback clicked;
+    height: 48px;
+    border-radius: 8px;
+    background: root.active ? Theme.surface-elevated : (ta.has-hover ? #ffffff10 : transparent);
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.name;
+                color: root.active ? Theme.accent : Theme.text-primary;
+                font-size: Typography.legal;
+                font-weight: root.active ? Typography.semibold : Typography.regular;
+                overflow: elide;
+            }
+            Text {
+                text: root.meta;
+                color: Theme.text-muted;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 export component OfflineManagerView inherits Rectangle {
     background: Theme.surface-main;
 
     VerticalLayout {
         padding: 24px;
-        spacing: 16px;
+        spacing: 14px;
 
-        // Header — back + title.
+        // Header.
         HorizontalLayout {
             vertical-stretch: 0;
             spacing: 12px;
@@ -101,7 +141,6 @@ export component OfflineManagerView inherits Rectangle {
             HorizontalLayout {
                 padding: 16px;
                 spacing: 20px;
-                // Totals.
                 VerticalLayout {
                     alignment: center;
                     Text {
@@ -116,7 +155,6 @@ export component OfflineManagerView inherits Rectangle {
                         font-size: Typography.legal;
                     }
                 }
-                // Usage bar.
                 Rectangle {
                     horizontal-stretch: 1;
                     VerticalLayout {
@@ -136,7 +174,6 @@ export component OfflineManagerView inherits Rectangle {
                         }
                     }
                 }
-                // Edit limit (GB).
                 VerticalLayout {
                     alignment: center;
                     HorizontalLayout {
@@ -178,7 +215,6 @@ export component OfflineManagerView inherits Rectangle {
                         }
                     }
                 }
-                // Open folder + clear all.
                 VerticalLayout {
                     alignment: center;
                     IconBtn {
@@ -201,92 +237,187 @@ export component OfflineManagerView inherits Rectangle {
             }
         }
 
-        // Loading / empty / list.
-        if OfflineManagerState.loading: VerticalLayout {
-            alignment: center;
-            HorizontalLayout {
-                alignment: center;
-                LoadingSpinner { }
+        // Toolbar — sort + show-only-failed.
+        HorizontalLayout {
+            vertical-stretch: 0;
+            spacing: 12px;
+            QbzSelect {
+                menu-width: 160px;
+                sm: true;
+                options: [@tr("Sort: A-Z"), @tr("Sort: Recent"), @tr("Sort: Largest"), @tr("Sort: Smallest")];
+                current-index: OfflineManagerState.sort-index;
+                selected(i) => {
+                    OfflineManagerActions.set-sort(i);
+                }
             }
-        }
-        if !OfflineManagerState.loading && OfflineManagerState.rows.length == 0: VerticalLayout {
-            alignment: center;
-            Text {
-                text: "No offline tracks yet";
-                color: Theme.text-muted;
-                font-size: Typography.body;
-                horizontal-alignment: center;
+            Rectangle {
+                width: failed-label.preferred-width + 28px;
+                height: 32px;
+                border-radius: Radius.sm;
+                border-width: 1px;
+                border-color: OfflineManagerState.show-only-failed ? Theme.accent : Theme.border-subtle;
+                background: OfflineManagerState.show-only-failed ? #e0564f22 : (failed-ta.has-hover ? Theme.surface-elevated : transparent);
+                failed-label := Text {
+                    x: 14px;
+                    text: @tr("Failed only");
+                    color: OfflineManagerState.show-only-failed ? #e0564f : Theme.text-secondary;
+                    font-size: Typography.legal;
+                    vertical-alignment: center;
+                    height: 100%;
+                }
+                failed-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        OfflineManagerActions.toggle-failed();
+                    }
+                }
             }
+            Rectangle { } // spacer
         }
-        if !OfflineManagerState.loading && OfflineManagerState.rows.length > 0: ScrollView {
-            VerticalLayout {
-                spacing: 2px;
-                for row in OfflineManagerState.rows: Rectangle {
-                    height: row.kind == "album" ? 58px : 44px;
-                    border-radius: 8px;
-                    background: row.kind == "album" ? Theme.surface-card : transparent;
+
+        // Body — artist rail + rows.
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 14px;
+
+            // Left A-Z artist rail.
+            Rectangle {
+                width: 210px;
+                border-radius: Radius.md;
+                background: Theme.surface-card;
+                ScrollView {
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 2px;
+                        ArtistRailRow {
+                            name: @tr("All artists");
+                            meta: OfflineManagerState.tracks-count + " tracks";
+                            active: OfflineManagerState.selected-artist == "";
+                            clicked => {
+                                OfflineManagerActions.select-artist("");
+                            }
+                        }
+                        for a in OfflineManagerState.artists: ArtistRailRow {
+                            name: a.name;
+                            meta: a.meta;
+                            active: a.selected;
+                            clicked => {
+                                OfflineManagerActions.select-artist(a.name);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Right list.
+            Rectangle {
+                horizontal-stretch: 1;
+                if OfflineManagerState.loading: VerticalLayout {
+                    alignment: center;
                     HorizontalLayout {
-                        padding-left: row.kind == "album" ? 12px : 28px;
-                        padding-right: 12px;
-                        spacing: 12px;
-                        // Status glyph.
-                        VerticalLayout {
-                            alignment: center;
-                            StatusIcon { status: row.status; }
-                        }
-                        // Title + subtitle.
-                        VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 1;
-                            spacing: 2px;
-                            Text {
-                                text: row.title;
-                                color: Theme.text-primary;
-                                font-size: row.kind == "album" ? Typography.body : Typography.legal;
-                                font-weight: row.kind == "album" ? Typography.semibold : Typography.regular;
-                                overflow: elide;
-                            }
-                            Text {
-                                text: row.subtitle;
-                                color: Theme.text-muted;
-                                font-size: Typography.legal;
-                                overflow: elide;
-                            }
-                        }
-                        // Meta.
-                        VerticalLayout {
-                            alignment: center;
-                            Text {
-                                text: row.meta;
-                                color: Theme.text-muted;
-                                font-size: Typography.legal;
-                                horizontal-alignment: right;
-                            }
-                        }
-                        // Re-download.
-                        VerticalLayout {
-                            alignment: center;
-                            IconBtn {
-                                icon: @image-url("../assets/icons/refresh-cw.svg");
-                                clicked => {
-                                    if (row.kind == "album") {
-                                        OfflineManagerActions.redownload-album(row.album-id);
-                                    } else {
-                                        OfflineManagerActions.redownload-track(row.track-id);
+                        alignment: center;
+                        LoadingSpinner { }
+                    }
+                }
+                if !OfflineManagerState.loading && OfflineManagerState.rows.length == 0: VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("No offline tracks yet");
+                        color: Theme.text-muted;
+                        font-size: Typography.body;
+                        horizontal-alignment: center;
+                    }
+                }
+                if !OfflineManagerState.loading && OfflineManagerState.rows.length > 0: ScrollView {
+                    VerticalLayout {
+                        spacing: 2px;
+                        for row in OfflineManagerState.rows: Rectangle {
+                            height: row.kind == "album" ? 60px : 44px;
+                            border-radius: 8px;
+                            background: row.kind == "album" ? Theme.surface-card : transparent;
+                            HorizontalLayout {
+                                padding-left: row.kind == "album" ? 10px : 28px;
+                                padding-right: 12px;
+                                spacing: 12px;
+                                // Album cover (album rows only).
+                                if row.kind == "album": VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 40px;
+                                        height: 40px;
+                                        border-radius: 4px;
+                                        clip: true;
+                                        background: Theme.surface-main;
+                                        Image {
+                                            width: 100%;
+                                            height: 100%;
+                                            source: row.cover;
+                                            image-fit: cover;
+                                        }
                                     }
                                 }
-                            }
-                        }
-                        // Remove.
-                        VerticalLayout {
-                            alignment: center;
-                            IconBtn {
-                                icon: @image-url("../assets/icons/trash-2.svg");
-                                clicked => {
-                                    if (row.kind == "album") {
-                                        OfflineManagerActions.remove-album(row.album-id);
-                                    } else {
-                                        OfflineManagerActions.remove-track(row.track-id);
+                                // Status glyph.
+                                VerticalLayout {
+                                    alignment: center;
+                                    StatusIcon {
+                                        status: row.status;
+                                    }
+                                }
+                                // Title + subtitle.
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    spacing: 2px;
+                                    Text {
+                                        text: row.title;
+                                        color: Theme.text-primary;
+                                        font-size: row.kind == "album" ? Typography.body : Typography.legal;
+                                        font-weight: row.kind == "album" ? Typography.semibold : Typography.regular;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: row.subtitle;
+                                        color: Theme.text-muted;
+                                        font-size: Typography.legal;
+                                        overflow: elide;
+                                    }
+                                }
+                                // Meta.
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: row.meta;
+                                        color: Theme.text-muted;
+                                        font-size: Typography.legal;
+                                        horizontal-alignment: right;
+                                    }
+                                }
+                                // Re-download.
+                                VerticalLayout {
+                                    alignment: center;
+                                    IconBtn {
+                                        icon: @image-url("../assets/icons/refresh-cw.svg");
+                                        clicked => {
+                                            if (row.kind == "album") {
+                                                OfflineManagerActions.redownload-album(row.album-id);
+                                            } else {
+                                                OfflineManagerActions.redownload-track(row.track-id);
+                                            }
+                                        }
+                                    }
+                                }
+                                // Remove.
+                                VerticalLayout {
+                                    alignment: center;
+                                    IconBtn {
+                                        icon: @image-url("../assets/icons/trash-2.svg");
+                                        clicked => {
+                                            if (row.kind == "album") {
+                                                OfflineManagerActions.remove-album(row.album-id);
+                                            } else {
+                                                OfflineManagerActions.remove-track(row.track-id);
+                                            }
+                                        }
                                     }
                                 }
                             }

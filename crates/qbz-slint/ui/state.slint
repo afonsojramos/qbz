@@ -671,10 +671,19 @@ export struct OfflineRow {
     // 0 none | 2 downloading | 3 ready | 4 failed. Album = worst across tracks.
     status: int,
     progress: float,       // track downloading 0..1
+    cover: image,          // album-header cover (loaded from the on-disk cover.jpg)
+}
+
+// One entry in the manager's left A-Z artist rail.
+export struct OfflineArtist {
+    name: string,
+    meta: string,          // "3 albums · 21 tracks"
+    selected: bool,
 }
 
 export global OfflineManagerState {
     in property <[OfflineRow]> rows: [];
+    in property <[OfflineArtist]> artists: [];
     in property <bool> loading: false;
     // Header stats.
     in property <int> tracks-count: 0;
@@ -682,12 +691,21 @@ export global OfflineManagerState {
     in property <string> limit-text: "";     // "of 5 GB" | "Unlimited"
     in property <float> usage: 0.0;           // 0..1 for the bar (0 = unlimited)
     in-out property <int> limit-gb: 5;        // edit-limit input
+    // Toolbar — set by the controller from the Rust-side filter state so the
+    // dropdown selection / toggle / rail highlight reflect the current view.
+    in property <string> selected-artist: ""; // "" = all artists
+    in property <int> sort-index: 0;           // 0 alpha / 1 recent / 2 largest / 3 smallest
+    in property <bool> show-only-failed: false;
 }
 
 export global OfflineManagerActions {
     // Navigate to the manager (from the Settings "Offline Playback" entry).
     callback open();
     callback refresh();
+    // Toolbar.
+    callback select-artist(string /* name, "" = all */);
+    callback set-sort(int /* index */);
+    callback toggle-failed();
     callback remove-track(string /* track id */);
     callback remove-album(string /* album id */);
     callback redownload-track(string /* track id */);
