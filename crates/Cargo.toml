@@ -16,6 +16,7 @@ members = [
     "qbz-cmaf",
     "qbz-secrets",
     "qbz-offline-cache",
+    "qbz-plex",
     "qconnect-core",
     "qconnect-protocol",
     "qconnect-transport-ws",

@@ -5174,6 +5174,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-plex"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "open",
+ "reqwest",
+ "rusqlite",
+ "serde",
+]
+
+[[package]]
 name = "qbz-qobuz"
 version = "0.1.0"
 dependencies = [
