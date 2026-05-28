@@ -43,6 +43,7 @@ mod queue;
 mod drag;
 mod folders;
 mod library_db;
+mod offline;
 mod playlist;
 mod playlist_manager;
 mod playlist_picker;

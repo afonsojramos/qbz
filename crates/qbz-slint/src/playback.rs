@@ -130,14 +130,15 @@ type Runtime = Arc<AppRuntime<SlintAdapter>>;
 /// the player's self-contained `play_track`. Errors are logged, not
 /// surfaced — the poll loop keeps the UI consistent regardless.
 async fn play_audible(runtime: &Runtime, track_id: u64) {
-    let client_lock = runtime.core().client();
-    let guard = client_lock.read().await;
-    let Some(client) = guard.as_ref() else {
-        log::error!("[qbz-slint] playback: no Qobuz client — cannot start audio");
-        return;
-    };
-    let player = runtime.core().player();
-    if let Err(e) = player.play_track(client, track_id, PLAYBACK_QUALITY).await {
+    // Route through the shared tier-walk: an offline-cached copy is preferred
+    // (decrypted to FLAC and played via play_data) before the player's own
+    // L1/L2 -> network path. The offline handle is None before login.
+    let offline = crate::offline::get().await;
+    if let Err(e) = runtime
+        .core()
+        .play_track_resolved(track_id, PLAYBACK_QUALITY, offline.as_deref(), None)
+        .await
+    {
         log::error!("[qbz-slint] playback: play_track {track_id} failed: {e}");
     }
 }
@@ -1145,16 +1146,20 @@ pub fn start_poll_loop(
                         let runtime = runtime.clone();
                         let next_id = next.id;
                         tokio::spawn(async move {
-                            let client_lock = runtime.core().client();
-                            let guard = client_lock.read().await;
-                            let Some(client) = guard.as_ref() else {
-                                return;
-                            };
-                            let player = runtime.core().player();
-                            if let Some(data) = player
-                                .fetch_for_gapless(client, next_id, PLAYBACK_QUALITY)
+                            // Shared tier-walk: L1/L2 (player cache) -> offline
+                            // -> network, then hand the bytes to play_next.
+                            let offline = crate::offline::get().await;
+                            if let Some(data) = runtime
+                                .core()
+                                .fetch_for_gapless_resolved(
+                                    next_id,
+                                    PLAYBACK_QUALITY,
+                                    offline.as_deref(),
+                                    None,
+                                )
                                 .await
                             {
+                                let player = runtime.core().player();
                                 if let Err(e) = player.play_next(data, next_id) {
                                     log::warn!(
                                         "[qbz-slint] [GAPLESS] play_next {next_id} failed: {e}"

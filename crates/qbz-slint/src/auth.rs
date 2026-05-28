@@ -87,6 +87,9 @@ where
     // Activate the per-user session (creates dirs, opens the session store).
     runtime.activate(user_id).await?;
 
+    // Bring up the per-user offline cache (shared index.db + library.db with Tauri).
+    crate::offline::activate(user_id).await;
+
     // Persist the token so the next launch restores the session silently.
     if let Err(e) = qbz_credentials::save_oauth_token(&token) {
         log::warn!("[qbz-slint] failed to persist OAuth token: {e}");
@@ -133,6 +136,7 @@ where
             let subscription = session.subscription_label.clone();
             core.set_session(session).await.map_err(|e| e.to_string())?;
             runtime.activate(user_id).await?;
+            crate::offline::activate(user_id).await;
             log::info!("[qbz-slint] restored saved session for user {user_id}");
             Ok(Some(SessionInfo {
                 user_id,
@@ -156,6 +160,7 @@ where
 {
     let _ = qbz_credentials::clear_oauth_token();
     let _ = runtime.core().logout().await;
+    crate::offline::deactivate().await;
     runtime.deactivate().await?;
     log::info!("[qbz-slint] logged out");
     Ok(())
