@@ -19,9 +19,11 @@ static VAULT: OnceLock<std::sync::Mutex<Option<SecretBox>>> = OnceLock::new();
 /// subsequent calls return the cached handle regardless.
 pub fn get_or_init(storage_dir: &Path) -> Result<SecretBox, SecretError> {
     let cell = VAULT.get_or_init(|| std::sync::Mutex::new(None));
-    let mut guard = cell
-        .lock()
-        .map_err(|_| SecretError::Other("secret vault mutex poisoned".to_string()))?;
+    // Recover from a poisoned mutex rather than wedging the vault for the rest
+    // of the session: a panic during a prior `SecretBox::open` (e.g. the zbus
+    // "runtime within a runtime" panic this guards against) leaves the inner
+    // `Option` as `None`, so recovering simply retries the open.
+    let mut guard = cell.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(existing) = guard.as_ref() {
         return Ok(existing.clone());
     }

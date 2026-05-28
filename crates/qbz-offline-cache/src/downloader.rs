@@ -320,16 +320,27 @@ pub(crate) async fn try_cmaf_offline_download(
         .await?
     };
 
-    // Open (or lazily init) the secret vault and wrap the keying material
-    // before it touches the filesystem.
-    let vault = crate::secret_vault::get_or_init(&offline_root_path)
-        .map_err(|e| format!("SecretBox init failed: {}", e))?;
-    let content_key_wrapped = vault
-        .wrap(&bundle.content_key)
-        .map_err(|e| format!("Failed to wrap content_key: {}", e))?;
-    let infos_wrapped = vault
-        .wrap(bundle.infos.as_bytes())
-        .map_err(|e| format!("Failed to wrap infos: {}", e))?;
+    // Open the secret vault and wrap the keying material on a BLOCKING thread.
+    // The OS keyring (secret-service) does a synchronous D-Bus round-trip via
+    // zbus, which PANICS ("cannot start a runtime from within a runtime") when
+    // run on an async worker. spawn_blocking moves it off the async pool — the
+    // same reason the playback decrypt path already uses spawn_blocking.
+    let offline_root_for_vault = offline_root_path.clone();
+    let content_key = bundle.content_key;
+    let infos = bundle.infos.clone();
+    let (content_key_wrapped, infos_wrapped) = tokio::task::spawn_blocking(move || {
+        let vault = crate::secret_vault::get_or_init(&offline_root_for_vault)
+            .map_err(|e| format!("SecretBox init failed: {}", e))?;
+        let ck = vault
+            .wrap(&content_key)
+            .map_err(|e| format!("Failed to wrap content_key: {}", e))?;
+        let inf = vault
+            .wrap(infos.as_bytes())
+            .map_err(|e| format!("Failed to wrap infos: {}", e))?;
+        Ok::<(Vec<u8>, Vec<u8>), String>((ck, inf))
+    })
+    .await
+    .map_err(|e| format!("vault task join failed: {}", e))??;
 
     // Persist the encrypted bundle to disk.
     let (layout, total_bytes) =
