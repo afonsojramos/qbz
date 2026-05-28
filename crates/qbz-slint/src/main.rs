@@ -4892,6 +4892,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let tracks = favorites::selected_tracks(&w);
                         playback::enqueue_tracks(runtime.clone(), handle.clone(), tracks, true);
                     }
+                    "make-offline" => {
+                        let tracks = favorites::selected_tracks(&w);
+                        offline_cache::cache_tracks(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            tracks,
+                        );
+                        favorites::clear_selection(&w);
+                    }
                     "add-to-playlist" => {
                         let ids = favorites::selected_ids(&w);
                         if !ids.is_empty() {
