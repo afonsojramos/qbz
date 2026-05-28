@@ -2191,6 +2191,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     });
                 }
+                ("album", "cache") => offline_cache::cache_album(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id,
+                ),
                 ("track", "play-next") => {
                     if let Ok(track_id) = id.parse::<u64>() {
                         playback::play_track_next(

@@ -349,6 +349,15 @@ export component AlbumPageView inherits Rectangle {
                         }
                         VerticalLayout {
                             alignment: center;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/cloud-download.svg");
+                                clicked => {
+                                    root.media-action("album", AlbumState.id, "cache");
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
                             CircleAction { icon: @image-url("../assets/icons/radio.svg"); }
                         }
                         VerticalLayout {

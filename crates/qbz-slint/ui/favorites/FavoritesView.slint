@@ -1066,6 +1066,7 @@ export component FavoritesView inherits Rectangle {
                                 show-artwork: true;
                                 show-album: FavoritesState.tracks-group-mode != "album";
                                 show-favorite: true;
+                                show-download: true;
                                 multi-select-mode: FavoritesState.tracks-multi-select;
                                 media-action(kind, id, action) => {
                                     if (kind == "album" && action == "open") {
