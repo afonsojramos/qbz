@@ -5133,14 +5133,19 @@ dependencies = [
 name = "qbz-offline-cache"
 version = "0.1.0"
 dependencies = [
+ "lofty",
  "log",
  "qbz-cmaf",
+ "qbz-library",
+ "qbz-models",
  "qbz-qobuz",
  "qbz-secrets",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

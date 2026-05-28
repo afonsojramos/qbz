@@ -17,12 +17,20 @@
 pub mod cmaf_store;
 pub mod db;
 pub mod maintenance;
+pub mod metadata;
+pub mod migration;
 pub mod path_validator;
+pub mod playback;
 pub mod secret_vault;
 pub mod types;
 
 pub use db::{CmafBundleRow, OfflineCacheDb};
+pub use metadata::{sanitize_filename, CompleteTrackMetadata};
+pub use migration::{
+    detect_legacy_cached_files, migrate_legacy_cached_files, MigrationError, MigrationStatus,
+};
 pub use path_validator::{is_offline_root_available, validate_path, PathStatus};
+pub use playback::load_cmaf_bundle;
 pub use types::{
     CacheProgress, CachedTrackInfo, OfflineCacheStats, OfflineCacheStatus, ReadyTrackForSync,
     TrackCacheInfo,
