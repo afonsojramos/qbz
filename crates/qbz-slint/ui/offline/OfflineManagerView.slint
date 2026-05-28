@@ -109,6 +109,33 @@ component ArtistRailRow inherits Rectangle {
     }
 }
 
+// A small labelled ghost button (toolbar / bulk actions).
+component TxtBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger: false;
+    callback clicked;
+    width: lbl.preferred-width + 24px;
+    height: 32px;
+    border-radius: Radius.sm;
+    border-width: 1px;
+    border-color: root.danger ? #e0564f : Theme.border-subtle;
+    background: ta.has-hover ? Theme.surface-elevated : transparent;
+    lbl := Text {
+        x: 12px;
+        text: root.label;
+        color: root.danger ? #e0564f : Theme.text-secondary;
+        font-size: Typography.legal;
+        vertical-alignment: center;
+        height: 100%;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 export component OfflineManagerView inherits Rectangle {
     background: Theme.surface-main;
 
@@ -272,7 +299,45 @@ export component OfflineManagerView inherits Rectangle {
                     }
                 }
             }
-            Rectangle { } // spacer
+            Rectangle {
+                horizontal-stretch: 1;
+            } // spacer
+            // Bulk actions on the checked tracks.
+            if OfflineManagerState.selected-count > 0: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: OfflineManagerState.selected-count + @tr(" selected");
+                        color: Theme.text-muted;
+                        font-size: Typography.legal;
+                    }
+                }
+                TxtBtn {
+                    label: @tr("Re-download");
+                    clicked => {
+                        OfflineManagerActions.bulk-redownload();
+                    }
+                }
+                TxtBtn {
+                    label: @tr("Remove");
+                    danger: true;
+                    clicked => {
+                        OfflineManagerActions.bulk-remove();
+                    }
+                }
+            }
+            // Select all / clear toggle.
+            TxtBtn {
+                label: OfflineManagerState.selected-count > 0 ? @tr("Clear") : @tr("Select all");
+                clicked => {
+                    if (OfflineManagerState.selected-count > 0) {
+                        OfflineManagerActions.clear-selection();
+                    } else {
+                        OfflineManagerActions.select-all();
+                    }
+                }
+            }
         }
 
         // Body — artist rail + rows.
@@ -336,13 +401,41 @@ export component OfflineManagerView inherits Rectangle {
                             border-radius: 8px;
                             background: row.kind == "album" ? Theme.surface-card : transparent;
                             HorizontalLayout {
-                                padding-left: row.kind == "album" ? 10px : 28px;
+                                padding-left: row.kind == "album" ? 10px : 16px;
                                 padding-right: 12px;
                                 spacing: 12px;
-                                // Album cover (album rows only).
-                                if row.kind == "album": VerticalLayout {
+                                // Selection checkbox (track rows) / spacer (albums).
+                                VerticalLayout {
                                     alignment: center;
                                     Rectangle {
+                                        width: 16px;
+                                        height: 16px;
+                                        border-radius: 4px;
+                                        background: row.selected ? Theme.accent : transparent;
+                                        border-width: (row.kind == "track" && !row.selected) ? 1.5px : 0px;
+                                        border-color: Theme.text-muted;
+                                        visible: row.kind == "track";
+                                        QbzIcon {
+                                            source: @image-url("../assets/icons/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            tint: #ffffff;
+                                            visible: row.selected;
+                                        }
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                OfflineManagerActions.toggle-select(row.track-id);
+                                            }
+                                        }
+                                    }
+                                }
+                                // Leading — album cover OR track number.
+                                VerticalLayout {
+                                    alignment: center;
+                                    if row.kind == "album": Rectangle {
                                         width: 40px;
                                         height: 40px;
                                         border-radius: 4px;
@@ -355,12 +448,18 @@ export component OfflineManagerView inherits Rectangle {
                                             image-fit: cover;
                                         }
                                     }
-                                }
-                                // Status glyph.
-                                VerticalLayout {
-                                    alignment: center;
-                                    StatusIcon {
-                                        status: row.status;
+                                    if row.kind == "track": Rectangle {
+                                        width: 40px;
+                                        height: 40px;
+                                        Text {
+                                            width: 100%;
+                                            height: 100%;
+                                            text: row.number;
+                                            color: Theme.text-muted;
+                                            font-size: Typography.body;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
                                     }
                                 }
                                 // Title + subtitle.
@@ -418,6 +517,13 @@ export component OfflineManagerView inherits Rectangle {
                                                 OfflineManagerActions.remove-track(row.track-id);
                                             }
                                         }
+                                    }
+                                }
+                                // Status — at the end of the row (both kinds).
+                                VerticalLayout {
+                                    alignment: center;
+                                    StatusIcon {
+                                        status: row.status;
                                     }
                                 }
                             }

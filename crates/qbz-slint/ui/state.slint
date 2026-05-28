@@ -672,6 +672,8 @@ export struct OfflineRow {
     status: int,
     progress: float,       // track downloading 0..1
     cover: image,          // album-header cover (loaded from the on-disk cover.jpg)
+    number: string,        // track position within its album ("" on album rows)
+    selected: bool,        // multi-select checkbox
 }
 
 // One entry in the manager's left A-Z artist rail.
@@ -696,6 +698,8 @@ export global OfflineManagerState {
     in property <string> selected-artist: ""; // "" = all artists
     in property <int> sort-index: 0;           // 0 alpha / 1 recent / 2 largest / 3 smallest
     in property <bool> show-only-failed: false;
+    // Multi-select: how many TRACK rows are checked (drives the bulk bar).
+    in property <int> selected-count: 0;
 }
 
 export global OfflineManagerActions {
@@ -706,6 +710,12 @@ export global OfflineManagerActions {
     callback select-artist(string /* name, "" = all */);
     callback set-sort(int /* index */);
     callback toggle-failed();
+    // Multi-select.
+    callback toggle-select(string /* track id */);
+    callback select-all();
+    callback clear-selection();
+    callback bulk-redownload();
+    callback bulk-remove();
     callback remove-track(string /* track id */);
     callback remove-album(string /* album id */);
     callback redownload-track(string /* track id */);

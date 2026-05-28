@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex as StdMutex, OnceLock};
 
 use qbz_offline_cache::{CachedTrackInfo, OfflineCacheStatus};
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::{AppWindow, OfflineArtist, OfflineManagerState, OfflineRow};
 
@@ -112,6 +112,7 @@ struct RowData {
     status: i32,
     progress: f32,
     cover_path: String,
+    number: String,
 }
 
 // --- Data load ----------------------------------------------------------
@@ -227,8 +228,9 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
             status: album_status,
             progress: 0.0,
             cover_path,
+            number: String::new(),
         });
-        for t in group {
+        for (i, t) in group.iter().enumerate() {
             if f.show_only_failed && !matches!(t.status, OfflineCacheStatus::Failed) {
                 continue;
             }
@@ -242,6 +244,7 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
                 status: track_status_int(&t.status),
                 progress: t.progress_percent as f32 / 100.0,
                 cover_path: String::new(),
+                number: (i + 1).to_string(),
             });
         }
     }
@@ -272,9 +275,12 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
                 status: rd.status,
                 progress: rd.progress,
                 cover: load_cover(&rd.cover_path),
+                number: rd.number.into(),
+                selected: false,
             })
             .collect();
         st.set_rows(ModelRc::new(VecModel::from(offline_rows)));
+        st.set_selected_count(0);
         st.set_artists(ModelRc::new(VecModel::from(artists)));
         st.set_tracks_count(tracks_count);
         st.set_size_text(SharedString::from(size_text));
@@ -317,6 +323,71 @@ pub fn toggle_failed(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handl
         f.show_only_failed = !f.show_only_failed;
     }
     handle.spawn(rebuild(weak));
+}
+
+// --- Multi-select (in-place model edits on the UI thread) ---------------
+
+fn recount(st: &OfflineManagerState) {
+    let model = st.get_rows();
+    let mut n = 0;
+    for i in 0..model.row_count() {
+        if let Some(r) = model.row_data(i) {
+            if r.kind == "track" && r.selected {
+                n += 1;
+            }
+        }
+    }
+    st.set_selected_count(n);
+}
+
+/// Flip a single track row's checkbox in place.
+pub fn toggle_select(w: &AppWindow, track_id: &str) {
+    let st = w.global::<OfflineManagerState>();
+    let model = st.get_rows();
+    if let Some(vm) = model.as_any().downcast_ref::<VecModel<OfflineRow>>() {
+        for i in 0..vm.row_count() {
+            if let Some(mut r) = vm.row_data(i) {
+                if r.kind == "track" && r.track_id == track_id {
+                    r.selected = !r.selected;
+                    vm.set_row_data(i, r);
+                }
+            }
+        }
+    }
+    recount(&st);
+}
+
+/// Check (or uncheck) every track row.
+pub fn set_all_selected(w: &AppWindow, selected: bool) {
+    let st = w.global::<OfflineManagerState>();
+    let model = st.get_rows();
+    if let Some(vm) = model.as_any().downcast_ref::<VecModel<OfflineRow>>() {
+        for i in 0..vm.row_count() {
+            if let Some(mut r) = vm.row_data(i) {
+                if r.kind == "track" && r.selected != selected {
+                    r.selected = selected;
+                    vm.set_row_data(i, r);
+                }
+            }
+        }
+    }
+    recount(&st);
+}
+
+/// The Qobuz ids of the checked track rows (for the bulk actions).
+pub fn selected_track_ids(w: &AppWindow) -> Vec<u64> {
+    let model = w.global::<OfflineManagerState>().get_rows();
+    let mut ids = Vec::new();
+    for i in 0..model.row_count() {
+        if let Some(r) = model.row_data(i) {
+            if r.kind == "track" && r.selected {
+                if let Ok(id) = r.track_id.parse::<u64>() {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    ids
 }
 
 /// Set the cache size limit (GB), persist it to disk, and refresh.

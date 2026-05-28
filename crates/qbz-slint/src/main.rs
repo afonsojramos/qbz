@@ -3315,6 +3315,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let weak = window.as_weak();
+        window
+            .global::<OfflineManagerActions>()
+            .on_toggle_select(move |id| {
+                if let Some(w) = weak.upgrade() {
+                    offline_manager::toggle_select(&w, &id);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<OfflineManagerActions>()
+            .on_select_all(move || {
+                if let Some(w) = weak.upgrade() {
+                    offline_manager::set_all_selected(&w, true);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<OfflineManagerActions>()
+            .on_clear_selection(move || {
+                if let Some(w) = weak.upgrade() {
+                    offline_manager::set_all_selected(&w, false);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let runtime = runtime.clone();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_bulk_redownload(move || {
+                if let Some(w) = weak.upgrade() {
+                    for id in offline_manager::selected_track_ids(&w) {
+                        offline_cache::redownload_track(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            id,
+                        );
+                    }
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let runtime = runtime.clone();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_bulk_remove(move || {
+                if let Some(w) = weak.upgrade() {
+                    for id in offline_manager::selected_track_ids(&w) {
+                        offline_cache::remove_cached(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            id,
+                        );
+                    }
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
         let runtime = runtime.clone();
         let handle = handle.clone();
         window
