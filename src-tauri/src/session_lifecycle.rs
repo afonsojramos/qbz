@@ -217,12 +217,12 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
     // both `offline.init_at` (above) and `offline_cache.init_at` so the DB
     // handle is available. Falls back silently to the 5 GB default when
     // unset.
-    if let Err(e) = offline_cache.apply_persisted_limit(&offline).await {
-        log::warn!(
-            "[SessionLifecycle] Failed to apply persisted offline cache limit: {} (using default)",
-            e
-        );
-    }
+    let persisted_limit = offline.store.lock().ok().and_then(|guard| {
+        guard
+            .as_ref()
+            .and_then(|s| s.get_cache_limit_bytes().ok().flatten())
+    });
+    offline_cache.apply_persisted_limit(persisted_limit).await;
     lyrics.init_at(&cache_dir).await?;
 
     // Run deferred subscription purge check
@@ -245,7 +245,7 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
         log::warn!("[SessionLifecycle] Subscription invalid beyond the grace window. Purging offline cache.");
         if let Err(e) = crate::offline_cache::purge::purge_all_cached_files(
             offline_cache.inner(),
-            library.inner(),
+            &library.inner().db,
         )
         .await
         {

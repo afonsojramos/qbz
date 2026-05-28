@@ -1501,11 +1501,32 @@ dependencies = [
 
 [[package]]
 name = "dirs"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
+dependencies = [
+ "dirs-sys 0.4.1",
+]
+
+[[package]]
+name = "dirs"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
 dependencies = [
- "dirs-sys",
+ "dirs-sys 0.5.0",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users 0.4.6",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -1516,7 +1537,7 @@ checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users",
+ "redox_users 0.5.2",
  "windows-sys 0.61.2",
 ]
 
@@ -2006,7 +2027,7 @@ dependencies = [
  "core-foundation 0.9.4",
  "core-graphics 0.23.2",
  "core-text",
- "dirs",
+ "dirs 6.0.0",
  "dwrote",
  "float-ord",
  "freetype-sys",
@@ -4979,7 +5000,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
- "dirs",
+ "dirs 6.0.0",
  "log",
  "md-5",
  "qbz-audio",
@@ -5001,7 +5022,7 @@ dependencies = [
  "alsa-sys",
  "async-trait",
  "coreaudio-rs",
- "dirs",
+ "dirs 6.0.0",
  "ebur128",
  "log",
  "objc2-core-audio",
@@ -5021,7 +5042,7 @@ dependencies = [
 name = "qbz-cache"
 version = "0.1.0"
 dependencies = [
- "dirs",
+ "dirs 6.0.0",
  "filetime",
  "log",
  "md-5",
@@ -5072,6 +5093,7 @@ dependencies = [
  "qbz-models",
  "qbz-player",
  "qbz-qobuz",
+ "qbz-radio",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -5085,7 +5107,7 @@ dependencies = [
  "aes-gcm",
  "ashpd",
  "base64 0.22.1",
- "dirs",
+ "dirs 6.0.0",
  "keyring",
  "log",
  "rand 0.10.1",
@@ -5114,7 +5136,7 @@ dependencies = [
 name = "qbz-library"
 version = "0.1.0"
 dependencies = [
- "dirs",
+ "dirs 6.0.0",
  "glob",
  "image",
  "lofty",
@@ -5151,7 +5173,7 @@ dependencies = [
  "axum-server",
  "base64 0.22.1",
  "chrono",
- "dirs",
+ "dirs 6.0.0",
  "discord-rich-presence",
  "dotenvy",
  "ebur128",
@@ -5179,6 +5201,7 @@ dependencies = [
  "qbz-integrations",
  "qbz-library",
  "qbz-models",
+ "qbz-offline-cache",
  "qbz-player",
  "qbz-qobuz",
  "qbz-secrets",
@@ -5221,6 +5244,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-offline-cache"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "futures-util",
+ "lofty",
+ "log",
+ "qbz-cmaf",
+ "qbz-library",
+ "qbz-models",
+ "qbz-qobuz",
+ "qbz-secrets",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "qbz-player"
 version = "0.1.0"
 dependencies = [
@@ -5260,6 +5303,17 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "qbz-radio"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "log",
+ "qbz-models",
+ "qbz-qobuz",
+ "rusqlite",
 ]
 
 [[package]]
@@ -5620,6 +5674,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce70a74e890531977d37e532c34d45e9055d2409ed08ddba14529471ed0be16"
 dependencies = [
  "bitflags 2.11.0",
+]
+
+[[package]]
+name = "redox_users"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba009ff324d1fc1b900bd1fdb31564febe58a8ccc8a6fdbb93b543d33b13ca43"
+dependencies = [
+ "getrandom 0.2.17",
+ "libredox",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -7027,7 +7092,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "cookie",
- "dirs",
+ "dirs 6.0.0",
  "dunce",
  "embed_plist",
  "getrandom 0.3.4",
@@ -7078,7 +7143,7 @@ checksum = "4aa1f9055fc23919a54e4e125052bed16ed04aef0487086e758fe01a67b451c7"
 dependencies = [
  "anyhow",
  "cargo_toml",
- "dirs",
+ "dirs 6.0.0",
  "glob",
  "heck 0.5.0",
  "json-patch",
@@ -7300,7 +7365,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "806d9dac662c2e4594ff03c647a552f2c9bd544e7d0f683ec58f872f952ce4af"
 dependencies = [
  "base64 0.22.1",
- "dirs",
+ "dirs 6.0.0",
  "flate2",
  "futures-util",
  "http",
@@ -7898,7 +7963,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "15edbb0d80583e85ee8df283410038e17314df5cba30da2087a54a85216c0773"
 dependencies = [
  "crossbeam-channel",
- "dirs",
+ "dirs 6.0.0",
  "libappindicator",
  "muda",
  "objc2",
@@ -9309,7 +9374,7 @@ dependencies = [
  "block2",
  "cookie",
  "crossbeam-channel",
- "dirs",
+ "dirs 6.0.0",
  "dom_query",
  "dpi",
  "dunce",

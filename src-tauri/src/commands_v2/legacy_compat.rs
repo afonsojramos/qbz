@@ -896,7 +896,6 @@ pub async fn v2_cache_track_for_offline(
     quality: String,
     bit_depth: Option<u32>,
     sample_rate: Option<f64>,
-    state: State<'_, AppState>,
     bridge: State<'_, crate::core_bridge::CoreBridgeState>,
     cache_state: State<'_, OfflineCacheState>,
     app_handle: tauri::AppHandle,
@@ -933,16 +932,16 @@ pub async fn v2_cache_track_for_offline(
         db.insert_track(&track_info, &file_path_str)?;
     }
 
+    let core_client = crate::offline_cache::core_client(&bridge).await?;
     spawn_track_cache_download(
         track_id,
         file_path,
-        state.client.clone(),
-        bridge.0.clone(),
+        core_client,
         cache_state.fetcher.clone(),
         cache_state.db.clone(),
         cache_state.get_cache_path(),
         cache_state.library_db.clone(),
-        app_handle.clone(),
+        crate::offline_cache::tauri_cache_sink(app_handle.clone()),
         cache_state.cache_semaphore.clone(),
     );
 
@@ -966,7 +965,6 @@ pub struct BatchTrackInfo {
 #[tauri::command]
 pub async fn v2_cache_tracks_batch_for_offline(
     tracks: Vec<BatchTrackInfo>,
-    state: State<'_, AppState>,
     bridge: State<'_, crate::core_bridge::CoreBridgeState>,
     cache_state: State<'_, OfflineCacheState>,
     app_handle: tauri::AppHandle,
@@ -1016,18 +1014,18 @@ pub async fn v2_cache_tracks_batch_for_offline(
     }
 
     // Spawn download tasks for each track
+    let core_client = crate::offline_cache::core_client(&bridge).await?;
     for track in &tracks {
         let file_path = cache_state.track_file_path(track.id, "flac");
         spawn_track_cache_download(
             track.id,
             file_path,
-            state.client.clone(),
-            bridge.0.clone(),
+            core_client.clone(),
             cache_state.fetcher.clone(),
             cache_state.db.clone(),
             cache_state.get_cache_path(),
             cache_state.library_db.clone(),
-            app_handle.clone(),
+            crate::offline_cache::tauri_cache_sink(app_handle.clone()),
             cache_state.cache_semaphore.clone(),
         );
     }
@@ -1037,7 +1035,7 @@ pub async fn v2_cache_tracks_batch_for_offline(
 
 #[tauri::command]
 pub async fn v2_start_legacy_migration(
-    state: State<'_, AppState>,
+    bridge: State<'_, crate::core_bridge::CoreBridgeState>,
     cache_state: State<'_, OfflineCacheState>,
     library_state: State<'_, crate::library::LibraryState>,
     app_handle: tauri::AppHandle,
@@ -1051,7 +1049,7 @@ pub async fn v2_start_legacy_migration(
     }
 
     let offline_root = cache_state.get_cache_path();
-    let qobuz_client = state.client.clone();
+    let qobuz_client = crate::offline_cache::core_client(&bridge).await?;
     let library_db = library_state.db.clone();
     let app_complete = app_handle.clone();
 

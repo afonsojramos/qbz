@@ -175,7 +175,7 @@ pub async fn migrate_legacy_cached_files(
     track_ids: Vec<u64>,
     tracks_dir: PathBuf,
     offline_root: String,
-    qobuz_client: Arc<RwLock<QobuzClient>>,
+    qobuz_client: Arc<RwLock<Option<QobuzClient>>>,
     library_db: Arc<Mutex<Option<LibraryDatabase>>>,
 ) -> MigrationStatus {
     let total = track_ids.len();
@@ -197,12 +197,21 @@ pub async fn migrate_legacy_cached_files(
 
         // Lock client for this migration
         let client_guard = qobuz_client.read().await;
+        let Some(client) = client_guard.as_ref() else {
+            status.failed += 1;
+            status.errors.push(MigrationError {
+                track_id,
+                error_message: "QobuzClient not initialized".to_string(),
+            });
+            status.processed += 1;
+            continue;
+        };
 
         match migrate_single_track(
             track_id,
             legacy_path.clone(),
             &offline_root,
-            &*client_guard,
+            client,
             library_db.clone(),
         )
         .await

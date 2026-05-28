@@ -9,7 +9,6 @@ use crate::core_bridge::CoreBridgeState;
 use crate::offline_cache::{
     downloader::spawn_track_cache_download, maintenance, OfflineCacheState, OfflineCacheStatus,
 };
-use crate::AppState;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,7 +48,6 @@ pub async fn v2_redownload_cached_album(
     album_id: String,
     failed_only: bool,
     cache_state: State<'_, OfflineCacheState>,
-    state: State<'_, AppState>,
     bridge: State<'_, CoreBridgeState>,
     app_handle: tauri::AppHandle,
 ) -> Result<RedownloadStartedReport, String> {
@@ -72,18 +70,18 @@ pub async fn v2_redownload_cached_album(
         ids
     };
 
+    let core_client = crate::offline_cache::core_client(&bridge).await?;
     for track_id in &queued_ids {
         let file_path = cache_state.track_file_path(*track_id, "flac");
         spawn_track_cache_download(
             *track_id,
             file_path,
-            state.client.clone(),
-            bridge.0.clone(),
+            core_client.clone(),
             cache_state.fetcher.clone(),
             cache_state.db.clone(),
             offline_root_string.clone(),
             cache_state.library_db.clone(),
-            app_handle.clone(),
+            crate::offline_cache::tauri_cache_sink(app_handle.clone()),
             cache_state.cache_semaphore.clone(),
         );
     }
@@ -98,7 +96,6 @@ pub async fn v2_redownload_cached_album(
 pub async fn v2_redownload_cached_track(
     track_id: u64,
     cache_state: State<'_, OfflineCacheState>,
-    state: State<'_, AppState>,
     bridge: State<'_, CoreBridgeState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -119,16 +116,16 @@ pub async fn v2_redownload_cached_track(
     }
 
     let file_path = cache_state.track_file_path(track_id, "flac");
+    let core_client = crate::offline_cache::core_client(&bridge).await?;
     spawn_track_cache_download(
         track_id,
         file_path,
-        state.client.clone(),
-        bridge.0.clone(),
+        core_client,
         cache_state.fetcher.clone(),
         cache_state.db.clone(),
         offline_root_string,
         cache_state.library_db.clone(),
-        app_handle,
+        crate::offline_cache::tauri_cache_sink(app_handle),
         cache_state.cache_semaphore.clone(),
     );
 

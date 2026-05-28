@@ -658,7 +658,7 @@ pub async fn v2_play_next_gapless(
                     let cache_path = offline_cache.get_cache_path();
                     let decrypted =
                         crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
-                            &app_handle,
+                            &crate::offline_cache::tauri_cache_sink(app_handle.clone()),
                             track_id,
                             track_id,
                             row.clone(),
@@ -741,7 +741,7 @@ pub async fn v2_play_next_gapless(
                                 let cache_path = offline_cache.get_cache_path();
                                 let decrypted =
                                     crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
-                                        &app_handle,
+                                        &crate::offline_cache::tauri_cache_sink(app_handle.clone()),
                                         track_id,  // display: library row id
                                         qid as u64, // cmaf/bundle: qobuz id
                                         row.clone(),
@@ -1123,7 +1123,7 @@ pub async fn v2_play_track(
             let audio_data_opt: Option<Vec<u8>> = if row.cache_format == 2 {
                 let cache_path = offline_cache.get_cache_path();
                 crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
-                    &app_handle,
+                    &crate::offline_cache::tauri_cache_sink(app_handle.clone()),
                     track_id,
                     track_id,
                     row.clone(),

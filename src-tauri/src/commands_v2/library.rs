@@ -924,7 +924,7 @@ pub async fn v2_library_play_track(
                 // CMAF id = qobuz track id (what the bundle is keyed by).
                 let audio_data =
                     crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
-                        &app_handle,
+                        &crate::offline_cache::tauri_cache_sink(app_handle.clone()),
                         track_id as u64,
                         qobuz_track_id as u64,
                         row.clone(),
