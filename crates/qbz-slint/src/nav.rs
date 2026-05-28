@@ -44,6 +44,9 @@ pub enum NavEntry {
     /// (filter/sort/view/folder-mode) is session-scoped in the
     /// controller, so the entry carries no payload.
     PlaylistManager,
+    /// The Offline Cache Manager — the manage-downloads surface (Tauri's
+    /// OfflineCacheManagerView). Session-scoped; no payload.
+    OfflineManager,
     Album(String),
     Artist(String),
     Settings,

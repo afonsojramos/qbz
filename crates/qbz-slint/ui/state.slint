@@ -323,7 +323,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings, search, musician, label, label-releases, location, favorites, mix, playlist, discover-browse, playlist-manager }
+export enum ContentView { home, album, artist, settings, search, musician, label, label-releases, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager }
 
 // In-app toast (transient notification). Mirrors Tauri's toastStore:
 // a single toast at a time (a new one replaces the current), auto-hidden
@@ -655,6 +655,48 @@ export global PlaylistManagerActions {
     // Move a playlist into a folder ("" = root). Used by the tree's
     // folder rows and the future DnD path.
     callback move-to-folder(string /* playlist id */, string /* folder id */);
+}
+
+// === Offline Cache Manager =============================================
+// The standalone manage-downloads surface (Tauri's OfflineCacheManagerView).
+// Rows are precomputed in Rust (crate::offline_manager): an album-header row
+// followed by its track rows, flattened (mirrors PmTreeRow).
+export struct OfflineRow {
+    kind: string,          // "album" | "track"
+    album-id: string,      // album-header: the album id; track: its album id
+    track-id: string,      // track rows
+    title: string,         // album title (album) | track title (track)
+    subtitle: string,      // artist
+    meta: string,          // "8 tracks · 320 MB" (album) | "3:45" (track)
+    // 0 none | 2 downloading | 3 ready | 4 failed. Album = worst across tracks.
+    status: int,
+    progress: float,       // track downloading 0..1
+}
+
+export global OfflineManagerState {
+    in property <[OfflineRow]> rows: [];
+    in property <bool> loading: false;
+    // Header stats.
+    in property <int> tracks-count: 0;
+    in property <string> size-text: "";     // "1.2 GB"
+    in property <string> limit-text: "";     // "of 5 GB" | "Unlimited"
+    in property <float> usage: 0.0;           // 0..1 for the bar (0 = unlimited)
+    in-out property <int> limit-gb: 5;        // edit-limit input
+}
+
+export global OfflineManagerActions {
+    // Navigate to the manager (from the Settings "Offline Playback" entry).
+    callback open();
+    callback refresh();
+    callback remove-track(string /* track id */);
+    callback remove-album(string /* album id */);
+    callback redownload-track(string /* track id */);
+    callback redownload-album(string /* album id */);
+    callback redownload-failed(string /* album id */);
+    callback set-limit(int /* gb */);
+    callback clear-all();
+    callback open-folder();
+    callback play-track(string /* track id */);
 }
 
 // Folder editor modal — create + edit (icon preset, solid color, custom

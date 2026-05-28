@@ -336,6 +336,177 @@ pub fn cache_playlist(
     });
 }
 
+/// Remove a whole album's offline copies (rows + CMAF dirs + library rows).
+pub fn remove_album(
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    album_id: String,
+) {
+    handle.spawn(async move {
+        let Some(off) = crate::offline::get().await else {
+            return;
+        };
+        let report = {
+            let guard = off.db.lock().await;
+            let Some(db) = guard.as_ref() else {
+                return;
+            };
+            let root = std::path::PathBuf::from(off.get_cache_path());
+            qbz_offline_cache::maintenance::remove_album_cached_tracks(db, &root, &album_id)
+        };
+        let report = match report {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("[qbz-slint] remove album {album_id} failed: {e}");
+                return;
+            }
+        };
+        {
+            let guard = off.library_db.lock().await;
+            if let Some(db) = guard.as_ref() {
+                for id in &report.removed_track_ids {
+                    let _ = db.remove_qobuz_cached_track(*id);
+                }
+            }
+        }
+        for id in &report.removed_track_ids {
+            mark_cached(*id, false);
+        }
+        let ids = report.removed_track_ids.clone();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            for id in ids {
+                crate::set_row_cache_status(&w, &id.to_string(), 0, 0.0);
+            }
+        });
+        crate::toast::success_weak(&weak, "Removed album from offline");
+    });
+}
+
+/// Re-download a single track (reset its row, spawn the download). Skips
+/// in-flight downloads.
+pub fn redownload_track(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    id: u64,
+) {
+    handle.spawn(async move {
+        let Some(off) = crate::offline::get().await else {
+            return;
+        };
+        {
+            let guard = off.db.lock().await;
+            let Some(db) = guard.as_ref() else {
+                return;
+            };
+            if let Ok(Some(t)) = db.get_track(id) {
+                if matches!(t.status, OfflineCacheStatus::Downloading) {
+                    return;
+                }
+            }
+            let _ = db.reset_track_for_redownload(id);
+        }
+        let file_path = off.track_file_path(id, "flac");
+        push_status(&weak, id, 1, 0.0);
+        qbz_offline_cache::spawn_track_cache_download(
+            id,
+            file_path,
+            runtime.core().client(),
+            off.fetcher.clone(),
+            off.db.clone(),
+            off.get_cache_path(),
+            off.library_db.clone(),
+            row_sink(weak.clone()),
+            off.cache_semaphore.clone(),
+        );
+    });
+}
+
+/// Re-download an album's tracks. `failed_only` re-queues only the failed
+/// ones; otherwise all (skipping in-flight).
+pub fn redownload_album(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    album_id: String,
+    failed_only: bool,
+) {
+    handle.spawn(async move {
+        let Some(off) = crate::offline::get().await else {
+            return;
+        };
+        let targets: Vec<u64> = {
+            let guard = off.db.lock().await;
+            let Some(db) = guard.as_ref() else {
+                return;
+            };
+            match db.get_album_tracks(&album_id) {
+                Ok(tracks) => {
+                    let picked =
+                        qbz_offline_cache::maintenance::select_redownload_targets(&tracks, failed_only);
+                    let ids: Vec<u64> = picked.iter().map(|t| t.track_id).collect();
+                    for id in &ids {
+                        let _ = db.reset_track_for_redownload(*id);
+                    }
+                    ids
+                }
+                Err(_) => Vec::new(),
+            }
+        };
+        for id in targets {
+            let file_path = off.track_file_path(id, "flac");
+            push_status(&weak, id, 1, 0.0);
+            qbz_offline_cache::spawn_track_cache_download(
+                id,
+                file_path,
+                runtime.core().client(),
+                off.fetcher.clone(),
+                off.db.clone(),
+                off.get_cache_path(),
+                off.library_db.clone(),
+                row_sink(weak.clone()),
+                off.cache_semaphore.clone(),
+            );
+        }
+    });
+}
+
+/// Open the offline-cache folder in the system file manager.
+pub fn open_folder(handle: tokio::runtime::Handle) {
+    handle.spawn(async move {
+        let Some(off) = crate::offline::get().await else {
+            return;
+        };
+        let path = off.get_cache_path();
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        if let Err(e) = std::process::Command::new(opener).arg(&path).spawn() {
+            log::warn!("[qbz-slint] open offline folder failed: {e}");
+        }
+    });
+}
+
+/// Clear the entire offline cache (DB + on-disk bundles + library rows).
+pub fn clear_all(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    handle.spawn(async move {
+        let Some(off) = crate::offline::get().await else {
+            return;
+        };
+        if let Err(e) = qbz_offline_cache::purge_all_cached_files(&off, &off.library_db).await {
+            log::error!("[qbz-slint] clear offline cache failed: {e}");
+            crate::toast::error_weak(&weak, "Couldn't clear the offline cache");
+            return;
+        }
+        if let Ok(mut s) = cached_ids().lock() {
+            s.clear();
+        }
+        crate::toast::success_weak(&weak, "Offline cache cleared");
+    });
+}
+
 /// Remove a track's offline copy (DB row + on-disk bundle/file + library row).
 pub fn remove_cached(
     _runtime: Runtime,

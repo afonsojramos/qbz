@@ -45,6 +45,7 @@ mod folders;
 mod library_db;
 mod offline;
 mod offline_cache;
+mod offline_manager;
 mod playlist;
 mod playlist_manager;
 mod playlist_picker;
@@ -685,6 +686,13 @@ fn apply_entry(
                 handle,
                 image_cache.clone(),
             );
+        }
+        nav::NavEntry::OfflineManager => {
+            let w2 = weak.clone();
+            let _ = weak.upgrade_in_event_loop(|w| {
+                w.global::<NavState>().set_view(ContentView::OfflineManager);
+            });
+            offline_manager::load(w2, handle.clone());
         }
         nav::NavEntry::Location {
             mbid,
@@ -3253,6 +3261,143 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 label::derive_releases(&w);
             }
         });
+    }
+
+    // Offline Cache Manager actions.
+    {
+        let runtime = app_runtime.clone();
+        let handle = tokio_rt.handle().clone();
+    {
+        let weak = window.as_weak();
+        let handle = handle.clone();
+        window.global::<OfflineManagerActions>().on_open(move || {
+            nav::record(nav::NavEntry::OfflineManager);
+            if let Some(w) = weak.upgrade() {
+                w.global::<NavState>().set_view(ContentView::OfflineManager);
+                update_nav_flags(&w);
+            }
+            offline_manager::load(weak.clone(), handle.clone());
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = handle.clone();
+        window.global::<OfflineManagerActions>().on_refresh(move || {
+            offline_manager::load(weak.clone(), handle.clone());
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let runtime = runtime.clone();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_remove_track(move |id| {
+                if let Ok(tid) = id.parse::<u64>() {
+                    offline_cache::remove_cached(runtime.clone(), weak.clone(), handle.clone(), tid);
+                    offline_manager::reload_soon(weak.clone(), handle.clone());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_remove_album(move |aid| {
+                offline_cache::remove_album(weak.clone(), handle.clone(), aid.to_string());
+                offline_manager::reload_soon(weak.clone(), handle.clone());
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let runtime = runtime.clone();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_redownload_track(move |id| {
+                if let Ok(tid) = id.parse::<u64>() {
+                    offline_cache::redownload_track(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        tid,
+                    );
+                    offline_manager::reload_soon(weak.clone(), handle.clone());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let runtime = runtime.clone();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_redownload_album(move |aid| {
+                offline_cache::redownload_album(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    aid.to_string(),
+                    false,
+                );
+                offline_manager::reload_soon(weak.clone(), handle.clone());
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let runtime = runtime.clone();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_redownload_failed(move |aid| {
+                offline_cache::redownload_album(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    aid.to_string(),
+                    true,
+                );
+                offline_manager::reload_soon(weak.clone(), handle.clone());
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_set_limit(move |gb| {
+                offline_manager::set_limit(weak.clone(), handle.clone(), gb);
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = handle.clone();
+        window.global::<OfflineManagerActions>().on_clear_all(move || {
+            offline_cache::clear_all(weak.clone(), handle.clone());
+            offline_manager::reload_soon(weak.clone(), handle.clone());
+        });
+    }
+    {
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_open_folder(move || {
+                offline_cache::open_folder(handle.clone());
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let runtime = runtime.clone();
+        let handle = handle.clone();
+        window
+            .global::<OfflineManagerActions>()
+            .on_play_track(move |id| {
+                if let Ok(tid) = id.parse::<u64>() {
+                    playback::play_track_now(runtime.clone(), weak.clone(), handle.clone(), tid);
+                }
+            });
+    }
     }
 
     // Scene (location) view actions — open-artist routes to the

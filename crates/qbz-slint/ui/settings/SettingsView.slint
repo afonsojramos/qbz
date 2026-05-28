@@ -14,6 +14,7 @@ import { NavButtons } from "../shell/NavButtons.slint";
 import { AudioSettings } from "AudioSettings.slint";
 import { PlaybackSettings } from "PlaybackSettings.slint";
 import { AppearanceSettings } from "AppearanceSettings.slint";
+import { OfflineSettings } from "OfflineSettings.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component SubNavItem inherits Rectangle {
@@ -130,6 +131,14 @@ export component SettingsView inherits Rectangle {
                             SettingsState.section = 2;
                         }
                     }
+                    SubNavItem {
+                        icon: @image-url("../assets/icons/cloud-download.svg");
+                        label: @tr("Offline");
+                        active: SettingsState.section == 3;
+                        clicked => {
+                            SettingsState.section = 3;
+                        }
+                    }
                 }
             }
 
@@ -176,6 +185,7 @@ export component SettingsView inherits Rectangle {
                     // AppearanceState and emit its own callbacks, so no
                     // SettingsView-level callback forwarding is needed here.
                     if !SettingsState.loading && SettingsState.section == 2: AppearanceSettings { }
+                    if !SettingsState.loading && SettingsState.section == 3: OfflineSettings { }
                 }
             }
         }

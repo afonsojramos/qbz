@@ -1,0 +1,299 @@
+// Offline Cache Manager — the standalone manage-downloads surface (Tauri's
+// OfflineCacheManagerView). Fixed header (Back + title) + a stats bar (totals
+// / usage bar / edit-limit / open-folder / clear-all) over a scrolling list
+// of album-header + track rows (per-row remove / re-download).
+//
+// Rows are precomputed in Rust (crate::offline_manager) and pushed as a flat
+// [OfflineRow] model; actions go through OfflineManagerActions.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import { OfflineManagerState, OfflineManagerActions, OfflineRow } from "../state.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
+import { NavButtons } from "../shell/NavButtons.slint";
+
+// A small ghost icon button.
+component IconBtn inherits Rectangle {
+    in property <image> icon;
+    in property <color> tint: Theme.text-muted;
+    callback clicked;
+    width: 30px;
+    height: 30px;
+    border-radius: Radius.sm;
+    background: ta.has-hover ? Theme.surface-elevated : transparent;
+    QbzIcon {
+        source: root.icon;
+        width: 16px;
+        height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: ta.has-hover ? Theme.text-primary : root.tint;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The cache-status glyph: 2 downloading (spinning loader) / 3 ready (check) /
+// 4 failed (alert) / else cloud.
+component StatusIcon inherits Rectangle {
+    in property <int> status;
+    width: 18px;
+    height: 18px;
+    if root.status == 2: Image {
+        width: 16px;
+        height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        source: @image-url("../assets/icons/loader-circle.svg");
+        colorize: Theme.accent;
+        transform-rotation: ((animation-tick() / 1ms) * 0.36) * 1deg;
+    }
+    if root.status != 2: QbzIcon {
+        width: 16px;
+        height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        source: root.status == 3
+            ? @image-url("../assets/icons/circle-check-big.svg")
+            : (root.status == 4
+                ? @image-url("../assets/icons/triangle-alert.svg")
+                : @image-url("../assets/icons/cloud-download.svg"));
+        tint: root.status == 3 ? Theme.accent : (root.status == 4 ? #e0564f : Theme.text-muted);
+    }
+}
+
+export component OfflineManagerView inherits Rectangle {
+    background: Theme.surface-main;
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+
+        // Header — back + title.
+        HorizontalLayout {
+            vertical-stretch: 0;
+            spacing: 12px;
+            NavButtons { }
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: "Offline Cache";
+                    color: Theme.text-primary;
+                    font-size: Typography.title;
+                    font-weight: Typography.bold;
+                }
+            }
+        }
+
+        // Stats bar.
+        Rectangle {
+            vertical-stretch: 0;
+            height: 76px;
+            border-radius: Radius.md;
+            background: Theme.surface-elevated;
+            HorizontalLayout {
+                padding: 16px;
+                spacing: 20px;
+                // Totals.
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: OfflineManagerState.tracks-count + " tracks";
+                        color: Theme.text-primary;
+                        font-size: Typography.body;
+                        font-weight: Typography.semibold;
+                    }
+                    Text {
+                        text: OfflineManagerState.size-text + " " + OfflineManagerState.limit-text;
+                        color: Theme.text-muted;
+                        font-size: Typography.legal;
+                    }
+                }
+                // Usage bar.
+                Rectangle {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Theme.surface-main;
+                            Rectangle {
+                                x: 0;
+                                y: 0;
+                                height: parent.height;
+                                border-radius: 4px;
+                                width: parent.width * Math.clamp(OfflineManagerState.usage, 0.0, 1.0);
+                                background: OfflineManagerState.usage >= 1.0 ? #e0564f : Theme.accent;
+                            }
+                        }
+                    }
+                }
+                // Edit limit (GB).
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Rectangle {
+                            width: 58px;
+                            height: 30px;
+                            border-radius: 6px;
+                            background: Theme.surface-main;
+                            border-width: 1px;
+                            border-color: limit-in.has-focus ? Theme.accent : Theme.border-subtle;
+                            limit-in := TextInput {
+                                x: 8px;
+                                width: parent.width - 16px;
+                                height: 100%;
+                                vertical-alignment: center;
+                                color: Theme.text-primary;
+                                font-size: Typography.body;
+                                input-type: number;
+                                text: OfflineManagerState.limit-gb;
+                                accepted => {
+                                    OfflineManagerActions.set-limit(self.text.to-float());
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "GB";
+                                color: Theme.text-muted;
+                                font-size: Typography.legal;
+                            }
+                        }
+                        IconBtn {
+                            icon: @image-url("../assets/icons/check.svg");
+                            clicked => {
+                                OfflineManagerActions.set-limit(limit-in.text.to-float());
+                            }
+                        }
+                    }
+                }
+                // Open folder + clear all.
+                VerticalLayout {
+                    alignment: center;
+                    IconBtn {
+                        icon: @image-url("../assets/icons/folder.svg");
+                        clicked => {
+                            OfflineManagerActions.open-folder();
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    IconBtn {
+                        icon: @image-url("../assets/icons/trash-2.svg");
+                        tint: #e0564f;
+                        clicked => {
+                            OfflineManagerActions.clear-all();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Loading / empty / list.
+        if OfflineManagerState.loading: VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                LoadingSpinner { }
+            }
+        }
+        if !OfflineManagerState.loading && OfflineManagerState.rows.length == 0: VerticalLayout {
+            alignment: center;
+            Text {
+                text: "No offline tracks yet";
+                color: Theme.text-muted;
+                font-size: Typography.body;
+                horizontal-alignment: center;
+            }
+        }
+        if !OfflineManagerState.loading && OfflineManagerState.rows.length > 0: ScrollView {
+            VerticalLayout {
+                spacing: 2px;
+                for row in OfflineManagerState.rows: Rectangle {
+                    height: row.kind == "album" ? 58px : 44px;
+                    border-radius: 8px;
+                    background: row.kind == "album" ? Theme.surface-card : transparent;
+                    HorizontalLayout {
+                        padding-left: row.kind == "album" ? 12px : 28px;
+                        padding-right: 12px;
+                        spacing: 12px;
+                        // Status glyph.
+                        VerticalLayout {
+                            alignment: center;
+                            StatusIcon { status: row.status; }
+                        }
+                        // Title + subtitle.
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            spacing: 2px;
+                            Text {
+                                text: row.title;
+                                color: Theme.text-primary;
+                                font-size: row.kind == "album" ? Typography.body : Typography.legal;
+                                font-weight: row.kind == "album" ? Typography.semibold : Typography.regular;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: row.subtitle;
+                                color: Theme.text-muted;
+                                font-size: Typography.legal;
+                                overflow: elide;
+                            }
+                        }
+                        // Meta.
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: row.meta;
+                                color: Theme.text-muted;
+                                font-size: Typography.legal;
+                                horizontal-alignment: right;
+                            }
+                        }
+                        // Re-download.
+                        VerticalLayout {
+                            alignment: center;
+                            IconBtn {
+                                icon: @image-url("../assets/icons/refresh-cw.svg");
+                                clicked => {
+                                    if (row.kind == "album") {
+                                        OfflineManagerActions.redownload-album(row.album-id);
+                                    } else {
+                                        OfflineManagerActions.redownload-track(row.track-id);
+                                    }
+                                }
+                            }
+                        }
+                        // Remove.
+                        VerticalLayout {
+                            alignment: center;
+                            IconBtn {
+                                icon: @image-url("../assets/icons/trash-2.svg");
+                                clicked => {
+                                    if (row.kind == "album") {
+                                        OfflineManagerActions.remove-album(row.album-id);
+                                    } else {
+                                        OfflineManagerActions.remove-track(row.track-id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
