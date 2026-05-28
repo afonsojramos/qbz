@@ -1,24 +1,36 @@
-// Settings > Offline Playback (cache half). Launches the Offline Cache
-// Manager and offers clear-all / open-folder. The full per-album/track
-// management lives in the manager; the Local-Library-dependent rows
-// (show-in-library, repair) arrive with the Local Library port.
+// Settings > Offline Playback (cache half). Same structure as the other
+// settings panels (GroupHeader + SettingRow + a secondary button control) so
+// the section stays consistent as more offline settings land. Launches the
+// Offline Cache Manager + offers open-folder / clear-all. The Local-Library
+// rows (show-in-library, repair) arrive with the Local Library port.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { OfflineManagerActions } from "../state.slint";
+import { SettingRow } from "SettingRow.slint";
 
-component Btn inherits Rectangle {
+component GroupHeader inherits Text {
+    color: Theme.text-muted;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    font-weight: Typography.semibold;
+}
+
+// Matches AudioSettings/AppearanceSettings' SecondaryButton.
+component SecondaryButton inherits Rectangle {
     in property <string> label;
     in property <bool> danger: false;
     callback clicked();
-    width: 184px;
-    height: 36px;
+    width: 160px;
+    height: 34px;
     border-radius: Radius.sm;
     border-width: 1px;
     border-color: root.danger ? #e0564f : Theme.border-subtle;
     background: ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
     Text {
+        width: 100%;
+        height: 100%;
         text: root.label;
         color: root.danger ? #e0564f : Theme.text-secondary;
         font-size: Typography.body;
@@ -35,36 +47,34 @@ component Btn inherits Rectangle {
 }
 
 export component OfflineSettings inherits VerticalLayout {
-    spacing: 16px;
-    padding: 4px;
-    Text {
-        text: @tr("Offline Playback");
-        color: Theme.text-primary;
-        font-size: Typography.title;
-        font-weight: Typography.bold;
-    }
-    Text {
-        text: @tr("Cache Qobuz tracks for offline listening while your subscription is active. Manage what's downloaded, free up space, or change the cache size limit in the manager.");
-        color: Theme.text-muted;
-        font-size: Typography.body;
-        wrap: word-wrap;
-    }
-    HorizontalLayout {
-        spacing: 12px;
-        alignment: start;
-        Btn {
-            label: @tr("Manage offline cache");
+    spacing: 4px;
+
+    GroupHeader { text: @tr("OFFLINE CACHE"); }
+
+    SettingRow {
+        label: @tr("Manage offline cache");
+        description: @tr("Browse and manage your downloaded tracks and albums.");
+        SecondaryButton {
+            label: @tr("Open manager");
             clicked => {
                 OfflineManagerActions.open();
             }
         }
-        Btn {
-            label: @tr("Open cache folder");
+    }
+    SettingRow {
+        label: @tr("Cache folder");
+        description: @tr("Open the folder where offline tracks are stored on disk.");
+        SecondaryButton {
+            label: @tr("Open folder");
             clicked => {
                 OfflineManagerActions.open-folder();
             }
         }
-        Btn {
+    }
+    SettingRow {
+        label: @tr("Clear offline cache");
+        description: @tr("Remove every downloaded track. This cannot be undone.");
+        SecondaryButton {
             label: @tr("Clear all");
             danger: true;
             clicked => {
@@ -72,5 +82,4 @@ export component OfflineSettings inherits VerticalLayout {
             }
         }
     }
-    Rectangle { } // spacer
 }
