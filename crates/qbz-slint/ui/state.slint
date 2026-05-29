@@ -377,6 +377,11 @@ export global LocalLibraryState {
     in property <bool> tracks-load-failed: false;
     in-out property <int> tracks-next-offset: 0;
     in-out property <string> tracks-search: "";
+
+    // --- Folders tab (flat) — albums grouped by directory (full load) ---
+    in property <[AlbumCardItem]> folders: [];
+    in property <bool> folders-loading: false;
+    in property <bool> folders-load-failed: false;
 }
 
 export global LocalLibraryActions {

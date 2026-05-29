@@ -226,8 +226,7 @@ pub fn play_local_album(
 ) {
     handle.spawn(async move {
         let tracks = tokio::task::spawn_blocking(move || {
-            let mut tracks = crate::library_db::with_db(|db| db.get_album_tracks_metadata(&album_id))
-                .unwrap_or_default();
+            let mut tracks = crate::local_library::fetch_album_tracks_blocking(&album_id);
             fill_missing_covers(&mut tracks);
             tracks
         })

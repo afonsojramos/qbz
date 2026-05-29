@@ -83,6 +83,8 @@ pub enum ArtworkTarget {
     /// is the albums generation at fetch time; a stale cover (the model was
     /// replaced by a search/sort/retry) is dropped on apply.
     LocalAlbumCard { index: usize, gen: u64 },
+    /// A card in LocalLibraryState.folders[index] (Folders-flat grid).
+    LocalFolderCard { index: usize },
     /// A card in FavoritesState.artists[index].
     FavoriteArtist { index: usize },
     /// A card in FavoritesState.labels[index].
@@ -608,6 +610,13 @@ fn apply_artwork(
                 return;
             }
             let model = window.global::<crate::LocalLibraryState>().get_albums();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LocalFolderCard { index } => {
+            let model = window.global::<crate::LocalLibraryState>().get_folders();
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);

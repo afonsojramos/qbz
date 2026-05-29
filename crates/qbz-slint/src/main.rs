@@ -433,8 +433,7 @@ fn navigate_local_album(
         });
         let gk = group_key.clone();
         let tracks = tokio::task::spawn_blocking(move || {
-            let mut t = crate::library_db::with_db(|db| db.get_album_tracks_metadata(&gk))
-                .unwrap_or_default();
+            let mut t = local_library::fetch_album_tracks_blocking(&gk);
             playback::fill_missing_covers(&mut t);
             t
         })
@@ -965,6 +964,9 @@ fn navigate_local_library(
     match tab {
         local_library::LibTab::Albums => {
             local_library::ensure_albums_loaded(weak, handle.clone(), image_cache);
+        }
+        local_library::LibTab::Folders => {
+            local_library::ensure_folders_loaded(weak, handle.clone(), image_cache);
         }
         local_library::LibTab::Tracks => {
             local_library::ensure_tracks_loaded(weak, handle.clone());

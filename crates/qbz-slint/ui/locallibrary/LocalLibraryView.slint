@@ -536,9 +536,71 @@ export component LocalLibraryView inherits Rectangle {
                 }
             }
 
+            // -------- Folders tab (flat) — folder-grouped album grid -----
+            if LocalLibraryState.active-tab == "folders": Rectangle {
+                if LocalLibraryState.folders-loading: VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: center;
+                        LoadingSpinner { size: 36px; }
+                    }
+                }
+                if !LocalLibraryState.folders-loading
+                    && LocalLibraryState.folders.length == 0: VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("No folders in your local library yet.");
+                        color: Theme.text-muted;
+                        font-size: Typography.body;
+                        horizontal-alignment: center;
+                    }
+                }
+                if !LocalLibraryState.folders-loading
+                    && LocalLibraryState.folders.length > 0: Rectangle {
+                    folders-flick := Flickable {
+                        viewport-width: self.width;
+                        viewport-height: folders-page.preferred-height;
+                        folders-page := VerticalLayout {
+                            width: parent.width;
+                            padding-left: 32px;
+                            padding-right: 32px;
+                            padding-top: 16px;
+                            padding-bottom: 100px;
+                            alignment: start;
+                            AlbumCollectionView {
+                                albums: LocalLibraryState.folders;
+                                is-grouped: false;
+                                view-mode: "grid";
+                                show-source: false;
+                                show-favorite: false;
+                                show-source-badge: true;
+                                open-album(id) => {
+                                    LocalLibraryActions.open-album(id);
+                                }
+                                open-artist(id) => {
+                                    LocalLibraryActions.open-artist(id);
+                                }
+                                media-action(kind, id, action) => {
+                                    LocalLibraryActions.album-action(id, action);
+                                }
+                            }
+                        }
+                    }
+                    ListScrollbar {
+                        x: parent.width - self.width - 4px;
+                        width: 14px;
+                        height: 100%;
+                        viewport-height: folders-flick.viewport-height;
+                        visible-height: folders-flick.height;
+                        viewport-y <=> folders-flick.viewport-y;
+                    }
+                }
+            }
+
             // -------- Other tabs — placeholder until their slices land ----
             if LocalLibraryState.active-tab != "albums"
-                && LocalLibraryState.active-tab != "tracks": VerticalLayout {
+                && LocalLibraryState.active-tab != "tracks"
+                && LocalLibraryState.active-tab != "folders": VerticalLayout {
                 alignment: center;
                 spacing: 6px;
                 Text {
