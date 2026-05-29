@@ -317,6 +317,8 @@ pub fn reset_album(window: &AppWindow) {
     let state = window.global::<AlbumState>();
     state.set_tracks(ModelRc::new(VecModel::from(Vec::<TrackItem>::new())));
     state.set_artwork(slint::Image::default());
+    // Default to a Qobuz album; the local-album loader opts in.
+    state.set_is_local(false);
     state.set_loading(true);
 }
 

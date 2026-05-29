@@ -414,6 +414,53 @@ fn navigate_album(
     });
 }
 
+/// Open a LOCAL album's detail in the shared AlbumPageView: load its tracks
+/// (metadata-grouped), populate AlbumState with `is-local` set, then resolve
+/// the folder/embedded cover from disk. `group_key` is the album's metadata
+/// group key.
+fn navigate_local_album(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+    group_key: String,
+) {
+    let _ = runtime;
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            album::reset_album(&w);
+            w.global::<NavState>().set_view(ContentView::Album);
+        });
+        let gk = group_key.clone();
+        let tracks = tokio::task::spawn_blocking(move || {
+            let mut t = crate::library_db::with_db(|db| db.get_album_tracks_metadata(&gk))
+                .unwrap_or_default();
+            playback::fill_missing_covers(&mut t);
+            t
+        })
+        .await
+        .unwrap_or_default();
+        let cover = tracks
+            .iter()
+            .find_map(|t| t.artwork_path.clone())
+            .unwrap_or_default();
+        let gk2 = group_key.clone();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            local_library::apply_local_album(&w, &gk2, tracks);
+        });
+        if !cover.is_empty() {
+            let art = qbz_models::ArtworkRef::LocalFile(cover);
+            if let Some((px, ww, hh)) =
+                artwork::fetch_and_decode_ref(&art, &image_cache, 448).await
+            {
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    album::apply_artwork(&w, &px, ww, hh);
+                });
+            }
+        }
+    });
+}
+
 /// Load an artist page and show the artist view, then fetch the portrait.
 /// Shared by the `open-artist` callback and by history back/forward.
 fn navigate_artist(
@@ -2175,6 +2222,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let id = id.to_string();
             let action = action.to_string();
             log::info!("[qbz-slint] media-action: kind={kind} id={id} action={action}");
+            // Local Library album detail reuses AlbumPageView. Route its play
+            // actions to local playback — guarded to the album view + is-local
+            // so Qobuz album/track play is untouched.
+            if action == "play" && (kind == "album" || kind == "track") {
+                if let Some(w) = weak.upgrade() {
+                    let album_state = w.global::<AlbumState>();
+                    if matches!(w.global::<NavState>().get_view(), ContentView::Album)
+                        && album_state.get_is_local()
+                    {
+                        let album_id = album_state.get_id().to_string();
+                        let start = if kind == "track" {
+                            id.parse::<i64>().ok()
+                        } else {
+                            None
+                        };
+                        playback::play_local_album(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            album_id,
+                            start,
+                        );
+                        return;
+                    }
+                }
+            }
             match (kind.as_str(), action.as_str()) {
                 ("album", "play") => playback::play_album(
                     runtime.clone(),
@@ -4002,11 +4075,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
         window
             .global::<LocalLibraryActions>()
             .on_open_album(move |id| {
-                // TODO(locallibrary): open the local album-detail view.
-                log::debug!("[qbz-slint] local album open (album-detail slice pending): {id}");
+                navigate_local_album(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    id.to_string(),
+                );
             });
     }
     {
@@ -4031,6 +4113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         weak.clone(),
                         handle.clone(),
                         id.to_string(),
+                        None,
                     );
                 } else {
                     // play-next / queue land with a later slice.

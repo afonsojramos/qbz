@@ -222,6 +222,7 @@ pub fn play_local_album(
     weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
     album_id: String,
+    start_track_id: Option<i64>,
 ) {
     handle.spawn(async move {
         let tracks = tokio::task::spawn_blocking(move || {
@@ -232,7 +233,13 @@ pub fn play_local_album(
         })
         .await
         .unwrap_or_default();
-        play_local_tracks_now(&runtime, &weak, tracks, 0).await;
+        // Start at the requested track (a row click in the album detail) or
+        // the top (play-all).
+        let start = match start_track_id {
+            Some(tid) => tracks.iter().position(|t| t.id == tid).unwrap_or(0),
+            None => 0,
+        };
+        play_local_tracks_now(&runtime, &weak, tracks, start).await;
     });
 }
 
@@ -316,7 +323,7 @@ fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
 /// always backfill the index) — so the cover that exists on disk reaches the
 /// now-playing bar + queue, not just the album grid. Runs off-thread (fs),
 /// memoized per folder so a whole album costs one stat.
-fn fill_missing_covers(tracks: &mut [qbz_library::LocalTrack]) {
+pub fn fill_missing_covers(tracks: &mut [qbz_library::LocalTrack]) {
     use std::collections::HashMap;
     let mut memo: HashMap<String, Option<String>> = HashMap::new();
     for t in tracks.iter_mut() {

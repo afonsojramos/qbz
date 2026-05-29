@@ -577,6 +577,99 @@ pub fn load_more_tracks(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Ha
     });
 }
 
+// ============================ Album detail ================================
+//
+// Local albums reuse the shared `AlbumPageView` + `AlbumState`: we just
+// populate the state from the album's local tracks and flag `is-local` so
+// the media-action dispatcher routes play to local playback.
+
+fn fmt_album_duration(secs: u64) -> String {
+    let mins = secs / 60;
+    if mins >= 60 {
+        format!("{} h {} min", mins / 60, mins % 60)
+    } else {
+        format!("{mins} min")
+    }
+}
+
+/// Populate `AlbumState` from a local album's tracks (UI thread). The cover
+/// is loaded separately by the caller; `is-local` is set so playback routes
+/// to local. `group_key` is the metadata group key.
+pub fn apply_local_album(
+    window: &AppWindow,
+    group_key: &str,
+    tracks: Vec<qbz_library::LocalTrack>,
+) {
+    let title = tracks
+        .first()
+        .map(|t| t.album_group_title.clone())
+        .unwrap_or_default();
+    // Album artist: the common album-artist, else "Various Artists".
+    let artist_of = |t: &qbz_library::LocalTrack| {
+        t.album_artist.clone().unwrap_or_else(|| t.artist.clone())
+    };
+    let artist = match tracks.first() {
+        Some(first) => {
+            let name = artist_of(first);
+            if tracks.iter().all(|t| artist_of(t) == name) {
+                name
+            } else {
+                "Various Artists".to_string()
+            }
+        }
+        None => String::new(),
+    };
+    let cover = tracks
+        .iter()
+        .find_map(|t| t.artwork_path.clone())
+        .unwrap_or_default();
+    let cover_url = if cover.is_empty() {
+        String::new()
+    } else {
+        format!("file://{cover}")
+    };
+    // Quality from the highest-resolution track in the album.
+    let (tier, detail) = match tracks.iter().max_by_key(|t| t.bit_depth.unwrap_or(0)) {
+        Some(t) => {
+            let tier = match t.bit_depth {
+                Some(b) if b >= 24 => "hires",
+                Some(_) => "cd",
+                None => "",
+            };
+            (tier.to_string(), local_quality(t.bit_depth, t.sample_rate).0)
+        }
+        None => (String::new(), String::new()),
+    };
+    let total_secs: u64 = tracks.iter().map(|t| t.duration_secs).sum();
+    let info_line = format!("{} tracks · {}", tracks.len(), fmt_album_duration(total_secs));
+    let items: Vec<TrackItem> = tracks
+        .into_iter()
+        .map(|t| {
+            let mut it = map_local_track(t);
+            it.album_id = group_key.into();
+            it
+        })
+        .collect();
+
+    let s = window.global::<crate::AlbumState>();
+    s.set_id(group_key.into());
+    s.set_is_local(true);
+    s.set_title(title.into());
+    s.set_artist(artist.into());
+    s.set_artist_id("".into());
+    s.set_artwork_url(cover_url.into());
+    s.set_has_custom_cover(false);
+    s.set_quality_tier(tier.into());
+    s.set_quality_detail(detail.into());
+    s.set_info_line(info_line.into());
+    s.set_label("".into());
+    s.set_description("".into());
+    s.set_description_short("".into());
+    s.set_awards(ModelRc::new(VecModel::from(Vec::<slint::SharedString>::new())));
+    s.set_tracks(ModelRc::new(VecModel::from(items)));
+    s.set_loading(false);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

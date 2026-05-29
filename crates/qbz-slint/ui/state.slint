@@ -288,6 +288,9 @@ export global AlbumState {
     in property <[string]> awards: [];
     in property <[TrackItem]> tracks: [];
     in property <bool> loading: false;
+    // True when this is a Local Library album (local files / offline copies).
+    // Routes the play actions to local playback + hides Qobuz-only chrome.
+    in property <bool> is-local: false;
 }
 
 // Album-view actions wired to Rust callbacks.
