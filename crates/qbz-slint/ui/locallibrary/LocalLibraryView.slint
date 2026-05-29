@@ -485,12 +485,15 @@ export component LocalLibraryView inherits Rectangle {
                 }
                 if !LocalLibraryState.tracks-loading
                     && !LocalLibraryState.tracks-load-failed
-                    && LocalLibraryState.tracks.length > 0: VerticalLayout {
-                    padding-left: 32px;
-                    padding-right: 32px;
-                    padding-top: 16px;
-                    Rectangle {
-                        vertical-stretch: 1;
+                    && LocalLibraryState.tracks.length > 0: Rectangle {
+                    // Padded content, but the scrollbar floats at the view's
+                    // TRUE right edge — matching the Albums grid, which is the
+                    // chrome-bezel standard. (Previously it was inset by the
+                    // 32px content padding, sitting too far into the content.)
+                    VerticalLayout {
+                        padding-left: 32px;
+                        padding-right: 32px;
+                        padding-top: 16px;
                         tracks-list := ListView {
                             width: 100%;
                             height: 100%;
@@ -521,14 +524,14 @@ export component LocalLibraryView inherits Rectangle {
                                 }
                             }
                         }
-                        ListScrollbar {
-                            x: parent.width - self.width - 4px;
-                            width: 14px;
-                            height: 100%;
-                            viewport-height: tracks-list.viewport-height;
-                            visible-height: tracks-list.visible-height;
-                            viewport-y <=> tracks-list.viewport-y;
-                        }
+                    }
+                    ListScrollbar {
+                        x: parent.width - self.width - 4px;
+                        width: 14px;
+                        height: 100%;
+                        viewport-height: tracks-list.viewport-height;
+                        visible-height: tracks-list.visible-height;
+                        viewport-y <=> tracks-list.viewport-y;
                     }
                 }
             }
