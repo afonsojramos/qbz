@@ -338,6 +338,17 @@ export component AlbumPageView inherits Rectangle {
                             alignment: center;
                             CircleAction { icon: @image-url("../assets/icons/shuffle.svg"); }
                         }
+                        // Edit metadata (tag editor) — local albums only; hidden
+                        // for Plex (tag write isn't supported there).
+                        if AlbumState.is-local && AlbumState.source != "plex": VerticalLayout {
+                            alignment: center;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/pencil.svg");
+                                clicked => {
+                                    root.media-action("album", AlbumState.id, "edit");
+                                }
+                            }
+                        }
                         VerticalLayout {
                             alignment: center;
                             CircleAction {

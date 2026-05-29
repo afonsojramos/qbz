@@ -655,6 +655,12 @@ pub fn apply_local_album(
     };
     let total_secs: u64 = tracks.iter().map(|t| t.duration_secs).sum();
     let info_line = format!("{} tracks · {}", tracks.len(), fmt_album_duration(total_secs));
+    // Album source for the tag-editor pencil gate (hidden for Plex). Computed
+    // before `tracks` is consumed below.
+    let source = tracks
+        .first()
+        .and_then(|t| t.source.clone())
+        .unwrap_or_default();
     let items: Vec<TrackItem> = tracks
         .into_iter()
         .map(|t| {
@@ -667,6 +673,7 @@ pub fn apply_local_album(
     let s = window.global::<crate::AlbumState>();
     s.set_id(group_key.into());
     s.set_is_local(true);
+    s.set_source(source.into());
     s.set_title(title.into());
     s.set_artist(artist.into());
     s.set_artist_id("".into());

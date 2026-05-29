@@ -45,6 +45,7 @@ mod folders;
 mod library_db;
 mod local_library;
 mod local_library_settings;
+mod tag_editor;
 mod offline;
 mod offline_cache;
 mod offline_manager;
@@ -2293,6 +2294,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle.clone(),
                     id,
                 ),
+                ("album", "edit") => {
+                    // Open the local-album tag editor (group_key == directory_path
+                    // for folder-grouped local albums).
+                    tag_editor::open_tag_editor(weak.clone(), handle.clone(), id.clone(), id);
+                }
                 ("album", "radio") => playback::play_album_radio(
                     runtime.clone(),
                     weak.clone(),
@@ -4145,6 +4151,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window
             .global::<LibraryManageActions>()
             .on_stop_scan(move || local_library_settings::stop_scan());
+    }
+
+    // Tag editor (local album metadata) — open via on_media_action("album",
+    // "edit"); these wire the modal's own actions.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<TagEditorActions>()
+            .on_close(move || tag_editor::close_tag_editor(weak.clone()));
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<TagEditorActions>()
+            .on_save(move || tag_editor::save_tags(weak.clone(), handle.clone()));
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<TagEditorActions>()
+            .on_set_persistence(move |i| {
+                if let Some(w) = weak.upgrade() {
+                    let s = w.global::<TagEditorState>();
+                    // Ignore selecting Direct when unavailable (CUE album).
+                    if i == 1 && !s.get_can_direct_write() {
+                        s.set_persistence_index(0);
+                    } else {
+                        s.set_persistence_index(i);
+                    }
+                }
+            });
     }
 
     // Local Library — Albums tab controls (search / sort re-query page 1;

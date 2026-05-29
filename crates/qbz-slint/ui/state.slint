@@ -294,6 +294,9 @@ export global AlbumState {
     // True when this is a Local Library album (local files / offline copies).
     // Routes the play actions to local playback + hides Qobuz-only chrome.
     in property <bool> is-local: false;
+    // Local source ("user" | "qobuz_download" | "plex" | ""). Gates the
+    // tag-editor pencil (hidden for Plex; tag write isn't supported there).
+    in property <string> source;
 }
 
 // Album-view actions wired to Rust callbacks.
@@ -590,6 +593,50 @@ export global LibraryManageActions {
     callback cleanup-missing();
     callback clear-library();                    // two-step confirm
     callback set-filter(string /* query */);
+}
+
+// ============================ Tag editor ==================================
+// Local-album metadata editor (Settings-independent modal launched from the
+// local album detail). Sidecar (default) + opt-in direct file-write. Remote
+// MusicBrainz/Discogs lookup lands as a follow-up sub-slice (needs the
+// remote-metadata crate move).
+
+// One editable track row. `cue_start_secs` is f64 (-1.0 = none); `has_cue`
+// is precomputed (cue_file_path != "" || cue_start_secs >= 0) and disables
+// direct file-write. disc/track 0 = unset sentinel (Option<u32>).
+export struct TagTrackEdit {
+    id: int,
+    file_path: string,
+    cue_file_path: string,
+    cue_start_secs: float,
+    has_cue: bool,
+    title: string,
+    disc_number: string,   // raw text (LineEdit); controller parses on save ("" = unset)
+    track_number: string,  // raw text (LineEdit); controller parses on save ("" = unset)
+}
+
+export global TagEditorState {
+    in-out property <bool> open: false;
+    in property <string> album_group_key;       // == LocalAlbum.id == directory_path
+    in-out property <string> album_title;
+    in-out property <string> album_artist;
+    in-out property <string> year_input;          // raw text; controller parses
+    in-out property <string> genre;
+    in-out property <string> catalog_number;
+    in-out property <int> album_total_discs;      // collected, NOT persisted (1:1)
+    in property <string> directory_path;          // reference + is_dir gate
+    in property <bool> can_direct_write;          // false if any track has_cue
+    in-out property <int> persistence_index: 0;   // 0 = sidecar, 1 = direct
+    in-out property <[TagTrackEdit]> tracks: [];
+    in-out property <bool> saving: false;
+    in-out property <int> write_progress_current: 0;
+    in-out property <int> write_progress_total: 0;
+}
+
+export global TagEditorActions {
+    callback close();
+    callback save();
+    callback set-persistence(int);   // QbzSelect index -> mode (controller maps)
 }
 
 // Global toast state, driven by crate::toast. The Toast overlay (mounted

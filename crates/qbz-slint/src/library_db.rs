@@ -81,6 +81,25 @@ where
     }
 }
 
+/// Like `with_db`, but hands `f` a `&mut LibraryDatabase` — required by
+/// methods that open a transaction (e.g. `update_album_group_metadata`). The
+/// connection is opened fresh per call on the current (blocking) thread, so a
+/// mutable borrow is free. Returns None (logged) if the DB can't be opened or
+/// the op errors.
+pub fn with_db_mut<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut LibraryDatabase) -> Result<R, LibraryError>,
+{
+    let mut db = open()?;
+    match f(&mut db) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            log::error!("[qbz-slint] library.db mut op failed: {e}");
+            None
+        }
+    }
+}
+
 /// Resolve the artwork-cache directory used for copied custom images,
 /// matching Tauri (`<cache_dir>/qbz/artwork`).
 pub fn artwork_cache_dir() -> Option<PathBuf> {

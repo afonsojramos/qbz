@@ -16,6 +16,7 @@ import { EditPlaylistModal } from "../primitives/EditPlaylistModal.slint";
 import { CreateFolderModal } from "../primitives/CreateFolderModal.slint";
 import { FolderEditModal } from "../primitives/FolderEditModal.slint";
 import { LibFolderEditModal } from "../settings/LibFolderEditModal.slint";
+import { TagEditorModal } from "../primitives/TagEditorModal.slint";
 import { DragGhost } from "../primitives/DragGhost.slint";
 import { PlayerBar } from "PlayerBar.slint";
 import { QueueSidebar } from "QueueSidebar.slint";
@@ -283,6 +284,9 @@ export component AppShell inherits Rectangle {
 
     // Global "Local Library folder settings" modal (Settings > Local Library).
     LibFolderEditModal { }
+
+    // Global "Tag editor" modal (local album metadata).
+    TagEditorModal { }
 
     // Floating track-drag ghost (follows the cursor, on top of all).
     DragGhost { }
