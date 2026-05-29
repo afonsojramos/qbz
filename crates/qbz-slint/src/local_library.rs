@@ -12,9 +12,12 @@
 //! button routes there.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
+use qbz_app::shell::AppRuntime;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
+use crate::adapter::SlintAdapter;
 use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
 use crate::{
     AlbumCardItem, AlphaJump, AppWindow, DiscoverSection, FolderNode, LocalArtistItem,
@@ -1132,6 +1135,17 @@ fn build_artist_album_ids(
     map
 }
 
+/// Send-safe merged-artist row (no `slint::Image`, so it can cross the
+/// `spawn_blocking` boundary). Converted to `LocalArtistItem` on the UI thread
+/// in `apply_artists` (where the non-Send decoded `image` is added).
+struct ArtistRow {
+    name: String,
+    display_name: String,
+    album_count: i32,
+    track_count: i32,
+    image_path: String,
+}
+
 /// Collapse normalized-equal artist spellings into one canonical row and
 /// attach accurate album counts + a custom-image path. Mirrors Tauri's
 /// `artistMergeResult`: canonical = the variant with most albums (tie: most
@@ -1140,7 +1154,7 @@ fn merge_artists(
     artists: Vec<qbz_library::LocalArtist>,
     albums: &[qbz_library::LocalAlbum],
     custom_images: &std::collections::HashMap<String, String>,
-) -> Vec<LocalArtistItem> {
+) -> Vec<ArtistRow> {
     let album_ids = build_artist_album_ids(albums);
     let norm_imgs: std::collections::HashMap<String, String> = custom_images
         .iter()
@@ -1161,7 +1175,7 @@ fn merge_artists(
         groups.entry(n).or_default().push(a);
     }
 
-    let mut out: Vec<LocalArtistItem> = Vec::with_capacity(order.len());
+    let mut out: Vec<ArtistRow> = Vec::with_capacity(order.len());
     for n in order {
         let variants = match groups.remove(&n) {
             Some(v) => v,
@@ -1194,12 +1208,12 @@ fn merge_artists(
             (canon.name.clone(), ac, total_tracks as i32)
         };
         let image_path = norm_imgs.get(&n).cloned().unwrap_or_default();
-        out.push(LocalArtistItem {
-            name: canonical.clone().into(),
-            display_name: canonical.into(),
+        out.push(ArtistRow {
+            name: canonical.clone(),
+            display_name: canonical,
             album_count,
             track_count,
-            image_path: image_path.into(),
+            image_path,
         });
     }
     out.sort_by(|a, b| {
@@ -1280,7 +1294,21 @@ pub fn derive_artists(window: &AppWindow) {
     s.set_artists_alpha(ModelRc::new(VecModel::from(jumps)));
 }
 
-fn apply_artists(window: &AppWindow, items: Vec<LocalArtistItem>) {
+fn apply_artists(window: &AppWindow, rows: Vec<ArtistRow>) {
+    // Build the Slint items here (UI thread) — `LocalArtistItem.image` holds a
+    // non-Send `slint::Image`, so the rows crossed `spawn_blocking` as the
+    // Send-safe `ArtistRow` and gain the (default-empty) decoded image now.
+    let items: Vec<LocalArtistItem> = rows
+        .into_iter()
+        .map(|r| LocalArtistItem {
+            name: r.name.into(),
+            display_name: r.display_name.into(),
+            album_count: r.album_count,
+            track_count: r.track_count,
+            image_path: r.image_path.into(),
+            image: slint::Image::default(),
+        })
+        .collect();
     let s = window.global::<LocalLibraryState>();
     s.set_artists(ModelRc::new(VecModel::from(items)));
     s.set_artists_loading(false);
@@ -1288,9 +1316,55 @@ fn apply_artists(window: &AppWindow, items: Vec<LocalArtistItem>) {
     derive_artists(window);
 }
 
+/// Generation guard for the artist-image fetch: bumped on every artists load
+/// so a stale in-flight fetch/decode (from a superseded list) is dropped.
+static ARTISTS_IMG_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// True if `gen` is still the current artist-image generation (the apply arm
+/// checks this before painting a portrait).
+pub fn artists_img_gen_current() -> u64 {
+    ARTISTS_IMG_GEN.load(Ordering::SeqCst)
+}
+
+/// Set a freshly-decoded portrait (by artist `name`) on BOTH the flat master
+/// (`artists`, so a later `derive_artists` carries it forward) and every
+/// rendered grouped section (`artists-grouped[*].artists`). Mirrors
+/// `favorites::set_album_artwork`. The `String` name lives here, not in the
+/// `Copy` artwork target.
+pub fn set_artist_row_image(window: &AppWindow, name: &str, image: slint::Image) {
+    let s = window.global::<LocalLibraryState>();
+    let flat = s.get_artists();
+    for i in 0..flat.row_count() {
+        if let Some(mut it) = flat.row_data(i) {
+            if it.name.as_str() == name {
+                it.image = image.clone();
+                flat.set_row_data(i, it);
+                break;
+            }
+        }
+    }
+    let grouped = s.get_artists_grouped();
+    for sx in 0..grouped.row_count() {
+        if let Some(sec) = grouped.row_data(sx) {
+            for r in 0..sec.artists.row_count() {
+                if let Some(mut it) = sec.artists.row_data(r) {
+                    if it.name.as_str() == name {
+                        it.image = image.clone();
+                        sec.artists.set_row_data(r, it);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Load + merge the artists master list on first visit (re-entry keeps it).
-/// Also caches the album set for the right-pane filter.
+/// Also caches the album set for the right-pane filter, seeds decode jobs for
+/// rows that already have an image (custom or previously-cached Qobuz), and
+/// kicks the capped background fetch for the rest.
 pub fn ensure_artists_loaded(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
     weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
     image_cache: ImageCache,
@@ -1302,8 +1376,9 @@ pub fn ensure_artists_loaded(
         }
         s.set_artists_loading(true);
         s.set_artists_load_failed(false);
-        let _ = image_cache; // reserved for the Qobuz-image follow-up
+        let gen = ARTISTS_IMG_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         let weak2 = w.as_weak();
+        let handle_inner = handle.clone();
         handle.spawn(async move {
             let items = tokio::task::spawn_blocking(|| {
                 let artists = crate::library_db::with_db(|db| db.get_artists_with_filter(true, false))
@@ -1312,7 +1387,9 @@ pub fn ensure_artists_loaded(
                     db.get_albums_with_full_filter(false, true, false)
                 })
                 .unwrap_or_default();
-                let custom = crate::library_db::with_db(|db| db.get_all_custom_artist_images())
+                // Seed custom AND previously-cached Qobuz portraits (fixes the
+                // Tauri headline bug: its batch load command was never wired).
+                let custom = crate::library_db::with_db(|db| db.get_all_artist_image_urls())
                     .unwrap_or_default();
                 let merged = merge_artists(artists, &albums, &custom);
                 if let Ok(mut cache) = ARTIST_ALBUMS.lock() {
@@ -1322,7 +1399,170 @@ pub fn ensure_artists_loaded(
             })
             .await
             .unwrap_or_default();
-            let _ = weak2.upgrade_in_event_loop(move |w| apply_artists(&w, items));
+            let _ = weak2.upgrade_in_event_loop(move |w| {
+                apply_artists(&w, items);
+                // Seed decode jobs for rows that already carry an image-path.
+                let s = w.global::<LocalLibraryState>();
+                let artists = s.get_artists();
+                let mut local_jobs = Vec::new();
+                let mut http_jobs = Vec::new();
+                for i in 0..artists.row_count() {
+                    if let Some(a) = artists.row_data(i) {
+                        let p = a.image_path.to_string();
+                        if p.is_empty() {
+                            continue;
+                        }
+                        let job = ArtworkJob {
+                            target: ArtworkTarget::LocalArtistRowImage { index: i, gen },
+                            url: p.clone(),
+                        };
+                        if p.starts_with("http") {
+                            http_jobs.push(job);
+                        } else {
+                            local_jobs.push(job);
+                        }
+                    }
+                }
+                crate::artwork::spawn_local_loads(local_jobs, w.as_weak(), image_cache.clone());
+                crate::artwork::spawn_loads(http_jobs, w.as_weak(), image_cache.clone());
+                // Kick the capped Qobuz portrait fetch for missing rows.
+                if s.get_artists_fetch_images() {
+                    fetch_missing_artist_images(
+                        runtime,
+                        w.as_weak(),
+                        handle_inner,
+                        image_cache,
+                        gen,
+                    );
+                }
+            });
+        });
+    });
+}
+
+/// Capped, sequential background fetch of missing artist portraits from Qobuz
+/// (max 50/session, 1s apart, exact-normalized match only). 1:1 with Tauri's
+/// `fetchMissingArtistImages`, with per-image immediate paint + a generation
+/// guard. Names with an image already are skipped (snapshotted on the UI
+/// thread; the worker never touches the Slint model except via event-loop hops).
+pub fn fetch_missing_artist_images(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    image_cache: ImageCache,
+    gen: u64,
+) {
+    // Snapshot the names missing a portrait, on the UI thread.
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        let s = w.global::<LocalLibraryState>();
+        s.set_artists_images_fetching(true);
+        s.set_artists_images_fetched(0);
+        let flat = s.get_artists();
+        let mut names = Vec::new();
+        for i in 0..flat.row_count() {
+            if let Some(a) = flat.row_data(i) {
+                if !a.image_path.is_empty() {
+                    continue;
+                }
+                let name = a.name.to_string();
+                if normalize_artist(&name) == "various artists" {
+                    continue;
+                }
+                names.push(name);
+            }
+        }
+        let _ = tx.send(names);
+    });
+    let mut names = rx.recv().unwrap_or_default();
+    names.truncate(50);
+    if names.is_empty() {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            w.global::<LocalLibraryState>().set_artists_images_fetching(false);
+        });
+        return;
+    }
+
+    handle.spawn(async move {
+        let mut painted = 0i32;
+        for name in names {
+            if artists_img_gen_current() != gen {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            if artists_img_gen_current() != gen {
+                break;
+            }
+            let page = match runtime.core().search_artists(&name, 3, 0, None).await {
+                Ok(p) => p,
+                Err(qbz_core::CoreError::NotInitialized) => break,
+                Err(e) => {
+                    log::debug!("[locallibrary] artist image search failed for {name}: {e}");
+                    continue;
+                }
+            };
+            let nsel = normalize_artist(&name);
+            let matched = page
+                .items
+                .into_iter()
+                .find(|a| normalize_artist(&a.name) == nsel);
+            let Some(artist) = matched else {
+                continue; // no exact match -> skip (no wrong-artist persist)
+            };
+            let Some(url) = artist.image.as_ref().and_then(|i| i.best().cloned()) else {
+                continue;
+            };
+
+            // Persist the fetched portrait (best-effort; paints regardless).
+            let name_c = name.clone();
+            let url_c = url.clone();
+            let canon = artist.name.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::library_db::with_db(|db| {
+                    db.cache_artist_image_with_canonical(
+                        &name_c,
+                        Some(&url_c),
+                        "qobuz",
+                        None,
+                        Some(&canon),
+                    )
+                })
+            })
+            .await;
+
+            // Paint now: resolve the current flat-master index on the UI thread.
+            let url_p = url.clone();
+            let name_p = name.clone();
+            let cache = image_cache.clone();
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                let s = w.global::<LocalLibraryState>();
+                let flat = s.get_artists();
+                let mut idx = None;
+                for i in 0..flat.row_count() {
+                    if let Some(a) = flat.row_data(i) {
+                        if a.name.as_str() == name_p {
+                            idx = Some(i);
+                            break;
+                        }
+                    }
+                }
+                if let Some(i) = idx {
+                    crate::artwork::spawn_loads(
+                        vec![ArtworkJob {
+                            target: ArtworkTarget::LocalArtistRowImage { index: i, gen },
+                            url: url_p,
+                        }],
+                        w.as_weak(),
+                        cache,
+                    );
+                }
+            });
+            painted += 1;
+        }
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            let s = w.global::<LocalLibraryState>();
+            s.set_artists_images_fetching(false);
+            s.set_artists_images_fetched(painted);
         });
     });
 }

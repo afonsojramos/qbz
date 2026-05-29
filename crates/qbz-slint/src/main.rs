@@ -950,7 +950,7 @@ fn navigate_favorites(
 /// on first visit. Albums is the first slice (chunked grid); the other tabs
 /// render their shell + a placeholder until their slices land.
 fn navigate_local_library(
-    _runtime: Arc<AppRuntime<SlintAdapter>>,
+    runtime: Arc<AppRuntime<SlintAdapter>>,
     weak: slint::Weak<AppWindow>,
     handle: &tokio::runtime::Handle,
     image_cache: artwork::ImageCache,
@@ -973,7 +973,7 @@ fn navigate_local_library(
             local_library::ensure_tracks_loaded(weak, handle.clone());
         }
         local_library::LibTab::Artists => {
-            local_library::ensure_artists_loaded(weak, handle.clone(), image_cache);
+            local_library::ensure_artists_loaded(runtime, weak, handle.clone(), image_cache);
         }
     }
 }

@@ -347,7 +347,8 @@ export struct LocalArtistItem {
     display-name: string,   // canonical display name (after name-merge)
     album-count: int,
     track-count: int,
-    image-path: string,     // local file path for a custom/cached photo ("" = none)
+    image-path: string,     // local file path OR cached Qobuz URL ("" = none)
+    image: image,           // decoded portrait (default-empty = show placeholder)
 }
 
 // One A-Z section of the local Artists left rail (master list grouped by the
@@ -453,6 +454,10 @@ export global LocalLibraryState {
     in property <string> artists-selected-display: "";
     in property <[AlbumCardItem]> artists-selected-albums: [];
     in property <bool> artists-selected-loading: false;
+    // Artist-image background fetch (capped Qobuz portrait fill).
+    in-out property <bool> artists-fetch-images: true;   // default ON (mirrors Tauri)
+    in property <bool> artists-images-fetching: false;   // a fetch session is running
+    in property <int> artists-images-fetched: 0;         // painted this session
 }
 
 export global LocalLibraryActions {

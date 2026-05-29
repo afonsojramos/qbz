@@ -4894,6 +4894,42 @@ impl LibraryDatabase {
         Ok(map)
     }
 
+    /// Bulk-load every cached artist image (custom path preferred, else the
+    /// fetched Qobuz URL) keyed by artist_name. Lets a UI seed the rail with
+    /// previously-fetched portraits on revisit without re-hitting Qobuz.
+    /// (The Tauri batch command `library_get_artist_images` was never
+    /// registered; this is the corrected one-pass reader.)
+    pub fn get_all_artist_image_urls(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT artist_name, custom_image_path, image_url FROM artist_images \
+                 WHERE custom_image_path IS NOT NULL OR image_url IS NOT NULL",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare query: {}", e)))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let custom: Option<String> = row.get(1)?;
+                let url: Option<String> = row.get(2)?;
+                Ok((row.get::<_, String>(0)?, custom.or(url)))
+            })
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to query artist images: {}", e))
+            })?;
+
+        let mut map = std::collections::HashMap::new();
+        for row in rows.flatten() {
+            let (name, maybe_path) = row;
+            if let Some(path) = maybe_path {
+                map.insert(name, path);
+            }
+        }
+        Ok(map)
+    }
+
     /// Get all canonical artist names mapping (for bulk lookup)
     pub fn get_all_canonical_names(
         &self,

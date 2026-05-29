@@ -88,6 +88,12 @@ pub enum ArtworkTarget {
     /// A card in LocalLibraryState.artists-selected-albums[index] (the
     /// Artists tab right pane — the selected artist's albums).
     LocalArtistAlbumCard { index: usize },
+    /// A rail-row avatar in LocalLibraryState.artists (Artists tab). Addressed
+    /// by its index in the FLAT master; the apply arm resolves index -> name
+    /// and routes through the name-keyed dual-setter (grouped sections are
+    /// re-derived, so they must be matched by name). `gen` drops a stale paint
+    /// after a reload/rescan.
+    LocalArtistRowImage { index: usize, gen: u64 },
     /// A card in FavoritesState.artists[index].
     FavoriteArtist { index: usize },
     /// A card in FavoritesState.labels[index].
@@ -142,7 +148,8 @@ impl ArtworkTarget {
             ArtworkTarget::SearchTrack { .. }
             | ArtworkTarget::FavoriteTrack { .. }
             | ArtworkTarget::MixTrack { .. }
-            | ArtworkTarget::PlaylistTrack { .. } => 96,
+            | ArtworkTarget::PlaylistTrack { .. }
+            | ArtworkTarget::LocalArtistRowImage { .. } => 96,
             // Sidebar micro-collage tiles render at ~10-20px; decode tiny.
             ArtworkTarget::SidebarPlaylistCover { .. } => 48,
             // Playlist Manager collage tiles render at ~70-140px.
@@ -632,6 +639,16 @@ fn apply_artwork(
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LocalArtistRowImage { index, gen } => {
+            // Drop a portrait whose artists list was superseded by a reload.
+            if crate::local_library::artists_img_gen_current() == gen {
+                let s = window.global::<crate::LocalLibraryState>();
+                if let Some(item) = s.get_artists().row_data(index) {
+                    let name = item.name.to_string();
+                    crate::local_library::set_artist_row_image(window, &name, image);
+                }
             }
         }
         ArtworkTarget::FavoriteArtist { index } => {

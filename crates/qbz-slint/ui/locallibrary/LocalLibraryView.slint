@@ -356,13 +356,19 @@ component LocalArtistRow inherits Rectangle {
                 border-radius: 24px;
                 background: Theme.surface-elevated;
                 clip: true;
-                QbzIcon {
+                if root.item.image-path == "": QbzIcon {
                     source: @image-url("../assets/icons/user.svg");
                     width: 22px;
                     height: 22px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     tint: Theme.text-muted;
+                }
+                if root.item.image-path != "": Image {
+                    source: root.item.image;
+                    image-fit: cover;
+                    width: 48px;
+                    height: 48px;
                 }
             }
         }
