@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
-use crate::{AlbumCardItem, AppWindow, LocalLibraryState};
+use crate::{AlbumCardItem, AppWindow, LocalLibraryState, TrackItem};
 
 /// The four browse tabs. Order mirrors Tauri's default tab order
 /// (`tracks / folders / albums / artists`); the visible order is a user
@@ -405,6 +405,172 @@ pub fn load_more_albums(
                     None => {
                         s.set_albums_loading_more(false);
                     }
+                }
+            });
+        });
+    });
+}
+
+// =============================== Tracks tab ===============================
+//
+// Server-paginated flat list (the perf path that avoids the documented ~16K
+// freeze): each page is a `search_with_filter_page` query, appended on
+// scroll. Track artwork is off by default (Tauri's perf default), so there
+// are no per-row artwork jobs here. Group-by / multi-select / per-row
+// playback land with the source-aware playback slice.
+
+const TRACKS_PAGE: u64 = 200;
+
+static TRACKS_GEN: AtomicU64 = AtomicU64::new(0);
+
+fn fmt_duration(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
+
+/// Map one local track row to the rendered `TrackItem` (UI thread — holds a
+/// non-Send `slint::Image`). Local tracks aren't Qobuz-linkable, so the
+/// artist/album link ids are empty (the row renders them as plain text).
+fn map_local_track(t: qbz_library::LocalTrack) -> TrackItem {
+    let tier = match t.bit_depth {
+        Some(b) if b >= 24 => "hires",
+        Some(_) => "cd",
+        None => "",
+    };
+    TrackItem {
+        id: t.id.to_string().into(),
+        number: t.track_number.map(|n| n.to_string()).unwrap_or_default().into(),
+        title: t.title.into(),
+        artist: t.artist.into(),
+        album: t.album.into(),
+        duration: fmt_duration(t.duration_secs).into(),
+        quality_tier: tier.into(),
+        explicit: false,
+        selected: false,
+        artwork_url: t.artwork_path.unwrap_or_default().into(),
+        artwork: slint::Image::default(),
+        is_favorite: false,
+        artist_id: "".into(),
+        album_id: "".into(),
+        removing: false,
+        cache_status: 0,
+        cache_progress: 0.0,
+        unlocking: false,
+    }
+}
+
+/// Fetch one tracks page off the UI thread. `LocalTrack` is Send, so it
+/// crosses the `spawn_blocking` boundary; the conversion to `TrackItem`
+/// happens on the UI thread. has_more = the page came back full.
+fn fetch_tracks_page(query: String, offset: u64) -> Option<(Vec<qbz_library::LocalTrack>, bool)> {
+    let rows = crate::library_db::with_db(|db| {
+        db.search_with_filter_page(query.trim(), offset, TRACKS_PAGE, true, false)
+    })?;
+    let has_more = rows.len() as u64 == TRACKS_PAGE;
+    Some((rows, has_more))
+}
+
+fn apply_tracks(window: &AppWindow, rows: Vec<qbz_library::LocalTrack>, has_more: bool) {
+    let items: Vec<TrackItem> = rows.into_iter().map(map_local_track).collect();
+    let s = window.global::<LocalLibraryState>();
+    let n = items.len() as i32;
+    s.set_tracks(ModelRc::new(VecModel::from(items)));
+    s.set_tracks_next_offset(n);
+    s.set_tracks_has_more(has_more);
+    s.set_tracks_loading(false);
+    s.set_tracks_loading_more(false);
+    s.set_tracks_load_failed(false);
+}
+
+fn append_tracks(window: &AppWindow, rows: Vec<qbz_library::LocalTrack>, has_more: bool) {
+    let new_items: Vec<TrackItem> = rows.into_iter().map(map_local_track).collect();
+    let s = window.global::<LocalLibraryState>();
+    let model = s.get_tracks();
+    let mut combined: Vec<TrackItem> = (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .collect();
+    let added = new_items.len() as i32;
+    combined.extend(new_items);
+    s.set_tracks(ModelRc::new(VecModel::from(combined)));
+    s.set_tracks_next_offset(s.get_tracks_next_offset() + added);
+    s.set_tracks_has_more(has_more);
+    s.set_tracks_loading_more(false);
+}
+
+fn spawn_tracks_page_load(window: &AppWindow, handle: tokio::runtime::Handle, gen: u64) {
+    let s = window.global::<LocalLibraryState>();
+    let query = s.get_tracks_search().to_string();
+    let weak = window.as_weak();
+    handle.spawn(async move {
+        let result = tokio::task::spawn_blocking(move || fetch_tracks_page(query, 0))
+            .await
+            .ok()
+            .flatten();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            if TRACKS_GEN.load(Ordering::SeqCst) != gen {
+                return;
+            }
+            match result {
+                Some((rows, has_more)) => apply_tracks(&w, rows, has_more),
+                None => {
+                    let s = w.global::<LocalLibraryState>();
+                    s.set_tracks_loading(false);
+                    s.set_tracks_load_failed(true);
+                }
+            }
+        });
+    });
+}
+
+/// (Re)load page 1 of the tracks list with the current search.
+pub fn reload_tracks(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        let gen = TRACKS_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+        let s = w.global::<LocalLibraryState>();
+        s.set_tracks_loading(true);
+        s.set_tracks_load_failed(false);
+        spawn_tracks_page_load(&w, handle, gen);
+    });
+}
+
+/// Lazy load on first visit (re-entry keeps the loaded set + scroll).
+pub fn ensure_tracks_loaded(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        let s = w.global::<LocalLibraryState>();
+        if s.get_tracks().row_count() == 0 && !s.get_tracks_loading() {
+            let gen = TRACKS_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+            s.set_tracks_loading(true);
+            s.set_tracks_load_failed(false);
+            spawn_tracks_page_load(&w, handle, gen);
+        }
+    });
+}
+
+/// Fetch + append the next tracks page (scroll-near-bottom).
+pub fn load_more_tracks(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        let s = w.global::<LocalLibraryState>();
+        if !s.get_tracks_has_more() || s.get_tracks_loading_more() || s.get_tracks_loading() {
+            return;
+        }
+        let offset = s.get_tracks_next_offset().max(0) as u64;
+        let query = s.get_tracks_search().to_string();
+        let gen = TRACKS_GEN.load(Ordering::SeqCst);
+        s.set_tracks_loading_more(true);
+        let weak2 = w.as_weak();
+        handle.spawn(async move {
+            let result = tokio::task::spawn_blocking(move || fetch_tracks_page(query, offset))
+                .await
+                .ok()
+                .flatten();
+            let _ = weak2.upgrade_in_event_loop(move |w| {
+                let s = w.global::<LocalLibraryState>();
+                if TRACKS_GEN.load(Ordering::SeqCst) != gen {
+                    s.set_tracks_loading_more(false);
+                    return;
+                }
+                match result {
+                    Some((rows, has_more)) => append_tracks(&w, rows, has_more),
+                    None => s.set_tracks_loading_more(false),
                 }
             });
         });

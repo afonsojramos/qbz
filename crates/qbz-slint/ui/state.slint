@@ -363,6 +363,17 @@ export global LocalLibraryState {
     in-out property <string> albums-sort: "artist-asc";
     // "grid" | "list" — the list view toggle lands with the next slice.
     in-out property <string> albums-view-mode: "grid";
+
+    // --- Tracks tab (server-paginated flat list — the 16K-freeze fix) ---
+    // Group-by / multi-select / per-row play land with the playback slice.
+    in property <[TrackItem]> tracks: [];
+    in property <int> tracks-total: 0;
+    in property <bool> tracks-loading: false;
+    in property <bool> tracks-loading-more: false;
+    in property <bool> tracks-has-more: false;
+    in property <bool> tracks-load-failed: false;
+    in-out property <int> tracks-next-offset: 0;
+    in-out property <string> tracks-search: "";
 }
 
 export global LocalLibraryActions {
@@ -388,6 +399,13 @@ export global LocalLibraryActions {
     // Per-card action (play / queue / play-next) — lands with the playback
     // slice. Wired now so the shared AlbumCollectionView contract is honored.
     callback album-action(string /* album id */, string /* action */);
+
+    // --- Tracks tab ---
+    callback tracks-search(string /* query */);
+    callback tracks-load-more();
+    callback tracks-retry();
+    // Per-row play/queue — local playback lands with the source-aware slice.
+    callback track-action(string /* track id */, string /* action */);
 }
 
 // Global toast state, driven by crate::toast. The Toast overlay (mounted

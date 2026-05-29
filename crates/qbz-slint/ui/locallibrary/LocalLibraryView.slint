@@ -26,6 +26,8 @@ import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
+import { TrackRow } from "../primitives/TrackRow.slint";
+import { ListView } from "std-widgets.slint";
 
 // One tab in the Local Library tab menu — underline style (ADR-008: NO
 // pills). 1:1 with Favorites' FavTab so the chrome reads identically.
@@ -248,6 +250,24 @@ export component LocalLibraryView inherits Rectangle {
                     }
                 }
             }
+
+            // Tracks toolbar — search.
+            if LocalLibraryState.active-tab == "tracks"
+                && (LocalLibraryState.tracks.length > 0
+                    || LocalLibraryState.tracks-search != ""): HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    ExpandableSearch {
+                        placeholder: @tr("Search");
+                        sm: true;
+                        query <=> LocalLibraryState.tracks-search;
+                        edited(q) => {
+                            LocalLibraryActions.tracks-search(q);
+                        }
+                    }
+                }
+            }
         }
 
         Rectangle { height: 14px; }
@@ -394,8 +414,128 @@ export component LocalLibraryView inherits Rectangle {
                 }
             }
 
+            // -------- Tracks tab — server-paginated flat list ------------
+            if LocalLibraryState.active-tab == "tracks": Rectangle {
+                if LocalLibraryState.tracks-loading: VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: center;
+                        LoadingSpinner { size: 36px; }
+                    }
+                }
+                if !LocalLibraryState.tracks-loading
+                    && LocalLibraryState.tracks-load-failed: VerticalLayout {
+                    alignment: center;
+                    spacing: 10px;
+                    Text {
+                        text: @tr("Couldn't load your local tracks.");
+                        color: Theme.text-primary;
+                        font-size: Typography.body;
+                        font-weight: Typography.semibold;
+                        horizontal-alignment: center;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: tretry-label.preferred-width + 28px;
+                            height: 32px;
+                            border-radius: 6px;
+                            background: tretry-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            tretry-label := Text {
+                                text: @tr("Retry");
+                                color: Theme.text-primary;
+                                font-size: Typography.legal;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                            tretry-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    LocalLibraryActions.tracks-retry();
+                                }
+                            }
+                        }
+                    }
+                }
+                if !LocalLibraryState.tracks-loading
+                    && !LocalLibraryState.tracks-load-failed
+                    && LocalLibraryState.tracks.length == 0
+                    && LocalLibraryState.tracks-search == "": VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("No tracks in your local library yet.");
+                        color: Theme.text-muted;
+                        font-size: Typography.body;
+                        horizontal-alignment: center;
+                    }
+                }
+                if !LocalLibraryState.tracks-loading
+                    && !LocalLibraryState.tracks-load-failed
+                    && LocalLibraryState.tracks.length == 0
+                    && LocalLibraryState.tracks-search != "": VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("No tracks match your search.");
+                        color: Theme.text-muted;
+                        font-size: Typography.body;
+                        horizontal-alignment: center;
+                    }
+                }
+                if !LocalLibraryState.tracks-loading
+                    && !LocalLibraryState.tracks-load-failed
+                    && LocalLibraryState.tracks.length > 0: VerticalLayout {
+                    padding-left: 32px;
+                    padding-right: 32px;
+                    padding-top: 16px;
+                    Rectangle {
+                        vertical-stretch: 1;
+                        tracks-list := ListView {
+                            width: 100%;
+                            height: 100%;
+                            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                            changed viewport-y => {
+                                if (-self.viewport-y + self.visible-height >= self.viewport-height - 600px
+                                    && LocalLibraryState.tracks-has-more
+                                    && !LocalLibraryState.tracks-loading-more
+                                    && !LocalLibraryState.tracks-loading) {
+                                    LocalLibraryActions.tracks-load-more();
+                                }
+                            }
+                            for track[i] in LocalLibraryState.tracks: TrackRow {
+                                track: track;
+                                index: i;
+                                show-artwork: false;
+                                show-album: true;
+                                show-favorite: false;
+                                show-download: false;
+                                media-action(kind, id, action) => {
+                                    if (kind == "album" && action == "open") {
+                                        LocalLibraryActions.open-album(id);
+                                    } else if (kind == "artist" && action == "open") {
+                                        LocalLibraryActions.open-artist(id);
+                                    } else {
+                                        LocalLibraryActions.track-action(id, action);
+                                    }
+                                }
+                            }
+                        }
+                        ListScrollbar {
+                            x: parent.width - self.width - 4px;
+                            width: 14px;
+                            height: 100%;
+                            viewport-height: tracks-list.viewport-height;
+                            visible-height: tracks-list.visible-height;
+                            viewport-y <=> tracks-list.viewport-y;
+                        }
+                    }
+                }
+            }
+
             // -------- Other tabs — placeholder until their slices land ----
-            if LocalLibraryState.active-tab != "albums": VerticalLayout {
+            if LocalLibraryState.active-tab != "albums"
+                && LocalLibraryState.active-tab != "tracks": VerticalLayout {
                 alignment: center;
                 spacing: 6px;
                 Text {

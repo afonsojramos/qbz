@@ -2810,6 +2810,63 @@ impl LibraryDatabase {
         Ok(tracks)
     }
 
+    /// Paged variant of `search_with_filter` — the performant path for the
+    /// Tracks tab. Returns one page (`LIMIT`/`OFFSET`) with the SAME ordering,
+    /// so the frontend never materializes the whole table (the documented
+    /// ~16K-row freeze). An empty `query` matches everything.
+    pub fn search_with_filter_page(
+        &self,
+        query: &str,
+        offset: u64,
+        limit: u64,
+        include_qobuz_downloads: bool,
+        exclude_network_folders: bool,
+    ) -> Result<Vec<LocalTrack>, LibraryError> {
+        let pattern = format!("%{}%", query);
+        let source_filter = if include_qobuz_downloads {
+            ""
+        } else {
+            "AND (source IS NULL OR source != 'qobuz_download')"
+        };
+        let network_filter = if exclude_network_folders {
+            "AND NOT EXISTS (
+                SELECT 1 FROM library_folders nf
+                WHERE nf.is_network = 1
+                AND local_tracks.file_path LIKE nf.path || '%'
+            )"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT {} FROM local_tracks \
+             WHERE (title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1) \
+             {} {} \
+             ORDER BY album COLLATE NOCASE, \
+                      COALESCE(album_artist, artist) COLLATE NOCASE, \
+                      disc_number, \
+                      track_number, \
+                      title COLLATE NOCASE \
+             LIMIT ?2 OFFSET ?3",
+            Self::TRACK_COLUMNS,
+            source_filter,
+            network_filter,
+        );
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![&pattern, limit as i64, offset as i64], |row| {
+                Self::row_to_track(row)
+            })
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        let mut tracks = Vec::new();
+        for track in rows {
+            tracks.push(track.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(tracks)
+    }
+
     /// Get library statistics
     pub fn get_stats(&self, include_qobuz_downloads: bool) -> Result<LibraryStats, LibraryError> {
         let source_filter = if include_qobuz_downloads {

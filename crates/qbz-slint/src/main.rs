@@ -914,9 +914,15 @@ fn navigate_local_library(
         w.global::<LocalLibraryState>().set_active_tab(tab_id.into());
         w.global::<NavState>().set_view(ContentView::LocalLibrary);
     });
-    // Lazy per-tab load — Albums fetches page 1 on first visit.
-    if tab == local_library::LibTab::Albums {
-        local_library::ensure_albums_loaded(weak, handle.clone(), image_cache);
+    // Lazy per-tab load on first visit.
+    match tab {
+        local_library::LibTab::Albums => {
+            local_library::ensure_albums_loaded(weak, handle.clone(), image_cache);
+        }
+        local_library::LibTab::Tracks => {
+            local_library::ensure_tracks_loaded(weak, handle.clone());
+        }
+        _ => {}
     }
 }
 
@@ -4017,6 +4023,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_album_action(move |id, action| {
                 // TODO(locallibrary): play / queue local albums.
                 log::debug!("[qbz-slint] local album action (playback slice pending): {id} {action}");
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_tracks_search(move |_query| {
+                // The query is two-way bound to tracks-search; reload page 1.
+                local_library::reload_tracks(weak.clone(), handle.clone());
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_tracks_load_more(move || {
+                local_library::load_more_tracks(weak.clone(), handle.clone());
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_tracks_retry(move || {
+                local_library::reload_tracks(weak.clone(), handle.clone());
+            });
+    }
+    {
+        window
+            .global::<LocalLibraryActions>()
+            .on_track_action(move |id, action| {
+                // TODO(locallibrary): play / queue local tracks (source-aware slice).
+                log::debug!("[qbz-slint] local track action (playback slice pending): {id} {action}");
             });
     }
 
