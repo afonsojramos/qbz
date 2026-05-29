@@ -18,6 +18,7 @@ component AlbumGrid inherits Rectangle {
     in property <length> card-width: 220px;
     in property <length> card-height: 266px;
     in property <length> card-gap: 24px;
+    in property <bool> show-favorite: true;
     callback open-album(string);
     callback open-artist(string);
     callback media-action(string, string, string);
@@ -36,6 +37,7 @@ component AlbumGrid inherits Rectangle {
         width: root.card-width;
         height: root.card-height;
         album: album;
+        show-favorite: root.show-favorite;
         clicked(id) => {
             root.open-album(id);
         }
@@ -55,6 +57,9 @@ export component AlbumCollectionView inherits VerticalLayout {
     in property <bool> is-grouped: false;
     in property <string> view-mode: "grid";       // "grid" | "list"
     in property <bool> show-source: false;
+    // Forwarded to AlbumCard — hide the favorite heart in non-favoritable
+    // contexts (Local Library albums).
+    in property <bool> show-favorite: true;
     in property <length> card-width: 220px;
     in property <length> card-height: 266px;
     in property <length> card-gap: 24px;
@@ -103,6 +108,7 @@ export component AlbumCollectionView inherits VerticalLayout {
             // Grid view: a card grid for this section.
             if root.view-mode != "list": AlbumGrid {
                 albums: section.albums;
+                show-favorite: root.show-favorite;
                 card-width: root.card-width;
                 card-height: root.card-height;
                 card-gap: root.card-gap;
@@ -122,6 +128,7 @@ export component AlbumCollectionView inherits VerticalLayout {
     // --- Flat grid -----------------------------------------------------
     if !root.is-grouped && root.view-mode == "grid" && root.albums.length > 0: AlbumGrid {
         albums: root.albums;
+        show-favorite: root.show-favorite;
         card-width: root.card-width;
         card-height: root.card-height;
         card-gap: root.card-gap;

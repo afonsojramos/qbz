@@ -61,6 +61,9 @@ component OverlayButton inherits Rectangle {
 
 export component AlbumCard inherits Rectangle {
     in property <AlbumCardItem> album;
+    // Hide the favorite heart + its menu item in non-favoritable contexts
+    // (e.g. Local Library albums). Mirrors Tauri's AlbumCardLibraryLite.
+    in property <bool> show-favorite: true;
     // Fade out when the card is being removed (favorites un-favorite).
     opacity: root.album.removing ? 0.0 : 1.0;
     animate opacity { duration: 250ms; }
@@ -159,6 +162,7 @@ export component AlbumCard inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     fav-btn := OverlayButton {
+                        visible: root.show-favorite;
                         icon: root.album.is-favorite
                             ? @image-url("../assets/icons/heart-filled.svg")
                             : @image-url("../assets/icons/heart.svg");
@@ -263,7 +267,7 @@ export component AlbumCard inherits Rectangle {
                             root.media-action("album", root.album.id, "queue");
                         }
                     }
-                    ContextMenuItem {
+                    if root.show-favorite: ContextMenuItem {
                         icon: @image-url("../assets/icons/heart.svg");
                         label: @tr("Add to favorites");
                         clicked => {
