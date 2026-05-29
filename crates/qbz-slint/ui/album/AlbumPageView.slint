@@ -529,8 +529,10 @@ export component AlbumPageView inherits Rectangle {
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
-                        // Favorite / offline-cache column headers.
-                        Rectangle {
+                        // Favorite / offline-cache column headers (Qobuz). For
+                        // a local album the rows show a source indicator
+                        // instead, so one unlabeled column keeps alignment.
+                        if !AlbumState.is-local: Rectangle {
                             width: 28px;
                             QbzIcon {
                                 source: @image-url("../assets/icons/heart.svg");
@@ -541,7 +543,7 @@ export component AlbumPageView inherits Rectangle {
                                 tint: Theme.text-muted;
                             }
                         }
-                        Rectangle {
+                        if !AlbumState.is-local: Rectangle {
                             width: 28px;
                             QbzIcon {
                                 source: @image-url("../assets/icons/cloud-download.svg");
@@ -552,6 +554,7 @@ export component AlbumPageView inherits Rectangle {
                                 tint: Theme.text-muted;
                             }
                         }
+                        if AlbumState.is-local: Rectangle { width: 28px; }
                         // Aligns with the per-row more-button slot.
                         Rectangle { width: 32px; }
                     }
@@ -559,10 +562,14 @@ export component AlbumPageView inherits Rectangle {
                     for track[index] in AlbumState.tracks: TrackRow {
                         track: track;
                         index: index;
-                        // Album context: number cell (no cover), with the
-                        // offline-cache button.
+                        // Number cell (no cover). Qobuz albums carry the
+                        // favorite heart (matching the column header) + the
+                        // offline-cache button; local albums show the source
+                        // indicator instead.
                         show-artwork: false;
-                        show-download: true;
+                        show-favorite: !AlbumState.is-local;
+                        show-download: !AlbumState.is-local;
+                        show-source: AlbumState.is-local;
                         media-action(kind, id, action) => {
                             root.media-action(kind, id, action);
                         }

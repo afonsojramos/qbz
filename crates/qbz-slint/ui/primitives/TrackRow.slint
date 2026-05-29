@@ -36,6 +36,9 @@ export component TrackRow inherits Rectangle {
     // button. A non-Qobuz surface (future Local Library / Plex rows, which are
     // already local) should set this false.
     in property <bool> show-download: true;
+    // Local Library: a subtle per-source indicator (local / qobuz / plex)
+    // shown INSTEAD of the favorite + offline columns.
+    in property <bool> show-source: false;
     in property <bool> multi-select-mode: false;
     // Custom-order reorder controls (up/down chevrons) at the leading
     // edge — used by the playlist custom sort.
@@ -447,6 +450,31 @@ export component TrackRow inherits Rectangle {
                         root.media-action("track", root.track.id,
                             root.track.cache-status == 3 ? "uncache" : "cache");
                     }
+                }
+            }
+        }
+
+        // Source indicator (Local Library) — a subtle per-source glyph shown
+        // instead of the favorite/offline columns. local -> hard-drive
+        // (tinted), plex / qobuz(offline) -> their mark; small + flat, not the
+        // bold album-card badge.
+        if root.show-source && root.track.source != "": VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                Image {
+                    source: root.track.source == "plex"
+                        ? @image-url("../assets/icons/plex-logo.svg")
+                        : (root.track.source == "qobuz"
+                            ? @image-url("../assets/icons/qobuz-logo-filled.svg")
+                            : @image-url("../assets/icons/hard-drive.svg"));
+                    colorize: root.track.source == "local" ? Theme.text-muted : transparent;
+                    width: root.track.source == "local" ? 15px : 16px;
+                    height: self.width;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    image-fit: contain;
                 }
             }
         }

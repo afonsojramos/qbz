@@ -765,6 +765,7 @@ fn top_track_to_item(t: &TopTrack) -> TrackItem {
         removing: false,
         cache_status: if crate::offline_cache::is_cached(&t.id) { 3 } else { 0 },
         cache_progress: 0.0,
+        source: "qobuz".into(),
         unlocking: false,
     }
 }

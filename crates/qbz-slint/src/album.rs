@@ -259,6 +259,8 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
             removing: false,
             cache_status: if crate::offline_cache::is_cached(&track.id) { 3 } else { 0 },
             cache_progress: 0.0,
+            // Qobuz album-detail rows; local albums override via map_local_track.
+            source: "qobuz".into(),
             unlocking: false,
         })
         .collect();

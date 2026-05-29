@@ -177,6 +177,7 @@ fn to_item(track: &Track) -> TrackItem {
         removing: false,
         cache_status: if crate::offline_cache::is_cached(&track.id.to_string()) { 3 } else { 0 },
         cache_progress: 0.0,
+        source: "qobuz".into(),
         unlocking: false,
     }
 }

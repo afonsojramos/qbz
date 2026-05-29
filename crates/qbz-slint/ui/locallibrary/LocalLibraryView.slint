@@ -513,6 +513,7 @@ export component LocalLibraryView inherits Rectangle {
                                 show-album: true;
                                 show-favorite: false;
                                 show-download: false;
+                                show-source: true;
                                 media-action(kind, id, action) => {
                                     if (kind == "album" && action == "open") {
                                         LocalLibraryActions.open-album(id);

@@ -454,6 +454,13 @@ fn map_local_track(t: qbz_library::LocalTrack) -> TrackItem {
         removing: false,
         cache_status: 0,
         cache_progress: 0.0,
+        // Source indicator: offline copies read as Qobuz, user files as local.
+        source: match t.source.as_deref() {
+            Some("qobuz_download") => "qobuz",
+            Some("plex") => "plex",
+            _ => "local",
+        }
+        .into(),
         unlocking: false,
     }
 }

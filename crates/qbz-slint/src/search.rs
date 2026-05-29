@@ -375,6 +375,7 @@ fn track_item(row: TrackRowData) -> TrackItem {
         removing: false,
         cache_status: if is_cached { 3 } else { 0 },
         cache_progress: 0.0,
+        source: "qobuz".into(),
         unlocking: false,
     }
 }

@@ -505,6 +505,7 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
             removing: false,
             cache_status: if crate::offline_cache::is_cached(&track.id) { 3 } else { 0 },
             cache_progress: 0.0,
+            source: "qobuz".into(),
             unlocking: false,
         })
         .collect();

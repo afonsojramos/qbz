@@ -251,6 +251,9 @@ export struct TrackItem {
     // album view, both via the media-action bubble channel.
     artist-id: string,
     album-id: string,
+    // "qobuz" | "local" | "plex" | "" — drives the Local Library source
+    // indicator (shown instead of the favorite/offline columns).
+    source: string,
     // Fading out (un-favorited in the favorites view) before removal.
     removing: bool,
     // Offline-cache status: 0 none, 1 queued, 2 downloading, 3 ready, 4 failed.
