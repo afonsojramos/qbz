@@ -347,6 +347,18 @@ export struct LocalArtistItem {
     subtitle: string,
 }
 
+// One visible row in the Folders tree (flattened-model lazy tree — Slint has
+// no native TreeView). Folders expand to fetch children lazily.
+export struct FolderNode {
+    path: string,         // absolute filesystem path (the node id)
+    segment: string,      // last path component (display)
+    depth: int,           // indent level
+    is-folder: bool,      // folder vs. track row
+    expanded: bool,       // folder open?
+    can-expand: bool,     // has children (track_count_under > 0)
+    track-count: int,     // recursive track count under a folder
+}
+
 export global LocalLibraryState {
     // "albums" | "artists" | "folders" | "tracks"
     in-out property <string> active-tab: "albums";
@@ -388,10 +400,29 @@ export global LocalLibraryState {
     in-out property <int> tracks-next-offset: 0;
     in-out property <string> tracks-search: "";
 
-    // --- Folders tab (flat) — albums grouped by directory (full load) ---
+    // --- Folders tab ---------------------------------------------------
+    // flat = album grid grouped by directory; tree = two-pane lazy filesystem.
+    in-out property <string> folders-view-mode: "flat";   // "flat" | "tree"
+    // Flat mode: `folders` is the full set (artwork target); `folders-visible`
+    // / `folders-grouped` are the search/sort/group-derived render sets.
     in property <[AlbumCardItem]> folders: [];
     in property <bool> folders-loading: false;
     in property <bool> folders-load-failed: false;
+    in property <[AlbumCardItem]> folders-visible: [];
+    in property <[DiscoverSection]> folders-grouped: [];
+    in-out property <string> folders-search: "";
+    in-out property <string> folders-sort: "title-asc";   // title-asc|title-desc|artist-asc|year-desc
+    in-out property <string> folders-group: "off";         // off | alpha | artist
+    in-out property <string> folders-grid-view: "grid";    // grid | list
+    // Tree mode: a flattened visible-node list + the selected folder's detail
+    // (its direct tracks; subfolders shown as a grid).
+    in property <[FolderNode]> folder-tree: [];
+    in property <bool> folder-tree-loading: false;
+    in-out property <string> folders-selected-path: "";
+    in property <string> folders-selected-name: "";
+    in property <[FolderNode]> folder-detail-subfolders: [];
+    in property <[TrackItem]> folder-detail-tracks: [];
+    in property <bool> folder-detail-loading: false;
 
     // --- Artists tab — name + counts grid (full load; images later) -----
     in property <[LocalArtistItem]> artists: [];
@@ -429,6 +460,21 @@ export global LocalLibraryActions {
     callback tracks-retry();
     // Per-row play/queue — local playback lands with the source-aware slice.
     callback track-action(string /* track id */, string /* action */);
+
+    // --- Folders tab ---
+    callback folders-search(string /* query */);
+    callback folders-set-sort(string /* sort key */);
+    callback folders-set-group(string /* off|alpha|artist */);
+    callback folders-set-mode(string /* flat|tree */);
+    // Tree: expand/collapse a folder node (lazy child fetch on expand).
+    callback folders-toggle-node(string /* path */, bool /* now-expanded */);
+    // Tree: select a folder -> load its detail (direct tracks + subfolders).
+    callback folders-select(string /* path */, string /* segment */);
+    // Tree: play everything under a folder (recursive).
+    callback folders-play-node(string /* path */);
+    // Tree: play one track from the selected folder's direct tracks (the
+    // folder's direct list becomes the queue, starting at this track).
+    callback folders-play-track(string /* track id */);
 }
 
 // Global toast state, driven by crate::toast. The Toast overlay (mounted

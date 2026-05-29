@@ -16,7 +16,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
-use crate::{AlbumCardItem, AppWindow, LocalArtistItem, LocalLibraryState, TrackItem};
+use crate::{
+    AlbumCardItem, AppWindow, DiscoverSection, FolderNode, LocalArtistItem, LocalLibraryState,
+    TrackItem,
+};
 
 /// The four browse tabs. Order mirrors Tauri's default tab order
 /// (`tracks / folders / albums / artists`); the visible order is a user
@@ -715,6 +718,92 @@ fn apply_folders(window: &AppWindow, cards: Vec<crate::album_map::AlbumCard>) {
     s.set_folders(ModelRc::new(VecModel::from(items)));
     s.set_folders_loading(false);
     s.set_folders_load_failed(false);
+    derive_folders(window);
+}
+
+/// First-letter bucket key for alpha grouping (`#` for non-alphabetic).
+/// Mirrors favorites' `album_alpha_key` so the two surfaces sort identically.
+fn folder_alpha_key(title: &str) -> String {
+    title
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| {
+            let up = c.to_uppercase().next().unwrap_or(c);
+            if up.is_ascii_digit() {
+                "#".to_string()
+            } else {
+                up.to_string()
+            }
+        })
+        .unwrap_or_else(|| "#".to_string())
+}
+
+/// Re-derive the flat-mode visible / grouped folder models from the full
+/// `folders` set, applying the toolbar's search query, sort key and group
+/// mode. Mirrors `favorites::derive_albums` so behaviour is identical to the
+/// metadata Albums tab; the only difference is the source model (directory
+/// grouping instead of metadata grouping).
+pub fn derive_folders(window: &AppWindow) {
+    let s = window.global::<LocalLibraryState>();
+    let query_owned = s.get_folders_search().to_lowercase();
+    let query = query_owned.trim();
+    let sort = s.get_folders_sort().to_string();
+    let group = s.get_folders_group().to_string();
+    let all = s.get_folders();
+    let empty_sections = || ModelRc::new(VecModel::from(Vec::<DiscoverSection>::new()));
+
+    let mut filtered: Vec<AlbumCardItem> = (0..all.row_count())
+        .filter_map(|i| all.row_data(i))
+        .filter(|a| {
+            query.is_empty()
+                || a.title.to_lowercase().contains(query)
+                || a.artist.to_lowercase().contains(query)
+        })
+        .collect();
+    crate::album_map::sort_album_items(&mut filtered, &sort);
+
+    if group == "off" {
+        s.set_folders_visible(ModelRc::new(VecModel::from(filtered)));
+        s.set_folders_grouped(empty_sections());
+        return;
+    }
+
+    // Grouped: bucket by artist name, or by the title's first letter
+    // (`#` for non-alphabetic). Sections ordered alphabetically, `#` last.
+    let mut map: Vec<(String, Vec<AlbumCardItem>)> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for item in filtered {
+        let key = if group == "artist" {
+            let a = item.artist.to_string();
+            if a.is_empty() {
+                "Unknown".to_string()
+            } else {
+                a
+            }
+        } else {
+            folder_alpha_key(item.title.as_str())
+        };
+        let idx = *index.entry(key.clone()).or_insert_with(|| {
+            map.push((key.clone(), Vec::new()));
+            map.len() - 1
+        });
+        map[idx].1.push(item);
+    }
+    map.sort_by(|(a, _), (b, _)| match (a == "#", b == "#") {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => a.to_lowercase().cmp(&b.to_lowercase()),
+    });
+    let sections: Vec<DiscoverSection> = map
+        .into_iter()
+        .map(|(key, items)| DiscoverSection {
+            title: key.into(),
+            endpoint: "".into(),
+            albums: ModelRc::new(VecModel::from(items)),
+        })
+        .collect();
+    s.set_folders_grouped(ModelRc::new(VecModel::from(sections)));
+    s.set_folders_visible(ModelRc::new(VecModel::from(Vec::<AlbumCardItem>::new())));
 }
 
 /// Load the folder-grouped album grid on first visit (re-entry keeps it).
@@ -740,6 +829,207 @@ pub fn ensure_folders_loaded(
                 apply_folders(&w, cards);
                 crate::artwork::spawn_local_loads(jobs, w.as_weak(), image_cache);
             });
+        });
+    });
+}
+
+// ============================ Folders (tree) ==============================
+//
+// Slint has no native TreeView and no self-recursive component, so the tree
+// is rendered as a flattened list of visible nodes (`FolderNode`) in a
+// ListView: each node carries its `depth` (drives the indent) and an
+// `expanded` flag. Expanding fetches one level lazily via
+// `list_folder_children`; collapsing drops the contiguous descendant block.
+
+/// Last path component for display (the registered root paths are absolute).
+fn path_basename(path: &str) -> String {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// Map a backend tree entry to a flattened `FolderNode` at the given depth.
+fn entry_to_node(entry: &qbz_library::FolderTreeEntry, depth: i32) -> FolderNode {
+    match entry {
+        qbz_library::FolderTreeEntry::Folder {
+            path,
+            segment,
+            track_count_under,
+            ..
+        } => FolderNode {
+            path: path.clone().into(),
+            segment: segment.clone().into(),
+            depth,
+            is_folder: true,
+            expanded: false,
+            can_expand: *track_count_under > 0,
+            track_count: *track_count_under as i32,
+        },
+        qbz_library::FolderTreeEntry::Track { path, segment } => FolderNode {
+            path: path.clone().into(),
+            segment: segment.clone().into(),
+            depth,
+            is_folder: false,
+            expanded: false,
+            can_expand: false,
+            track_count: 0,
+        },
+    }
+}
+
+/// Load the tree roots (registered library folders) on first switch to tree
+/// mode. Each root gets a recursive track count so the rail can show totals
+/// and gate the expand affordance.
+pub fn ensure_folder_tree_loaded(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        let s = w.global::<LocalLibraryState>();
+        if s.get_folder_tree().row_count() != 0 || s.get_folder_tree_loading() {
+            return;
+        }
+        s.set_folder_tree_loading(true);
+        let weak2 = w.as_weak();
+        handle.spawn(async move {
+            let roots = tokio::task::spawn_blocking(|| {
+                crate::library_db::with_db(|db| {
+                    let paths = db.get_folders()?;
+                    let mut out: Vec<(String, u32)> = Vec::with_capacity(paths.len());
+                    for p in paths {
+                        let cnt = db.count_folder_tracks_recursive(&p, false)?;
+                        out.push((p, cnt));
+                    }
+                    Ok::<_, qbz_library::LibraryError>(out)
+                })
+                .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default();
+            let _ = weak2.upgrade_in_event_loop(move |w| {
+                let nodes: Vec<FolderNode> = roots
+                    .into_iter()
+                    .map(|(p, cnt)| FolderNode {
+                        segment: path_basename(&p).into(),
+                        path: p.into(),
+                        depth: 0,
+                        is_folder: true,
+                        expanded: false,
+                        can_expand: cnt > 0,
+                        track_count: cnt as i32,
+                    })
+                    .collect();
+                let s = w.global::<LocalLibraryState>();
+                s.set_folder_tree(ModelRc::new(VecModel::from(nodes)));
+                s.set_folder_tree_loading(false);
+            });
+        });
+    });
+}
+
+/// Collect the current flattened tree into a plain vec for splicing.
+fn collect_tree(s: &LocalLibraryState) -> Vec<FolderNode> {
+    let m = s.get_folder_tree();
+    (0..m.row_count()).filter_map(|i| m.row_data(i)).collect()
+}
+
+/// Expand or collapse a folder node. Collapsing is pure UI (drop the
+/// contiguous descendant block); expanding fetches one child level lazily.
+pub fn toggle_folder_node(
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    path: String,
+    expand: bool,
+) {
+    if !expand {
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            let s = w.global::<LocalLibraryState>();
+            let mut nodes = collect_tree(&s);
+            if let Some(pos) = nodes.iter().position(|n| n.path == path) {
+                let depth = nodes[pos].depth;
+                nodes[pos].expanded = false;
+                let mut end = pos + 1;
+                while end < nodes.len() && nodes[end].depth > depth {
+                    end += 1;
+                }
+                nodes.drain(pos + 1..end);
+                s.set_folder_tree(ModelRc::new(VecModel::from(nodes)));
+            }
+        });
+        return;
+    }
+    // Expand: fetch this level's children off-thread, then splice them in.
+    let path_for_fetch = path.clone();
+    handle.spawn(async move {
+        let children = tokio::task::spawn_blocking(move || {
+            crate::library_db::with_db(|db| db.list_folder_children(&path_for_fetch, false))
+                .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            let s = w.global::<LocalLibraryState>();
+            let mut nodes = collect_tree(&s);
+            if let Some(pos) = nodes.iter().position(|n| n.path == path) {
+                let depth = nodes[pos].depth;
+                nodes[pos].expanded = true;
+                let child_nodes: Vec<FolderNode> = children
+                    .iter()
+                    .map(|e| entry_to_node(e, depth + 1))
+                    .collect();
+                for (i, cn) in child_nodes.into_iter().enumerate() {
+                    nodes.insert(pos + 1 + i, cn);
+                }
+                s.set_folder_tree(ModelRc::new(VecModel::from(nodes)));
+            }
+        });
+    });
+}
+
+/// Select a folder in the tree: load its detail pane — direct child tracks
+/// plus immediate subfolders (for in-pane drill-down).
+pub fn select_folder(
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    path: String,
+    segment: String,
+) {
+    let _ = weak.upgrade_in_event_loop({
+        let path = path.clone();
+        let segment = segment.clone();
+        move |w| {
+            let s = w.global::<LocalLibraryState>();
+            s.set_folders_selected_path(path.clone().into());
+            s.set_folders_selected_name(segment.clone().into());
+            s.set_folder_detail_loading(true);
+        }
+    });
+    let path_for_fetch = path.clone();
+    handle.spawn(async move {
+        let (tracks, subfolders) = tokio::task::spawn_blocking(move || {
+            let tracks = crate::library_db::with_db(|db| {
+                db.list_folder_tracks(&path_for_fetch, false)
+            })
+            .unwrap_or_default();
+            let children = crate::library_db::with_db(|db| {
+                db.list_folder_children(&path_for_fetch, false)
+            })
+            .unwrap_or_default();
+            (tracks, children)
+        })
+        .await
+        .unwrap_or_default();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            let track_items: Vec<TrackItem> = tracks.into_iter().map(map_local_track).collect();
+            let sub_nodes: Vec<FolderNode> = subfolders
+                .iter()
+                .filter(|e| matches!(e, qbz_library::FolderTreeEntry::Folder { .. }))
+                .map(|e| entry_to_node(e, 0))
+                .collect();
+            let s = w.global::<LocalLibraryState>();
+            s.set_folder_detail_tracks(ModelRc::new(VecModel::from(track_items)));
+            s.set_folder_detail_subfolders(ModelRc::new(VecModel::from(sub_nodes)));
+            s.set_folder_detail_loading(false);
         });
     });
 }

@@ -242,6 +242,64 @@ pub fn play_local_album(
     });
 }
 
+/// Play everything under a folder (recursive), in path order — the whole
+/// subtree becomes the queue. Mirrors `play_local_album` but sources the
+/// tracks from the folder hierarchy instead of a metadata group.
+pub fn play_local_folder_recursive(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    folder_path: String,
+) {
+    handle.spawn(async move {
+        let tracks = tokio::task::spawn_blocking(move || {
+            let mut tracks = crate::library_db::with_db(|db| {
+                db.list_folder_tracks_recursive(&folder_path, false)
+            })
+            .unwrap_or_default();
+            fill_missing_covers(&mut tracks);
+            tracks
+        })
+        .await
+        .unwrap_or_default();
+        if tracks.is_empty() {
+            return;
+        }
+        play_local_tracks_now(&runtime, &weak, tracks, 0).await;
+    });
+}
+
+/// Play a folder's DIRECT tracks (non-recursive) starting at `start_track_id`
+/// — the folder's own track list becomes the queue. Used by the tree-mode
+/// detail pane when a track row is clicked.
+pub fn play_local_folder_tracks_from(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    folder_path: String,
+    start_track_id: i64,
+) {
+    handle.spawn(async move {
+        let tracks = tokio::task::spawn_blocking(move || {
+            let mut tracks =
+                crate::library_db::with_db(|db| db.list_folder_tracks(&folder_path, false))
+                    .unwrap_or_default();
+            fill_missing_covers(&mut tracks);
+            tracks
+        })
+        .await
+        .unwrap_or_default();
+        if tracks.is_empty() {
+            return;
+        }
+        let start = tracks
+            .iter()
+            .position(|t| t.id == start_track_id)
+            .unwrap_or(0);
+        play_local_tracks_now(&runtime, &weak, tracks, start).await;
+    });
+}
+
 /// Play the Tracks-tab list starting at `start_track_id`: the matching set
 /// (current search) becomes the queue, so playback continues down the list.
 pub fn play_local_tracks_from(

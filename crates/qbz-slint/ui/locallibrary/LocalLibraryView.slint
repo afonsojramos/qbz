@@ -18,7 +18,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { LocalLibraryState, LocalLibraryActions } from "../state.slint";
+import { LocalLibraryState, LocalLibraryActions, FolderNode } from "../state.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
@@ -27,6 +27,7 @@ import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
+import { ToggleButton } from "../primitives/ToggleButton.slint";
 import { ListView } from "std-widgets.slint";
 
 // One tab in the Local Library tab menu — underline style (ADR-008: NO
@@ -140,6 +141,160 @@ component CircleIconBtn inherits Rectangle {
         mouse-cursor: pointer;
         clicked => {
             root.clicked();
+        }
+    }
+}
+
+// Grid/list segmented toggle for the Folders flat mode (mirrors Favorites'
+// ViewToggle). ADR-008: small-radius rectangle, NOT a pill.
+component ViewToggle inherits Rectangle {
+    in property <string> view-mode;   // "grid" | "list"
+    callback set-view(string);
+    width: 60px;
+    height: 30px;
+    border-radius: 6px;
+    background: Theme.surface-elevated;
+    clip: true;
+    HorizontalLayout {
+        ToggleButton {
+            icon: @image-url("../assets/icons/layout-grid.svg");
+            active: root.view-mode == "grid";
+            sm: true;
+            clicked => { root.set-view("grid"); }
+        }
+        ToggleButton {
+            icon: @image-url("../assets/icons/list.svg");
+            active: root.view-mode == "list";
+            sm: true;
+            clicked => { root.set-view("list"); }
+        }
+    }
+}
+
+// Flat/tree mode segmented toggle for the Folders tab. flat = the album grid
+// grouped by directory; tree = the two-pane filesystem browser.
+component ModeToggle inherits Rectangle {
+    in property <string> mode;        // "flat" | "tree"
+    callback set-mode(string);
+    width: 60px;
+    height: 30px;
+    border-radius: 6px;
+    background: Theme.surface-elevated;
+    clip: true;
+    HorizontalLayout {
+        ToggleButton {
+            icon: @image-url("../assets/icons/disc.svg");
+            active: root.mode == "flat";
+            sm: true;
+            clicked => { root.set-mode("flat"); }
+        }
+        ToggleButton {
+            icon: @image-url("../assets/icons/folder.svg");
+            active: root.mode == "tree";
+            sm: true;
+            clicked => { root.set-mode("tree"); }
+        }
+    }
+}
+
+// One row of the flattened folder tree (tree mode, left rail). Carries its
+// `depth` (indent), an expand chevron for folders with content, a folder /
+// music icon, the segment name and (for folders) the recursive track count.
+component TreeRow inherits Rectangle {
+    in property <FolderNode> node;
+    in property <bool> selected;
+    callback toggle();        // chevron — expand/collapse
+    callback activate();      // row body — select folder (load detail)
+    height: 32px;
+    border-radius: 6px;
+    background: root.selected
+        ? Theme.surface-elevated
+        : (row-ta.has-hover ? Theme.surface-hover : transparent);
+
+    row-ta := TouchArea {
+        mouse-cursor: root.node.is-folder ? pointer : default;
+        clicked => {
+            if (root.node.is-folder) { root.activate(); }
+        }
+    }
+
+    // Accent bar marking the selected folder (mirrors the underline-tab
+    // accent language; ADR-008: a thin rectangle, not a pill).
+    if root.selected: Rectangle {
+        x: 0;
+        width: 3px;
+        height: parent.height - 8px;
+        y: 4px;
+        background: Theme.accent;
+        border-radius: 1.5px;
+    }
+
+    HorizontalLayout {
+        padding-left: 8px + root.node.depth * 16px;
+        padding-right: 10px;
+        spacing: 6px;
+
+        // Expand chevron — its own hit target so toggling doesn't select.
+        Rectangle {
+            width: 18px;
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+                    if root.node.can-expand: QbzIcon {
+                        source: root.node.expanded
+                            ? @image-url("../assets/icons/chevron-down.svg")
+                            : @image-url("../assets/icons/chevron-right.svg");
+                        width: 13px;
+                        height: 13px;
+                        tint: Theme.text-muted;
+                    }
+                }
+            }
+            chev-ta := TouchArea {
+                mouse-cursor: root.node.can-expand ? pointer : default;
+                clicked => {
+                    if (root.node.can-expand) { root.toggle(); }
+                }
+            }
+        }
+
+        // Folder / track icon.
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.node.is-folder
+                    ? (root.node.expanded
+                        ? @image-url("../assets/icons/folder-open.svg")
+                        : @image-url("../assets/icons/folder.svg"))
+                    : @image-url("../assets/icons/music.svg");
+                width: 16px;
+                height: 16px;
+                tint: root.node.is-folder ? Theme.accent : Theme.text-muted;
+            }
+        }
+
+        // Name.
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.node.segment;
+                color: root.selected ? Theme.text-primary : Theme.text-secondary;
+                font-size: Typography.body;
+                font-weight: root.selected ? Typography.semibold : Typography.regular;
+                overflow: elide;
+            }
+        }
+
+        // Recursive track count (folders only).
+        if root.node.is-folder && root.node.track-count > 0: VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.node.track-count;
+                color: Theme.text-muted;
+                font-size: Typography.legal;
+            }
         }
     }
 }
@@ -264,6 +419,97 @@ export component LocalLibraryView inherits Rectangle {
                         query <=> LocalLibraryState.tracks-search;
                         edited(q) => {
                             LocalLibraryActions.tracks-search(q);
+                        }
+                    }
+                }
+            }
+
+            // Folders toolbar — search (both modes); flat adds sort + group +
+            // grid/list; a flat/tree mode toggle sits at the far right.
+            if LocalLibraryState.active-tab == "folders"
+                && (LocalLibraryState.folders.length > 0
+                    || LocalLibraryState.folders-search != ""): HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    ExpandableSearch {
+                        placeholder: @tr("Search");
+                        sm: true;
+                        query <=> LocalLibraryState.folders-search;
+                        edited(q) => {
+                            LocalLibraryActions.folders-search(q);
+                        }
+                    }
+                }
+                // Flat-only controls: sort, group-by, grid/list.
+                if LocalLibraryState.folders-view-mode == "flat": HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        QbzSelect {
+                            menu-width: 180px;
+                            options: [
+                                @tr("Artist A-Z"),
+                                @tr("Artist Z-A"),
+                                @tr("Title A-Z"),
+                                @tr("Title Z-A"),
+                                @tr("Year (newest)"),
+                                @tr("Year (oldest)"),
+                            ];
+                            sm: true;
+                            current-index: LocalLibraryState.folders-sort == "artist-asc" ? 0
+                                : LocalLibraryState.folders-sort == "artist-desc" ? 1
+                                : LocalLibraryState.folders-sort == "title-asc" ? 2
+                                : LocalLibraryState.folders-sort == "title-desc" ? 3
+                                : LocalLibraryState.folders-sort == "year-desc" ? 4
+                                : 5;
+                            selected(i) => {
+                                LocalLibraryActions.folders-set-sort(
+                                    i == 0 ? "artist-asc"
+                                    : i == 1 ? "artist-desc"
+                                    : i == 2 ? "title-asc"
+                                    : i == 3 ? "title-desc"
+                                    : i == 4 ? "year-desc"
+                                    : "year-asc");
+                            }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        QbzSelect {
+                            menu-width: 160px;
+                            options: [
+                                @tr("No grouping"),
+                                @tr("Group by letter"),
+                                @tr("Group by artist"),
+                            ];
+                            sm: true;
+                            current-index: LocalLibraryState.folders-group == "alpha" ? 1
+                                : LocalLibraryState.folders-group == "artist" ? 2
+                                : 0;
+                            selected(i) => {
+                                LocalLibraryActions.folders-set-group(
+                                    i == 1 ? "alpha" : i == 2 ? "artist" : "off");
+                            }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        ViewToggle {
+                            view-mode: LocalLibraryState.folders-grid-view;
+                            set-view(v) => {
+                                LocalLibraryState.folders-grid-view = v;
+                            }
+                        }
+                    }
+                }
+                // Flat/tree mode toggle (always visible).
+                VerticalLayout {
+                    alignment: center;
+                    ModeToggle {
+                        mode: LocalLibraryState.folders-view-mode;
+                        set-mode(m) => {
+                            LocalLibraryActions.folders-set-mode(m);
                         }
                     }
                 }
@@ -537,8 +783,9 @@ export component LocalLibraryView inherits Rectangle {
                 }
             }
 
-            // -------- Folders tab (flat) — folder-grouped album grid -----
+            // -------- Folders tab — flat grid/list OR tree two-pane ------
             if LocalLibraryState.active-tab == "folders": Rectangle {
+                // Initial flat load.
                 if LocalLibraryState.folders-loading: VerticalLayout {
                     alignment: center;
                     HorizontalLayout {
@@ -546,8 +793,10 @@ export component LocalLibraryView inherits Rectangle {
                         LoadingSpinner { size: 36px; }
                     }
                 }
+                // Empty — nothing indexed.
                 if !LocalLibraryState.folders-loading
-                    && LocalLibraryState.folders.length == 0: VerticalLayout {
+                    && LocalLibraryState.folders.length == 0
+                    && LocalLibraryState.folders-search == "": VerticalLayout {
                     alignment: center;
                     Text {
                         text: @tr("No folders in your local library yet.");
@@ -556,44 +805,298 @@ export component LocalLibraryView inherits Rectangle {
                         horizontal-alignment: center;
                     }
                 }
+
+                // ===================== FLAT MODE =====================
                 if !LocalLibraryState.folders-loading
-                    && LocalLibraryState.folders.length > 0: Rectangle {
-                    folders-flick := Flickable {
-                        viewport-width: self.width;
-                        viewport-height: folders-page.preferred-height;
-                        folders-page := VerticalLayout {
-                            width: parent.width;
-                            padding-left: 32px;
-                            padding-right: 32px;
-                            padding-top: 16px;
-                            padding-bottom: 100px;
-                            alignment: start;
-                            AlbumCollectionView {
-                                albums: LocalLibraryState.folders;
-                                is-grouped: false;
-                                view-mode: "grid";
-                                show-source: false;
-                                show-favorite: false;
-                                show-source-badge: true;
-                                open-album(id) => {
-                                    LocalLibraryActions.open-album(id);
+                    && LocalLibraryState.folders.length > 0
+                    && LocalLibraryState.folders-view-mode == "flat": Rectangle {
+                    // Search matched nothing.
+                    if LocalLibraryState.folders-visible.length == 0
+                        && LocalLibraryState.folders-grouped.length == 0
+                        && LocalLibraryState.folders-search != "": VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: @tr("No folders match your search.");
+                            color: Theme.text-muted;
+                            font-size: Typography.body;
+                            horizontal-alignment: center;
+                        }
+                    }
+                    if LocalLibraryState.folders-visible.length > 0
+                        || LocalLibraryState.folders-grouped.length > 0: Rectangle {
+                        folders-flick := Flickable {
+                            viewport-width: self.width;
+                            viewport-height: folders-page.preferred-height;
+                            folders-page := VerticalLayout {
+                                width: parent.width;
+                                padding-left: 32px;
+                                padding-right: 32px;
+                                padding-top: 16px;
+                                padding-bottom: 100px;
+                                alignment: start;
+                                AlbumCollectionView {
+                                    albums: LocalLibraryState.folders-visible;
+                                    grouped: LocalLibraryState.folders-grouped;
+                                    is-grouped: LocalLibraryState.folders-group != "off";
+                                    view-mode: LocalLibraryState.folders-grid-view;
+                                    show-source: false;
+                                    show-favorite: false;
+                                    show-source-badge: true;
+                                    open-album(id) => {
+                                        LocalLibraryActions.open-album(id);
+                                    }
+                                    open-artist(id) => {
+                                        LocalLibraryActions.open-artist(id);
+                                    }
+                                    media-action(kind, id, action) => {
+                                        LocalLibraryActions.album-action(id, action);
+                                    }
                                 }
-                                open-artist(id) => {
-                                    LocalLibraryActions.open-artist(id);
-                                }
-                                media-action(kind, id, action) => {
-                                    LocalLibraryActions.album-action(id, action);
+                            }
+                        }
+                        ListScrollbar {
+                            x: parent.width - self.width - 4px;
+                            width: 14px;
+                            height: 100%;
+                            viewport-height: folders-flick.viewport-height;
+                            visible-height: folders-flick.height;
+                            viewport-y <=> folders-flick.viewport-y;
+                        }
+                    }
+                }
+
+                // ===================== TREE MODE =====================
+                if !LocalLibraryState.folders-loading
+                    && LocalLibraryState.folders.length > 0
+                    && LocalLibraryState.folders-view-mode == "tree": HorizontalLayout {
+                    spacing: 0px;
+
+                    // ---- Left rail: the flattened folder tree ----
+                    Rectangle {
+                        width: 340px;
+                        if LocalLibraryState.folder-tree-loading: VerticalLayout {
+                            alignment: center;
+                            HorizontalLayout {
+                                alignment: center;
+                                LoadingSpinner { size: 28px; }
+                            }
+                        }
+                        if !LocalLibraryState.folder-tree-loading: VerticalLayout {
+                            padding-left: 24px;
+                            padding-right: 8px;
+                            padding-top: 12px;
+                            tree-list := ListView {
+                                for node[i] in LocalLibraryState.folder-tree: TreeRow {
+                                    node: node;
+                                    selected: node.path == LocalLibraryState.folders-selected-path;
+                                    toggle => {
+                                        LocalLibraryActions.folders-toggle-node(node.path, !node.expanded);
+                                    }
+                                    activate => {
+                                        LocalLibraryActions.folders-select(node.path, node.segment);
+                                    }
                                 }
                             }
                         }
                     }
-                    ListScrollbar {
-                        x: parent.width - self.width - 4px;
-                        width: 14px;
-                        height: 100%;
-                        viewport-height: folders-flick.viewport-height;
-                        visible-height: folders-flick.height;
-                        viewport-y <=> folders-flick.viewport-y;
+
+                    // Divider.
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border-subtle;
+                    }
+
+                    // ---- Right pane: selected folder detail ----
+                    Rectangle {
+                        horizontal-stretch: 1;
+
+                        // Nothing selected yet.
+                        if LocalLibraryState.folders-selected-path == "": VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: @tr("Select a folder to see its contents.");
+                                color: Theme.text-muted;
+                                font-size: Typography.body;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        if LocalLibraryState.folders-selected-path != "": Rectangle {
+                            detail-flick := Flickable {
+                                viewport-width: self.width;
+                                viewport-height: detail-page.preferred-height;
+                                detail-page := VerticalLayout {
+                                    width: parent.width;
+                                    padding-left: 28px;
+                                    padding-right: 28px;
+                                    padding-top: 16px;
+                                    padding-bottom: 100px;
+                                    spacing: 14px;
+                                    alignment: start;
+
+                                    // Header: folder name + Play all.
+                                    HorizontalLayout {
+                                        spacing: 12px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            horizontal-stretch: 1;
+                                            Text {
+                                                text: LocalLibraryState.folders-selected-name;
+                                                color: Theme.text-primary;
+                                                font-size: Typography.section;
+                                                font-weight: Typography.bold;
+                                                overflow: elide;
+                                            }
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: playall-row.preferred-width + 28px;
+                                                height: 34px;
+                                                border-radius: 6px;
+                                                background: playall-ta.has-hover
+                                                    ? Theme.accent-hover : Theme.accent;
+                                                playall-row := HorizontalLayout {
+                                                    x: (parent.width - self.width) / 2;
+                                                    spacing: 7px;
+                                                    VerticalLayout {
+                                                        alignment: center;
+                                                        QbzIcon {
+                                                            source: @image-url("../assets/icons/play-fill.svg");
+                                                            width: 13px;
+                                                            height: 13px;
+                                                            tint: Theme.accent-text;
+                                                        }
+                                                    }
+                                                    VerticalLayout {
+                                                        alignment: center;
+                                                        Text {
+                                                            text: @tr("Play all");
+                                                            color: Theme.accent-text;
+                                                            font-size: Typography.legal;
+                                                            font-weight: Typography.semibold;
+                                                        }
+                                                    }
+                                                }
+                                                playall-ta := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        LocalLibraryActions.folders-play-node(
+                                                            LocalLibraryState.folders-selected-path);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if LocalLibraryState.folder-detail-loading: HorizontalLayout {
+                                        alignment: center;
+                                        padding-top: 30px;
+                                        LoadingSpinner { size: 28px; }
+                                    }
+
+                                    // Subfolders (drill-down), if any.
+                                    if !LocalLibraryState.folder-detail-loading
+                                        && LocalLibraryState.folder-detail-subfolders.length > 0: VerticalLayout {
+                                        spacing: 6px;
+                                        Text {
+                                            text: @tr("Subfolders");
+                                            color: Theme.text-muted;
+                                            font-size: Typography.legal;
+                                            font-weight: Typography.semibold;
+                                        }
+                                        for sub[si] in LocalLibraryState.folder-detail-subfolders: Rectangle {
+                                            height: 34px;
+                                            border-radius: 6px;
+                                            background: sub-ta.has-hover ? Theme.surface-hover : transparent;
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 10px;
+                                                spacing: 8px;
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    QbzIcon {
+                                                        source: @image-url("../assets/icons/folder.svg");
+                                                        width: 16px;
+                                                        height: 16px;
+                                                        tint: Theme.accent;
+                                                    }
+                                                }
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    horizontal-stretch: 1;
+                                                    Text {
+                                                        text: sub.segment;
+                                                        color: Theme.text-secondary;
+                                                        font-size: Typography.body;
+                                                        overflow: elide;
+                                                    }
+                                                }
+                                                if sub.track-count > 0: VerticalLayout {
+                                                    alignment: center;
+                                                    Text {
+                                                        text: sub.track-count;
+                                                        color: Theme.text-muted;
+                                                        font-size: Typography.legal;
+                                                    }
+                                                }
+                                            }
+                                            sub-ta := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    LocalLibraryActions.folders-select(sub.path, sub.segment);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Direct tracks.
+                                    if !LocalLibraryState.folder-detail-loading
+                                        && LocalLibraryState.folder-detail-tracks.length > 0: VerticalLayout {
+                                        spacing: 0px;
+                                        for track[ti] in LocalLibraryState.folder-detail-tracks: TrackRow {
+                                            track: track;
+                                            index: ti;
+                                            show-artwork: false;
+                                            show-album: true;
+                                            show-favorite: false;
+                                            show-download: false;
+                                            show-source: true;
+                                            media-action(kind, id, action) => {
+                                                if (kind == "album" && action == "open") {
+                                                    LocalLibraryActions.open-album(id);
+                                                } else if (kind == "artist" && action == "open") {
+                                                    LocalLibraryActions.open-artist(id);
+                                                } else {
+                                                    LocalLibraryActions.folders-play-track(id);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Folder has no direct tracks (only subfolders).
+                                    if !LocalLibraryState.folder-detail-loading
+                                        && LocalLibraryState.folder-detail-tracks.length == 0
+                                        && LocalLibraryState.folder-detail-subfolders.length == 0: VerticalLayout {
+                                        padding-top: 24px;
+                                        Text {
+                                            text: @tr("This folder has no tracks.");
+                                            color: Theme.text-muted;
+                                            font-size: Typography.body;
+                                            horizontal-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                            ListScrollbar {
+                                x: parent.width - self.width - 4px;
+                                width: 14px;
+                                height: 100%;
+                                viewport-height: detail-flick.viewport-height;
+                                visible-height: detail-flick.height;
+                                viewport-y <=> detail-flick.viewport-y;
+                            }
+                        }
                     }
                 }
             }
