@@ -675,9 +675,20 @@ fn load_artwork(weak: slint::Weak<AppWindow>, jobs: Vec<(ArtTarget, String)>) {
     for (target, url) in jobs {
         let weak = weak.clone();
         let cache = cache.clone();
+        // Source-aware: queue covers may be remote (Qobuz) OR local file
+        // paths (Local Library / offline). Route file paths through
+        // ArtworkRef::LocalFile so they decode from disk instead of an HTTP
+        // fetch (which silently failed, leaving local rows art-less).
+        let art = if url.starts_with("http://") || url.starts_with("https://") {
+            qbz_models::ArtworkRef::Remote(url)
+        } else if let Some(p) = url.strip_prefix("file://") {
+            qbz_models::ArtworkRef::LocalFile(p.to_string())
+        } else {
+            qbz_models::ArtworkRef::LocalFile(url)
+        };
         tokio::spawn(async move {
             let Some((pixels, w, h)) =
-                crate::artwork::fetch_and_decode(&url, &cache, 96).await
+                crate::artwork::fetch_and_decode_ref(&art, &cache, 96).await
             else {
                 return;
             };

@@ -225,11 +225,12 @@ pub fn play_local_album(
 ) {
     handle.spawn(async move {
         let tracks = tokio::task::spawn_blocking(move || {
-            crate::library_db::with_db(|db| db.get_album_tracks_metadata(&album_id))
+            let mut tracks = crate::library_db::with_db(|db| db.get_album_tracks_metadata(&album_id))
+                .unwrap_or_default();
+            fill_missing_covers(&mut tracks);
+            tracks
         })
         .await
-        .ok()
-        .flatten()
         .unwrap_or_default();
         play_local_tracks_now(&runtime, &weak, tracks, 0).await;
     });
@@ -246,11 +247,13 @@ pub fn play_local_tracks_from(
 ) {
     handle.spawn(async move {
         let tracks = tokio::task::spawn_blocking(move || {
-            crate::library_db::with_db(|db| db.search_with_filter(query.trim(), 0, true, false))
+            let mut tracks =
+                crate::library_db::with_db(|db| db.search_with_filter(query.trim(), 0, true, false))
+                    .unwrap_or_default();
+            fill_missing_covers(&mut tracks);
+            tracks
         })
         .await
-        .ok()
-        .flatten()
         .unwrap_or_default();
         let start = tracks
             .iter()
@@ -305,6 +308,44 @@ fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
         }),
         parental_warning: false,
         source_item_id_hint: None,
+    }
+}
+
+/// Fill `artwork_path` for tracks that lack one, from a cover image in the
+/// track's folder (the offline-cache writes `cover.jpg` there but doesn't
+/// always backfill the index) — so the cover that exists on disk reaches the
+/// now-playing bar + queue, not just the album grid. Runs off-thread (fs),
+/// memoized per folder so a whole album costs one stat.
+fn fill_missing_covers(tracks: &mut [qbz_library::LocalTrack]) {
+    use std::collections::HashMap;
+    let mut memo: HashMap<String, Option<String>> = HashMap::new();
+    for t in tracks.iter_mut() {
+        if t.artwork_path.as_deref().is_some_and(|s| !s.is_empty()) {
+            continue;
+        }
+        let p = std::path::Path::new(&t.file_path);
+        let folder = if p.is_dir() {
+            p.to_path_buf()
+        } else {
+            match p.parent() {
+                Some(d) => d.to_path_buf(),
+                None => continue,
+            }
+        };
+        let key = folder.to_string_lossy().into_owned();
+        let cover = memo
+            .entry(key)
+            .or_insert_with(|| {
+                ["cover.jpg", "cover.png", "folder.jpg", "front.jpg"]
+                    .iter()
+                    .map(|n| folder.join(n))
+                    .find(|c| c.is_file())
+                    .map(|c| c.to_string_lossy().into_owned())
+            })
+            .clone();
+        if cover.is_some() {
+            t.artwork_path = cover;
+        }
     }
 }
 
@@ -1275,18 +1316,36 @@ pub fn start_poll_loop(
                 && is_playing
                 && was_playing;
             if seamless_change {
-                log::info!(
-                    "[qbz-slint] [GAPLESS] seamless transition {last_track_id} -> {track_id}"
-                );
-                // Advance the core queue pointer so the queue state stays
-                // in sync with what the player is actually playing.
-                let _ = runtime.core().next_track().await;
-                refresh_now_playing_meta(&runtime, &weak).await;
-                record_recent(&runtime).await;
-                refresh_sidebar(true);
-                // Prefetch the successors of the now-current track.
-                kick_prefetch(&runtime).await;
-                gapless_requested_for = 0;
+                // A track-id change while still playing is EITHER a real
+                // gapless hand-off (the engine started the prefetched next
+                // track) OR a manual new-track play that just replaced the
+                // queue. Only the former should advance the core queue
+                // pointer: a real gapless next IS the current upcoming track.
+                // For a manual play the queue is already correct, and calling
+                // next_track() would push the pointer one past what's actually
+                // playing — desyncing now-playing from the queue (the reported
+                // erratic mismatch).
+                let is_gapless_advance = runtime
+                    .core()
+                    .peek_upcoming(1)
+                    .await
+                    .first()
+                    .map(|t| t.id)
+                    == Some(track_id);
+                if is_gapless_advance {
+                    log::info!(
+                        "[qbz-slint] [GAPLESS] seamless transition {last_track_id} -> {track_id}"
+                    );
+                    let _ = runtime.core().next_track().await;
+                    refresh_now_playing_meta(&runtime, &weak).await;
+                    record_recent(&runtime).await;
+                    refresh_sidebar(true);
+                    // Prefetch the successors of the now-current track.
+                    kick_prefetch(&runtime).await;
+                    gapless_requested_for = 0;
+                }
+                // Resync the edge trackers either way so this change is not
+                // re-detected on the next tick.
                 last_track_id = track_id;
                 seen_position = position;
                 was_playing = is_playing;
