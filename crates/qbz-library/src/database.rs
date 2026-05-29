@@ -1958,6 +1958,32 @@ impl LibraryDatabase {
         result
     }
 
+    /// Resolve a folder cover for an album that has no `artwork_path` in the
+    /// index — e.g. an offline-cached (CMAF) album whose downloader wrote a
+    /// `cover.jpg` into the track folder but didn't backfill `artwork_path`.
+    /// Looks up a representative track for the metadata group, derives its
+    /// containing folder (the path itself when it is a directory, as for CMAF
+    /// bundles, else the parent dir), and returns `<folder>/cover.jpg` when
+    /// that file exists. Frontend-agnostic (no `tauri::State`).
+    pub fn resolve_album_cover_fallback(&self, group_key: &str) -> Option<String> {
+        let expr = crate::album_grouping::metadata_group_key_sql_expression();
+        let query = format!("SELECT file_path FROM local_tracks WHERE ({expr}) = ?1 LIMIT 1");
+        let file_path: String = self
+            .conn
+            .query_row(&query, rusqlite::params![group_key], |row| row.get(0))
+            .ok()?;
+        let p = std::path::Path::new(&file_path);
+        let folder = if p.is_dir() {
+            p.to_path_buf()
+        } else {
+            p.parent()?.to_path_buf()
+        };
+        let cover = folder.join("cover.jpg");
+        cover
+            .is_file()
+            .then(|| cover.to_string_lossy().into_owned())
+    }
+
     fn get_albums_metadata_page_inner(
         &self,
         offset: u64,

@@ -26,6 +26,9 @@ pub struct AlbumCard {
     pub artwork_url: String,
     // List-row extras (AlbumListRow columns; ignored by the grid card).
     pub release_type: String,   // "Album" | "EP" | "Single" (TYPE column)
+    // "local" | "qobuz_download" | "plex" | "" — SOURCE column + the
+    // always-visible source badge on the Local Library grid card.
+    pub source: String,
     pub quality_detail: String, // "24-bit / 96 kHz"
     pub track_count: String,    // "12"
     pub plain_year: String,     // "1973"
@@ -94,6 +97,9 @@ pub fn map_album(album: Album) -> AlbumCard {
         quality_label,
         artwork_url: album.image.best().cloned().unwrap_or_default(),
         release_type,
+        // Qobuz album surfaces (Discover / Favorites / Label) hide the SOURCE
+        // column and the badge, so leave it empty (preserves prior behavior).
+        source: String::new(),
         quality_detail,
         track_count,
         plain_year,
@@ -189,6 +195,7 @@ pub fn to_item(card: AlbumCard) -> AlbumCardItem {
         // List-row extras — feed the AlbumListRow columns (TYPE / QUALITY /
         // TRACKS / YEAR) for the list view toggle.
         release_type: card.release_type.into(),
+        source: card.source.into(),
         quality_detail: card.quality_detail.into(),
         track_count: card.track_count.into(),
         plain_year: card.plain_year.into(),

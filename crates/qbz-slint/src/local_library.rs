@@ -109,6 +109,14 @@ pub fn map_local_album(a: qbz_library::LocalAlbum) -> crate::album_map::AlbumCar
     } else {
         String::new()
     };
+    // Real source for the SOURCE column + the always-visible card badge:
+    // user files -> local, offline copies -> qobuz_download, Plex -> plex.
+    let source = match a.source.as_str() {
+        "plex" => "plex",
+        "qobuz_download" => "qobuz_download",
+        _ => "local",
+    }
+    .to_string();
     crate::album_map::AlbumCard {
         id: a.id,
         title: a.title,
@@ -120,6 +128,7 @@ pub fn map_local_album(a: qbz_library::LocalAlbum) -> crate::album_map::AlbumCar
         quality_label,
         artwork_url: a.artwork_path.unwrap_or_default(),
         release_type: crate::album_map::classify_release_type(Some(a.track_count)).to_string(),
+        source,
         quality_detail,
         track_count,
         plain_year: year,
@@ -178,8 +187,8 @@ fn fetch_albums_page(
     } else {
         Some(trimmed)
     };
-    let page = crate::library_db::with_db(|db| {
-        db.get_albums_metadata_page(
+    crate::library_db::with_db(|db| {
+        let page = db.get_albums_metadata_page(
             offset,
             ALBUMS_PAGE,
             search_opt,
@@ -193,12 +202,27 @@ fn fetch_albums_page(
             // filtering and Plex are their own later slices.
             false,
             None,
-        )
-    })?;
-    let total = page.total;
-    let has_more = offset + (page.albums.len() as u64) < total;
-    let cards = page.albums.into_iter().map(map_local_album).collect();
-    Some((cards, total, has_more))
+        )?;
+        let total = page.total;
+        let has_more = offset + (page.albums.len() as u64) < total;
+        let cards: Vec<crate::album_map::AlbumCard> = page
+            .albums
+            .into_iter()
+            .map(|a| {
+                let mut card = map_local_album(a);
+                // Offline-cached / folder albums sometimes have no backfilled
+                // artwork_path though a cover.jpg sits in the track folder —
+                // resolve it so the cover that exists on disk actually shows.
+                if card.artwork_url.is_empty() {
+                    if let Some(cover) = db.resolve_album_cover_fallback(&card.id) {
+                        card.artwork_url = cover;
+                    }
+                }
+                card
+            })
+            .collect();
+        Ok((cards, total, has_more))
+    })
 }
 
 /// Build local-cover artwork jobs for a page of cards. The job url carries

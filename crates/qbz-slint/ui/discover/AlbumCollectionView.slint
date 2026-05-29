@@ -19,6 +19,7 @@ component AlbumGrid inherits Rectangle {
     in property <length> card-height: 266px;
     in property <length> card-gap: 24px;
     in property <bool> show-favorite: true;
+    in property <bool> show-source-badge: false;
     callback open-album(string);
     callback open-artist(string);
     callback media-action(string, string, string);
@@ -38,6 +39,7 @@ component AlbumGrid inherits Rectangle {
         height: root.card-height;
         album: album;
         show-favorite: root.show-favorite;
+        show-source-badge: root.show-source-badge;
         clicked(id) => {
             root.open-album(id);
         }
@@ -60,6 +62,9 @@ export component AlbumCollectionView inherits VerticalLayout {
     // Forwarded to AlbumCard — hide the favorite heart in non-favoritable
     // contexts (Local Library albums).
     in property <bool> show-favorite: true;
+    // Forwarded to AlbumCard — show the always-visible source badge on the
+    // grid card art (Local Library: local | qobuz-offline | plex).
+    in property <bool> show-source-badge: false;
     in property <length> card-width: 220px;
     in property <length> card-height: 266px;
     in property <length> card-gap: 24px;
@@ -109,6 +114,7 @@ export component AlbumCollectionView inherits VerticalLayout {
             if root.view-mode != "list": AlbumGrid {
                 albums: section.albums;
                 show-favorite: root.show-favorite;
+                show-source-badge: root.show-source-badge;
                 card-width: root.card-width;
                 card-height: root.card-height;
                 card-gap: root.card-gap;
@@ -129,6 +135,7 @@ export component AlbumCollectionView inherits VerticalLayout {
     if !root.is-grouped && root.view-mode == "grid" && root.albums.length > 0: AlbumGrid {
         albums: root.albums;
         show-favorite: root.show-favorite;
+        show-source-badge: root.show-source-badge;
         card-width: root.card-width;
         card-height: root.card-height;
         card-gap: root.card-gap;

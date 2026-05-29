@@ -364,6 +364,8 @@ export component LocalLibraryView inherits Rectangle {
                                 show-source: false;
                                 // Local albums aren't Qobuz-favoritable — hide the heart.
                                 show-favorite: false;
+                                // Always-visible source badge (local | qobuz-offline | plex).
+                                show-source-badge: true;
                                 open-album(id) => {
                                     LocalLibraryActions.open-album(id);
                                 }
