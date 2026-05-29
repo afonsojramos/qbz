@@ -4054,11 +4054,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
         window
             .global::<LocalLibraryActions>()
             .on_track_action(move |id, action| {
-                // TODO(locallibrary): play / queue local tracks (source-aware slice).
-                log::debug!("[qbz-slint] local track action (playback slice pending): {id} {action}");
+                if action.as_str() == "play" {
+                    if let Ok(row_id) = id.parse::<i64>() {
+                        playback::play_local_library_track(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            row_id,
+                        );
+                    }
+                } else {
+                    // queue / play-next land with the queue-advancement slice.
+                    log::debug!("[qbz-slint] local track action (queue slice pending): {id} {action}");
+                }
             });
     }
 

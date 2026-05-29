@@ -145,6 +145,125 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
     }
 }
 
+/// Play a single Local Library track (Tracks-tab rows). Mirrors Tauri's
+/// `v2_library_play_track` routing: offline-cached (`qobuz_download`) tracks
+/// reuse the shared tier-walk (`after_track_change` -> `play_track_resolved`
+/// -> offline resolve -> `play_data`), keyed by the Qobuz id; local user
+/// files are read from disk and handed to the player's `play_data` seam
+/// (which extracts the sample rate + drives the PROTECTED device init,
+/// untouched here). Single-track play (a 1-track queue) — album/queue +
+/// auto-advance land with the queue-advancement slice. Additive: the shared
+/// Qobuz `play_audible` path is unchanged.
+pub fn play_local_library_track(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    row_id: i64,
+) {
+    handle.spawn(async move {
+        let track = tokio::task::spawn_blocking(move || {
+            crate::library_db::with_db(|db| db.get_track(row_id))
+        })
+        .await
+        .ok()
+        .flatten()
+        .flatten();
+        let Some(track) = track else {
+            log::error!("[qbz-slint] local play: track {row_id} not found");
+            return;
+        };
+        let is_offline = track.source.as_deref() == Some("qobuz_download");
+        runtime
+            .core()
+            .set_queue(vec![local_queue_track(&track)], Some(0))
+            .await;
+
+        if is_offline {
+            // Offline copy: reuse the shared tier-walk, keyed by the Qobuz id.
+            match track.qobuz_track_id {
+                Some(qid) => after_track_change(&runtime, &weak, qid as u64).await,
+                None => log::error!(
+                    "[qbz-slint] local play: qobuz_download row {row_id} has no qobuz_track_id"
+                ),
+            }
+            return;
+        }
+
+        // Local user file: refresh now-playing, then read the file off-thread
+        // and hand the bytes to the player (no Qobuz client, no network).
+        refresh_now_playing_meta(&runtime, &weak).await;
+        record_recent(&runtime).await;
+        let path = track.file_path.clone();
+        let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
+            .await
+            .ok()
+            .and_then(Result::ok);
+        let Some(bytes) = bytes else {
+            log::error!("[qbz-slint] local play: failed to read {}", track.file_path);
+            return;
+        };
+        if let Err(e) = runtime.core().player().play_data(bytes, row_id as u64) {
+            log::error!("[qbz-slint] local play: play_data {row_id} failed: {e}");
+            return;
+        }
+        // CUE virtual tracks share one audio file — seek to the track start.
+        if let Some(start) = track.cue_start_secs {
+            if start > 0.0 {
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                let _ = runtime.core().player().seek(start as u64);
+            }
+        }
+    });
+}
+
+/// Build a `QueueTrack` from a local-library row. Mirrors Tauri's
+/// `local_track_to_queue_track`: `file://` artwork, kHz sample rate, the real
+/// source. Offline copies carry the Qobuz id (so the shared resolver finds
+/// them) + `source = "qobuz_download"`; user files carry the library row id +
+/// `source = "local"`.
+fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
+    let artwork_url = track.artwork_path.as_ref().map(|p| {
+        if p.starts_with("file://") {
+            p.clone()
+        } else {
+            format!("file://{p}")
+        }
+    });
+    let sample_rate_khz = if track.sample_rate >= 1000.0 {
+        track.sample_rate / 1000.0
+    } else {
+        track.sample_rate
+    };
+    let is_offline = track.source.as_deref() == Some("qobuz_download");
+    QueueTrack {
+        id: if is_offline {
+            track.qobuz_track_id.unwrap_or(track.id) as u64
+        } else {
+            track.id as u64
+        },
+        title: track.title.clone(),
+        version: None,
+        artist: track.artist.clone(),
+        album: track.album_group_title.clone(),
+        duration_secs: track.duration_secs,
+        artwork_url,
+        hires: track.bit_depth.map(|d| d > 16).unwrap_or(false),
+        bit_depth: track.bit_depth,
+        sample_rate: Some(sample_rate_khz),
+        is_local: true,
+        album_id: Some(track.album_group_key.clone()),
+        artist_id: None,
+        streamable: true,
+        source: Some(if is_offline {
+            "qobuz_download".to_string()
+        } else {
+            "local".to_string()
+        }),
+        parental_warning: false,
+        source_item_id_hint: None,
+    }
+}
+
 /// Resolve the now-playing cover and apply it to `NowPlayingState`.
 ///
 /// Takes a source-aware [`qbz_models::ArtworkRef`] so local-library and Plex
