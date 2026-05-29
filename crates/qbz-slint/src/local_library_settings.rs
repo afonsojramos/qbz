@@ -11,12 +11,14 @@
 //! kept in a module static; the Slint `LibraryFoldersState.folders` model is
 //! the filtered render set derived from it.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use slint::{ComponentHandle, ModelRc, VecModel, Weak};
 
-use crate::{AppWindow, LibFolderEditState, LibraryFolderItem, LibraryFoldersState};
+use crate::{
+    AppWindow, LibFolderEditState, LibraryFolderItem, LibraryFoldersState, LibraryScanState,
+};
 
 /// One registered folder + its UI selection state. The authoritative copy;
 /// the Slint model is derived (filtered) from this.
@@ -587,4 +589,167 @@ pub fn clear_library(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
 /// Re-derive after the filter changed (the text is two-way bound already).
 pub fn set_filter(weak: Weak<AppWindow>) {
     let _ = weak.upgrade_in_event_loop(|w| derive(&w));
+}
+
+// ================================ Scan ====================================
+
+/// Cancel token for the running scan (the port's equivalent of Tauri's
+/// `LibraryState.scan_cancel`). `stop_scan` sets it; the core loop checks it
+/// at every file boundary.
+static SCAN_CANCEL: LazyLock<Arc<AtomicBool>> = LazyLock::new(|| Arc::new(AtomicBool::new(false)));
+
+fn basename(path: &str) -> String {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// ~100ms coalescing for the per-file event stream (a 16K-track scan would
+/// otherwise flood the event loop). Terminal/phase events bypass this.
+fn throttle_ok(last: &Mutex<std::time::Instant>) -> bool {
+    let mut g = last.lock().unwrap_or_else(|e| e.into_inner());
+    if g.elapsed() >= std::time::Duration::from_millis(100) {
+        *g = std::time::Instant::now();
+        true
+    } else {
+        false
+    }
+}
+
+/// Run a scan (full when `ids` is None, else the given enabled folders) on a
+/// blocking thread, pushing throttled progress to `LibraryScanState`. On
+/// finish: reload the folder list, reset the browse models so the tabs
+/// re-fetch, and toast the outcome.
+fn run_scan(weak: Weak<AppWindow>, handle: tokio::runtime::Handle, ids: Option<Vec<i64>>) {
+    SCAN_CANCEL.store(false, Ordering::SeqCst);
+    let _ = weak.upgrade_in_event_loop(|w| {
+        let s = w.global::<LibraryScanState>();
+        s.set_scanning(true);
+        s.set_scan_status(1);
+        s.set_total_files(0);
+        s.set_processed_files(0);
+        s.set_progress(0.0);
+        s.set_current_file("".into());
+        s.set_error_count(0);
+    });
+
+    let h = handle.clone();
+    handle.spawn_blocking(move || {
+        let artwork_cache = crate::library_db::artwork_cache_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let cancel = SCAN_CANCEL.clone();
+        let weak_sink = weak.clone();
+        let last = Mutex::new(std::time::Instant::now());
+
+        let sink = move |ev: qbz_library::ScanEvent| {
+            use qbz_library::ScanEvent::*;
+            match ev {
+                Started => {}
+                TotalsAdded { total } => {
+                    let _ = weak_sink.upgrade_in_event_loop(move |w| {
+                        w.global::<LibraryScanState>().set_total_files(total as i32);
+                    });
+                }
+                FileStarted { path } => {
+                    if throttle_ok(&last) {
+                        let base = basename(&path);
+                        let _ = weak_sink.upgrade_in_event_loop(move |w| {
+                            w.global::<LibraryScanState>().set_current_file(base.into());
+                        });
+                    }
+                }
+                FileDone { processed, total } => {
+                    if throttle_ok(&last) {
+                        let _ = weak_sink.upgrade_in_event_loop(move |w| {
+                            let s = w.global::<LibraryScanState>();
+                            s.set_processed_files(processed as i32);
+                            s.set_total_files(total as i32);
+                            s.set_progress(if total > 0 {
+                                (processed as f32 / total as f32).min(1.0)
+                            } else {
+                                0.0
+                            });
+                        });
+                    }
+                }
+                Cleanup => {
+                    let _ = weak_sink.upgrade_in_event_loop(|w| {
+                        w.global::<LibraryScanState>()
+                            .set_current_file("Cleaning up missing files...".into());
+                    });
+                }
+                Finished { status, errors } => {
+                    let st = match status {
+                        qbz_library::ScanStatus::Complete => 2,
+                        qbz_library::ScanStatus::Cancelled => 3,
+                        qbz_library::ScanStatus::Error => 4,
+                        _ => 0,
+                    };
+                    let ec = errors.len() as i32;
+                    let _ = weak_sink.upgrade_in_event_loop(move |w| {
+                        let s = w.global::<LibraryScanState>();
+                        s.set_scanning(false);
+                        s.set_scan_status(st);
+                        s.set_error_count(ec);
+                        s.set_current_file("".into());
+                        if st == 2 {
+                            s.set_progress(1.0);
+                        }
+                    });
+                    match st {
+                        2 if ec > 0 => crate::toast::success_weak(
+                            &weak_sink,
+                            format!("Scan complete ({ec} file(s) skipped)"),
+                        ),
+                        2 => crate::toast::success_weak(&weak_sink, "Scan complete"),
+                        3 => crate::toast::success_weak(&weak_sink, "Scan cancelled"),
+                        _ => crate::toast::error_weak(&weak_sink, "Scan failed"),
+                    }
+                }
+            }
+        };
+
+        let ids_ref = ids.as_deref();
+        let _ = crate::library_db::with_db(|db| {
+            qbz_library::scan_with_progress(db, ids_ref, &artwork_cache, &cancel, &sink)
+        });
+
+        // Post-scan: refresh the folder list (last_scan labels) + reset the
+        // browse models so the tabs re-fetch the new index on next visit.
+        let _ = weak.upgrade_in_event_loop(|w| {
+            let s = w.global::<crate::LocalLibraryState>();
+            let empty_albums = ModelRc::new(VecModel::from(Vec::<crate::AlbumCardItem>::new()));
+            let empty_tracks = ModelRc::new(VecModel::from(Vec::<crate::TrackItem>::new()));
+            s.set_albums(empty_albums.clone());
+            s.set_folders(empty_albums);
+            s.set_tracks(empty_tracks);
+            s.set_artists(ModelRc::new(VecModel::from(Vec::<crate::LocalArtistItem>::new())));
+        });
+        load_folders(weak, h);
+    });
+}
+
+/// Scan every enabled folder. Guards on an empty list.
+pub fn scan_all(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    let empty = folders_lock().is_empty();
+    if empty {
+        crate::toast::error_weak(&weak, "Add a folder before scanning");
+        return;
+    }
+    run_scan(weak, handle, None);
+}
+
+/// Scan a single folder (from the settings modal). Closes the modal first.
+pub fn scan_folder(weak: Weak<AppWindow>, handle: tokio::runtime::Handle, id: i64) {
+    let _ = weak.upgrade_in_event_loop(|w| {
+        w.global::<LibFolderEditState>().set_open(false);
+    });
+    run_scan(weak, handle, Some(vec![id]));
+}
+
+/// Request cancellation of the running scan.
+pub fn stop_scan() {
+    SCAN_CANCEL.store(true, Ordering::SeqCst);
 }

@@ -9,7 +9,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { LibraryFoldersState, LibraryManageActions } from "../state.slint";
+import { LibraryFoldersState, LibraryManageActions, LibraryScanState } from "../state.slint";
 import { SettingRow } from "SettingRow.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzCheckbox } from "../primitives/QbzCheckbox.slint";
@@ -178,6 +178,7 @@ export component LocalLibrarySettings inherits VerticalLayout {
         // Toolbar: scan-all / add / edit (one selected) / remove (any selected).
         IconBtn {
             icon: @image-url("../assets/icons/refresh-cw.svg");
+            enabled: !LibraryScanState.scanning;
             clicked => { LibraryManageActions.scan-all(); }
         }
         IconBtn {
@@ -232,6 +233,82 @@ export component LocalLibrarySettings inherits VerticalLayout {
                     accessible: f.accessible;
                     selected: f.selected;
                     toggle => { LibraryManageActions.toggle-folder-select(f.id); }
+                }
+            }
+        }
+    }
+
+    // --- Scan progress (determinate; only while scanning) ----------------
+    if LibraryScanState.scanning: Rectangle {
+        height: scan-box.preferred-height + 24px;
+        VerticalLayout {
+            scan-box := VerticalLayout {
+                padding-top: 14px;
+                spacing: 8px;
+                HorizontalLayout {
+                    Text {
+                        text: @tr("Scanning") + ": \{LibraryScanState.processed-files} / \{LibraryScanState.total-files}";
+                        color: Theme.text-secondary;
+                        font-size: Typography.body;
+                        font-weight: Typography.medium;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    // Stop scan.
+                    Rectangle {
+                        width: stop-row.preferred-width + 22px;
+                        height: 30px;
+                        border-radius: Radius.sm;
+                        border-width: 1px;
+                        border-color: #e0564f;
+                        background: stop-ta.has-hover ? #e0564f22 : transparent;
+                        stop-row := HorizontalLayout {
+                            x: (parent.width - self.width) / 2;
+                            spacing: 6px;
+                            VerticalLayout {
+                                alignment: center;
+                                QbzIcon {
+                                    source: @image-url("../assets/icons/x.svg");
+                                    width: 13px;
+                                    height: 13px;
+                                    tint: #e0564f;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: @tr("Stop");
+                                    color: #e0564f;
+                                    font-size: Typography.legal;
+                                    font-weight: Typography.semibold;
+                                }
+                            }
+                        }
+                        stop-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { LibraryManageActions.stop-scan(); }
+                        }
+                    }
+                }
+                // Determinate bar (2 rectangles; ADR-008-clean).
+                Rectangle {
+                    height: 6px;
+                    border-radius: 3px;
+                    background: Theme.surface-elevated;
+                    clip: true;
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * LibraryScanState.progress;
+                        height: parent.height;
+                        border-radius: 3px;
+                        background: Theme.accent;
+                    }
+                }
+                if LibraryScanState.current-file != "": Text {
+                    text: LibraryScanState.current-file;
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    overflow: elide;
                 }
             }
         }

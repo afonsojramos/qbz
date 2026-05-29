@@ -35,6 +35,7 @@ mod errors;
 mod metadata;
 mod models;
 mod mount_info;
+mod scan;
 mod scanner;
 mod tag_sidecar;
 mod thumbnails;
@@ -49,6 +50,7 @@ pub use errors::LibraryError;
 pub use metadata::MetadataExtractor;
 pub use models::*;
 pub use mount_info::{is_network_path, network_fs_label};
+pub use scan::{scan_with_progress, ScanEvent};
 pub use scanner::{LibraryScanner, ScanResult};
 pub use thumbnails::{
     clear_thumbnails, generate_thumbnail, generate_thumbnail_from_bytes, get_cache_size,

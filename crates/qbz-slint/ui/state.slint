@@ -558,6 +558,18 @@ export global LibFolderEditState {
     in property <string> last-scan-label: "";   // "Never" / date
 }
 
+// Library scan progress — a single global poll target (scan is not per-row,
+// unlike the offline cache). `progress` is computed Rust-side (total==0 guard).
+export global LibraryScanState {
+    in property <bool> scanning: false;          // status == Scanning
+    in property <int> scan-status: 0;            // 0 Idle,1 Scanning,2 Complete,3 Cancelled,4 Error
+    in property <int> total-files: 0;
+    in property <int> processed-files: 0;
+    in property <float> progress: 0.0;           // 0..1
+    in property <string> current-file: "";       // basename, or the cleanup label
+    in property <int> error-count: 0;
+}
+
 export global LibraryManageActions {
     callback load();                             // (re)load the folder list (panel init)
     callback add-folder();                       // native dir picker (Rust)

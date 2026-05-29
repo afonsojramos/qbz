@@ -4125,6 +4125,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .global::<LibraryManageActions>()
             .on_set_filter(move |_q| local_library_settings::set_filter(weak.clone()));
     }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LibraryManageActions>()
+            .on_scan_all(move || local_library_settings::scan_all(weak.clone(), handle.clone()));
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LibraryManageActions>()
+            .on_scan_folder(move |id| {
+                local_library_settings::scan_folder(weak.clone(), handle.clone(), id as i64)
+            });
+    }
+    {
+        window
+            .global::<LibraryManageActions>()
+            .on_stop_scan(move || local_library_settings::stop_scan());
+    }
 
     // Local Library — Albums tab controls (search / sort re-query page 1;
     // load-more pages on scroll; retry) + the shared AlbumCollectionView's
