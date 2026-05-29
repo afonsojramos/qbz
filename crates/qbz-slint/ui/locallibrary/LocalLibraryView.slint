@@ -18,7 +18,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { LocalLibraryState, LocalLibraryActions, FolderNode } from "../state.slint";
+import { LocalLibraryState, LocalLibraryActions, FolderNode, LocalArtistItem, AlphaJump } from "../state.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
@@ -299,6 +299,100 @@ component TreeRow inherits Rectangle {
     }
 }
 
+// Vertical A-Z jump strip on the right edge of the artist rail. Emits
+// jump(ordinal, index); the host scrolls its flickable proportionally.
+// Ported 1:1 from FavoritesView's AlphaStrip.
+component AlphaStrip inherits Rectangle {
+    in property <[AlphaJump]> jumps;
+    callback jump(int /* ordinal */, int /* index */);
+    width: 18px;
+    VerticalLayout {
+        alignment: center;
+        spacing: 0px;
+        for j[k] in root.jumps: Rectangle {
+            height: 15px;
+            width: 18px;
+            Text {
+                text: j.letter;
+                color: la.has-hover ? Theme.accent : Theme.text-muted;
+                font-size: 9px;
+                font-weight: Typography.semibold;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            la := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.jump(k, j.index);
+                }
+            }
+        }
+    }
+}
+
+// One compact row in the Artists left rail — a 48px round avatar (custom/
+// cached photo or a mic-style placeholder) + display name + "N albums ·
+// M tracks". 1:1 with Tauri's .artist-card-compact. ADR-008: round avatar is
+// the permitted icon-only circle; the row itself is a small-radius rectangle.
+component LocalArtistRow inherits Rectangle {
+    in property <LocalArtistItem> item;
+    in property <bool> selected;
+    callback clicked(string /* artist name */);
+    height: 60px;
+    border-radius: 8px;
+    background: root.selected
+        ? Theme.accent
+        : (ta.has-hover ? Theme.surface-hover : transparent);
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: 24px;
+                background: Theme.surface-elevated;
+                clip: true;
+                QbzIcon {
+                    source: @image-url("../assets/icons/user.svg");
+                    width: 22px;
+                    height: 22px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: Theme.text-muted;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 3px;
+            Text {
+                text: root.item.display-name;
+                color: root.selected ? Theme.accent-text : Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: root.selected ? Typography.semibold : Typography.medium;
+                overflow: elide;
+            }
+            Text {
+                text: "\{root.item.album-count} " + @tr("albums") + " · \{root.item.track-count} " + @tr("tracks");
+                color: root.selected ? Theme.accent-text : Theme.text-muted;
+                font-size: Typography.legal;
+                overflow: elide;
+            }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked(root.item.name);
+        }
+    }
+}
+
 export component LocalLibraryView inherits Rectangle {
     background: Theme.surface-main;
 
@@ -510,6 +604,23 @@ export component LocalLibraryView inherits Rectangle {
                         mode: LocalLibraryState.folders-view-mode;
                         set-mode(m) => {
                             LocalLibraryActions.folders-set-mode(m);
+                        }
+                    }
+                }
+            }
+
+            // Artists toolbar — search (filters the master rail in place).
+            if LocalLibraryState.active-tab == "artists"
+                && LocalLibraryState.artists.length > 0: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    ExpandableSearch {
+                        placeholder: @tr("Search artists");
+                        sm: true;
+                        query <=> LocalLibraryState.artists-search;
+                        edited(q) => {
+                            LocalLibraryActions.artists-search(q);
                         }
                     }
                 }
@@ -1101,7 +1212,7 @@ export component LocalLibraryView inherits Rectangle {
                 }
             }
 
-            // -------- Artists tab — name + counts grid -------------------
+            // -------- Artists tab — two-column master/detail -------------
             if LocalLibraryState.active-tab == "artists": Rectangle {
                 if LocalLibraryState.artists-loading: VerticalLayout {
                     alignment: center;
@@ -1110,9 +1221,20 @@ export component LocalLibraryView inherits Rectangle {
                         LoadingSpinner { size: 36px; }
                     }
                 }
+                // Empty library.
                 if !LocalLibraryState.artists-loading
                     && LocalLibraryState.artists.length == 0: VerticalLayout {
                     alignment: center;
+                    spacing: 10px;
+                    HorizontalLayout {
+                        alignment: center;
+                        QbzIcon {
+                            source: @image-url("../assets/icons/user.svg");
+                            width: 44px;
+                            height: 44px;
+                            tint: Theme.text-muted;
+                        }
+                    }
                     Text {
                         text: @tr("No artists in your local library yet.");
                         color: Theme.text-muted;
@@ -1120,75 +1242,190 @@ export component LocalLibraryView inherits Rectangle {
                         horizontal-alignment: center;
                     }
                 }
+                // Two-column layout.
                 if !LocalLibraryState.artists-loading
-                    && LocalLibraryState.artists.length > 0: Rectangle {
-                    artists-flick := Flickable {
-                        viewport-width: self.width;
-                        viewport-height: artists-page.preferred-height;
-                        artists-page := VerticalLayout {
-                            width: parent.width;
-                            padding-left: 32px;
-                            padding-right: 32px;
-                            padding-top: 16px;
-                            padding-bottom: 100px;
-                            alignment: start;
-                            artists-grid := Rectangle {
-                                property <length> card-w: 160px;
-                                property <length> card-h: 200px;
-                                property <length> gap: 24px;
-                                property <int> columns: Math.max(1,
-                                    Math.floor((self.width + self.gap) / (self.card-w + self.gap)));
-                                property <int> rows: Math.ceil(LocalLibraryState.artists.length / self.columns);
-                                height: self.rows > 0
-                                    ? self.rows * self.card-h + Math.max(0, self.rows - 1) * self.gap
-                                    : 0px;
-                                for artist[i] in LocalLibraryState.artists: VerticalLayout {
-                                    x: Math.mod(i, artists-grid.columns) * (artists-grid.card-w + artists-grid.gap);
-                                    y: Math.floor(i / artists-grid.columns) * (artists-grid.card-h + artists-grid.gap);
-                                    width: artists-grid.card-w;
-                                    spacing: 10px;
-                                    Rectangle {
-                                        width: 120px;
-                                        height: 120px;
-                                        x: (parent.width - self.width) / 2;
-                                        border-radius: 60px;
-                                        background: Theme.surface-elevated;
-                                        QbzIcon {
-                                            source: @image-url("../assets/icons/user.svg");
-                                            width: 44px;
-                                            height: 44px;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            tint: Theme.text-muted;
+                    && LocalLibraryState.artists.length > 0: HorizontalLayout {
+                    spacing: 0px;
+
+                    // ---- Left rail: merged, A-Z grouped master list ----
+                    Rectangle {
+                        width: 280px;
+                        clip: true;
+                        VerticalLayout {
+                            padding-left: 24px;
+                            padding-top: 12px;
+                            spacing: 8px;
+                            // Rail header — count after filter.
+                            Text {
+                                text: "\{LocalLibraryState.artists-shown} " + @tr("artists");
+                                color: Theme.text-muted;
+                                font-size: Typography.legal;
+                                font-weight: Typography.semibold;
+                            }
+                            // No-match state.
+                            if LocalLibraryState.artists-shown == 0: Text {
+                                text: @tr("No artists match your search.");
+                                color: Theme.text-muted;
+                                font-size: Typography.legal;
+                            }
+                            if LocalLibraryState.artists-shown > 0: Rectangle {
+                                vertical-stretch: 1;
+                                rail-flick := Flickable {
+                                    viewport-width: self.width;
+                                    viewport-height: rail-col.preferred-height;
+                                    rail-col := VerticalLayout {
+                                        width: parent.width;
+                                        padding-right: 22px;
+                                        padding-bottom: 40px;
+                                        spacing: 4px;
+                                        alignment: start;
+                                        for section[s] in LocalLibraryState.artists-grouped: VerticalLayout {
+                                            spacing: 2px;
+                                            Text {
+                                                text: section.letter;
+                                                color: Theme.text-secondary;
+                                                font-size: Typography.legal;
+                                                font-weight: Typography.semibold;
+                                            }
+                                            for artist[i] in section.artists: LocalArtistRow {
+                                                item: artist;
+                                                selected: LocalLibraryState.artists-selected-name == artist.name;
+                                                clicked(name) => {
+                                                    LocalLibraryActions.artists-select(name);
+                                                }
+                                            }
                                         }
                                     }
-                                    Text {
-                                        text: artist.name;
-                                        color: Theme.text-primary;
-                                        font-size: Typography.body;
-                                        font-weight: Typography.medium;
-                                        horizontal-alignment: center;
-                                        overflow: elide;
-                                        width: artists-grid.card-w;
-                                    }
-                                    Text {
-                                        text: artist.subtitle;
-                                        color: Theme.text-muted;
-                                        font-size: Typography.legal;
-                                        horizontal-alignment: center;
-                                        width: artists-grid.card-w;
+                                }
+                                if LocalLibraryState.artists-alpha.length > 0: AlphaStrip {
+                                    x: parent.width - self.width - 2px;
+                                    height: 100%;
+                                    jumps: LocalLibraryState.artists-alpha;
+                                    jump(ord, idx) => {
+                                        rail-flick.viewport-y = -(ord / Math.max(1, LocalLibraryState.artists-alpha.length - 1))
+                                            * Math.max(0, (rail-flick.viewport-height - rail-flick.height) / 1px) * 1px;
                                     }
                                 }
                             }
                         }
                     }
-                    ListScrollbar {
-                        x: parent.width - self.width - 4px;
-                        width: 14px;
-                        height: 100%;
-                        viewport-height: artists-flick.viewport-height;
-                        visible-height: artists-flick.height;
-                        viewport-y <=> artists-flick.viewport-y;
+
+                    // Divider.
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border-subtle;
+                    }
+
+                    // ---- Right pane: selected artist's albums ----
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        clip: true;
+
+                        // Nothing selected.
+                        if LocalLibraryState.artists-selected-name == "": VerticalLayout {
+                            alignment: center;
+                            spacing: 10px;
+                            HorizontalLayout {
+                                alignment: center;
+                                QbzIcon {
+                                    source: @image-url("../assets/icons/user.svg");
+                                    width: 44px;
+                                    height: 44px;
+                                    tint: Theme.text-muted;
+                                }
+                            }
+                            Text {
+                                text: @tr("Select an artist to view their albums");
+                                color: Theme.text-muted;
+                                font-size: Typography.body;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        if LocalLibraryState.artists-selected-name != "": Rectangle {
+                            VerticalLayout {
+                                padding-left: 28px;
+                                padding-right: 8px;
+                                padding-top: 14px;
+                                spacing: 12px;
+
+                                // Header — artist name + album count.
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text {
+                                        text: LocalLibraryState.artists-selected-display;
+                                        color: Theme.text-primary;
+                                        font-size: Typography.section;
+                                        font-weight: Typography.bold;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: "\{LocalLibraryState.artists-selected-albums.length} " + @tr("albums");
+                                        color: Theme.text-muted;
+                                        font-size: Typography.legal;
+                                    }
+                                }
+
+                                if LocalLibraryState.artists-selected-loading: HorizontalLayout {
+                                    alignment: center;
+                                    padding-top: 30px;
+                                    LoadingSpinner { size: 28px; }
+                                }
+
+                                // No albums for this artist.
+                                if !LocalLibraryState.artists-selected-loading
+                                    && LocalLibraryState.artists-selected-albums.length == 0: VerticalLayout {
+                                    padding-top: 24px;
+                                    Text {
+                                        text: @tr("No albums found");
+                                        color: Theme.text-muted;
+                                        font-size: Typography.body;
+                                        horizontal-alignment: center;
+                                    }
+                                }
+
+                                // Album grid — self-scrolling.
+                                if !LocalLibraryState.artists-selected-loading
+                                    && LocalLibraryState.artists-selected-albums.length > 0: Rectangle {
+                                    vertical-stretch: 1;
+                                    artist-albums-flick := Flickable {
+                                        viewport-width: self.width;
+                                        viewport-height: artist-albums-page.preferred-height;
+                                        artist-albums-page := VerticalLayout {
+                                            width: parent.width;
+                                            padding-right: 20px;
+                                            padding-bottom: 100px;
+                                            alignment: start;
+                                            AlbumCollectionView {
+                                                albums: LocalLibraryState.artists-selected-albums;
+                                                is-grouped: false;
+                                                view-mode: "grid";
+                                                show-source: false;
+                                                show-favorite: false;
+                                                show-source-badge: true;
+                                                open-album(id) => {
+                                                    LocalLibraryActions.open-album(id);
+                                                }
+                                                open-artist(id) => {
+                                                    LocalLibraryActions.open-artist(id);
+                                                }
+                                                media-action(kind, id, action) => {
+                                                    LocalLibraryActions.album-action(id, action);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ListScrollbar {
+                                        x: parent.width - self.width - 4px;
+                                        width: 14px;
+                                        height: 100%;
+                                        viewport-height: artist-albums-flick.viewport-height;
+                                        visible-height: artist-albums-flick.height;
+                                        viewport-y <=> artist-albums-flick.viewport-y;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

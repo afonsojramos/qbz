@@ -17,8 +17,8 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
 use crate::{
-    AlbumCardItem, AppWindow, DiscoverSection, FolderNode, LocalArtistItem, LocalLibraryState,
-    TrackItem,
+    AlbumCardItem, AlphaJump, AppWindow, DiscoverSection, FolderNode, LocalArtistItem,
+    LocalArtistSection, LocalLibraryState, TrackItem,
 };
 
 /// The four browse tabs. Order mirrors Tauri's default tab order
@@ -1036,27 +1036,265 @@ pub fn select_folder(
 
 // ============================== Artists tab ===============================
 //
-// A full-loaded grid of artists (name + album/track counts). Images +
-// click-to-detail are a later slice; merge/dedup of normalized-equal names
-// (the Tauri artistMergeResult) is deferred — v1 shows the DB's distinct
-// album-artist rows.
+// Two-column master/detail, 1:1 with Tauri's Artists tab (NOT a card grid —
+// the Svelte VirtualizedArtistGrid imports there are dead). Left rail: a
+// merged/deduped, alpha-grouped master list of compact rows (round avatar +
+// name + "N albums · M tracks"). Right pane: the selected artist's albums,
+// filtered IN PLACE from the loaded album set (no new backend call). The
+// name-merge collapses normalized-equal spellings into one canonical row.
+//
+// The Qobuz background image fetch (capped/sequential in Tauri, and whose DB
+// batch path is broken there) is the remaining follow-up; this pass wires the
+// DB custom-image path + the mic placeholder.
 
-fn apply_artists(window: &AppWindow, artists: Vec<qbz_library::LocalArtist>) {
-    let items: Vec<LocalArtistItem> = artists
-        .into_iter()
-        .map(|a| LocalArtistItem {
-            name: a.name.into(),
-            subtitle: format!("{} albums · {} tracks", a.album_count, a.track_count).into(),
+/// The loaded album set, cached so the right-pane filter (select) doesn't
+/// re-hit the DB — mirrors Tauri filtering its in-memory `albums` array.
+static ARTIST_ALBUMS: std::sync::Mutex<Vec<qbz_library::LocalAlbum>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Fold a common Latin accented char to its ASCII base (best-effort, no
+/// `unicode-normalization` dep). Covers Spanish/European music metadata; the
+/// uncovered tail just won't merge across diacritics. Mirrors the intent of
+/// Tauri's NFKD + combining-mark strip in `normalizeArtistName`.
+fn fold_diacritic(c: char) -> char {
+    match c {
+        'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' | 'ā' => 'a',
+        'é' | 'è' | 'ê' | 'ë' | 'ē' | 'ė' => 'e',
+        'í' | 'ì' | 'î' | 'ï' | 'ī' => 'i',
+        'ó' | 'ò' | 'ô' | 'ö' | 'õ' | 'ō' | 'ø' => 'o',
+        'ú' | 'ù' | 'û' | 'ü' | 'ū' => 'u',
+        'ñ' => 'n',
+        'ç' => 'c',
+        'ý' | 'ÿ' => 'y',
+        'ß' => 's',
+        _ => c,
+    }
+}
+
+/// Normalize an artist name for merge/match: lowercase, fold diacritics,
+/// collapse every run of non-alphanumerics to a single space, trim. So
+/// "Alice In Chains" and "alice  in chains" both -> "alice in chains".
+fn normalize_artist(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut prev_space = false;
+    for ch in name.to_lowercase().chars() {
+        let c = fold_diacritic(ch);
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            prev_space = false;
+        } else if !prev_space {
+            out.push(' ');
+            prev_space = true;
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Split a credit string into individual artist names on the usual
+/// separators (comma already handled by the caller for `all_artists`).
+fn split_credit(s: &str) -> Vec<String> {
+    s.split([',', '&', '/', ';'])
+        .flat_map(|p| {
+            p.split(" feat ")
+                .flat_map(|q| q.split(" ft "))
+                .flat_map(|q| q.split(" featuring "))
+                .flat_map(|q| q.split(" with "))
+                .map(|q| q.to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Build the per-normalized-artist set of album ids, so merged rows get an
+/// accurate unique album count independent of per-track spelling. Mirrors
+/// Tauri's `artistAlbumIds`.
+fn build_artist_album_ids(
+    albums: &[qbz_library::LocalAlbum],
+) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
+    let mut map: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    for al in albums {
+        if !al.all_artists.is_empty() {
+            for part in al.all_artists.split(',') {
+                let n = normalize_artist(part);
+                if n.is_empty() || n == "various artists" {
+                    continue;
+                }
+                map.entry(n).or_default().insert(al.id.clone());
+            }
+        } else {
+            let n = normalize_artist(&al.artist);
+            if !n.is_empty() && n != "various artists" {
+                map.entry(n).or_default().insert(al.id.clone());
+            }
+        }
+    }
+    map
+}
+
+/// Collapse normalized-equal artist spellings into one canonical row and
+/// attach accurate album counts + a custom-image path. Mirrors Tauri's
+/// `artistMergeResult`: canonical = the variant with most albums (tie: most
+/// tracks); merged track count = sum across variants.
+fn merge_artists(
+    artists: Vec<qbz_library::LocalArtist>,
+    albums: &[qbz_library::LocalAlbum],
+    custom_images: &std::collections::HashMap<String, String>,
+) -> Vec<LocalArtistItem> {
+    let album_ids = build_artist_album_ids(albums);
+    let norm_imgs: std::collections::HashMap<String, String> = custom_images
+        .iter()
+        .map(|(k, v)| (normalize_artist(k), v.clone()))
+        .collect();
+
+    let mut groups: std::collections::HashMap<String, Vec<qbz_library::LocalArtist>> =
+        std::collections::HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for a in artists {
+        let n = normalize_artist(&a.name);
+        if n.is_empty() {
+            continue;
+        }
+        if !groups.contains_key(&n) {
+            order.push(n.clone());
+        }
+        groups.entry(n).or_default().push(a);
+    }
+
+    let mut out: Vec<LocalArtistItem> = Vec::with_capacity(order.len());
+    for n in order {
+        let variants = match groups.remove(&n) {
+            Some(v) => v,
+            None => continue,
+        };
+        let album_set_len = album_ids.get(&n).map(|s| s.len()).unwrap_or(0) as i32;
+        let (canonical, album_count, track_count) = if variants.len() == 1 {
+            let v = &variants[0];
+            let ac = if album_set_len > 0 {
+                album_set_len
+            } else {
+                v.album_count as i32
+            };
+            (v.name.clone(), ac, v.track_count as i32)
+        } else {
+            let canon = variants
+                .iter()
+                .max_by(|a, b| {
+                    a.album_count
+                        .cmp(&b.album_count)
+                        .then(a.track_count.cmp(&b.track_count))
+                })
+                .unwrap();
+            let total_tracks: u32 = variants.iter().map(|v| v.track_count).sum();
+            let ac = if album_set_len > 0 {
+                album_set_len
+            } else {
+                canon.album_count as i32
+            };
+            (canon.name.clone(), ac, total_tracks as i32)
+        };
+        let image_path = norm_imgs.get(&n).cloned().unwrap_or_default();
+        out.push(LocalArtistItem {
+            name: canonical.clone().into(),
+            display_name: canonical.into(),
+            album_count,
+            track_count,
+            image_path: image_path.into(),
+        });
+    }
+    out.sort_by(|a, b| {
+        a.display_name
+            .to_lowercase()
+            .cmp(&b.display_name.to_lowercase())
+    });
+    out
+}
+
+/// Does this album credit the (normalized) selected artist — as primary, in
+/// `all_artists`, or as one part of a multi-artist credit? Mirrors Tauri's
+/// `selectedArtistAlbums` predicate.
+fn album_matches_artist(al: &qbz_library::LocalAlbum, nsel: &str) -> bool {
+    if nsel == "various artists" {
+        return normalize_artist(&al.artist) == "various artists";
+    }
+    if normalize_artist(&al.artist) == nsel {
+        return true;
+    }
+    for part in al.all_artists.split(',') {
+        if normalize_artist(part) == nsel {
+            return true;
+        }
+    }
+    for part in split_credit(&al.artist) {
+        if normalize_artist(&part) == nsel {
+            return true;
+        }
+    }
+    false
+}
+
+/// Re-derive the left-rail render sets (search filter + A-Z grouping + jump
+/// strip) from the merged `artists` master list.
+pub fn derive_artists(window: &AppWindow) {
+    let s = window.global::<LocalLibraryState>();
+    let query_owned = s.get_artists_search().to_lowercase();
+    let query = query_owned.trim();
+    let all = s.get_artists();
+    let filtered: Vec<LocalArtistItem> = (0..all.row_count())
+        .filter_map(|i| all.row_data(i))
+        .filter(|a| query.is_empty() || a.display_name.to_lowercase().contains(query))
+        .collect();
+    s.set_artists_shown(filtered.len() as i32);
+
+    let mut map: Vec<(String, Vec<LocalArtistItem>)> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for item in filtered {
+        let key = folder_alpha_key(item.display_name.as_str());
+        let idx = *index.entry(key.clone()).or_insert_with(|| {
+            map.push((key.clone(), Vec::new()));
+            map.len() - 1
+        });
+        map[idx].1.push(item);
+    }
+    map.sort_by(|(a, _), (b, _)| match (a == "#", b == "#") {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => a.to_lowercase().cmp(&b.to_lowercase()),
+    });
+    let jumps: Vec<AlphaJump> = map
+        .iter()
+        .enumerate()
+        .map(|(i, (k, _))| AlphaJump {
+            letter: k.clone().into(),
+            index: i as i32,
         })
         .collect();
+    let sections: Vec<LocalArtistSection> = map
+        .into_iter()
+        .map(|(letter, artists)| LocalArtistSection {
+            letter: letter.into(),
+            artists: ModelRc::new(VecModel::from(artists)),
+        })
+        .collect();
+    s.set_artists_grouped(ModelRc::new(VecModel::from(sections)));
+    s.set_artists_alpha(ModelRc::new(VecModel::from(jumps)));
+}
+
+fn apply_artists(window: &AppWindow, items: Vec<LocalArtistItem>) {
     let s = window.global::<LocalLibraryState>();
     s.set_artists(ModelRc::new(VecModel::from(items)));
     s.set_artists_loading(false);
     s.set_artists_load_failed(false);
+    derive_artists(window);
 }
 
-/// Load the artists grid on first visit (re-entry keeps it).
-pub fn ensure_artists_loaded(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+/// Load + merge the artists master list on first visit (re-entry keeps it).
+/// Also caches the album set for the right-pane filter.
+pub fn ensure_artists_loaded(
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    image_cache: ImageCache,
+) {
     let _ = weak.upgrade_in_event_loop(move |w| {
         let s = w.global::<LocalLibraryState>();
         if s.get_artists().row_count() != 0 || s.get_artists_loading() {
@@ -1064,15 +1302,86 @@ pub fn ensure_artists_loaded(weak: slint::Weak<AppWindow>, handle: tokio::runtim
         }
         s.set_artists_loading(true);
         s.set_artists_load_failed(false);
+        let _ = image_cache; // reserved for the Qobuz-image follow-up
         let weak2 = w.as_weak();
         handle.spawn(async move {
-            let artists = tokio::task::spawn_blocking(|| {
-                crate::library_db::with_db(|db| db.get_artists_with_filter(true, false))
-                    .unwrap_or_default()
+            let items = tokio::task::spawn_blocking(|| {
+                let artists = crate::library_db::with_db(|db| db.get_artists_with_filter(true, false))
+                    .unwrap_or_default();
+                let albums = crate::library_db::with_db(|db| {
+                    db.get_albums_with_full_filter(false, true, false)
+                })
+                .unwrap_or_default();
+                let custom = crate::library_db::with_db(|db| db.get_all_custom_artist_images())
+                    .unwrap_or_default();
+                let merged = merge_artists(artists, &albums, &custom);
+                if let Ok(mut cache) = ARTIST_ALBUMS.lock() {
+                    *cache = albums;
+                }
+                merged
             })
             .await
             .unwrap_or_default();
-            let _ = weak2.upgrade_in_event_loop(move |w| apply_artists(&w, artists));
+            let _ = weak2.upgrade_in_event_loop(move |w| apply_artists(&w, items));
+        });
+    });
+}
+
+/// Select an artist: filter their albums (in place, from the cached album
+/// set) into the right pane and kick cover loads.
+pub fn select_local_artist(
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    image_cache: ImageCache,
+    name: String,
+) {
+    let _ = weak.upgrade_in_event_loop({
+        let name = name.clone();
+        move |w| {
+            let s = w.global::<LocalLibraryState>();
+            s.set_artists_selected_name(name.clone().into());
+            // Display name = the merged row's display, else the raw name.
+            let all = s.get_artists();
+            let display = (0..all.row_count())
+                .filter_map(|i| all.row_data(i))
+                .find(|a| a.name == name)
+                .map(|a| a.display_name.to_string())
+                .unwrap_or_else(|| name.clone());
+            s.set_artists_selected_display(display.into());
+            s.set_artists_selected_loading(true);
+        }
+    });
+    handle.spawn(async move {
+        let cards = tokio::task::spawn_blocking(move || {
+            let albums = ARTIST_ALBUMS
+                .lock()
+                .map(|c| c.clone())
+                .unwrap_or_default();
+            let nsel = normalize_artist(&name);
+            albums
+                .into_iter()
+                .filter(|al| album_matches_artist(al, &nsel))
+                .map(map_local_album)
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            let jobs: Vec<ArtworkJob> = cards
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| !c.artwork_url.is_empty())
+                .map(|(i, c)| ArtworkJob {
+                    target: ArtworkTarget::LocalArtistAlbumCard { index: i },
+                    url: c.artwork_url.clone(),
+                })
+                .collect();
+            let items: Vec<AlbumCardItem> =
+                cards.into_iter().map(crate::album_map::to_item).collect();
+            let s = w.global::<LocalLibraryState>();
+            s.set_artists_selected_albums(ModelRc::new(VecModel::from(items)));
+            s.set_artists_selected_loading(false);
+            crate::artwork::spawn_local_loads(jobs, w.as_weak(), image_cache);
         });
     });
 }

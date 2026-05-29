@@ -972,7 +972,7 @@ fn navigate_local_library(
             local_library::ensure_tracks_loaded(weak, handle.clone());
         }
         local_library::LibTab::Artists => {
-            local_library::ensure_artists_loaded(weak, handle.clone());
+            local_library::ensure_artists_loaded(weak, handle.clone(), image_cache);
         }
     }
 }
@@ -4306,6 +4306,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                 }
+            });
+    }
+
+    // ---- Artists tab actions ----
+    {
+        let weak = window.as_weak();
+        window
+            .global::<LocalLibraryActions>()
+            .on_artists_search(move |_query| {
+                // Query is two-way bound to artists-search; re-derive in place.
+                if let Some(w) = weak.upgrade() {
+                    local_library::derive_artists(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_artists_select(move |name| {
+                local_library::select_local_artist(
+                    weak.clone(),
+                    handle.clone(),
+                    image_cache.clone(),
+                    name.to_string(),
+                );
             });
     }
 

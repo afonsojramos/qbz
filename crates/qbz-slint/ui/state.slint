@@ -343,8 +343,19 @@ export enum ToastKind { success, error, info, warning, buffering }
 // One card in the Local Library Artists grid (name + "N albums · M tracks").
 // Images + click-to-detail are a later slice.
 export struct LocalArtistItem {
-    name: string,
-    subtitle: string,
+    name: string,           // raw/canonical key (used for selection + matching)
+    display-name: string,   // canonical display name (after name-merge)
+    album-count: int,
+    track-count: int,
+    image-path: string,     // local file path for a custom/cached photo ("" = none)
+}
+
+// One A-Z section of the local Artists left rail (master list grouped by the
+// display name's first letter, "#" bucket for non-alphabetic). 1:1 with the
+// Tauri Artists tab, which groups the compact rows under sticky letters.
+export struct LocalArtistSection {
+    letter: string,
+    artists: [LocalArtistItem],
 }
 
 // One visible row in the Folders tree (flattened-model lazy tree — Slint has
@@ -424,10 +435,24 @@ export global LocalLibraryState {
     in property <[TrackItem]> folder-detail-tracks: [];
     in property <bool> folder-detail-loading: false;
 
-    // --- Artists tab — name + counts grid (full load; images later) -----
+    // --- Artists tab — two-column master/detail (1:1 with Tauri) --------
+    // Left rail: the merged/deduped artist master list. `artists` is the full
+    // merged set (post name-merge); `artists-grouped` / `artists-alpha` are
+    // the search-and-group-derived render sets; `artists-shown` is the count
+    // after the search filter (drives the rail header).
     in property <[LocalArtistItem]> artists: [];
     in property <bool> artists-loading: false;
     in property <bool> artists-load-failed: false;
+    in-out property <string> artists-search: "";
+    in property <[LocalArtistSection]> artists-grouped: [];
+    in property <[AlphaJump]> artists-alpha: [];
+    in property <int> artists-shown: 0;
+    // Right pane: the selected artist's albums (filtered in place from the
+    // loaded album set — no new backend call, mirroring Tauri).
+    in-out property <string> artists-selected-name: "";   // "" = none selected
+    in property <string> artists-selected-display: "";
+    in property <[AlbumCardItem]> artists-selected-albums: [];
+    in property <bool> artists-selected-loading: false;
 }
 
 export global LocalLibraryActions {
@@ -475,6 +500,12 @@ export global LocalLibraryActions {
     // Tree: play one track from the selected folder's direct tracks (the
     // folder's direct list becomes the queue, starting at this track).
     callback folders-play-track(string /* track id */);
+
+    // --- Artists tab ---
+    // Filter the master list (two-way bound to artists-search; re-derive).
+    callback artists-search(string /* query */);
+    // Select an artist -> filter their albums into the right pane.
+    callback artists-select(string /* artist name */);
 }
 
 // Global toast state, driven by crate::toast. The Toast overlay (mounted
