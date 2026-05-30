@@ -12,7 +12,7 @@ use qbz_core::FrontendAdapter;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::folders::FolderInfo;
-use crate::{AppWindow, SidebarEntry, SidebarPlaylistItem, SidebarState};
+use crate::{AppWindow, SidebarEntry, SidebarFolderPopupState, SidebarPlaylistItem, SidebarState};
 
 #[derive(Clone)]
 pub struct SidebarPlaylist {
@@ -236,6 +236,28 @@ fn playlist_entry(p: &SidebarPlaylist, indent: bool, folder_id: &str) -> Sidebar
         cover3: slint::Image::default(),
         cover4: slint::Image::default(),
     }
+}
+
+/// Populate the collapsed-sidebar folder flyout with `folder_id`'s playlists,
+/// built from the cache so it works even for collapsed folders (whose
+/// children are absent from the flattened `entries`).
+pub fn load_folder_popup(window: &AppWindow, folder_id: &str) {
+    let data = CACHE.lock().map(|c| c.clone()).unwrap_or_default();
+    let sorted = sort_playlists(&data.playlists);
+    let entries: Vec<SidebarEntry> = sorted
+        .iter()
+        .filter(|p| {
+            data.folder_map
+                .get(&p.id)
+                .map(|f| f.as_str() == folder_id)
+                .unwrap_or(false)
+        })
+        .filter(|p| !data.hidden_playlists.contains(&p.id))
+        .map(|p| playlist_entry(p, true, folder_id))
+        .collect();
+    window
+        .global::<SidebarFolderPopupState>()
+        .set_playlists(ModelRc::new(VecModel::from(entries)));
 }
 
 /// Rebuild the flattened entries (+ the folders list for the

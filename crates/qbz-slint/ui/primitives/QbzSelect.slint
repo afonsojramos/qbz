@@ -52,15 +52,18 @@ export component QbzSelect inherits Rectangle {
     in property <bool> sm: false;
     callback selected(int);
 
+    // Toolbar (sm) selects — Group / Sort / filter — were unnecessarily wide;
+    // trim 20px from the effective width (button + list).
+    private property <length> eff-width: root.menu-width - (root.sm ? 20px : 0px);
     // Resolved width of the open list.
     private property <length> list-width:
-        root.popup-width > root.menu-width ? root.popup-width : root.menu-width;
+        root.popup-width > root.eff-width ? root.popup-width : root.eff-width;
 
     // Height of one option row and one section-header row.
     private property <length> row-height: 32px;
     private property <length> header-height: 24px;
 
-    width: root.menu-width;
+    width: root.eff-width;
     height: root.sm ? 30px : 34px;
     // sm matches the favorites toolbar buttons (6px, no outline); the
     // standard size keeps the settings-style bordered look.
@@ -113,7 +116,7 @@ export component QbzSelect inherits Rectangle {
     popup := PopupWindow {
         // Right-anchored so a list wider than the control grows leftward
         // and stays on-screen.
-        x: root.menu-width - root.list-width;
+        x: root.eff-width - root.list-width;
         y: root.height + 4px;
         width: root.list-width;
         height: list-layout.preferred-height;

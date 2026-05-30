@@ -29,95 +29,23 @@ import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { ToggleButton } from "../primitives/ToggleButton.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
+import { SegmentedTabBar, SegTab } from "../primitives/SegmentedTabBar.slint";
 import { ListView } from "std-widgets.slint";
 
-// One tab in the Local Library tab menu — underline style (ADR-008: NO
-// pills). 1:1 with Favorites' FavTab so the chrome reads identically.
-component LibTab inherits Rectangle {
-    in property <string> label;
-    in property <string> id;
-    in property <int> count;
-    callback selected(string);
-
-    property <bool> active: LocalLibraryState.active-tab == root.id;
-    height: 34px;
-    width: tab-row.preferred-width;
-
-    tab-row := HorizontalLayout {
-        padding-left: 4px;
-        padding-right: 4px;
-        spacing: 6px;
-        Text {
-            text: root.label;
-            color: root.active ? Theme.text-primary : Theme.text-muted;
-            font-size: Typography.body;
-            font-weight: root.active ? Typography.semibold : Typography.regular;
-            vertical-alignment: center;
-        }
-        if root.count > 0: Text {
-            text: root.count;
-            color: Theme.text-muted;
-            font-size: Typography.legal;
-            vertical-alignment: center;
-        }
-    }
-    // Active underline (NOT a pill background).
-    Rectangle {
-        y: parent.height - 2px;
-        height: 2px;
-        width: parent.width;
-        background: root.active ? Theme.accent : transparent;
-        border-radius: 1px;
-    }
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.selected(root.id);
-        }
-    }
-}
-
-// The Local Library tabs as one floating group (row 1, right side). Order
-// mirrors the existing HeaderBar "Local Library" menu (Albums / Artists /
-// Folders / Tracks). Counts come from LocalLibraryState (0 until seeded).
-component LibTabMenu inherits HorizontalLayout {
-    spacing: 18px;
-    VerticalLayout {
-        alignment: center;
-        LibTab {
-            label: @tr("Albums");
-            id: "albums";
-            count: LocalLibraryState.album-count;
-            selected(id) => { LocalLibraryActions.select-tab(id); }
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        LibTab {
-            label: @tr("Artists");
-            id: "artists";
-            count: LocalLibraryState.artist-count;
-            selected(id) => { LocalLibraryActions.select-tab(id); }
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        LibTab {
-            label: @tr("Folders");
-            id: "folders";
-            count: LocalLibraryState.folder-count;
-            selected(id) => { LocalLibraryActions.select-tab(id); }
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        LibTab {
-            label: @tr("Tracks");
-            id: "tracks";
-            count: LocalLibraryState.track-count;
-            selected(id) => { LocalLibraryActions.select-tab(id); }
-        }
-    }
+// The Local Library tabs as one floating group (row 1, right side) — now
+// the shared Discovery-style SegmentedTabBar, counts rendered as badges.
+// Order mirrors the existing HeaderBar "Local Library" menu (Albums /
+// Artists / Folders / Tracks). Counts come from LocalLibraryState (seeded
+// up front so the badges show without visiting each tab).
+component LibTabMenu inherits SegmentedTabBar {
+    active-id: LocalLibraryState.active-tab;
+    tabs: [
+        { id: "albums", label: @tr("Albums"), count: LocalLibraryState.album-count },
+        { id: "artists", label: @tr("Artists"), count: LocalLibraryState.artist-count },
+        { id: "folders", label: @tr("Folders"), count: LocalLibraryState.folder-count },
+        { id: "tracks", label: @tr("Tracks"), count: LocalLibraryState.track-count },
+    ];
+    selected(id) => { LocalLibraryActions.select-tab(id); }
 }
 
 // Standalone icon-only circle (ADR-008 permits a full circle for an
@@ -447,10 +375,6 @@ export component LocalLibraryView inherits Rectangle {
             spacing: 16px;
             VerticalLayout {
                 alignment: center;
-                NavButtons { }
-            }
-            VerticalLayout {
-                alignment: center;
                 Text {
                     text: @tr("Local Library");
                     color: Theme.text-primary;
@@ -458,11 +382,7 @@ export component LocalLibraryView inherits Rectangle {
                     font-weight: Typography.bold;
                 }
             }
-            Rectangle { horizontal-stretch: 1; }
-            VerticalLayout {
-                alignment: center;
-                LibTabMenu { }
-            }
+            // Settings gear — inline, to the right of the title.
             VerticalLayout {
                 alignment: center;
                 CircleIconBtn {
@@ -472,6 +392,7 @@ export component LocalLibraryView inherits Rectangle {
                     }
                 }
             }
+            Rectangle { horizontal-stretch: 1; }
         }
 
         Rectangle { height: 12px; }
@@ -485,6 +406,12 @@ export component LocalLibraryView inherits Rectangle {
             padding-left: 32px;
             padding-right: 32px;
             spacing: 8px;
+
+            // The section tab menu sits under the title (left of row 2).
+            VerticalLayout {
+                alignment: center;
+                LibTabMenu { }
+            }
 
             Rectangle { horizontal-stretch: 1; }
 

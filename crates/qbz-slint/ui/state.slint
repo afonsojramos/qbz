@@ -804,6 +804,20 @@ export struct SidebarEntry {
     cover4: image,
 }
 
+// Flyout shown when a folder is clicked while the sidebar is collapsed
+// (mini): a popup to the right listing that folder's playlists. The list is
+// populated from Rust because collapsed folders' children are NOT present in
+// the flat `SidebarState.entries`.
+export global SidebarFolderPopupState {
+    in-out property <bool> open: false;
+    in-out property <string> folder-id;
+    in-out property <string> folder-name;
+    in-out property <int> count: 0;     // folder's playlist count (caps the height)
+    in-out property <length> anchor-x;  // window x (sidebar right edge)
+    in-out property <length> anchor-y;  // window y (folder row top)
+    in property <[SidebarEntry]> playlists: [];
+}
+
 // The sidebar's playlists + folders. Populated by crate::sidebar on
 // shell entry and after create/delete/move.
 export global SidebarState {
@@ -838,6 +852,9 @@ export global SidebarState {
 
 export global SidebarActions {
     callback open-playlist(string /* id */);
+    // Populate SidebarFolderPopupState.playlists for the collapsed-sidebar
+    // folder flyout (the folder's children aren't in the flat entries).
+    callback load-folder-popup(string /* folder id */);
     callback create-playlist();
     callback create-folder();
     callback toggle-folder(string /* folder id */);
@@ -1278,14 +1295,10 @@ export global SettingsState {
 // so the UI renders standalone even while unwired.
 export global AppearanceState {
     // --- THEME -------------------------------------------------------------
+    // Only the themes that are actually ported/wired. Order is load-bearing:
+    // the index maps 1:1 to ThemeState.mode (0 Dark, 1 OLED, 2 Tokyo, 3 System).
     in-out property <[string]> themes: [
-        "Dark", "OLED Black", "Light", "System",
-        "Warm", "Nord", "Dracula", "Tokyo Night", "Catppuccin Mocha",
-        "Breeze Dark", "Adwaita Dark", "Alucard", "Aurora", "Ikari",
-        "Ayanami", "Iscariot", "Stratego", "Rumi", "Zoey", "Mira",
-        "Rose Pine Dawn", "Breeze Light", "Adwaita Light", "Duotone Snow",
-        "Snow Storm", "Frost", "Langley", "Kurosaki",
-        "WCAG Light", "WCAG Dark", "High Contrast", "Colorblind"
+        "Dark", "OLED Black", "Tokyo Night", "System"
     ];
     in-out property <int> theme-index: 0;
     // Theme list filter cycle: 0 = All, 1 = Dark, 2 = Light. Mirrors the
@@ -1316,6 +1329,8 @@ export global AppearanceState {
     // the panel (the only already-functional flag here).
     in-out property <bool> sidebar-playlist-collage: true;
     in-out property <bool> local-library-track-artwork: false;
+    // Player volume +/- stepper buttons — opt-in, hidden by default.
+    in-out property <bool> show-volume-steppers: false;
 
     // --- NOTIFICATIONS -----------------------------------------------------
     in-out property <bool> in-app-toasts: true;
@@ -1420,6 +1435,19 @@ export global HeaderMenuState {
     // Header x-coordinate of the open tab, so the overlay aligns the
     // menu panel under it.
     in-out property <length> anchor-x: 0px;
+    // Window y-coordinate of the anchor — used for sidebar flyouts, which
+    // open to the RIGHT of the row rather than under the header.
+    in-out property <length> anchor-y: 0px;
+    // True when the open menu is a sidebar section flyout (opens right of
+    // the row) rather than a header dropdown (opens under the tab).
+    in-out property <bool> from-sidebar: false;
+    // Optional section-name header shown as the first row (with a hairline
+    // separator below it). Empty = no header row.
+    in-out property <string> title: "";
+    // True while the pointer rests on the TRIGGER (the header tab / compact
+    // nav icon / sidebar nav row). Pauses the idle-close like hovering the
+    // menu does, so resting on the trigger never lets it close.
+    in-out property <bool> trigger-hovered: false;
     // The open tab's menu rows.
     in-out property <[NavMenuEntry]> items: [];
     // Index of the row wired to Home (-1 = none); only Discover uses it.
@@ -1785,10 +1813,25 @@ export global LocationViewActions {
 // Globals are imported directly by the shell components, so toggles
 // need no callback plumbing.
 export global ShellState {
-    in-out property <bool> sidebar-collapsed: false;
-    in-out property <length> sidebar-width: 280px;
+    // Three-state sidebar: 0 = open (240px, labels), 1 = mini (64px, icons
+    // only, Tauri-style), 2 = closed (0px). The collapse toggle cycles
+    // open -> mini -> closed -> open.
+    in-out property <int> sidebar-state: 0;
+    out property <length> sidebar-rendered-width:
+        root.sidebar-state == 2 ? 0px
+        : root.sidebar-state == 1 ? 64px
+        : 240px;
+    // True while in the icons-only mini state — gates label/header rendering.
+    out property <bool> sidebar-mini: root.sidebar-state == 1;
+    // Advance the sidebar through its three states.
+    public function cycle-sidebar() {
+        root.sidebar-state = Math.mod(root.sidebar-state + 1, 3);
+    }
     // 0 = none, 1 = queue, 2 = lyrics
     in-out property <int> right-panel: 0;
+    // Section navigation placement: the sections (Discover/Library/Local
+    // Library/My QBZ) now live in the sidebar and open right-flyout menus.
+    in-out property <bool> nav-in-sidebar: true;
 }
 
 // Authenticated user, for the header user element.
@@ -2049,6 +2092,8 @@ export global FavoritesActions {
     callback albums-search(string /* query */);
     callback search-labels(string /* query */);
     callback playlists-set-sub-tab(string /* favorites | following */);
+    callback playlists-random();
+    callback labels-random();
     callback search-playlists(string /* query */);
     callback playlists-set-view(string /* grid | list */);
     callback playlist-action(string /* playlist id */, string /* play | play-next | queue | share | favorite */);

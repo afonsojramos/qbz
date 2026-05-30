@@ -2922,6 +2922,18 @@ impl LibraryDatabase {
         Ok(tracks)
     }
 
+    /// Cheap total local-track count — the Tracks-tab badge number without
+    /// materializing the (potentially 16K-row) table. Mirrors the Tracks tab
+    /// filter (include_qobuz_downloads = true, no network exclusion, no search)
+    /// so the badge equals the unfiltered list length.
+    pub fn count_all_local_tracks(&self) -> Result<u64, LibraryError> {
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM local_tracks", [], |row| row.get(0))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        Ok(n as u64)
+    }
+
     /// Get library statistics
     pub fn get_stats(&self, include_qobuz_downloads: bool) -> Result<LibraryStats, LibraryError> {
         let source_filter = if include_qobuz_downloads {

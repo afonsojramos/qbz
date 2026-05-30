@@ -630,9 +630,10 @@ fn apply_artwork(
         }
         ArtworkTarget::LocalFolderCard { index } => {
             let model = window.global::<crate::LocalLibraryState>().get_folders();
-            if let Some(mut item) = model.row_data(index) {
-                item.artwork = image;
-                model.set_row_data(index, item);
+            if let Some(item) = model.row_data(index) {
+                // Dual-set by id onto the full set + visible + grouped sections.
+                let id = item.id.to_string();
+                crate::local_library::set_local_folder_artwork(window, &id, image);
             }
         }
         ArtworkTarget::LocalArtistAlbumCard { index } => {
@@ -660,8 +661,11 @@ fn apply_artwork(
         ArtworkTarget::FavoriteArtist { index } => {
             let model = window.global::<crate::FavoritesState>().get_artists();
             if let Some(mut item) = model.row_data(index) {
-                item.image = image;
+                let id = item.id.to_string();
+                item.image = image.clone();
                 model.set_row_data(index, item);
+                // Also reach the rendered (visible + grouped/sidepanel) models.
+                crate::favorites::set_artist_image(window, &id, image);
             }
         }
         ArtworkTarget::FavoriteLabel { index } => {

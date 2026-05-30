@@ -6,10 +6,12 @@
 // content well); no hairline borders.
 
 import { Theme } from "../foundation/semantic-colors.slint";
+import { Radius } from "../foundation/radius.slint";
 import { NavState, ContentView, ShellState } from "../state.slint";
 import { Sidebar } from "Sidebar.slint";
 import { HeaderBar } from "HeaderBar.slint";
 import { HeaderMenuOverlay } from "HeaderMenuOverlay.slint";
+import { SidebarFolderPopup } from "SidebarFolderPopup.slint";
 import { PlaylistPickerModal } from "../primitives/PlaylistPickerModal.slint";
 import { CreatePlaylistModal } from "../primitives/CreatePlaylistModal.slint";
 import { EditPlaylistModal } from "../primitives/EditPlaylistModal.slint";
@@ -72,6 +74,7 @@ export component AppShell inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
+        // Header spans the full width at the top; the sidebar starts below it.
         HeaderBar {
             logout => {
                 root.logout();
@@ -85,12 +88,33 @@ export component AppShell inherits Rectangle {
             vertical-stretch: 1;
             spacing: 0px;
 
-            Sidebar { }
+            Sidebar {
+                navigate(route) => {
+                    root.header-menu-navigate(route);
+                }
+            }
 
-            // Content region — Home, Album, or Artist.
+            // Content frame — surface-card chrome around a rounded, inset
+            // content panel (Slack-style bezel on all four corners).
             Rectangle {
                 horizontal-stretch: 1;
-                background: Theme.surface-main;
+                background: Theme.surface-card;
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    // No top padding: the contiguous surface-card gap below the
+                    // header made the items look high (the perceived header
+                    // band was taller than its real height). The panel now
+                    // butts the header; its rounded top corners still bezel.
+                    padding-top: 0px;
+                    padding-bottom: 8px;
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: Theme.surface-main;
+                            border-radius: Radius.md;
+                            clip: true;
 
                 if NavState.view == ContentView.home: HomeView {
                     album-clicked(id) => {
@@ -240,6 +264,8 @@ export component AppShell inherits Rectangle {
                         root.media-action(kind, id, action);
                     }
                 }
+                        }
+                    }
             }
 
             // Right-side panels — layout siblings of the content area, so
@@ -268,6 +294,9 @@ export component AppShell inherits Rectangle {
             root.header-menu-navigate(route);
         }
     }
+
+    // Collapsed-sidebar folder flyout (mini state). Drawn above the content.
+    SidebarFolderPopup { }
 
     // Global "Add to playlist" picker overlay, opened from any track
     // context menu.

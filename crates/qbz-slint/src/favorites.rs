@@ -927,6 +927,40 @@ pub fn random_visible_artist(window: &AppWindow) -> Option<String> {
     model.row_data(idx).map(|a| a.id.to_string())
 }
 
+/// A random playlist id from the currently-visible Playlists set (for the
+/// Playlists "random" button — play a random playlist).
+pub fn random_visible_playlist(window: &AppWindow) -> Option<String> {
+    let model = window.global::<FavoritesState>().get_playlists_visible();
+    let n = model.row_count();
+    if n == 0 {
+        return None;
+    }
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
+    let idx = (seed % n as u64) as usize;
+    model.row_data(idx).map(|p| p.id.to_string())
+}
+
+/// A random label (id, name) from the currently-visible Labels set (for the
+/// Labels "random" button — open a random label's landing).
+pub fn random_visible_label(window: &AppWindow) -> Option<(String, String)> {
+    let model = window.global::<FavoritesState>().get_labels_visible();
+    let n = model.row_count();
+    if n == 0 {
+        return None;
+    }
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
+    let idx = (seed % n as u64) as usize;
+    model
+        .row_data(idx)
+        .map(|l| (l.id.to_string(), l.name.to_string()))
+}
+
 // ---- Un-favorite in place: fade (set `removing`) then remove -----------
 
 /// Flag the matching track row(s) as removing so they fade out.
@@ -1036,6 +1070,40 @@ pub fn set_album_artwork(window: &AppWindow, id: &str, image: slint::Image) {
     for s in 0..grouped.row_count() {
         if let Some(section) = grouped.row_data(s) {
             set_artwork_in_albums(&section.albums, id, &image);
+        }
+    }
+}
+
+/// Set a freshly-decoded artist photo (by id) on the rendered favorites
+/// artist models (flat `artists-visible` + every `artists-grouped` section,
+/// which backs both the grouped grid and the sidepanel list). Without this
+/// the photo only lands on the source `artists` model and the grouped/
+/// sidepanel views show it only after a re-derive (revisit).
+pub fn set_artist_image(window: &AppWindow, id: &str, image: slint::Image) {
+    let st = window.global::<FavoritesState>();
+    let vis = st.get_artists_visible();
+    for i in 0..vis.row_count() {
+        if let Some(mut item) = vis.row_data(i) {
+            if item.id.as_str() == id {
+                item.image = image.clone();
+                vis.set_row_data(i, item);
+                break;
+            }
+        }
+    }
+    let grouped = st.get_artists_grouped();
+    for s in 0..grouped.row_count() {
+        if let Some(section) = grouped.row_data(s) {
+            let arts = section.artists;
+            for i in 0..arts.row_count() {
+                if let Some(mut item) = arts.row_data(i) {
+                    if item.id.as_str() == id {
+                        item.image = image.clone();
+                        arts.set_row_data(i, item);
+                        break;
+                    }
+                }
+            }
         }
     }
 }

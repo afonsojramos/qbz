@@ -1,70 +1,8 @@
-// Browser-like back / forward navigation pair.
-//
-// The [<] [>] history pair uses the same circular elevated style as the
-// Discover carousel page navigators. Used inline beside the Discover
-// tabs and in place of the per-page Back button. (The sidebar-collapse
-// toggle lives in the header now, not here.)
-
-import { Theme } from "../foundation/semantic-colors.slint";
-import { NavState } from "../state.slint";
-import { QbzIcon } from "../primitives/QbzIcon.slint";
-
-// Circular elevated icon button — same look as the Discover carousel
-// page navigators (Carousel.slint NavButton).
-component HistoryNavBtn inherits Rectangle {
-    in property <image> icon;
-    in property <bool> enabled: true;
-    callback clicked();
-
-    width: 28px;
-    height: 28px;
-    border-radius: 14px;
-    opacity: root.enabled ? 1.0 : 0.4;
-    background: ta.has-hover && root.enabled
-        ? Theme.surface-hover
-        : Theme.surface-elevated;
-
-    QbzIcon {
-        source: root.icon;
-        width: 15px;
-        height: 15px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        tint: root.enabled ? Theme.text-primary : Theme.text-muted;
-    }
-
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: root.enabled ? pointer : default;
-        clicked => {
-            if (root.enabled) {
-                root.clicked();
-            }
-        }
-    }
-}
-
+// The back / forward / collapse buttons moved to the app header (HeaderBar,
+// floating right). This component is now an empty zero-size placeholder so
+// the many per-view headers that still instantiate it render nothing — the
+// real buttons live once, in the header.
 export component NavButtons inherits HorizontalLayout {
-    spacing: 4px;
-
-    VerticalLayout {
-        alignment: center;
-        HistoryNavBtn {
-            icon: @image-url("../assets/icons/chevron-left.svg");
-            enabled: NavState.can-back;
-            clicked => {
-                NavState.request-back();
-            }
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        HistoryNavBtn {
-            icon: @image-url("../assets/icons/chevron-right.svg");
-            enabled: NavState.can-forward;
-            clicked => {
-                NavState.request-forward();
-            }
-        }
-    }
+    width: 0px;
+    height: 0px;
 }

@@ -18,7 +18,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
 import { Layout } from "../foundation/layout.slint";
-import { HeaderMenuState, NavState, ContentView } from "../state.slint";
+import { HeaderMenuState, NavState, ContentView, ShellState } from "../state.slint";
 import { NavMenuItem } from "NavMenuItem.slint";
 
 export component HeaderMenuOverlay inherits Rectangle {
@@ -30,38 +30,40 @@ export component HeaderMenuOverlay inherits Rectangle {
     // to the shell so Rust can run the navigation + data load.
     callback navigate(string);
 
-    // (Re)arms the idle countdown — called on any pointer activity over
-    // the panel or its rows.
-    function reset-idle() {
-        idle-timer.restart();
-    }
+    // True while the pointer rests on the panel body (set by panel-ta, which
+    // lives inside the conditional panel and so can't be referenced directly).
+    property <bool> panel-hovered: false;
+    // Which row is hovered (-1 = none). Rows don't overlap, so one at a time.
+    property <int> hovered-row: -1;
+    // True while the pointer rests anywhere on the menu (panel body OR a row).
+    // The idle timer is paused while this holds, so resting the cursor on the
+    // menu — even without moving it — never lets the menu close.
+    property <bool> menu-hovered:
+        root.panel-hovered || root.hovered-row >= 0 || HeaderMenuState.trigger-hovered;
 
-    // Closes the menu and disarms the timer.
+    // Closes the menu.
     function close-menu() {
         HeaderMenuState.open-index = -1;
-        idle-timer.running = false;
     }
 
-    // Restart the idle countdown every time a tab (re)publishes the
-    // open menu — covers both the initial open and hover-switching
-    // between tabs.
+    // Clear the panel/row hover trackers whenever the open menu changes, so a
+    // stale state from the previous menu can't wrongly pause the timer.
+    // NOTE: trigger-hovered is deliberately NOT reset here — the trigger owns
+    // it (resetting it on open would clear the flag the instant the hovered
+    // trigger opens the menu, defeating the whole purpose).
     changed open-index => {
-        if (HeaderMenuState.open-index >= 0) {
-            idle-timer.running = true;
-            idle-timer.restart();
-        } else {
-            idle-timer.running = false;
-        }
+        root.hovered-row = -1;
+        root.panel-hovered = false;
     }
     property <int> open-index: HeaderMenuState.open-index;
 
-    // Closes the menu after 1s without pointer interaction (project rule:
-    // no menu stays open more than 1s idle).
+    // Closes the menu after 1s idle (project rule). The timer runs only while a
+    // menu is open AND the pointer is NOT over it — so hovering the menu pauses
+    // the countdown, and leaving it restarts a fresh 1s.
     idle-timer := Timer {
         interval: 1000ms;
-        running: false;
+        running: HeaderMenuState.open-index >= 0 && !root.menu-hovered;
         triggered => {
-            self.running = false;
             HeaderMenuState.open-index = -1;
         }
     }
@@ -72,8 +74,13 @@ export component HeaderMenuOverlay inherits Rectangle {
     // events and block hover-switching, exactly like the old
     // PopupWindow's pointer grab did.
     if HeaderMenuState.open-index >= 0: TouchArea {
-        y: Layout.header-height;
-        height: parent.height - Layout.header-height;
+        // Header dropdowns: scrim starts below the header so the tabs stay
+        // hoverable. Sidebar flyouts: scrim starts right of the sidebar so the
+        // section rows stay clickable.
+        x: HeaderMenuState.from-sidebar ? ShellState.sidebar-rendered-width : 0px;
+        y: HeaderMenuState.from-sidebar ? 0px : Layout.header-height;
+        width: parent.width - self.x;
+        height: parent.height - self.y;
         clicked => {
             root.close-menu();
         }
@@ -83,9 +90,9 @@ export component HeaderMenuOverlay inherits Rectangle {
     // surface-main background, 1px border-muted, Radius.sm, drop shadow.
     if HeaderMenuState.open-index >= 0: panel := Rectangle {
         x: HeaderMenuState.anchor-x;
-        // Snug under the tabs — the 30px tab is centered in the 48px
-        // header, so its bottom edge sits at ~39px.
-        y: 45px;
+        // Header dropdown: snug under the tabs (~45px). Sidebar flyout: aligned
+        // to the row's window y, opening to the right.
+        y: HeaderMenuState.from-sidebar ? HeaderMenuState.anchor-y : 45px;
         width: 188px;
         height: panel-box.preferred-height;
 
@@ -98,18 +105,36 @@ export component HeaderMenuOverlay inherits Rectangle {
             drop-shadow-color: Theme.card-shadow;
             drop-shadow-offset-y: 6px;
 
-            // Keeps the pointer "inside" the menu so the scrim's click
-            // does not pass through, and resets the idle countdown on
-            // any movement over the panel body.
+            // Keeps the pointer "inside" the menu so the scrim's click does
+            // not pass through, and reports panel-body hover so the idle timer
+            // pauses while the cursor rests on the menu.
             panel-ta := TouchArea {
-                moved => {
-                    root.reset-idle();
+                changed has-hover => {
+                    root.panel-hovered = self.has-hover;
                 }
             }
 
             VerticalLayout {
                 padding-top: 6px;
                 padding-bottom: 6px;
+                // Optional section-name header + hairline (used by the compact
+                // header nav shown when the sidebar is fully closed).
+                if HeaderMenuState.title != "": HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    Text {
+                        text: HeaderMenuState.title;
+                        color: Theme.text-muted;
+                        font-size: 11px;
+                        font-weight: 600;
+                        height: 26px;
+                        vertical-alignment: center;
+                    }
+                }
+                if HeaderMenuState.title != "": Rectangle {
+                    height: 1px;
+                    background: Theme.border-subtle;
+                }
                 for entry[idx] in HeaderMenuState.items: NavMenuItem {
                     label: entry.label;
                     icon: entry.icon;
@@ -122,10 +147,14 @@ export component HeaderMenuOverlay inherits Rectangle {
                         }
                         root.close-menu();
                     }
-                    // Any pointer interaction with a row resets the
-                    // idle-close countdown.
-                    hovered => {
-                        root.reset-idle();
+                    // Track per-row hover so the idle timer stays paused while
+                    // the cursor rests on a row (not just while it moves).
+                    hover-changed(h) => {
+                        if (h) {
+                            root.hovered-row = idx;
+                        } else if (root.hovered-row == idx) {
+                            root.hovered-row = -1;
+                        }
                     }
                 }
             }

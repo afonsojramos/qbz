@@ -941,6 +941,9 @@ fn navigate_local_library(
         w.global::<LocalLibraryState>().set_active_tab(tab_id.into());
         w.global::<NavState>().set_view(ContentView::LocalLibrary);
     });
+    // Seed all four tab-badge counts up front (like Favorites) so the nav
+    // badges show without visiting each tab.
+    local_library::seed_counts(weak.clone(), handle.clone());
     // Lazy per-tab load on first visit.
     match tab {
         local_library::LibTab::Albums => {
@@ -2846,14 +2849,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 ("playlist-track", track_id) => {
-                    let idx = playlist::index_of(track_id);
-                    let runtime = runtime.clone();
-                    let weak = weak.clone();
-                    let handle = handle.clone();
-                    handle.clone().spawn(async move {
-                        let tracks = playlist::current_tracks();
-                        playback::play_tracks(runtime, weak, handle, tracks, idx);
-                    });
+                    // Queue the VISIBLE order starting at the clicked track, so
+                    // the tracks that follow it (not track 1) play next.
+                    if let Some(w) = weak.upgrade() {
+                        let (tracks, idx) = playlist::visible_play_context(&w, track_id);
+                        playback::play_tracks(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            tracks,
+                            idx,
+                        );
+                    }
                 }
                 _ => {}
             }
@@ -5072,6 +5079,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        // Populate the collapsed-sidebar folder flyout's playlist list.
+        let weak = window.as_weak();
+        window
+            .global::<SidebarActions>()
+            .on_load_folder_popup(move |folder_id| {
+                if let Some(w) = weak.upgrade() {
+                    sidebar::load_folder_popup(&w, folder_id.as_str());
+                }
+            });
+    }
+    {
         let weak = window.as_weak();
         window
             .global::<SidebarActions>()
@@ -5599,6 +5617,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = weak.upgrade() {
                     if let Some(id) = favorites::random_visible_artist(&w) {
                         w.invoke_open_artist(id.into());
+                    }
+                }
+            });
+    }
+    {
+        // Playlists "random" — play a random visible playlist (reuses the
+        // playlist-action "play" path).
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_playlists_random(move || {
+                if let Some(w) = weak.upgrade() {
+                    if let Some(id) = favorites::random_visible_playlist(&w) {
+                        w.global::<FavoritesActions>()
+                            .invoke_playlist_action(id.into(), "play".into());
+                    }
+                }
+            });
+    }
+    {
+        // Labels "random" — open a random visible label's landing.
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_labels_random(move || {
+                if let Some(w) = weak.upgrade() {
+                    if let Some((id, name)) = favorites::random_visible_label(&w) {
+                        w.global::<FavoritesActions>()
+                            .invoke_open_label(id.into(), name.into());
                     }
                 }
             });

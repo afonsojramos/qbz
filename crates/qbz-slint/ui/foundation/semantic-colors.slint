@@ -1,28 +1,69 @@
 // Semantic color tokens — the contract every component consumes.
 //
-// Currently bound to the QBZ dark theme. When theme switching lands
-// (later in M1), `Theme` becomes the surface that swaps palettes; the
-// token names stay stable so components never change.
+// `Theme` is the surface that swaps palettes: every token is conditional on
+// ThemeState.mode (0 = Dark, 1 = OLED Black, 2 = Tokyo Night, 3 = System).
+// The System mode sources colors from the std-widgets Palette, which follows
+// the OS light/dark scheme. Token names stay stable so components never
+// change. The fixed values mirror src/app.css.
 
 import { Palette } from "palette.slint";
+import { Palette as StdPalette } from "std-widgets.slint";
+import { ThemeState } from "theme-state.slint";
 
 export global Theme {
-    // Surfaces
-    out property <color> surface-main: Palette.black-0;
-    out property <color> surface-card: Palette.black-1;
-    out property <color> surface-elevated: Palette.black-2;
+    // Surfaces (--bg-primary / --bg-secondary / --bg-tertiary)
+    out property <color> surface-main:
+        ThemeState.mode == 1 ? #000000
+        : ThemeState.mode == 2 ? #1a1b26
+        : ThemeState.mode == 3 ? StdPalette.background
+        : Palette.black-0;
+    out property <color> surface-card:
+        ThemeState.mode == 1 ? #0a0a0a
+        : ThemeState.mode == 2 ? #16161e
+        : ThemeState.mode == 3 ? StdPalette.alternate-background
+        : Palette.black-1;
+    out property <color> surface-elevated:
+        ThemeState.mode == 1 ? #1a1a1a
+        : ThemeState.mode == 2 ? #1c1d29
+        : ThemeState.mode == 3 ? StdPalette.control-background
+        : Palette.black-2;
 
-    // Text
-    out property <color> text-primary: Palette.white;
-    out property <color> text-secondary: Palette.gray-c;
-    out property <color> text-muted: Palette.gray-8;
-    out property <color> text-disabled: Palette.gray-5;
+    // Text (Tokyo Night recolors; OLED keeps the default dark text; System
+    // derives muted tiers from the OS foreground via alpha)
+    out property <color> text-primary:
+        ThemeState.mode == 2 ? #a9b1d6
+        : ThemeState.mode == 3 ? StdPalette.foreground
+        : Palette.white;
+    out property <color> text-secondary:
+        ThemeState.mode == 2 ? #787c99
+        : ThemeState.mode == 3 ? StdPalette.foreground.with-alpha(0.78)
+        : Palette.gray-c;
+    out property <color> text-muted:
+        ThemeState.mode == 2 ? #545c7e
+        : ThemeState.mode == 3 ? StdPalette.foreground.with-alpha(0.55)
+        : Palette.gray-8;
+    out property <color> text-disabled:
+        ThemeState.mode == 2 ? #3d425e
+        : ThemeState.mode == 3 ? StdPalette.foreground.with-alpha(0.35)
+        : Palette.gray-5;
 
-    // Accent
-    out property <color> accent: Palette.blue;
-    out property <color> accent-hover: Palette.blue-hover;
-    out property <color> accent-pressed: Palette.blue-active;
-    out property <color> accent-text: Palette.white;
+    // Accent (--accent-primary / hover / active / btn-primary-text)
+    out property <color> accent:
+        ThemeState.mode == 2 ? #7aa2f7
+        : ThemeState.mode == 3 ? StdPalette.accent-background
+        : Palette.blue;
+    out property <color> accent-hover:
+        ThemeState.mode == 2 ? #7dcfff
+        : ThemeState.mode == 3 ? StdPalette.accent-background.brighter(0.15)
+        : Palette.blue-hover;
+    out property <color> accent-pressed:
+        ThemeState.mode == 2 ? #bb9af7
+        : ThemeState.mode == 3 ? StdPalette.accent-background.darker(0.15)
+        : Palette.blue-active;
+    out property <color> accent-text:
+        ThemeState.mode == 2 ? #1a1b26
+        : ThemeState.mode == 3 ? StdPalette.accent-foreground
+        : Palette.white;
 
     // Favorite (heart) — the active "loved" state.
     out property <color> favorite: Palette.danger;

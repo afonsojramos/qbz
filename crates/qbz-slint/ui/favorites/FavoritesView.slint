@@ -35,103 +35,24 @@ import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
+import { SegmentedTabBar, SegTab } from "../primitives/SegmentedTabBar.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { ListView } from "std-widgets.slint";
 
 // One tab in the favorites tab menu.
-component FavTab inherits Rectangle {
-    in property <string> label;
-    in property <string> id;
-    in property <int> count;
-    callback selected(string);
-
-    property <bool> active: FavoritesState.active-tab == root.id;
-    height: 34px;
-    width: tab-row.preferred-width;
-
-    tab-row := HorizontalLayout {
-        padding-left: 4px;
-        padding-right: 4px;
-        spacing: 6px;
-        Text {
-            text: root.label;
-            color: root.active ? Theme.text-primary : Theme.text-muted;
-            font-size: Typography.body;
-            font-weight: root.active ? Typography.semibold : Typography.regular;
-            vertical-alignment: center;
-        }
-        if root.count > 0: Text {
-            text: root.count;
-            color: Theme.text-muted;
-            font-size: Typography.legal;
-            vertical-alignment: center;
-        }
-    }
-    // Active underline.
-    Rectangle {
-        y: parent.height - 2px;
-        height: 2px;
-        width: parent.width;
-        background: root.active ? Theme.accent : transparent;
-        border-radius: 1px;
-    }
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.selected(root.id);
-        }
-    }
-}
-
-// The 5 favorites tabs as one floating group (row 1, right side). Counts
-// stay live (FavoritesState.*-total are seeded up front).
-component FavTabMenu inherits HorizontalLayout {
-    spacing: 18px;
-    VerticalLayout {
-        alignment: center;
-        FavTab {
-            label: @tr("Tracks");
-            id: "tracks";
-            count: FavoritesState.tracks-total;
-            selected(id) => { FavoritesActions.select-tab(id); }
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        FavTab {
-            label: @tr("Albums");
-            id: "albums";
-            count: FavoritesState.albums-total;
-            selected(id) => { FavoritesActions.select-tab(id); }
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        FavTab {
-            label: @tr("Artists");
-            id: "artists";
-            count: FavoritesState.artists-total;
-            selected(id) => { FavoritesActions.select-tab(id); }
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        FavTab {
-            label: @tr("Playlists");
-            id: "playlists";
-            count: FavoritesState.playlists-total;
-            selected(id) => { FavoritesActions.select-tab(id); }
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        FavTab {
-            label: @tr("Labels");
-            id: "labels";
-            count: FavoritesState.labels-total;
-            selected(id) => { FavoritesActions.select-tab(id); }
-        }
-    }
+// The 5 favorites tabs as one floating group (row 1, right side) — the
+// shared Discovery-style SegmentedTabBar with count badges. Counts stay
+// live (FavoritesState.*-total are seeded up front).
+component FavTabMenu inherits SegmentedTabBar {
+    active-id: FavoritesState.active-tab;
+    tabs: [
+        { id: "tracks", label: @tr("Tracks"), count: FavoritesState.tracks-total },
+        { id: "albums", label: @tr("Albums"), count: FavoritesState.albums-total },
+        { id: "artists", label: @tr("Artists"), count: FavoritesState.artists-total },
+        { id: "playlists", label: @tr("Playlists"), count: FavoritesState.playlists-total },
+        { id: "labels", label: @tr("Labels"), count: FavoritesState.labels-total },
+    ];
+    selected(id) => { FavoritesActions.select-tab(id); }
 }
 
 // One underline sub-tab for the Playlists tab (Library / Following).
@@ -621,10 +542,6 @@ export component FavoritesView inherits Rectangle {
             spacing: 16px;
             VerticalLayout {
                 alignment: center;
-                NavButtons { }
-            }
-            VerticalLayout {
-                alignment: center;
                 Text {
                     text: @tr("Library");
                     color: Theme.text-primary;
@@ -632,11 +549,84 @@ export component FavoritesView inherits Rectangle {
                     font-weight: Typography.bold;
                 }
             }
-            Rectangle { horizontal-stretch: 1; }
-            VerticalLayout {
-                alignment: center;
-                FavTabMenu { }
+            // Reserve the action-button height from the start so the header
+            // doesn't jump when the (conditional) buttons appear after load.
+            Rectangle { width: 0px; height: 40px; }
+            // Per-tab action buttons — inline, to the right of the title.
+            if FavoritesState.active-tab == "tracks"
+                && FavoritesState.tracks-visible.length > 0: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/play-fill.svg");
+                        primary: true;
+                        clicked => { FavoritesActions.play-all-tracks(); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/shuffle.svg");
+                        clicked => { FavoritesActions.shuffle-tracks(); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/square-check-big.svg");
+                        active: FavoritesState.tracks-multi-select;
+                        clicked => { FavoritesActions.toggle-multi-select(); }
+                    }
+                }
             }
+            if FavoritesState.active-tab == "albums"
+                && FavoritesState.albums-visible.length > 0: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/shuffle.svg");
+                        clicked => { FavoritesActions.albums-shuffle(); }
+                    }
+                }
+            }
+            if FavoritesState.active-tab == "artists"
+                && FavoritesState.artists-visible.length > 0: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/shuffle.svg");
+                        clicked => { FavoritesActions.artists-shuffle(); }
+                    }
+                }
+            }
+            // Playlists — play a random playlist.
+            if FavoritesState.active-tab == "playlists"
+                && FavoritesState.playlists-visible.length > 0: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/shuffle.svg");
+                        clicked => { FavoritesActions.playlists-random(); }
+                    }
+                }
+            }
+            // Labels — open a random label's landing.
+            if FavoritesState.active-tab == "labels"
+                && FavoritesState.labels-visible.length > 0: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/shuffle.svg");
+                        clicked => { FavoritesActions.labels-random(); }
+                    }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
         }
 
         Rectangle { height: 12px; }
@@ -654,65 +644,10 @@ export component FavoritesView inherits Rectangle {
             padding-right: 32px;
             spacing: 8px;
 
-            // --- Left: action buttons ---
-            if FavoritesState.active-tab == "tracks"
-                && FavoritesState.tracks-visible.length > 0: HorizontalLayout {
-                spacing: 8px;
-                VerticalLayout {
-                    alignment: center;
-                    CircleAction {
-                        icon: @image-url("../assets/icons/play-fill.svg");
-                        primary: true;
-                        clicked => {
-                            FavoritesActions.play-all-tracks();
-                        }
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    CircleAction {
-                        icon: @image-url("../assets/icons/shuffle.svg");
-                        clicked => {
-                            FavoritesActions.shuffle-tracks();
-                        }
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    CircleAction {
-                        icon: @image-url("../assets/icons/square-check-big.svg");
-                        active: FavoritesState.tracks-multi-select;
-                        clicked => {
-                            FavoritesActions.toggle-multi-select();
-                        }
-                    }
-                }
-            }
-            if FavoritesState.active-tab == "albums"
-                && FavoritesState.albums-visible.length > 0: HorizontalLayout {
-                spacing: 8px;
-                VerticalLayout {
-                    alignment: center;
-                    CircleAction {
-                        icon: @image-url("../assets/icons/shuffle.svg");
-                        clicked => {
-                            FavoritesActions.albums-shuffle();
-                        }
-                    }
-                }
-            }
-            if FavoritesState.active-tab == "artists"
-                && FavoritesState.artists-visible.length > 0: HorizontalLayout {
-                spacing: 8px;
-                VerticalLayout {
-                    alignment: center;
-                    CircleAction {
-                        icon: @image-url("../assets/icons/shuffle.svg");
-                        clicked => {
-                            FavoritesActions.artists-shuffle();
-                        }
-                    }
-                }
+            // --- Left: the section tab menu, sitting under the title ---
+            VerticalLayout {
+                alignment: center;
+                FavTabMenu { }
             }
 
             Rectangle { horizontal-stretch: 1; }
@@ -886,22 +821,8 @@ export component FavoritesView inherits Rectangle {
                         }
                     }
                 }
-                // Grid <-> sidepanel view toggle.
-                VerticalLayout {
-                    alignment: center;
-                    ToggleButton {
-                        icon: FavoritesState.artists-view-mode == "sidepanel"
-                            ? @image-url("../assets/icons/layout-grid.svg")
-                            : @image-url("../assets/icons/list.svg");
-                        active: FavoritesState.artists-view-mode == "sidepanel";
-                        sm: true;
-                        clicked => {
-                            FavoritesActions.artists-set-view(
-                                FavoritesState.artists-view-mode == "grid" ? "sidepanel" : "grid");
-                        }
-                    }
-                }
                 // Group (A-Z) — grid mode only (Tauri hides it in sidepanel).
+                // Sits between the search field and the view toggle.
                 if FavoritesState.artists-view-mode == "grid": VerticalLayout {
                     alignment: center;
                     QbzSelect {
@@ -914,6 +835,22 @@ export component FavoritesView inherits Rectangle {
                         current-index: FavoritesState.artists-group-enabled ? 1 : 0;
                         selected(i) => {
                             FavoritesActions.artists-set-group(i == 0 ? "off" : "alpha");
+                        }
+                    }
+                }
+                // Grid <-> sidepanel view toggle. active:false keeps the two
+                // icon states visually identical (homologated background).
+                VerticalLayout {
+                    alignment: center;
+                    ToggleButton {
+                        icon: FavoritesState.artists-view-mode == "sidepanel"
+                            ? @image-url("../assets/icons/layout-grid.svg")
+                            : @image-url("../assets/icons/list.svg");
+                        active: false;
+                        sm: true;
+                        clicked => {
+                            FavoritesActions.artists-set-view(
+                                FavoritesState.artists-view-mode == "grid" ? "sidepanel" : "grid");
                         }
                     }
                 }
@@ -985,7 +922,9 @@ export component FavoritesView inherits Rectangle {
 
             // --- Tracks tab — virtualized self-scrolling list --------------
             if !FavoritesState.loading && FavoritesState.load-error == ""
-                && FavoritesState.active-tab == "tracks": VerticalLayout {
+                && FavoritesState.active-tab == "tracks": Rectangle {
+                vertical-stretch: 1;
+                VerticalLayout {
                 padding-left: 32px;
                 padding-right: 32px;
                 padding-top: 16px;
@@ -1021,12 +960,9 @@ export component FavoritesView inherits Rectangle {
                     font-size: Typography.body;
                 }
 
-                Rectangle {
+                track-list := ListView {
                     vertical-stretch: 1;
-                    track-list := ListView {
-                        width: 100%;
-                        height: 100%;
-                        vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                    vertical-scrollbar-policy: ScrollBarPolicy.always-off;
                         for track[i] in FavoritesState.tracks-visible: VerticalLayout {
                             spacing: 0px;
                             // Group header rows when grouping by album / artist.
@@ -1082,25 +1018,25 @@ export component FavoritesView inherits Rectangle {
                             }
                         }
                     }
-                    ListScrollbar {
-                        x: parent.width - self.width - 4px;
-                        width: 14px;
-                        height: 100%;
-                        viewport-height: track-list.viewport-height;
-                        visible-height: track-list.visible-height;
-                        viewport-y <=> track-list.viewport-y;
-                    }
-                    // A-Z jump strip (name grouping) — accurate (uniform rows).
-                    if FavoritesState.tracks-group-mode == "name"
-                        && FavoritesState.tracks-alpha.length > 0: AlphaStrip {
-                        x: parent.width - self.width - 20px;
-                        height: 100%;
-                        jumps: FavoritesState.tracks-alpha;
-                        jump(ord, idx) => {
-                            track-list.viewport-y = -Math.min(
-                                idx * 50px / 1px,
-                                Math.max(0, (track-list.viewport-height - track-list.visible-height) / 1px)) * 1px;
-                        }
+                }
+                ListScrollbar {
+                    x: parent.width - self.width - 4px;
+                    width: 14px;
+                    height: 100%;
+                    viewport-height: track-list.viewport-height;
+                    visible-height: track-list.visible-height;
+                    viewport-y <=> track-list.viewport-y;
+                }
+                // A-Z jump strip (name grouping) — accurate (uniform rows).
+                if FavoritesState.tracks-group-mode == "name"
+                    && FavoritesState.tracks-alpha.length > 0: AlphaStrip {
+                    x: parent.width - self.width - 20px;
+                    height: 100%;
+                    jumps: FavoritesState.tracks-alpha;
+                    jump(ord, idx) => {
+                        track-list.viewport-y = -Math.min(
+                            idx * 50px / 1px,
+                            Math.max(0, (track-list.viewport-height - track-list.visible-height) / 1px)) * 1px;
                     }
                 }
             }

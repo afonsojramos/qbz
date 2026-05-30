@@ -10,7 +10,7 @@ import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "QbzIcon.slint";
 
 export component QualityBadge inherits Rectangle {
-    // "hires" | "cd" | "" — empty hides the badge entirely.
+    // "hires" | "cd" | "mp3" | "" — empty hides the badge entirely.
     in property <string> tier;
     // Exact quality string for the hover tooltip.
     in property <string> label;
@@ -42,6 +42,23 @@ export component QualityBadge inherits Rectangle {
             source: @image-url("../assets/cd.svg");
             image-fit: contain;
             // Tinted light, matching the Tauri CD badge.
+            tint: #b0b0b0;
+        }
+    }
+    if root.tier == "mp3": Rectangle {
+        width: 30px;
+        height: 30px;
+        border-radius: 3px;
+        background: Theme.surface-elevated;
+        border-width: 1px;
+        border-color: Theme.border-subtle;
+        QbzIcon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 16px;
+            height: 16px;
+            source: @image-url("../assets/mp3.svg");
+            image-fit: contain;
             tint: #b0b0b0;
         }
     }

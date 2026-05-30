@@ -11,9 +11,10 @@
 // flags Tauri gates on (System theme, title-bar mode, etc.).
 
 import { Theme } from "../foundation/semantic-colors.slint";
+import { ThemeState } from "../foundation/theme-state.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { AppearanceState, SidebarState } from "../state.slint";
+import { AppearanceState, SidebarState, ShellState } from "../state.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
@@ -128,7 +129,6 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("THEME"); }
 
     SettingRow {
-        unsupported: true;
         label: @tr("Theme");
         HorizontalLayout {
             spacing: 8px;
@@ -164,6 +164,10 @@ export component AppearanceSettings inherits VerticalLayout {
                 current-index: AppearanceState.theme-index;
                 selected(i) => {
                     AppearanceState.theme-index = i;
+                    // The themes list is trimmed to the ported set, so the
+                    // dropdown index maps 1:1 to the mode (0 Dark, 1 OLED,
+                    // 2 Tokyo Night, 3 System).
+                    ThemeState.mode = i;
                     AppearanceState.appearance-select("theme", i);
                 }
             }
@@ -284,6 +288,16 @@ export component AppearanceSettings inherits VerticalLayout {
     // ===================================================================
     GroupHeader { text: @tr("LIBRARY & VISUALS"); }
 
+    SettingRow {
+        label: @tr("Show navigation in sidebar");
+        description: @tr("Move the Discover, Library, Local Library and My QBZ sections out of the header and into the sidebar.");
+        QbzToggle {
+            checked: ShellState.nav-in-sidebar;
+            toggled(v) => {
+                ShellState.nav-in-sidebar = v;
+            }
+        }
+    }
     SettingRow {
         label: @tr("Show playlist cover collages in sidebar");
         description: @tr("Render a 2×2 thumbnail of track covers next to each playlist. Disable on low-end machines to skip the extra images.");
@@ -632,6 +646,16 @@ export component AppearanceSettings inherits VerticalLayout {
     // ===================================================================
     GroupHeader { text: @tr("PLAYER VIEWS"); }
 
+    SettingRow {
+        label: @tr("Show volume +/- buttons");
+        description: @tr("Add discrete plus and minus buttons next to the volume slider in the player bar.");
+        QbzToggle {
+            checked: AppearanceState.show-volume-steppers;
+            toggled(v) => {
+                AppearanceState.show-volume-steppers = v;
+            }
+        }
+    }
     SettingRow {
         unsupported: true;
         label: @tr("Mini player default view");

@@ -497,6 +497,37 @@ pub fn index_of(track_id: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// Build the play queue + start index from the CURRENTLY VISIBLE order
+/// (search/sort applied — read straight off `PlaylistState.tracks`), starting
+/// at `track_id`. This makes clicking a row begin playback there and queue the
+/// tracks that VISUALLY follow it — the general app behaviour. Falls back to
+/// the cached order if the visible/cache mapping comes up empty.
+pub fn visible_play_context(window: &AppWindow, track_id: &str) -> (Vec<Track>, usize) {
+    use slint::Model;
+    let visible_ids: Vec<String> = {
+        let m = window.global::<PlaylistState>().get_tracks();
+        (0..m.row_count())
+            .filter_map(|i| m.row_data(i).map(|it| it.id.to_string()))
+            .collect()
+    };
+    let cur = CURRENT.lock().map(|c| c.clone()).unwrap_or_default();
+    let by_id: std::collections::HashMap<String, Track> =
+        cur.iter().map(|t| (t.id.to_string(), t.clone())).collect();
+    let ordered: Vec<Track> = visible_ids
+        .iter()
+        .filter_map(|id| by_id.get(id).cloned())
+        .collect();
+    if ordered.is_empty() {
+        // Cache/visible mismatch — fall back to the cached order.
+        return (cur, index_of(track_id));
+    }
+    let idx = visible_ids
+        .iter()
+        .position(|id| id == track_id)
+        .unwrap_or(0);
+    (ordered, idx)
+}
+
 // ==================== Custom artwork ====================
 
 /// Copy `src` into the artwork cache and store it as this playlist's

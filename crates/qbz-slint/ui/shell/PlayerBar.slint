@@ -16,7 +16,7 @@ import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzSlider } from "../primitives/QbzSlider.slint";
 import { SeekBar } from "SeekBar.slint";
-import { NowPlayingState } from "../state.slint";
+import { NowPlayingState, ShellState, AppearanceState } from "../state.slint";
 
 component IconButton inherits Rectangle {
     in property <image> icon;
@@ -257,6 +257,24 @@ export component PlayerBar inherits Rectangle {
                     IconButton { icon: @image-url("../assets/icons/maximize-2.svg"); icon-size: 16px; }
                     IconButton { icon: @image-url("../assets/icons/audio-lines.svg"); icon-size: 16px; }
 
+                    // Lyrics + queue panel toggles (moved here from the header).
+                    IconButton {
+                        icon: @image-url("../assets/icons/captions.svg");
+                        icon-size: 16px;
+                        active: ShellState.right-panel == 2;
+                        clicked => {
+                            ShellState.right-panel = ShellState.right-panel == 2 ? 0 : 2;
+                        }
+                    }
+                    IconButton {
+                        icon: @image-url("../assets/icons/list-ordered.svg");
+                        icon-size: 16px;
+                        active: ShellState.right-panel == 1;
+                        clicked => {
+                            ShellState.right-panel = ShellState.right-panel == 1 ? 0 : 1;
+                        }
+                    }
+
                     Rectangle { width: 6px; }
 
                     IconButton {
@@ -281,14 +299,15 @@ export component PlayerBar inherits Rectangle {
                             }
                         }
                     }
-                    IconButton {
+                    // Volume +/- steppers — opt-in (Settings > Appearance).
+                    if AppearanceState.show-volume-steppers: IconButton {
                         icon: @image-url("../assets/icons/minus.svg");
                         icon-size: 15px;
                         clicked => {
                             NowPlayingState.set-volume(Math.max(0.0, NowPlayingState.volume - 0.05));
                         }
                     }
-                    IconButton {
+                    if AppearanceState.show-volume-steppers: IconButton {
                         icon: @image-url("../assets/icons/plus.svg");
                         icon-size: 15px;
                         clicked => {

@@ -15,7 +15,7 @@ import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SidebarPlaylistCollage } from "../primitives/SidebarPlaylistCollage.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
-import { ShellState, SidebarState, SidebarActions, SidebarEntry, DragState } from "../state.slint";
+import { ShellState, SidebarState, SidebarActions, SidebarEntry, DragState, HeaderMenuState, NavMenuEntry, SidebarFolderPopupState } from "../state.slint";
 import { ScrollView, LineEdit } from "std-widgets.slint";
 
 // A single context-menu item row.
@@ -119,6 +119,9 @@ component SidebarRow inherits Rectangle {
     callback edit-folder(string);
     callback hide-playlist(string);
     callback hide-folder(string);
+    // Fires on row hover enter/leave so the sidebar can reveal the scrollbar
+    // while the pointer is anywhere over the scrollable list.
+    callback hover-changed(bool);
 
     property <bool> is-folder: root.entry.kind == "folder";
     // Live filter for the move-to-folder list (per-row search input).
@@ -161,7 +164,11 @@ component SidebarRow inherits Rectangle {
         && root.show-collage
         && root.entry.cover-count > 0;
 
-    height: 32px;
+    // Collapsed (mini): folders behave as if closed — their nested playlists
+    // (indented rows) are hidden; contents open via the right-flyout instead.
+    property <bool> hidden-in-mini: ShellState.sidebar-mini && root.entry.indent;
+    height: root.hidden-in-mini ? 0px : 32px;
+    visible: !root.hidden-in-mini;
     border-radius: 6px;
     background: root.drop-hot
         ? #22c55e26
@@ -171,34 +178,47 @@ component SidebarRow inherits Rectangle {
     border-color: #22c55e66;
 
     HorizontalLayout {
-        padding-left: root.entry.indent ? 24px : 8px;
-        padding-right: 6px;
+        padding-left: ShellState.sidebar-mini ? 0px : (root.entry.indent ? 24px : 8px);
+        padding-right: ShellState.sidebar-mini ? 0px : 6px;
         spacing: 8px;
+        // mini -> center the lone icon; open -> stretch so the name fills and
+        // the chevron is pushed to a fixed x (the row's right edge).
+        alignment: ShellState.sidebar-mini ? center : stretch;
         // Leading icon — accent-tinted folder for folders, micro-collage
         // (or list-music fallback) for playlists.
-        VerticalLayout {
-            alignment: center;
+        // Fixed-width icon slot so every row's text starts at the same x,
+        // whether the leading glyph is a 15px folder icon or a 20px collage.
+        Rectangle {
+            width: 24px;
             if root.is-folder: QbzIcon {
-                source: root.entry.expanded
+                // In the collapsed (mini) state folders always read as closed
+                // (their contents open in the right-flyout, not inline).
+                source: (root.entry.expanded && !ShellState.sidebar-mini)
                     ? @image-url("../assets/icons/folder-open.svg")
                     : @image-url("../assets/icons/folder.svg");
                 width: 15px;
                 height: 15px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
                 // Folder icon tinted accent; the name keeps text color.
                 tint: Theme.accent;
             }
             if !root.is-folder && root.use-collage: SidebarPlaylistCollage {
                 entry: root.entry;
                 size: 20px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
             }
             if !root.is-folder && !root.use-collage: QbzIcon {
                 source: @image-url("../assets/icons/list-music.svg");
                 width: 15px;
                 height: 15px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
                 tint: root.active ? Theme.text-primary : Theme.text-muted;
             }
         }
-        Text {
+        if !ShellState.sidebar-mini: Text {
             text: root.entry.name;
             color: root.active ? Theme.text-primary : Theme.text-secondary;
             font-size: 13px;
@@ -208,7 +228,7 @@ component SidebarRow inherits Rectangle {
             overflow: elide;
         }
         // Folder playlist count — only visible on hover.
-        if root.is-folder && root.entry.count > 0: Text {
+        if root.is-folder && root.entry.count > 0 && !ShellState.sidebar-mini: Text {
             text: root.entry.count;
             color: Theme.text-muted;
             font-size: 11px;
@@ -216,8 +236,8 @@ component SidebarRow inherits Rectangle {
             opacity: ta.has-hover ? 1.0 : 0.0;
         }
         // Folder open/close chevron — the primary affordance. Reflects
-        // the open/closed state (down = open, right = closed).
-        if root.is-folder: VerticalLayout {
+        // the open/closed state (down = open, right = closed). Hidden in mini.
+        if root.is-folder && !ShellState.sidebar-mini: VerticalLayout {
             alignment: center;
             Rectangle {
                 width: 22px;
@@ -249,9 +269,26 @@ component SidebarRow inherits Rectangle {
     }
     ta := TouchArea {
         mouse-cursor: pointer;
+        changed has-hover => {
+            root.hover-changed(self.has-hover);
+        }
         clicked => {
             if (root.is-folder) {
-                root.toggle-folder(root.entry.id);
+                // Collapsed (mini) sidebar: a folder opens a flyout to the
+                // right instead of expanding downward (Tauri parity).
+                if (ShellState.sidebar-mini) {
+                    SidebarFolderPopupState.folder-id = root.entry.id;
+                    SidebarFolderPopupState.folder-name = root.entry.name;
+                    SidebarFolderPopupState.count = root.entry.count;
+                    SidebarFolderPopupState.anchor-x = root.absolute-position.x + root.width + 6px;
+                    SidebarFolderPopupState.anchor-y = root.absolute-position.y;
+                    // Fill the popup's playlists from the cache (collapsed
+                    // folders' children aren't in the flat entries).
+                    SidebarActions.load-folder-popup(root.entry.id);
+                    SidebarFolderPopupState.open = true;
+                } else {
+                    root.toggle-folder(root.entry.id);
+                }
             } else {
                 root.open-playlist(root.entry.id);
             }
@@ -409,26 +446,143 @@ component SidebarRow inherits Rectangle {
     }
 }
 
+// One section-nav row in the sidebar. Clicking (or hovering) opens the same
+// dropdown the header tab used, but flown out to the RIGHT of the row. In the
+// mini state the label is hidden (icon only). Mirrors NavTabWithMenu.
+component SidebarNavRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <int> tab-index;
+    in property <[NavMenuEntry]> items;
+    in property <int> home-item: -1;
+    property <bool> active: HeaderMenuState.open-index == root.tab-index;
+
+    height: 34px;
+    border-radius: 6px;
+    background: nav-ta.has-hover ? Theme.surface-hover : transparent;
+
+    // Publish this row's menu into the shared overlay, anchored to the right
+    // of the row at the row's window y.
+    function open-menu() {
+        HeaderMenuState.open-index = root.tab-index;
+        HeaderMenuState.anchor-x = root.absolute-position.x + root.width + 6px;
+        HeaderMenuState.anchor-y = root.absolute-position.y;
+        HeaderMenuState.items = root.items;
+        HeaderMenuState.home-item = root.home-item;
+        HeaderMenuState.from-sidebar = true;
+        HeaderMenuState.title = "";
+    }
+
+    HorizontalLayout {
+        padding-left: ShellState.sidebar-mini ? 0px : 8px;
+        padding-right: ShellState.sidebar-mini ? 0px : 8px;
+        spacing: 10px;
+        alignment: ShellState.sidebar-mini ? center : start;
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.icon;
+                width: 16px;
+                height: 16px;
+                tint: nav-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+            }
+        }
+        if !ShellState.sidebar-mini: Text {
+            text: root.label;
+            color: nav-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+            font-size: 13px;
+            font-weight: 500;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+    nav-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.open-menu();
+        }
+        changed has-hover => {
+            if (self.has-hover) {
+                HeaderMenuState.trigger-hovered = true;
+                root.open-menu();
+            } else if (root.active) {
+                HeaderMenuState.trigger-hovered = false;
+            }
+        }
+    }
+}
+
 export component Sidebar inherits Rectangle {
-    // Rendered width — 0 when collapsed, otherwise the user-set width.
-    width: ShellState.sidebar-collapsed ? 0px : ShellState.sidebar-width;
-    // The sidebar sits one surface above the content area, matching the
-    // QBZ dark theme (--bg-secondary sidebar over --bg-primary content).
+    // Fired when a sidebar section-nav row is clicked — wired in AppShell to
+    // the same route handler the header dropdowns use.
+    callback navigate(string /* route */);
+    // Three-state rendered width: 0 (closed) / 64 (mini) / 240 (open).
+    width: ShellState.sidebar-rendered-width;
     background: Theme.surface-card;
-    // Clip so content doesn't spill while the width animates to 0.
+    // Square edges — the bezel lives on the inset content panel, not here.
+    // Clip keeps content from spilling while the width animates.
     clip: true;
     animate width { duration: 160ms; easing: ease-in-out; }
 
-    // Captured sidebar width at pointer-down, so drag deltas are
-    // measured from a stable origin.
-    property <length> drag-start-width: ShellState.sidebar-width;
-
     VerticalLayout {
-        padding: Spacing.md;
+        padding: ShellState.sidebar-mini ? 8px : Spacing.md;
         spacing: Spacing.md;
 
-        // ---- Header toolbar ----------------------------------------
-        HorizontalLayout {
+        // ---- Section nav — each row opens its dropdown as a right flyout,
+        // exactly like the header tabs did (same item sets). ----------
+        if ShellState.nav-in-sidebar: VerticalLayout {
+            spacing: 2px;
+            SidebarNavRow {
+                tab-index: 0;
+                icon: @image-url("../assets/icons/compass.svg");
+                label: @tr("Discover");
+                home-item: 0;
+                items: [
+                    { label: @tr("Home"), has-glyph: false, route: "discover-home" },
+                    { label: @tr("Editor's Picks"), has-glyph: false, route: "discover-editorPicks" },
+                    { label: @tr("For You"), has-glyph: false, route: "discover-forYou" },
+                ];
+            }
+            SidebarNavRow {
+                tab-index: 1;
+                icon: @image-url("../assets/icons/music-library-2.svg");
+                label: @tr("Library");
+                items: [
+                    { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true, route: "favorites-tracks" },
+                    { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true, route: "favorites-albums" },
+                    { label: @tr("Artists"), icon: @image-url("../assets/icons/user.svg"), has-glyph: true, route: "favorites-artists" },
+                    { label: @tr("Playlists"), icon: @image-url("../assets/icons/list-music.svg"), has-glyph: true, route: "favorites-playlists" },
+                    { label: @tr("Labels"), icon: @image-url("../assets/icons/disc-3.svg"), has-glyph: true, route: "favorites-labels" },
+                ];
+            }
+            SidebarNavRow {
+                tab-index: 2;
+                icon: @image-url("../assets/icons/hard-drive.svg");
+                label: @tr("Local Library");
+                items: [
+                    { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true, route: "local-albums" },
+                    { label: @tr("Artists"), icon: @image-url("../assets/icons/user.svg"), has-glyph: true, route: "local-artists" },
+                    { label: @tr("Folders"), icon: @image-url("../assets/icons/folder.svg"), has-glyph: true, route: "local-folders" },
+                    { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true, route: "local-tracks" },
+                ];
+            }
+            SidebarNavRow {
+                tab-index: 3;
+                icon: @image-url("../assets/icons/cassette-tape.svg");
+                label: @tr("My QBZ");
+                items: [
+                    { label: @tr("Collections"), icon: @image-url("../assets/icons/library-big.svg"), has-glyph: true },
+                    { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true },
+                ];
+            }
+        }
+        if ShellState.nav-in-sidebar: Rectangle {
+            height: 1px;
+            background: Theme.border-subtle;
+        }
+
+        // ---- Header toolbar (hidden in the mini state) -------------
+        if !ShellState.sidebar-mini: HorizontalLayout {
             spacing: 4px;
             height: 22px;
 
@@ -603,13 +757,22 @@ export component Sidebar inherits Rectangle {
         }
 
         // ---- Playlist list (hidden when the section is collapsed) ----
-        if !SidebarState.playlists-collapsed: ScrollView {
+        // Wheel-scrolled Flickable (interactive only while NOT dragging, so a
+        // playlist drag-and-drop is never hijacked into a scroll) + a thin,
+        // auto-hiding scrollbar pinned to the sidebar's right edge.
+        if !SidebarState.playlists-collapsed: Rectangle {
             vertical-stretch: 1;
-            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-            VerticalLayout {
-                spacing: 2px;
-                alignment: start;
-                for entry in SidebarState.entries: SidebarRow {
+            pl-flick := Flickable {
+                width: 100%;
+                height: 100%;
+                interactive: !DragState.active;
+                viewport-width: self.width;
+                viewport-height: pl-content.preferred-height;
+                pl-content := VerticalLayout {
+                    width: parent.width;
+                    spacing: 2px;
+                    alignment: start;
+                    for entry in SidebarState.entries: SidebarRow {
                     entry: entry;
                     active: entry.kind == "playlist" && entry.id == SidebarState.active-id;
                     show-collage: SidebarState.playlist-collage;
@@ -637,12 +800,70 @@ export component Sidebar inherits Rectangle {
                     hide-folder(id) => {
                         SidebarActions.hide-folder(id);
                     }
+                    hover-changed(h) => {
+                        pl-sb.hover-rows = h ? pl-sb.hover-rows + 1 : Math.max(0, pl-sb.hover-rows - 1);
+                    }
                 }
                 if SidebarState.entries.length == 0 && !SidebarState.loading: Text {
                     text: @tr("No playlists yet.");
                     color: Theme.text-muted;
                     font-size: 12px;
                     wrap: word-wrap;
+                }
+                }
+            }
+
+            // Thin scrollbar pinned to the sidebar's RIGHT EDGE. The +Spacing.md
+            // offset cancels the list's right padding so the gutter sits flush
+            // against the sidebar border. It appears whenever the pointer is
+            // over the scrollable list (hover-rows) or the gutter itself.
+            pl-sb := Rectangle {
+                // Offset by the list's real right padding (8px mini / 16px
+                // open) so the gutter sits flush against the sidebar edge in
+                // BOTH states. Narrower in the collapsed (mini) state.
+                x: parent.width - self.width + (ShellState.sidebar-mini ? 8px : Spacing.md);
+                width: ShellState.sidebar-mini ? 8px : 10px;
+                height: 100%;
+                // Count of list rows currently hovered (>0 = pointer over the
+                // scrollable area). Reveals the scrollbar.
+                property <int> hover-rows: 0;
+                property <length> max-scroll: max(0px, pl-flick.viewport-height - pl-flick.height);
+                property <length> thumb-h: pl-flick.viewport-height > 0px
+                    ? max(40px, pl-flick.height / pl-flick.viewport-height * self.height)
+                    : self.height;
+                property <length> travel: max(0px, self.height - self.thumb-h);
+                property <bool> show: pl-sb-ta.has-hover || pl-sb-ta.pressed || self.hover-rows > 0;
+                visible: self.max-scroll > 0px;
+
+                thumb := Rectangle {
+                    x: parent.width - self.width;
+                    width: pl-sb-ta.has-hover || pl-sb-ta.pressed
+                        ? (ShellState.sidebar-mini ? 4px : 6px)
+                        : (ShellState.sidebar-mini ? 3px : 4px);
+                    height: pl-sb.thumb-h;
+                    y: pl-sb.max-scroll > 0px
+                        ? (-pl-flick.viewport-y / pl-sb.max-scroll) * pl-sb.travel
+                        : 0px;
+                    border-radius: 3px;
+                    background: pl-sb-ta.has-hover || pl-sb-ta.pressed ? #ffffff7a : #ffffff4d;
+                    opacity: pl-sb.show ? 1.0 : 0.0;
+                    animate opacity { duration: 160ms; }
+                    animate width { duration: 100ms; }
+                }
+                pl-sb-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    moved => {
+                        if (pl-sb-ta.pressed && pl-sb.travel > 0px) {
+                            pl-flick.viewport-y = -min(pl-sb.max-scroll, max(0px,
+                                (pl-sb-ta.mouse-y - pl-sb.thumb-h / 2) / pl-sb.travel * pl-sb.max-scroll));
+                        }
+                    }
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down && pl-sb.travel > 0px) {
+                            pl-flick.viewport-y = -min(pl-sb.max-scroll, max(0px,
+                                (pl-sb-ta.mouse-y - pl-sb.thumb-h / 2) / pl-sb.travel * pl-sb.max-scroll));
+                        }
+                    }
                 }
             }
         }
@@ -651,30 +872,7 @@ export component Sidebar inherits Rectangle {
             vertical-stretch: 1;
         }
     }
-
-    // Drag handle — a thin strip pinned to the right edge. Resizes the
-    // sidebar; below ~160px it collapses instead of resizing.
-    drag-handle := TouchArea {
-        x: parent.width - self.width;
-        width: 6px;
-        height: parent.height;
-        mouse-cursor: ew-resize;
-
-        pointer-event(e) => {
-            if (e.kind == PointerEventKind.down) {
-                root.drag-start-width = ShellState.sidebar-width;
-            }
-        }
-        moved => {
-            if (self.pressed) {
-                if (root.drag-start-width + (self.mouse-x - self.pressed-x) < 160px) {
-                    ShellState.sidebar-collapsed = true;
-                } else {
-                    ShellState.sidebar-width = Math.min(Math.max(
-                        root.drag-start-width + (self.mouse-x - self.pressed-x),
-                        200px), 420px);
-                }
-            }
-        }
-    }
+    // The drag-to-resize handle was removed: the sidebar is now a fixed
+    // three-state control (open / mini / closed) cycled from the header
+    // collapse button.
 }

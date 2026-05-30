@@ -16,32 +16,6 @@ import { Radius } from "../foundation/radius.slint";
 import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 
-// Sidebar collapse toggle — bare bright icon, no background. Sits at
-// the very left of the header, before the Discover tab.
-component SidebarToggle inherits Rectangle {
-    width: 30px;
-    height: 30px;
-
-    // 14px matches the nav-tab icons; with the 30px box the centering
-    // math ((30-14)/2 = 8) lands on whole pixels so the glyph stays
-    // crisp. Tint matches the tab icons (secondary, primary on hover).
-    QbzIcon {
-        source: @image-url("../assets/icons/panel-left.svg");
-        width: 14px;
-        height: 14px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            ShellState.sidebar-collapsed = !ShellState.sidebar-collapsed;
-        }
-    }
-}
-
 component NavTab inherits Rectangle {
     in property <image> icon;
     in property <string> label;
@@ -200,6 +174,91 @@ component NavTabWithMenu inherits Rectangle {
     }
 }
 
+// Compact icon-only nav button shown in the header ONLY while the sidebar is
+// fully closed (Cerrado), so the section nav stays reachable. Opens a downward
+// dropdown headed by the section name (label + hairline + the clickable rows).
+component CompactNavBtn inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <[NavMenuEntry]> items;
+    in property <int> tab-index;
+    in property <int> home-item: -1;
+
+    width: 30px;
+    height: 30px;
+    border-radius: Radius.sm;
+    property <bool> active: HeaderMenuState.open-index == root.tab-index;
+    background: root.active ? Theme.surface-elevated
+        : cn-ta.has-hover ? Theme.surface-hover : transparent;
+
+    function open-menu() {
+        HeaderMenuState.open-index = root.tab-index;
+        HeaderMenuState.anchor-x = root.absolute-position.x;
+        HeaderMenuState.from-sidebar = false;
+        HeaderMenuState.title = root.title;
+        HeaderMenuState.items = root.items;
+        HeaderMenuState.home-item = root.home-item;
+    }
+
+    QbzIcon {
+        source: root.icon;
+        width: 16px;
+        height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: root.active ? Theme.text-primary : Theme.text-secondary;
+    }
+    cn-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.open-menu(); }
+        changed has-hover => {
+            if (self.has-hover) {
+                HeaderMenuState.trigger-hovered = true;
+                root.open-menu();
+            } else if (root.active) {
+                // Only the trigger owning the open menu clears the flag — this
+                // avoids a leave/enter race when sliding between triggers.
+                HeaderMenuState.trigger-hovered = false;
+            }
+        }
+    }
+}
+
+// Circular history / collapse button for the header's right cluster —
+// same look as the Discover carousel navigators. `enabled` dims + disables.
+component HeaderNavBtn inherits Rectangle {
+    in property <image> icon;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    opacity: root.enabled ? 1.0 : 0.4;
+    background: hn-ta.has-hover && root.enabled
+        ? Theme.surface-hover
+        : Theme.surface-elevated;
+
+    QbzIcon {
+        source: root.icon;
+        width: 15px;
+        height: 15px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        tint: root.enabled ? Theme.text-primary : Theme.text-muted;
+    }
+
+    hn-ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+}
+
 // Square icon button for the header's right-side controls. `active`
 // gives it a highlighted look when its associated panel is open.
 component HeaderIconButton inherits Rectangle {
@@ -254,10 +313,12 @@ export component HeaderBar inherits Rectangle {
         y: (root.height - self.height) / 2;
         height: 30px;
         spacing: 2px;
-        VerticalLayout {
-            alignment: center;
-            SidebarToggle { }
-        }
+        // Section nav lives in the header by default; when the user moves it
+        // to the sidebar (ShellState.nav-in-sidebar) the header tabs hide.
+        // The sidebar-collapse toggle no longer lives here — it moved next to
+        // the back/forward nav buttons (NavButtons), present in every view.
+        if !ShellState.nav-in-sidebar: HorizontalLayout {
+        spacing: 2px;
         NavTabWithMenu {
             tab-index: 0;
             icon: @image-url("../assets/icons/compass.svg");
@@ -308,6 +369,7 @@ export component HeaderBar inherits Rectangle {
                 { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true },
             ];
         }
+        }
     }
 
     // --- Search (absolutely centered on the window) ------------------------
@@ -320,81 +382,155 @@ export component HeaderBar inherits Rectangle {
         border-width: 1px;
         border-color: Theme.border-subtle;
         background: Theme.surface-elevated;
-        HorizontalLayout {
-            padding-left: 10px;
-            padding-right: 10px;
-            spacing: 7px;
+
+        // Magnifier — absolutely positioned on the left so it does NOT take
+        // layout space; the text/placeholder center against the full input
+        // width as if the icon weren't there.
+        QbzIcon {
+            source: @image-url("../assets/icons/search.svg");
+            width: 14px;
+            height: 14px;
+            x: 10px;
+            y: (parent.height - self.height) / 2;
+            tint: Theme.text-muted;
+        }
+
+        // Full-width input — text centered against the whole box.
+        search-input := TextInput {
+            width: parent.width;
+            height: 100%;
+            color: Theme.text-primary;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            single-line: true;
+            // Enter submits to the full results page; every edit feeds the
+            // debounced live search (Rust side).
+            accepted => { SearchActions.submit(self.text); }
+            edited => { SearchActions.live(self.text); }
+        }
+        Text {
+            visible: search-input.text == "";
+            text: @tr("Search");
+            width: parent.width;
+            height: 100%;
+            color: Theme.text-muted;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+
+    // --- Left controls: history nav + collapse (anchored left) -------------
+    // The three navigation buttons (back / forward / sidebar-collapse) float
+    // at the header's LEFT edge.
+    left-controls := HorizontalLayout {
+        x: Spacing.md;
+        y: (root.height - self.height) / 2;
+        width: self.preferred-width;
+        height: 36px;
+        spacing: 6px;
+        VerticalLayout {
+            alignment: center;
+            HeaderNavBtn {
+                icon: @image-url("../assets/icons/panel-left.svg");
+                clicked => { ShellState.cycle-sidebar(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            HeaderNavBtn {
+                icon: @image-url("../assets/icons/chevron-left.svg");
+                enabled: NavState.can-back;
+                clicked => { NavState.request-back(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            HeaderNavBtn {
+                icon: @image-url("../assets/icons/chevron-right.svg");
+                enabled: NavState.can-forward;
+                clicked => { NavState.request-forward(); }
+            }
+        }
+        // Compact section nav — only while the sidebar is fully closed
+        // (Cerrado), so Discover / Library / Local Library / My QBZ stay
+        // reachable. Icon-only; each opens a titled downward dropdown.
+        if ShellState.sidebar-state == 2: HorizontalLayout {
+            spacing: 2px;
+            // A small gap from the history buttons.
+            Rectangle { width: 6px; }
             VerticalLayout {
                 alignment: center;
-                QbzIcon {
-                    source: @image-url("../assets/icons/search.svg");
-                    width: 14px;
-                    height: 14px;
-                    tint: Theme.text-muted;
+                CompactNavBtn {
+                    tab-index: 0;
+                    title: @tr("Discover");
+                    icon: @image-url("../assets/icons/compass.svg");
+                    home-item: 0;
+                    items: [
+                        { label: @tr("Home"), has-glyph: false, route: "discover-home" },
+                        { label: @tr("Editor's Picks"), has-glyph: false, route: "discover-editorPicks" },
+                        { label: @tr("For You"), has-glyph: false, route: "discover-forYou" },
+                    ];
                 }
             }
-            // Real text input, with a placeholder shown while empty —
-            // same pattern as the album track-search field.
-            Rectangle {
-                horizontal-stretch: 1;
-                search-input := TextInput {
-                    width: 100%;
-                    height: 100%;
-                    color: Theme.text-primary;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                    single-line: true;
-                    // Enter submits to the full results page; every edit
-                    // feeds the debounced live search (Rust side).
-                    accepted => { SearchActions.submit(self.text); }
-                    edited => { SearchActions.live(self.text); }
+            VerticalLayout {
+                alignment: center;
+                CompactNavBtn {
+                    tab-index: 1;
+                    title: @tr("Library");
+                    icon: @image-url("../assets/icons/music-library-2.svg");
+                    items: [
+                        { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true, route: "favorites-tracks" },
+                        { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true, route: "favorites-albums" },
+                        { label: @tr("Artists"), icon: @image-url("../assets/icons/user.svg"), has-glyph: true, route: "favorites-artists" },
+                        { label: @tr("Playlists"), icon: @image-url("../assets/icons/list-music.svg"), has-glyph: true, route: "favorites-playlists" },
+                        { label: @tr("Labels"), icon: @image-url("../assets/icons/disc-3.svg"), has-glyph: true, route: "favorites-labels" },
+                    ];
                 }
-                Text {
-                    visible: search-input.text == "";
-                    text: @tr("Search");
-                    // Span the input box so vertical-alignment centers the
-                    // placeholder the same way the TextInput centers its
-                    // own text — otherwise it rides at the top.
-                    width: 100%;
-                    height: 100%;
-                    color: Theme.text-muted;
-                    font-size: 13px;
-                    vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                CompactNavBtn {
+                    tab-index: 2;
+                    title: @tr("Local Library");
+                    icon: @image-url("../assets/icons/hard-drive.svg");
+                    items: [
+                        { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true, route: "local-albums" },
+                        { label: @tr("Artists"), icon: @image-url("../assets/icons/user.svg"), has-glyph: true, route: "local-artists" },
+                        { label: @tr("Folders"), icon: @image-url("../assets/icons/folder.svg"), has-glyph: true, route: "local-folders" },
+                        { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true, route: "local-tracks" },
+                    ];
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                CompactNavBtn {
+                    tab-index: 3;
+                    title: @tr("My QBZ");
+                    icon: @image-url("../assets/icons/cassette-tape.svg");
+                    items: [
+                        { label: @tr("Collections"), icon: @image-url("../assets/icons/library-big.svg"), has-glyph: true },
+                        { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true },
+                    ];
                 }
             }
         }
     }
 
-    // --- Right controls: queue, lyrics, hamburger (anchored right) ---------
-    // Explicit width (3 * 36 + 2 * 2 spacing) so the right anchor lands
-    // correctly — a layout left to its own devices fills the parent.
+    // --- Right controls: app menu (anchored right) -------------------------
     right-controls := HorizontalLayout {
-        // 2px tighter to the window edge than the standard margin.
         x: root.width - self.width - Spacing.md + 2px;
         y: (root.height - self.height) / 2;
-        width: 112px;
+        width: 36px;
         height: 36px;
-        spacing: 2px;
-        // Lyrics panel toggle.
-        HeaderIconButton {
-            icon: @image-url("../assets/icons/captions.svg");
-            active: ShellState.right-panel == 2;
-            clicked => {
-                ShellState.right-panel = ShellState.right-panel == 2 ? 0 : 2;
-            }
-        }
-        // Queue panel toggle.
-        HeaderIconButton {
-            icon: @image-url("../assets/icons/list-ordered.svg");
-            active: ShellState.right-panel == 1;
-            clicked => {
-                ShellState.right-panel = ShellState.right-panel == 1 ? 0 : 1;
-            }
-        }
-        HeaderIconButton {
-            icon: @image-url("../assets/icons/menu.svg");
-            clicked => {
-                menu.show();
+        VerticalLayout {
+            alignment: center;
+            HeaderIconButton {
+                icon: @image-url("../assets/icons/menu.svg");
+                clicked => {
+                    menu.show();
+                }
             }
         }
     }

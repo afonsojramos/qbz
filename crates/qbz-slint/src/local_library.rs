@@ -100,10 +100,16 @@ pub fn albums_gen_current(gen: u64) -> bool {
 /// genre per-track, not per-album); the cover PATH rides on `artwork_url`
 /// as the artwork-job carrier (the grid renders `artwork`, not the url).
 pub fn map_local_album(a: qbz_library::LocalAlbum) -> crate::album_map::AlbumCard {
-    let tier = match a.bit_depth {
-        Some(b) if b >= 24 => "hires",
-        Some(_) => "cd",
-        None => "",
+    // Format-first classification (mirrors Tauri): a lossy format (MP3) gets
+    // the dedicated MP3 badge tier, never CD.
+    let tier = if a.format.to_string().eq_ignore_ascii_case("mp3") {
+        "mp3"
+    } else {
+        match a.bit_depth {
+            Some(b) if b >= 24 => "hires",
+            Some(_) => "cd",
+            None => "",
+        }
     };
     let (quality_detail, quality_label) = local_quality(a.bit_depth, a.sample_rate);
     let year = a.year.map(|y| y.to_string()).unwrap_or_default();
@@ -298,6 +304,33 @@ pub fn set_local_album_artwork(window: &AppWindow, id: &str, image: slint::Image
     }
 }
 
+/// Same, for the Folders tab: full `folders` set + `folders-visible` + each
+/// `folders-grouped` section. Without this the cover only lands on the source
+/// `folders` model and the rendered (visible/grouped) views miss it on first
+/// load (the same bug the Albums/Artists tabs had).
+pub fn set_local_folder_artwork(window: &AppWindow, id: &str, image: slint::Image) {
+    let s = window.global::<LocalLibraryState>();
+    let set_in = |m: &ModelRc<AlbumCardItem>| {
+        for i in 0..m.row_count() {
+            if let Some(mut it) = m.row_data(i) {
+                if it.id.as_str() == id {
+                    it.artwork = image.clone();
+                    m.set_row_data(i, it);
+                    break;
+                }
+            }
+        }
+    };
+    set_in(&s.get_folders());
+    set_in(&s.get_folders_visible());
+    let grouped = s.get_folders_grouped();
+    for gi in 0..grouped.row_count() {
+        if let Some(sec) = grouped.row_data(gi) {
+            set_in(&sec.albums);
+        }
+    }
+}
+
 /// Re-derive the rendered Albums sets (search + quality/format/source filter +
 /// sort + group + A-Z) from the full `albums` card set, filtered by id against
 /// the raw LocalAlbum cache. Mirrors `derive_folders` plus the filter.
@@ -483,6 +516,54 @@ pub fn reload_albums(
     });
 }
 
+/// Seed all four tab-badge counts up front (mirrors Favorites' seeded
+/// counts) so the nav shows numbers without visiting each tab. Cheap:
+/// bounded album/folder/artist reads + a `COUNT(*)` for the (potentially
+/// huge) tracks table. Album/artist counts match each tab's own loader
+/// exactly (same `get_albums_metadata_grouped` set; same `normalize_artist`
+/// grouping the rail uses), so badges never jump when a tab is opened.
+pub fn seed_counts(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    handle.spawn(async move {
+        let counts: Option<(usize, usize, usize, usize)> = tokio::task::spawn_blocking(|| {
+            crate::library_db::with_db(|db| {
+                let albums = db
+                    .get_albums_metadata_grouped(false, true, false)
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                let folders = db
+                    .get_folders_with_metadata()
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                let tracks = db.count_all_local_tracks().unwrap_or(0) as usize;
+                // Exact rail count = distinct non-empty normalized names
+                // (mirrors merge_artists' grouping key).
+                let artists_raw = db.get_artists().unwrap_or_default();
+                let mut seen = std::collections::HashSet::new();
+                for a in &artists_raw {
+                    let n = normalize_artist(&a.name);
+                    if !n.is_empty() {
+                        seen.insert(n);
+                    }
+                }
+                Ok((albums, seen.len(), folders, tracks))
+            })
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((albums, artists, folders, tracks)) = counts {
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                let s = w.global::<LocalLibraryState>();
+                s.set_album_count(albums as i32);
+                s.set_artist_count(artists as i32);
+                s.set_folder_count(folders as i32);
+                s.set_track_count(tracks as i32);
+            });
+        }
+    });
+}
+
 /// Load on first visit only (re-entry keeps the set + derived views).
 pub fn ensure_albums_loaded(
     weak: slint::Weak<AppWindow>,
@@ -530,10 +611,15 @@ fn fmt_duration(secs: u64) -> String {
 /// non-Send `slint::Image`). Local tracks aren't Qobuz-linkable, so the
 /// artist/album link ids are empty (the row renders them as plain text).
 fn map_local_track(t: qbz_library::LocalTrack) -> TrackItem {
-    let tier = match t.bit_depth {
-        Some(b) if b >= 24 => "hires",
-        Some(_) => "cd",
-        None => "",
+    // Format-first classification (mirrors Tauri): MP3/lossy → MP3 tier.
+    let tier = if t.format.to_string().eq_ignore_ascii_case("mp3") {
+        "mp3"
+    } else {
+        match t.bit_depth {
+            Some(b) if b >= 24 => "hires",
+            Some(_) => "cd",
+            None => "",
+        }
     };
     TrackItem {
         id: t.id.to_string().into(),

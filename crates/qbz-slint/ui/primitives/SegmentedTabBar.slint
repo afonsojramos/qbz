@@ -1,0 +1,95 @@
+// Segmented tab navigator — the SAME design Discovery's HomeView uses (a
+// small-radius rectangle group, ADR-008-compliant: NOT a capsule pill),
+// promoted to a shared, data-driven primitive so Local Library and Library
+// (Favorites) read identically. Each tab carries an optional count rendered
+// as a compact badge with smaller-but-legible type inside the tab item.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+
+// One entry in the navigator. `count <= 0` hides the badge.
+export struct SegTab {
+    id: string,
+    label: string,
+    count: int,
+}
+
+// A single segment: fills with surface-main when active (Discovery's Tab),
+// hover surface-hover, transparent otherwise. The count sits in a rounded
+// badge to the right of the label.
+component Segment inherits Rectangle {
+    in property <string> label;
+    in property <int> count;
+    in property <bool> active;
+    callback clicked();
+
+    border-radius: 4px;
+    background: root.active ? Theme.surface-main
+        : ta.has-hover ? Theme.surface-hover : transparent;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: root.count > 0 ? 8px : 12px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 7px;
+        Text {
+            text: root.label;
+            color: root.active ? Theme.text-primary : Theme.text-muted;
+            // Discovery's tab type: 13px medium.
+            font-size: Typography.legal;
+            font-weight: Typography.medium;
+            vertical-alignment: center;
+        }
+        // Count badge — smaller (11px) but legible. min-width keeps single
+        // digits balanced; the layout grows the chip for 2–3 digit counts.
+        if root.count > 0: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                min-width: 18px;
+                height: 16px;
+                border-radius: 8px;
+                background: root.active ? #ffffff24 : #ffffff14;
+                HorizontalLayout {
+                    alignment: center;
+                    padding-left: 5px;
+                    padding-right: 5px;
+                    Text {
+                        text: root.count;
+                        color: root.active ? Theme.text-primary : Theme.text-secondary;
+                        font-size: 11px;
+                        font-weight: Typography.medium;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SegmentedTabBar inherits Rectangle {
+    in property <[SegTab]> tabs;
+    in property <string> active-id;
+    callback selected(string);
+
+    width: row.preferred-width;
+    height: row.preferred-height;
+    background: Theme.surface-elevated;
+    border-radius: 6px;
+
+    row := HorizontalLayout {
+        padding: 3px;
+        spacing: 4px;
+        for tab in root.tabs: Segment {
+            label: tab.label;
+            count: tab.count;
+            active: root.active-id == tab.id;
+            clicked => { root.selected(tab.id); }
+        }
+    }
+}

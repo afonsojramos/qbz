@@ -266,18 +266,25 @@ export component AlbumListRow inherits Rectangle {
             overflow: elide;
         }
 
-        // --- SOURCE (hideable) ----------------------------------------
-        if root.show-source: Text {
+        // --- SOURCE (hideable) — discreet per-source glyph, NOT text. ---
+        // Mirrors TrackRow's source indicator: local -> tinted hard-drive,
+        // qobuz/offline + plex -> their own mark; small + flat (the bold
+        // colored badge is reserved for the AlbumCard grid).
+        if root.show-source: Rectangle {
             width: AlbumListCols.source;
-            text: root.album.source == "qobuz" ? @tr("Qobuz")
-                : root.album.source == "qobuz_download" ? @tr("Offline")
-                : root.album.source == "plex" ? @tr("Plex")
-                : root.album.source == "local" ? @tr("Local")
-                : "";
-            color: Theme.text-secondary;
-            font-size: 12px;
-            vertical-alignment: center;
-            overflow: elide;
+            if root.album.source != "": Image {
+                source: root.album.source == "plex"
+                    ? @image-url("../assets/icons/plex-logo.svg")
+                    : (root.album.source == "qobuz" || root.album.source == "qobuz_download"
+                        ? @image-url("../assets/icons/qobuz-logo-filled.svg")
+                        : @image-url("../assets/icons/hard-drive.svg"));
+                colorize: root.album.source == "local" ? Theme.text-muted : transparent;
+                width: root.album.source == "local" ? 15px : 16px;
+                height: self.width;
+                x: 0;
+                y: (parent.height - self.height) / 2;
+                image-fit: contain;
+            }
         }
 
         // --- QUALITY (shared QualityBadgeFull) ------------------------

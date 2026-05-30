@@ -13,6 +13,9 @@ export component NavMenuItem inherits Rectangle {
     // Fires whenever the pointer is over the row — drives the dropdown's
     // idle-close timer reset.
     callback hovered();
+    // Fires on hover enter/leave so the host keeps the menu open while the
+    // pointer rests on a row (the idle timer must not close it then).
+    callback hover-changed(bool);
 
     height: 32px;
     background: ta.has-hover ? Theme.surface-hover : transparent;
@@ -45,6 +48,7 @@ export component NavMenuItem inherits Rectangle {
             root.clicked();
         }
         changed has-hover => {
+            root.hover-changed(self.has-hover);
             if (self.has-hover) {
                 root.hovered();
             }
