@@ -13,7 +13,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
-import { AlbumCardItem } from "../state.slint";
+import { AlbumCardItem, NavState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadge } from "../primitives/QualityBadge.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
@@ -55,6 +55,16 @@ component OverlayButton inherits Rectangle {
         mouse-cursor: pointer;
         clicked => {
             root.clicked();
+        }
+        // Forward the mouse back/forward buttons to history nav (a TouchArea
+        // swallows them, so they never reach the AppShell catcher).
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.back) {
+                NavState.request-back();
+            }
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.forward) {
+                NavState.request-forward();
+            }
         }
     }
 }

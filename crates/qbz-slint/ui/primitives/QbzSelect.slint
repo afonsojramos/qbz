@@ -53,8 +53,8 @@ export component QbzSelect inherits Rectangle {
     callback selected(int);
 
     // Toolbar (sm) selects — Group / Sort / filter — were unnecessarily wide;
-    // trim 20px from the effective width (button + list).
-    private property <length> eff-width: root.menu-width - (root.sm ? 20px : 0px);
+    // trim 40px from the effective width (button + list).
+    private property <length> eff-width: root.menu-width - (root.sm ? 40px : 0px);
     // Resolved width of the open list.
     private property <length> list-width:
         root.popup-width > root.eff-width ? root.popup-width : root.eff-width;

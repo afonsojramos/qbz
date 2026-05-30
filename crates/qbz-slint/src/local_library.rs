@@ -603,6 +603,13 @@ fn tracks_current() -> std::sync::MutexGuard<'static, Vec<qbz_library::LocalTrac
     TRACKS_CURRENT.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Snapshot of the currently-loaded Tracks-tab rows (already carry their
+/// covers). Used to build the play queue instantly on a row click — avoiding
+/// the full DB re-query + cover-fill that delayed queue population.
+pub fn tracks_current_snapshot() -> Vec<qbz_library::LocalTrack> {
+    tracks_current().clone()
+}
+
 fn fmt_duration(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }

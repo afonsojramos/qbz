@@ -18,7 +18,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { TrackItem, DragActions, NowPlayingState } from "../state.slint";
+import { TrackItem, DragActions, NowPlayingState, NavState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { TrackPlayCell } from "TrackPlayCell.slint";
 import { TrackContextMenu } from "TrackContextMenu.slint";
@@ -81,6 +81,15 @@ export component TrackRow inherits Rectangle {
         property <length> down-y;
         property <bool> dragging: false;
         pointer-event(e) => {
+            // The mouse back/forward buttons drive history nav. A TouchArea
+            // swallows these (they never reach the AppShell catcher), so each
+            // interactive row forwards them itself.
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.back) {
+                NavState.request-back();
+            }
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.forward) {
+                NavState.request-forward();
+            }
             if (e.kind == PointerEventKind.down) {
                 ta.down-x = root.absolute-position.x + ta.mouse-x;
                 ta.down-y = root.absolute-position.y + ta.mouse-y;

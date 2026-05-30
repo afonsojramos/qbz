@@ -12,7 +12,9 @@ import { QbzIcon } from "QbzIcon.slint";
 
 export component ExpandableSearch inherits Rectangle {
     in property <string> placeholder: "Search…";
-    in property <length> max-open-width: 216px;
+    // Trimmed 20px so the open field doesn't ride over the controls to its
+    // left on small screens.
+    in property <length> max-open-width: 196px;
     in-out property <bool> open: false;
     in-out property <string> query;
     // Bootstrap-style small variant. Default is the standard size.

@@ -4456,23 +4456,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match action.as_str() {
                     "play" => {
                         if let Ok(row_id) = id.parse::<i64>() {
-                            // Queue the current (searched) list so playback
-                            // continues down it from the clicked row.
-                            let query = weak
-                                .upgrade()
-                                .map(|w| {
-                                    w.global::<LocalLibraryState>()
-                                        .get_tracks_search()
-                                        .to_string()
-                                })
-                                .unwrap_or_default();
-                            playback::play_local_tracks_from(
-                                runtime.clone(),
-                                weak.clone(),
-                                handle.clone(),
-                                query,
-                                row_id,
-                            );
+                            // Queue the already-loaded rows (instant — no DB
+                            // re-query / cover-fill that delayed the queue) so
+                            // playback continues down the list from the click.
+                            let tracks = local_library::tracks_current_snapshot();
+                            if !tracks.is_empty() {
+                                let start = tracks
+                                    .iter()
+                                    .position(|t| t.id == row_id)
+                                    .unwrap_or(0);
+                                playback::play_local_tracks(
+                                    runtime.clone(),
+                                    weak.clone(),
+                                    handle.clone(),
+                                    tracks,
+                                    start,
+                                    false,
+                                );
+                            }
                         }
                     }
                     "toggle-select" => {

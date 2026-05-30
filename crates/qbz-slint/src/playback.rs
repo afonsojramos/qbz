@@ -332,6 +332,9 @@ pub fn play_local_folder_tracks_from(
 
 /// Play the Tracks-tab list starting at `start_track_id`: the matching set
 /// (current search) becomes the queue, so playback continues down the list.
+/// (Superseded by the instant in-memory-cache path; kept for the full-list
+/// option.)
+#[allow(dead_code)]
 pub fn play_local_tracks_from(
     runtime: Runtime,
     weak: slint::Weak<AppWindow>,
