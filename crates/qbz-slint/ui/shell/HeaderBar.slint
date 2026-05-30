@@ -24,6 +24,9 @@ component NavTab inherits Rectangle {
     callback clicked();
     // Fires when the pointer first enters the tab — drives hover-to-open.
     callback hovered();
+    // Fires on hover enter/leave so the host can keep the menu open while the
+    // pointer rests on the tab (idle-close must pause then).
+    callback hover-changed(bool);
 
     height: 30px;
     width: tab-row.preferred-width;
@@ -33,7 +36,7 @@ component NavTab inherits Rectangle {
 
     tab-row := HorizontalLayout {
         padding-left: root.show-icon ? 9px : 11px;
-        padding-right: 7px;
+        padding-right: 11px;
         spacing: 6px;
         if root.show-icon: VerticalLayout {
             alignment: center;
@@ -44,9 +47,8 @@ component NavTab inherits Rectangle {
                 tint: root.active ? Theme.text-primary : Theme.text-secondary;
             }
         }
-        // An explicit row-height box plus vertical-alignment centers the
-        // label optically against the glyph and caret — a bare Text box
-        // rides high because of the font's descender space.
+        // The dropdown caret was dropped (it ate width on small screens; the
+        // dropdown nature is learned after first use).
         Text {
             text: root.label;
             height: root.height;
@@ -54,16 +56,6 @@ component NavTab inherits Rectangle {
             color: Theme.text-primary;
             font-size: 11px;
             font-weight: root.active ? Typography.semibold : Typography.regular;
-        }
-        // Caret marking the tab as a dropdown.
-        VerticalLayout {
-            alignment: center;
-            QbzIcon {
-                source: @image-url("../assets/icons/chevron-down.svg");
-                width: 12px;
-                height: 12px;
-                tint: root.active ? Theme.text-secondary : Theme.text-muted;
-            }
         }
     }
 
@@ -73,6 +65,7 @@ component NavTab inherits Rectangle {
             root.clicked();
         }
         changed has-hover => {
+            root.hover-changed(self.has-hover);
             if (self.has-hover) {
                 root.hovered();
             }
@@ -154,6 +147,11 @@ component NavTabWithMenu inherits Rectangle {
     function open-menu() {
         HeaderMenuState.open-index = root.tab-index;
         HeaderMenuState.anchor-x = root.absolute-position.x;
+        // Header dropdown — NOT a sidebar flyout. Resetting these is what
+        // glues the panel under the tab: a stale from-sidebar/anchor-y from a
+        // previous sidebar flyout would otherwise fling it far away.
+        HeaderMenuState.from-sidebar = false;
+        HeaderMenuState.title = "";
         HeaderMenuState.items = root.items;
         HeaderMenuState.home-item = root.home-item;
     }
@@ -170,6 +168,15 @@ component NavTabWithMenu inherits Rectangle {
         // different tab overwrites the global → instant switch.
         hovered => {
             root.open-menu();
+        }
+        // Pause the idle-close while the cursor rests on the tab; only the
+        // active tab clears the flag (avoids a leave/enter race).
+        hover-changed(h) => {
+            if (h) {
+                HeaderMenuState.trigger-hovered = true;
+            } else if (root.active) {
+                HeaderMenuState.trigger-hovered = false;
+            }
         }
     }
 }
@@ -301,82 +308,22 @@ export component HeaderBar inherits Rectangle {
 
     // Responsive breakpoints.
     property <bool> show-tab-icons: root.width >= 1140px;
-    // 80% of the prior search width (was 224px / 320px).
-    property <length> search-width: root.width < 960px ? 179px : 256px;
+    // 80% of the prior search width (was 224px / 320px). When the section nav
+    // is in the header (nav-in-sidebar off) it gives up 60px to make room.
+    property <length> search-width:
+        (root.width < 960px ? 179px : 256px) - (ShellState.nav-in-sidebar ? 0px : 60px);
 
-    // --- Tabs (anchored left) ----------------------------------------------
-    tabs := HorizontalLayout {
-        // xs (not md): the sidebar toggle is a bare icon with ~10px of
-        // breathing room to the Discover tab; the window-edge margin is
-        // matched to that so the toggle glyph sits symmetrically.
-        x: Spacing.xs;
-        y: (root.height - self.height) / 2;
-        height: 30px;
-        spacing: 2px;
-        // Section nav lives in the header by default; when the user moves it
-        // to the sidebar (ShellState.nav-in-sidebar) the header tabs hide.
-        // The sidebar-collapse toggle no longer lives here — it moved next to
-        // the back/forward nav buttons (NavButtons), present in every view.
-        if !ShellState.nav-in-sidebar: HorizontalLayout {
-        spacing: 2px;
-        NavTabWithMenu {
-            tab-index: 0;
-            icon: @image-url("../assets/icons/compass.svg");
-            label: @tr("Discover");
-            active: true;
-            show-icon: root.show-tab-icons;
-            // Discover rows are text-only (no glyphs).
-            items: [
-                { label: @tr("Home"), has-glyph: false, route: "discover-home" },
-                { label: @tr("Editor's Picks"), has-glyph: false, route: "discover-editorPicks" },
-                { label: @tr("For You"), has-glyph: false, route: "discover-forYou" },
-            ];
-            // Row 0 = Home, the one working destination.
-            home-item: 0;
-        }
-        NavTabWithMenu {
-            tab-index: 1;
-            icon: @image-url("../assets/icons/music-library-2.svg");
-            label: @tr("Library");
-            show-icon: root.show-tab-icons;
-            items: [
-                { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true, route: "favorites-tracks" },
-                { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true, route: "favorites-albums" },
-                { label: @tr("Artists"), icon: @image-url("../assets/icons/user.svg"), has-glyph: true, route: "favorites-artists" },
-                { label: @tr("Playlists"), icon: @image-url("../assets/icons/list-music.svg"), has-glyph: true, route: "favorites-playlists" },
-                { label: @tr("Labels"), icon: @image-url("../assets/icons/disc-3.svg"), has-glyph: true, route: "favorites-labels" },
-            ];
-        }
-        NavTabWithMenu {
-            tab-index: 2;
-            icon: @image-url("../assets/icons/hard-drive.svg");
-            label: @tr("Local Library");
-            show-icon: root.show-tab-icons;
-            items: [
-                { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true, route: "local-albums" },
-                { label: @tr("Artists"), icon: @image-url("../assets/icons/user.svg"), has-glyph: true, route: "local-artists" },
-                { label: @tr("Folders"), icon: @image-url("../assets/icons/folder.svg"), has-glyph: true, route: "local-folders" },
-                { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true, route: "local-tracks" },
-            ];
-        }
-        NavTabWithMenu {
-            tab-index: 3;
-            icon: @image-url("../assets/icons/cassette-tape.svg");
-            label: @tr("My QBZ");
-            show-icon: root.show-tab-icons;
-            items: [
-                { label: @tr("Collections"), icon: @image-url("../assets/icons/library-big.svg"), has-glyph: true },
-                { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true },
-            ];
-        }
-        }
-    }
+    // The section nav now lives inside the left-controls cluster (after the
+    // three sacred nav buttons), so it can never overlap them.
 
     // --- Search (absolutely centered on the window) ------------------------
     Rectangle {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         width: root.search-width;
+        // Smoothly animate the width change when the nav moves in/out of the
+        // header (and the x recenters with it).
+        animate width { duration: 220ms; easing: ease-in-out; }
         height: 32px;
         border-radius: 6px;
         border-width: 1px;
@@ -451,6 +398,74 @@ export component HeaderBar inherits Rectangle {
                 icon: @image-url("../assets/icons/chevron-right.svg");
                 enabled: NavState.can-forward;
                 clicked => { NavState.request-forward(); }
+            }
+        }
+        // Full section nav (text tabs) — header-nav mode (nav-in-sidebar OFF)
+        // while the sidebar isn't fully closed. Sits AFTER the three sacred
+        // buttons, so it never overlaps them. Mutually exclusive with the
+        // compact icons below (which only show when fully closed).
+        if !ShellState.nav-in-sidebar && ShellState.sidebar-state != 2: HorizontalLayout {
+            spacing: 2px;
+            Rectangle { width: 6px; }
+            VerticalLayout {
+                alignment: center;
+                NavTabWithMenu {
+                    tab-index: 0;
+                    icon: @image-url("../assets/icons/compass.svg");
+                    label: @tr("Discover");
+                    active: true;
+                    show-icon: root.show-tab-icons;
+                    home-item: 0;
+                    items: [
+                        { label: @tr("Home"), has-glyph: false, route: "discover-home" },
+                        { label: @tr("Editor's Picks"), has-glyph: false, route: "discover-editorPicks" },
+                        { label: @tr("For You"), has-glyph: false, route: "discover-forYou" },
+                    ];
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                NavTabWithMenu {
+                    tab-index: 1;
+                    icon: @image-url("../assets/icons/music-library-2.svg");
+                    label: @tr("Library");
+                    show-icon: root.show-tab-icons;
+                    items: [
+                        { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true, route: "favorites-tracks" },
+                        { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true, route: "favorites-albums" },
+                        { label: @tr("Artists"), icon: @image-url("../assets/icons/user.svg"), has-glyph: true, route: "favorites-artists" },
+                        { label: @tr("Playlists"), icon: @image-url("../assets/icons/list-music.svg"), has-glyph: true, route: "favorites-playlists" },
+                        { label: @tr("Labels"), icon: @image-url("../assets/icons/disc-3.svg"), has-glyph: true, route: "favorites-labels" },
+                    ];
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                NavTabWithMenu {
+                    tab-index: 2;
+                    icon: @image-url("../assets/icons/hard-drive.svg");
+                    label: @tr("Local Library");
+                    show-icon: root.show-tab-icons;
+                    items: [
+                        { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true, route: "local-albums" },
+                        { label: @tr("Artists"), icon: @image-url("../assets/icons/user.svg"), has-glyph: true, route: "local-artists" },
+                        { label: @tr("Folders"), icon: @image-url("../assets/icons/folder.svg"), has-glyph: true, route: "local-folders" },
+                        { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true, route: "local-tracks" },
+                    ];
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                NavTabWithMenu {
+                    tab-index: 3;
+                    icon: @image-url("../assets/icons/cassette-tape.svg");
+                    label: @tr("My QBZ");
+                    show-icon: root.show-tab-icons;
+                    items: [
+                        { label: @tr("Collections"), icon: @image-url("../assets/icons/library-big.svg"), has-glyph: true },
+                        { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true },
+                    ];
+                }
             }
         }
         // Compact section nav — only while the sidebar is fully closed

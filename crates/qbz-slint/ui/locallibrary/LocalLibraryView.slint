@@ -18,7 +18,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { LocalLibraryState, LocalLibraryActions, FolderNode, LocalArtistItem, AlphaJump, LibAlbumFilterState } from "../state.slint";
+import { LocalLibraryState, LocalLibraryActions, FolderNode, LocalArtistItem, AlphaJump, LibAlbumFilterState, AppearanceState } from "../state.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
@@ -993,7 +993,7 @@ export component LocalLibraryView inherits Rectangle {
                                 TrackRow {
                                     track: track;
                                     index: i;
-                                    show-artwork: false;
+                                    show-artwork: AppearanceState.local-library-track-artwork;
                                     show-album: LocalLibraryState.tracks-group-mode != "album";
                                     show-favorite: false;
                                     show-download: false;
@@ -1309,7 +1309,7 @@ export component LocalLibraryView inherits Rectangle {
                                         for track[ti] in LocalLibraryState.folder-detail-tracks: TrackRow {
                                             track: track;
                                             index: ti;
-                                            show-artwork: false;
+                                            show-artwork: AppearanceState.local-library-track-artwork;
                                             show-album: true;
                                             show-favorite: false;
                                             show-download: false;

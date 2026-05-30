@@ -19,9 +19,21 @@ export component ExpandableSearch inherits Rectangle {
     in property <bool> sm: false;
     callback edited(string);
 
+    // Defer the focus: focusing the input synchronously inside `changed open`
+    // races the open animation/layout (and can panic with "Recursion
+    // detected"). A one-shot timer grabs focus a tick later, reliably.
+    focus-timer := Timer {
+        interval: 30ms;
+        running: false;
+        triggered => {
+            input.focus();
+            self.running = false;
+        }
+    }
     changed open => {
         if (root.open) {
-            input.focus();
+            focus-timer.running = true;
+            focus-timer.restart();
         }
     }
 
@@ -29,9 +41,11 @@ export component ExpandableSearch inherits Rectangle {
     width: root.sm ? 30px : 34px;
     height: root.sm ? 30px : 34px;
 
-    // Closed: the magnifier toggle.
+    // Closed: the magnifier toggle. Fades (not toggled) so open/close is
+    // smooth in both directions.
     Rectangle {
-        visible: !root.open;
+        opacity: root.open ? 0.0 : 1.0;
+        animate opacity { duration: 120ms; easing: ease-in-out; }
         width: root.sm ? 30px : 34px;
         height: root.sm ? 30px : 34px;
         border-radius: 6px;
@@ -45,6 +59,7 @@ export component ExpandableSearch inherits Rectangle {
             tint: open-ta.has-hover ? Theme.text-primary : Theme.text-muted;
         }
         open-ta := TouchArea {
+            enabled: !root.open;
             mouse-cursor: pointer;
             clicked => {
                 root.open = true;
@@ -52,15 +67,15 @@ export component ExpandableSearch inherits Rectangle {
         }
     }
 
-    // Open: right-anchored overlay that grows left.
+    // Open: right-anchored overlay that grows left. Always rendered; its width
+    // animates to 0 when closed (clip hides it), so the shrink is also smooth.
     overlay := Rectangle {
-        visible: root.open;
         x: parent.width - self.width;
         width: root.open ? root.max-open-width : 0px;
         height: root.sm ? 30px : 34px;
         background: Theme.surface-card;
         border-radius: 6px;
-        border-width: 1px;
+        border-width: root.open ? 1px : 0px;
         border-color: input.has-focus ? Theme.accent : Theme.border-subtle;
         clip: true;
         animate width { duration: 200ms; easing: ease-in-out; }

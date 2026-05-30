@@ -14,7 +14,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { ThemeState } from "../foundation/theme-state.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { AppearanceState, SidebarState, ShellState } from "../state.slint";
+import { AppearanceState, SidebarState, ShellState, ToastState } from "../state.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
@@ -312,7 +312,6 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
-        unsupported: true;
         label: @tr("Show album artwork in Local Library track list");
         description: @tr("Display the album cover thumbnail next to each track in the Tracks and Folders views. Off by default — large libraries pay a per-row image-decode cost.");
         QbzToggle {
@@ -334,12 +333,12 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("NOTIFICATIONS"); }
 
     SettingRow {
-        unsupported: true;
         label: @tr("In-app toasts notifications");
         QbzToggle {
             checked: AppearanceState.in-app-toasts;
             toggled(v) => {
                 AppearanceState.in-app-toasts = v;
+                ToastState.enabled = v;
                 AppearanceState.appearance-bool("in-app-toasts", v);
             }
         }
