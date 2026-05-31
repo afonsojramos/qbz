@@ -88,6 +88,11 @@ enum AudioCommand {
     Seek(u64),
     /// Reinitialize audio device (releases and re-acquires)
     ReinitDevice { device_name: Option<String> },
+    /// Release the output device WITHOUT reopening it: drops the active
+    /// stream (freeing an exclusive ALSA `hw:` grab + its D-Bus reservation)
+    /// and un-suspends / un-forces anything QBZ parked, so PipeWire can
+    /// reclaim a device QBZ was holding. User-triggered from settings.
+    ReleaseDevice,
     /// Append next track to current engine for gapless playback (Rodio only)
     PlayNext {
         data: Vec<u8>,
@@ -2902,6 +2907,30 @@ impl Player {
                             // Keep current_audio_data and current_streaming_source
                             // intact so Resume can recreate the engine and seek.
                         }
+                        AudioCommand::ReleaseDevice => {
+                            log::info!("Audio thread: releasing output device (user-requested)");
+                            // Cancel any deferred drop and tear the stream down NOW so
+                            // the device is freed immediately (no warm-stream lingering).
+                            *pause_suspend_deadline = None;
+                            if let Some(engine) = current_engine.take() {
+                                engine.stop();
+                            }
+                            drop(stream_opt.take());
+                            // Undo anything QBZ parked so PipeWire / WirePlumber can
+                            // reclaim the device (e.g. a DAC left invisible to other
+                            // apps after bit-perfect ALSA Direct held it exclusively).
+                            // Both calls are self-gating no-ops if QBZ didn't set them.
+                            #[cfg(target_os = "linux")]
+                            {
+                                qbz_audio::alsa_backend::resume_suspended_sink();
+                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
+                            }
+                            thread_state.pause_playback_timer();
+                            thread_state.is_playing.store(false, Ordering::SeqCst);
+                            // Keep current_audio_data / current_streaming_source intact
+                            // so a later Play / Resume reopens and continues.
+                            log::info!("Audio thread: output device released");
+                        }
                         AudioCommand::PlayNext {
                             data,
                             track_id,
@@ -4094,6 +4123,19 @@ impl Player {
         self.tx
             .send(AudioCommand::ReinitDevice { device_name })
             .map_err(|e| format!("Failed to send reinit command: {}", e))
+    }
+
+    /// Release the output device without reopening it. Drops the active
+    /// stream — freeing an exclusive ALSA `hw:` grab and its D-Bus
+    /// reservation — and un-suspends / un-forces anything QBZ parked, so
+    /// PipeWire/WirePlumber can reclaim a device QBZ was holding (e.g. a DAC
+    /// left invisible to other apps after bit-perfect ALSA Direct). Pair
+    /// with a device re-enumeration in the UI to surface a freed or
+    /// hot-plugged DAC without restarting the app.
+    pub fn release_device(&self) -> Result<(), String> {
+        self.tx
+            .send(AudioCommand::ReleaseDevice)
+            .map_err(|e| format!("Failed to send release command: {}", e))
     }
 
     /// Reload audio settings from fresh config (e.g., after database update)

@@ -65,6 +65,7 @@ export component SettingsView inherits Rectangle {
     callback settings-select(string, int);
     callback settings-slider(string, int);
     callback settings-reset();
+    callback settings-release-device();
 
     background: Theme.surface-main;
 
@@ -177,6 +178,9 @@ export component SettingsView inherits Rectangle {
                         }
                         settings-reset => {
                             root.settings-reset();
+                        }
+                        settings-release-device => {
+                            root.settings-release-device();
                         }
                     }
                     if !SettingsState.loading && SettingsState.section == 1: PlaybackSettings {

@@ -9,6 +9,7 @@ import { Radius } from "../foundation/radius.slint";
 import { SettingsState } from "../state.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SettingRow } from "SettingRow.slint";
 
 component GroupHeader inherits Text {
@@ -28,6 +29,10 @@ export component AudioSettings inherits VerticalLayout {
     callback settings-select(string, int);
     // Emitted by the Reset button.
     callback settings-reset();
+    // Emitted by the refresh/release button next to the output device:
+    // frees a device QBZ is holding (ALSA exclusive) and re-enumerates so a
+    // freed or hot-plugged DAC appears without restarting the app.
+    callback settings-release-device();
 
     spacing: 4px;
 
@@ -93,21 +98,49 @@ export component AudioSettings inherits VerticalLayout {
     SettingRow {
         label: @tr("Output device");
         description: @tr("The DAC or sound device that receives audio.");
-        QbzSelect {
-            menu-width: 300px;
-            // Device labels run long; open the list wider so the full
-            // name (card + ALSA PCM id) is readable.
-            popup-width: 480px;
-            // Output lists can be long (multiple DACs / HDMI sinks); a
-            // filter box + capped, scrolling list keeps it usable.
-            searchable: true;
-            options: SettingsState.devices;
-            badges: SettingsState.device-bp;
-            groups: SettingsState.device-groups;
-            current-index: SettingsState.device-index;
-            selected(i) => {
-                SettingsState.device-index = i;
-                root.settings-select("device", i);
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: center;
+            // Refresh / release: frees a device QBZ is holding exclusively
+            // (ALSA Direct) and re-enumerates, so a DAC that's invisible to
+            // PipeWire — or one hot-plugged while QBZ ran — shows up without
+            // an app restart.
+            release-btn := Rectangle {
+                width: 34px;
+                height: 34px;
+                border-radius: Radius.sm;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+                background: release-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+                QbzIcon {
+                    width: 16px;
+                    height: 16px;
+                    source: @image-url("../assets/icons/refresh-cw.svg");
+                    tint: release-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                }
+                release-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.settings-release-device();
+                    }
+                }
+            }
+            QbzSelect {
+                menu-width: 300px;
+                // Device labels run long; open the list wider so the full
+                // name (card + ALSA PCM id) is readable.
+                popup-width: 480px;
+                // Output lists can be long (multiple DACs / HDMI sinks); a
+                // filter box + capped, scrolling list keeps it usable.
+                searchable: true;
+                options: SettingsState.devices;
+                badges: SettingsState.device-bp;
+                groups: SettingsState.device-groups;
+                current-index: SettingsState.device-index;
+                selected(i) => {
+                    SettingsState.device-index = i;
+                    root.settings-select("device", i);
+                }
             }
         }
     }

@@ -2198,6 +2198,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Settings — the output-device refresh/release button: free a device QBZ
+    // holds exclusively (ALSA Direct) and re-enumerate, so a freed or
+    // hot-plugged DAC reappears without an app restart.
+    {
+        let runtime = app_runtime.clone();
+        let settings_ctx = settings_ctx.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.on_settings_release_device(move || {
+            let runtime = runtime.clone();
+            let settings_ctx = settings_ctx.clone();
+            let weak = weak.clone();
+            handle.spawn(async move {
+                settings::handle_release_device(settings_ctx, runtime, weak).await;
+            });
+        });
+    }
+
     // Context-menu / overlay media actions — route play / queue actions
     // into the playback controller; favorite / download stay logged.
     {

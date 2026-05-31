@@ -937,6 +937,36 @@ pub async fn handle_reset(
     apply_audio(&ctx, &runtime, Apply::Reinit);
 }
 
+/// Release the held output device, then re-enumerate. Frees a device QBZ is
+/// holding exclusively (ALSA Direct, which leaves the DAC invisible to
+/// PipeWire/other apps) and rebuilds the snapshot so a freed or hot-plugged
+/// DAC shows up in the list without restarting the app — the Tauri
+/// "refresh" affordance plus an explicit release, in one action.
+pub async fn handle_release_device(
+    ctx: Arc<SettingsCtx>,
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+) {
+    if let Err(e) = runtime.core().player().release_device() {
+        log::error!("[qbz-slint] player.release_device failed: {e}");
+    }
+    // Let PipeWire/WirePlumber reclaim the just-freed device before we list.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let snap = {
+        let ctx = ctx.clone();
+        match tokio::task::spawn_blocking(move || load_snapshot(&ctx)).await {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("[qbz-slint] release-device rebuild task failed: {e}");
+                return;
+            }
+        }
+    };
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        apply_snapshot(&w, snap);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

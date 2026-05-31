@@ -54,6 +54,7 @@ export component AppShell inherits Rectangle {
     callback settings-select(string, int);
     callback settings-slider(string, int);
     callback settings-reset();
+    callback settings-release-device();
     callback logout();
     callback close-app();
 
@@ -254,6 +255,9 @@ export component AppShell inherits Rectangle {
                     }
                     settings-reset => {
                         root.settings-reset();
+                    }
+                    settings-release-device => {
+                        root.settings-release-device();
                     }
                 }
                 if NavState.view == ContentView.search: SearchResultsView {
