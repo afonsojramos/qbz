@@ -336,7 +336,12 @@ export component AlbumPageView inherits Rectangle {
                         }
                         VerticalLayout {
                             alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/shuffle.svg"); }
+                            CircleAction {
+                                icon: @image-url("../assets/icons/shuffle.svg");
+                                clicked => {
+                                    root.media-action("album", AlbumState.id, "shuffle");
+                                }
+                            }
                         }
                         // Edit metadata (tag editor) — local albums only; hidden
                         // for Plex (tag write isn't supported there).
@@ -369,11 +374,21 @@ export component AlbumPageView inherits Rectangle {
                         }
                         VerticalLayout {
                             alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/radio.svg"); }
+                            CircleAction {
+                                icon: @image-url("../assets/icons/radio.svg");
+                                clicked => {
+                                    root.media-action("album", AlbumState.id, "radio");
+                                }
+                            }
                         }
                         VerticalLayout {
                             alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/user.svg"); }
+                            CircleAction {
+                                icon: @image-url("../assets/icons/user.svg");
+                                clicked => {
+                                    root.open-artist(AlbumState.artist-id);
+                                }
+                            }
                         }
                         VerticalLayout {
                             alignment: center;
@@ -600,6 +615,11 @@ export component AlbumPageView inherits Rectangle {
                             icon: @image-url("../assets/icons/disc.svg");
                             name: AlbumState.label;
                             avatar-bg: @linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+                            clicked => {
+                                if (AlbumState.label-id != "") {
+                                    root.media-action("label", AlbumState.label-id, "open");
+                                }
+                            }
                         }
                     }
 

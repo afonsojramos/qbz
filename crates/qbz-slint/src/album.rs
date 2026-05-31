@@ -39,6 +39,9 @@ pub struct AlbumData {
     pub artwork_url: String,
     /// Record label name, for the sidebar (empty when unknown).
     pub label: String,
+    /// Record label id, so the sidebar label card can navigate to the label
+    /// page ("" when unknown).
+    pub label_id: String,
     /// Editorial award names, for the sidebar.
     pub awards: Vec<String>,
     pub tracks: Vec<TrackData>,
@@ -120,6 +123,11 @@ fn map_album(album: Album) -> AlbumData {
         .as_ref()
         .map(|l| l.name.clone())
         .unwrap_or_default();
+    let label_id = album
+        .label
+        .as_ref()
+        .map(|l| l.id.to_string())
+        .unwrap_or_default();
     let awards = album
         .awards
         .as_deref()
@@ -148,6 +156,7 @@ fn map_album(album: Album) -> AlbumData {
         description_short,
         artwork_url,
         label,
+        label_id,
         awards,
         tracks,
     }
@@ -284,6 +293,7 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
     state.set_description(data.description.into());
     state.set_description_short(data.description_short.into());
     state.set_label(data.label.into());
+    state.set_label_id(data.label_id.into());
     state.set_awards(ModelRc::new(VecModel::from(awards)));
 
     // Keep the unfiltered list for the track search, then show it all.

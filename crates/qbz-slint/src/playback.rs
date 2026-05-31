@@ -1047,6 +1047,46 @@ pub fn enqueue_album(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
     });
 }
 
+/// Play an album with its tracks in a fresh random order (the header Shuffle
+/// button). Fetches the album, shuffles the raw track list with the same
+/// SystemTime-seeded xorshift Fisher-Yates the playlist shuffle uses (no `rand`
+/// dependency), then plays from the top via the shared `play_tracks`.
+pub fn play_album_shuffled(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    album_id: String,
+) {
+    let play_handle = handle.clone();
+    handle.spawn(async move {
+        let album = match runtime.core().get_album(&album_id).await {
+            Ok(album) => album,
+            Err(e) => {
+                log::error!("[qbz-slint] playback: shuffle get_album {album_id} failed: {e}");
+                return;
+            }
+        };
+        let mut tracks: Vec<qbz_models::Track> =
+            album.tracks.map(|container| container.items).unwrap_or_default();
+        if tracks.is_empty() {
+            return;
+        }
+        let mut seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1)
+            | 1;
+        for i in (1..tracks.len()).rev() {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let j = (seed % (i as u64 + 1)) as usize;
+            tracks.swap(i, j);
+        }
+        play_tracks(runtime, weak, play_handle, tracks, 0);
+    });
+}
+
 /// Insert an album's tracks immediately after the current track ("Play next").
 ///
 /// The core's `add_track_next` inserts a single track after the current index,

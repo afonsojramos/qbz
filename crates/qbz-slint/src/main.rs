@@ -2276,6 +2276,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle.clone(),
                     id,
                 ),
+                ("album", "shuffle") => playback::play_album_shuffled(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id,
+                ),
                 ("album", "edit") => {
                     // Open the local-album tag editor (group_key == directory_path
                     // for folder-grouped local albums).

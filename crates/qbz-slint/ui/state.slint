@@ -288,6 +288,8 @@ export global AlbumState {
     // Artwork-derived tint for the header gradient.
     in property <color> header-color: #181820;
     in property <string> label;
+    // Label id for the sidebar label card → label page navigation ("" = none).
+    in property <string> label-id;
     in property <[string]> awards: [];
     in property <[TrackItem]> tracks: [];
     in property <bool> loading: false;
