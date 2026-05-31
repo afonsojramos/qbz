@@ -488,6 +488,16 @@ impl AudioBackend for CpalDefaultBackend {
             });
         }
 
+        // CPAL's raw enumeration repeats one output across many ALSA PCM
+        // plugins (all sharing a display name) and includes the `null` discard
+        // sink. Collapse the duplicates and push `null` to the end so the
+        // System/JACK picker shows one entry per real output. See device_filter.
+        let devices = crate::device_filter::retain_real_outputs(
+            devices,
+            |d| d.id.as_str(),
+            |d| d.name.as_str(),
+        );
+
         Ok(devices)
     }
 

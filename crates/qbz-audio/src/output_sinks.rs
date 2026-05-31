@@ -122,6 +122,15 @@ pub fn list_output_sinks() -> Result<Vec<OutputSinkInfo>, String> {
         })
         .collect();
 
+    // Collapse the per-PCM-plugin duplicates CPAL emits for a single output and
+    // push the `null` discard sink to the end (shared with the System/JACK
+    // backend enumeration — see device_filter).
+    let sinks = crate::device_filter::retain_real_outputs(
+        sinks,
+        |s| s.name.as_str(),
+        |s| s.description.as_str(),
+    );
+
     log::debug!(
         "[qbz-audio] Found {} audio output devices via CPAL",
         sinks.len()
@@ -164,6 +173,12 @@ pub fn list_output_sinks() -> Result<Vec<OutputSinkInfo>, String> {
             })
         })
         .collect();
+
+    let sinks = crate::device_filter::retain_real_outputs(
+        sinks,
+        |s| s.name.as_str(),
+        |s| s.description.as_str(),
+    );
 
     log::info!("[qbz-audio] Found {} audio output devices", sinks.len());
     Ok(sinks)

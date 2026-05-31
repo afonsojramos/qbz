@@ -41,6 +41,7 @@ pub mod alsa_direct;
 pub mod coreaudio_direct;
 pub mod analysis;
 pub mod analyzer_tap;
+pub mod device_filter;
 pub mod device_reservation;
 pub mod diagnostic;
 pub mod dynamic_amplify;
