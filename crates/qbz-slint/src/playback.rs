@@ -213,6 +213,12 @@ async fn play_local_tracks_now(
     let play_id = queue[start].id;
     runtime.core().set_queue(queue, Some(start)).await;
     after_track_change(runtime, weak, play_id).await;
+    // Push the new queue onto the sidebar model — without this the Queue
+    // panel kept showing the previous queue until it was reopened or its tab
+    // toggled. The sibling play paths (play_local_album / play_local_tracks_from
+    // / the Qobuz play-all paths) already do this; this shared helper backs all
+    // five Local Library entry points, so it was the one path that omitted it.
+    refresh_sidebar(true);
 }
 
 /// Play a local/offline album (metadata-grouped): the whole album becomes the
