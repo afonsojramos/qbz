@@ -20,6 +20,67 @@ use rodio::{
 };
 use std::collections::HashMap;
 use std::fs;
+use std::sync::Mutex;
+
+/// The PipeWire sink QBZ suspended to take a device exclusively (ALSA-direct
+/// EBUSY retry / CPAL-exclusive). Recorded by *resolved name* so
+/// `resume_suspended_sink` wakes the exact sink that was suspended — PipeWire
+/// sink names are deterministic, so resume-by-name is reliable even if the sink
+/// was vacated and re-created while QBZ held the device. Issue #263: QBZ
+/// suspended the default sink but never resumed it, leaving the rest of the
+/// system stuck on a suspended sink after exclusive playback.
+static SUSPENDED_SINK: Mutex<Option<String>> = Mutex::new(None);
+
+/// Suspend the current default PipeWire sink so an exclusive ALSA device open
+/// can grab the hardware, recording the resolved sink name for later resume.
+/// Falls back to the `@DEFAULT_SINK@` alias if the name can't be resolved.
+fn suspend_default_sink_for_exclusive() {
+    let resolved = std::process::Command::new("pactl")
+        .args(["get-default-sink"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let target = resolved.unwrap_or_else(|| "@DEFAULT_SINK@".to_string());
+    match std::process::Command::new("pactl")
+        .args(["suspend-sink", &target, "1"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            log::info!(
+                "[ALSA Backend] Suspended PipeWire sink '{}' for exclusive access",
+                target
+            );
+            if let Ok(mut guard) = SUSPENDED_SINK.lock() {
+                *guard = Some(target);
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::warn!("[ALSA Backend] Failed to suspend PipeWire sink: {}", stderr);
+        }
+        Err(e) => log::warn!("[ALSA Backend] Error suspending PipeWire sink: {}", e),
+    }
+}
+
+/// Resume the PipeWire sink QBZ suspended for exclusive access (issue #263 leak
+/// fix). No-op if QBZ did not suspend one — so it is safe to call on every
+/// stop/teardown. Call it once the exclusive device has actually been released
+/// so the rest of the system can use the sink again.
+pub fn resume_suspended_sink() {
+    let target = match SUSPENDED_SINK.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => None,
+    };
+    if let Some(sink) = target {
+        let _ = std::process::Command::new("pactl")
+            .args(["suspend-sink", &sink, "0"])
+            .output();
+        log::info!("[ALSA Backend] Resumed PipeWire sink '{}'", sink);
+    }
+}
 
 /// Common audio sample rates to check for device support
 const COMMON_SAMPLE_RATES: &[u32] = &[
@@ -725,10 +786,9 @@ impl AlsaBackend {
                         // Retry with progressive backoff before giving up.
                         log::info!("[ALSA Backend] Device busy — retrying with backoff");
 
-                        // Try suspending PipeWire once (covers PipeWire-held case)
-                        let _ = std::process::Command::new("pactl")
-                            .args(["suspend-sink", "@DEFAULT_SINK@", "1"])
-                            .output();
+                        // Try suspending PipeWire once (covers PipeWire-held case).
+                        // Records the sink so it is resumed on stop/teardown (#263).
+                        suspend_default_sink_for_exclusive();
 
                         let retry_delays_ms = [50, 100, 200, 400, 800];
                         for (i, delay_ms) in retry_delays_ms.iter().enumerate() {
@@ -821,9 +881,7 @@ impl AlsaBackend {
 
                 if matches!(error, super::backend::AlsaDirectError::DeviceBusy(_)) {
                     log::info!("[ALSA Backend] plughw device busy — retrying with backoff");
-                    let _ = std::process::Command::new("pactl")
-                        .args(["suspend-sink", "@DEFAULT_SINK@", "1"])
-                        .output();
+                    suspend_default_sink_for_exclusive();
 
                     let retry_delays_ms = [50, 100, 200, 400, 800];
                     for (i, delay_ms) in retry_delays_ms.iter().enumerate() {
@@ -1143,18 +1201,8 @@ impl AudioBackend for AlsaBackend {
             log::info!(
                 "[ALSA Backend] Exclusive mode: suspending PipeWire sinks before CPAL stream"
             );
-            if let Ok(output) = std::process::Command::new("pactl")
-                .args(["suspend-sink", "@DEFAULT_SINK@", "1"])
-                .output()
-            {
-                if output.status.success() {
-                    log::info!("[ALSA Backend] PipeWire sink suspended");
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    log::warn!("[ALSA Backend] Failed to suspend PipeWire sink: {}", stderr);
-                }
-            }
+            suspend_default_sink_for_exclusive();
+            std::thread::sleep(std::time::Duration::from_millis(200));
         }
 
         // Create MixerDeviceSink with custom config

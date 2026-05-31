@@ -3230,6 +3230,11 @@ impl Player {
                                 // for plain (no-passthrough) PipeWire users (#263).
                                 #[cfg(target_os = "linux")]
                                 qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
+                                // The exclusive device is now released (stream dropped
+                                // above), so resume any PipeWire sink we suspended for
+                                // exclusive access — self-gating no-op otherwise (#263).
+                                #[cfg(target_os = "linux")]
+                                qbz_audio::alsa_backend::resume_suspended_sink();
                                 log::info!("Audio thread: suspended stream after pause");
                                 continue;
                             }
