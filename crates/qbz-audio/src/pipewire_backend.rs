@@ -23,6 +23,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The force and the reset both run on the audio thread, so `Relaxed` is enough.
 static CLOCK_FORCE_APPLIED: AtomicBool = AtomicBool::new(false);
 
+/// Restores the `PIPEWIRE_NODE` env var to its previous value when dropped, so
+/// locked-mode sink targeting (Tier 2a, #263) does not leak into later stream
+/// opens. Edition 2021: `set_var`/`remove_var` are safe.
+#[cfg(target_os = "linux")]
+struct PwNodeEnvGuard(Option<String>);
+
+#[cfg(target_os = "linux")]
+impl Drop for PwNodeEnvGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(v) => std::env::set_var("PIPEWIRE_NODE", v),
+            None => std::env::remove_var("PIPEWIRE_NODE"),
+        }
+    }
+}
+
 pub struct PipeWireBackend {
     #[allow(dead_code)]
     host: rodio::cpal::Host,
@@ -588,6 +604,26 @@ impl AudioBackend for PipeWireBackend {
             BufferSize::Fixed(effective_rate / 10)
         };
         log::info!("[PipeWire Backend] Buffer size: {:?}", cpal_buffer_size);
+
+        // Tier 2a (#263): in locked mode (skip_sink_switch) QBZ does NOT steal the
+        // system default sink, so route THIS stream to the selected sink via the
+        // pipewire-ALSA plugin's PIPEWIRE_NODE env — it targets that node WITHOUT
+        // changing the system default. The guard restores the prior env value
+        // after the PCM open (kept alive until the end of this function).
+        #[cfg(target_os = "linux")]
+        let _pw_node_guard = if config.skip_sink_switch {
+            target_sink.as_ref().map(|sink| {
+                let prev = std::env::var("PIPEWIRE_NODE").ok();
+                std::env::set_var("PIPEWIRE_NODE", sink);
+                log::info!(
+                    "[PipeWire Backend] Targeting sink '{}' via PIPEWIRE_NODE (locked mode, default unchanged)",
+                    sink
+                );
+                PwNodeEnvGuard(prev)
+            })
+        } else {
+            None
+        };
 
         // Create MixerDeviceSink with custom config
         let mixer_sink = DeviceSinkBuilder::from_device(device)
