@@ -389,34 +389,50 @@ impl AudioBackend for PipeWireBackend {
             config.sample_rate
         };
 
-        // Force PipeWire to use the effective sample rate (for bit-perfect playback)
-        log::info!(
-            "[PipeWire Backend] Forcing sample rate to {}Hz via pw-metadata",
-            effective_rate
-        );
-        let metadata_result = Command::new("pw-metadata")
-            .args([
-                "-n",
-                "settings",
-                "0",
-                "clock.force-rate",
-                &effective_rate.to_string(),
-            ])
-            .output();
+        // Force PipeWire to use the effective sample rate (for bit-perfect playback).
+        //
+        // Tier 1 (issue #263): when skip_sink_switch ("Lock output device") is ON, the
+        // user has asked QBZ not to mutate GLOBAL graph state to preserve external
+        // routing (JACK/qjackctl/qpwgraph). So we skip the global `clock.force-rate`
+        // write too — not just `set-default-sink`. This trades device-native-rate
+        // playback for routing freedom (PipeWire resamples when track rate != graph
+        // rate). Safe: skip_sink_switch is transitively mutually exclusive with
+        // dac_passthrough / pw_force_bitperfect (the bit-perfect clock path), so this
+        // never collides with a forced-rate bit-perfect session.
+        if config.skip_sink_switch {
+            log::info!(
+                "[PipeWire Backend] Skipping clock.force-rate (skip_sink_switch enabled) — \
+                 external routing preserved; PipeWire may resample if graph rate differs"
+            );
+        } else {
+            log::info!(
+                "[PipeWire Backend] Forcing sample rate to {}Hz via pw-metadata",
+                effective_rate
+            );
+            let metadata_result = Command::new("pw-metadata")
+                .args([
+                    "-n",
+                    "settings",
+                    "0",
+                    "clock.force-rate",
+                    &effective_rate.to_string(),
+                ])
+                .output();
 
-        match metadata_result {
-            Ok(output) if output.status.success() => {
-                log::info!(
-                    "[PipeWire Backend] Sample rate forced to {}Hz",
-                    effective_rate
-                );
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                log::warn!("[PipeWire Backend] Failed to force sample rate: {}", stderr);
-            }
-            Err(e) => {
-                log::warn!("[PipeWire Backend] Error executing pw-metadata: {}", e);
+            match metadata_result {
+                Ok(output) if output.status.success() => {
+                    log::info!(
+                        "[PipeWire Backend] Sample rate forced to {}Hz",
+                        effective_rate
+                    );
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    log::warn!("[PipeWire Backend] Failed to force sample rate: {}", stderr);
+                }
+                Err(e) => {
+                    log::warn!("[PipeWire Backend] Error executing pw-metadata: {}", e);
+                }
             }
         }
 
@@ -577,7 +593,11 @@ impl AudioBackend for PipeWireBackend {
         // The pre-stream force-rate can be ignored if no streams were active.
         // Re-applying now that the stream exists forces PipeWire to reconfigure
         // the graph at the correct rate.
-        if effective_rate != 44100 && effective_rate != 48000 {
+        //
+        // Tier 1 (issue #263): also gated by skip_sink_switch — in "Lock output
+        // device" mode QBZ never writes the global clock force (pre-stream OR
+        // re-apply), so the user's external routing/graph clock is left untouched.
+        if !config.skip_sink_switch && effective_rate != 44100 && effective_rate != 48000 {
             let _ = Command::new("pw-metadata")
                 .args([
                     "-n",
