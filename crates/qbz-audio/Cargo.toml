@@ -36,6 +36,10 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # System directories
 dirs = "6"
 
+# Lock-free SPSC ring buffer (f32-native) for the JACK feeder -> RT callback
+# handoff (#263 Tier 3). f32 elements avoid any byte/alignment handling.
+ringbuf = "0.4"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # ALSA for direct hardware access (bit-perfect)
 alsa = "0.11"

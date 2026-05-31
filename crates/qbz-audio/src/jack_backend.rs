@@ -2,35 +2,38 @@
 //!
 //! QBZ appears as a first-class JACK client (`qbz`) with stable output ports
 //! `qbz:out_FL` / `qbz:out_FR`, patchable in qjackctl / qpwgraph / Reaper. The
-//! routing survives track changes because the client + ports are created ONCE
-//! and live for the whole session.
+//! client + ports are created ONCE and live for the whole session, so routing
+//! survives track changes. On activation the ports are auto-connected to the
+//! system's physical playback (so it "just works" without a patchbay); a user
+//! may re-patch them freely.
 //!
-//! **NOT bit-perfect.** A JACK graph runs at ONE fixed sample rate, so audio is
+//! **NOT bit-perfect.** A JACK graph runs at ONE fixed rate, so audio is
 //! resampled to the graph rate (by the player's feeder) before it reaches us.
-//! This is the documented opt-in trade: routing freedom over per-track
-//! bit-perfect. The ALSA-exclusive / DAC-passthrough paths are untouched.
+//! Opt-in routing-freedom trade; the bit-perfect ALSA-exclusive / DAC-passthrough
+//! paths are untouched.
 //!
-//! Architecture: a lock-free SPSC ring buffer sits between the player's feeder
-//! thread (push, via [`JackStream::write_f32`]) and the JACK `process` callback
-//! (pop, runs in JACK's real-time thread). The callback never allocates or
-//! locks beyond the lock-free ring read.
+//! Architecture: a lock-free SPSC ring of **f32 samples** (`ringbuf`) sits
+//! between the player's feeder thread (push, via [`JackStream::write_f32`]) and
+//! the JACK `process` callback (pop, JACK's RT thread). f32 elements mean no
+//! byte/alignment handling; writes/reads are kept to whole stereo frames.
 
-use jack::{AudioOut, Client, ClientOptions, Control, Port, ProcessScope};
+use jack::{AudioOut, Client, ClientOptions, Control, Port, PortFlags, ProcessScope};
+use ringbuf::traits::{Consumer, Observer, Producer, Split};
+use ringbuf::{HeapCons, HeapProd, HeapRb};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Ring buffer headroom in stereo frames (~1.5 s at 44.1 kHz). Sized generously
-/// so the feeder never blocks the audio decode under normal scheduling.
+/// Ring capacity in stereo frames (~1.5 s at 44.1 kHz). Generous so the feeder
+/// never blocks audio decode under normal scheduling.
 const RING_CAPACITY_FRAMES: usize = 1 << 16; // 65536
-
-/// Max stereo frames a single `process` cycle will ever request; the reusable
-/// de-interleave scratch is pre-sized to this so the RT callback never allocates.
+/// Max stereo frames a single `process` cycle requests; the reusable scratch is
+/// pre-sized to this so the RT callback never allocates.
 const MAX_NFRAMES: usize = 16384;
 
-/// JACK `process` handler (runs in JACK's RT thread). Pops interleaved stereo
-/// f32 from the ring buffer and de-interleaves into the two output ports.
+/// JACK `process` handler (RT thread). Pops interleaved stereo f32 from the ring
+/// and de-interleaves into the two output ports. Allocation- and lock-free.
 struct JackProcess {
-    reader: jack::RingBufferReader,
+    consumer: HeapCons<f32>,
     out_l: Port<AudioOut>,
     out_r: Port<AudioOut>,
     /// Reusable interleaved scratch (pre-sized; no RT allocation).
@@ -41,29 +44,18 @@ struct JackProcess {
 impl jack::ProcessHandler for JackProcess {
     fn process(&mut self, _client: &Client, ps: &ProcessScope) -> Control {
         let nframes = (ps.n_frames() as usize).min(MAX_NFRAMES);
-        let need_samples = nframes * 2; // stereo interleaved
-
-        // Read interleaved f32 (as bytes) from the lock-free ring buffer into the
-        // pre-allocated scratch. No allocation: scratch is sized to MAX_NFRAMES*2.
-        let scratch_bytes: &mut [u8] = unsafe {
-            std::slice::from_raw_parts_mut(
-                self.scratch.as_mut_ptr() as *mut u8,
-                need_samples * std::mem::size_of::<f32>(),
-            )
-        };
-        let got_bytes = self.reader.read_buffer(scratch_bytes);
-        let got_samples = got_bytes / std::mem::size_of::<f32>();
+        let need = nframes * 2; // stereo interleaved
+        let got = self.consumer.pop_slice(&mut self.scratch[..need]);
 
         let l = self.out_l.as_mut_slice(ps);
         let r = self.out_r.as_mut_slice(ps);
         for i in 0..nframes {
             let li = i * 2;
             let ri = li + 1;
-            l[i] = if li < got_samples { self.scratch[li] } else { 0.0 };
-            r[i] = if ri < got_samples { self.scratch[ri] } else { 0.0 };
+            l[i] = if li < got { self.scratch[li] } else { 0.0 };
+            r[i] = if ri < got { self.scratch[ri] } else { 0.0 };
         }
-
-        if got_samples < need_samples {
+        if got < need {
             self.underruns.fetch_add(1, Ordering::Relaxed);
         }
         Control::Continue
@@ -72,25 +64,21 @@ impl jack::ProcessHandler for JackProcess {
 
 /// An active JACK client plus the producer side of the audio ring buffer.
 ///
-/// Mirrors the role of `AlsaDirectStream`: the player feeds interleaved f32 via
-/// [`write_f32`](Self::write_f32); a long-lived feeder thread paces the writes.
-/// Dropping this deactivates + closes the JACK client (ports disappear).
+/// Mirrors `AlsaDirectStream`: the player feeds interleaved stereo f32 via
+/// [`write_f32`](Self::write_f32). Dropping this deactivates + closes the JACK
+/// client (ports disappear).
 pub struct JackStream {
-    /// Activated async client; kept alive for the stream's lifetime. Its `Drop`
-    /// deactivates the client and unregisters the ports.
+    /// Activated async client; its `Drop` deactivates + unregisters the ports.
     _async_client: jack::AsyncClient<(), JackProcess>,
-    writer: Mutex<jack::RingBufferWriter>,
+    producer: Mutex<HeapProd<f32>>,
     sample_rate: u32,
     channels: u16,
     underruns: Arc<AtomicU64>,
 }
 
 impl JackStream {
-    /// Open the JACK client, register stable stereo ports, and activate.
-    ///
-    /// `channels` is the player's channel count; JACK output is stereo here
-    /// (FL/FR). The player resamples + downmixes to stereo at the graph rate
-    /// before feeding, so the ring carries interleaved stereo f32.
+    /// Open the JACK client, register stable stereo ports, activate, and
+    /// auto-connect to the system's physical playback.
     pub fn new(channels: u16) -> Result<Self, String> {
         let (client, _status) = Client::new("qbz", ClientOptions::NO_START_SERVER)
             .map_err(|e| format!("JACK client open failed (is a JACK/pipewire-jack server running?): {e}"))?;
@@ -104,14 +92,12 @@ impl JackStream {
             .register_port("out_FR", AudioOut::default())
             .map_err(|e| format!("JACK register out_FR failed: {e}"))?;
 
-        // Lock-free SPSC ring buffer (bytes). Holds interleaved stereo f32.
-        let rb = jack::RingBuffer::new(RING_CAPACITY_FRAMES * 2 * std::mem::size_of::<f32>())
-            .map_err(|e| format!("JACK ring buffer alloc failed: {e}"))?;
-        let (reader, writer) = rb.into_reader_writer();
+        let rb = HeapRb::<f32>::new(RING_CAPACITY_FRAMES * 2);
+        let (producer, consumer) = rb.split();
 
         let underruns = Arc::new(AtomicU64::new(0));
         let process = JackProcess {
-            reader,
+            consumer,
             out_l,
             out_r,
             scratch: vec![0.0f32; MAX_NFRAMES * 2],
@@ -122,6 +108,31 @@ impl JackStream {
             .activate_async((), process)
             .map_err(|e| format!("JACK activate failed: {e}"))?;
 
+        // Auto-connect qbz:out_FL/FR to the first two physical playback ports so
+        // audio reaches the hardware without a manual patchbay. A user may
+        // disconnect + re-patch freely (the ports are stable).
+        {
+            let c = async_client.as_client();
+            let playback = c.ports(None, None, PortFlags::IS_INPUT | PortFlags::IS_PHYSICAL);
+            if playback.len() >= 2 {
+                if let Err(e) = c.connect_ports_by_name("qbz:out_FL", &playback[0]) {
+                    log::warn!("[JACK] auto-connect out_FL -> {} failed: {e}", playback[0]);
+                }
+                if let Err(e) = c.connect_ports_by_name("qbz:out_FR", &playback[1]) {
+                    log::warn!("[JACK] auto-connect out_FR -> {} failed: {e}", playback[1]);
+                }
+                log::info!(
+                    "[JACK] auto-connected qbz:out_FL/FR -> {} / {}",
+                    playback[0], playback[1]
+                );
+            } else {
+                log::warn!(
+                    "[JACK] no physical playback ports to auto-connect ({} found); patch qbz:out_FL/FR manually",
+                    playback.len()
+                );
+            }
+        }
+
         log::info!(
             "[JACK] client 'qbz' active at {} Hz — ports qbz:out_FL / qbz:out_FR (NOT bit-perfect: resampled to the graph rate)",
             sample_rate
@@ -129,7 +140,7 @@ impl JackStream {
 
         Ok(Self {
             _async_client: async_client,
-            writer: Mutex::new(writer),
+            producer: Mutex::new(producer),
             sample_rate,
             channels,
             underruns,
@@ -137,8 +148,8 @@ impl JackStream {
     }
 
     /// The JACK graph sample rate. The player resamples each track to this rate
-    /// before feeding (the graph rate can change at runtime — the player should
-    /// re-read this on a `buffer_size`/`sample_rate` change; TODO Slice 3.2).
+    /// before feeding. (Runtime graph-rate changes are a slice-3.2 item; today
+    /// this is read once at open.)
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
@@ -147,22 +158,19 @@ impl JackStream {
         self.channels
     }
 
-    /// Push interleaved stereo f32 (already at the graph rate) into the ring
-    /// buffer. Called from the player's feeder thread. Returns the number of
-    /// *frames* accepted; fewer than requested means the ring is full and the
-    /// feeder should retry (it paces itself against real time).
+    /// Push interleaved stereo f32 (already at the graph rate) into the ring.
+    /// Called from the player's feeder thread. Returns the number of *frames*
+    /// accepted (whole stereo frames only); fewer than requested means the ring
+    /// is full and the feeder should retry (it paces against real time).
     pub fn write_f32(&self, samples: &[f32]) -> usize {
-        let bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                samples.as_ptr() as *const u8,
-                std::mem::size_of_val(samples),
-            )
-        };
-        let written = {
-            let mut w = self.writer.lock().unwrap();
-            w.write_buffer(bytes)
-        };
-        (written / std::mem::size_of::<f32>()) / 2
+        let mut p = self.producer.lock().unwrap();
+        // Only push whole stereo frames so the L/R interleave never shifts.
+        let n = samples.len().min(p.vacant_len()) & !1;
+        if n == 0 {
+            return 0;
+        }
+        let pushed = p.push_slice(&samples[..n]);
+        pushed / 2
     }
 
     /// Total underrun events since open (diagnostic).

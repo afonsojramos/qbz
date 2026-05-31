@@ -296,11 +296,11 @@ impl BackendManager {
                 backends.push(AudioBackendType::Pulse);
             }
 
-            // JACK (#263 Tier 3): foundation in place (jack_backend.rs + the enum +
-            // the factory) but NOT yet offered in the selector — the player wiring
-            // (StreamType::Jack + the dispatch + PlaybackEngine::Jack feeder/resampler)
-            // is still pending. Re-enable this push once that lands (Tier-3 handoff).
-            // backends.push(AudioBackendType::Jack);
+            // JACK (#263 Tier 3): offered now that the player wiring is in place
+            // (StreamType::Jack + dispatch + PlaybackEngine::Jack feeder/resampler).
+            // The binary links libjack, so reaching here means it is present;
+            // opening the client fails gracefully if no JACK server is reachable.
+            backends.push(AudioBackendType::Jack);
         }
 
         #[cfg(not(target_os = "linux"))]

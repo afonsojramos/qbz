@@ -9,6 +9,8 @@
 //! seamlessly without interrupting the PCM stream.
 
 use qbz_audio::AlsaDirectStream;
+#[cfg(target_os = "linux")]
+use qbz_audio::JackStream;
 use rodio::{mixer::Mixer, Player as RodioPlayer, Source};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -81,6 +83,21 @@ pub enum PlaybackEngine {
         source_transition: Arc<AtomicBool>,
         hardware_volume: bool,
     },
+    /// Native JACK output (#263 Tier 3). Mirrors AlsaDirect (gapless source queue
+    /// + a single long-lived feeder thread), but the feeder resamples each source
+    /// to the JACK graph rate and writes interleaved stereo f32 into the client's
+    /// lock-free ring buffer via `JackStream::write_f32`. NOT bit-perfect.
+    #[cfg(target_os = "linux")]
+    Jack {
+        is_playing: Arc<AtomicBool>,
+        should_stop: Arc<AtomicBool>,
+        position_frames: Arc<AtomicU64>,
+        duration_frames: Arc<AtomicU64>,
+        source_queue: Arc<SourceQueue>,
+        feeder_thread: Option<thread::JoinHandle<()>>,
+        source_transition: Arc<AtomicBool>,
+        graph_rate: u32,
+    },
 }
 
 impl PlaybackEngine {
@@ -138,6 +155,46 @@ impl PlaybackEngine {
         }
     }
 
+    /// Create a JACK engine with a gapless source queue (#263 Tier 3). Spawns one
+    /// long-lived feeder thread that resamples each source to the JACK graph rate
+    /// and writes it to the client's ring buffer.
+    #[cfg(target_os = "linux")]
+    pub fn new_jack(stream: Arc<JackStream>) -> Self {
+        let is_playing = Arc::new(AtomicBool::new(false));
+        let should_stop = Arc::new(AtomicBool::new(false));
+        let position_frames = Arc::new(AtomicU64::new(0));
+        let duration_frames = Arc::new(AtomicU64::new(0));
+        let source_queue = Arc::new(SourceQueue::new());
+        let source_transition = Arc::new(AtomicBool::new(false));
+        let graph_rate = stream.sample_rate();
+
+        let handle = {
+            let stream_c = stream.clone();
+            let playing_c = is_playing.clone();
+            let stop_c = should_stop.clone();
+            let pos_c = position_frames.clone();
+            let dur_c = duration_frames.clone();
+            let queue_c = source_queue.clone();
+            let transition_c = source_transition.clone();
+            thread::spawn(move || {
+                jack_feeder_thread(
+                    stream_c, playing_c, stop_c, pos_c, dur_c, queue_c, transition_c,
+                );
+            })
+        };
+
+        Self::Jack {
+            is_playing,
+            should_stop,
+            position_frames,
+            duration_frames,
+            source_queue,
+            feeder_thread: Some(handle),
+            source_transition,
+            graph_rate,
+        }
+    }
+
     /// Append audio source.
     /// For ALSA Direct: pushes to the source queue for gapless transition.
     /// For Rodio: delegates to Sink's built-in queue.
@@ -177,6 +234,37 @@ impl PlaybackEngine {
 
                 Ok(())
             }
+            #[cfg(target_os = "linux")]
+            Self::Jack {
+                is_playing,
+                should_stop,
+                position_frames,
+                source_queue,
+                source_transition,
+                graph_rate,
+                ..
+            } => {
+                let is_first = source_queue.is_empty() && !is_playing.load(Ordering::SeqCst);
+                // Resample the track-native source to the JACK graph rate (stereo) so
+                // the feeder/ring always carry graph-rate interleaved stereo f32.
+                let resampled = rodio::source::UniformSourceIterator::new(
+                    source,
+                    std::num::NonZero::new(2u16).unwrap(),
+                    std::num::NonZero::new(*graph_rate).unwrap(),
+                );
+                let boxed: BoxedSampleIter = Box::new(resampled);
+                source_queue.push(boxed);
+                if is_first {
+                    position_frames.store(0, Ordering::SeqCst);
+                    should_stop.store(false, Ordering::SeqCst);
+                    source_transition.store(false, Ordering::SeqCst);
+                    is_playing.store(true, Ordering::SeqCst);
+                    log::info!("[JACK Engine] First source queued, playback starting");
+                } else {
+                    log::info!("[JACK Engine] Source queued for gapless transition");
+                }
+                Ok(())
+            }
         }
     }
 
@@ -188,6 +276,11 @@ impl PlaybackEngine {
                 log::info!("[ALSA Direct Engine] Resume requested");
                 is_playing.store(true, Ordering::SeqCst);
             }
+            #[cfg(target_os = "linux")]
+            Self::Jack { is_playing, .. } => {
+                log::info!("[JACK Engine] Resume requested");
+                is_playing.store(true, Ordering::SeqCst);
+            }
         }
     }
 
@@ -197,6 +290,11 @@ impl PlaybackEngine {
             Self::Rodio { sink } => sink.pause(),
             Self::AlsaDirect { is_playing, .. } => {
                 log::info!("[ALSA Direct Engine] Pause requested");
+                is_playing.store(false, Ordering::SeqCst);
+            }
+            #[cfg(target_os = "linux")]
+            Self::Jack { is_playing, .. } => {
+                log::info!("[JACK Engine] Pause requested");
                 is_playing.store(false, Ordering::SeqCst);
             }
         }
@@ -237,6 +335,24 @@ impl PlaybackEngine {
                     log::warn!("[ALSA Direct Engine] Stop failed: {}", e);
                 }
             }
+            #[cfg(target_os = "linux")]
+            Self::Jack {
+                is_playing,
+                should_stop,
+                feeder_thread,
+                ..
+            } => {
+                if should_stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                log::info!("[JACK Engine] Stop requested");
+                should_stop.store(true, Ordering::SeqCst);
+                is_playing.store(false, Ordering::SeqCst);
+                if let Some(handle) = feeder_thread.take() {
+                    let _ = handle.join();
+                }
+                // JackStream's Drop deactivates the client + unregisters the ports.
+            }
         }
     }
 
@@ -262,6 +378,12 @@ impl PlaybackEngine {
                     );
                 }
             }
+            #[cfg(target_os = "linux")]
+            Self::Jack { .. } => {
+                // JACK output volume is controlled in the JACK graph / DAW; the
+                // feeder writes unattenuated f32. (Software volume could later be
+                // applied by scaling in the feeder.)
+            }
         }
     }
 
@@ -270,6 +392,12 @@ impl PlaybackEngine {
         match self {
             Self::Rodio { sink } => sink.empty(),
             Self::AlsaDirect {
+                is_playing,
+                source_queue,
+                ..
+            } => !is_playing.load(Ordering::SeqCst) && source_queue.is_empty(),
+            #[cfg(target_os = "linux")]
+            Self::Jack {
                 is_playing,
                 source_queue,
                 ..
@@ -283,6 +411,12 @@ impl PlaybackEngine {
         match self {
             Self::Rodio { .. } => false,
             Self::AlsaDirect {
+                source_transition, ..
+            } => source_transition
+                .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok(),
+            #[cfg(target_os = "linux")]
+            Self::Jack {
                 source_transition, ..
             } => source_transition
                 .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
@@ -304,6 +438,15 @@ impl PlaybackEngine {
                 let sample_rate = stream.sample_rate() as u64;
                 Some(frames / sample_rate)
             }
+            #[cfg(target_os = "linux")]
+            Self::Jack {
+                position_frames,
+                graph_rate,
+                ..
+            } => {
+                let frames = position_frames.load(Ordering::SeqCst);
+                Some(frames / (*graph_rate as u64).max(1))
+            }
         }
     }
 
@@ -320,6 +463,15 @@ impl PlaybackEngine {
                 let frames = duration_frames.load(Ordering::SeqCst);
                 let sample_rate = stream.sample_rate() as u64;
                 Some(frames / sample_rate)
+            }
+            #[cfg(target_os = "linux")]
+            Self::Jack {
+                duration_frames,
+                graph_rate,
+                ..
+            } => {
+                let frames = duration_frames.load(Ordering::SeqCst);
+                Some(frames / (*graph_rate as u64).max(1))
             }
         }
     }
@@ -448,6 +600,103 @@ fn alsa_writer_thread(
 
     is_playing.store(false, Ordering::SeqCst);
     log::info!("[ALSA Direct Engine] Writer thread finished");
+}
+
+/// Single long-lived feeder thread for JACK (#263 Tier 3).
+///
+/// Mirrors `alsa_writer_thread`, but writes graph-rate interleaved STEREO f32
+/// into the JACK client's lock-free ring buffer via `JackStream::write_f32`
+/// (the RT process callback drains it), pacing itself when the ring is full.
+/// Sources are resampled to the graph rate + stereo at `append` time.
+#[cfg(target_os = "linux")]
+fn jack_feeder_thread(
+    stream: Arc<JackStream>,
+    is_playing: Arc<AtomicBool>,
+    should_stop: Arc<AtomicBool>,
+    position_frames: Arc<AtomicU64>,
+    duration_frames: Arc<AtomicU64>,
+    source_queue: Arc<SourceQueue>,
+    source_transition: Arc<AtomicBool>,
+) {
+    const CHUNK_FRAMES: usize = 4096;
+    const CHANNELS: usize = 2;
+    let chunk_samples = CHUNK_FRAMES * CHANNELS;
+    let mut buffer_f32: Vec<f32> = Vec::with_capacity(chunk_samples);
+    let mut current_source: Option<BoxedSampleIter> = None;
+    let mut total_frames: u64 = 0;
+
+    log::info!("[JACK Engine] Feeder thread started");
+
+    'thread: loop {
+        if should_stop.load(Ordering::SeqCst) {
+            break 'thread;
+        }
+        if current_source.is_none() {
+            match source_queue.wait_for_source(Duration::from_millis(100)) {
+                Some(src) => {
+                    current_source = Some(src);
+                    total_frames = 0;
+                    position_frames.store(0, Ordering::SeqCst);
+                }
+                None => continue 'thread,
+            }
+        }
+        while !is_playing.load(Ordering::SeqCst) {
+            if should_stop.load(Ordering::SeqCst) {
+                break 'thread;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        buffer_f32.clear();
+        let source = current_source.as_mut().unwrap();
+        let mut source_ended = false;
+        for _ in 0..chunk_samples {
+            match source.next() {
+                Some(s) => buffer_f32.push(s),
+                None => {
+                    source_ended = true;
+                    break;
+                }
+            }
+        }
+
+        // Write to the ring, paced: write_f32 returns frames accepted; a full
+        // ring returns fewer (or 0) and we wait for the RT callback to drain.
+        let mut off_samples = 0usize;
+        while off_samples < buffer_f32.len() {
+            if should_stop.load(Ordering::SeqCst) {
+                break 'thread;
+            }
+            let frames = stream.write_f32(&buffer_f32[off_samples..]);
+            if frames == 0 {
+                std::thread::sleep(Duration::from_millis(2));
+                continue;
+            }
+            off_samples += frames * CHANNELS;
+            total_frames += frames as u64;
+            position_frames.store(total_frames, Ordering::SeqCst);
+            duration_frames.store(total_frames, Ordering::SeqCst);
+        }
+
+        if source_ended {
+            match source_queue.try_pop() {
+                Some(next_src) => {
+                    current_source = Some(next_src);
+                    total_frames = 0;
+                    position_frames.store(0, Ordering::SeqCst);
+                    source_transition.store(true, Ordering::SeqCst);
+                }
+                None => {
+                    current_source = None;
+                    is_playing.store(false, Ordering::SeqCst);
+                }
+            }
+        }
+    }
+
+    is_playing.store(false, Ordering::SeqCst);
+    log::info!("[JACK Engine] Feeder thread finished");
 }
 
 impl Drop for PlaybackEngine {

@@ -495,6 +495,10 @@ enum StreamType {
     },
     #[cfg(target_os = "linux")]
     AlsaDirect(Arc<qbz_audio::AlsaDirectStream>),
+    /// Native JACK output (#263 Tier 3). QBZ as a JACK client with stable ports;
+    /// NOT bit-perfect (resampled to the graph rate).
+    #[cfg(target_os = "linux")]
+    Jack(Arc<qbz_audio::JackStream>),
 }
 
 impl StreamType {
@@ -848,6 +852,19 @@ fn try_init_stream_with_backend(
                     }
                 }
             }
+        }
+    }
+
+    // JACK (#263 Tier 3): create the JACK client/stream directly (not via the
+    // MixerDeviceSink trait). Opt-in routing-freedom mode, NOT bit-perfect.
+    #[cfg(target_os = "linux")]
+    if backend_type == AudioBackendType::Jack {
+        match qbz_audio::JackStream::new(config.channels) {
+            Ok(stream) => {
+                state.set_bit_perfect_mode(Some(qbz_audio::BitPerfectMode::Disabled));
+                return Some(Ok(StreamType::Jack(Arc::new(stream))));
+            }
+            Err(e) => return Some(Err(format!("JACK backend unavailable: {e}"))),
         }
     }
 
@@ -1881,6 +1898,12 @@ impl Player {
                                         hardware_volume,
                                     )
                                 }
+                                #[cfg(target_os = "linux")]
+                                StreamType::Jack(jack_stream) => {
+                                    *consecutive_sink_failures = 0;
+                                    thread_state.set_stream_error(false);
+                                    PlaybackEngine::new_jack(jack_stream.clone())
+                                }
                             };
 
                             let volume = thread_state.volume.load(Ordering::SeqCst) as f32 / 100.0;
@@ -2209,6 +2232,10 @@ impl Player {
                                         hardware_volume,
                                     )
                                 }
+                                #[cfg(target_os = "linux")]
+                                StreamType::Jack(jack_stream) => {
+                                    PlaybackEngine::new_jack(jack_stream.clone())
+                                }
                             };
 
                             let volume = thread_state.volume.load(Ordering::SeqCst) as f32 / 100.0;
@@ -2507,6 +2534,10 @@ impl Player {
                                             hardware_volume,
                                         )
                                     }
+                                    #[cfg(target_os = "linux")]
+                                    StreamType::Jack(jack_stream) => {
+                                        PlaybackEngine::new_jack(jack_stream.clone())
+                                    }
                                 };
 
                                 let volume =
@@ -2708,6 +2739,10 @@ impl Player {
                                         alsa_stream.clone(),
                                         hardware_volume,
                                     )
+                                }
+                                #[cfg(target_os = "linux")]
+                                StreamType::Jack(jack_stream) => {
+                                    PlaybackEngine::new_jack(jack_stream.clone())
                                 }
                             };
 
