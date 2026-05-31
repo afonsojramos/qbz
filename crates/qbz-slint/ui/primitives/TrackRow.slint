@@ -91,8 +91,13 @@ export component TrackRow inherits Rectangle {
                 NavState.request-forward();
             }
             if (e.kind == PointerEventKind.down) {
-                ta.down-x = root.absolute-position.x + ta.mouse-x;
-                ta.down-y = root.absolute-position.y + ta.mouse-y;
+                // absolute-position double-counts this row's own layout offset
+                // when the row sits inside a Flickable (the track list), so the
+                // global pointer drifted down by the row's offset. Subtract
+                // root.{x,y} to recover the true window position (scroll-safe:
+                // root.{x,y} is the fixed in-layout offset, not the scroll).
+                ta.down-x = root.absolute-position.x - root.x + ta.mouse-x;
+                ta.down-y = root.absolute-position.y - root.y + ta.mouse-y;
                 ta.dragging = false;
             }
             if (e.kind == PointerEventKind.up && ta.dragging) {
@@ -103,24 +108,22 @@ export component TrackRow inherits Rectangle {
         moved => {
             if (ta.pressed && root.draggable) {
                 if (!ta.dragging
-                    && (Math.abs(root.absolute-position.x + ta.mouse-x - ta.down-x) > 6px
-                     || Math.abs(root.absolute-position.y + ta.mouse-y - ta.down-y) > 6px)) {
+                    && (Math.abs(root.absolute-position.x - root.x + ta.mouse-x - ta.down-x) > 6px
+                     || Math.abs(root.absolute-position.y - root.y + ta.mouse-y - ta.down-y) > 6px)) {
                     ta.dragging = true;
-                    debug("DRAG absx=", root.absolute-position.x, " absy=", root.absolute-position.y,
-                          " mx=", ta.mouse-x, " my=", ta.mouse-y);
                     DragActions.start(
                         root.track.id,
                         root.track.title,
                         root.track.album != ""
                             ? root.track.artist + " · " + root.track.album
                             : root.track.artist,
-                        root.absolute-position.x + ta.mouse-x,
-                        root.absolute-position.y + ta.mouse-y);
+                        root.absolute-position.x - root.x + ta.mouse-x,
+                        root.absolute-position.y - root.y + ta.mouse-y);
                 }
                 if (ta.dragging) {
                     DragActions.move(
-                        root.absolute-position.x + ta.mouse-x,
-                        root.absolute-position.y + ta.mouse-y);
+                        root.absolute-position.x - root.x + ta.mouse-x,
+                        root.absolute-position.y - root.y + ta.mouse-y);
                 }
             }
         }

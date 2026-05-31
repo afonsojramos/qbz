@@ -142,12 +142,17 @@ component SidebarRow inherits Rectangle {
     property <bool> drag-on: DragState.active;
     property <bool> drop-hot: false;
     function recompute-drop() {
+        // Same Flickable double-count as the folder flyout anchor below:
+        // absolute-position adds this row's own layout offset twice, so the
+        // hit box drifted down by one row-pitch per row. Subtract root.{x,y}
+        // to get the true window bounds (the drag pointer in DragState is
+        // already in true window coords — TrackRow corrects it the same way).
         root.drop-hot = root.drag-on
             && !root.is-folder
-            && root.drag-px >= root.absolute-position.x
-            && root.drag-px <= root.absolute-position.x + root.width
-            && root.drag-py >= root.absolute-position.y
-            && root.drag-py <= root.absolute-position.y + root.height;
+            && root.drag-px >= root.absolute-position.x - root.x
+            && root.drag-px <= root.absolute-position.x - root.x + root.width
+            && root.drag-py >= root.absolute-position.y - root.y
+            && root.drag-py <= root.absolute-position.y - root.y + root.height;
         if (root.drop-hot) {
             DragState.over-playlist-id = root.entry.id;
         } else if (DragState.over-playlist-id == root.entry.id) {
@@ -280,8 +285,18 @@ component SidebarRow inherits Rectangle {
                     SidebarFolderPopupState.folder-id = root.entry.id;
                     SidebarFolderPopupState.folder-name = root.entry.name;
                     SidebarFolderPopupState.count = root.entry.count;
-                    SidebarFolderPopupState.anchor-x = root.absolute-position.x + root.width + 6px;
-                    SidebarFolderPopupState.anchor-y = root.absolute-position.y;
+                    // absolute-position double-counts this row's OWN layout
+                    // offset when the row lives inside a Flickable (here:
+                    // pl-flick). Measured: abs.y = true_y + root.y for every
+                    // row (the first row, root.y==0, is the only one that
+                    // landed right — which is why lower folders drifted down by
+                    // exactly one row-pitch each). Subtracting root.{x,y} cancels
+                    // the duplicate and yields the true window position; it is
+                    // scroll-safe because root.{x,y} is the row's fixed offset
+                    // within the layout, independent of viewport-y. Rows OUTSIDE
+                    // a Flickable (the section nav rows) must NOT subtract it.
+                    SidebarFolderPopupState.anchor-x = root.absolute-position.x - root.x + root.width + 6px;
+                    SidebarFolderPopupState.anchor-y = root.absolute-position.y - root.y;
                     // Fill the popup's playlists from the cache (collapsed
                     // folders' children aren't in the flat entries).
                     SidebarActions.load-folder-popup(root.entry.id);
