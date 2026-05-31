@@ -15,6 +15,13 @@ use rodio::{
     DeviceSinkBuilder, MixerDeviceSink,
 };
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set true whenever QBZ writes a global `clock.force-rate` to the PipeWire
+/// graph, so `reset_pipewire_clock` only resets a force WE applied and never
+/// clobbers another app's intentional forced rate (issue #263, leak fix).
+/// The force and the reset both run on the audio thread, so `Relaxed` is enough.
+static CLOCK_FORCE_APPLIED: AtomicBool = AtomicBool::new(false);
 
 pub struct PipeWireBackend {
     #[allow(dead_code)]
@@ -32,6 +39,15 @@ impl PipeWireBackend {
     /// Call this when playback stops so other apps aren't stuck at a forced rate.
     /// Quantum reset is kept for safety even though we no longer force it.
     pub fn reset_pipewire_clock() {
+        // Only reset a force WE applied — otherwise stopping QBZ would clobber
+        // another app's intentional clock.force-rate. This also makes the call
+        // safe to invoke unconditionally on every stop/suspend (issue #263 leak
+        // fix): previously the reset was gated on `pw_force_bitperfect`, but QBZ
+        // forces the clock for ANY non-locked PipeWire stream, so a plain
+        // PipeWire (no-passthrough) user left the graph force-clocked after stop.
+        if !CLOCK_FORCE_APPLIED.swap(false, Ordering::Relaxed) {
+            return;
+        }
         log::info!("[PipeWire Backend] Resetting clock.force-rate and clock.force-quantum to 0");
         let _ = Command::new("pw-metadata")
             .args(["-n", "settings", "0", "clock.force-rate", "0"])
@@ -434,6 +450,10 @@ impl AudioBackend for PipeWireBackend {
                     log::warn!("[PipeWire Backend] Error executing pw-metadata: {}", e);
                 }
             }
+            // Remember WE forced the clock so the stop/suspend reset undoes it
+            // (and only it). This runs for every non-locked PipeWire stream, so
+            // a plain no-passthrough user no longer leaks a forced rate on stop.
+            CLOCK_FORCE_APPLIED.store(true, Ordering::Relaxed);
         }
 
         // Note: clock.force-quantum is intentionally NOT set.

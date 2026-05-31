@@ -2591,17 +2591,13 @@ impl Player {
                             *pause_suspend_deadline = Some(
                                 Instant::now() + Duration::from_millis(PAUSE_SUSPEND_DELAY_MS),
                             );
-                            // Reset PipeWire clock if bit-perfect was active
+                            // Reset the PipeWire clock if WE forced it. The call is
+                            // self-gating (reset_pipewire_clock no-ops unless QBZ set
+                            // the force), so it is now unconditional: the previous
+                            // pw_force_bitperfect gate missed plain (no-passthrough)
+                            // PipeWire users and leaked a forced rate after stop (#263).
                             #[cfg(target_os = "linux")]
-                            if thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| s.pw_force_bitperfect)
-                                .unwrap_or(false)
-                            {
-                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock(
-                                );
-                            }
+                            qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
                             log::info!("Audio thread: stopped");
                         }
                         AudioCommand::SetVolume(volume) => {
@@ -3228,16 +3224,12 @@ impl Player {
                                 }
                                 drop(stream_opt.take());
                                 pause_suspend_deadline = None;
-                                // Reset PipeWire clock if bit-perfect was active
+                                // Reset the PipeWire clock if WE forced it (self-gating;
+                                // see reset_pipewire_clock). Unconditional now — the
+                                // previous pw_force_bitperfect gate leaked a forced rate
+                                // for plain (no-passthrough) PipeWire users (#263).
                                 #[cfg(target_os = "linux")]
-                                if thread_settings
-                                    .lock()
-                                    .ok()
-                                    .map(|s| s.pw_force_bitperfect)
-                                    .unwrap_or(false)
-                                {
-                                    qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
-                                }
+                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
                                 log::info!("Audio thread: suspended stream after pause");
                                 continue;
                             }
