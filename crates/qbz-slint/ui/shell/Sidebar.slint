@@ -516,7 +516,9 @@ component SidebarNavRow inherits Rectangle {
         HeaderMenuState.items = root.items;
         HeaderMenuState.home-item = root.home-item;
         HeaderMenuState.from-sidebar = true;
-        HeaderMenuState.title = "";
+        // Head the flyout with the section name + hairline, matching the
+        // closed-sidebar CompactNavBtn dropdowns (same @tr labels).
+        HeaderMenuState.title = root.label;
     }
 
     HorizontalLayout {
