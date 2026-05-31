@@ -2694,6 +2694,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         playback::play_tracks(runtime, weak, handle, tracks, 0);
                     });
                 }
+                ("playlist", "queue") => playback::enqueue_playlist(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id,
+                    false,
+                ),
+                ("playlist", "play-next") => playback::enqueue_playlist(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id,
+                    true,
+                ),
                 ("playlist", "favorite") => {
                     // Favorite/unfavorite the open playlist.
                     if let Some(w) = weak.upgrade() {
