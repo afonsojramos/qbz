@@ -3712,6 +3712,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // Case-insensitive substring test backing the searchable QbzSelect
+    // (Slint 1.16 has no `contains` builtin). Pure + stateless, so a single
+    // registration at setup serves every searchable list.
+    window
+        .global::<TextUtil>()
+        .on_contains_ci(|haystack: slint::SharedString, needle: slint::SharedString| {
+            haystack
+                .to_lowercase()
+                .contains(needle.to_lowercase().as_str())
+        });
+
     // Genre filter — selection is per context ("discover" / "favorites").
     // Toggling / clearing re-fetches the discover index (discover context)
     // or re-derives the favorites tab (favorites context).

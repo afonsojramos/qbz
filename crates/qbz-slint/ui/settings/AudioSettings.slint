@@ -98,6 +98,9 @@ export component AudioSettings inherits VerticalLayout {
             // Device labels run long; open the list wider so the full
             // name (card + ALSA PCM id) is readable.
             popup-width: 480px;
+            // Output lists can be long (multiple DACs / HDMI sinks); a
+            // filter box + capped, scrolling list keeps it usable.
+            searchable: true;
             options: SettingsState.devices;
             badges: SettingsState.device-bp;
             groups: SettingsState.device-groups;

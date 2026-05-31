@@ -222,6 +222,14 @@ export global GenreFilterActions {
     callback set-advanced(bool);
 }
 
+// Small string helpers backed by Rust. Slint 1.16 has no `contains`
+// builtin, so the searchable QbzSelect filter (long device lists) needs a
+// native case-insensitive substring test. Pure so it can be called from
+// property bindings; reusable by any searchable list.
+export global TextUtil {
+    pure callback contains-ci(string /* haystack */, string /* needle */) -> bool;
+}
+
 // The single, shared track-row model. Superset of every track-list
 // surface (album, artist popular, search, favorites, mix, playlist),
 // rendered by the shared primitives/TrackRow component. Fields that a

@@ -4,11 +4,24 @@
 // shows the current option and opens a PopupWindow list on click; picking
 // an option emits `selected(index)` and the caller updates the bound
 // state.
+//
+// Two opt-in affordances for long lists (the audio Output-device picker):
+//   - `searchable`: a case-insensitive filter box at the top of the open
+//     list. It hides non-matching rows by visibility only — the model is
+//     never reordered — so `selected(i)` still emits the original index.
+//   - the open list is height-capped and scrolls, so a machine with many
+//     outputs never produces a list taller than the screen.
+//
+// `badges` drives two mutually-exclusive trailing markers per option: a
+// "BP" tag for bit-perfect-capable outputs, and a speaker glyph for the
+// rest (real outputs that play audio but not bit-perfect). The speaker is
+// an addition, never a replacement for "BP".
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "QbzIcon.slint";
+import { TextUtil } from "../state.slint";
 
 // "BP" marker for bit-perfect-capable options. Plain accent text, no
 // background — the QBZ UI never uses pill-style chips.
@@ -19,6 +32,15 @@ component BpBadge inherits Text {
     font-weight: Typography.semibold;
     letter-spacing: 0.5px;
     vertical-alignment: center;
+}
+
+// Speaker glyph marking a non-bit-perfect output that still plays audio.
+// Sits where BP would, so the trailing column stays aligned.
+component AudioGlyph inherits QbzIcon {
+    source: @image-url("../assets/icons/volume-2.svg");
+    width: 14px;
+    height: 14px;
+    tint: Theme.text-muted;
 }
 
 // Non-selectable section header row shown in the open list above the
@@ -34,7 +56,9 @@ component SectionHeader inherits Text {
 
 export component QbzSelect inherits Rectangle {
     in property <[string]> options;
-    // Optional, parallel to `options`: a true entry shows a "BP" badge.
+    // Optional, parallel to `options`: each entry shows either a "BP" badge
+    // (true) or a speaker glyph (false). When `badges` is empty (every
+    // non-device caller) no trailing marker is drawn at all.
     in property <[bool]> badges: [];
     // Optional, parallel to `options`: a non-empty entry renders a
     // non-selectable section-header row immediately above that option.
@@ -50,7 +74,14 @@ export component QbzSelect inherits Rectangle {
     // Bootstrap-style small variant. Default is the standard size (used by
     // Settings); toolbars opt in with `sm: true`.
     in property <bool> sm: false;
+    // Opt-in filter box for long lists. Off by default so existing callers
+    // are untouched.
+    in property <bool> searchable: false;
     callback selected(int);
+
+    // Live filter text (searchable lists only); reset every time the list
+    // opens so a stale query never hides the current selection.
+    private property <string> filter: "";
 
     // Toolbar (sm) selects — Group / Sort / filter — were unnecessarily wide;
     // trim 40px from the effective width (button + list).
@@ -62,6 +93,10 @@ export component QbzSelect inherits Rectangle {
     // Height of one option row and one section-header row.
     private property <length> row-height: 32px;
     private property <length> header-height: 24px;
+    // Search box height (0 when not searchable) and the cap past which the
+    // option list scrolls instead of growing.
+    private property <length> search-height: root.searchable ? 42px : 0px;
+    private property <length> max-list-height: 360px;
 
     width: root.eff-width;
     height: root.sm ? 30px : 34px;
@@ -93,6 +128,12 @@ export component QbzSelect inherits Rectangle {
             alignment: center;
             BpBadge { }
         }
+        if root.current-index >= 0
+            && root.current-index < root.badges.length
+            && !root.badges[root.current-index]: VerticalLayout {
+            alignment: center;
+            AudioGlyph { }
+        }
         VerticalLayout {
             alignment: center;
             QbzIcon {
@@ -108,6 +149,7 @@ export component QbzSelect inherits Rectangle {
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
             if (root.enabled) {
+                root.filter = "";
                 popup.show();
             }
         }
@@ -119,7 +161,9 @@ export component QbzSelect inherits Rectangle {
         x: root.eff-width - root.list-width;
         y: root.height + 4px;
         width: root.list-width;
-        height: list-layout.preferred-height;
+        height: root.search-height
+            + Math.min(rows-col.preferred-height, root.max-list-height)
+            + 10px;
 
         Rectangle {
             background: Theme.surface-main;
@@ -130,50 +174,110 @@ export component QbzSelect inherits Rectangle {
             drop-shadow-color: Theme.card-shadow;
             drop-shadow-offset-y: 5px;
 
-            list-layout := VerticalLayout {
+            VerticalLayout {
                 padding-top: 5px;
                 padding-bottom: 5px;
-                // Each entry is a group-header row (optional, non-selectable)
-                // stacked above its option row. A `groups[i]` of "" means the
-                // option carries no header — every non-device QbzSelect caller
-                // leaves `groups` empty, so they render exactly as before.
-                for opt[i] in root.options: VerticalLayout {
-                    if i < root.groups.length && root.groups[i] != "": Rectangle {
-                        height: root.header-height;
-                        HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            padding-top: 4px;
-                            SectionHeader {
-                                text: root.groups[i];
-                                horizontal-stretch: 1;
+
+                if root.searchable: Rectangle {
+                    height: root.search-height;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        padding-bottom: 6px;
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            QbzIcon {
+                                source: @image-url("../assets/icons/search.svg");
+                                width: 14px;
+                                height: 14px;
+                                tint: Theme.text-muted;
+                            }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            search-input := TextInput {
+                                width: 100%;
+                                height: 100%;
+                                color: Theme.text-primary;
+                                font-size: Typography.body;
+                                vertical-alignment: center;
+                                single-line: true;
+                                text <=> root.filter;
+                            }
+                            Text {
+                                visible: search-input.text == "";
+                                text: @tr("Search…");
+                                color: Theme.text-muted;
+                                font-size: Typography.body;
+                                vertical-alignment: center;
                             }
                         }
                     }
-                    Rectangle {
-                        height: root.row-height;
-                        background: opt-ta.has-hover ? Theme.surface-hover : transparent;
-                        HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            spacing: 8px;
-                            Text {
-                                text: opt;
-                                color: i == root.current-index ? Theme.accent : Theme.text-secondary;
-                                font-size: root.sm ? 12px : Typography.body;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                                overflow: elide;
+                }
+
+                Flickable {
+                    height: Math.min(rows-col.preferred-height, root.max-list-height);
+                    viewport-width: self.width;
+                    viewport-height: rows-col.preferred-height;
+
+                    rows-col := VerticalLayout {
+                        // Each entry is a group-header row (optional,
+                        // non-selectable) stacked above its option row. A
+                        // `groups[i]` of "" means the option carries no header
+                        // — every non-device caller leaves `groups` empty, so
+                        // they render exactly as before. When a filter is
+                        // active, rows that don't match collapse to zero
+                        // height (model order is untouched, so `selected(i)`
+                        // keeps the original index).
+                        for opt[i] in root.options: row-wrap := VerticalLayout {
+                            property <bool> shown:
+                                root.filter == "" || TextUtil.contains-ci(opt, root.filter);
+
+                            if row-wrap.shown
+                                && i < root.groups.length
+                                && root.groups[i] != "": Rectangle {
+                                height: root.header-height;
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    padding-top: 4px;
+                                    SectionHeader {
+                                        text: root.groups[i];
+                                        horizontal-stretch: 1;
+                                    }
+                                }
                             }
-                            if i < root.badges.length && root.badges[i]: VerticalLayout {
-                                alignment: center;
-                                BpBadge { }
-                            }
-                        }
-                        opt-ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.selected(i);
+                            if row-wrap.shown: Rectangle {
+                                height: root.row-height;
+                                background: opt-ta.has-hover ? Theme.surface-hover : transparent;
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    spacing: 8px;
+                                    Text {
+                                        text: opt;
+                                        color: i == root.current-index ? Theme.accent : Theme.text-secondary;
+                                        font-size: root.sm ? 12px : Typography.body;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                    }
+                                    if i < root.badges.length && root.badges[i]: VerticalLayout {
+                                        alignment: center;
+                                        BpBadge { }
+                                    }
+                                    if i < root.badges.length && !root.badges[i]: VerticalLayout {
+                                        alignment: center;
+                                        AudioGlyph { }
+                                    }
+                                }
+                                opt-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.selected(i);
+                                    }
+                                }
                             }
                         }
                     }
