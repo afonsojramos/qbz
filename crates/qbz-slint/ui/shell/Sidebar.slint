@@ -15,7 +15,7 @@ import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SidebarPlaylistCollage } from "../primitives/SidebarPlaylistCollage.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
-import { ShellState, SidebarState, SidebarActions, SidebarEntry, DragState, HeaderMenuState, NavMenuEntry, SidebarFolderPopupState } from "../state.slint";
+import { ShellState, SidebarState, SidebarActions, SidebarEntry, DragState, HeaderMenuState, NavMenuEntry, SidebarFolderPopupState, SidebarTooltipState } from "../state.slint";
 import { ScrollView, LineEdit } from "std-widgets.slint";
 
 // A single context-menu item row.
@@ -163,6 +163,29 @@ component SidebarRow inherits Rectangle {
     changed drag-py => { root.recompute-drop(); }
     changed drag-on => { root.recompute-drop(); }
 
+    // Collapsed (mini) hover tooltip: the row shows only an icon, so reveal the
+    // name (folders also show their playlist count) in a bubble to the right.
+    // Same Flickable absolute-position correction as the folder flyout anchor.
+    function show-tooltip() {
+        if (!ShellState.sidebar-mini) {
+            return;
+        }
+        SidebarTooltipState.id = root.entry.id;
+        SidebarTooltipState.text = root.is-folder
+            ? root.entry.name + " (" + root.entry.count + ")"
+            : root.entry.name;
+        SidebarTooltipState.anchor-x = root.absolute-position.x - root.x + root.width + 6px;
+        SidebarTooltipState.anchor-y = root.absolute-position.y - root.y;
+        SidebarTooltipState.open = true;
+    }
+    // Close only if this row still owns the tooltip (race-safe when the pointer
+    // slides directly from one row to the next).
+    function hide-tooltip() {
+        if (SidebarTooltipState.id == root.entry.id) {
+            SidebarTooltipState.open = false;
+        }
+    }
+
     // True when this playlist row should show its micro-collage instead
     // of the generic glyph (opt-out + at least one cover available).
     property <bool> use-collage: !root.is-folder
@@ -276,8 +299,16 @@ component SidebarRow inherits Rectangle {
         mouse-cursor: pointer;
         changed has-hover => {
             root.hover-changed(self.has-hover);
+            if (self.has-hover) {
+                root.show-tooltip();
+            } else {
+                root.hide-tooltip();
+            }
         }
         clicked => {
+            // The flyout / navigation takes over from here — drop the tooltip
+            // so it doesn't linger behind the opening flyout.
+            SidebarTooltipState.open = false;
             if (root.is-folder) {
                 // Collapsed (mini) sidebar: a folder opens a flyout to the
                 // right instead of expanding downward (Tauri parity).

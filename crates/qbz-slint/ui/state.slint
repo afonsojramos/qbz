@@ -818,6 +818,20 @@ export global SidebarFolderPopupState {
     in property <[SidebarEntry]> playlists: [];
 }
 
+// Collapsed (mini) sidebar hover tooltip — the row shows only an icon, so a
+// hover bubble surfaces the name (folders also show their playlist count).
+// Mirrors Tauri's native `title` on the collapsed folder/playlist buttons.
+// Rendered at the AppShell level because the sidebar clips its overflow; the
+// anchor is the row's true window position (the collapsed rows live inside a
+// Flickable, so SidebarRow corrects the absolute-position double-count).
+export global SidebarTooltipState {
+    in-out property <bool> open: false;
+    in-out property <string> id;        // owning row id (race-safe leave)
+    in-out property <string> text;      // "Folder (N)" or "Playlist name"
+    in-out property <length> anchor-x;  // window x (sidebar right edge)
+    in-out property <length> anchor-y;  // window y (row top)
+}
+
 // The sidebar's playlists + folders. Populated by crate::sidebar on
 // shell entry and after create/delete/move.
 export global SidebarState {
