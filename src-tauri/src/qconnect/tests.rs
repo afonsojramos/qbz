@@ -1,6 +1,6 @@
 use super::commands::{
-    build_qconnect_file_audio_quality_snapshot, classify_qconnect_audio_quality,
-    determine_queue_lookup_report_strategy,
+    build_qconnect_file_audio_quality_snapshot, build_set_position_player_state_request,
+    classify_qconnect_audio_quality, determine_queue_lookup_report_strategy,
     should_skip_renderer_report_due_to_stale_snapshot,
 };
 use super::queue_resolution::{
@@ -15,7 +15,8 @@ use super::transport::{
 };
 use super::{
     normalize_volume_to_fraction, QconnectHandoffIntent, QconnectOutboundCommandType,
-    QconnectRendererInfo, QconnectSessionState, QconnectTrackOrigin, AUDIO_QUALITY_HIRES_LEVEL1,
+    QconnectQueueVersionPayload, QconnectRendererInfo, QconnectSessionState, QconnectTrackOrigin,
+    AUDIO_QUALITY_HIRES_LEVEL1,
 };
 use qbz_models::RepeatMode;
 use qconnect_app::{
@@ -1112,4 +1113,33 @@ fn watchdog_arms_only_for_playing_active_peer() {
     assert!(!should_arm_renderer_watchdog(None, true));
     // Do not arm when not an active peer (e.g. local renderer is active).
     assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_PLAYING), false));
+}
+
+#[test]
+fn build_set_position_request_carries_position_and_queue_item_without_changing_play_state() {
+    let req = build_set_position_player_state_request(
+        42_000,
+        Some(7),
+        QconnectQueueVersionPayload { major: 3, minor: 1 },
+    );
+    assert_eq!(
+        req.playing_state, None,
+        "seek must not change play/pause state"
+    );
+    assert_eq!(req.current_position, Some(42_000));
+    let item = req.current_queue_item.expect("queue item present");
+    assert_eq!(item.id, Some(7));
+    let ver = item.queue_version.expect("queue version present");
+    assert_eq!((ver.major, ver.minor), (3, 1));
+}
+
+#[test]
+fn build_set_position_request_omits_queue_item_when_unknown() {
+    let req = build_set_position_player_state_request(
+        1_000,
+        None,
+        QconnectQueueVersionPayload { major: 1, minor: 0 },
+    );
+    assert!(req.current_queue_item.is_none());
+    assert_eq!(req.current_position, Some(1_000));
 }

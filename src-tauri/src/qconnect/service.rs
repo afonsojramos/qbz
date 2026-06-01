@@ -1510,6 +1510,53 @@ impl QconnectServiceState {
 
         Ok(true)
     }
+
+    pub(super) async fn set_position_if_remote(
+        &self,
+        position_ms: i64,
+        app_handle: &AppHandle,
+    ) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((renderer, queue, session)) = remote_context else {
+            return Ok(false);
+        };
+
+        let current_queue_item_id = renderer
+            .current_track
+            .as_ref()
+            .map(|item| item.queue_item_id);
+
+        let request = super::commands::build_set_position_player_state_request(
+            position_ms,
+            current_queue_item_id,
+            QconnectQueueVersionPayload {
+                major: queue.version.major,
+                minor: queue.version.minor,
+            },
+        );
+        let payload = serde_json::to_value(request)
+            .map_err(|err| format!("serialize set_position request: {err}"))?;
+
+        self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
+            .await?;
+
+        if position_ms >= 0 {
+            self.update_renderer_position(position_ms as u64).await;
+        }
+
+        emit_qconnect_diagnostic(
+            app_handle,
+            "qconnect:set_position_handoff",
+            "info",
+            json!({
+                "active_renderer_id": session.active_renderer_id,
+                "local_renderer_id": session.local_renderer_id,
+                "position_ms": position_ms,
+            }),
+        );
+
+        Ok(true)
+    }
 }
 
 

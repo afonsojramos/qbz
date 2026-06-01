@@ -414,6 +414,19 @@ pub async fn v2_qconnect_stop_if_remote(
 }
 
 #[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_qconnect_set_position_if_remote(
+    positionMs: i64,
+    app_handle: AppHandle,
+    service: State<'_, QconnectServiceState>,
+) -> Result<bool, RuntimeError> {
+    service
+        .set_position_if_remote(positionMs, &app_handle)
+        .await
+        .map_err(RuntimeError::Internal)
+}
+
+#[tauri::command]
 pub async fn v2_qconnect_toggle_shuffle_if_remote(
     app_handle: AppHandle,
     service: State<'_, QconnectServiceState>,
@@ -836,6 +849,34 @@ pub(super) fn should_report_queue_item_ids_for_renderer_state(
     requested_current_qid.is_some()
         || queue_lookup_report_strategy.is_some()
         || (local_renderer_active && resolved_current_qid.is_some())
+}
+
+/// Build a `CtrlSrvrSetPlayerState` request that seeks the remote renderer to
+/// `position_ms` for `current_queue_item_id` under optimistic concurrency.
+///
+/// `playing_state` is intentionally `None`: a seek must not toggle play/pause.
+pub(super) fn build_set_position_player_state_request(
+    position_ms: i64,
+    current_queue_item_id: Option<u64>,
+    queue_version: super::QconnectQueueVersionPayload,
+) -> super::QconnectSetPlayerStateRequest {
+    let current_position = i32::try_from(position_ms.max(0)).ok();
+    let current_queue_item = current_queue_item_id.and_then(|qid| {
+        i32::try_from(qid)
+            .ok()
+            .map(|id| super::QconnectSetPlayerStateQueueItemPayload {
+                queue_version: Some(super::QconnectQueueVersionPayload {
+                    major: queue_version.major,
+                    minor: queue_version.minor,
+                }),
+                id: Some(id),
+            })
+    });
+    super::QconnectSetPlayerStateRequest {
+        playing_state: None,
+        current_position,
+        current_queue_item,
+    }
 }
 
 /// Report volume change to QConnect server.

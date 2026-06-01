@@ -1568,6 +1568,7 @@ pub fn run(qconnect_cli_override: Option<bool>) {
             qconnect::v2_qconnect_set_volume_if_remote,
             qconnect::v2_qconnect_mute_if_remote,
             qconnect::v2_qconnect_stop_if_remote,
+            qconnect::v2_qconnect_set_position_if_remote,
             qconnect::v2_qconnect_toggle_shuffle_if_remote,
             qconnect::v2_qconnect_cycle_repeat_if_remote,
             qconnect::v2_qconnect_set_autoplay_mode_if_remote,
