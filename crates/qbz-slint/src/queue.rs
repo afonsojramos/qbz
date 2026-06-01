@@ -213,10 +213,10 @@ impl QueueController {
             .unwrap_or(false);
 
         // --- UP NEXT (search-filtered) -----------------------------------
-        let (search, page) = self
+        let (search, page, tab) = self
             .view
             .lock()
-            .map(|v| (v.search.clone(), v.page))
+            .map(|v| (v.search.clone(), v.page, v.tab))
             .unwrap_or_default();
         let query = search.trim().to_lowercase();
 
@@ -312,6 +312,9 @@ impl QueueController {
             qs.set_history(slint::ModelRc::new(slint::VecModel::from(history_items)));
 
             qs.set_infinite_play(infinite);
+            // Keep the Slint tab property in sync with the view state so the
+            // Queue/History body always matches the selected tab.
+            qs.set_tab(tab);
         });
 
         load_artwork(self.weak.clone(), art_jobs);
@@ -524,10 +527,16 @@ impl QueueController {
         self.refresh();
     }
 
-    /// Switch the active tab (0 = Queue, 1 = History).
+    /// Switch the active tab (0 = Queue, 1 = History). Pushes the new index
+    /// onto the Slint `QueueState.tab` property right away — `refresh()` is
+    /// async, so without this the body never switched (the History tab read
+    /// `tab == 1` but the property stayed 0, so clicking History did nothing).
     pub fn set_tab(&self, tab: i32) {
         if let Ok(mut view) = self.view.lock() {
             view.tab = tab;
+        }
+        if let Some(w) = self.weak.upgrade() {
+            w.global::<QueueState>().set_tab(tab);
         }
         self.refresh();
     }
