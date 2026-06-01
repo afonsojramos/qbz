@@ -22,6 +22,7 @@ use super::corebridge::{
     apply_renderer_command_to_corebridge, materialize_remote_queue_to_corebridge,
 };
 use super::queue_resolution::is_valid_ordered_queue_shuffle_order;
+use super::service::emit_qconnect_diagnostic;
 use super::session::{
     build_session_renderer_snapshot, cache_renderer_snapshot, ensure_session_renderer_state,
     is_peer_renderer_active, normalize_active_renderer_id, refresh_local_renderer_id,
@@ -164,6 +165,37 @@ impl QconnectEventSink for TauriQconnectEventSink {
                     // track preloaded above); announce readiness to the controller.
                     self.report_active_renderer_ready().await;
                 }
+            }
+            QconnectAppEvent::RendererUnreachable { renderer_id } => {
+                self.emit_renderer_freeze_channel("qconnect:renderer_unreachable", *renderer_id);
+            }
+            QconnectAppEvent::RendererDisconnected { renderer_id } => {
+                self.emit_renderer_freeze_channel("qconnect:renderer_disconnected", *renderer_id);
+            }
+            QconnectAppEvent::ResyncComplete => {
+                emit_qconnect_diagnostic(
+                    &self.app_handle,
+                    "qconnect:resync_complete",
+                    "info",
+                    serde_json::json!({}),
+                );
+            }
+            QconnectAppEvent::LifecycleChanged { state } => {
+                let serialized =
+                    serde_json::to_value(state).unwrap_or_else(|_| serde_json::json!("unknown"));
+                if let Err(err) = self.app_handle.emit(
+                    "qconnect:status_changed",
+                    serde_json::json!({ "state": serialized }),
+                ) {
+                    log::warn!("[QConnect] Failed to emit qconnect:status_changed: {err}");
+                }
+            }
+            QconnectAppEvent::Diagnostic {
+                channel,
+                level,
+                payload,
+            } => {
+                emit_qconnect_diagnostic(&self.app_handle, channel, level, payload.clone());
             }
             _ => {}
         }
@@ -483,7 +515,7 @@ impl TauriQconnectEventSink {
         if let Some(renderer_id) = disconnected_renderer_id {
             self.freeze_active_renderer_projection_to_unknown(
                 renderer_id,
-                "qconnect:renderer_disconnected",
+                QconnectAppEvent::RendererDisconnected { renderer_id },
             )
             .await;
         }
@@ -517,7 +549,7 @@ impl TauriQconnectEventSink {
                     );
                     sink.freeze_active_renderer_projection_to_unknown(
                         renderer_id,
-                        "qconnect:renderer_unreachable",
+                        QconnectAppEvent::RendererUnreachable { renderer_id },
                     )
                     .await;
                 }
@@ -534,15 +566,20 @@ impl TauriQconnectEventSink {
     }
 
     /// Force the active renderer's cached projection to UNKNOWN/stopped and
-    /// emit a freeze event. Shared by ACTIVE_DISCONNECTED (P0-2) and the
-    /// silence watchdog (P0-1). Caller passes the event name to emit.
+    /// signal a freeze event through the event sink. Shared by
+    /// ACTIVE_DISCONNECTED (P0-2) and the silence watchdog (P0-1). Caller passes
+    /// the `QconnectAppEvent` freeze variant (`RendererUnreachable` /
+    /// `RendererDisconnected`) to emit.
     ///
-    /// This is a pure-state mutation + emit; it does NOT route back through
-    /// `apply_session_management_event`, so it cannot re-arm the watchdog.
+    /// This is a pure-state mutation followed by `on_event(variant)`. The sink's
+    /// mapper arm for these variants ONLY emits the dedicated Tauri channel (+
+    /// the blanket `qconnect:event`); it does NOT route back through
+    /// `apply_session_management_event` or call this helper again, so it cannot
+    /// re-arm the watchdog or recurse.
     async fn freeze_active_renderer_projection_to_unknown(
         &self,
         renderer_id: i32,
-        event_name: &str,
+        freeze_event: QconnectAppEvent,
     ) {
         {
             let mut state = self.sync_state.lock().await;
@@ -550,11 +587,19 @@ impl TauriQconnectEventSink {
             renderer_state.playing_state = Some(PLAYING_STATE_UNKNOWN);
             renderer_state.updated_at_ms = qconnect_now_ms();
         }
+        self.on_event(freeze_event).await;
+    }
+
+    /// Emit one renderer-freeze dedicated channel (`qconnect:renderer_unreachable`
+    /// / `qconnect:renderer_disconnected`) with the legacy `{renderer_id}` payload.
+    /// Called from the `on_event` mapper arms; kept as a small helper so both
+    /// freeze channels share the exact same payload shape.
+    fn emit_renderer_freeze_channel(&self, channel: &str, renderer_id: i32) {
         if let Err(err) = self
             .app_handle
-            .emit(event_name, serde_json::json!({ "renderer_id": renderer_id }))
+            .emit(channel, serde_json::json!({ "renderer_id": renderer_id }))
         {
-            log::warn!("[QConnect] Failed to emit {event_name}: {err}");
+            log::warn!("[QConnect] Failed to emit {channel}: {err}");
         }
     }
 

@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use qconnect_app::{
-    QConnectQueueState, QConnectRendererState, QconnectApp, QueueCommandType, RendererReport,
-    RendererReportType,
+    QConnectQueueState, QConnectRendererState, QconnectApp, QconnectAppEvent, QconnectEventSink,
+    QueueCommandType, RendererReport, RendererReportType,
 };
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
 use serde_json::{json, Value};
@@ -214,7 +214,7 @@ fn queue_payload_track_preview(payload: &Value, key: &str) -> Vec<i64> {
 }
 async fn update_lifecycle_state_if_running(
     inner: &Arc<Mutex<QconnectServiceInner>>,
-    app_handle: &AppHandle,
+    sink: &TauriQconnectEventSink,
     next: QconnectLifecycleState,
 ) {
     let mut guard = inner.lock().await;
@@ -226,16 +226,19 @@ async fn update_lifecycle_state_if_running(
     }
     guard.lifecycle_state = next;
     drop(guard);
-    let serialized = serde_json::to_value(next).unwrap_or_else(|_| json!("unknown"));
-    let _ = app_handle.emit(
-        "qconnect:status_changed",
-        json!({
-            "state": serialized,
-        }),
-    );
+    // Slice 3: route through the event sink. The sink's `LifecycleChanged` arm
+    // emits `qconnect:status_changed` with `{state}` — byte-identical to the
+    // prior raw emit here.
+    sink.on_event(QconnectAppEvent::LifecycleChanged { state: next })
+        .await;
 }
 
-fn emit_qconnect_diagnostic(app_handle: &AppHandle, channel: &str, level: &str, payload: Value) {
+pub(super) fn emit_qconnect_diagnostic(
+    app_handle: &AppHandle,
+    channel: &str,
+    level: &str,
+    payload: Value,
+) {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
@@ -323,6 +326,11 @@ impl QconnectServiceState {
         let inner_for_loop = Arc::clone(&self.inner);
         let sync_state_for_loop = Arc::clone(&sync_state);
         let app_handle_for_status = app_handle.clone();
+        // The session/liveness/diagnostic emits route THROUGH the event sink
+        // (Slice 3): the sink maps each new QconnectAppEvent variant back to the
+        // exact same `qconnect:*` channel + payload as the prior raw emits, so
+        // the Svelte wire surface is byte-identical.
+        let sink_for_loop = Arc::clone(&sink);
         // gap #7: when the transport is configured to idle-retry after
         // Exhausted, the transport loop does NOT terminate — it idles then
         // re-arms and emits fresh ReconnectScheduled / SessionEstablished
@@ -392,7 +400,7 @@ impl QconnectServiceState {
                                 // SessionEstablished or MaxReconnectAttemptsExceeded.
                                 update_lifecycle_state_if_running(
                                     &inner_for_loop,
-                                    &app_handle_for_status,
+                                    &sink_for_loop,
                                     QconnectLifecycleState::Reconnecting,
                                 )
                                 .await;
@@ -422,12 +430,10 @@ impl QconnectServiceState {
                                     // P1-11: signal the frontend that the post-reconnect
                                     // resync has been issued, so it can evaluate whether
                                     // to replay or advise on the last transport intent.
-                                    emit_qconnect_diagnostic(
-                                        &app_handle_for_status,
-                                        "qconnect:resync_complete",
-                                        "info",
-                                        json!({}),
-                                    );
+                                    // Slice 3: routed through the sink; the `ResyncComplete`
+                                    // arm emits the identical `qconnect:diagnostic`
+                                    // (channel=qconnect:resync_complete, level=info, {}).
+                                    sink_for_loop.on_event(QconnectAppEvent::ResyncComplete).await;
                                 }
                             }
                             qconnect_transport_ws::TransportEvent::KeepalivePingSent => {
@@ -449,11 +455,10 @@ impl QconnectServiceState {
                                     evt.message_type(),
                                     evt.payload
                                 );
-                                emit_qconnect_diagnostic(
-                                    &app_for_errors,
-                                    "qconnect:inbound_queue_event",
-                                    "info",
-                                    json!({
+                                sink_for_loop.on_event(QconnectAppEvent::Diagnostic {
+                                    channel: "qconnect:inbound_queue_event".to_string(),
+                                    level: "info".to_string(),
+                                    payload: json!({
                                         "message_type": evt.message_type(),
                                         "action_uuid": evt.action_uuid.clone(),
                                         "queue_version": evt.queue_version,
@@ -462,7 +467,7 @@ impl QconnectServiceState {
                                         "preview_track_ids": queue_payload_track_preview(&evt.payload, "tracks"),
                                         "preview_autoplay_track_ids": queue_payload_track_preview(&evt.payload, "autoplay_tracks"),
                                     }),
-                                );
+                                }).await;
                             }
                             qconnect_transport_ws::TransportEvent::InboundRendererServerCommand(
                                 cmd,
@@ -520,16 +525,15 @@ impl QconnectServiceState {
                                     code,
                                     descr
                                 );
-                                emit_qconnect_diagnostic(
-                                    &app_for_errors,
-                                    "qconnect:cloud_error",
-                                    "warning",
-                                    json!({
+                                sink_for_loop.on_event(QconnectAppEvent::Diagnostic {
+                                    channel: "qconnect:cloud_error".to_string(),
+                                    level: "warning".to_string(),
+                                    payload: json!({
                                         "msg_id": msg_id,
                                         "code": code,
                                         "descr": descr,
                                     }),
-                                );
+                                }).await;
                             }
                             qconnect_transport_ws::TransportEvent::InboundReceived(_envelope) => {
                                 log::info!(
@@ -542,7 +546,7 @@ impl QconnectServiceState {
                                 );
                                 update_lifecycle_state_if_running(
                                     &inner_for_loop,
-                                    &app_handle_for_status,
+                                    &sink_for_loop,
                                     QconnectLifecycleState::Connected,
                                 )
                                 .await;
@@ -556,15 +560,14 @@ impl QconnectServiceState {
                                     attempts,
                                     last_reason
                                 );
-                                emit_qconnect_diagnostic(
-                                    &app_for_errors,
-                                    "qconnect:max_reconnect_attempts_exceeded",
-                                    "error",
-                                    json!({
+                                sink_for_loop.on_event(QconnectAppEvent::Diagnostic {
+                                    channel: "qconnect:max_reconnect_attempts_exceeded".to_string(),
+                                    level: "error".to_string(),
+                                    payload: json!({
                                         "attempts": attempts,
                                         "last_reason": last_reason,
                                     }),
-                                );
+                                }).await;
                                 // Surface the Exhausted lifecycle to the UI in
                                 // both modes. The difference is what we do with
                                 // the runtime + event loop afterwards:

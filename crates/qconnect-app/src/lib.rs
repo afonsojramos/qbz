@@ -16,8 +16,9 @@ pub use error::QconnectAppError;
 pub use events::{NoOpEventSink, QconnectAppEvent, QconnectEventSink};
 pub use session::{
     compute_connection_state, deferred_join_reason, quality_from_max_audio_quality,
-    should_arm_renderer_watchdog, should_reask_queue_state, ConnectionDecision, RendererStatus,
-    ServerActiveState, JOIN_SESSION_REASON_CONTROLLER_REQUEST, JOIN_SESSION_REASON_RECONNECTION,
+    should_arm_renderer_watchdog, should_reask_queue_state, ConnectionDecision,
+    QconnectLifecycleState, RendererStatus, ServerActiveState,
+    JOIN_SESSION_REASON_CONTROLLER_REQUEST, JOIN_SESSION_REASON_RECONNECTION,
     QCONNECT_RENDERER_LOST_TIMEOUT_MS,
 };
 pub use feature_flags::{

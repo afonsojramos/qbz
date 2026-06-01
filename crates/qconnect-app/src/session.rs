@@ -6,6 +6,35 @@
 //! byte-for-byte identical to the prior Tauri-side definitions.
 
 use qbz_models::Quality;
+use serde::{Deserialize, Serialize};
+
+/// Lifecycle state surfaced to the UI so the toggle can reflect what the user
+/// asked for (`running`) separately from what the transport currently has
+/// (`Connecting`/`Connected`/`Reconnecting`). Without this distinction the UI
+/// reads the toggle as "off" while the backend reconnect loop is alive,
+/// leaving the user unable to disable QConnect (issue #358).
+///
+/// Pure data — no Tauri dependency. The Tauri `types.rs` re-exports this for the
+/// command surface; the session layer emits it via `QconnectAppEvent::LifecycleChanged`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QconnectLifecycleState {
+    /// User has not enabled QConnect (or it has been fully torn down).
+    #[default]
+    Off,
+    /// `connect()` has been called; transport is establishing the WS but no
+    /// `SessionEstablished` yet.
+    Connecting,
+    /// Transport saw at least one `SESSION_STATE` frame on the active WS — the
+    /// session-level handshake completed.
+    Connected,
+    /// Transport disconnected after at least one successful connect; the
+    /// reconnect loop is running.
+    Reconnecting,
+    /// `MaxReconnectAttemptsExceeded` fired — runtime auto-stopped, last error
+    /// surfaced. User can re-enable from UI.
+    Exhausted,
+}
 
 /// Playing-state wire value for PLAYING. Mirrors the Tauri adapter's
 /// `PLAYING_STATE_PLAYING` (the renderer reports playing_state == 2 while
