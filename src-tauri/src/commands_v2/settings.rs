@@ -247,6 +247,7 @@ pub fn v2_get_available_backends() -> Result<Vec<BackendInfo>, String> {
                 AudioBackendType::Alsa => "ALSA Direct",
                 AudioBackendType::Pulse => "PulseAudio",
                 AudioBackendType::SystemDefault => "System",
+                AudioBackendType::Jack => "JACK",
             };
 
             BackendInfo {
