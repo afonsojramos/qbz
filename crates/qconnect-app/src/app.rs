@@ -322,6 +322,7 @@ where
                     QueueEventType::SrvrCtrlShuffleModeSet
                         | QueueEventType::SrvrCtrlQueueTracksReordered
                         | QueueEventType::SrvrCtrlQueueTracksRemoved
+                        | QueueEventType::SrvrCtrlQueueTracksAddedFromAutoplay
                 ) {
                     should_trigger_resync = true;
                 }
@@ -1161,6 +1162,34 @@ mod tests {
         assert!(
             !sent.is_empty(),
             "expected ask-for-state resync after remove"
+        );
+    }
+
+    #[tokio::test]
+    async fn autoplay_growth_triggers_queue_state_resync() {
+        let (app, sink, transport, _events_rx) = build_connected_app().await;
+
+        app.apply_server_event(QueueServerEvent {
+            event_type: QueueEventType::SrvrCtrlQueueTracksAddedFromAutoplay,
+            action_uuid: None,
+            queue_version: Some(QueueVersion::new(2, 0)),
+            payload: json!({ "queue_item_ids": [101, 102] }),
+        })
+        .await
+        .expect("apply autoplay-growth event");
+
+        let events = sink.snapshot().await;
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, QconnectAppEvent::QueueResyncTriggered)),
+            "autoplay growth must force an AskForQueueState resync"
+        );
+
+        let sent = transport.sent_messages().await;
+        assert!(
+            !sent.is_empty(),
+            "expected ask-for-state resync after autoplay growth"
         );
     }
 
