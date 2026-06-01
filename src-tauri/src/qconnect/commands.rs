@@ -5,7 +5,7 @@
 //! to `QconnectServiceState` after a `runtime.check_requirements` gate.
 
 use qconnect_app::{
-    evaluate_remote_queue_admission, resolve_handoff_intent, QConnectQueueState,
+    evaluate_remote_queue_admission, resolve_handoff_intent, AdmissionDecision, QConnectQueueState,
     QConnectRendererState, QconnectStartupMode, QueueCommandType, RendererReport,
     RendererReportType,
 };
@@ -182,6 +182,26 @@ pub async fn v2_qconnect_evaluate_queue_admission(
     })
 }
 
+/// Server-side backstop: re-evaluate EVERY track's origin, independent of the
+/// command-level `origin`. A bare `track_id` (a `u64`) cannot prove "Qobuz vs
+/// local/Plex" on its own, so the frontend ships per-track origins and the gate
+/// re-validates each one here. An empty list is blocked: we cannot prove the
+/// queue is all-Qobuz, so we refuse rather than trust the command-level origin.
+pub(super) fn validate_track_origins_for_admission(
+    origins: &[QconnectTrackOrigin],
+) -> AdmissionDecision {
+    if origins.is_empty() {
+        return AdmissionDecision::block("empty_track_origins_blocked");
+    }
+    for origin in origins {
+        let decision = evaluate_remote_queue_admission(origin.into_core_origin());
+        if !decision.accepted {
+            return decision;
+        }
+    }
+    AdmissionDecision::allow("all_track_origins_qobuz")
+}
+
 #[tauri::command]
 pub async fn v2_qconnect_send_command_with_admission(
     request: QconnectSendCommandWithAdmissionRequest,
@@ -196,8 +216,24 @@ pub async fn v2_qconnect_send_command_with_admission(
 
     if request.command_type.requires_remote_queue_admission() {
         let core_origin = request.origin.into_core_origin();
-        let decision = evaluate_remote_queue_admission(core_origin);
-        if !decision.accepted {
+        let command_decision = evaluate_remote_queue_admission(core_origin);
+
+        // Per-track backstop: only enforced when the caller actually ships
+        // per-track origins (bulk queue loads). Single-track play-next/play-later
+        // legitimately carry no `track_origins` and gate on the command-level
+        // origin alone, so an empty list here must NOT over-block them.
+        let per_track_decision = if request.track_origins.is_empty() {
+            command_decision.clone()
+        } else {
+            validate_track_origins_for_admission(&request.track_origins)
+        };
+
+        if !command_decision.accepted || !per_track_decision.accepted {
+            let decision = if !per_track_decision.accepted {
+                per_track_decision
+            } else {
+                command_decision
+            };
             log::warn!(
                 "[QConnect] send_command_with_admission: BLOCKED reason={}",
                 decision.reason

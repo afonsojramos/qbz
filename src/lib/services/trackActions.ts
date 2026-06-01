@@ -202,12 +202,14 @@ async function resolveQconnectPlayNextInsertAfterFromSnapshots(): Promise<Qconne
 async function sendQconnectQueueCommandWithAdmission(
   commandType: QconnectQueueCommandType,
   origin: QconnectTrackOrigin,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  trackOrigins: QconnectTrackOrigin[] = []
 ): Promise<void> {
   await invoke('v2_qconnect_send_command_with_admission', {
     request: {
       command_type: commandType,
       origin,
+      track_origins: trackOrigins,
       payload
     }
   });
@@ -610,8 +612,15 @@ export async function loadQconnectQueue(
       preview_track_ids: trackIds.slice(0, 8),
       payload
     });
+    // Per-track origins for the Rust backstop (fix #3): when backend-shaped
+    // tracks are supplied, ship each track's resolved origin so the server gate
+    // can re-validate every id, not just the command-level origin. Bare id-only
+    // callers send none and stay gated by the command-level origin alone.
+    const trackOrigins = tracks
+      ? tracks.map((tr) => resolveQconnectTrackOrigin(tr, tr.is_local ?? false))
+      : [];
     console.log('[QConnect/LoadQueue] sending queue_load_tracks');
-    await sendQconnectQueueCommandWithAdmission('queue_load_tracks', origin, payload);
+    await sendQconnectQueueCommandWithAdmission('queue_load_tracks', origin, payload, trackOrigins);
     console.log('[QConnect/LoadQueue] SUCCESS');
 
     // Sync local autoplay preference to QConnect server after queue load

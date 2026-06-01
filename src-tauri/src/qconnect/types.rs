@@ -182,6 +182,12 @@ pub struct QconnectAdmissionResult {
 pub struct QconnectSendCommandWithAdmissionRequest {
     pub command_type: QconnectOutboundCommandType,
     pub origin: QconnectTrackOrigin,
+    /// Per-track origins for the IDs in `payload.track_ids`. The server gate
+    /// re-validates EACH, independent of the command-level `origin`. Defaults
+    /// to empty for callers that legitimately carry no track payload (e.g.
+    /// single-track play-next/play-later that gate on the command-level origin).
+    #[serde(default)]
+    pub track_origins: Vec<QconnectTrackOrigin>,
     #[serde(default)]
     pub payload: Value,
 }

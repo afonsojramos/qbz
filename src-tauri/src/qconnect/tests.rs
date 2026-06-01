@@ -99,6 +99,17 @@ fn maps_qconnect_track_origin_to_core_origin_and_handoff() {
 }
 
 #[test]
+fn blocks_command_when_any_track_origin_is_non_qobuz() {
+    use super::commands::validate_track_origins_for_admission;
+    use super::QconnectTrackOrigin::*;
+    assert!(validate_track_origins_for_admission(&[QobuzOnline, QobuzOfflineCache]).accepted);
+    assert!(!validate_track_origins_for_admission(&[QobuzOnline, LocalLibrary]).accepted);
+    assert!(!validate_track_origins_for_admission(&[Plex]).accepted);
+    assert!(!validate_track_origins_for_admission(&[ExternalUnknown]).accepted);
+    assert!(!validate_track_origins_for_admission(&[]).accepted); // empty -> blocked
+}
+
+#[test]
 fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
     let local_device_uuid = super::transport::resolve_qconnect_device_uuid();
     let mut session = QconnectSessionState {
