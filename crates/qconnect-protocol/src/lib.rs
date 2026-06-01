@@ -12,10 +12,11 @@ mod renderer;
 mod wire;
 
 pub use command::{QueueCommand, QueueCommandType};
+pub use decoder::decode_playback_error;
 pub use decoder::decode_queue_server_events;
 pub use decoder::decode_renderer_server_commands;
 pub use error::ProtocolError;
-pub use event::{QueueEventType, QueueServerEvent};
+pub use event::{ErrorType, PlaybackErrorEvent, QueueEventType, QueueServerEvent};
 pub use mapper::{
     build_qconnect_outbound_envelope, build_qconnect_renderer_outbound_envelope,
     encode_queue_command_batch, encode_renderer_report_batch,

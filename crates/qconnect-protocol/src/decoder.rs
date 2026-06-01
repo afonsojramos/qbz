@@ -35,6 +35,26 @@ pub fn decode_queue_server_events(payload: &[u8]) -> Result<Vec<QueueServerEvent
     Ok(events)
 }
 
+/// Decode the first renderer `PlaybackErrorMessage` from a batch, if any.
+///
+/// `playback_error` rides at tag 3 of each `QConnectMessage` inside the batch
+/// `messages[]` (the official `Message` envelope record: message_type #1,
+/// error #2, playback_error #3, oneof payloads 21-105). This is resolved from
+/// the actual transport bytes: the decoder receives the batch `QConnectMessages`,
+/// so the field lives on the per-message record, not on the batch wrapper.
+pub fn decode_playback_error(payload: &[u8]) -> Option<crate::event::PlaybackErrorEvent> {
+    let batch = QConnectMessages::decode(payload).ok()?;
+    let msg = batch
+        .messages
+        .into_iter()
+        .find_map(|message| message.playback_error)?;
+    Some(crate::event::PlaybackErrorEvent {
+        queue_item_id: i32_to_u64(msg.queue_item_id.unwrap_or(0)).ok()?,
+        error_type: crate::event::ErrorType::from_wire(msg.error_type.unwrap_or(0)),
+        queue_version: queue_version_opt(msg.queue_version).ok().flatten(),
+    })
+}
+
 fn decode_queue_server_event(
     message: QConnectMessage,
 ) -> Result<Option<QueueServerEvent>, ProtocolError> {
@@ -1065,12 +1085,44 @@ mod tests {
     use prost::Message;
 
     use crate::queue_command_proto::{
-        QConnectMessage, QConnectMessageType, QConnectMessages, QueueTrack, QueueTrackWithContext,
-        QueueTracksAddedMessage, QueueTracksLoadedMessage, QueueVersionRef,
+        PlaybackErrorMessage, QConnectMessage, QConnectMessageType, QConnectMessages, QueueTrack,
+        QueueTrackWithContext, QueueTracksAddedMessage, QueueTracksLoadedMessage, QueueVersionRef,
         RendererMuteVolumeMessage, RendererSetStateMessage,
     };
+    use crate::ErrorType;
 
-    use super::{decode_queue_server_events, decode_renderer_server_commands};
+    use super::{
+        decode_playback_error, decode_queue_server_events, decode_renderer_server_commands,
+    };
+
+    #[test]
+    fn decodes_playback_error_track_not_streamable() {
+        // playback_error rides at tag 3 of a QConnectMessage inside the batch
+        // messages[], not on the QConnectMessages wrapper (verified from the
+        // transport bytes: decoder receives the batch).
+        let message = QConnectMessage {
+            // message_type = PLAYBACK_ERROR(2) per Common.MessageType.
+            message_type: Some(2),
+            playback_error: Some(PlaybackErrorMessage {
+                queue_version: Some(QueueVersionRef {
+                    major: Some(2),
+                    minor: Some(0),
+                }),
+                queue_item_id: Some(55),
+                error_type: Some(2), // TRACK_NOT_STREAMABLE
+            }),
+            ..Default::default()
+        };
+        let batch = QConnectMessages {
+            messages_time: None,
+            messages_id: None,
+            messages: vec![message],
+        };
+        let bytes = batch.encode_to_vec();
+        let parsed = decode_playback_error(&bytes).expect("playback error decoded");
+        assert_eq!(parsed.queue_item_id, 55);
+        assert_eq!(parsed.error_type, ErrorType::TrackNotStreamable);
+    }
 
     #[test]
     fn decodes_tracks_added_server_event_batch() {
