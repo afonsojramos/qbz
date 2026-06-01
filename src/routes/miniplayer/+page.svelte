@@ -330,6 +330,17 @@
     await toggleMute();
   }
 
+  async function handleSeek(time: number): Promise<void> {
+    try {
+      const positionMs = Math.max(0, Math.round(time * 1000));
+      const handledRemotely = await invoke<boolean>('v2_qconnect_set_position_if_remote', { positionMs });
+      if (handledRemotely) return;
+    } catch {
+      // Fall through to local
+    }
+    playerSeek(time);
+  }
+
   async function handleTogglePlay(): Promise<void> {
     try {
       const handledRemotely = await invoke<boolean>('v2_qconnect_toggle_play_if_remote');
@@ -544,7 +555,7 @@
     onTogglePlay={handleTogglePlay}
     onSkipBack={handleSkipBack}
     onSkipForward={handleSkipForward}
-    onSeek={playerSeek}
+    onSeek={handleSeek}
     onVolumeChange={handleVolumeChange}
     onToggleMute={handleToggleMute}
     onToggleShuffle={handleToggleShuffle}

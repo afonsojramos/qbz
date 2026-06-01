@@ -2871,7 +2871,14 @@
   }
 
   // Playback controls (delegating to playerStore)
-  function handleSeek(time: number) {
+  async function handleSeek(time: number) {
+    try {
+      const positionMs = Math.max(0, Math.round(time * 1000));
+      const handledRemotely = await invoke<boolean>('v2_qconnect_set_position_if_remote', { positionMs });
+      if (handledRemotely) return;
+    } catch {
+      // Fall through to local
+    }
     playerSeek(time);
   }
 
