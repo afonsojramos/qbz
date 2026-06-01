@@ -98,6 +98,14 @@ pub fn save_last_known_state(state: bool) {
 /// activation are complete.
 pub struct QconnectCliOverride(pub Option<bool>);
 
+/// Bounded, monotonically-increasing backoff schedule for the startup
+/// auto-connect retry loop (gap #8). A failed initial connect previously left
+/// the lifecycle Off forever; now we retry on this fixed schedule and give up
+/// for the session after the last step. Pure so it can be unit-tested headless.
+pub fn startup_retry_schedule() -> [u64; 4] {
+    [2_000, 5_000, 15_000, 30_000]
+}
+
 /// Trigger QConnect auto-connect AFTER the runtime is fully bootstrapped
 /// (client init + OAuth restore + CoreBridge auth + session activation).
 ///
@@ -137,28 +145,62 @@ pub async fn maybe_auto_connect_after_bootstrap(
         let app_state = app_handle.state::<crate::AppState>();
         let core_bridge = app_handle.state::<crate::core_bridge::CoreBridgeState>();
 
-        // Use default options; auto-discovery via qws/createToken resolves
-        // endpoint+JWT (see transport.rs::resolve_transport_config).
-        let config = match crate::qconnect::transport::resolve_transport_config(
-            Default::default(),
-            &app_state,
-        )
-        .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("[QConnect] startup auto-connect transport resolve failed: {e}");
-                return;
-            }
-        };
+        // gap #8: retry the initial connect on a bounded backoff schedule
+        // instead of giving up after a single failed attempt. Each iteration
+        // re-resolves the transport config (endpoint+JWT via qws/createToken)
+        // because the failure may be a transient credential/network issue that
+        // clears on a later attempt.
+        let schedule = startup_retry_schedule();
+        // One immediate attempt, then one per scheduled delay.
+        for attempt in 0..=schedule.len() {
+            // Use default options; auto-discovery via qws/createToken resolves
+            // endpoint+JWT (see transport.rs::resolve_transport_config).
+            let resolved = crate::qconnect::transport::resolve_transport_config(
+                Default::default(),
+                &app_state,
+            )
+            .await;
 
-        if let Err(e) = service
-            .connect(app_handle.clone(), core_bridge.0.clone(), config)
-            .await
-        {
-            log::warn!("[QConnect] startup auto-connect failed: {e}");
-        } else {
-            log::info!("[QConnect] startup auto-connect succeeded");
+            match resolved {
+                Ok(config) => {
+                    match service
+                        .connect(app_handle.clone(), core_bridge.0.clone(), config)
+                        .await
+                    {
+                        Ok(_) => {
+                            log::info!("[QConnect] startup auto-connect succeeded");
+                            return;
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[QConnect] startup auto-connect attempt {} failed: {e}",
+                                attempt + 1
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[QConnect] startup auto-connect attempt {} transport resolve failed: {e}",
+                        attempt + 1
+                    );
+                }
+            }
+
+            // If there is a remaining scheduled delay, wait it out before the
+            // next attempt; otherwise we have exhausted the schedule.
+            match schedule.get(attempt) {
+                Some(delay_ms) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+                }
+                None => {
+                    log::warn!(
+                        "[QConnect] startup auto-connect gave up for this session after {} attempts",
+                        attempt + 1
+                    );
+                    return;
+                }
+            }
         }
     });
 }

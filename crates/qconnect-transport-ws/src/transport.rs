@@ -356,7 +356,21 @@ async fn run_native_transport_loop(
                 .await
                 {
                     ReconnectOutcome::Continue => continue,
-                    ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+                    ReconnectOutcome::Shutdown => break,
+                    ReconnectOutcome::Exhausted => {
+                        if idle_retry_after_exhausted(
+                            &mut shutdown_rx,
+                            &mut reconnect_attempt,
+                            &mut backoff,
+                            base_backoff,
+                            config.reconnect_idle_retry_ms,
+                        )
+                        .await
+                        {
+                            continue;
+                        }
+                        break;
+                    }
                 }
             }
             Err(_) => {
@@ -372,7 +386,21 @@ async fn run_native_transport_loop(
                 .await
                 {
                     ReconnectOutcome::Continue => continue,
-                    ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+                    ReconnectOutcome::Shutdown => break,
+                    ReconnectOutcome::Exhausted => {
+                        if idle_retry_after_exhausted(
+                            &mut shutdown_rx,
+                            &mut reconnect_attempt,
+                            &mut backoff,
+                            base_backoff,
+                            config.reconnect_idle_retry_ms,
+                        )
+                        .await
+                        {
+                            continue;
+                        }
+                        break;
+                    }
                 }
             }
         };
@@ -417,7 +445,21 @@ async fn run_native_transport_loop(
                 .await
                 {
                     ReconnectOutcome::Continue => continue,
-                    ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+                    ReconnectOutcome::Shutdown => break,
+                    ReconnectOutcome::Exhausted => {
+                        if idle_retry_after_exhausted(
+                            &mut shutdown_rx,
+                            &mut reconnect_attempt,
+                            &mut backoff,
+                            base_backoff,
+                            config.reconnect_idle_retry_ms,
+                        )
+                        .await
+                        {
+                            continue;
+                        }
+                        break;
+                    }
                 }
             }
             emit(&events_tx, TransportEvent::Authenticated);
@@ -451,7 +493,21 @@ async fn run_native_transport_loop(
             .await
             {
                 ReconnectOutcome::Continue => continue,
-                ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+                ReconnectOutcome::Shutdown => break,
+                ReconnectOutcome::Exhausted => {
+                    if idle_retry_after_exhausted(
+                        &mut shutdown_rx,
+                        &mut reconnect_attempt,
+                        &mut backoff,
+                        base_backoff,
+                        config.reconnect_idle_retry_ms,
+                    )
+                    .await
+                    {
+                        continue;
+                    }
+                    break;
+                }
             }
         }
 
@@ -489,7 +545,21 @@ async fn run_native_transport_loop(
                 .await
                 {
                     ReconnectOutcome::Continue => continue,
-                    ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+                    ReconnectOutcome::Shutdown => break,
+                    ReconnectOutcome::Exhausted => {
+                        if idle_retry_after_exhausted(
+                            &mut shutdown_rx,
+                            &mut reconnect_attempt,
+                            &mut backoff,
+                            base_backoff,
+                            config.reconnect_idle_retry_ms,
+                        )
+                        .await
+                        {
+                            continue;
+                        }
+                        break;
+                    }
                 }
             }
             emit(&events_tx, TransportEvent::Subscribed);
@@ -635,7 +705,21 @@ async fn run_native_transport_loop(
         .await
         {
             ReconnectOutcome::Continue => continue,
-            ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+            ReconnectOutcome::Shutdown => break,
+            ReconnectOutcome::Exhausted => {
+                if idle_retry_after_exhausted(
+                    &mut shutdown_rx,
+                    &mut reconnect_attempt,
+                    &mut backoff,
+                    base_backoff,
+                    config.reconnect_idle_retry_ms,
+                )
+                .await
+                {
+                    continue;
+                }
+                break;
+            }
         }
     }
 
@@ -699,6 +783,39 @@ async fn handle_reconnect_delay(
 
     *backoff_ms = (*backoff_ms).saturating_mul(2).min(max_backoff);
     ReconnectOutcome::Continue
+}
+
+/// Long-backoff idle retry after the reconnect loop has Exhausted its bounded
+/// attempts (gap #7). When `idle_retry_ms == 0` this is a no-op returning
+/// `false` (legacy terminate behavior). Otherwise it sleeps `idle_retry_ms`
+/// (cancellable by shutdown); on a real shutdown it returns `false` without
+/// re-arming. On a clean wake it resets the attempt counter / backoff to base
+/// and returns `true` so the caller can `continue` the loop.
+///
+/// NOTE: this resets the counters ONLY after Exhausted + a deliberate idle
+/// wait — never on connect. The issue #358 latch (reset only on the first
+/// SESSION_STATE) is therefore untouched.
+async fn idle_retry_after_exhausted(
+    shutdown_rx: &mut watch::Receiver<bool>,
+    reconnect_attempt: &mut u32,
+    backoff: &mut u64,
+    base_backoff: u64,
+    idle_retry_ms: u64,
+) -> bool {
+    if idle_retry_ms == 0 {
+        return false;
+    }
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_millis(idle_retry_ms)) => {}
+        _ = shutdown_rx.changed() => {
+            if *shutdown_rx.borrow() {
+                return false;
+            }
+        }
+    }
+    *reconnect_attempt = 0;
+    *backoff = base_backoff;
+    true
 }
 
 /// Side-channel result from `handle_incoming_binary`: we need to know whether
@@ -1059,6 +1176,28 @@ mod tests {
         assert!(!keepalive_is_stale(now, now - deadline - 1, 0, deadline));
         assert!(!keepalive_is_stale(now, now - deadline - 1, 1, deadline));
         assert!(keepalive_is_stale(now, now - deadline - 1, 2, deadline));
+    }
+
+    /// gap #7: with `idle_retry_ms == 0` the helper is a no-op — it returns
+    /// `false` (terminate) and leaves the counters untouched.
+    #[tokio::test]
+    async fn idle_retry_disabled_when_interval_zero() {
+        let (_tx, mut rx) = watch::channel(false);
+        let mut attempt = 5u32;
+        let mut backoff = 8u64;
+        assert!(!idle_retry_after_exhausted(&mut rx, &mut attempt, &mut backoff, 2, 0).await);
+        assert_eq!(attempt, 5);
+    }
+
+    /// gap #7: a shutdown signalled during the idle wait must cancel the retry
+    /// and NOT re-arm (returns `false`, counters untouched).
+    #[tokio::test]
+    async fn idle_retry_cancelled_by_shutdown_does_not_rearm() {
+        let (tx, mut rx) = watch::channel(false);
+        let _ = tx.send(true);
+        let mut attempt = 5u32;
+        let mut backoff = 8u64;
+        assert!(!idle_retry_after_exhausted(&mut rx, &mut attempt, &mut backoff, 2, 60_000).await);
     }
 
     #[test]

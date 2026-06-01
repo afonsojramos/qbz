@@ -183,6 +183,12 @@ impl QconnectServiceState {
         let app_for_errors = app_handle.clone();
         let inner_for_loop = Arc::clone(&self.inner);
         let app_handle_for_status = app_handle.clone();
+        // gap #7: when the transport is configured to idle-retry after
+        // Exhausted, the transport loop does NOT terminate — it idles then
+        // re-arms and emits fresh ReconnectScheduled / SessionEstablished
+        // events. The event loop must therefore stay alive and keep the runtime,
+        // otherwise the re-armed transport has no listener.
+        let idle_retry_active = config.reconnect_idle_retry_ms > 0;
 
         let event_loop = tauri::async_runtime::spawn(async move {
             log::info!("[QConnect/EventLoop] Started listening for transport events");
@@ -377,23 +383,30 @@ impl QconnectServiceState {
                                         "last_reason": last_reason,
                                     }),
                                 );
-                                // Auto-stop the runtime: the transport loop
-                                // already broke (Exhausted), so no more events
-                                // will fire. Take the runtime out so a fresh
-                                // user-initiated `connect()` succeeds, mark the
-                                // lifecycle as Exhausted with the cloud-side
-                                // reason, and exit the event loop. The runtime
-                                // we just dropped owns this very task's
-                                // JoinHandle — that's fine, dropping a handle
-                                // detaches; we then `break` so the task ends
-                                // naturally (issue #358).
-                                let mut guard = inner_for_loop.lock().await;
-                                guard.lifecycle_state = QconnectLifecycleState::Exhausted;
-                                guard.last_error = Some(format!(
-                                    "Reconnect attempts exhausted ({attempts}): {last_reason}"
-                                ));
-                                guard.runtime = None;
-                                drop(guard);
+                                // Surface the Exhausted lifecycle to the UI in
+                                // both modes. The difference is what we do with
+                                // the runtime + event loop afterwards:
+                                {
+                                    let mut guard = inner_for_loop.lock().await;
+                                    guard.lifecycle_state = QconnectLifecycleState::Exhausted;
+                                    guard.last_error = Some(format!(
+                                        "Reconnect attempts exhausted ({attempts}): {last_reason}"
+                                    ));
+                                    if !idle_retry_active {
+                                        // Legacy terminate path: the transport
+                                        // loop already broke, so no more events
+                                        // will fire. Take the runtime out so a
+                                        // fresh user-initiated `connect()`
+                                        // succeeds. Dropping the runtime detaches
+                                        // this task's own JoinHandle (fine — we
+                                        // break right after) (issue #358).
+                                        guard.runtime = None;
+                                    }
+                                    // gap #7 (idle_retry_active): leave the
+                                    // runtime in place. The transport is idling
+                                    // and will re-arm; this loop must keep
+                                    // consuming its subsequent events.
+                                }
                                 let _ = app_handle_for_status.emit(
                                     "qconnect:status_changed",
                                     json!({
@@ -403,6 +416,13 @@ impl QconnectServiceState {
                                         "last_reason": last_reason,
                                     }),
                                 );
+                                if idle_retry_active {
+                                    // Keep the event loop alive for the re-armed
+                                    // transport. Skip handle_transport_event for
+                                    // this terminal-diagnostic event and wait for
+                                    // the next one.
+                                    continue;
+                                }
                                 break;
                             }
                         }

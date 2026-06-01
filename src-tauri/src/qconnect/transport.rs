@@ -284,6 +284,9 @@ pub(crate) async fn resolve_transport_config(
     // gap #12: the real Qobuz endpoint must AUTHENTICATE; a missing JWT here is
     // a hard credential error, not a silent skip.
     config.require_jwt = true;
+    // gap #7: instead of terminating after the bounded reconnect attempts are
+    // exhausted, idle 60s then rearm — the user no longer has to re-toggle.
+    config.reconnect_idle_retry_ms = 60_000;
     config.reconnect_backoff_ms = options
         .reconnect_backoff_ms
         .unwrap_or(config.reconnect_backoff_ms);

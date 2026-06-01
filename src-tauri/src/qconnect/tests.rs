@@ -1143,3 +1143,11 @@ fn build_set_position_request_omits_queue_item_when_unknown() {
     assert!(req.current_queue_item.is_none());
     assert_eq!(req.current_position, Some(1_000));
 }
+
+#[test]
+fn startup_retry_schedule_is_bounded_and_monotonic() {
+    let s = super::startup::startup_retry_schedule();
+    assert_eq!(s.len(), 4);
+    assert!(s.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(*s.last().unwrap(), 30_000);
+}
