@@ -77,7 +77,13 @@ type QconnectAdmissionResult = {
   handoff_intent: 'continue_locally' | 'send_to_connect';
 };
 
-type QconnectQueueCommandType = 'queue_add_tracks' | 'queue_insert_tracks' | 'queue_load_tracks';
+type QconnectQueueCommandType =
+  | 'queue_add_tracks'
+  | 'queue_insert_tracks'
+  | 'queue_load_tracks'
+  | 'queue_reorder_tracks'
+  | 'queue_remove_tracks'
+  | 'clear_queue';
 type QueueTrackActionOptions = {
   silent?: boolean;
 };
@@ -649,6 +655,70 @@ export async function loadQconnectQueue(
       error: String(err)
     });
     return false;
+  }
+}
+
+// ============ Remote Queue Mutation Routing (P1-4) ============
+//
+// When a peer renderer owns playback, reorder/remove/clear must mutate the
+// REMOTE queue instead of the local store. Each function returns true when the
+// remote queue handled it (caller must NOT also mutate the local store), and
+// false when the caller should fall back to the local store. The targets
+// (queue_reorder_tracks / queue_remove_tracks / clear_queue) do not require
+// admission; origin 'qobuz_online' is ignored for non-admission commands.
+
+export async function reorderQconnectQueueIfRemote(orderedQueueItemIds: number[]): Promise<boolean> {
+  if (!(await isQconnectConnected())) return false;
+  try {
+    await sendQconnectQueueCommandWithAdmission('queue_reorder_tracks', 'qobuz_online', {
+      queue_item_ids: orderedQueueItemIds
+    });
+    await emitQconnectDiagnostic('qconnect:queue_reorder_sent', 'info', {
+      count: orderedQueueItemIds.length,
+      preview: orderedQueueItemIds.slice(0, 8)
+    });
+    showToast(translate('qconnect.remoteQueueReordered'), 'success');
+    return true;
+  } catch (err) {
+    console.error('[QConnect/Reorder] FAILED:', err);
+    await emitQconnectDiagnostic('qconnect:queue_reorder_failed', 'error', { error: String(err) });
+    showToast(translate('qconnect.remoteQueueFailed'), 'error');
+    return true; // handled (and reported) — do NOT silently fall back and double-mutate
+  }
+}
+
+export async function removeQconnectQueueItemsIfRemote(queueItemIds: number[]): Promise<boolean> {
+  if (!(await isQconnectConnected())) return false;
+  try {
+    await sendQconnectQueueCommandWithAdmission('queue_remove_tracks', 'qobuz_online', {
+      queue_item_ids: queueItemIds
+    });
+    await emitQconnectDiagnostic('qconnect:queue_remove_sent', 'info', {
+      count: queueItemIds.length,
+      preview: queueItemIds.slice(0, 8)
+    });
+    showToast(translate('qconnect.remoteQueueRemoved'), 'success');
+    return true;
+  } catch (err) {
+    console.error('[QConnect/Remove] FAILED:', err);
+    await emitQconnectDiagnostic('qconnect:queue_remove_failed', 'error', { error: String(err) });
+    showToast(translate('qconnect.remoteQueueFailed'), 'error');
+    return true;
+  }
+}
+
+export async function clearQconnectQueueIfRemote(): Promise<boolean> {
+  if (!(await isQconnectConnected())) return false;
+  try {
+    await sendQconnectQueueCommandWithAdmission('clear_queue', 'qobuz_online', {});
+    await emitQconnectDiagnostic('qconnect:queue_clear_sent', 'info', {});
+    showToast(translate('qconnect.remoteQueueCleared'), 'success');
+    return true;
+  } catch (err) {
+    console.error('[QConnect/Clear] FAILED:', err);
+    await emitQconnectDiagnostic('qconnect:queue_clear_failed', 'error', { error: String(err) });
+    showToast(translate('qconnect.remoteQueueFailed'), 'error');
+    return true;
   }
 }
 
