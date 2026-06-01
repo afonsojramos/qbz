@@ -6,7 +6,6 @@
 
 use qconnect_transport_ws::WsTransportConfig;
 use serde_json::Value;
-use uuid::Uuid;
 
 use crate::AppState;
 
@@ -78,73 +77,12 @@ pub(super) fn default_qconnect_device_info_with_name(
     }
 }
 
+/// Persistent QConnect device identity moved to the frontend-agnostic
+/// `qbz_app::qconnect_identity` module so both the Tauri and Slint frontends
+/// resolve the SAME uuid for the same install (byte-identical DB path/key/env
+/// override). This is a one-line delegate.
 pub(super) fn resolve_qconnect_device_uuid() -> String {
-    if let Some(explicit) = std::env::var("QBZ_QCONNECT_DEVICE_UUID")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        return explicit;
-    }
-
-    match qconnect_settings_db_path() {
-        Some(path) => device_uuid_from_db(&path),
-        // Fail-open: if we cannot resolve a settings path, fall back to a
-        // fresh v4 (same behavior as before persistence existed). This keeps
-        // QConnect functional on exotic systems without a data dir.
-        None => Uuid::new_v4().to_string(),
-    }
-}
-
-/// Load the persisted device_uuid from `path`, generating + persisting one on
-/// first run. Mirrors `load_persisted_device_name`/`persist_device_name`. Split
-/// out so the persistence round-trip is unit-testable against a temp path.
-pub(super) fn device_uuid_from_db(path: &std::path::Path) -> String {
-    if let Some(existing) = load_persisted_device_uuid(path) {
-        return existing;
-    }
-    let generated = Uuid::new_v4().to_string();
-    persist_device_uuid(path, &generated);
-    generated
-}
-
-/// Load the persisted device_uuid. Returns None if not set or on any error.
-fn load_persisted_device_uuid(path: &std::path::Path) -> Option<String> {
-    let conn = rusqlite::Connection::open(path).ok()?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
-        .ok()?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )",
-    )
-    .ok()?;
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = 'device_uuid'",
-        [],
-        |row| row.get::<_, String>(0),
-    )
-    .ok()
-    .filter(|v| !v.trim().is_empty())
-}
-
-/// Persist the device_uuid to disk (INSERT OR REPLACE).
-fn persist_device_uuid(path: &std::path::Path, uuid: &str) {
-    let Ok(conn) = rusqlite::Connection::open(path) else {
-        return;
-    };
-    let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
-    let _ = conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )",
-    );
-    let _ = conn.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('device_uuid', ?1)",
-        rusqlite::params![uuid],
-    );
+    qbz_app::qconnect_identity::resolve_qconnect_device_uuid()
 }
 
 pub(super) fn resolve_system_hostname() -> String {
@@ -171,11 +109,11 @@ pub(super) fn resolve_default_qconnect_device_name() -> String {
     format!("Qbz - {hostname}")
 }
 
-/// Path to the QConnect settings database (global, not per-user).
+/// Path to the QConnect settings database (global, not per-user). Delegates to
+/// `qbz_app::qconnect_identity` so the device-name persistence here shares the
+/// exact same DB file as the relocated device-uuid persistence.
 fn qconnect_settings_db_path() -> Option<std::path::PathBuf> {
-    let data_dir = dirs::data_dir()?.join("qbz");
-    std::fs::create_dir_all(&data_dir).ok()?;
-    Some(data_dir.join("qconnect_settings.db"))
+    qbz_app::qconnect_identity::qconnect_settings_db_path()
 }
 
 /// Load the persisted custom device name from disk.

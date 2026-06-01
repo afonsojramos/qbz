@@ -16,6 +16,7 @@ tokio = { workspace = true }
 log = { workspace = true }
 rusqlite = { version = "0.31", features = ["bundled"] }
 dirs = "6"
+uuid = { version = "1", features = ["v4"] }
 chrono = { workspace = true }
 md-5 = { workspace = true }
 base64 = { workspace = true }
