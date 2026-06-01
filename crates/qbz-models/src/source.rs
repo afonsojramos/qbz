@@ -70,6 +70,36 @@ impl PlaybackSource {
     }
 }
 
+/// Admission-only origin tag. Unlike PlaybackSource, this has ExternalUnknown
+/// so the Qobuz Connect gate can default unknown/absent to *blocked* not *Qobuz*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrackOriginTag {
+    Qobuz,
+    OfflineCache,
+    Local,
+    Plex,
+    ExternalUnknown,
+}
+
+impl PlaybackSource {
+    /// Strict parse for the admission path: unknown/absent → ExternalUnknown (blocked).
+    pub fn from_source_str_strict(s: Option<&str>) -> TrackOriginTag {
+        match s {
+            Some("qobuz") => TrackOriginTag::Qobuz,
+            Some("qobuz_download") => TrackOriginTag::OfflineCache,
+            Some("local") => TrackOriginTag::Local,
+            Some("plex") => TrackOriginTag::Plex,
+            _ => TrackOriginTag::ExternalUnknown,
+        }
+    }
+}
+
+impl TrackOriginTag {
+    pub fn is_castable_to_qconnect(self) -> bool {
+        matches!(self, Self::Qobuz | Self::OfflineCache)
+    }
+}
+
 /// A reference to a piece of cover art, resolvable regardless of origin.
 ///
 /// The artwork loaders historically handled only remote HTTP URLs, which is
@@ -161,6 +191,19 @@ mod tests {
         ] {
             assert_eq!(PlaybackSource::from_source_str(Some(s.as_source_str())), s);
         }
+    }
+
+    #[test]
+    fn strict_parse_blocks_unknown_and_absent() {
+        use TrackOriginTag::*;
+        assert_eq!(PlaybackSource::from_source_str_strict(Some("qobuz")), Qobuz);
+        assert_eq!(PlaybackSource::from_source_str_strict(Some("local")), Local);
+        assert_eq!(PlaybackSource::from_source_str_strict(Some("plex")), Plex);
+        assert_eq!(PlaybackSource::from_source_str_strict(Some("qobuz_download")), OfflineCache);
+        assert_eq!(PlaybackSource::from_source_str_strict(None), ExternalUnknown);
+        assert_eq!(PlaybackSource::from_source_str_strict(Some("???")), ExternalUnknown);
+        // Lenient parser still defaults to Qobuz (playback compatibility).
+        assert_eq!(PlaybackSource::from_source_str(None), PlaybackSource::Qobuz);
     }
 
     #[test]

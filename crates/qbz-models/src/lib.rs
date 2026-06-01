@@ -41,7 +41,7 @@ pub mod types;
 pub use error::{QbzError, QbzResult};
 pub use events::CoreEvent;
 pub use playback::{PlaybackState, PlaybackStatus, QueueState, QueueTrack, RepeatMode};
-pub use source::{ArtworkRef, PlaybackSource};
+pub use source::{ArtworkRef, PlaybackSource, TrackOriginTag};
 pub use traits::{FrontendAdapter, LoggingAdapter, NoOpAdapter};
 pub use types::{
     Album,
