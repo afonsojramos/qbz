@@ -606,6 +606,25 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         queue.current()
     }
 
+    /// Reconcile the queue pointer to the track the audio engine is actually
+    /// playing. A gapless hand-off advances inside the player without going
+    /// through `next_track`, so the core pointer can lag the live track and
+    /// the now-playing card goes stale. This moves the pointer to the track
+    /// with `id` and returns it plus whether the pointer moved; a queue
+    /// update is emitted only when it did. Frontend-agnostic — the playback
+    /// poll loop calls this to keep now-playing in sync (ADR-006).
+    pub async fn sync_current_to_id(&self, id: u64) -> Option<(QueueTrack, bool)> {
+        let queue = self.queue.write().await;
+        let result = queue.sync_current_to_id(id);
+        if matches!(result, Some((_, true))) {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        result
+    }
+
     // ==================== Search & Catalog ====================
 
     /// Search for albums

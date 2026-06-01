@@ -1932,32 +1932,30 @@ pub fn start_poll_loop(
                 && is_playing
                 && was_playing;
             if seamless_change {
-                // A track-id change while still playing is EITHER a real
-                // gapless hand-off (the engine started the prefetched next
+                // The audio engine advanced to `track_id` on its own — EITHER
+                // a real gapless hand-off (it started the prefetched next
                 // track) OR a manual new-track play that just replaced the
-                // queue. Only the former should advance the core queue
-                // pointer: a real gapless next IS the current upcoming track.
-                // For a manual play the queue is already correct, and calling
-                // next_track() would push the pointer one past what's actually
-                // playing — desyncing now-playing from the queue (the reported
-                // erratic mismatch).
-                let is_gapless_advance = runtime
-                    .core()
-                    .peek_upcoming(1)
-                    .await
-                    .first()
-                    .map(|t| t.id)
-                    == Some(track_id);
-                if is_gapless_advance {
-                    log::info!(
-                        "[qbz-slint] [GAPLESS] seamless transition {last_track_id} -> {track_id}"
-                    );
-                    let _ = runtime.core().next_track().await;
+                // queue. Rather than guess which (the old peek-based heuristic
+                // missed cases and left the card stale while the seek bar kept
+                // moving — the reported populate bug), reconcile the queue
+                // pointer + the now-playing card to whatever is ACTUALLY
+                // playing. `sync_current_to_id` moves the pointer only when it
+                // lags (a real advance); a manual play already moved it, so it
+                // reports `moved == false` and we skip the double bookkeeping.
+                if let Some((_, moved)) =
+                    runtime.core().sync_current_to_id(track_id).await
+                {
+                    // Always refresh so title/art/meta match the live track.
                     refresh_now_playing_meta(&runtime, &weak).await;
-                    record_recent(&runtime).await;
-                    refresh_sidebar(true);
-                    // Prefetch the successors of the now-current track.
-                    kick_prefetch(&runtime).await;
+                    if moved {
+                        log::info!(
+                            "[qbz-slint] [GAPLESS] seamless transition {last_track_id} -> {track_id}"
+                        );
+                        record_recent(&runtime).await;
+                        refresh_sidebar(true);
+                        // Prefetch the successors of the now-current track.
+                        kick_prefetch(&runtime).await;
+                    }
                     gapless_requested_for = 0;
                 }
                 // Resync the edge trackers either way so this change is not
