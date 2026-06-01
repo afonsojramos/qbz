@@ -362,7 +362,9 @@
   import {
     replacePlaybackQueue,
     assessQconnectQueueSync,
-    syncQconnectQueueFromTracks
+    syncQconnectQueueFromTracks,
+    shouldAutoSkipOnPlaybackError,
+    type QconnectPlaybackErrorPayload
   } from '$lib/services/queuePlaybackService';
   import type {
     QconnectDiagnosticsPayload,
@@ -5771,6 +5773,21 @@
                     : '[QConnect] Local queue NOT pushed on connect (rejected or failed)');
                 })().catch(err => console.error('[QConnect] Local queue push on connect error:', err));
               }, 2000);
+            }
+          }
+
+          // Renderer reported a per-track playback failure. Auto-skip the
+          // failed track if it is the one currently playing and the error is a
+          // deterministic per-track failure; otherwise surface a toast.
+          if ('PlaybackError' in payloadObj) {
+            const pe = payloadObj.PlaybackError as QconnectPlaybackErrorPayload;
+            const currentQid =
+              qobuzConnectRendererSnapshot?.current_track?.queue_item_id ?? null;
+            if (shouldAutoSkipOnPlaybackError(pe, currentQid)) {
+              showToast($t('qconnect.trackUnavailableSkipping'), 'warning');
+              void handleSkipForward();
+            } else {
+              showToast($t('qconnect.trackPlaybackError'), 'error');
             }
           }
 

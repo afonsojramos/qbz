@@ -1811,6 +1811,8 @@
     "lastErrorLabel": "Ultimo error",
     "queueStateTitle": "Cola remota",
     "mixedQueueNotCast": "La cola mixta no se envió a Qobuz Connect (tiene pistas locales o de Plex).",
+    "trackUnavailableSkipping": "La pista no está disponible en el reproductor, saltando a la siguiente.",
+    "trackPlaybackError": "El reproductor no pudo reproducir esta pista.",
     "queueVersionLabel": "Version",
     "queueItemsLabel": "Items en cola",
     "autoplayModeLabel": "Autoplay",

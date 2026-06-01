@@ -1811,6 +1811,8 @@
     "lastErrorLabel": "Último erro",
     "queueStateTitle": "Fila remota",
     "mixedQueueNotCast": "Fila mista não enviada ao Qobuz Connect (contém faixas locais ou do Plex).",
+    "trackUnavailableSkipping": "Faixa indisponível no reprodutor, pulando para a próxima.",
+    "trackPlaybackError": "O reprodutor não conseguiu reproduzir esta faixa.",
     "queueVersionLabel": "Versão",
     "queueItemsLabel": "Itens da fila",
     "autoplayModeLabel": "Autoplay",

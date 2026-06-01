@@ -1811,6 +1811,8 @@
     "lastErrorLabel": "Last error",
     "queueStateTitle": "Remote Queue",
     "mixedQueueNotCast": "Mixed queue not cast to Qobuz Connect (contains local or Plex tracks).",
+    "trackUnavailableSkipping": "Track unavailable on the renderer, skipping to the next one.",
+    "trackPlaybackError": "The renderer could not play this track.",
     "queueVersionLabel": "Version",
     "queueItemsLabel": "Queue items",
     "autoplayModeLabel": "Autoplay",

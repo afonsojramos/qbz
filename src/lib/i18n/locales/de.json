@@ -1811,6 +1811,8 @@
     "lastErrorLabel": "Letzter Fehler",
     "queueStateTitle": "Remote-Warteschlange",
     "mixedQueueNotCast": "Gemischte Warteschlange nicht an Qobuz Connect gesendet (enthält lokale oder Plex-Titel).",
+    "trackUnavailableSkipping": "Titel auf dem Renderer nicht verfügbar, springe zum nächsten.",
+    "trackPlaybackError": "Der Renderer konnte diesen Titel nicht abspielen.",
     "queueVersionLabel": "Version",
     "queueItemsLabel": "Warteschlangeneinträge",
     "autoplayModeLabel": "Autoplay",

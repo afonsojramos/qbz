@@ -1811,6 +1811,8 @@
     "lastErrorLabel": "Dernière erreur",
     "queueStateTitle": "File d'attente distante",
     "mixedQueueNotCast": "File d'attente mixte non envoyée à Qobuz Connect (contient des pistes locales ou Plex).",
+    "trackUnavailableSkipping": "Piste indisponible sur le lecteur, passage à la suivante.",
+    "trackPlaybackError": "Le lecteur n'a pas pu lire cette piste.",
     "queueVersionLabel": "Version",
     "queueItemsLabel": "Éléments de la file",
     "autoplayModeLabel": "Lecture auto",

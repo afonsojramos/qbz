@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  assessQconnectQueueSync
+  assessQconnectQueueSync,
+  shouldAutoSkipOnPlaybackError,
+  type QconnectPlaybackErrorPayload
 } from './queuePlaybackService';
 import type { BackendQueueTrack } from '$lib/stores/queueStore';
 
@@ -90,5 +92,21 @@ describe('assessQconnectQueueSync — offline-cache', () => {
     ]);
     expect(r.syncable).toBe(false);
     expect(r.blockedTrackIds).toContain(2);
+  });
+});
+
+describe('shouldAutoSkipOnPlaybackError', () => {
+  it('auto-skips on TrackNotStreamable for the current queue item', () => {
+    const payload: QconnectPlaybackErrorPayload = { queue_item_id: 7, error_type: 'TrackNotStreamable' };
+    expect(shouldAutoSkipOnPlaybackError(payload, 7)).toBe(true);
+  });
+  it('does NOT skip when the failed item is not the one currently playing', () => {
+    expect(shouldAutoSkipOnPlaybackError({ queue_item_id: 9, error_type: 'NetworkError' }, 7)).toBe(false);
+  });
+  it('does NOT skip on Unknown error type (avoid skip storms)', () => {
+    expect(shouldAutoSkipOnPlaybackError({ queue_item_id: 7, error_type: 'Unknown' }, 7)).toBe(false);
+  });
+  it('does NOT skip when current queue item id is null', () => {
+    expect(shouldAutoSkipOnPlaybackError({ queue_item_id: 7, error_type: 'TrackNotStreamable' }, null)).toBe(false);
   });
 });

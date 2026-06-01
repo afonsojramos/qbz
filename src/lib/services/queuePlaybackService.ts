@@ -19,6 +19,44 @@ export type ReplacePlaybackQueueOptions = {
   debugLabel?: string;
 };
 
+/**
+ * Payload shape of a `PlaybackError` qconnect:event (mirrors the Rust
+ * QconnectAppEvent::PlaybackError; error_type serializes as its variant name).
+ */
+export type QconnectPlaybackErrorPayload = {
+  queue_item_id: number;
+  error_type:
+    | 'Unknown'
+    | 'TrackNotFound'
+    | 'TrackNotStreamable'
+    | 'TrackMusicDataInvalid'
+    | 'ServiceError'
+    | 'NetworkError'
+    | 'OtherErrors';
+};
+
+const AUTO_SKIP_ERROR_TYPES = new Set([
+  'TrackNotFound',
+  'TrackNotStreamable',
+  'TrackMusicDataInvalid',
+  'NetworkError'
+]);
+
+/**
+ * Decide whether a renderer PlaybackError should trigger an auto-skip. Only
+ * skips when the failed item IS the one currently playing and the error type is
+ * a deterministic per-track failure — Unknown/ServiceError are excluded to avoid
+ * skip storms on transient/ambiguous errors.
+ */
+export function shouldAutoSkipOnPlaybackError(
+  payload: QconnectPlaybackErrorPayload,
+  currentQueueItemId: number | null
+): boolean {
+  if (currentQueueItemId == null) return false;
+  if (payload.queue_item_id !== currentQueueItemId) return false;
+  return AUTO_SKIP_ERROR_TYPES.has(payload.error_type);
+}
+
 export function isQconnectSyncEligibleTrack(track: BackendQueueTrack): boolean {
   if (track.is_local) return false;
 
