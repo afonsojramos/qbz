@@ -63,6 +63,28 @@ fn deferred_join_reason_is_reconnection_only_after_a_drop() {
 }
 
 #[test]
+fn compute_connection_state_matrix() {
+    use super::session::{compute_connection_state, ServerActiveState::*};
+    let d = compute_connection_state(true, true, None, false);
+    assert!(
+        d.should_be_active && d.should_set_active_renderer && d.should_set_queue && !d.should_ask_queue
+    );
+    let d = compute_connection_state(true, false, Me, false);
+    assert!(d.should_be_active && !d.should_set_active_renderer && d.should_set_queue);
+    let d = compute_connection_state(false, false, Me, true);
+    assert!(d.should_ask_queue && !d.should_set_queue && !d.should_set_active_renderer);
+    let d = compute_connection_state(false, false, OtherPlaying, false);
+    assert!(!d.should_be_active && !d.should_set_active_renderer && d.should_ask_queue);
+    let d = compute_connection_state(false, false, None, false);
+    assert!(
+        !d.should_be_active
+            && !d.should_set_active_renderer
+            && !d.should_set_queue
+            && !d.should_ask_queue
+    );
+}
+
+#[test]
 fn maps_outbound_command_type_to_protocol_command_type() {
     assert_eq!(
         QconnectOutboundCommandType::JoinSession.to_queue_command_type(),

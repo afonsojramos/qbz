@@ -18,6 +18,70 @@ use super::{
     QconnectQueueVersionPayload, QconnectRemoteSyncState, QconnectVisibleQueueProjection,
 };
 
+/// The server's view of who currently owns the active-renderer slot in a
+/// SESSION_STATE frame, classified relative to us (P1-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ServerActiveState {
+    /// No renderer is active in the session.
+    None,
+    /// We are the active renderer.
+    Me,
+    /// Another renderer is active and reports PLAYING.
+    OtherPlaying,
+    /// Another renderer is active and reports a non-playing state.
+    OtherPaused,
+}
+
+/// Outcome of takeover arbitration on a SESSION_STATE frame (P1-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ConnectionDecision {
+    /// We should consider ourselves the active renderer.
+    pub should_be_active: bool,
+    /// We should emit CtrlSrvrSetActiveRenderer to claim the slot.
+    pub should_set_active_renderer: bool,
+    /// We should push our queue + state to the session.
+    pub should_set_queue: bool,
+    /// We should ask the renderer for its current state.
+    pub should_ask_queue: bool,
+}
+
+/// Pure takeover arbitration ported from the web controller's
+/// `computeConnectionState`. This is a REDUCED matrix: it captures the
+/// shape and named outputs faithfully from the appendix prose, but the
+/// exact web truth-table cell values were not dumped verbatim. The
+/// `OtherPaused` vs `OtherPlaying` divergence and repeat-mode
+/// reconciliation are pending a decompiled-bundle cross-check; repeat-mode
+/// reconciliation is intentionally OUT of P1-3 scope (it overlaps the
+/// existing `session_loop_mode` handling in `event_sink.rs`).
+pub(super) fn compute_connection_state(
+    was_active: bool,
+    was_playing: bool,
+    server: ServerActiveState,
+    queue_equal: bool,
+) -> ConnectionDecision {
+    use ServerActiveState::*;
+    match server {
+        None => ConnectionDecision {
+            should_be_active: was_active,
+            should_set_active_renderer: was_active,
+            should_set_queue: was_active,
+            should_ask_queue: false,
+        },
+        Me => ConnectionDecision {
+            should_be_active: true,
+            should_set_active_renderer: false,
+            should_set_queue: !queue_equal && (was_active || was_playing),
+            should_ask_queue: queue_equal,
+        },
+        OtherPlaying | OtherPaused => ConnectionDecision {
+            should_be_active: false,
+            should_set_active_renderer: false,
+            should_set_queue: false,
+            should_ask_queue: true,
+        },
+    }
+}
+
 pub(super) fn queue_item_snapshot_for_cursor(
     queue: &QConnectQueueState,
     cursor: QconnectOrderedQueueCursor,
