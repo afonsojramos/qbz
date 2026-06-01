@@ -34,6 +34,25 @@ import {
   type QconnectQueueSnapshot,
   type QconnectRendererSnapshot
 } from '$lib/services/qconnectRemoteQueue';
+import { isQconnectSyncEligibleTrack } from '$lib/services/queuePlaybackService';
+
+/**
+ * Partition a backend-shaped track list into those that can be cast to a
+ * Qobuz Connect renderer (Qobuz catalog + offline-cache, whose id is the real
+ * Qobuz track id) and those that cannot (local files, Plex). The shared
+ * predicate lives in queuePlaybackService so every cast path agrees.
+ */
+export function partitionQconnectLoadableTracks(
+  tracks: BackendQueueTrack[]
+): { loadableIds: number[]; blockedIds: number[]; hasBlocked: boolean } {
+  const loadableIds: number[] = [];
+  const blockedIds: number[] = [];
+  for (const track of tracks) {
+    if (isQconnectSyncEligibleTrack(track)) loadableIds.push(track.id);
+    else blockedIds.push(track.id);
+  }
+  return { loadableIds, blockedIds, hasBlocked: blockedIds.length > 0 };
+}
 
 // ============ Toast Integration ============
 
@@ -520,9 +539,28 @@ export async function queueTrackLater(
 export async function loadQconnectQueue(
   trackIds: number[],
   startIndex: number = 0,
-  shuffleMode: boolean = false
+  shuffleMode: boolean = false,
+  tracks?: BackendQueueTrack[]
 ): Promise<boolean> {
   console.log('[QConnect/LoadQueue] called: trackCount=%d startIndex=%d', trackIds.length, startIndex);
+
+  // Source-aware guard: when backend-shaped tracks are supplied, refuse the
+  // whole load if ANY track is non-Qobuz (local/Plex). A Qobuz Connect
+  // renderer can only play Qobuz catalog ids; shipping a local/Plex row id
+  // either errors or streams an unrelated track that shares the numeric id.
+  if (tracks && tracks.length > 0) {
+    const { blockedIds, hasBlocked } = partitionQconnectLoadableTracks(tracks);
+    if (hasBlocked) {
+      console.warn('[QConnect/LoadQueue] refused: queue contains non-Qobuz tracks %o', blockedIds);
+      await emitQconnectDiagnostic('qconnect:queue_load_rejected', 'warn', {
+        reason: 'queue_contains_non_qobuz_tracks',
+        blocked_track_ids: blockedIds,
+        track_count: trackIds.length
+      });
+      return false;
+    }
+  }
+
   const qconnectConnected = await isQconnectConnected();
   if (!qconnectConnected) {
     console.warn('[QConnect/LoadQueue] skipped: transport not connected');

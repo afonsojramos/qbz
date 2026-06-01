@@ -19,7 +19,7 @@ export type ReplacePlaybackQueueOptions = {
   debugLabel?: string;
 };
 
-function isQconnectSyncEligibleTrack(track: BackendQueueTrack): boolean {
+export function isQconnectSyncEligibleTrack(track: BackendQueueTrack): boolean {
   if (track.is_local) return false;
 
   const source = (track.source ?? '').toLowerCase();
