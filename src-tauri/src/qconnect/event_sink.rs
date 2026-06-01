@@ -3,13 +3,17 @@
 //! management messages) and dispatches them into our local CoreBridge,
 //! sync_state cache, and Tauri event emitter.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use async_trait::async_trait;
-use qconnect_app::{QconnectAppEvent, QconnectEventSink};
+use qconnect_app::{
+    QconnectApp, QconnectAppEvent, QconnectEventSink, RendererReport, RendererReportType,
+};
+use qconnect_transport_ws::NativeWsTransport;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, RwLock};
+use uuid::Uuid;
 
 use crate::core_bridge::CoreBridge;
 
@@ -23,13 +27,59 @@ use super::session::{
     is_peer_renderer_active, normalize_active_renderer_id, refresh_local_renderer_id,
     sync_session_renderer_active_flags,
 };
-use super::{qconnect_now_ms, QconnectRemoteSyncState, QconnectRendererInfo};
+use super::{
+    qconnect_now_ms, should_arm_renderer_watchdog, QconnectRemoteSyncState, QconnectRendererInfo,
+    RendererStatus, BUFFER_STATE_OK, PLAYING_STATE_PLAYING, PLAYING_STATE_UNKNOWN,
+    QCONNECT_RENDERER_LOST_TIMEOUT_MS,
+};
+
+/// Concrete `QconnectApp` type used by the Tauri adapter.
+type TauriQconnectApp = QconnectApp<NativeWsTransport, TauriQconnectEventSink>;
 
 #[derive(Clone)]
 pub(super) struct TauriQconnectEventSink {
     pub(super) app_handle: AppHandle,
     pub(super) core_bridge: Arc<RwLock<Option<CoreBridge>>>,
     pub(super) sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
+    /// Late-bound weak reference to the owning `QconnectApp`. The app is built
+    /// FROM the sink, so it can only be wired after construction (via
+    /// `set_app`). Used to emit renderer reports (e.g. is_active=true after a
+    /// SetActive(true) command) from inside the sink without an ownership cycle.
+    pub(super) app: Arc<OnceLock<Weak<TauriQconnectApp>>>,
+}
+
+impl TauriQconnectEventSink {
+    /// Wire the owning app after it has been constructed. Idempotent: a second
+    /// call is ignored (OnceLock).
+    pub(super) fn set_app(&self, app: &Arc<TauriQconnectApp>) {
+        let _ = self.app.set(Arc::downgrade(app));
+    }
+
+    /// Emit a StateUpdated report announcing that this renderer is now active.
+    /// Sent after a SetActive(true) command is applied so the controller learns
+    /// the renderer is ready.
+    async fn report_active_renderer_ready(&self) {
+        let Some(app) = self.app.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        let queue_version = app.queue_state_snapshot().await.version;
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrStateUpdated,
+            Uuid::new_v4().to_string(),
+            queue_version,
+            serde_json::json!({
+                "is_active": true,
+                "buffer_state": BUFFER_STATE_OK,
+                "queue_version": {
+                    "major": queue_version.major,
+                    "minor": queue_version.minor
+                }
+            }),
+        );
+        if let Err(err) = app.send_renderer_report_command(report).await {
+            log::warn!("[QConnect] Failed to report active-renderer-ready: {err}");
+        }
+    }
 }
 
 #[async_trait]
@@ -96,6 +146,10 @@ impl QconnectEventSink for TauriQconnectEventSink {
             }
             QconnectAppEvent::RendererCommandApplied { command, state } => {
                 log::info!("[QConnect] Renderer command applied: {:?}", command);
+                let became_active = matches!(
+                    command,
+                    qconnect_app::RendererCommand::SetActive { active: true }
+                );
                 if let Err(err) = apply_renderer_command_to_corebridge(
                     &self.core_bridge,
                     &self.sync_state,
@@ -105,6 +159,10 @@ impl QconnectEventSink for TauriQconnectEventSink {
                 .await
                 {
                     log::warn!("[QConnect] Failed to apply renderer command to CoreBridge: {err}");
+                } else if became_active {
+                    // P1-6: SetActive(true) is now genuinely supported (current
+                    // track preloaded above); announce readiness to the controller.
+                    self.report_active_renderer_ready().await;
                 }
             }
             _ => {}
@@ -121,6 +179,8 @@ impl TauriQconnectEventSink {
         let mut remote_projection_renderer_id: Option<i32> = None;
         let mut sync_local_playback = false;
         let mut apply_loop_mode: Option<i32> = None;
+        let mut disconnected_renderer_id: Option<i32> = None;
+        let mut watchdog_arm: Option<(i32, u64)> = None;
         let mut state = self.sync_state.lock().await;
         match message_type {
             "MESSAGE_TYPE_SRVR_CTRL_SESSION_STATE" => {
@@ -182,6 +242,11 @@ impl TauriQconnectEventSink {
                                 .and_then(|d| d.get("device_type"))
                                 .and_then(Value::as_i64)
                                 .map(|v| v as i32),
+                            volume_remote_control: device_info
+                                .and_then(|d| d.get("capabilities"))
+                                .and_then(|c| c.get("volume_remote_control"))
+                                .and_then(Value::as_i64)
+                                .map(|v| v as i32),
                         });
                         refresh_local_renderer_id(&mut state.session);
                     }
@@ -229,6 +294,13 @@ impl TauriQconnectEventSink {
                         {
                             existing.device_type = Some(device_type as i32);
                         }
+                        if let Some(vrc) = device_info
+                            .and_then(|d| d.get("capabilities"))
+                            .and_then(|c| c.get("volume_remote_control"))
+                            .and_then(Value::as_i64)
+                        {
+                            existing.volume_remote_control = Some(vrc as i32);
+                        }
                         refresh_local_renderer_id(&mut state.session);
                     }
                     let _ = ensure_session_renderer_state(&mut state, renderer_id);
@@ -263,6 +335,8 @@ impl TauriQconnectEventSink {
                 sync_session_renderer_active_flags(&mut state);
                 remote_projection_renderer_id = state.session.active_renderer_id;
                 sync_local_playback = true;
+                // P0-1: active-renderer change disarms any pending liveness task.
+                Self::bump_watchdog_generation(&mut state);
             }
             "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED" => {
                 let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) else {
@@ -296,8 +370,34 @@ impl TauriQconnectEventSink {
                 }
 
                 renderer_state.updated_at_ms = qconnect_now_ms();
+                // Snapshot the just-written playing_state for the watchdog decision
+                // (the &mut borrow ends here so we can re-read state.session below).
+                let this_playing_state = renderer_state.playing_state;
                 remote_projection_renderer_id = Some(renderer_id as i32);
                 sync_local_playback = true;
+
+                let is_active_peer = state.session.active_renderer_id
+                    == Some(renderer_id as i32)
+                    && is_peer_renderer_active(&state.session)
+                    && renderer_id != -1;
+
+                // P0-2: graceful disconnect. status==ACTIVE_DISCONNECTED(2) for
+                // the active remote renderer (id != -1) means the renderer left
+                // cleanly — freeze the projection so the UI stops lying.
+                let status =
+                    RendererStatus::from_wire(payload.get("status").and_then(Value::as_i64));
+                if status == RendererStatus::ActiveDisconnected && is_active_peer {
+                    disconnected_renderer_id = Some(renderer_id as i32);
+                }
+
+                // P0-1 liveness watchdog. Any RENDERER_STATE_UPDATED for the
+                // active peer resets the timer (bump generation); arm a fresh 12s
+                // task only while PLAYING. A non-playing update disarms (bump
+                // only, no spawn).
+                let new_generation = Self::bump_watchdog_generation(&mut state);
+                if should_arm_renderer_watchdog(this_playing_state, is_active_peer) {
+                    watchdog_arm = Some((renderer_id as i32, new_generation));
+                }
             }
             "MESSAGE_TYPE_SRVR_CTRL_VOLUME_CHANGED" => {
                 let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) else {
@@ -378,6 +478,83 @@ impl TauriQconnectEventSink {
 
         if let Some(renderer_id) = remote_projection_renderer_id {
             self.sync_active_renderer_projection(renderer_id).await;
+        }
+
+        if let Some(renderer_id) = disconnected_renderer_id {
+            self.freeze_active_renderer_projection_to_unknown(
+                renderer_id,
+                "qconnect:renderer_disconnected",
+            )
+            .await;
+        }
+
+        // P0-1: arm the generation-guarded 12s liveness watchdog. The spawned
+        // task holds a clone of this sink (TauriQconnectEventSink: Clone). On
+        // wake it re-locks and no-ops unless its captured epoch is still current
+        // AND the renderer is still the active peer AND still nominally playing.
+        if let Some((renderer_id, generation)) = watchdog_arm {
+            let sink = self.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    QCONNECT_RENDERER_LOST_TIMEOUT_MS,
+                ))
+                .await;
+                let fire = {
+                    let state = sink.sync_state.lock().await;
+                    state.watchdog_generation == generation
+                        && state.session.active_renderer_id == Some(renderer_id)
+                        && is_peer_renderer_active(&state.session)
+                        && state
+                            .session_renderer_states
+                            .get(&renderer_id)
+                            .and_then(|r| r.playing_state)
+                            == Some(PLAYING_STATE_PLAYING)
+                };
+                if fire {
+                    log::warn!(
+                        "[QConnect] Renderer {renderer_id} silent for {}ms — marking unreachable",
+                        QCONNECT_RENDERER_LOST_TIMEOUT_MS
+                    );
+                    sink.freeze_active_renderer_projection_to_unknown(
+                        renderer_id,
+                        "qconnect:renderer_unreachable",
+                    )
+                    .await;
+                }
+            });
+        }
+    }
+
+    /// Bump the watchdog epoch, invalidating any in-flight 12s liveness task.
+    /// Returns the new generation (used when arming so the spawned task knows
+    /// which epoch it belongs to).
+    fn bump_watchdog_generation(state: &mut QconnectRemoteSyncState) -> u64 {
+        state.watchdog_generation = state.watchdog_generation.wrapping_add(1);
+        state.watchdog_generation
+    }
+
+    /// Force the active renderer's cached projection to UNKNOWN/stopped and
+    /// emit a freeze event. Shared by ACTIVE_DISCONNECTED (P0-2) and the
+    /// silence watchdog (P0-1). Caller passes the event name to emit.
+    ///
+    /// This is a pure-state mutation + emit; it does NOT route back through
+    /// `apply_session_management_event`, so it cannot re-arm the watchdog.
+    async fn freeze_active_renderer_projection_to_unknown(
+        &self,
+        renderer_id: i32,
+        event_name: &str,
+    ) {
+        {
+            let mut state = self.sync_state.lock().await;
+            let renderer_state = ensure_session_renderer_state(&mut state, renderer_id);
+            renderer_state.playing_state = Some(PLAYING_STATE_UNKNOWN);
+            renderer_state.updated_at_ms = qconnect_now_ms();
+        }
+        if let Err(err) = self
+            .app_handle
+            .emit(event_name, serde_json::json!({ "renderer_id": renderer_id }))
+        {
+            log::warn!("[QConnect] Failed to emit {event_name}: {err}");
         }
     }
 

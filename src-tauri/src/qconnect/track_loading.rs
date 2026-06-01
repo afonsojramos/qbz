@@ -29,12 +29,29 @@ pub(super) fn should_reload_remote_track(
     playback_state.track_id != track_id
 }
 
+/// Map a QConnect `max_audio_quality` level to a qbz `Quality`.
+/// QConnect levels: 0/1 ~ MP3, 2 ~ CD/Lossless, 3 ~ Hi-Res (<=96kHz),
+/// 4 ~ Hi-Res (>96kHz), 5/None ~ uncapped. The qbz `Quality` enum only has
+/// four variants (Mp3, Lossless, HiRes, UltraHiRes), so 4 and uncapped both
+/// resolve to UltraHiRes.
+pub(super) fn quality_from_max_audio_quality(level: Option<i32>) -> Quality {
+    match level {
+        Some(l) if l <= 1 => Quality::Mp3,
+        Some(2) => Quality::Lossless,
+        Some(3) => Quality::HiRes,
+        Some(4) => Quality::UltraHiRes,
+        _ => Quality::UltraHiRes,
+    }
+}
+
 async fn load_remote_track_into_player(
     bridge: &CoreBridge,
     track_id: u64,
+    max_audio_quality: Option<i32>,
 ) -> Result<(), String> {
+    let quality = quality_from_max_audio_quality(max_audio_quality);
     let stream_url = bridge
-        .get_stream_url(track_id, Quality::UltraHiRes)
+        .get_stream_url(track_id, quality)
         .await
         .map_err(|err| format!("resolve stream url for remote track {track_id}: {err}"))?;
     let duration_secs = bridge
@@ -77,6 +94,7 @@ pub(super) async fn ensure_remote_track_loaded(
     bridge: &CoreBridge,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
     track_id: u64,
+    max_audio_quality: Option<i32>,
 ) -> Result<(), String> {
     {
         let state = sync_state.lock().await;
@@ -93,7 +111,7 @@ pub(super) async fn ensure_remote_track_loaded(
         let mut state = sync_state.lock().await;
         state.last_load_attempt = Some((track_id, std::time::Instant::now()));
     }
-    load_remote_track_into_player(bridge, track_id).await
+    load_remote_track_into_player(bridge, track_id, max_audio_quality).await
 }
 
 struct QconnectRemoteStreamInfo {

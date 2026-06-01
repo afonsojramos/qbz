@@ -182,6 +182,12 @@ pub struct QconnectAdmissionResult {
 pub struct QconnectSendCommandWithAdmissionRequest {
     pub command_type: QconnectOutboundCommandType,
     pub origin: QconnectTrackOrigin,
+    /// Per-track origins for the IDs in `payload.track_ids`. The server gate
+    /// re-validates EACH, independent of the command-level `origin`. Defaults
+    /// to empty for callers that legitimately carry no track payload (e.g.
+    /// single-track play-next/play-later that gate on the command-level origin).
+    #[serde(default)]
+    pub track_origins: Vec<QconnectTrackOrigin>,
     #[serde(default)]
     pub payload: Value,
 }
@@ -270,4 +276,29 @@ pub struct QconnectSetMaxAudioQualityRequest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QconnectAskForRendererStateRequest {
     pub renderer_id: Option<i32>,
+}
+
+/// Wire renderer status from `MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED`
+/// (`status` field, decoded at qconnect-protocol decoder.rs:801).
+/// Wire enum: UNKNOWN=0, ACTIVE_CONNECTED=1, ACTIVE_DISCONNECTED=2, INACTIVE=3.
+/// Per the official client's `Ya` collapse, UNKNOWN and any UNRECOGNIZED value
+/// map to INACTIVE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RendererStatus {
+    ActiveConnected,
+    ActiveDisconnected,
+    Inactive,
+}
+
+impl RendererStatus {
+    pub(super) fn from_wire(value: Option<i64>) -> Self {
+        match value {
+            Some(1) => Self::ActiveConnected,
+            Some(2) => Self::ActiveDisconnected,
+            // 0 (UNKNOWN), 3 (INACTIVE), any UNRECOGNIZED value, and a missing
+            // field all collapse to INACTIVE.
+            _ => Self::Inactive,
+        }
+    }
 }

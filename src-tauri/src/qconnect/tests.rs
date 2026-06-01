@@ -1,6 +1,6 @@
 use super::commands::{
-    build_qconnect_file_audio_quality_snapshot, classify_qconnect_audio_quality,
-    determine_queue_lookup_report_strategy,
+    build_qconnect_file_audio_quality_snapshot, build_set_position_player_state_request,
+    classify_qconnect_audio_quality, determine_queue_lookup_report_strategy,
     should_skip_renderer_report_due_to_stale_snapshot,
 };
 use super::queue_resolution::{
@@ -8,14 +8,16 @@ use super::queue_resolution::{
     QconnectRemoteSkipDirection,
 };
 use super::session::{
-    find_unique_renderer_id, refresh_local_renderer_id, QconnectFileAudioQualitySnapshot,
+    find_unique_renderer_id, refresh_local_renderer_id, renderer_allows_remote_volume,
+    QconnectFileAudioQualitySnapshot,
 };
 use super::transport::{
     decode_hex_channel, default_qconnect_device_info, parse_subscribe_channels,
 };
 use super::{
     normalize_volume_to_fraction, QconnectHandoffIntent, QconnectOutboundCommandType,
-    QconnectRendererInfo, QconnectSessionState, QconnectTrackOrigin, AUDIO_QUALITY_HIRES_LEVEL1,
+    QconnectQueueVersionPayload, QconnectRendererInfo, QconnectSessionState, QconnectTrackOrigin,
+    AUDIO_QUALITY_HIRES_LEVEL1,
 };
 use qbz_models::RepeatMode;
 use qconnect_app::{
@@ -45,6 +47,51 @@ fn normalizes_renderer_volume() {
     assert!((normalize_volume_to_fraction(58) - 0.58).abs() < f32::EPSILON);
     assert!((normalize_volume_to_fraction(-5) - 0.0).abs() < f32::EPSILON);
     assert!((normalize_volume_to_fraction(125) - 1.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn deferred_join_reason_is_reconnection_only_after_a_drop() {
+    use super::service::deferred_join_reason;
+    use super::{JOIN_SESSION_REASON_CONTROLLER_REQUEST, JOIN_SESSION_REASON_RECONNECTION};
+    assert_eq!(
+        deferred_join_reason(false),
+        JOIN_SESSION_REASON_CONTROLLER_REQUEST
+    );
+    assert_eq!(
+        deferred_join_reason(true),
+        JOIN_SESSION_REASON_RECONNECTION
+    );
+}
+
+#[test]
+fn reask_queue_state_stops_once_session_uuid_known_or_budget_spent() {
+    use super::service::should_reask_queue_state;
+    assert!(should_reask_queue_state(false, 0, 5));
+    assert!(should_reask_queue_state(false, 4, 5));
+    assert!(!should_reask_queue_state(false, 5, 5));
+    assert!(!should_reask_queue_state(true, 0, 5));
+}
+
+#[test]
+fn compute_connection_state_matrix() {
+    use super::session::{compute_connection_state, ServerActiveState::*};
+    let d = compute_connection_state(true, true, None, false);
+    assert!(
+        d.should_be_active && d.should_set_active_renderer && d.should_set_queue && !d.should_ask_queue
+    );
+    let d = compute_connection_state(true, false, Me, false);
+    assert!(d.should_be_active && !d.should_set_active_renderer && d.should_set_queue);
+    let d = compute_connection_state(false, false, Me, true);
+    assert!(d.should_ask_queue && !d.should_set_queue && !d.should_set_active_renderer);
+    let d = compute_connection_state(false, false, OtherPlaying, false);
+    assert!(!d.should_be_active && !d.should_set_active_renderer && d.should_ask_queue);
+    let d = compute_connection_state(false, false, None, false);
+    assert!(
+        !d.should_be_active
+            && !d.should_set_active_renderer
+            && !d.should_set_queue
+            && !d.should_ask_queue
+    );
 }
 
 #[test]
@@ -99,6 +146,17 @@ fn maps_qconnect_track_origin_to_core_origin_and_handoff() {
 }
 
 #[test]
+fn blocks_command_when_any_track_origin_is_non_qobuz() {
+    use super::commands::validate_track_origins_for_admission;
+    use super::QconnectTrackOrigin::*;
+    assert!(validate_track_origins_for_admission(&[QobuzOnline, QobuzOfflineCache]).accepted);
+    assert!(!validate_track_origins_for_admission(&[QobuzOnline, LocalLibrary]).accepted);
+    assert!(!validate_track_origins_for_admission(&[Plex]).accepted);
+    assert!(!validate_track_origins_for_admission(&[ExternalUnknown]).accepted);
+    assert!(!validate_track_origins_for_admission(&[]).accepted); // empty -> blocked
+}
+
+#[test]
 fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
     let local_device_uuid = super::transport::resolve_qconnect_device_uuid();
     let mut session = QconnectSessionState {
@@ -110,6 +168,7 @@ fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
                 brand: Some("Apple".to_string()),
                 model: Some("iPhone".to_string()),
                 device_type: Some(6),
+                volume_remote_control: None,
             },
             QconnectRendererInfo {
                 renderer_id: 6,
@@ -118,6 +177,7 @@ fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
                 brand: Some("QBZ".to_string()),
                 model: Some("QBZ".to_string()),
                 device_type: Some(5),
+                volume_remote_control: None,
             },
         ],
         ..Default::default()
@@ -142,6 +202,7 @@ fn refreshes_local_renderer_id_from_unique_fingerprint_when_uuid_missing() {
                 brand: Some("Apple".to_string()),
                 model: Some("iPhone".to_string()),
                 device_type: Some(6),
+                volume_remote_control: None,
             },
             QconnectRendererInfo {
                 renderer_id: 6,
@@ -150,6 +211,7 @@ fn refreshes_local_renderer_id_from_unique_fingerprint_when_uuid_missing() {
                 brand: local_device_info.brand.clone(),
                 model: local_device_info.model.clone(),
                 device_type: local_device_info.device_type,
+                volume_remote_control: None,
             },
         ],
         ..Default::default()
@@ -171,6 +233,7 @@ fn does_not_guess_local_renderer_id_when_fingerprint_is_ambiguous() {
                 brand: Some("QBZ".to_string()),
                 model: Some("QBZ".to_string()),
                 device_type: Some(5),
+                volume_remote_control: None,
             },
             QconnectRendererInfo {
                 renderer_id: 9,
@@ -179,6 +242,7 @@ fn does_not_guess_local_renderer_id_when_fingerprint_is_ambiguous() {
                 brand: Some("QBZ".to_string()),
                 model: Some("QBZ".to_string()),
                 device_type: Some(5),
+                volume_remote_control: None,
             },
         ],
         ..Default::default()
@@ -1041,4 +1105,137 @@ fn resolves_remote_previous_to_prior_item_even_mid_track() {
             matched_queue_item_id: Some(0),
         }
     );
+}
+
+#[test]
+fn device_uuid_env_override_takes_precedence() {
+    // SAFETY: single-threaded test process for this var; restore after.
+    std::env::set_var("QBZ_QCONNECT_DEVICE_UUID", "env-override-uuid-123");
+    let uuid = super::transport::resolve_qconnect_device_uuid();
+    std::env::remove_var("QBZ_QCONNECT_DEVICE_UUID");
+    assert_eq!(uuid, "env-override-uuid-123");
+}
+
+#[test]
+fn device_uuid_persists_and_is_reused_across_calls() {
+    let tmp = std::env::temp_dir().join(format!(
+        "qbz_qconnect_uuid_test_{}.db",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&tmp);
+
+    // First call generates and persists.
+    let first = super::transport::device_uuid_from_db(&tmp);
+    assert!(!first.trim().is_empty(), "generated uuid must be non-empty");
+    // Second call must return the SAME value (read back from disk, not a fresh v4).
+    let second = super::transport::device_uuid_from_db(&tmp);
+    assert_eq!(first, second, "device_uuid must be stable across calls");
+
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn renderer_status_from_wire_maps_known_values() {
+    use super::RendererStatus;
+    assert_eq!(RendererStatus::from_wire(Some(0)), RendererStatus::Inactive); // UNKNOWN collapses
+    assert_eq!(RendererStatus::from_wire(Some(1)), RendererStatus::ActiveConnected);
+    assert_eq!(RendererStatus::from_wire(Some(2)), RendererStatus::ActiveDisconnected);
+    assert_eq!(RendererStatus::from_wire(Some(3)), RendererStatus::Inactive);
+}
+
+#[test]
+fn renderer_status_from_wire_collapses_unknown_and_missing_to_inactive() {
+    use super::RendererStatus;
+    assert_eq!(RendererStatus::from_wire(Some(99)), RendererStatus::Inactive); // UNRECOGNIZED
+    assert_eq!(RendererStatus::from_wire(None), RendererStatus::Inactive);     // absent field
+}
+
+#[test]
+fn watchdog_arms_only_for_playing_active_peer() {
+    use super::{
+        should_arm_renderer_watchdog, PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING,
+        PLAYING_STATE_STOPPED, PLAYING_STATE_UNKNOWN,
+    };
+    // Arm: playing AND active peer.
+    assert!(should_arm_renderer_watchdog(Some(PLAYING_STATE_PLAYING), true));
+    // Do not arm when paused/stopped/unknown even if active peer.
+    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_PAUSED), true));
+    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_STOPPED), true));
+    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_UNKNOWN), true));
+    assert!(!should_arm_renderer_watchdog(None, true));
+    // Do not arm when not an active peer (e.g. local renderer is active).
+    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_PLAYING), false));
+}
+
+#[test]
+fn build_set_position_request_carries_position_and_queue_item_without_changing_play_state() {
+    let req = build_set_position_player_state_request(
+        42_000,
+        Some(7),
+        QconnectQueueVersionPayload { major: 3, minor: 1 },
+    );
+    assert_eq!(
+        req.playing_state, None,
+        "seek must not change play/pause state"
+    );
+    assert_eq!(req.current_position, Some(42_000));
+    let item = req.current_queue_item.expect("queue item present");
+    assert_eq!(item.id, Some(7));
+    let ver = item.queue_version.expect("queue version present");
+    assert_eq!((ver.major, ver.minor), (3, 1));
+}
+
+#[test]
+fn build_set_position_request_omits_queue_item_when_unknown() {
+    let req = build_set_position_player_state_request(
+        1_000,
+        None,
+        QconnectQueueVersionPayload { major: 1, minor: 0 },
+    );
+    assert!(req.current_queue_item.is_none());
+    assert_eq!(req.current_position, Some(1_000));
+}
+
+#[test]
+fn startup_retry_schedule_is_bounded_and_monotonic() {
+    let s = super::startup::startup_retry_schedule();
+    assert_eq!(s.len(), 4);
+    assert!(s.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(*s.last().unwrap(), 30_000);
+}
+
+#[test]
+fn quality_from_max_audio_quality_maps_levels() {
+    use super::track_loading::quality_from_max_audio_quality;
+    use qbz_models::Quality;
+    // qbz Quality has four variants: Mp3, Lossless (CD), HiRes (<=96kHz),
+    // UltraHiRes (>96kHz). QConnect levels collapse onto these.
+    assert_eq!(quality_from_max_audio_quality(Some(0)), Quality::Mp3);
+    assert_eq!(quality_from_max_audio_quality(Some(1)), Quality::Mp3);
+    assert_eq!(quality_from_max_audio_quality(Some(2)), Quality::Lossless);
+    assert_eq!(quality_from_max_audio_quality(Some(3)), Quality::HiRes);
+    assert_eq!(quality_from_max_audio_quality(Some(4)), Quality::UltraHiRes);
+    assert_eq!(quality_from_max_audio_quality(Some(5)), Quality::UltraHiRes);
+    assert_eq!(quality_from_max_audio_quality(None), Quality::UltraHiRes);
+    assert_eq!(quality_from_max_audio_quality(Some(99)), Quality::UltraHiRes);
+}
+
+#[test]
+fn renderer_allows_remote_volume_defaults_allow_when_absent() {
+    let mut info = QconnectRendererInfo {
+        renderer_id: 7,
+        device_uuid: None,
+        friendly_name: None,
+        brand: None,
+        model: None,
+        device_type: None,
+        volume_remote_control: None,
+    };
+    assert!(renderer_allows_remote_volume(&info)); // absent => allowed
+    info.volume_remote_control = Some(1);
+    assert!(renderer_allows_remote_volume(&info)); // ALLOWED
+    info.volume_remote_control = Some(0);
+    assert!(!renderer_allows_remote_volume(&info)); // explicit non-allowed
+    info.volume_remote_control = Some(2);
+    assert!(!renderer_allows_remote_volume(&info)); // any other value
 }

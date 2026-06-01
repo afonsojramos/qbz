@@ -9,8 +9,8 @@
 //! This is the frontend-agnostic contract behind the source-aware playback
 //! context: the now-playing bar, the queue, and the artwork pipeline consume
 //! `PlaybackSource` + [`ArtworkRef`] and never special-case a source themselves.
-//! The same contract drives the Qobuz Connect queue gate (only Qobuz-streamable
-//! tracks may be cast — see [`PlaybackSource::is_qobuz_streamable`]).
+//! The same contract drives the Qobuz Connect queue gate (only castable tracks
+//! may be cast — see [`PlaybackSource::is_castable_to_qconnect`]).
 
 use serde::{Deserialize, Serialize};
 
@@ -54,12 +54,57 @@ impl PlaybackSource {
         }
     }
 
-    /// Whether this source streams from Qobuz and may therefore be cast onto
-    /// a Qobuz Connect queue. Offline-cache copies, local files, and Plex are
-    /// **not** castable to a Qobuz Connect receiver — this is the first-class
-    /// gate the queue pipeline consults before syncing to Qobuz Connect.
+    /// Whether this source streams live from the Qobuz catalog. NOTE: NOT the
+    /// cast gate — offline-cache also carries a valid Qobuz id and IS castable.
+    /// Use is_castable_to_qconnect for the Qobuz Connect gate.
     pub fn is_qobuz_streamable(self) -> bool {
         matches!(self, Self::Qobuz)
+    }
+
+    /// The admission-side cast predicate. Offline-cache maps to castable (the
+    /// offline copy carries a valid Qobuz track id). This is the method the
+    /// QConnect gate consults; is_qobuz_streamable stays "streams live from Qobuz".
+    ///
+    /// Shared QConnect-admission gate primitive: this is the single predicate
+    /// both the Tauri and the upcoming Slint frontends call to gate casting.
+    pub fn is_castable_to_qconnect(self) -> bool {
+        matches!(self, Self::Qobuz | Self::OfflineCache)
+    }
+}
+
+/// Admission-only origin tag. Unlike PlaybackSource, this has ExternalUnknown
+/// so the Qobuz Connect gate can default unknown/absent to *blocked* not *Qobuz*.
+///
+/// Shared QConnect-admission gate primitive consumed by the Slint port (its
+/// strict-parse companion for the cast gate); kept intentionally for that use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrackOriginTag {
+    Qobuz,
+    OfflineCache,
+    Local,
+    Plex,
+    ExternalUnknown,
+}
+
+impl PlaybackSource {
+    /// Strict parse for the admission path: unknown/absent → ExternalUnknown (blocked).
+    ///
+    /// Shared QConnect-admission gate primitive consumed by the Slint port (it
+    /// feeds the cast gate, where unknown origins must block, not default to Qobuz).
+    pub fn from_source_str_strict(s: Option<&str>) -> TrackOriginTag {
+        match s {
+            Some("qobuz") => TrackOriginTag::Qobuz,
+            Some("qobuz_download") => TrackOriginTag::OfflineCache,
+            Some("local") => TrackOriginTag::Local,
+            Some("plex") => TrackOriginTag::Plex,
+            _ => TrackOriginTag::ExternalUnknown,
+        }
+    }
+}
+
+impl TrackOriginTag {
+    pub fn is_castable_to_qconnect(self) -> bool {
+        matches!(self, Self::Qobuz | Self::OfflineCache)
     }
 }
 
@@ -154,6 +199,25 @@ mod tests {
         ] {
             assert_eq!(PlaybackSource::from_source_str(Some(s.as_source_str())), s);
         }
+    }
+
+    #[test]
+    fn offline_cache_is_castable() {
+        assert!(PlaybackSource::OfflineCache.is_castable_to_qconnect());
+        assert!(TrackOriginTag::OfflineCache.is_castable_to_qconnect());
+    }
+
+    #[test]
+    fn strict_parse_blocks_unknown_and_absent() {
+        use TrackOriginTag::*;
+        assert_eq!(PlaybackSource::from_source_str_strict(Some("qobuz")), Qobuz);
+        assert_eq!(PlaybackSource::from_source_str_strict(Some("local")), Local);
+        assert_eq!(PlaybackSource::from_source_str_strict(Some("plex")), Plex);
+        assert_eq!(PlaybackSource::from_source_str_strict(Some("qobuz_download")), OfflineCache);
+        assert_eq!(PlaybackSource::from_source_str_strict(None), ExternalUnknown);
+        assert_eq!(PlaybackSource::from_source_str_strict(Some("???")), ExternalUnknown);
+        // Lenient parser still defaults to Qobuz (playback compatibility).
+        assert_eq!(PlaybackSource::from_source_str(None), PlaybackSource::Qobuz);
     }
 
     #[test]

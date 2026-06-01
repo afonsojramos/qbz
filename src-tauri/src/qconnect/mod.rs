@@ -38,6 +38,28 @@ pub(super) const PLAYING_STATE_PLAYING: i32 = 2;
 pub(super) const PLAYING_STATE_PAUSED: i32 = 3;
 pub(super) const BUFFER_STATE_OK: i32 = 2;
 
+/// JoinSession `reason` wire values (proto tag 3): a first join from a fresh
+/// runtime is a controller request, a join after a transport drop carries the
+/// reconnection reason so the server treats it as session continuity rather
+/// than a brand-new controller (P1-2).
+pub(super) const JOIN_SESSION_REASON_CONTROLLER_REQUEST: i32 = 1;
+pub(super) const JOIN_SESSION_REASON_RECONNECTION: i32 = 2;
+
+/// Official "renderer LOST" silence budget. A *playing* active peer renderer
+/// that sends no RENDERER_STATE_UPDATED for this long is considered
+/// unreachable (webplayer arms setTimeout(...,12e3) on onPlayerStateUpdated
+/// while playingState==PLAY). See 05-sync-status-queue.md §1.
+pub(super) const QCONNECT_RENDERER_LOST_TIMEOUT_MS: u64 = 12_000;
+
+/// Pure arming predicate for the renderer-liveness watchdog: arm only while the
+/// active renderer is a peer AND its reported playing_state is PLAYING.
+pub(super) fn should_arm_renderer_watchdog(
+    playing_state: Option<i32>,
+    is_active_peer: bool,
+) -> bool {
+    is_active_peer && playing_state == Some(PLAYING_STATE_PLAYING)
+}
+
 // AudioQuality enum: 0=unknown, 1=mp3, 2=cd, 3=hires_l1, 4=hires_l2(192k), 5=hires_l3(384k)
 pub(super) const AUDIO_QUALITY_UNKNOWN: i32 = 0;
 pub(super) const AUDIO_QUALITY_MP3: i32 = 1;
@@ -63,17 +85,30 @@ pub(super) struct QconnectRemoteSyncState {
     pub(super) last_materialized_start_index: Option<usize>,
     pub(super) last_materialized_core_shuffle_order: Option<Vec<usize>>,
     pub(super) last_reported_file_audio_quality: Option<QconnectFileAudioQualitySnapshot>,
+    /// Last reported device (DAC output) audio quality: (sampling_rate, bit_depth, nb_channels).
+    /// Used to dedup outbound RndrSrvrDeviceAudioQualityChanged(27) reports.
+    pub(super) last_reported_device_audio_quality: Option<(i32, i32, i32)>,
     pub(super) last_applied_queue_state: Option<QConnectQueueState>,
     pub(super) last_remote_queue_state: Option<QConnectQueueState>,
     pub(super) session_loop_mode: Option<i32>,
     /// Session topology — stored from session management events (types 81-87).
     pub(super) session: QconnectSessionState,
+    /// The session_uuid for which we last ran the full deferred renderer-join
+    /// body. Used to make the deferred join idempotent (P1-8): when a SESSION_STATE
+    /// arrives with the same session_uuid we skip the join reports but still
+    /// re-AskForRendererState.
+    pub(super) last_joined_session_uuid: Option<String>,
     pub(super) session_renderer_states: HashMap<i32, QconnectSessionRendererState>,
     /// Track of the most recent load attempt across paths (V2 play
     /// handoff and ensure_remote_track_loaded). Used to suppress
     /// redundant reloads when an echo SetState arrives during the
     /// in-progress buffer/decode window of a previously triggered load.
     pub(super) last_load_attempt: Option<(u64, std::time::Instant)>,
+    /// Monotonic epoch for the renderer-liveness watchdog (P0-1). Every armed
+    /// RENDERER_STATE_UPDATED bumps this; a spawned 12s task captures the value
+    /// and no-ops on wake if it was superseded (reset/disarm). Disarm =
+    /// pause/stop/active-change/disconnect, which also bump it.
+    pub(super) watchdog_generation: u64,
 }
 
 pub(super) fn qconnect_now_ms() -> u64 {

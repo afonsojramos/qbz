@@ -9,8 +9,8 @@ use qconnect_core::{
 };
 use qconnect_protocol::{
     build_qconnect_outbound_envelope, build_qconnect_renderer_outbound_envelope,
-    parse_inbound_event, InboundEnvelope, QueueCommand, QueueCommandType, QueueEventType,
-    QueueServerEvent, RendererCommandType, RendererReport, RendererReportType,
+    decode_playback_error, parse_inbound_event, InboundEnvelope, QueueCommand, QueueCommandType,
+    QueueEventType, QueueServerEvent, RendererCommandType, RendererReport, RendererReportType,
     RendererServerCommand,
 };
 use qconnect_transport_ws::{TransportEvent, WsTransport, WsTransportConfig};
@@ -213,6 +213,20 @@ where
             TransportEvent::InboundRendererServerCommand(command) => {
                 self.apply_renderer_server_command(command).await?;
             }
+            TransportEvent::InboundPayloadBytes { payload, .. } => {
+                // The batch carries renderer per-track failures as a tag-3
+                // playback_error on a messages[] entry. The queue/renderer
+                // decoders ignore it, so decode it here off the raw batch bytes.
+                if let Some(error) = decode_playback_error(&payload) {
+                    self.sink
+                        .on_event(QconnectAppEvent::PlaybackError {
+                            queue_item_id: error.queue_item_id,
+                            error_type: error.error_type,
+                            queue_version: error.queue_version,
+                        })
+                        .await;
+                }
+            }
             TransportEvent::Authenticated
             | TransportEvent::Subscribed
             | TransportEvent::SessionEstablished
@@ -223,7 +237,6 @@ where
             | TransportEvent::TransportError { .. }
             | TransportEvent::CloudError { .. }
             | TransportEvent::InboundFrameDecoded { .. }
-            | TransportEvent::InboundPayloadBytes { .. }
             | TransportEvent::OutboundSent { .. } => {}
         }
         Ok(())
@@ -322,7 +335,16 @@ where
                     QueueEventType::SrvrCtrlShuffleModeSet
                         | QueueEventType::SrvrCtrlQueueTracksReordered
                         | QueueEventType::SrvrCtrlQueueTracksRemoved
+                        | QueueEventType::SrvrCtrlQueueTracksAddedFromAutoplay
                 ) {
+                    should_trigger_resync = true;
+                }
+
+                // queue_hash divergence seam. Inert today (local hash algorithm
+                // is a BLOCKING unknown -> compute_local_queue_hash returns None),
+                // so this never fires spurious resyncs. When the algorithm lands,
+                // a mismatch will pull the authoritative QueueState.
+                if queue_hashes_diverge(&state.queue) {
                     should_trigger_resync = true;
                 }
             }
@@ -610,6 +632,28 @@ fn infer_buffer_state(playing_state: Option<i32>) -> Option<i32> {
     }
 }
 
+/// BLOCKING OPEN QUESTION: the Qobuz `queue_hash` (field #100) algorithm is
+/// undocumented. Until it is verified, this returns `None`, which keeps
+/// `queue_hashes_diverge` inert so it can NOT fire spurious resyncs. Flipping
+/// this to a real implementation is the single switch that turns on divergence
+/// detection.
+fn compute_local_queue_hash(_queue: &QConnectQueueState) -> Option<Vec<u8>> {
+    None
+}
+
+/// Algorithm-agnostic divergence seam. Only reports divergence when BOTH a
+/// locally computed hash and a server-reported hash exist and differ. Because
+/// `compute_local_queue_hash` returns `None` today, this is always `false`.
+fn queue_hashes_diverge(queue: &QConnectQueueState) -> bool {
+    match (
+        compute_local_queue_hash(queue),
+        queue.last_server_queue_hash.as_ref(),
+    ) {
+        (Some(local), Some(server)) => &local != server,
+        _ => false,
+    }
+}
+
 fn map_server_event(event: &QueueServerEvent, current: &QConnectQueueState) -> QueueEvent {
     let version = event
         .queue_version
@@ -634,6 +678,12 @@ fn map_server_event(event: &QueueServerEvent, current: &QConnectQueueState) -> Q
                 };
             } else {
                 next.shuffle_order = None;
+            }
+
+            // Surface the server queue_hash (field #100). Only overwrite when the
+            // payload actually carries it, so an omitted hash leaves prior state.
+            if let Some(server_hash) = parse_bytes(&event.payload, "server_queue_hash") {
+                next.last_server_queue_hash = Some(server_hash);
             }
 
             QueueEvent::QueueStateReplaced {
@@ -826,6 +876,21 @@ fn parse_u64(payload: &Value, field: &str) -> Option<u64> {
     payload.get(field).and_then(value_as_u64)
 }
 
+/// Parse a JSON byte array (e.g. the server `queue_hash` field #100) into bytes.
+/// Returns `None` when absent/null so an omitted hash does not clobber state.
+fn parse_bytes(payload: &Value, field: &str) -> Option<Vec<u8>> {
+    payload
+        .get(field)
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(value_as_u64)
+                .filter_map(|value| u8::try_from(value).ok())
+                .collect()
+        })
+}
+
 fn parse_bool(payload: &Value, field: &str, default: bool) -> bool {
     payload
         .get(field)
@@ -946,7 +1011,8 @@ mod tests {
 
     use crate::{QconnectAppEvent, QconnectEventSink};
 
-    use super::QconnectApp;
+    use super::{queue_hashes_diverge, QconnectApp};
+    use qconnect_core::QConnectQueueState;
     use qconnect_protocol::{
         QueueCommandType, QueueEventType, QueueServerEvent, RendererCommandType,
         RendererServerCommand,
@@ -1161,6 +1227,117 @@ mod tests {
         assert!(
             !sent.is_empty(),
             "expected ask-for-state resync after remove"
+        );
+    }
+
+    #[test]
+    fn queue_hashes_diverge_is_inert_without_local_algorithm() {
+        let mut queue = QConnectQueueState::default();
+        queue.last_server_queue_hash = Some(vec![9, 9, 9]);
+        assert!(
+            !queue_hashes_diverge(&queue),
+            "divergence detection must stay inert until the local hash algorithm is known"
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_state_event_surfaces_server_queue_hash() {
+        let (app, _sink, _transport, _events_rx) = build_connected_app().await;
+
+        app.apply_server_event(QueueServerEvent {
+            event_type: QueueEventType::SrvrCtrlQueueState,
+            action_uuid: None,
+            queue_version: Some(QueueVersion::new(1, 0)),
+            payload: json!({
+                "tracks": [],
+                "shuffle_mode": false,
+                "autoplay_tracks": [],
+                "server_queue_hash": [1, 2, 3, 4]
+            }),
+        })
+        .await
+        .expect("apply queue-state event");
+
+        let snap = app.queue_state_snapshot().await;
+        assert_eq!(
+            snap.last_server_queue_hash.as_deref(),
+            Some(&[1u8, 2, 3, 4][..])
+        );
+    }
+
+    #[tokio::test]
+    async fn inbound_playback_error_emits_playback_error_app_event() {
+        use prost::Message as _;
+        use qconnect_protocol::{
+            ErrorType, PlaybackErrorMessage, QConnectMessage, QConnectMessages, QueueVersionRef,
+        };
+        use qconnect_transport_ws::TransportEvent;
+
+        let (app, sink, _transport, _events_rx) = build_connected_app().await;
+
+        let batch = QConnectMessages {
+            messages_time: None,
+            messages_id: None,
+            messages: vec![QConnectMessage {
+                message_type: Some(2), // PLAYBACK_ERROR
+                playback_error: Some(PlaybackErrorMessage {
+                    queue_version: Some(QueueVersionRef {
+                        major: Some(4),
+                        minor: Some(2),
+                    }),
+                    queue_item_id: Some(77),
+                    error_type: Some(5), // NETWORK_ERROR
+                }),
+                ..Default::default()
+            }],
+        };
+
+        app.handle_transport_event(TransportEvent::InboundPayloadBytes {
+            cloud_message_type: 0,
+            payload: batch.encode_to_vec(),
+        })
+        .await
+        .expect("handle playback-error frame");
+
+        let events = sink.snapshot().await;
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                QconnectAppEvent::PlaybackError {
+                    queue_item_id: 77,
+                    error_type: ErrorType::NetworkError,
+                    ..
+                }
+            )),
+            "expected a PlaybackError app event for queue item 77 / NetworkError"
+        );
+    }
+
+    #[tokio::test]
+    async fn autoplay_growth_triggers_queue_state_resync() {
+        let (app, sink, transport, _events_rx) = build_connected_app().await;
+
+        app.apply_server_event(QueueServerEvent {
+            event_type: QueueEventType::SrvrCtrlQueueTracksAddedFromAutoplay,
+            action_uuid: None,
+            queue_version: Some(QueueVersion::new(2, 0)),
+            payload: json!({ "queue_item_ids": [101, 102] }),
+        })
+        .await
+        .expect("apply autoplay-growth event");
+
+        let events = sink.snapshot().await;
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, QconnectAppEvent::QueueResyncTriggered)),
+            "autoplay growth must force an AskForQueueState resync"
+        );
+
+        let sent = transport.sent_messages().await;
+        assert!(
+            !sent.is_empty(),
+            "expected ask-for-state resync after autoplay growth"
         );
     }
 

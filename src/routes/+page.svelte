@@ -358,15 +358,24 @@
     addToPlaylist,
     shareQobuzTrackLink,
     shareSonglinkTrack,
-    loadQconnectQueue
+    reorderQconnectQueueIfRemote,
+    removeQconnectQueueItemsIfRemote,
+    clearQconnectQueueIfRemote
   } from '$lib/services/trackActions';
-  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
+  import {
+    replacePlaybackQueue,
+    assessQconnectQueueSync,
+    syncQconnectQueueFromTracks,
+    shouldAutoSkipOnPlaybackError,
+    type QconnectPlaybackErrorPayload
+  } from '$lib/services/queuePlaybackService';
   import type {
     QconnectDiagnosticsPayload,
     QconnectQueueSnapshot,
     QconnectRendererReportDebugPayload,
     QconnectRendererSnapshot
   } from '$lib/services/qconnectRemoteQueue';
+  import { resolveQconnectQueueDisplayItems } from '$lib/services/qconnectRemoteQueue';
   import {
     DEFAULT_QCONNECT_CONNECTION_STATUS,
     QCONNECT_DIAGNOSTIC_LOG_LIMIT,
@@ -1119,6 +1128,26 @@
 
   const qconnectPeerRendererActive = $derived(
     isQconnectPeerRendererActive(qobuzConnectSessionSnapshot)
+  );
+  // P1-5: respect the active renderer's volume_remote_control capability.
+  // Absent (null/undefined) => allowed; only an explicit non-1 value disables.
+  const qconnectRemoteVolumeAllowed = $derived.by(() => {
+    if (!qconnectPeerRendererActive) return true;
+    const snap = qobuzConnectSessionSnapshot;
+    const activeId = snap?.active_renderer_id ?? null;
+    const info = snap?.renderers?.find((r) => r.renderer_id === activeId) ?? null;
+    const vrc = info?.volume_remote_control;
+    return vrc == null || vrc === 1;
+  });
+  // P1-5: unified volume-lock state shared by the now-playing bar + immersive
+  // player. Hardware lock applies only locally; remote lock applies when a peer
+  // renderer is active and disallows remote volume.
+  const qconnectVolumeLocked = $derived(
+    (isAlsaDirectHw && !qconnectPeerRendererActive) ||
+      (qconnectPeerRendererActive && !qconnectRemoteVolumeAllowed)
+  );
+  const qconnectVolumeLockedReason: 'hardware' | 'remote' = $derived(
+    qconnectPeerRendererActive && !qconnectRemoteVolumeAllowed ? 'remote' : 'hardware'
   );
   const qconnectSuppressLocalPlaybackAutomation = $derived(
     shouldQconnectSuppressLocalPlaybackAutomation(
@@ -2868,13 +2897,22 @@
   }
 
   // Playback controls (delegating to playerStore)
-  function handleSeek(time: number) {
+  async function handleSeek(time: number) {
+    try {
+      const positionMs = Math.max(0, Math.round(time * 1000));
+      const handledRemotely = await invoke<boolean>('v2_qconnect_set_position_if_remote', { positionMs });
+      if (handledRemotely) return;
+    } catch {
+      // Fall through to local
+    }
     playerSeek(time);
   }
 
   async function handleVolumeChange(newVolume: number) {
     // ALSA Direct hw: locks volume at 100% — unless controlling a remote renderer
     if (isAlsaDirectHw && !qconnectPeerRendererActive) return;
+    // P1-5: the active remote renderer disallows remote volume control.
+    if (qconnectPeerRendererActive && !qconnectRemoteVolumeAllowed) return;
 
     try {
       const handledRemotely = await invoke<boolean>('v2_qconnect_set_volume_if_remote', { volume: newVolume });
@@ -3222,10 +3260,50 @@
     }
   }
 
+  // Resolve the remote queue_item_id for a local upcoming row.
+  //
+  // When a peer renderer owns playback the local queue sidebar shows a
+  // projection of the local backend `upcoming[]` (track_id only). The remote
+  // renderer keys mutations on the cloud's stable `queue_item_id`, which lives
+  // only in `qobuzConnectQueueSnapshot.queue_items`. We map the upcoming row to
+  // a queue_item_id by walking the remote display order: slice off everything up
+  // to and including the renderer's current track, then index into the remaining
+  // (upcoming) portion. We corroborate by track_id so a stale/misaligned
+  // snapshot returns null instead of a wrong id (which would silently mutate the
+  // wrong row on the renderer).
+  function resolveRemoteQueueItemIdForUpcoming(
+    upcomingIndex: number,
+    expectedTrackId: number | null
+  ): number | null {
+    const displayItems = resolveQconnectQueueDisplayItems(qobuzConnectQueueSnapshot);
+    if (displayItems.length === 0) return null;
+
+    const currentQueueItemId = qobuzConnectRendererSnapshot?.current_track?.queue_item_id ?? null;
+    let upcomingStart = 0;
+    if (currentQueueItemId != null) {
+      const currentPos = displayItems.findIndex(
+        (item) => item.queue_item_id === currentQueueItemId
+      );
+      if (currentPos >= 0) {
+        upcomingStart = currentPos + 1;
+      }
+    }
+
+    const target = displayItems[upcomingStart + upcomingIndex] ?? null;
+    if (!target) return null;
+    // Corroborate by track_id: if the local row and the remote slot disagree,
+    // the snapshot is out of sync — refuse rather than mutate the wrong item.
+    if (expectedTrackId != null && target.track_id !== expectedTrackId) return null;
+    return target.queue_item_id;
+  }
+
   // Clear the queue. If nothing is actively playing, also wipe the
   // now-playing slot so a stale track doesn't linger in NOW PLAYING
   // after the user pressed Clear.
   async function handleClearQueue() {
+    // When a peer renderer owns playback, route the clear to the remote queue
+    // and skip the local mutation entirely.
+    if (qconnectPeerRendererActive && (await clearQconnectQueueIfRemote())) return;
     const includeCurrent = !isPlaying;
     const success = await clearQueue({ includeCurrent });
     if (success) {
@@ -3240,6 +3318,20 @@
   }
 
   // Reorder tracks in the queue
+  //
+  // NOTE (P1-4, DONE_WITH_CONCERNS): the remote `queue_reorder_tracks` command
+  // needs the FULL target order as queue_item_ids for the whole renderer queue.
+  // This handler only receives local upcoming-relative from/to indices, and the
+  // local backend queue rows carry no queue_item_id. Reconstructing the complete
+  // remote order would require mapping every local row to a queue_item_id by
+  // track_id (ambiguous when a track_id appears more than once) AND splicing in
+  // the current track + autoplay items under the renderer's shuffle order — none
+  // of which can be derived reliably from a from/to index pair. Sending a partial
+  // or mis-ordered id list would silently corrupt the renderer queue, so we do
+  // NOT route reorder remotely. The local store reorder is left intact (under a
+  // peer renderer it simply doesn't propagate). Wiring this correctly needs the
+  // backend to expose per-row queue_item_ids in the projected queue, or a
+  // dedicated move-by-queue_item_id remote command.
   async function handleQueueReorder(fromIndex: number, toIndex: number) {
     const success = await moveQueueTrack(fromIndex, toIndex);
     if (!success) {
@@ -3249,6 +3341,18 @@
 
   // Remove a track from the upcoming queue by its position in the upcoming list (V2)
   async function handleRemoveFromQueue(upcomingIndex: number) {
+    // When a peer renderer owns playback, route the removal to the remote queue.
+    // Map the local upcoming index to the renderer's stable queue_item_id; only
+    // route if we can resolve it unambiguously (else fall through to local so we
+    // never mutate the wrong remote row).
+    if (qconnectPeerRendererActive) {
+      const state = await getBackendQueueState();
+      const expectedTrackId = state?.upcoming[upcomingIndex]?.id ?? null;
+      const queueItemId = resolveRemoteQueueItemIdForUpcoming(upcomingIndex, expectedTrackId);
+      if (queueItemId != null) {
+        if (await removeQconnectQueueItemsIfRemote([queueItemId])) return;
+      }
+    }
     try {
       await invoke('v2_remove_upcoming_track', { upcomingIndex });
       await syncQueueState(); // Refresh UI
@@ -5589,6 +5693,8 @@
     let unlistenQconnectError: UnlistenFn | null = null;
     let unlistenQconnectStatusChanged: UnlistenFn | null = null;
     let unlistenQconnectAdmissionBlocked: UnlistenFn | null = null;
+    let unlistenQconnectRendererDisconnected: UnlistenFn | null = null;
+    let unlistenQconnectRendererUnreachable: UnlistenFn | null = null;
     let unlistenQconnectDiagnostic: UnlistenFn | null = null;
     let unlistenQconnectRendererReportDebug: UnlistenFn | null = null;
     let unlistenAudioDeviceMissing: UnlistenFn | null = null;
@@ -5726,18 +5832,54 @@
               // Delay briefly so the QConnect session setup (ask_for_queue_state etc.)
               // completes before we try to push our queue.
               setTimeout(() => {
-                const queueState = getQueueState();
-                const trackIds = queueState.queue
-                  .map(item => item.trackId ?? parseInt(item.id))
-                  .filter((id): id is number => typeof id === 'number' && !isNaN(id) && id > 0);
-                if (trackIds.length > 0) {
-                  console.log('[QConnect] Pushing local queue to remote on connect (%d tracks)', trackIds.length);
-                  loadQconnectQueue(trackIds, 0).then(ok => {
-                    if (ok) console.log('[QConnect] Local queue pushed to remote on connect');
-                    else console.warn('[QConnect] Local queue NOT pushed on connect (rejected or failed)');
-                  }).catch(err => console.error('[QConnect] Local queue push on connect error:', err));
-                }
+                void (async () => {
+                  // Use the BACKEND queue snapshot: its tracks carry `source`
+                  // and `is_local`, which the frontend display queue
+                  // (getQueueState) does not. The mixed-queue guard needs them
+                  // to refuse pushing a local/Plex row id to a Qobuz renderer.
+                  const state = await getBackendQueueState();
+                  if (!state) {
+                    console.warn('[QConnect] On-connect push skipped: no backend queue snapshot');
+                    return;
+                  }
+                  const tracks = [
+                    ...state.history,
+                    ...(state.current_track ? [state.current_track] : []),
+                    ...state.upcoming
+                  ];
+                  // Start index = the current track's position in the ordered list.
+                  const startIndex = state.current_track ? state.history.length : 0;
+                  const assessment = assessQconnectQueueSync(tracks);
+                  if (!assessment.syncable) {
+                    console.warn('[QConnect] On-connect push refused: reason=%s blocked=%o',
+                      assessment.reason, assessment.blockedTrackIds);
+                    if (assessment.reason === 'queue_contains_non_qobuz_tracks') {
+                      showToast($t('qconnect.mixedQueueNotCast'), 'warning');
+                    }
+                    return;
+                  }
+                  console.log('[QConnect] Pushing local queue to remote on connect (%d tracks)', tracks.length);
+                  const ok = await syncQconnectQueueFromTracks(tracks, startIndex, 'on-connect-push');
+                  console.log(ok
+                    ? '[QConnect] Local queue pushed to remote on connect'
+                    : '[QConnect] Local queue NOT pushed on connect (rejected or failed)');
+                })().catch(err => console.error('[QConnect] Local queue push on connect error:', err));
               }, 2000);
+            }
+          }
+
+          // Renderer reported a per-track playback failure. Auto-skip the
+          // failed track if it is the one currently playing and the error is a
+          // deterministic per-track failure; otherwise surface a toast.
+          if ('PlaybackError' in payloadObj) {
+            const pe = payloadObj.PlaybackError as QconnectPlaybackErrorPayload;
+            const currentQid =
+              qobuzConnectRendererSnapshot?.current_track?.queue_item_id ?? null;
+            if (shouldAutoSkipOnPlaybackError(pe, currentQid)) {
+              showToast($t('qconnect.trackUnavailableSkipping'), 'warning');
+              void handleSkipForward();
+            } else {
+              showToast($t('qconnect.trackPlaybackError'), 'error');
             }
           }
 
@@ -5807,6 +5949,28 @@
       if (disposed) { unlisten8(); return; }
       unlistenQconnectAdmissionBlocked = unlisten8;
 
+      const unlistenRendererDisconnected = await listen<{ renderer_id: number }>(
+        'qconnect:renderer_disconnected',
+        (event) => {
+          pushQobuzConnectDiagnostic('qconnect:renderer_disconnected', 'warn', event.payload);
+          void refreshQobuzConnectRuntimeState();
+          showToast($t('qconnect.rendererDisconnected'), 'error');
+        }
+      );
+      if (disposed) { unlistenRendererDisconnected(); return; }
+      unlistenQconnectRendererDisconnected = unlistenRendererDisconnected;
+
+      const unlistenRendererUnreachable = await listen<{ renderer_id: number }>(
+        'qconnect:renderer_unreachable',
+        (event) => {
+          pushQobuzConnectDiagnostic('qconnect:renderer_unreachable', 'warn', event.payload);
+          void refreshQobuzConnectRuntimeState();
+          showToast($t('qconnect.rendererUnreachable'), 'error');
+        }
+      );
+      if (disposed) { unlistenRendererUnreachable(); return; }
+      unlistenQconnectRendererUnreachable = unlistenRendererUnreachable;
+
       const unlisten9 = await listen<QconnectDiagnosticsPayload>('qconnect:diagnostic', (event) => {
         pushQobuzConnectDiagnostic(
           event.payload.channel,
@@ -5872,6 +6036,8 @@
       unlistenQconnectError?.();
       unlistenQconnectStatusChanged?.();
       unlistenQconnectAdmissionBlocked?.();
+      unlistenQconnectRendererDisconnected?.();
+      unlistenQconnectRendererUnreachable?.();
       unlistenQconnectDiagnostic?.();
       unlistenQconnectRendererReportDebug?.();
       unlistenAudioDeviceMissing?.();
@@ -7067,7 +7233,8 @@
         onToggleQconnectConnection={handleQobuzConnectButton}
         qconnectBusy={qobuzConnectBusy}
         {showQconnectDevButton}
-        volumeLocked={isAlsaDirectHw && !qconnectPeerRendererActive}
+        volumeLocked={qconnectVolumeLocked}
+        volumeLockedReason={qconnectVolumeLockedReason}
         {bufferProgress}
       />
     {:else}
@@ -7090,7 +7257,8 @@
         onToggleQconnectConnection={handleQobuzConnectButton}
         qconnectBusy={qobuzConnectBusy}
         {showQconnectDevButton}
-        volumeLocked={isAlsaDirectHw && !qconnectPeerRendererActive}
+        volumeLocked={qconnectVolumeLocked}
+        volumeLockedReason={qconnectVolumeLockedReason}
       />
     {/if}
 
@@ -7124,7 +7292,7 @@
         {volume}
         onVolumeChange={handleVolumeChange}
         onToggleMute={handleToggleMute}
-        volumeLocked={isAlsaDirectHw && !qconnectPeerRendererActive}
+        volumeLocked={qconnectVolumeLocked}
         {isShuffle}
         onToggleShuffle={toggleShuffle}
         {repeatMode}

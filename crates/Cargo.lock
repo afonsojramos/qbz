@@ -5309,6 +5309,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "log",
+ "prost",
  "qconnect-core",
  "qconnect-protocol",
  "qconnect-transport-ws",
@@ -5323,6 +5324,7 @@ dependencies = [
 name = "qconnect-core"
 version = "0.1.0"
 dependencies = [
+ "qbz-models",
  "serde",
  "thiserror 2.0.18",
 ]

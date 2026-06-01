@@ -108,3 +108,37 @@ impl QueueServerEvent {
         self.event_type.as_message_type()
     }
 }
+
+/// Common.ErrorType classification for a renderer per-track playback failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorType {
+    Unknown,
+    TrackNotFound,
+    TrackNotStreamable,
+    TrackMusicDataInvalid,
+    ServiceError,
+    NetworkError,
+    OtherErrors,
+}
+
+impl ErrorType {
+    pub fn from_wire(value: i32) -> Self {
+        match value {
+            1 => Self::TrackNotFound,
+            2 => Self::TrackNotStreamable,
+            3 => Self::TrackMusicDataInvalid,
+            4 => Self::ServiceError,
+            5 => Self::NetworkError,
+            100 => Self::OtherErrors,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Renderer per-track failure surfaced from `PlaybackErrorMessage`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaybackErrorEvent {
+    pub queue_item_id: u64,
+    pub error_type: ErrorType,
+    pub queue_version: Option<QueueVersion>,
+}
