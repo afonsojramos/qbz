@@ -141,9 +141,13 @@ pub(super) async fn apply_renderer_command_to_corebridge(
                         // track_loaded below; legitimate seek-to-start from
                         // a peer controller can use the seek path with
                         // target>1s if needed.
-                        if let Err(err) =
-                            ensure_remote_track_loaded(bridge, sync_state, command_track.track_id)
-                                .await
+                        if let Err(err) = ensure_remote_track_loaded(
+                            bridge,
+                            sync_state,
+                            command_track.track_id,
+                            projection_renderer_state.max_audio_quality,
+                        )
+                        .await
                         {
                             log::warn!(
                                 "[QConnect] Failed to load remote track {}: {err}",
@@ -233,11 +237,34 @@ pub(super) async fn apply_renderer_command_to_corebridge(
             bridge.set_repeat_mode(repeat_mode).await;
         }
         RendererCommand::SetActive { active } => {
-            if !*active {
+            if *active {
+                // Becoming the active renderer: preload the current track so
+                // playback can start immediately on the next SetState.
+                if let Some(current) = renderer_state.current_track.as_ref() {
+                    if let Err(err) = ensure_remote_track_loaded(
+                        bridge,
+                        sync_state,
+                        current.track_id,
+                        renderer_state.max_audio_quality,
+                    )
+                    .await
+                    {
+                        log::warn!("[QConnect] SetActive(true) preload failed: {err}");
+                    }
+                }
+            } else {
                 bridge.stop()?;
             }
         }
-        RendererCommand::SetMaxAudioQuality { .. } | RendererCommand::SetShuffleMode { .. } => {}
+        RendererCommand::SetMaxAudioQuality { max_audio_quality } => {
+            // Applied on the next load via renderer_state.max_audio_quality
+            // (recorded by the core reducer). No immediate re-fetch.
+            log::info!("[QConnect] SetMaxAudioQuality => {max_audio_quality}");
+        }
+        RendererCommand::SetShuffleMode { shuffle_mode } => {
+            let enabled = renderer_state.shuffle_mode.unwrap_or(*shuffle_mode);
+            bridge.set_shuffle(enabled).await;
+        }
     }
 
     Ok(())

@@ -316,8 +316,12 @@ impl QconnectServiceState {
             app_handle: app_handle.clone(),
             core_bridge,
             sync_state: Arc::clone(&sync_state),
+            app: Arc::new(std::sync::OnceLock::new()),
         });
-        let app = Arc::new(QconnectApp::new(transport, sink));
+        let app = Arc::new(QconnectApp::new(transport, Arc::clone(&sink)));
+        // P1-6: wire the owning app into the sink so it can emit reports
+        // (e.g. is_active=true after SetActive(true)).
+        sink.set_app(&app);
 
         if let Err(err) = app.connect(config.clone()).await {
             // Don't leak `lifecycle_state = Connecting` with `runtime = None`

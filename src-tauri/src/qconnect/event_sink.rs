@@ -3,13 +3,17 @@
 //! management messages) and dispatches them into our local CoreBridge,
 //! sync_state cache, and Tauri event emitter.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use async_trait::async_trait;
-use qconnect_app::{QconnectAppEvent, QconnectEventSink};
+use qconnect_app::{
+    QconnectApp, QconnectAppEvent, QconnectEventSink, RendererReport, RendererReportType,
+};
+use qconnect_transport_ws::NativeWsTransport;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, RwLock};
+use uuid::Uuid;
 
 use crate::core_bridge::CoreBridge;
 
@@ -25,14 +29,57 @@ use super::session::{
 };
 use super::{
     qconnect_now_ms, should_arm_renderer_watchdog, QconnectRemoteSyncState, QconnectRendererInfo,
-    RendererStatus, PLAYING_STATE_PLAYING, PLAYING_STATE_UNKNOWN, QCONNECT_RENDERER_LOST_TIMEOUT_MS,
+    RendererStatus, BUFFER_STATE_OK, PLAYING_STATE_PLAYING, PLAYING_STATE_UNKNOWN,
+    QCONNECT_RENDERER_LOST_TIMEOUT_MS,
 };
+
+/// Concrete `QconnectApp` type used by the Tauri adapter.
+type TauriQconnectApp = QconnectApp<NativeWsTransport, TauriQconnectEventSink>;
 
 #[derive(Clone)]
 pub(super) struct TauriQconnectEventSink {
     pub(super) app_handle: AppHandle,
     pub(super) core_bridge: Arc<RwLock<Option<CoreBridge>>>,
     pub(super) sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
+    /// Late-bound weak reference to the owning `QconnectApp`. The app is built
+    /// FROM the sink, so it can only be wired after construction (via
+    /// `set_app`). Used to emit renderer reports (e.g. is_active=true after a
+    /// SetActive(true) command) from inside the sink without an ownership cycle.
+    pub(super) app: Arc<OnceLock<Weak<TauriQconnectApp>>>,
+}
+
+impl TauriQconnectEventSink {
+    /// Wire the owning app after it has been constructed. Idempotent: a second
+    /// call is ignored (OnceLock).
+    pub(super) fn set_app(&self, app: &Arc<TauriQconnectApp>) {
+        let _ = self.app.set(Arc::downgrade(app));
+    }
+
+    /// Emit a StateUpdated report announcing that this renderer is now active.
+    /// Sent after a SetActive(true) command is applied so the controller learns
+    /// the renderer is ready.
+    async fn report_active_renderer_ready(&self) {
+        let Some(app) = self.app.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        let queue_version = app.queue_state_snapshot().await.version;
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrStateUpdated,
+            Uuid::new_v4().to_string(),
+            queue_version,
+            serde_json::json!({
+                "is_active": true,
+                "buffer_state": BUFFER_STATE_OK,
+                "queue_version": {
+                    "major": queue_version.major,
+                    "minor": queue_version.minor
+                }
+            }),
+        );
+        if let Err(err) = app.send_renderer_report_command(report).await {
+            log::warn!("[QConnect] Failed to report active-renderer-ready: {err}");
+        }
+    }
 }
 
 #[async_trait]
@@ -99,6 +146,10 @@ impl QconnectEventSink for TauriQconnectEventSink {
             }
             QconnectAppEvent::RendererCommandApplied { command, state } => {
                 log::info!("[QConnect] Renderer command applied: {:?}", command);
+                let became_active = matches!(
+                    command,
+                    qconnect_app::RendererCommand::SetActive { active: true }
+                );
                 if let Err(err) = apply_renderer_command_to_corebridge(
                     &self.core_bridge,
                     &self.sync_state,
@@ -108,6 +159,10 @@ impl QconnectEventSink for TauriQconnectEventSink {
                 .await
                 {
                     log::warn!("[QConnect] Failed to apply renderer command to CoreBridge: {err}");
+                } else if became_active {
+                    // P1-6: SetActive(true) is now genuinely supported (current
+                    // track preloaded above); announce readiness to the controller.
+                    self.report_active_renderer_ready().await;
                 }
             }
             _ => {}

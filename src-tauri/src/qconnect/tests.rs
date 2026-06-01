@@ -1196,3 +1196,19 @@ fn startup_retry_schedule_is_bounded_and_monotonic() {
     assert!(s.windows(2).all(|w| w[0] < w[1]));
     assert_eq!(*s.last().unwrap(), 30_000);
 }
+
+#[test]
+fn quality_from_max_audio_quality_maps_levels() {
+    use super::track_loading::quality_from_max_audio_quality;
+    use qbz_models::Quality;
+    // qbz Quality has four variants: Mp3, Lossless (CD), HiRes (<=96kHz),
+    // UltraHiRes (>96kHz). QConnect levels collapse onto these.
+    assert_eq!(quality_from_max_audio_quality(Some(0)), Quality::Mp3);
+    assert_eq!(quality_from_max_audio_quality(Some(1)), Quality::Mp3);
+    assert_eq!(quality_from_max_audio_quality(Some(2)), Quality::Lossless);
+    assert_eq!(quality_from_max_audio_quality(Some(3)), Quality::HiRes);
+    assert_eq!(quality_from_max_audio_quality(Some(4)), Quality::UltraHiRes);
+    assert_eq!(quality_from_max_audio_quality(Some(5)), Quality::UltraHiRes);
+    assert_eq!(quality_from_max_audio_quality(None), Quality::UltraHiRes);
+    assert_eq!(quality_from_max_audio_quality(Some(99)), Quality::UltraHiRes);
+}
