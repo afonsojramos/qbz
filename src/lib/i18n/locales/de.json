@@ -1839,6 +1839,7 @@
     "remoteQueuedNext": "In Qobuz Connect zur nächsten Wiedergabe eingereiht.",
     "remoteQueuedLater": "Zur Qobuz Connect-Warteschlange hinzugefügt.",
     "remoteQueueFailed": "Aktualisierung der Qobuz Connect-Warteschlange fehlgeschlagen.",
+    "rendererDisconnected": "Das entfernte Gerät hat die Verbindung zu Qobuz Connect getrennt.",
     "sessionTitle": "Sitzung",
     "sessionUuid": "Sitzungs-UUID",
     "activeRenderer": "Aktiver Renderer",

@@ -1839,6 +1839,7 @@
     "remoteQueuedNext": "Queued on Qobuz Connect to play next.",
     "remoteQueuedLater": "Added to Qobuz Connect queue.",
     "remoteQueueFailed": "Failed to update Qobuz Connect queue.",
+    "rendererDisconnected": "The remote device disconnected from Qobuz Connect.",
     "sessionTitle": "Session",
     "sessionUuid": "Session UUID",
     "activeRenderer": "Active renderer",

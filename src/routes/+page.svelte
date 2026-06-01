@@ -5592,6 +5592,7 @@
     let unlistenQconnectError: UnlistenFn | null = null;
     let unlistenQconnectStatusChanged: UnlistenFn | null = null;
     let unlistenQconnectAdmissionBlocked: UnlistenFn | null = null;
+    let unlistenQconnectRendererDisconnected: UnlistenFn | null = null;
     let unlistenQconnectDiagnostic: UnlistenFn | null = null;
     let unlistenQconnectRendererReportDebug: UnlistenFn | null = null;
     let unlistenAudioDeviceMissing: UnlistenFn | null = null;
@@ -5831,6 +5832,17 @@
       if (disposed) { unlisten8(); return; }
       unlistenQconnectAdmissionBlocked = unlisten8;
 
+      const unlistenRendererDisconnected = await listen<{ renderer_id: number }>(
+        'qconnect:renderer_disconnected',
+        (event) => {
+          pushQobuzConnectDiagnostic('qconnect:renderer_disconnected', 'warn', event.payload);
+          void refreshQobuzConnectRuntimeState();
+          showToast($t('qconnect.rendererDisconnected'), 'error');
+        }
+      );
+      if (disposed) { unlistenRendererDisconnected(); return; }
+      unlistenQconnectRendererDisconnected = unlistenRendererDisconnected;
+
       const unlisten9 = await listen<QconnectDiagnosticsPayload>('qconnect:diagnostic', (event) => {
         pushQobuzConnectDiagnostic(
           event.payload.channel,
@@ -5896,6 +5908,7 @@
       unlistenQconnectError?.();
       unlistenQconnectStatusChanged?.();
       unlistenQconnectAdmissionBlocked?.();
+      unlistenQconnectRendererDisconnected?.();
       unlistenQconnectDiagnostic?.();
       unlistenQconnectRendererReportDebug?.();
       unlistenAudioDeviceMissing?.();

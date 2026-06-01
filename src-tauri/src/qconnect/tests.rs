@@ -1080,3 +1080,19 @@ fn device_uuid_persists_and_is_reused_across_calls() {
 
     let _ = std::fs::remove_file(&tmp);
 }
+
+#[test]
+fn renderer_status_from_wire_maps_known_values() {
+    use super::RendererStatus;
+    assert_eq!(RendererStatus::from_wire(Some(0)), RendererStatus::Inactive); // UNKNOWN collapses
+    assert_eq!(RendererStatus::from_wire(Some(1)), RendererStatus::ActiveConnected);
+    assert_eq!(RendererStatus::from_wire(Some(2)), RendererStatus::ActiveDisconnected);
+    assert_eq!(RendererStatus::from_wire(Some(3)), RendererStatus::Inactive);
+}
+
+#[test]
+fn renderer_status_from_wire_collapses_unknown_and_missing_to_inactive() {
+    use super::RendererStatus;
+    assert_eq!(RendererStatus::from_wire(Some(99)), RendererStatus::Inactive); // UNRECOGNIZED
+    assert_eq!(RendererStatus::from_wire(None), RendererStatus::Inactive);     // absent field
+}

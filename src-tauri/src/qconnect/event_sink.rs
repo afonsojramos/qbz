@@ -23,7 +23,10 @@ use super::session::{
     is_peer_renderer_active, normalize_active_renderer_id, refresh_local_renderer_id,
     sync_session_renderer_active_flags,
 };
-use super::{qconnect_now_ms, QconnectRemoteSyncState, QconnectRendererInfo};
+use super::{
+    qconnect_now_ms, QconnectRemoteSyncState, QconnectRendererInfo, RendererStatus,
+    PLAYING_STATE_UNKNOWN,
+};
 
 #[derive(Clone)]
 pub(super) struct TauriQconnectEventSink {
@@ -121,6 +124,7 @@ impl TauriQconnectEventSink {
         let mut remote_projection_renderer_id: Option<i32> = None;
         let mut sync_local_playback = false;
         let mut apply_loop_mode: Option<i32> = None;
+        let mut disconnected_renderer_id: Option<i32> = None;
         let mut state = self.sync_state.lock().await;
         match message_type {
             "MESSAGE_TYPE_SRVR_CTRL_SESSION_STATE" => {
@@ -298,6 +302,19 @@ impl TauriQconnectEventSink {
                 renderer_state.updated_at_ms = qconnect_now_ms();
                 remote_projection_renderer_id = Some(renderer_id as i32);
                 sync_local_playback = true;
+
+                // P0-2: graceful disconnect. status==ACTIVE_DISCONNECTED(2) for
+                // the active remote renderer (id != -1) means the renderer left
+                // cleanly — freeze the projection so the UI stops lying.
+                let status =
+                    RendererStatus::from_wire(payload.get("status").and_then(Value::as_i64));
+                if status == RendererStatus::ActiveDisconnected
+                    && renderer_id != -1
+                    && state.session.active_renderer_id == Some(renderer_id as i32)
+                    && is_peer_renderer_active(&state.session)
+                {
+                    disconnected_renderer_id = Some(renderer_id as i32);
+                }
             }
             "MESSAGE_TYPE_SRVR_CTRL_VOLUME_CHANGED" => {
                 let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) else {
@@ -378,6 +395,39 @@ impl TauriQconnectEventSink {
 
         if let Some(renderer_id) = remote_projection_renderer_id {
             self.sync_active_renderer_projection(renderer_id).await;
+        }
+
+        if let Some(renderer_id) = disconnected_renderer_id {
+            self.freeze_active_renderer_projection_to_unknown(
+                renderer_id,
+                "qconnect:renderer_disconnected",
+            )
+            .await;
+        }
+    }
+
+    /// Force the active renderer's cached projection to UNKNOWN/stopped and
+    /// emit a freeze event. Shared by ACTIVE_DISCONNECTED (P0-2) and the
+    /// silence watchdog (P0-1). Caller passes the event name to emit.
+    ///
+    /// This is a pure-state mutation + emit; it does NOT route back through
+    /// `apply_session_management_event`, so it cannot re-arm the watchdog.
+    async fn freeze_active_renderer_projection_to_unknown(
+        &self,
+        renderer_id: i32,
+        event_name: &str,
+    ) {
+        {
+            let mut state = self.sync_state.lock().await;
+            let renderer_state = ensure_session_renderer_state(&mut state, renderer_id);
+            renderer_state.playing_state = Some(PLAYING_STATE_UNKNOWN);
+            renderer_state.updated_at_ms = qconnect_now_ms();
+        }
+        if let Err(err) = self
+            .app_handle
+            .emit(event_name, serde_json::json!({ "renderer_id": renderer_id }))
+        {
+            log::warn!("[QConnect] Failed to emit {event_name}: {err}");
         }
     }
 
