@@ -85,6 +85,9 @@ pub(super) struct QconnectRemoteSyncState {
     pub(super) last_materialized_start_index: Option<usize>,
     pub(super) last_materialized_core_shuffle_order: Option<Vec<usize>>,
     pub(super) last_reported_file_audio_quality: Option<QconnectFileAudioQualitySnapshot>,
+    /// Last reported device (DAC output) audio quality: (sampling_rate, bit_depth, nb_channels).
+    /// Used to dedup outbound RndrSrvrDeviceAudioQualityChanged(27) reports.
+    pub(super) last_reported_device_audio_quality: Option<(i32, i32, i32)>,
     pub(super) last_applied_queue_state: Option<QConnectQueueState>,
     pub(super) last_remote_queue_state: Option<QConnectQueueState>,
     pub(super) session_loop_mode: Option<i32>,

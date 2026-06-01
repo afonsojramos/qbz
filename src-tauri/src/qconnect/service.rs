@@ -379,6 +379,7 @@ impl QconnectServiceState {
                                         deferred_renderer_join(
                                             &app_for_loop,
                                             &sync_state_for_loop,
+                                            &app_handle_for_status,
                                             session_uuid,
                                             deferred_join_reason(has_disconnected),
                                         )
@@ -1037,6 +1038,52 @@ impl QconnectServiceState {
 
         let mut state = sync_state.lock().await;
         state.last_reported_file_audio_quality = Some(audio_quality);
+        Ok(true)
+    }
+
+    /// Emit a RndrSrvrDeviceAudioQualityChanged(27) report describing the actual
+    /// DAC output format (sampling_rate / bit_depth / nb_channels), deduped against
+    /// the last reported value. Returns Ok(true) when a report was sent.
+    pub(super) async fn report_device_audio_quality_if_changed(
+        &self,
+        queue_version: qconnect_app::QueueVersion,
+        sampling_rate: i32,
+        bit_depth: i32,
+        nb_channels: i32,
+    ) -> Result<bool, String> {
+        let (app, sync_state) = {
+            let guard = self.inner.lock().await;
+            let Some(runtime) = guard.runtime.as_ref() else {
+                return Err("QConnect service is not running".to_string());
+            };
+            (Arc::clone(&runtime.app), Arc::clone(&runtime.sync_state))
+        };
+
+        let key = (sampling_rate, bit_depth, nb_channels);
+        {
+            let state = sync_state.lock().await;
+            if state.last_reported_device_audio_quality == Some(key) {
+                return Ok(false);
+            }
+        }
+
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrDeviceAudioQualityChanged,
+            Uuid::new_v4().to_string(),
+            queue_version,
+            serde_json::json!({
+                "sampling_rate": sampling_rate,
+                "bit_depth": bit_depth,
+                "nb_channels": nb_channels
+            }),
+        );
+
+        app.send_renderer_report_command(report)
+            .await
+            .map_err(|err| format!("send device audio quality report failed: {err}"))?;
+
+        let mut state = sync_state.lock().await;
+        state.last_reported_device_audio_quality = Some(key);
         Ok(true)
     }
 
@@ -1887,6 +1934,7 @@ async fn bootstrap_remote_presence(
 async fn deferred_renderer_join(
     app: &Arc<QconnectApp<NativeWsTransport, TauriQconnectEventSink>>,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
+    app_handle: &AppHandle,
     session_uuid: &str,
     join_reason: i32,
 ) {
@@ -1945,17 +1993,47 @@ async fn deferred_renderer_join(
         return;
     }
 
-    // 2. Send initial StateUpdated report
-    let state_report_payload = serde_json::json!({
+    // 2. Send initial StateUpdated report. At join time (e.g. reconnect
+    // mid-playback) we may already have a current track, so resolve the real
+    // duration + current/next queue_item_ids instead of hardcoding nulls.
+    let renderer = app.renderer_state_snapshot().await;
+    let queue = app.queue_state_snapshot().await;
+    let current_track_id = renderer.current_track.as_ref().map(|item| item.track_id);
+    let (current_qid, next_qid, _) = current_track_id
+        .map(|tid| resolve_queue_item_ids_from_queue_state(&queue, tid))
+        .unwrap_or((None, None, None));
+    let duration_secs = match current_track_id {
+        Some(track_id) => {
+            let mut resolved: u64 = 0;
+            if let Some(bridge_state) = app_handle.try_state::<CoreBridgeState>() {
+                if let Some(bridge) = bridge_state.try_get().await {
+                    resolved = bridge
+                        .get_track(track_id)
+                        .await
+                        .map(|track| u64::from(track.duration))
+                        .unwrap_or(0);
+                }
+            }
+            resolved
+        }
+        None => 0,
+    };
+    let mut state_report_payload = serde_json::json!({
         "playing_state": PLAYING_STATE_STOPPED,
         "buffer_state": BUFFER_STATE_OK,
         "current_position": 0,
-        "duration": 0,
+        "duration": duration_secs,
         "queue_version": {
             "major": queue_version_ref.major,
             "minor": queue_version_ref.minor
         }
     });
+    if let Some(qid) = current_qid {
+        state_report_payload["current_queue_item_id"] = serde_json::json!(qid);
+    }
+    if let Some(qid) = next_qid {
+        state_report_payload["next_queue_item_id"] = serde_json::json!(qid);
+    }
     let state_report = RendererReport::new(
         RendererReportType::RndrSrvrStateUpdated,
         Uuid::new_v4().to_string(),

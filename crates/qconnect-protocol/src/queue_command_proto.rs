@@ -716,6 +716,16 @@ pub struct RendererFileAudioQualityChangedMessage {
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RendererDeviceAudioQualityChangedMessage {
+    #[prost(int32, optional, tag = "1")]
+    pub sampling_rate: Option<i32>,
+    #[prost(int32, optional, tag = "2")]
+    pub bit_depth: Option<i32>,
+    #[prost(int32, optional, tag = "3")]
+    pub nb_channels: Option<i32>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RendererMaxAudioQualityChangedMessage {
     #[prost(int32, optional, tag = "1")]
     pub max_audio_quality: Option<i32>,
@@ -905,6 +915,9 @@ pub struct QConnectMessage {
     pub rndr_srvr_volume_changed: Option<RendererVolumeChangedMessage>,
     #[prost(message, optional, tag = "26")]
     pub rndr_srvr_file_audio_quality_changed: Option<RendererFileAudioQualityChangedMessage>,
+    #[prost(message, optional, tag = "27")]
+    pub rndr_srvr_device_audio_quality_changed:
+        Option<RendererDeviceAudioQualityChangedMessage>,
     #[prost(message, optional, tag = "28")]
     pub rndr_srvr_max_audio_quality_changed: Option<RendererMaxAudioQualityChangedMessage>,
     #[prost(message, optional, tag = "29")]

@@ -750,6 +750,22 @@ pub async fn v2_qconnect_report_playback_state(
         {
             log::warn!("[QConnect] Failed to report file audio quality: {err}");
         }
+
+        // P1-7: also report the actual DAC output format (DeviceAudioQualityChanged,
+        // tag 27). In QBZ's bit-perfect pipeline the output config matches the track
+        // under passthrough; the snapshot above already carries the real output
+        // stream sample_rate / bit_depth / channels.
+        if let Err(err) = service
+            .report_device_audio_quality_if_changed(
+                queue_version,
+                audio_quality.sampling_rate,
+                audio_quality.bit_depth,
+                audio_quality.nb_channels,
+            )
+            .await
+        {
+            log::warn!("[QConnect] Failed to report device audio quality: {err}");
+        }
     }
 
     if let Err(err) = app_handle.emit(

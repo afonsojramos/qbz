@@ -15,7 +15,8 @@ use crate::{
         DeviceInfoMessage, JoinSessionMessage, MuteVolumeMessage, PlaybackPositionMessage,
         QConnectMessage, QConnectMessageType, QConnectMessages, QueueAddTracksMessage,
         QueueInsertTracksMessage, QueueLoadTracksMessage, QueueRemoveTracksMessage,
-        QueueReorderTracksMessage, QueueVersionRef, RendererFileAudioQualityChangedMessage,
+        QueueReorderTracksMessage, QueueVersionRef, RendererDeviceAudioQualityChangedMessage,
+        RendererFileAudioQualityChangedMessage,
         RendererMaxAudioQualityChangedMessage, RendererStateMessage, RendererStateUpdatedMessage,
         RendererVolumeChangedMessage, RendererVolumeMutedMessage, SetActiveRendererMessage,
         SetAutoplayModeMessage, SetLoopModeMessage, SetMaxAudioQualityMessage,
@@ -486,6 +487,19 @@ fn map_renderer_report(report: &RendererReport) -> Result<QConnectMessage, Proto
             }),
             ..Default::default()
         }),
+        RendererReportType::RndrSrvrDeviceAudioQualityChanged => Ok(QConnectMessage {
+            message_type: Some(
+                QConnectMessageType::MessageTypeRndrSrvrDeviceAudioQualityChanged as i32,
+            ),
+            rndr_srvr_device_audio_quality_changed: Some(
+                RendererDeviceAudioQualityChangedMessage {
+                    sampling_rate: optional_i32(&report.payload, "sampling_rate")?,
+                    bit_depth: optional_i32(&report.payload, "bit_depth")?,
+                    nb_channels: optional_i32(&report.payload, "nb_channels")?,
+                },
+            ),
+            ..Default::default()
+        }),
         RendererReportType::RndrSrvrMaxAudioQualityChanged => Ok(QConnectMessage {
             message_type: Some(
                 QConnectMessageType::MessageTypeRndrSrvrMaxAudioQualityChanged as i32,
@@ -927,6 +941,29 @@ mod tests {
     use prost::Message;
     use qconnect_core::QueueVersion;
     use serde_json::json;
+
+    #[test]
+    fn maps_device_audio_quality_changed_report_to_tag_27() {
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrDeviceAudioQualityChanged,
+            "00000000-0000-0000-0000-000000000000",
+            QueueVersion { major: 1, minor: 2 },
+            json!({ "sampling_rate": 96000, "bit_depth": 24, "nb_channels": 2 }),
+        );
+        let msg = map_renderer_report(&report).expect("mapping should succeed");
+        assert_eq!(
+            msg.message_type,
+            Some(QConnectMessageType::MessageTypeRndrSrvrDeviceAudioQualityChanged as i32)
+        );
+        let dev = msg
+            .rndr_srvr_device_audio_quality_changed
+            .expect("device AQ submessage present");
+        assert_eq!(dev.sampling_rate, Some(96000));
+        assert_eq!(dev.bit_depth, Some(24));
+        assert_eq!(dev.nb_channels, Some(2));
+        assert!(msg.rndr_srvr_file_audio_quality_changed.is_none());
+        assert!(msg.rndr_srvr_max_audio_quality_changed.is_none());
+    }
 
     #[test]
     fn encodes_add_tracks_command_into_binary_batch() {
