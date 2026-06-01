@@ -431,6 +431,15 @@ impl QconnectServiceState {
                                     {
                                         log::warn!("[QConnect] AskForRendererState after reconnect failed: {err}");
                                     }
+                                    // P1-11: signal the frontend that the post-reconnect
+                                    // resync has been issued, so it can evaluate whether
+                                    // to replay or advise on the last transport intent.
+                                    emit_qconnect_diagnostic(
+                                        &app_handle_for_status,
+                                        "qconnect:resync_complete",
+                                        "info",
+                                        json!({}),
+                                    );
                                 }
                             }
                             qconnect_transport_ws::TransportEvent::KeepalivePingSent => {

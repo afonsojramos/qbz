@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   evaluateQconnectPlaybackReportSkip,
+  evaluateQconnectReconnectAdvisory,
   evaluateQconnectSessionPersistence,
   isQconnectPeerRendererActive,
   isQconnectRemoteModeActive,
@@ -244,5 +245,48 @@ describe('QConnect runtime state helpers', () => {
         localCurrentTrackId: 48425288
       })
     ).toBeNull();
+  });
+});
+
+describe('evaluateQconnectReconnectAdvisory', () => {
+  const base = { prevState: 'reconnecting' as const, nextState: 'connected' as const, now: 1000 };
+
+  it('replays an idempotent play intent issued recently', () => {
+    const r = evaluateQconnectReconnectAdvisory({
+      ...base,
+      lastIntent: { kind: 'play', issuedAt: 900 }
+    });
+    expect(r.shouldReplay).toBe(true);
+    expect(r.shouldToast).toBe(false);
+  });
+
+  it('only advises (no replay) for next, to avoid double-skip', () => {
+    const r = evaluateQconnectReconnectAdvisory({
+      ...base,
+      lastIntent: { kind: 'next', issuedAt: 900 }
+    });
+    expect(r.shouldReplay).toBe(false);
+    expect(r.shouldToast).toBe(true);
+    expect(r.toastKey).toBe('qconnect.lastActionMayNotHaveApplied');
+  });
+
+  it('does nothing when the intent is stale', () => {
+    const r = evaluateQconnectReconnectAdvisory({
+      ...base,
+      now: 100_000,
+      lastIntent: { kind: 'play', issuedAt: 900 }
+    });
+    expect(r.shouldReplay).toBe(false);
+    expect(r.shouldToast).toBe(false);
+  });
+
+  it('does nothing outside a reconnecting->connected transition', () => {
+    const r = evaluateQconnectReconnectAdvisory({
+      prevState: 'connected',
+      nextState: 'connected',
+      now: 1000,
+      lastIntent: { kind: 'play', issuedAt: 900 }
+    });
+    expect(r.shouldReplay).toBe(false);
   });
 });

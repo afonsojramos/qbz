@@ -1803,6 +1803,7 @@
   },
   "qconnect": {
     "title": "Qobuz Connect",
+    "lastActionMayNotHaveApplied": "La dernière action n'a peut-être pas été appliquée. Veuillez vérifier l'état actuel.",
     "statusConnected": "Connecté",
     "statusDisconnected": "Déconnecté",
     "turnOn": "Activer",
