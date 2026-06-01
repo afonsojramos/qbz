@@ -106,6 +106,9 @@
     qconnectBusy?: boolean;
     showQconnectDevButton?: boolean;
     volumeLocked?: boolean;
+    // P1-5: distinguishes the hardware (ALSA Direct) lock from the remote
+    // renderer (cast device) lock so the tooltip can be specific.
+    volumeLockedReason?: 'hardware' | 'remote';
     bufferProgress?: number | null;
   }
 
@@ -162,6 +165,7 @@
     qconnectBusy = false,
     showQconnectDevButton = false,
     volumeLocked = false,
+    volumeLockedReason = 'hardware',
     bufferProgress = null,
   }: Props = $props();
 
@@ -823,7 +827,9 @@
         {#if volumeLocked}
           <button
             class="control-btn volume-btn"
-            title={$translateStore('player.volumeLockedHw')}
+            title={volumeLockedReason === 'remote'
+              ? $translateStore('player.volumeLockedRemote')
+              : $translateStore('player.volumeLockedHw')}
             disabled
           >
             <Volume2 size={16} />

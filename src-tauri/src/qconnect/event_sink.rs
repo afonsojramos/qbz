@@ -242,6 +242,11 @@ impl TauriQconnectEventSink {
                                 .and_then(|d| d.get("device_type"))
                                 .and_then(Value::as_i64)
                                 .map(|v| v as i32),
+                            volume_remote_control: device_info
+                                .and_then(|d| d.get("capabilities"))
+                                .and_then(|c| c.get("volume_remote_control"))
+                                .and_then(Value::as_i64)
+                                .map(|v| v as i32),
                         });
                         refresh_local_renderer_id(&mut state.session);
                     }
@@ -288,6 +293,13 @@ impl TauriQconnectEventSink {
                             .and_then(Value::as_i64)
                         {
                             existing.device_type = Some(device_type as i32);
+                        }
+                        if let Some(vrc) = device_info
+                            .and_then(|d| d.get("capabilities"))
+                            .and_then(|c| c.get("volume_remote_control"))
+                            .and_then(Value::as_i64)
+                        {
+                            existing.volume_remote_control = Some(vrc as i32);
                         }
                         refresh_local_renderer_id(&mut state.session);
                     }

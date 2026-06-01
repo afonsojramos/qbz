@@ -30,7 +30,7 @@ use super::queue_resolution::{
 use super::session::{
     build_effective_renderer_snapshot, build_visible_queue_projection, compute_connection_state,
     ensure_session_renderer_state, is_local_renderer_active, is_peer_renderer_active,
-    QconnectFileAudioQualitySnapshot,
+    renderer_allows_remote_volume, QconnectFileAudioQualitySnapshot,
 };
 use super::transport::{
     default_qconnect_device_info, default_qconnect_device_info_with_name, hex_preview,
@@ -1658,6 +1658,24 @@ impl QconnectServiceState {
         let Some((_renderer, _queue, session)) = remote_context else {
             return Ok(false);
         };
+
+        // P1-5: respect the active renderer's volume_remote_control capability.
+        // Absent => allowed. Only an explicit non-ALLOWED value disables.
+        if let Some(active_id) = session.active_renderer_id {
+            if let Some(info) = session
+                .renderers
+                .iter()
+                .find(|r| r.renderer_id == active_id)
+            {
+                if !renderer_allows_remote_volume(info) {
+                    log::info!(
+                        "[QConnect] set_volume_if_remote short-circuited: renderer {active_id} disallows remote volume"
+                    );
+                    // Handled (no-op): the frontend must NOT fall back to local.
+                    return Ok(true);
+                }
+            }
+        }
 
         let payload = serde_json::to_value(QconnectSetVolumeRequest {
             renderer_id: session.active_renderer_id,

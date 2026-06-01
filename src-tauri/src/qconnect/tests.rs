@@ -8,7 +8,8 @@ use super::queue_resolution::{
     QconnectRemoteSkipDirection,
 };
 use super::session::{
-    find_unique_renderer_id, refresh_local_renderer_id, QconnectFileAudioQualitySnapshot,
+    find_unique_renderer_id, refresh_local_renderer_id, renderer_allows_remote_volume,
+    QconnectFileAudioQualitySnapshot,
 };
 use super::transport::{
     decode_hex_channel, default_qconnect_device_info, parse_subscribe_channels,
@@ -167,6 +168,7 @@ fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
                 brand: Some("Apple".to_string()),
                 model: Some("iPhone".to_string()),
                 device_type: Some(6),
+                volume_remote_control: None,
             },
             QconnectRendererInfo {
                 renderer_id: 6,
@@ -175,6 +177,7 @@ fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
                 brand: Some("QBZ".to_string()),
                 model: Some("QBZ".to_string()),
                 device_type: Some(5),
+                volume_remote_control: None,
             },
         ],
         ..Default::default()
@@ -199,6 +202,7 @@ fn refreshes_local_renderer_id_from_unique_fingerprint_when_uuid_missing() {
                 brand: Some("Apple".to_string()),
                 model: Some("iPhone".to_string()),
                 device_type: Some(6),
+                volume_remote_control: None,
             },
             QconnectRendererInfo {
                 renderer_id: 6,
@@ -207,6 +211,7 @@ fn refreshes_local_renderer_id_from_unique_fingerprint_when_uuid_missing() {
                 brand: local_device_info.brand.clone(),
                 model: local_device_info.model.clone(),
                 device_type: local_device_info.device_type,
+                volume_remote_control: None,
             },
         ],
         ..Default::default()
@@ -228,6 +233,7 @@ fn does_not_guess_local_renderer_id_when_fingerprint_is_ambiguous() {
                 brand: Some("QBZ".to_string()),
                 model: Some("QBZ".to_string()),
                 device_type: Some(5),
+                volume_remote_control: None,
             },
             QconnectRendererInfo {
                 renderer_id: 9,
@@ -236,6 +242,7 @@ fn does_not_guess_local_renderer_id_when_fingerprint_is_ambiguous() {
                 brand: Some("QBZ".to_string()),
                 model: Some("QBZ".to_string()),
                 device_type: Some(5),
+                volume_remote_control: None,
             },
         ],
         ..Default::default()
@@ -1211,4 +1218,24 @@ fn quality_from_max_audio_quality_maps_levels() {
     assert_eq!(quality_from_max_audio_quality(Some(5)), Quality::UltraHiRes);
     assert_eq!(quality_from_max_audio_quality(None), Quality::UltraHiRes);
     assert_eq!(quality_from_max_audio_quality(Some(99)), Quality::UltraHiRes);
+}
+
+#[test]
+fn renderer_allows_remote_volume_defaults_allow_when_absent() {
+    let mut info = QconnectRendererInfo {
+        renderer_id: 7,
+        device_uuid: None,
+        friendly_name: None,
+        brand: None,
+        model: None,
+        device_type: None,
+        volume_remote_control: None,
+    };
+    assert!(renderer_allows_remote_volume(&info)); // absent => allowed
+    info.volume_remote_control = Some(1);
+    assert!(renderer_allows_remote_volume(&info)); // ALLOWED
+    info.volume_remote_control = Some(0);
+    assert!(!renderer_allows_remote_volume(&info)); // explicit non-allowed
+    info.volume_remote_control = Some(2);
+    assert!(!renderer_allows_remote_volume(&info)); // any other value
 }

@@ -32,6 +32,9 @@ export type QconnectRendererInfo = {
   brand?: string | null;
   model?: string | null;
   device_type?: number | null;
+  // P1-5: capabilities.volume_remote_control. 1 == ALLOWED. null/undefined ==
+  // not advertised (treated as allowed). Any other value disables remote volume.
+  volume_remote_control?: number | null;
 };
 
 export type QconnectSessionSnapshot = {

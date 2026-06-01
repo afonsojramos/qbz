@@ -1540,6 +1540,7 @@
     "volumeUp": "Subir volumen",
     "volumeDown": "Bajar volumen",
     "volumeLockedHw": "Volumen fijo al 100% — ALSA Direct hw: (ajusta desde el DAC/hardware)",
+    "volumeLockedRemote": "El control de volumen está deshabilitado por el dispositivo",
     "clearQueue": "Limpiar Cola",
     "queueEmpty": "La cola está vacía",
     "queueEmptyDescription": "Busca música o explora tu biblioteca para agregar pistas.",

@@ -1125,6 +1125,26 @@
   const qconnectPeerRendererActive = $derived(
     isQconnectPeerRendererActive(qobuzConnectSessionSnapshot)
   );
+  // P1-5: respect the active renderer's volume_remote_control capability.
+  // Absent (null/undefined) => allowed; only an explicit non-1 value disables.
+  const qconnectRemoteVolumeAllowed = $derived.by(() => {
+    if (!qconnectPeerRendererActive) return true;
+    const snap = qobuzConnectSessionSnapshot;
+    const activeId = snap?.active_renderer_id ?? null;
+    const info = snap?.renderers?.find((r) => r.renderer_id === activeId) ?? null;
+    const vrc = info?.volume_remote_control;
+    return vrc == null || vrc === 1;
+  });
+  // P1-5: unified volume-lock state shared by the now-playing bar + immersive
+  // player. Hardware lock applies only locally; remote lock applies when a peer
+  // renderer is active and disallows remote volume.
+  const qconnectVolumeLocked = $derived(
+    (isAlsaDirectHw && !qconnectPeerRendererActive) ||
+      (qconnectPeerRendererActive && !qconnectRemoteVolumeAllowed)
+  );
+  const qconnectVolumeLockedReason: 'hardware' | 'remote' = $derived(
+    qconnectPeerRendererActive && !qconnectRemoteVolumeAllowed ? 'remote' : 'hardware'
+  );
   const qconnectSuppressLocalPlaybackAutomation = $derived(
     shouldQconnectSuppressLocalPlaybackAutomation(
       isQobuzConnectConnected,
@@ -2887,6 +2907,8 @@
   async function handleVolumeChange(newVolume: number) {
     // ALSA Direct hw: locks volume at 100% — unless controlling a remote renderer
     if (isAlsaDirectHw && !qconnectPeerRendererActive) return;
+    // P1-5: the active remote renderer disallows remote volume control.
+    if (qconnectPeerRendererActive && !qconnectRemoteVolumeAllowed) return;
 
     try {
       const handledRemotely = await invoke<boolean>('v2_qconnect_set_volume_if_remote', { volume: newVolume });
@@ -7141,7 +7163,8 @@
         onToggleQconnectConnection={handleQobuzConnectButton}
         qconnectBusy={qobuzConnectBusy}
         {showQconnectDevButton}
-        volumeLocked={isAlsaDirectHw && !qconnectPeerRendererActive}
+        volumeLocked={qconnectVolumeLocked}
+        volumeLockedReason={qconnectVolumeLockedReason}
         {bufferProgress}
       />
     {:else}
@@ -7164,7 +7187,8 @@
         onToggleQconnectConnection={handleQobuzConnectButton}
         qconnectBusy={qobuzConnectBusy}
         {showQconnectDevButton}
-        volumeLocked={isAlsaDirectHw && !qconnectPeerRendererActive}
+        volumeLocked={qconnectVolumeLocked}
+        volumeLockedReason={qconnectVolumeLockedReason}
       />
     {/if}
 
@@ -7198,7 +7222,7 @@
         {volume}
         onVolumeChange={handleVolumeChange}
         onToggleMute={handleToggleMute}
-        volumeLocked={isAlsaDirectHw && !qconnectPeerRendererActive}
+        volumeLocked={qconnectVolumeLocked}
         {isShuffle}
         onToggleShuffle={toggleShuffle}
         {repeatMode}
