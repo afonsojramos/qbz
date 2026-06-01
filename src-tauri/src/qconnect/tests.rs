@@ -1096,3 +1096,20 @@ fn renderer_status_from_wire_collapses_unknown_and_missing_to_inactive() {
     assert_eq!(RendererStatus::from_wire(Some(99)), RendererStatus::Inactive); // UNRECOGNIZED
     assert_eq!(RendererStatus::from_wire(None), RendererStatus::Inactive);     // absent field
 }
+
+#[test]
+fn watchdog_arms_only_for_playing_active_peer() {
+    use super::{
+        should_arm_renderer_watchdog, PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING,
+        PLAYING_STATE_STOPPED, PLAYING_STATE_UNKNOWN,
+    };
+    // Arm: playing AND active peer.
+    assert!(should_arm_renderer_watchdog(Some(PLAYING_STATE_PLAYING), true));
+    // Do not arm when paused/stopped/unknown even if active peer.
+    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_PAUSED), true));
+    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_STOPPED), true));
+    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_UNKNOWN), true));
+    assert!(!should_arm_renderer_watchdog(None, true));
+    // Do not arm when not an active peer (e.g. local renderer is active).
+    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_PLAYING), false));
+}

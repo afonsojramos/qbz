@@ -24,8 +24,8 @@ use super::session::{
     sync_session_renderer_active_flags,
 };
 use super::{
-    qconnect_now_ms, QconnectRemoteSyncState, QconnectRendererInfo, RendererStatus,
-    PLAYING_STATE_UNKNOWN,
+    qconnect_now_ms, should_arm_renderer_watchdog, QconnectRemoteSyncState, QconnectRendererInfo,
+    RendererStatus, PLAYING_STATE_PLAYING, PLAYING_STATE_UNKNOWN, QCONNECT_RENDERER_LOST_TIMEOUT_MS,
 };
 
 #[derive(Clone)]
@@ -125,6 +125,7 @@ impl TauriQconnectEventSink {
         let mut sync_local_playback = false;
         let mut apply_loop_mode: Option<i32> = None;
         let mut disconnected_renderer_id: Option<i32> = None;
+        let mut watchdog_arm: Option<(i32, u64)> = None;
         let mut state = self.sync_state.lock().await;
         match message_type {
             "MESSAGE_TYPE_SRVR_CTRL_SESSION_STATE" => {
@@ -267,6 +268,8 @@ impl TauriQconnectEventSink {
                 sync_session_renderer_active_flags(&mut state);
                 remote_projection_renderer_id = state.session.active_renderer_id;
                 sync_local_playback = true;
+                // P0-1: active-renderer change disarms any pending liveness task.
+                Self::bump_watchdog_generation(&mut state);
             }
             "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED" => {
                 let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) else {
@@ -300,20 +303,33 @@ impl TauriQconnectEventSink {
                 }
 
                 renderer_state.updated_at_ms = qconnect_now_ms();
+                // Snapshot the just-written playing_state for the watchdog decision
+                // (the &mut borrow ends here so we can re-read state.session below).
+                let this_playing_state = renderer_state.playing_state;
                 remote_projection_renderer_id = Some(renderer_id as i32);
                 sync_local_playback = true;
+
+                let is_active_peer = state.session.active_renderer_id
+                    == Some(renderer_id as i32)
+                    && is_peer_renderer_active(&state.session)
+                    && renderer_id != -1;
 
                 // P0-2: graceful disconnect. status==ACTIVE_DISCONNECTED(2) for
                 // the active remote renderer (id != -1) means the renderer left
                 // cleanly — freeze the projection so the UI stops lying.
                 let status =
                     RendererStatus::from_wire(payload.get("status").and_then(Value::as_i64));
-                if status == RendererStatus::ActiveDisconnected
-                    && renderer_id != -1
-                    && state.session.active_renderer_id == Some(renderer_id as i32)
-                    && is_peer_renderer_active(&state.session)
-                {
+                if status == RendererStatus::ActiveDisconnected && is_active_peer {
                     disconnected_renderer_id = Some(renderer_id as i32);
+                }
+
+                // P0-1 liveness watchdog. Any RENDERER_STATE_UPDATED for the
+                // active peer resets the timer (bump generation); arm a fresh 12s
+                // task only while PLAYING. A non-playing update disarms (bump
+                // only, no spawn).
+                let new_generation = Self::bump_watchdog_generation(&mut state);
+                if should_arm_renderer_watchdog(this_playing_state, is_active_peer) {
+                    watchdog_arm = Some((renderer_id as i32, new_generation));
                 }
             }
             "MESSAGE_TYPE_SRVR_CTRL_VOLUME_CHANGED" => {
@@ -404,6 +420,50 @@ impl TauriQconnectEventSink {
             )
             .await;
         }
+
+        // P0-1: arm the generation-guarded 12s liveness watchdog. The spawned
+        // task holds a clone of this sink (TauriQconnectEventSink: Clone). On
+        // wake it re-locks and no-ops unless its captured epoch is still current
+        // AND the renderer is still the active peer AND still nominally playing.
+        if let Some((renderer_id, generation)) = watchdog_arm {
+            let sink = self.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    QCONNECT_RENDERER_LOST_TIMEOUT_MS,
+                ))
+                .await;
+                let fire = {
+                    let state = sink.sync_state.lock().await;
+                    state.watchdog_generation == generation
+                        && state.session.active_renderer_id == Some(renderer_id)
+                        && is_peer_renderer_active(&state.session)
+                        && state
+                            .session_renderer_states
+                            .get(&renderer_id)
+                            .and_then(|r| r.playing_state)
+                            == Some(PLAYING_STATE_PLAYING)
+                };
+                if fire {
+                    log::warn!(
+                        "[QConnect] Renderer {renderer_id} silent for {}ms — marking unreachable",
+                        QCONNECT_RENDERER_LOST_TIMEOUT_MS
+                    );
+                    sink.freeze_active_renderer_projection_to_unknown(
+                        renderer_id,
+                        "qconnect:renderer_unreachable",
+                    )
+                    .await;
+                }
+            });
+        }
+    }
+
+    /// Bump the watchdog epoch, invalidating any in-flight 12s liveness task.
+    /// Returns the new generation (used when arming so the spawned task knows
+    /// which epoch it belongs to).
+    fn bump_watchdog_generation(state: &mut QconnectRemoteSyncState) -> u64 {
+        state.watchdog_generation = state.watchdog_generation.wrapping_add(1);
+        state.watchdog_generation
     }
 
     /// Force the active renderer's cached projection to UNKNOWN/stopped and

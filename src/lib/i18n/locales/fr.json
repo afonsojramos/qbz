@@ -1840,6 +1840,7 @@
     "remoteQueuedLater": "Ajouté à la file Qobuz Connect.",
     "remoteQueueFailed": "Échec de la mise à jour de la file Qobuz Connect.",
     "rendererDisconnected": "L'appareil distant s'est déconnecté de Qobuz Connect.",
+    "rendererUnreachable": "L'appareil distant ne répond plus.",
     "sessionTitle": "Session",
     "sessionUuid": "UUID de session",
     "activeRenderer": "Rendu actif",
