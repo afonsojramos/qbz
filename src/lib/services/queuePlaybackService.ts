@@ -23,7 +23,8 @@ function isQconnectSyncEligibleTrack(track: BackendQueueTrack): boolean {
   if (track.is_local) return false;
 
   const source = (track.source ?? '').toLowerCase();
-  if (source === 'local' || source === 'plex' || source === 'qobuz_download') {
+  // Offline-cache (qobuz_download) IS eligible: its id is the real Qobuz id.
+  if (source === 'local' || source === 'plex') {
     return false;
   }
 

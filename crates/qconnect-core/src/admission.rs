@@ -82,4 +82,9 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn offline_cache_is_admitted() {
+        assert!(evaluate_remote_queue_admission(TrackOrigin::QobuzOfflineCache).accepted);
+    }
 }

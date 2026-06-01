@@ -9,8 +9,8 @@
 //! This is the frontend-agnostic contract behind the source-aware playback
 //! context: the now-playing bar, the queue, and the artwork pipeline consume
 //! `PlaybackSource` + [`ArtworkRef`] and never special-case a source themselves.
-//! The same contract drives the Qobuz Connect queue gate (only Qobuz-streamable
-//! tracks may be cast — see [`PlaybackSource::is_qobuz_streamable`]).
+//! The same contract drives the Qobuz Connect queue gate (only castable tracks
+//! may be cast — see [`PlaybackSource::is_castable_to_qconnect`]).
 
 use serde::{Deserialize, Serialize};
 
@@ -54,10 +54,9 @@ impl PlaybackSource {
         }
     }
 
-    /// Whether this source streams from Qobuz and may therefore be cast onto
-    /// a Qobuz Connect queue. Offline-cache copies, local files, and Plex are
-    /// **not** castable to a Qobuz Connect receiver — this is the first-class
-    /// gate the queue pipeline consults before syncing to Qobuz Connect.
+    /// Whether this source streams live from the Qobuz catalog. NOTE: NOT the
+    /// cast gate — offline-cache also carries a valid Qobuz id and IS castable.
+    /// Use is_castable_to_qconnect for the Qobuz Connect gate.
     pub fn is_qobuz_streamable(self) -> bool {
         matches!(self, Self::Qobuz)
     }
@@ -191,6 +190,12 @@ mod tests {
         ] {
             assert_eq!(PlaybackSource::from_source_str(Some(s.as_source_str())), s);
         }
+    }
+
+    #[test]
+    fn offline_cache_is_castable() {
+        assert!(PlaybackSource::OfflineCache.is_castable_to_qconnect());
+        assert!(TrackOriginTag::OfflineCache.is_castable_to_qconnect());
     }
 
     #[test]
