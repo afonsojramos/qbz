@@ -380,6 +380,10 @@ export component ArtistPageView inherits Rectangle {
             // this row regardless of how tall the artist header above
             // it grew (long bios push the body row down with no manual
             // tuning).
+            // Breathing room between the artist portrait and the JUMP TO bar.
+            // The bar tracks body-row.absolute-position.y, so pushing the row
+            // down keeps the fix-on-scroll behaviour intact.
+            Rectangle { height: 20px; }
             body-row := HorizontalLayout {
                 spacing: 0px;
                 main-col := VerticalLayout {
