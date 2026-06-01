@@ -6,10 +6,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use qbz_models::Quality;
 use tokio::sync::Mutex;
 
 use crate::core_bridge::CoreBridge;
+
+/// `quality_from_max_audio_quality` now lives in the frontend-agnostic
+/// `qconnect_app::session` module. Re-exported here so the existing call sites in
+/// this module compile unchanged.
+use qconnect_app::quality_from_max_audio_quality;
 
 use super::QconnectRemoteSyncState;
 
@@ -27,21 +31,6 @@ pub(super) fn should_reload_remote_track(
     // load_remote_track_into_player that interrupted the in-progress
     // load. That was the residual first-track hiccup.
     playback_state.track_id != track_id
-}
-
-/// Map a QConnect `max_audio_quality` level to a qbz `Quality`.
-/// QConnect levels: 0/1 ~ MP3, 2 ~ CD/Lossless, 3 ~ Hi-Res (<=96kHz),
-/// 4 ~ Hi-Res (>96kHz), 5/None ~ uncapped. The qbz `Quality` enum only has
-/// four variants (Mp3, Lossless, HiRes, UltraHiRes), so 4 and uncapped both
-/// resolve to UltraHiRes.
-pub(super) fn quality_from_max_audio_quality(level: Option<i32>) -> Quality {
-    match level {
-        Some(l) if l <= 1 => Quality::Mp3,
-        Some(2) => Quality::Lossless,
-        Some(3) => Quality::HiRes,
-        Some(4) => Quality::UltraHiRes,
-        _ => Quality::UltraHiRes,
-    }
 }
 
 async fn load_remote_track_into_player(

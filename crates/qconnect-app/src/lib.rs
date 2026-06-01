@@ -6,6 +6,7 @@ mod app;
 mod error;
 mod events;
 mod feature_flags;
+pub mod session;
 mod state;
 pub mod startup;
 
@@ -13,13 +14,20 @@ pub use app::QconnectApp;
 pub use startup::{compute_effective_startup, QconnectStartupMode};
 pub use error::QconnectAppError;
 pub use events::{NoOpEventSink, QconnectAppEvent, QconnectEventSink};
+pub use session::{
+    compute_connection_state, deferred_join_reason, quality_from_max_audio_quality,
+    should_arm_renderer_watchdog, should_reask_queue_state, ConnectionDecision, RendererStatus,
+    ServerActiveState, JOIN_SESSION_REASON_CONTROLLER_REQUEST, JOIN_SESSION_REASON_RECONNECTION,
+    QCONNECT_RENDERER_LOST_TIMEOUT_MS,
+};
 pub use feature_flags::{
     QBZ_QCONNECT_PANEL_SWITCH, QBZ_QCONNECT_QUEUE_MODEL, QBZ_QCONNECT_STRICT_DOMAIN_ISOLATION,
     QBZ_QCONNECT_TRANSPORT,
 };
 pub use qconnect_core::{
-    evaluate_remote_queue_admission, resolve_handoff_intent, AdmissionDecision, HandoffIntent,
-    QConnectQueueState, QConnectRendererState, QueueVersion, RendererCommand, TrackOrigin,
+    evaluate_remote_queue_admission, resolve_handoff_intent, validate_track_origins_for_admission,
+    AdmissionDecision, HandoffIntent, QConnectQueueState, QConnectRendererState, QueueVersion,
+    RendererCommand, TrackOrigin,
 };
 pub use qconnect_protocol::{QueueCommandType, RendererReport, RendererReportType};
 pub use state::QconnectRuntimeState;

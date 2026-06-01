@@ -9,6 +9,7 @@ description = "UI-agnostic Qobuz Connect application adapter"
 qconnect-core = { path = "../qconnect-core" }
 qconnect-protocol = { path = "../qconnect-protocol" }
 qconnect-transport-ws = { path = "../qconnect-transport-ws" }
+qbz-models = { path = "../qbz-models" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

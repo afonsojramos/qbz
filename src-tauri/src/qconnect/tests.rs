@@ -49,50 +49,10 @@ fn normalizes_renderer_volume() {
     assert!((normalize_volume_to_fraction(125) - 1.0).abs() < f32::EPSILON);
 }
 
-#[test]
-fn deferred_join_reason_is_reconnection_only_after_a_drop() {
-    use super::service::deferred_join_reason;
-    use super::{JOIN_SESSION_REASON_CONTROLLER_REQUEST, JOIN_SESSION_REASON_RECONNECTION};
-    assert_eq!(
-        deferred_join_reason(false),
-        JOIN_SESSION_REASON_CONTROLLER_REQUEST
-    );
-    assert_eq!(
-        deferred_join_reason(true),
-        JOIN_SESSION_REASON_RECONNECTION
-    );
-}
-
-#[test]
-fn reask_queue_state_stops_once_session_uuid_known_or_budget_spent() {
-    use super::service::should_reask_queue_state;
-    assert!(should_reask_queue_state(false, 0, 5));
-    assert!(should_reask_queue_state(false, 4, 5));
-    assert!(!should_reask_queue_state(false, 5, 5));
-    assert!(!should_reask_queue_state(true, 0, 5));
-}
-
-#[test]
-fn compute_connection_state_matrix() {
-    use super::session::{compute_connection_state, ServerActiveState::*};
-    let d = compute_connection_state(true, true, None, false);
-    assert!(
-        d.should_be_active && d.should_set_active_renderer && d.should_set_queue && !d.should_ask_queue
-    );
-    let d = compute_connection_state(true, false, Me, false);
-    assert!(d.should_be_active && !d.should_set_active_renderer && d.should_set_queue);
-    let d = compute_connection_state(false, false, Me, true);
-    assert!(d.should_ask_queue && !d.should_set_queue && !d.should_set_active_renderer);
-    let d = compute_connection_state(false, false, OtherPlaying, false);
-    assert!(!d.should_be_active && !d.should_set_active_renderer && d.should_ask_queue);
-    let d = compute_connection_state(false, false, None, false);
-    assert!(
-        !d.should_be_active
-            && !d.should_set_active_renderer
-            && !d.should_set_queue
-            && !d.should_ask_queue
-    );
-}
+// `deferred_join_reason`, `should_reask_queue_state`, and
+// `compute_connection_state` are now pure functions in
+// `qconnect_app::session`; their unit tests live in that crate's `session`
+// test module.
 
 #[test]
 fn maps_outbound_command_type_to_protocol_command_type() {
@@ -145,16 +105,11 @@ fn maps_qconnect_track_origin_to_core_origin_and_handoff() {
     );
 }
 
-#[test]
-fn blocks_command_when_any_track_origin_is_non_qobuz() {
-    use super::commands::validate_track_origins_for_admission;
-    use super::QconnectTrackOrigin::*;
-    assert!(validate_track_origins_for_admission(&[QobuzOnline, QobuzOfflineCache]).accepted);
-    assert!(!validate_track_origins_for_admission(&[QobuzOnline, LocalLibrary]).accepted);
-    assert!(!validate_track_origins_for_admission(&[Plex]).accepted);
-    assert!(!validate_track_origins_for_admission(&[ExternalUnknown]).accepted);
-    assert!(!validate_track_origins_for_admission(&[]).accepted); // empty -> blocked
-}
+// The pure per-track admission backstop now lives in
+// `qconnect_core::validate_track_origins_for_admission`; its unit test lives in
+// that crate's `admission` test module. The thin Tauri wrapper
+// `commands::validate_track_origins_for_admission` only maps wire origins to
+// core origins.
 
 #[test]
 fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
@@ -1134,38 +1089,9 @@ fn device_uuid_persists_and_is_reused_across_calls() {
     let _ = std::fs::remove_file(&tmp);
 }
 
-#[test]
-fn renderer_status_from_wire_maps_known_values() {
-    use super::RendererStatus;
-    assert_eq!(RendererStatus::from_wire(Some(0)), RendererStatus::Inactive); // UNKNOWN collapses
-    assert_eq!(RendererStatus::from_wire(Some(1)), RendererStatus::ActiveConnected);
-    assert_eq!(RendererStatus::from_wire(Some(2)), RendererStatus::ActiveDisconnected);
-    assert_eq!(RendererStatus::from_wire(Some(3)), RendererStatus::Inactive);
-}
-
-#[test]
-fn renderer_status_from_wire_collapses_unknown_and_missing_to_inactive() {
-    use super::RendererStatus;
-    assert_eq!(RendererStatus::from_wire(Some(99)), RendererStatus::Inactive); // UNRECOGNIZED
-    assert_eq!(RendererStatus::from_wire(None), RendererStatus::Inactive);     // absent field
-}
-
-#[test]
-fn watchdog_arms_only_for_playing_active_peer() {
-    use super::{
-        should_arm_renderer_watchdog, PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING,
-        PLAYING_STATE_STOPPED, PLAYING_STATE_UNKNOWN,
-    };
-    // Arm: playing AND active peer.
-    assert!(should_arm_renderer_watchdog(Some(PLAYING_STATE_PLAYING), true));
-    // Do not arm when paused/stopped/unknown even if active peer.
-    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_PAUSED), true));
-    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_STOPPED), true));
-    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_UNKNOWN), true));
-    assert!(!should_arm_renderer_watchdog(None, true));
-    // Do not arm when not an active peer (e.g. local renderer is active).
-    assert!(!should_arm_renderer_watchdog(Some(PLAYING_STATE_PLAYING), false));
-}
+// `RendererStatus::from_wire` and `should_arm_renderer_watchdog` are now in
+// `qconnect_app::session`; their unit tests live in that crate's `session` test
+// module.
 
 #[test]
 fn build_set_position_request_carries_position_and_queue_item_without_changing_play_state() {
@@ -1204,21 +1130,8 @@ fn startup_retry_schedule_is_bounded_and_monotonic() {
     assert_eq!(*s.last().unwrap(), 30_000);
 }
 
-#[test]
-fn quality_from_max_audio_quality_maps_levels() {
-    use super::track_loading::quality_from_max_audio_quality;
-    use qbz_models::Quality;
-    // qbz Quality has four variants: Mp3, Lossless (CD), HiRes (<=96kHz),
-    // UltraHiRes (>96kHz). QConnect levels collapse onto these.
-    assert_eq!(quality_from_max_audio_quality(Some(0)), Quality::Mp3);
-    assert_eq!(quality_from_max_audio_quality(Some(1)), Quality::Mp3);
-    assert_eq!(quality_from_max_audio_quality(Some(2)), Quality::Lossless);
-    assert_eq!(quality_from_max_audio_quality(Some(3)), Quality::HiRes);
-    assert_eq!(quality_from_max_audio_quality(Some(4)), Quality::UltraHiRes);
-    assert_eq!(quality_from_max_audio_quality(Some(5)), Quality::UltraHiRes);
-    assert_eq!(quality_from_max_audio_quality(None), Quality::UltraHiRes);
-    assert_eq!(quality_from_max_audio_quality(Some(99)), Quality::UltraHiRes);
-}
+// `quality_from_max_audio_quality` is now in `qconnect_app::session`; its unit
+// test lives in that crate's `session` test module.
 
 #[test]
 fn renderer_allows_remote_volume_defaults_allow_when_absent() {

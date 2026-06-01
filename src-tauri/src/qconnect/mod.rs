@@ -38,27 +38,12 @@ pub(super) const PLAYING_STATE_PLAYING: i32 = 2;
 pub(super) const PLAYING_STATE_PAUSED: i32 = 3;
 pub(super) const BUFFER_STATE_OK: i32 = 2;
 
-/// JoinSession `reason` wire values (proto tag 3): a first join from a fresh
-/// runtime is a controller request, a join after a transport drop carries the
-/// reconnection reason so the server treats it as session continuity rather
-/// than a brand-new controller (P1-2).
-pub(super) const JOIN_SESSION_REASON_CONTROLLER_REQUEST: i32 = 1;
-pub(super) const JOIN_SESSION_REASON_RECONNECTION: i32 = 2;
-
-/// Official "renderer LOST" silence budget. A *playing* active peer renderer
-/// that sends no RENDERER_STATE_UPDATED for this long is considered
-/// unreachable (webplayer arms setTimeout(...,12e3) on onPlayerStateUpdated
-/// while playingState==PLAY). See 05-sync-status-queue.md §1.
-pub(super) const QCONNECT_RENDERER_LOST_TIMEOUT_MS: u64 = 12_000;
-
-/// Pure arming predicate for the renderer-liveness watchdog: arm only while the
-/// active renderer is a peer AND its reported playing_state is PLAYING.
-pub(super) fn should_arm_renderer_watchdog(
-    playing_state: Option<i32>,
-    is_active_peer: bool,
-) -> bool {
-    is_active_peer && playing_state == Some(PLAYING_STATE_PLAYING)
-}
+/// The renderer-liveness silence budget and the pure watchdog-arming predicate
+/// now live in the frontend-agnostic `qconnect_app::session` module. Re-exported
+/// here so existing `super::…` references inside this module compile unchanged.
+/// (The JoinSession `reason` consts also moved there; they are consumed only by
+/// `deferred_join_reason`, which moved too, so they are not re-exported here.)
+pub(super) use qconnect_app::{should_arm_renderer_watchdog, QCONNECT_RENDERER_LOST_TIMEOUT_MS};
 
 // AudioQuality enum: 0=unknown, 1=mp3, 2=cd, 3=hires_l1, 4=hires_l2(192k), 5=hires_l3(384k)
 pub(super) const AUDIO_QUALITY_UNKNOWN: i32 = 0;

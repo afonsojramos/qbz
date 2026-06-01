@@ -41,32 +41,15 @@ use super::{
     QconnectLifecycleState, QconnectMuteVolumeRequest, QconnectQueueVersionPayload,
     QconnectRemoteSyncState, QconnectSessionState, QconnectSetPlayerStateQueueItemPayload,
     QconnectSetPlayerStateRequest, QconnectSetVolumeRequest, QconnectVisibleQueueProjection,
-    AUDIO_QUALITY_HIRES_LEVEL2, BUFFER_STATE_OK, JOIN_SESSION_REASON_CONTROLLER_REQUEST,
-    JOIN_SESSION_REASON_RECONNECTION, PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING,
+    AUDIO_QUALITY_HIRES_LEVEL2, BUFFER_STATE_OK, PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING,
     PLAYING_STATE_STOPPED,
 };
 
-/// Pure selector for the JoinSession `reason`: a post-drop rejoin carries
-/// RECONNECTION, the first join from a fresh runtime carries CONTROLLER_REQUEST
-/// (P1-2).
-pub(super) fn deferred_join_reason(has_disconnected: bool) -> i32 {
-    if has_disconnected {
-        JOIN_SESSION_REASON_RECONNECTION
-    } else {
-        JOIN_SESSION_REASON_CONTROLLER_REQUEST
-    }
-}
-
-/// Pure predicate (P1-8): keep re-asking for queue state after a Lagged
-/// broadcast drop until the session_uuid is confirmed or the attempt budget is
-/// spent. Stops immediately once the session_uuid is known.
-pub(super) fn should_reask_queue_state(
-    session_uuid_known: bool,
-    attempts: u32,
-    max_attempts: u32,
-) -> bool {
-    !session_uuid_known && attempts < max_attempts
-}
+/// `deferred_join_reason` and `should_reask_queue_state` now live in the
+/// frontend-agnostic `qconnect_app::session` module. Re-exported here so the
+/// existing `deferred_join_reason`/`should_reask_queue_state` call sites in this
+/// module compile unchanged.
+pub(super) use qconnect_app::{deferred_join_reason, should_reask_queue_state};
 
 /// Prior-state snapshot captured from `sync_state` BEFORE a SESSION_STATE frame
 /// is applied by `event_sink`, plus the server's classified active state derived

@@ -5,9 +5,10 @@
 //! to `QconnectServiceState` after a `runtime.check_requirements` gate.
 
 use qconnect_app::{
-    evaluate_remote_queue_admission, resolve_handoff_intent, AdmissionDecision, QConnectQueueState,
-    QConnectRendererState, QconnectStartupMode, QueueCommandType, RendererReport,
-    RendererReportType,
+    evaluate_remote_queue_admission, resolve_handoff_intent,
+    validate_track_origins_for_admission as validate_core_track_origins_for_admission,
+    AdmissionDecision, QConnectQueueState, QConnectRendererState, QconnectStartupMode,
+    QueueCommandType, RendererReport, RendererReportType,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
@@ -182,24 +183,19 @@ pub async fn v2_qconnect_evaluate_queue_admission(
     })
 }
 
-/// Server-side backstop: re-evaluate EVERY track's origin, independent of the
-/// command-level `origin`. A bare `track_id` (a `u64`) cannot prove "Qobuz vs
-/// local/Plex" on its own, so the frontend ships per-track origins and the gate
-/// re-validates each one here. An empty list is blocked: we cannot prove the
-/// queue is all-Qobuz, so we refuse rather than trust the command-level origin.
+/// Thin Tauri-side wrapper over the frontend-agnostic
+/// `qconnect_core::validate_track_origins_for_admission`: maps the wire
+/// `QconnectTrackOrigin`s to core `TrackOrigin`s and delegates. The pure
+/// per-track backstop logic (empty-list block, any-non-Qobuz block) lives in
+/// `qconnect-core` next to `evaluate_remote_queue_admission`.
 pub(super) fn validate_track_origins_for_admission(
     origins: &[QconnectTrackOrigin],
 ) -> AdmissionDecision {
-    if origins.is_empty() {
-        return AdmissionDecision::block("empty_track_origins_blocked");
-    }
-    for origin in origins {
-        let decision = evaluate_remote_queue_admission(origin.into_core_origin());
-        if !decision.accepted {
-            return decision;
-        }
-    }
-    AdmissionDecision::allow("all_track_origins_qobuz")
+    let core_origins: Vec<_> = origins
+        .iter()
+        .map(|origin| origin.into_core_origin())
+        .collect();
+    validate_core_track_origins_for_admission(&core_origins)
 }
 
 #[tauri::command]
