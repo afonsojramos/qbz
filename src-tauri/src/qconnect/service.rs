@@ -256,6 +256,16 @@ impl QconnectServiceState {
             return Err(msg);
         }
 
+        // Subscribe to transport events SYNCHRONOUSLY here — after app.connect()
+        // returns and BEFORE the spawn / any further await — so the receiver is
+        // live before the WS handshake emits Connected / Subscribed /
+        // SessionEstablished / SESSION_STATE. NativeWsTransport::connect spawns
+        // the WS loop and returns without awaiting the handshake, and tokio
+        // broadcast has no replay, so a receiver created later inside the spawned
+        // loop would race those initial events and silently drop them (a lost
+        // SessionEstablished leaves the UI stuck Connecting; a lost SESSION_STATE
+        // skips the deferred renderer join).
+        let transport_rx = app.subscribe_transport_events();
         let idle_retry_active = config.reconnect_idle_retry_ms > 0;
         // The session/liveness/diagnostic emits route THROUGH the event sink
         // (Slice 3); the adapter-coupled seams (lifecycle gating, reconnect-
@@ -271,7 +281,9 @@ impl QconnectServiceState {
         });
         let app_for_loop = Arc::clone(&app);
         let event_loop = tauri::async_runtime::spawn(async move {
-            app_for_loop.run_session_loop(host, idle_retry_active).await;
+            app_for_loop
+                .run_session_loop(host, transport_rx, idle_retry_active)
+                .await;
         });
 
         let runtime = QconnectRuntime {

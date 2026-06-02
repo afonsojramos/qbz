@@ -1668,8 +1668,17 @@ where
     /// prior inline Tauri loop; the adapter-coupled seams (lifecycle gating,
     /// teardown, bootstrap, renderer-join, raw error) go through `host` so both
     /// frontends share this control flow.
-    pub async fn run_session_loop(&self, host: Arc<dyn SessionLoopHost>, idle_retry_active: bool) {
-        let mut transport_rx = self.subscribe_transport_events();
+    pub async fn run_session_loop(
+        &self,
+        host: Arc<dyn SessionLoopHost>,
+        mut transport_rx: tokio::sync::broadcast::Receiver<TransportEvent>,
+        idle_retry_active: bool,
+    ) {
+        // NOTE: `transport_rx` is subscribed by the adapter SYNCHRONOUSLY before
+        // this task is spawned (and before any further await), so the receiver is
+        // live before the WS handshake can emit its initial events. tokio
+        // broadcast has no replay — subscribing here, inside the spawned task,
+        // would race those events and silently drop them.
         log::info!("[QConnect/EventLoop] Started listening for transport events");
         let mut renderer_joined = false;
         let mut has_disconnected = false;
