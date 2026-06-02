@@ -35,9 +35,14 @@ pub use qconnect_app::{QconnectRendererInfo, QconnectSessionRendererState, Qconn
 /// qconnect-app (slice 2+4). Re-exported so existing `super::session::…` /
 /// `super::…` references compile unchanged.
 pub(super) use qconnect_app::{
-    find_unique_renderer_id, is_local_renderer_active, is_peer_renderer_active,
-    normalize_active_renderer_id, renderer_allows_remote_volume, QconnectFileAudioQualitySnapshot,
+    is_local_renderer_active, is_peer_renderer_active, normalize_active_renderer_id,
+    renderer_allows_remote_volume, QconnectFileAudioQualitySnapshot,
 };
+// find_unique_renderer_id's sole non-test caller (refresh_local_renderer_id)
+// moved to qconnect-app, so it is referenced only by the test module now; gate
+// the re-export to test builds.
+#[cfg(test)]
+pub(super) use qconnect_app::find_unique_renderer_id;
 
 pub(super) fn queue_item_snapshot_for_cursor(
     queue: &QConnectQueueState,

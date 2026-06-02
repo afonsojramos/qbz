@@ -21,14 +21,15 @@ mod types;
 pub use commands::*;
 pub use service::QconnectServiceState;
 pub use session::{QconnectRendererInfo, QconnectSessionState};
+// QconnectSessionRendererState is referenced via `super::…` only by the test
+// module now (the QconnectRemoteSyncState struct that consumed it in non-test
+// code moved to qconnect-app), so gate the re-export to test builds to avoid an
+// unused-import warning.
+#[cfg(test)]
+pub(super) use session::QconnectSessionRendererState;
 pub use types::*;
 
-use std::collections::HashMap;
-
 use qbz_models::{QueueTrack, RepeatMode, Track};
-use qconnect_app::QConnectQueueState;
-
-use session::{QconnectFileAudioQualitySnapshot, QconnectSessionRendererState};
 
 const QCONNECT_REMOTE_QUEUE_SOURCE: &str = "qobuz_connect_remote";
 
@@ -54,47 +55,11 @@ pub(super) const AUDIO_QUALITY_HIRES_LEVEL2: i32 = 4;
 pub(super) const AUDIO_QUALITY_HIRES_LEVEL3: i32 = 5;
 pub(super) const DEFAULT_QCONNECT_CHANNEL_COUNT: i32 = 2;
 
-/// Cross-submodule accumulator: caches the cloud's renderer/queue
-/// snapshots, the most recent materialization, the topology of all
-/// renderers in the session, and the load-attempt dedup window. Mutated
-/// by event_sink (on inbound events), corebridge (on materialize/apply),
-/// track_loading (on load attempt), and service (on outbound report
-/// completions).
-#[derive(Debug, Default)]
-pub(super) struct QconnectRemoteSyncState {
-    pub(super) last_renderer_queue_item_id: Option<u64>,
-    pub(super) last_renderer_next_queue_item_id: Option<u64>,
-    pub(super) last_renderer_track_id: Option<u64>,
-    pub(super) last_renderer_next_track_id: Option<u64>,
-    pub(super) last_renderer_playing_state: Option<i32>,
-    pub(super) last_materialized_start_index: Option<usize>,
-    pub(super) last_materialized_core_shuffle_order: Option<Vec<usize>>,
-    pub(super) last_reported_file_audio_quality: Option<QconnectFileAudioQualitySnapshot>,
-    /// Last reported device (DAC output) audio quality: (sampling_rate, bit_depth, nb_channels).
-    /// Used to dedup outbound RndrSrvrDeviceAudioQualityChanged(27) reports.
-    pub(super) last_reported_device_audio_quality: Option<(i32, i32, i32)>,
-    pub(super) last_applied_queue_state: Option<QConnectQueueState>,
-    pub(super) last_remote_queue_state: Option<QConnectQueueState>,
-    pub(super) session_loop_mode: Option<i32>,
-    /// Session topology — stored from session management events (types 81-87).
-    pub(super) session: QconnectSessionState,
-    /// The session_uuid for which we last ran the full deferred renderer-join
-    /// body. Used to make the deferred join idempotent (P1-8): when a SESSION_STATE
-    /// arrives with the same session_uuid we skip the join reports but still
-    /// re-AskForRendererState.
-    pub(super) last_joined_session_uuid: Option<String>,
-    pub(super) session_renderer_states: HashMap<i32, QconnectSessionRendererState>,
-    /// Track of the most recent load attempt across paths (V2 play
-    /// handoff and ensure_remote_track_loaded). Used to suppress
-    /// redundant reloads when an echo SetState arrives during the
-    /// in-progress buffer/decode window of a previously triggered load.
-    pub(super) last_load_attempt: Option<(u64, std::time::Instant)>,
-    /// Monotonic epoch for the renderer-liveness watchdog (P0-1). Every armed
-    /// RENDERER_STATE_UPDATED bumps this; a spawned 12s task captures the value
-    /// and no-ops on wake if it was superseded (reset/disarm). Disarm =
-    /// pause/stop/active-change/disconnect, which also bump it.
-    pub(super) watchdog_generation: u64,
-}
+/// The cross-submodule remote-sync accumulator now lives in the frontend-agnostic
+/// `qconnect_app::sync_state` module (slice 2+4) so both the Tauri and Slint
+/// adapters share one struct under one lock. Re-exported here so existing
+/// `super::QconnectRemoteSyncState` references compile unchanged.
+pub(super) use qconnect_app::QconnectRemoteSyncState;
 
 pub(super) fn qconnect_now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
