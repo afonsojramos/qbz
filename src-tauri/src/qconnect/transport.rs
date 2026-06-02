@@ -321,19 +321,6 @@ async fn fetch_qconnect_transport_credentials(
     Ok((endpoint_url, jwt_qws))
 }
 
-pub(super) fn hex_preview(data: &[u8], max_bytes: usize) -> String {
-    let take = data.len().min(max_bytes);
-    let hex: String = data[..take]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join("");
-    if data.len() > max_bytes {
-        format!("{hex}...({}B total)", data.len())
-    } else {
-        hex
-    }
-}
 
 fn normalize_opt_string(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
