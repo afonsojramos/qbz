@@ -51,134 +51,6 @@ use super::{
 /// module compile unchanged.
 pub(super) use qconnect_app::{deferred_join_reason, should_reask_queue_state};
 
-/// Prior-state snapshot captured from `sync_state` BEFORE a SESSION_STATE frame
-/// is applied by `event_sink`, plus the server's classified active state derived
-/// from the incoming payload. Drives P1-3 takeover arbitration after the apply.
-struct SessionStateTakeoverInput {
-    was_active: bool,
-    was_playing: bool,
-    server: super::session::ServerActiveState,
-}
-
-/// Capture `was_active`/`was_playing` from the current (pre-apply) sync_state and
-/// classify the server's active-renderer state from the incoming SESSION_STATE
-/// payload, relative to our local renderer id. Pure-ish read; takes no decision.
-async fn capture_session_state_takeover_input(
-    sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
-    payload: &Value,
-) -> SessionStateTakeoverInput {
-    use super::session::ServerActiveState;
-    let st = sync_state.lock().await;
-    let local_id = st.session.local_renderer_id;
-    let was_active = is_local_renderer_active(&st.session);
-    let was_playing = st.last_renderer_playing_state == Some(PLAYING_STATE_PLAYING);
-    let incoming_active = payload
-        .get("active_renderer_id")
-        .and_then(Value::as_i64)
-        .and_then(|value| i32::try_from(value).ok());
-    let server = match incoming_active {
-        None => ServerActiveState::None,
-        Some(id) if Some(id) == local_id => ServerActiveState::Me,
-        Some(_) => {
-            // Another renderer owns the slot. Classify playing vs paused from the
-            // last observed peer playing_state; default to OtherPaused when unknown.
-            if st.last_renderer_playing_state == Some(PLAYING_STATE_PLAYING) {
-                ServerActiveState::OtherPlaying
-            } else {
-                ServerActiveState::OtherPaused
-            }
-        }
-    };
-    SessionStateTakeoverInput {
-        was_active,
-        was_playing,
-        server,
-    }
-}
-
-/// Guarded `CtrlSrvrSetActiveRenderer` sender usable from the spawned event loop
-/// (mirrors `QconnectServiceState::send_set_active_renderer_if_needed` but takes
-/// the already-cloned `app`/`sync_state` handles). No-ops when the target equals
-/// the current active renderer or the id is invalid. Never resets reconnect
-/// counters (#358 latch untouched).
-async fn send_set_active_renderer_via_app(
-    app: &Arc<QconnectApp<NativeWsTransport, TauriQconnectEventSink>>,
-    sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
-    target_renderer_id: i32,
-) -> Result<bool, String> {
-    if target_renderer_id < 0 {
-        return Ok(false);
-    }
-    {
-        let st = sync_state.lock().await;
-        if st.session.active_renderer_id == Some(target_renderer_id) {
-            return Ok(false);
-        }
-    }
-    let payload = serde_json::to_value(super::QconnectSetActiveRendererRequest {
-        renderer_id: Some(target_renderer_id),
-    })
-    .map_err(|err| format!("serialize set_active_renderer: {err}"))?;
-    let command = app
-        .build_queue_command(QueueCommandType::CtrlSrvrSetActiveRenderer, payload)
-        .await;
-    let uuid = app
-        .send_queue_command(command)
-        .await
-        .map_err(|err| format!("send set_active_renderer failed: {err}"))?;
-    clear_pending_if_matches(app, &uuid).await;
-    Ok(true)
-}
-
-/// Ask the currently-active renderer for its full state (P1-8). No-op when no
-/// active renderer is known. The reply is not reducer-correlated, so its pending
-/// slot is cleared immediately. Usable from the spawned event loop and the
-/// deferred-join body.
-async fn ask_for_active_renderer_state(
-    app: &Arc<QconnectApp<NativeWsTransport, TauriQconnectEventSink>>,
-    sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
-) -> Result<bool, String> {
-    let active_id = {
-        let st = sync_state.lock().await;
-        st.session.active_renderer_id
-    };
-    let Some(active_id) = active_id else {
-        return Ok(false);
-    };
-    let payload = serde_json::to_value(super::QconnectAskForRendererStateRequest {
-        renderer_id: Some(active_id),
-    })
-    .map_err(|err| format!("serialize ask_for_renderer_state: {err}"))?;
-    let cmd = app
-        .build_queue_command(QueueCommandType::CtrlSrvrAskForRendererState, payload)
-        .await;
-    let uuid = app
-        .send_queue_command(cmd)
-        .await
-        .map_err(|err| format!("send ask_for_renderer_state failed: {err}"))?;
-    clear_pending_if_matches(app, &uuid).await;
-    Ok(true)
-}
-
-/// Ask the server for the current queue state (P1-8 Lagged-recovery / generic
-/// re-sync). The reply is not reducer-correlated, so its pending slot is cleared.
-async fn ask_for_queue_state(
-    app: &Arc<QconnectApp<NativeWsTransport, TauriQconnectEventSink>>,
-) -> Result<(), String> {
-    let cmd = app
-        .build_queue_command(
-            QueueCommandType::CtrlSrvrAskForQueueState,
-            serde_json::json!({}),
-        )
-        .await;
-    let uuid = app
-        .send_queue_command(cmd)
-        .await
-        .map_err(|err| format!("send ask_for_queue_state failed: {err}"))?;
-    clear_pending_if_matches(app, &uuid).await;
-    Ok(())
-}
-
 const QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS: u64 = 1_500;
 /// Attempt budget for the Lagged-recovery re-AskForQueueState loop (P1-8).
 const QCONNECT_REASK_QUEUE_STATE_MAX_ATTEMPTS: u32 = 5;
@@ -199,19 +71,7 @@ struct QconnectServiceInner {
     /// loop. See `QconnectLifecycleState` (issue #358).
     lifecycle_state: QconnectLifecycleState,
 }
-fn queue_payload_track_preview(payload: &Value, key: &str) -> Vec<i64> {
-    payload
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|tracks| {
-            tracks
-                .iter()
-                .filter_map(|track| track.get("track_id").and_then(Value::as_i64))
-                .take(8)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
+
 async fn update_lifecycle_state_if_running(
     inner: &Arc<Mutex<QconnectServiceInner>>,
     sink: &TauriQconnectEventSink,
@@ -356,7 +216,8 @@ impl QconnectServiceState {
                         // active/playing state + classify the server's active
                         // renderer BEFORE event_sink applies the new state, so we
                         // can run takeover arbitration once the apply lands below.
-                        let mut takeover_input: Option<SessionStateTakeoverInput> = None;
+                        let mut takeover_input: Option<qconnect_app::SessionStateTakeoverInput> =
+                            None;
                         // Check for SESSION_STATE to trigger deferred renderer join
                         if let qconnect_transport_ws::TransportEvent::InboundQueueServerEvent(
                             ref evt,
@@ -364,11 +225,9 @@ impl QconnectServiceState {
                         {
                             if evt.message_type() == "MESSAGE_TYPE_SRVR_CTRL_SESSION_STATE" {
                                 takeover_input = Some(
-                                    capture_session_state_takeover_input(
-                                        &sync_state_for_loop,
-                                        &evt.payload,
-                                    )
-                                    .await,
+                                    app_for_loop
+                                        .capture_session_state_takeover_input(&evt.payload)
+                                        .await,
                                 );
                                 if !renderer_joined {
                                     if let Some(session_uuid) =
@@ -423,11 +282,8 @@ impl QconnectServiceState {
                                     }
                                     // P1-8: resync renderer state too, not just the
                                     // queue, when an active renderer is known.
-                                    if let Err(err) = ask_for_active_renderer_state(
-                                        &app_for_loop,
-                                        &sync_state_for_loop,
-                                    )
-                                    .await
+                                    if let Err(err) =
+                                        app_for_loop.ask_for_active_renderer_state().await
                                     {
                                         log::warn!("[QConnect] AskForRendererState after reconnect failed: {err}");
                                     }
@@ -468,8 +324,8 @@ impl QconnectServiceState {
                                         "queue_version": evt.queue_version,
                                         "track_count": evt.payload.get("tracks").and_then(|value| value.as_array()).map(|tracks| tracks.len()).unwrap_or(0),
                                         "autoplay_track_count": evt.payload.get("autoplay_tracks").and_then(|value| value.as_array()).map(|tracks| tracks.len()).unwrap_or(0),
-                                        "preview_track_ids": queue_payload_track_preview(&evt.payload, "tracks"),
-                                        "preview_autoplay_track_ids": queue_payload_track_preview(&evt.payload, "autoplay_tracks"),
+                                        "preview_track_ids": qconnect_app::queue_payload_track_preview(&evt.payload, "tracks"),
+                                        "preview_autoplay_track_ids": qconnect_app::queue_payload_track_preview(&evt.payload, "autoplay_tracks"),
                                     }),
                                 }).await;
                             }
@@ -644,12 +500,8 @@ impl QconnectServiceState {
                                     st.session.local_renderer_id
                                 };
                                 if let Some(local_id) = local_id {
-                                    if let Err(err) = send_set_active_renderer_via_app(
-                                        &app_for_loop,
-                                        &sync_state_for_loop,
-                                        local_id,
-                                    )
-                                    .await
+                                    if let Err(err) =
+                                        app_for_loop.send_set_active_renderer(local_id).await
                                     {
                                         log::warn!(
                                             "[QConnect] takeover set_active_renderer failed: {err}"
@@ -676,7 +528,7 @@ impl QconnectServiceState {
                             QCONNECT_REASK_QUEUE_STATE_MAX_ATTEMPTS,
                         ) {
                             lagged_reask_attempts = lagged_reask_attempts.saturating_add(1);
-                            if let Err(err) = ask_for_queue_state(&app_for_loop).await {
+                            if let Err(err) = app_for_loop.ask_for_queue_state().await {
                                 log::warn!("[QConnect] Lagged-recovery AskForQueueState failed: {err}");
                             }
                         }
@@ -1919,7 +1771,7 @@ async fn bootstrap_remote_presence(
 
     // JoinSession typically responds with session/renderer controller events that are not part of
     // queue reducer correlation. Drop pending slot so queue operations are not blocked for 10s.
-    clear_pending_if_matches(app, &join_action_uuid).await;
+    app.clear_pending_if_matches(&join_action_uuid).await;
 
     // 2. Ask for current queue state from server
     let ask_queue_payload = serde_json::json!({});
@@ -1933,7 +1785,7 @@ async fn bootstrap_remote_presence(
         .send_queue_command(ask_queue_command)
         .await
         .map_err(|err| format!("send bootstrap ask_for_queue_state failed: {err}"))?;
-    clear_pending_if_matches(app, &ask_action_uuid).await;
+    app.clear_pending_if_matches(&ask_action_uuid).await;
 
     // NOTE: Renderer JoinSession requires a session_uuid from the server (type 81 SESSION_STATE).
     // It is sent as a deferred step from the event loop when SESSION_STATE arrives.
@@ -1963,7 +1815,7 @@ async fn deferred_renderer_join(
             "[QConnect] Deferred join skipped (already joined session_uuid={}); re-asking renderer state",
             session_uuid
         );
-        if let Err(err) = ask_for_active_renderer_state(app, sync_state).await {
+        if let Err(err) = app.ask_for_active_renderer_state().await {
             log::warn!("[QConnect] Idempotent-join AskForRendererState failed: {err}");
         }
         return;
@@ -2091,13 +1943,13 @@ async fn deferred_renderer_join(
         )
         .await;
     if let Ok(action_uuid) = app.send_queue_command(refresh_command).await {
-        clear_pending_if_matches(app, &action_uuid).await;
+        app.clear_pending_if_matches(&action_uuid).await;
         log::info!("[QConnect] Re-requested session state after renderer join");
     }
 
     // P1-8: also resync the active renderer's full state (not just the queue)
     // right after the join, so a reconnect rejoin restores renderer state too.
-    if let Err(err) = ask_for_active_renderer_state(app, sync_state).await {
+    if let Err(err) = app.ask_for_active_renderer_state().await {
         log::warn!("[QConnect] Post-join AskForRendererState failed: {err}");
     }
 
@@ -2106,21 +1958,5 @@ async fn deferred_renderer_join(
     {
         let mut st = sync_state.lock().await;
         st.last_joined_session_uuid = Some(session_uuid.to_string());
-    }
-}
-
-async fn clear_pending_if_matches(
-    app: &Arc<QconnectApp<NativeWsTransport, TauriQconnectEventSink>>,
-    action_uuid: &str,
-) {
-    let state_handle = app.state_handle();
-    let mut state = state_handle.lock().await;
-    let pending_matches = state
-        .pending
-        .current()
-        .map(|pending| pending.uuid == action_uuid)
-        .unwrap_or(false);
-    if pending_matches {
-        state.pending.clear();
     }
 }

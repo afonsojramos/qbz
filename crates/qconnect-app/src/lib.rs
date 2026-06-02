@@ -11,7 +11,9 @@ mod state;
 pub mod startup;
 mod sync_state;
 
-pub use app::{QconnectApp, SessionApplyOutcome};
+pub use app::{
+    queue_payload_track_preview, QconnectApp, SessionApplyOutcome, SessionStateTakeoverInput,
+};
 pub use startup::{compute_effective_startup, QconnectStartupMode};
 pub use error::QconnectAppError;
 pub use events::{NoOpEventSink, QconnectAppEvent, QconnectEventSink};

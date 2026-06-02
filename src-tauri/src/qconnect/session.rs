@@ -23,7 +23,7 @@ use super::{
 /// here so existing `super::session::…` references compile unchanged.
 /// (`ConnectionDecision` is the return type — consumed via field access, so it
 /// is not named directly on the Tauri side; it lives in `qconnect_app`.)
-pub(super) use qconnect_app::{compute_connection_state, ServerActiveState};
+pub(super) use qconnect_app::compute_connection_state;
 
 /// Session topology types now live in the frontend-agnostic `qconnect_app::session`
 /// module (slice 2+4). Re-exported here so existing `super::session::…` /

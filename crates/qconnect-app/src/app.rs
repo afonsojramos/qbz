@@ -19,9 +19,10 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::session::{
-    is_peer_renderer_active, normalize_active_renderer_id, refresh_local_renderer_id,
-    should_arm_renderer_watchdog, LocalIdentity, QconnectRendererInfo, RendererStatus,
-    PLAYING_STATE_PLAYING, PLAYING_STATE_UNKNOWN, QCONNECT_RENDERER_LOST_TIMEOUT_MS,
+    is_local_renderer_active, is_peer_renderer_active, normalize_active_renderer_id,
+    refresh_local_renderer_id, should_arm_renderer_watchdog, LocalIdentity, QconnectRendererInfo,
+    RendererStatus, ServerActiveState, PLAYING_STATE_PLAYING, PLAYING_STATE_UNKNOWN,
+    QCONNECT_RENDERER_LOST_TIMEOUT_MS,
 };
 use crate::{
     ensure_session_renderer_state, sync_session_renderer_active_flags, QconnectAppError,
@@ -1442,6 +1443,163 @@ where
             renderer_state.updated_at_ms = now_ms();
         }
         self.sink.on_event(freeze_event).await;
+    }
+}
+
+/// Prior-state snapshot captured from the sync accumulator BEFORE a SESSION_STATE
+/// frame is applied, plus the server's classified active state derived from the
+/// incoming payload. Drives P1-3 takeover arbitration after the apply. Relocated
+/// from the Tauri adapter (slice 5) so the shared session loop owns it.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionStateTakeoverInput {
+    pub was_active: bool,
+    pub was_playing: bool,
+    pub server: ServerActiveState,
+}
+
+/// Preview the first 8 `track_id`s under `payload[key]` for diagnostic emits.
+/// Pure; relocated from the Tauri adapter (slice 5).
+pub fn queue_payload_track_preview(payload: &Value, key: &str) -> Vec<i64> {
+    payload
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|tracks| {
+            tracks
+                .iter()
+                .filter_map(|track| track.get("track_id").and_then(Value::as_i64))
+                .take(8)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+impl<TTransport, TSink> QconnectApp<TTransport, TSink>
+where
+    TTransport: WsTransport + 'static,
+    TSink: QconnectEventSink + 'static,
+{
+    /// Capture `was_active`/`was_playing` from the current (pre-apply) sync state
+    /// and classify the server's active-renderer state from the incoming
+    /// SESSION_STATE payload, relative to our local renderer id. Pure-ish read;
+    /// takes no decision. Relocated from the Tauri adapter (slice 5); locks
+    /// `self.sync` (the same accumulator the apply path mutates).
+    pub async fn capture_session_state_takeover_input(
+        &self,
+        payload: &Value,
+    ) -> SessionStateTakeoverInput {
+        let st = self.sync.lock().await;
+        let local_id = st.session.local_renderer_id;
+        let was_active = is_local_renderer_active(&st.session);
+        let was_playing = st.last_renderer_playing_state == Some(PLAYING_STATE_PLAYING);
+        let incoming_active = payload
+            .get("active_renderer_id")
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok());
+        let server = match incoming_active {
+            None => ServerActiveState::None,
+            Some(id) if Some(id) == local_id => ServerActiveState::Me,
+            Some(_) => {
+                // Another renderer owns the slot. Classify playing vs paused from
+                // the last observed peer playing_state; default OtherPaused when unknown.
+                if st.last_renderer_playing_state == Some(PLAYING_STATE_PLAYING) {
+                    ServerActiveState::OtherPlaying
+                } else {
+                    ServerActiveState::OtherPaused
+                }
+            }
+        };
+        SessionStateTakeoverInput {
+            was_active,
+            was_playing,
+            server,
+        }
+    }
+
+    /// Clear the pending action slot iff it still matches `action_uuid`. Used for
+    /// replies that are not reducer-correlated (set-active, ask-for-state). Locks
+    /// `self.state` (NEVER co-locked with `self.sync`). Relocated from the Tauri
+    /// adapter (slice 5).
+    pub async fn clear_pending_if_matches(&self, action_uuid: &str) {
+        let mut state = self.state.lock().await;
+        let pending_matches = state
+            .pending
+            .current()
+            .map(|pending| pending.uuid == action_uuid)
+            .unwrap_or(false);
+        if pending_matches {
+            state.pending.clear();
+        }
+    }
+
+    /// Guarded `CtrlSrvrSetActiveRenderer` sender. No-ops when the target equals
+    /// the current active renderer or the id is invalid. Never resets reconnect
+    /// counters (#358 latch untouched). Relocated from the Tauri adapter's
+    /// `send_set_active_renderer_via_app` (slice 5); the request payload
+    /// `{ "renderer_id": <i32> }` is byte-identical to the prior
+    /// `QconnectSetActiveRendererRequest` serialization.
+    pub async fn send_set_active_renderer(&self, target_renderer_id: i32) -> Result<bool, String> {
+        if target_renderer_id < 0 {
+            return Ok(false);
+        }
+        {
+            let st = self.sync.lock().await;
+            if st.session.active_renderer_id == Some(target_renderer_id) {
+                return Ok(false);
+            }
+        }
+        let payload = serde_json::json!({ "renderer_id": target_renderer_id });
+        let command = self
+            .build_queue_command(QueueCommandType::CtrlSrvrSetActiveRenderer, payload)
+            .await;
+        let uuid = self
+            .send_queue_command(command)
+            .await
+            .map_err(|err| format!("send set_active_renderer failed: {err}"))?;
+        self.clear_pending_if_matches(&uuid).await;
+        Ok(true)
+    }
+
+    /// Ask the currently-active renderer for its full state (P1-8). No-op when no
+    /// active renderer is known. The reply is not reducer-correlated, so its
+    /// pending slot is cleared immediately. Relocated from the Tauri adapter
+    /// (slice 5); payload byte-identical to the prior
+    /// `QconnectAskForRendererStateRequest` serialization.
+    pub async fn ask_for_active_renderer_state(&self) -> Result<bool, String> {
+        let active_id = {
+            let st = self.sync.lock().await;
+            st.session.active_renderer_id
+        };
+        let Some(active_id) = active_id else {
+            return Ok(false);
+        };
+        let payload = serde_json::json!({ "renderer_id": active_id });
+        let cmd = self
+            .build_queue_command(QueueCommandType::CtrlSrvrAskForRendererState, payload)
+            .await;
+        let uuid = self
+            .send_queue_command(cmd)
+            .await
+            .map_err(|err| format!("send ask_for_renderer_state failed: {err}"))?;
+        self.clear_pending_if_matches(&uuid).await;
+        Ok(true)
+    }
+
+    /// Ask the server for the current queue state (P1-8 Lagged-recovery / generic
+    /// re-sync). The reply is not reducer-correlated, so its pending slot is
+    /// cleared. Relocated from the Tauri adapter (slice 5).
+    pub async fn ask_for_queue_state(&self) -> Result<(), String> {
+        let cmd = self
+            .build_queue_command(
+                QueueCommandType::CtrlSrvrAskForQueueState,
+                serde_json::json!({}),
+            )
+            .await;
+        let uuid = self
+            .send_queue_command(cmd)
+            .await
+            .map_err(|err| format!("send ask_for_queue_state failed: {err}"))?;
+        self.clear_pending_if_matches(&uuid).await;
+        Ok(())
     }
 }
 
