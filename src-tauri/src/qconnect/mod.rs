@@ -39,13 +39,6 @@ pub(super) const PLAYING_STATE_PLAYING: i32 = 2;
 pub(super) const PLAYING_STATE_PAUSED: i32 = 3;
 pub(super) const BUFFER_STATE_OK: i32 = 2;
 
-/// The renderer-liveness silence budget and the pure watchdog-arming predicate
-/// now live in the frontend-agnostic `qconnect_app::session` module. Re-exported
-/// here so existing `super::…` references inside this module compile unchanged.
-/// (The JoinSession `reason` consts also moved there; they are consumed only by
-/// `deferred_join_reason`, which moved too, so they are not re-exported here.)
-pub(super) use qconnect_app::{should_arm_renderer_watchdog, QCONNECT_RENDERER_LOST_TIMEOUT_MS};
-
 // AudioQuality enum: 0=unknown, 1=mp3, 2=cd, 3=hires_l1, 4=hires_l2(192k), 5=hires_l3(384k)
 pub(super) const AUDIO_QUALITY_UNKNOWN: i32 = 0;
 pub(super) const AUDIO_QUALITY_MP3: i32 = 1;

@@ -35,7 +35,7 @@ pub use qconnect_app::{QconnectRendererInfo, QconnectSessionRendererState, Qconn
 /// qconnect-app (slice 2+4). Re-exported so existing `super::session::…` /
 /// `super::…` references compile unchanged.
 pub(super) use qconnect_app::{
-    is_local_renderer_active, is_peer_renderer_active, normalize_active_renderer_id,
+    ensure_session_renderer_state, is_local_renderer_active, is_peer_renderer_active,
     renderer_allows_remote_volume, QconnectFileAudioQualitySnapshot,
 };
 // find_unique_renderer_id's sole non-test caller (refresh_local_renderer_id)
@@ -76,47 +76,20 @@ pub(crate) struct QconnectRendererReportDebugEvent {
     pub(super) resolution_strategy: String,
 }
 
-/// Thin Tauri wrapper: resolves this device's identity (uuid + device-info)
-/// adapter-side, then delegates to the frontend-agnostic resolver in
-/// qconnect-app. qconnect-app stays identity-free. The eager device-info build
-/// is idempotent and side-effect-free (env reads + the cached uuid), so the
-/// resolved renderer id is identical to the prior in-place implementation.
-pub(super) fn refresh_local_renderer_id(session: &mut QconnectSessionState) {
+/// Resolve THIS device's identity (uuid + device-info) for injection into the
+/// frontend-agnostic session-apply logic in qconnect-app. The device-info build
+/// is idempotent and side-effect-free (env reads + the cached uuid), so
+/// resolving it here once per session event yields the exact renderer-id
+/// resolution the prior in-place `refresh_local_renderer_id` produced.
+pub(super) fn resolve_local_identity() -> qconnect_app::LocalIdentity {
     let info = default_qconnect_device_info();
-    let identity = qconnect_app::LocalIdentity {
+    qconnect_app::LocalIdentity {
         device_uuid: info.device_uuid.unwrap_or_default(),
         friendly_name: info.friendly_name,
         brand: info.brand,
         model: info.model,
         device_type: info.device_type,
-    };
-    qconnect_app::refresh_local_renderer_id(session, &identity);
-}
-
-pub(super) fn sync_session_renderer_active_flags(state: &mut QconnectRemoteSyncState) {
-    for (renderer_id, renderer_state) in &mut state.session_renderer_states {
-        renderer_state.active = state
-            .session
-            .active_renderer_id
-            .map(|active_renderer_id| active_renderer_id == *renderer_id);
     }
-}
-
-pub(super) fn ensure_session_renderer_state(
-    state: &mut QconnectRemoteSyncState,
-    renderer_id: i32,
-) -> &mut QconnectSessionRendererState {
-    let active = state
-        .session
-        .active_renderer_id
-        .map(|active_renderer_id| active_renderer_id == renderer_id);
-    state
-        .session_renderer_states
-        .entry(renderer_id)
-        .or_insert_with(|| QconnectSessionRendererState {
-            active,
-            ..Default::default()
-        })
 }
 
 pub(super) fn build_session_renderer_snapshot(

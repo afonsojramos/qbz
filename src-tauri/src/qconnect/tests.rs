@@ -8,7 +8,7 @@ use super::queue_resolution::{
     QconnectRemoteSkipDirection,
 };
 use super::session::{
-    find_unique_renderer_id, refresh_local_renderer_id, renderer_allows_remote_volume,
+    find_unique_renderer_id, renderer_allows_remote_volume, resolve_local_identity,
     QconnectFileAudioQualitySnapshot,
 };
 use super::transport::{
@@ -138,7 +138,7 @@ fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
         ..Default::default()
     };
 
-    refresh_local_renderer_id(&mut session);
+    qconnect_app::refresh_local_renderer_id(&mut session, &resolve_local_identity());
 
     assert_eq!(session.local_renderer_id, Some(6));
 }
@@ -172,7 +172,7 @@ fn refreshes_local_renderer_id_from_unique_fingerprint_when_uuid_missing() {
         ..Default::default()
     };
 
-    refresh_local_renderer_id(&mut session);
+    qconnect_app::refresh_local_renderer_id(&mut session, &resolve_local_identity());
 
     assert_eq!(session.local_renderer_id, Some(6));
 }
@@ -203,7 +203,7 @@ fn does_not_guess_local_renderer_id_when_fingerprint_is_ambiguous() {
         ..Default::default()
     };
 
-    refresh_local_renderer_id(&mut session);
+    qconnect_app::refresh_local_renderer_id(&mut session, &resolve_local_identity());
 
     assert_eq!(session.local_renderer_id, None);
     assert_eq!(
