@@ -7,7 +7,7 @@
 
 use qconnect_app::{QConnectQueueState, QConnectRendererState};
 use qconnect_core::QueueItem;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::queue_resolution::{
     find_cursor_index_by_queue_item_id, normalize_current_queue_item_id_from_queue_state,
@@ -25,6 +25,12 @@ use super::{
 /// is not named directly on the Tauri side; it lives in `qconnect_app`.)
 pub(super) use qconnect_app::{compute_connection_state, ServerActiveState};
 
+/// Session topology types now live in the frontend-agnostic `qconnect_app::session`
+/// module (slice 2+4). Re-exported here so existing `super::session::…` /
+/// `super::…` references inside this module compile unchanged, and so the Tauri
+/// command surface keeps the same serialized shape.
+pub use qconnect_app::{QconnectRendererInfo, QconnectSessionRendererState, QconnectSessionState};
+
 pub(super) fn queue_item_snapshot_for_cursor(
     queue: &QConnectQueueState,
     cursor: QconnectOrderedQueueCursor,
@@ -40,34 +46,12 @@ pub(super) fn queue_item_snapshot_for_cursor(
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct QconnectSessionRendererState {
-    pub(super) active: Option<bool>,
-    pub(super) playing_state: Option<i32>,
-    pub(super) current_position_ms: Option<u64>,
-    pub(super) current_queue_item_id: Option<u64>,
-    pub(super) volume: Option<i32>,
-    pub(super) muted: Option<bool>,
-    pub(super) max_audio_quality: Option<i32>,
-    pub(super) loop_mode: Option<i32>,
-    pub(super) shuffle_mode: Option<bool>,
-    pub(super) updated_at_ms: u64,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct QconnectFileAudioQualitySnapshot {
     pub(super) sampling_rate: i32,
     pub(super) bit_depth: i32,
     pub(super) nb_channels: i32,
     pub(super) audio_quality: i32,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct QconnectSessionState {
-    pub session_uuid: Option<String>,
-    pub active_renderer_id: Option<i32>,
-    pub local_renderer_id: Option<i32>,
-    pub renderers: Vec<QconnectRendererInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,20 +69,6 @@ pub(crate) struct QconnectRendererReportDebugEvent {
     pub(super) duration: Option<i32>,
     pub(super) queue_version: QconnectQueueVersionPayload,
     pub(super) resolution_strategy: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QconnectRendererInfo {
-    pub renderer_id: i32,
-    pub device_uuid: Option<String>,
-    pub friendly_name: Option<String>,
-    pub brand: Option<String>,
-    pub model: Option<String>,
-    pub device_type: Option<i32>,
-    /// capabilities.volume_remote_control. 1 == ALLOWED. None == not advertised
-    /// (treated as allowed to avoid regressing renderers that omit it).
-    #[serde(default)]
-    pub volume_remote_control: Option<i32>,
 }
 
 /// Whether the active renderer permits remote volume control. Absent capability

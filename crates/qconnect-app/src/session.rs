@@ -186,6 +186,57 @@ pub fn quality_from_max_audio_quality(level: Option<i32>) -> Quality {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Session topology types (relocated from the Tauri adapter — slice 2+4).
+//
+// These are pure data describing who is in a QConnect session and the cloud's
+// per-renderer view. They move here (frontend-agnostic) so both the Tauri and
+// Slint adapters share one session-topology model under a single lock. Field
+// visibility is widened to `pub` because the adapters access these fields
+// across the crate boundary; serialized shape is unchanged.
+// ---------------------------------------------------------------------------
+
+/// Per-renderer cached state derived from session-management events
+/// (RENDERER_STATE_UPDATED etc.): the cloud's latest view of one renderer.
+#[derive(Debug, Clone, Default)]
+pub struct QconnectSessionRendererState {
+    pub active: Option<bool>,
+    pub playing_state: Option<i32>,
+    pub current_position_ms: Option<u64>,
+    pub current_queue_item_id: Option<u64>,
+    pub volume: Option<i32>,
+    pub muted: Option<bool>,
+    pub max_audio_quality: Option<i32>,
+    pub loop_mode: Option<i32>,
+    pub shuffle_mode: Option<bool>,
+    pub updated_at_ms: u64,
+}
+
+/// Session topology — stored from session management events (types 81-87):
+/// who is in the session, who is active, and which renderer is us.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QconnectSessionState {
+    pub session_uuid: Option<String>,
+    pub active_renderer_id: Option<i32>,
+    pub local_renderer_id: Option<i32>,
+    pub renderers: Vec<QconnectRendererInfo>,
+}
+
+/// One renderer registered in the QConnect session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QconnectRendererInfo {
+    pub renderer_id: i32,
+    pub device_uuid: Option<String>,
+    pub friendly_name: Option<String>,
+    pub brand: Option<String>,
+    pub model: Option<String>,
+    pub device_type: Option<i32>,
+    /// capabilities.volume_remote_control. 1 == ALLOWED. None == not advertised
+    /// (treated as allowed to avoid regressing renderers that omit it).
+    #[serde(default)]
+    pub volume_remote_control: Option<i32>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
