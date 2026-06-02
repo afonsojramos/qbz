@@ -2496,6 +2496,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         w.invoke_open_album(id.clone().into());
                     }
                 }
+                // Now-playing context (song-card layers button) -> playlist page.
+                ("playlist", "open") => {
+                    nav::record(nav::NavEntry::Playlist(id.clone()));
+                    navigate_playlist(
+                        runtime.clone(),
+                        weak.clone(),
+                        &handle,
+                        image_cache.clone(),
+                        id.clone(),
+                    );
+                }
                 ("artist", "play-top") => playback::play_artist_top_tracks(
                     runtime.clone(),
                     weak.clone(),

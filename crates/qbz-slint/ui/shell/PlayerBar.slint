@@ -1,31 +1,37 @@
-// Bottom now-playing / transport bar.
+// Bottom now-playing / transport bar — Default mode.
 //
-// 110px tall. A seek bar near the top, then a controls row: transport
-// cluster (left), the song card (center, no background/border), and the
-// secondary actions + volume cluster (right). Queue and Lyrics are
-// intentionally absent — they live in the header.
-//
-// Playback state is not wired yet; the values are placeholders until the
-// playback session lands.
+// Three clusters over a full-width seek bar: the SONG CARD (left), the INFO +
+// TRANSPORT cluster (absolutely centred so it never drifts with the song-card
+// width), and the SECONDARY actions + volume cluster (right). Grouped popovers
+// open upward: "+" add menu, the Qobuz Connect flyout, the audio-settings
+// (normalization + gapless) popover, and the layout-mode popover.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Spacing } from "../foundation/spacing.slint";
-import { Typography } from "../foundation/typography.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzSlider } from "../primitives/QbzSlider.slint";
+import { QbzToggle } from "../primitives/QbzToggle.slint";
+import { ContextMenu } from "../primitives/ContextMenu.slint";
+import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { SeekBar } from "SeekBar.slint";
-import { NowPlayingState, ShellState, AppearanceState } from "../state.slint";
+import { SongCard } from "SongCard.slint";
+import { NowPlayingState, ShellState, AppearanceState, SettingsState, TooltipState } from "../state.slint";
 
+// Square, compact icon button with a hover tooltip.
 component IconButton inherits Rectangle {
     in property <image> icon;
-    in property <length> icon-size: 18px;
+    in property <length> icon-size: 16px;
     in property <bool> active: false;
+    in property <string> tooltip;
+    // Footprint width; the right-cluster buttons are narrower (28) than the
+    // transport (32) so they pack tighter.
+    in property <length> btn-width: 32px;
     callback clicked();
 
-    width: 34px;
-    height: 34px;
+    width: root.btn-width;
+    height: 32px;
     border-radius: Radius.sm;
     background: ta.has-hover ? Theme.surface-hover : transparent;
 
@@ -33,8 +39,9 @@ component IconButton inherits Rectangle {
         source: root.icon;
         width: root.icon-size;
         height: root.icon-size;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        // Pixel-snap the centring so fine SVGs don't render blurry.
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.active
             ? Theme.accent
             : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
@@ -45,12 +52,23 @@ component IconButton inherits Rectangle {
         clicked => {
             root.clicked();
         }
+        changed has-hover => {
+            if (self.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else if (!self.has-hover) {
+                TooltipState.show = false;
+            }
+        }
     }
 }
 
 // Primary, filled play/pause button.
 component PlayButton inherits Rectangle {
     in property <image> icon;
+    in property <string> tooltip;
     callback clicked();
 
     width: 38px;
@@ -72,47 +90,140 @@ component PlayButton inherits Rectangle {
         clicked => {
             root.clicked();
         }
+        changed has-hover => {
+            if (self.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else if (!self.has-hover) {
+                TooltipState.show = false;
+            }
+        }
     }
 }
 
-// Clickable album/artist link text.
-component MetaLink inherits TouchArea {
-    in property <string> label;
-    callback activated();
+// Qobuz Connect button — monitor-speaker glyph; golden over a soft golden tint
+// when a remote renderer owns playback. The renderer name lives in the song
+// card (the remote badge under artist·album), not here.
+component ConnectButton inherits Rectangle {
+    in property <bool> active: false;
+    in property <string> tooltip;
+    callback clicked();
 
-    width: link-text.preferred-width;
-    height: link-text.preferred-height;
-    mouse-cursor: pointer;
-    clicked => {
-        root.activated();
+    property <color> gold: #e0b341;
+
+    width: 28px;
+    height: 32px;
+    border-radius: Radius.sm;
+    background: root.active
+        ? root.gold.with-alpha(0.16)
+        : (ta.has-hover ? Theme.surface-hover : transparent);
+    border-width: root.active ? 1px : 0px;
+    border-color: root.gold.with-alpha(0.45);
+
+    QbzIcon {
+        source: @image-url("../assets/icons/monitor-speaker.svg");
+        width: 16px;
+        height: 16px;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        tint: root.active
+            ? root.gold
+            : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
     }
-    link-text := Text {
-        text: root.label;
-        color: root.has-hover ? Theme.text-primary : Theme.text-muted;
-        font-size: 12px;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+        changed has-hover => {
+            if (self.has-hover && root.tooltip != "" && !root.active) {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else if (!self.has-hover) {
+                TooltipState.show = false;
+            }
+        }
+    }
+}
+
+// A labelled toggle row for the audio-settings popover.
+component ToggleRow inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    in property <bool> checked;
+    callback toggled(bool);
+
+    height: 44px;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 1px;
+            Text {
+                text: root.label;
+                color: Theme.text-primary;
+                font-size: 13px;
+            }
+            if root.hint != "": Text {
+                text: root.hint;
+                color: Theme.text-muted;
+                font-size: 10px;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            QbzToggle {
+                checked: root.checked;
+                toggled(v) => {
+                    root.toggled(v);
+                }
+            }
+        }
     }
 }
 
 export component PlayerBar inherits Rectangle {
     callback open-album(string);
     callback open-artist(string);
+    callback media-action(string, string, string);
+    callback settings-bool(string, bool);
 
     height: Layout.player-bar-height;
     background: Theme.surface-card;
 
+    // Responsive column zones. The song-card (left) and the buttons (right)
+    // share the SAME fraction so they are symmetric — which makes the centre
+    // transport column absolutely centred (PLAY lands on the window centre) at
+    // every width. The side fraction shrinks as the window grows so the song
+    // card / buttons never sprawl on wide screens.
+    //   width <  1366  -> 39% | 22% | 39%
+    //   1366..<1920    -> 30% | 40% | 30%
+    //   width >= 1920  -> 25% | 50% | 25%
+    property <float> side-frac: root.width >= 1920px
+        ? 0.25
+        : (root.width >= 1366px ? 0.30 : 0.39);
+    property <float> centre-frac: 1.0 - 2.0 * root.side-frac;
+
     VerticalLayout {
-        spacing: 0px;
+        Rectangle { height: 6px; }
 
-        // Gap from the top edge to the seek bar.
-        Rectangle { height: 14px; }
-
-        // --- Seek bar ----------------------------------------------------
+        // Full-width seek bar (6px side margins, times at the ends).
         HorizontalLayout {
-            padding-left: Spacing.md;
-            padding-right: Spacing.md;
+            padding-left: 6px;
+            padding-right: 6px;
             SeekBar {
+                height: 20px;
                 progress: NowPlayingState.progress;
                 cache: NowPlayingState.cache;
+                seekable-max: NowPlayingState.seekable-max;
                 elapsed: NowPlayingState.elapsed;
                 remaining: NowPlayingState.remaining;
                 duration-secs: NowPlayingState.duration-secs;
@@ -122,200 +233,638 @@ export component PlayerBar inherits Rectangle {
             }
         }
 
-        // --- Controls row ------------------------------------------------
+        Rectangle { height: 6px; }
+
+        // --- Controls: responsive symmetric zones (39/22/39, 30/40/30,
+        //     25/50/25 by window width). The side columns share one fraction so
+        //     the transport (centre) is symmetric and PLAY lands on the window
+        //     centre (aligned with the header search + title). The album art
+        //     fills the row height. Columns clip; tooltips are a global overlay
+        //     so clipping is safe.
         HorizontalLayout {
             vertical-stretch: 1;
-            padding-left: Spacing.md;
-            padding-right: Spacing.md;
-            spacing: Spacing.md;
+            padding-left: 6px;
+            padding-right: 6px;
+            spacing: 0px;
 
-            // Transport cluster.
-            VerticalLayout {
-                alignment: center;
-                HorizontalLayout {
-                    spacing: 2px;
+            // LEFT column (responsive 39/30/25%) — song card; audio stamp
+            // floats to its right wall.
+            Rectangle {
+                width: (parent.width - 12px) * root.side-frac;
+                clip: true;
+                // SongCard fills the column (a layout fills its Rectangle
+                // parent), so its text column can stretch and push the audio
+                // stamp to the right wall. Vertical centring is handled by the
+                // card's own sub-columns. Do NOT wrap it in an `alignment:
+                // start` layout — that forces preferred sizing and kills both.
+                SongCard {
+                    // Fill the controls-row height (bar - top6 - seek20
+                    // - gap6 - bottom6 = bar - 38).
+                    art-size: Layout.player-bar-height - 38px;
+                    // Below 1366px shrink the stamp 10% so it stays
+                    // clear of the controls column; full size above.
+                    narrow: root.width < 1366px;
+                    open-album(id) => {
+                        root.open-album(id);
+                    }
+                    open-artist(id) => {
+                        root.open-artist(id);
+                    }
+                    open-context(kind, id) => {
+                        root.media-action(kind, id, "open");
+                    }
+                }
+            }
+
+            // CENTRE column (responsive 22/40/50%) — symmetric transport,
+            // absolutely centred at every width.
+            Rectangle {
+                width: (parent.width - 12px) * root.centre-frac;
+                clip: true;
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 2px;
+
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        icon: @image-url("../assets/icons/info.svg");
+                        tooltip: @tr("Track info");
+                        clicked => {
+                            if (NowPlayingState.has-track) {
+                                root.media-action("track", NowPlayingState.track-id, "track-info");
+                            }
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
                     IconButton {
                         icon: @image-url("../assets/icons/shuffle.svg");
                         icon-size: 16px;
+                        tooltip: @tr("Shuffle");
                         active: NowPlayingState.shuffle;
                         clicked => {
                             NowPlayingState.toggle-shuffle();
                         }
                     }
+                }
+                VerticalLayout {
+                    alignment: center;
                     IconButton {
                         icon: @image-url("../assets/icons/skip-back.svg");
+                        tooltip: @tr("Previous");
                         clicked => {
                             NowPlayingState.previous();
                         }
                     }
-                    VerticalLayout {
-                        alignment: center;
-                        PlayButton {
-                            icon: NowPlayingState.playing
-                                ? @image-url("../assets/icons/pause.svg")
-                                : @image-url("../assets/icons/play-fill.svg");
-                            clicked => {
-                                NowPlayingState.toggle-play();
-                            }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    PlayButton {
+                        icon: NowPlayingState.playing
+                            ? @image-url("../assets/icons/pause.svg")
+                            : @image-url("../assets/icons/play-fill.svg");
+                        tooltip: NowPlayingState.playing ? @tr("Pause") : @tr("Play");
+                        clicked => {
+                            NowPlayingState.toggle-play();
                         }
                     }
+                }
+                VerticalLayout {
+                    alignment: center;
                     IconButton {
                         icon: @image-url("../assets/icons/skip-forward.svg");
+                        tooltip: @tr("Next");
                         clicked => {
                             NowPlayingState.next();
                         }
                     }
+                }
+                VerticalLayout {
+                    alignment: center;
                     IconButton {
                         icon: NowPlayingState.repeat-mode == 2
                             ? @image-url("../assets/icons/repeat-1.svg")
                             : @image-url("../assets/icons/repeat.svg");
                         icon-size: 16px;
+                        tooltip: @tr("Repeat");
                         active: NowPlayingState.repeat-mode != 0;
                         clicked => {
                             NowPlayingState.cycle-repeat();
                         }
                     }
-                    IconButton { icon: @image-url("../assets/icons/plus.svg"); icon-size: 16px; }
-                    IconButton { icon: @image-url("../assets/icons/heart.svg"); icon-size: 16px; }
                 }
-            }
-
-            // Song card — no background, no border.
-            HorizontalLayout {
-                horizontal-stretch: 1;
-                alignment: center;
-                HorizontalLayout {
-                    spacing: 12px;
-                    VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 56px;
-                            height: 56px;
-                            border-radius: 6px;
-                            background: Theme.surface-elevated;
-                            clip: true;
-                            if NowPlayingState.has-track && NowPlayingState.artwork.width > 0: Image {
-                                source: NowPlayingState.artwork;
-                                width: 100%;
-                                height: 100%;
-                                image-fit: cover;
+                // "+" — grouped add menu.
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        IconButton {
+                            icon: @image-url("../assets/icons/plus.svg");
+                            icon-size: 16px;
+                            tooltip: @tr("Add to…");
+                            clicked => {
+                                add-menu.show();
                             }
                         }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 4px;
-                        Text {
-                            text: NowPlayingState.has-track
-                                ? NowPlayingState.title
-                                : @tr("Nothing playing");
-                            color: Theme.text-primary;
-                            font-size: Typography.body;
-                            font-weight: Typography.medium;
-                            overflow: elide;
-                        }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            alignment: start;
-                            if NowPlayingState.has-track: MetaLink {
-                                label: NowPlayingState.artist;
-                                activated => {
-                                    if (NowPlayingState.artist-id != "") {
-                                        root.open-artist(NowPlayingState.artist-id);
+                        add-menu := PopupWindow {
+                            x: 0px;
+                            y: -222px;
+                            width: 232px;
+                            height: 214px;
+                            close-policy: close-on-click;
+                            ContextMenu {
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/heart.svg");
+                                    label: @tr("Add to library");
+                                    clicked => {
+                                        root.media-action("track", NowPlayingState.track-id, "favorite");
+                                    }
+                                }
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/list-music.svg");
+                                    label: @tr("Add to playlist");
+                                    clicked => {
+                                        root.media-action("track", NowPlayingState.track-id, "add-to-playlist");
+                                    }
+                                }
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/list-end.svg");
+                                    label: @tr("Add to queue");
+                                    clicked => {
+                                        root.media-action("track", NowPlayingState.track-id, "queue");
+                                    }
+                                }
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/list-plus.svg");
+                                    label: @tr("Play next");
+                                    clicked => {
+                                        root.media-action("track", NowPlayingState.track-id, "play-next");
+                                    }
+                                }
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/cassette-tape.svg");
+                                    label: @tr("Add to mixtape");
+                                    clicked => {
+                                        root.media-action("track", NowPlayingState.track-id, "add-to-mixtape");
+                                    }
+                                }
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/disc-3.svg");
+                                    label: @tr("Add album to collection");
+                                    enabled: NowPlayingState.album-id != "";
+                                    clicked => {
+                                        root.media-action("album", NowPlayingState.album-id, "favorite");
                                     }
                                 }
                             }
-                            if NowPlayingState.has-track: VerticalLayout {
-                                alignment: center;
-                                QbzIcon {
-                                    source: @image-url("../assets/icons/layers.svg");
-                                    width: 13px;
-                                    height: 13px;
-                                    tint: Theme.text-muted;
-                                }
+                        }
+                    }
+                }
+            }
+            }
+            }
+
+            // RIGHT column (responsive 39/30/25%, symmetric with the song
+            // card) — secondary actions + volume, clustered at the right wall.
+            Rectangle {
+                width: (parent.width - 12px) * root.side-frac;
+                clip: true;
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 1px;
+
+                // Qobuz Connect — golden when remote; opens the connect flyout.
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px;
+                        height: 32px;
+                        ConnectButton {
+                            active: NowPlayingState.is-remote;
+                            tooltip: @tr("Qobuz Connect");
+                            clicked => {
+                                qconnect-menu.show();
                             }
-                            if NowPlayingState.has-track: MetaLink {
-                                label: NowPlayingState.album;
-                                activated => {
-                                    if (NowPlayingState.album-id != "") {
-                                        root.open-album(NowPlayingState.album-id);
+                        }
+                        qconnect-menu := PopupWindow {
+                            x: 32px - 280px;
+                            y: -252px;
+                            width: 280px;
+                            height: 244px;
+                            close-policy: close-on-click-outside;
+                            Rectangle {
+                                background: Theme.surface-main;
+                                border-radius: Radius.sm;
+                                border-width: 1px;
+                                border-color: Theme.border-muted;
+                                drop-shadow-blur: 22px;
+                                drop-shadow-color: Theme.card-shadow;
+                                drop-shadow-offset-y: 6px;
+                                VerticalLayout {
+                                    padding: 14px;
+                                    spacing: 12px;
+                                    // Header.
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        QbzIcon {
+                                            source: @image-url("../assets/icons/monitor-speaker.svg");
+                                            width: 16px;
+                                            height: 16px;
+                                            tint: Theme.text-primary;
+                                        }
+                                        Text {
+                                            text: @tr("Qobuz Connect");
+                                            color: Theme.text-primary;
+                                            font-size: 14px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    // Status row.
+                                    Rectangle {
+                                        height: 1px;
+                                        background: Theme.border-subtle;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 8px;
+                                                height: 8px;
+                                                border-radius: 4px;
+                                                background: NowPlayingState.is-remote ? #22c55e : Theme.text-muted;
+                                            }
+                                        }
+                                        Text {
+                                            text: NowPlayingState.is-remote
+                                                ? @tr("Connected")
+                                                : @tr("Disconnected");
+                                            color: Theme.text-secondary;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    // Device list / empty state.
+                                    Rectangle {
+                                        vertical-stretch: 1;
+                                        background: Theme.surface-elevated;
+                                        border-radius: Radius.sm;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            spacing: 4px;
+                                            Text {
+                                                text: @tr("No devices found");
+                                                color: Theme.text-secondary;
+                                                font-size: 12px;
+                                                horizontal-alignment: center;
+                                            }
+                                            Text {
+                                                text: @tr("Make sure your renderer is on the same network");
+                                                color: Theme.text-muted;
+                                                font-size: 10px;
+                                                horizontal-alignment: center;
+                                                wrap: word-wrap;
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // Secondary actions + volume cluster.
-            VerticalLayout {
-                alignment: center;
-                HorizontalLayout {
-                    spacing: 2px;
-                    IconButton { icon: @image-url("../assets/icons/cast.svg"); icon-size: 16px; }
-                    IconButton { icon: @image-url("../assets/icons/picture-in-picture-2.svg"); icon-size: 16px; }
-                    IconButton { icon: @image-url("../assets/icons/maximize-2.svg"); icon-size: 16px; }
-                    IconButton { icon: @image-url("../assets/icons/audio-lines.svg"); icon-size: 16px; }
+                // Cast (Chromecast / DLNA) — opens the cast flyout.
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px;
+                        height: 32px;
+                        IconButton {
+                            icon: @image-url("../assets/icons/cast.svg");
+                            icon-size: 16px;
+                            btn-width: 28px;
+                            tooltip: @tr("Cast");
+                            active: NowPlayingState.cast-active;
+                            clicked => {
+                                cast-menu.show();
+                            }
+                        }
+                        cast-menu := PopupWindow {
+                            x: 32px - 280px;
+                            y: -252px;
+                            width: 280px;
+                            height: 244px;
+                            close-policy: close-on-click-outside;
+                            Rectangle {
+                                background: Theme.surface-main;
+                                border-radius: Radius.sm;
+                                border-width: 1px;
+                                border-color: Theme.border-muted;
+                                drop-shadow-blur: 22px;
+                                drop-shadow-color: Theme.card-shadow;
+                                drop-shadow-offset-y: 6px;
+                                VerticalLayout {
+                                    padding: 14px;
+                                    spacing: 12px;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        QbzIcon {
+                                            source: @image-url("../assets/icons/cast.svg");
+                                            width: 16px;
+                                            height: 16px;
+                                            tint: Theme.text-primary;
+                                        }
+                                        Text {
+                                            text: @tr("Cast");
+                                            color: Theme.text-primary;
+                                            font-size: 14px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    Rectangle {
+                                        height: 1px;
+                                        background: Theme.border-subtle;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 8px;
+                                                height: 8px;
+                                                border-radius: 4px;
+                                                background: NowPlayingState.cast-active ? #a855f7 : Theme.text-muted;
+                                            }
+                                        }
+                                        Text {
+                                            text: NowPlayingState.cast-active
+                                                ? @tr("Casting")
+                                                : @tr("Not casting");
+                                            color: Theme.text-secondary;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    Rectangle {
+                                        vertical-stretch: 1;
+                                        background: Theme.surface-elevated;
+                                        border-radius: Radius.sm;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            spacing: 4px;
+                                            Text {
+                                                text: @tr("No cast devices found");
+                                                color: Theme.text-secondary;
+                                                font-size: 12px;
+                                                horizontal-alignment: center;
+                                            }
+                                            Text {
+                                                text: @tr("Looking for Chromecast & DLNA on your network");
+                                                color: Theme.text-muted;
+                                                font-size: 10px;
+                                                horizontal-alignment: center;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
-                    // Lyrics + queue panel toggles (moved here from the header).
+                // Audio settings — normalization + gapless.
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px;
+                        height: 32px;
+                        IconButton {
+                            icon: @image-url("../assets/icons/settings-2.svg");
+                            icon-size: 16px;
+                            btn-width: 28px;
+                            tooltip: @tr("Audio settings");
+                            active: SettingsState.normalization;
+                            clicked => {
+                                audio-menu.show();
+                            }
+                        }
+                        audio-menu := PopupWindow {
+                            x: 32px - 252px;
+                            y: -126px;
+                            width: 252px;
+                            height: 118px;
+                            close-policy: close-on-click-outside;
+                            ContextMenu {
+                                ToggleRow {
+                                    label: @tr("Normalization");
+                                    hint: @tr("Level loudness across tracks");
+                                    checked: SettingsState.normalization;
+                                    toggled(v) => {
+                                        root.settings-bool("normalization", v);
+                                    }
+                                }
+                                ToggleRow {
+                                    label: @tr("Gapless");
+                                    hint: @tr("Seamless track transitions");
+                                    checked: SettingsState.gapless;
+                                    toggled(v) => {
+                                        root.settings-bool("gapless", v);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Now-Playing view — unified switch for the bar layouts
+                // (Default / Small / Large) + the window modes (Miniplayer /
+                // Immersive). All are "presentation modes" of now-playing, so
+                // one menu. Small/Large/window modes are disabled until those
+                // layouts/features land.
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px;
+                        height: 32px;
+                        IconButton {
+                            icon: @image-url("../assets/icons/layout-grid.svg");
+                            icon-size: 16px;
+                            btn-width: 28px;
+                            tooltip: @tr("Now Playing view");
+                            clicked => {
+                                layout-menu.show();
+                            }
+                        }
+                        layout-menu := PopupWindow {
+                            x: 32px - 196px;
+                            y: -210px;
+                            width: 196px;
+                            height: 202px;
+                            close-policy: close-on-click;
+                            ContextMenu {
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/panel-left.svg");
+                                    label: @tr("Default");
+                                    selected: true;
+                                    clicked => {
+                                        root.media-action("npb-view", "", "default");
+                                    }
+                                }
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/rows-3.svg");
+                                    label: @tr("Small");
+                                    enabled: false;
+                                    clicked => {
+                                        root.media-action("npb-view", "", "small");
+                                    }
+                                }
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/layout-grid.svg");
+                                    label: @tr("Large");
+                                    enabled: false;
+                                    clicked => {
+                                        root.media-action("npb-view", "", "large");
+                                    }
+                                }
+                                Rectangle {
+                                    height: 7px;
+                                    Rectangle {
+                                        height: 1px;
+                                        y: 3px;
+                                        background: Theme.border-subtle;
+                                    }
+                                }
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/picture-in-picture-2.svg");
+                                    label: @tr("Miniplayer");
+                                    enabled: false;
+                                    clicked => {
+                                        root.media-action("npb-view", "", "miniplayer");
+                                    }
+                                }
+                                ContextMenuItem {
+                                    icon: @image-url("../assets/icons/maximize-2.svg");
+                                    label: @tr("Immersive");
+                                    enabled: false;
+                                    clicked => {
+                                        root.media-action("npb-view", "", "immersive");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Lyrics.
+                VerticalLayout {
+                    alignment: center;
                     IconButton {
-                        icon: @image-url("../assets/icons/captions.svg");
+                        icon: @image-url("../assets/icons/mic-vocal.svg");
                         icon-size: 16px;
+                        btn-width: 28px;
+                        tooltip: @tr("Lyrics");
                         active: ShellState.right-panel == 2;
                         clicked => {
                             ShellState.right-panel = ShellState.right-panel == 2 ? 0 : 2;
                         }
                     }
-                    IconButton {
-                        icon: @image-url("../assets/icons/list-ordered.svg");
-                        icon-size: 16px;
-                        active: ShellState.right-panel == 1;
-                        clicked => {
-                            ShellState.right-panel = ShellState.right-panel == 1 ? 0 : 1;
-                        }
-                    }
+                }
 
-                    Rectangle { width: 6px; }
+                Rectangle { width: 6px; }
 
+                // Volume — disabled while a remote renderer locks it.
+                VerticalLayout {
+                    alignment: center;
                     IconButton {
                         icon: NowPlayingState.muted
                             ? @image-url("../assets/icons/volume-x.svg")
                             : @image-url("../assets/icons/volume-2.svg");
                         icon-size: 16px;
+                        btn-width: 28px;
+                        tooltip: NowPlayingState.muted ? @tr("Unmute") : @tr("Mute");
                         active: NowPlayingState.muted;
                         clicked => {
-                            NowPlayingState.toggle-mute();
+                            if (!NowPlayingState.volume-locked) {
+                                NowPlayingState.toggle-mute();
+                            }
                         }
                     }
-                    VerticalLayout {
-                        alignment: center;
-                        QbzSlider {
-                            width: 90px;
-                            minimum: 0;
-                            maximum: 100;
-                            value: NowPlayingState.volume * 100;
-                            changed(v) => {
+                }
+                VerticalLayout {
+                    alignment: center;
+                    opacity: NowPlayingState.volume-locked ? 0.4 : 1.0;
+                    QbzSlider {
+                        width: 90px;
+                        minimum: 0;
+                        maximum: 100;
+                        value: NowPlayingState.volume * 100;
+                        changed(v) => {
+                            if (!NowPlayingState.volume-locked) {
                                 NowPlayingState.set-volume(v / 100.0);
                             }
                         }
                     }
-                    // Volume +/- steppers — opt-in (Settings > Appearance).
-                    if AppearanceState.show-volume-steppers: IconButton {
+                }
+                if AppearanceState.show-volume-steppers: VerticalLayout {
+                    alignment: center;
+                    IconButton {
                         icon: @image-url("../assets/icons/minus.svg");
                         icon-size: 15px;
+                        btn-width: 28px;
+                        tooltip: @tr("Volume down");
                         clicked => {
-                            NowPlayingState.set-volume(Math.max(0.0, NowPlayingState.volume - 0.05));
-                        }
-                    }
-                    if AppearanceState.show-volume-steppers: IconButton {
-                        icon: @image-url("../assets/icons/plus.svg");
-                        icon-size: 15px;
-                        clicked => {
-                            NowPlayingState.set-volume(Math.min(1.0, NowPlayingState.volume + 0.05));
+                            if (!NowPlayingState.volume-locked) {
+                                NowPlayingState.set-volume(Math.max(0.0, NowPlayingState.volume - 0.05));
+                            }
                         }
                     }
                 }
+                if AppearanceState.show-volume-steppers: VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        icon: @image-url("../assets/icons/plus.svg");
+                        icon-size: 15px;
+                        btn-width: 28px;
+                        tooltip: @tr("Volume up");
+                        clicked => {
+                            if (!NowPlayingState.volume-locked) {
+                                NowPlayingState.set-volume(Math.min(1.0, NowPlayingState.volume + 0.05));
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { width: 6px; }
+
+                // Queue panel toggle.
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        icon: @image-url("../assets/icons/list-ordered.svg");
+                        icon-size: 16px;
+                        btn-width: 28px;
+                        tooltip: @tr("Queue");
+                        active: ShellState.right-panel == 1;
+                        clicked => {
+                            ShellState.right-panel = ShellState.right-panel == 1 ? 0 : 1;
+                        }
+                    }
+                }
+                }
             }
         }
+        Rectangle { height: 6px; }
     }
 }

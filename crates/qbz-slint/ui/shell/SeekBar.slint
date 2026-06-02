@@ -9,6 +9,7 @@ import { Typography } from "../foundation/typography.slint";
 export component SeekBar inherits HorizontalLayout {
     in property <float> progress: 0.0;   // 0..1 played
     in property <float> cache: 0.0;      // 0..1 buffered
+    in property <float> seekable-max: 1.0; // furthest seekable fraction (stream lock)
     in property <string> elapsed: "0:00";
     in property <string> remaining: "0:00";
     in property <int> duration-secs: 0;
@@ -79,9 +80,13 @@ export component SeekBar inherits HorizontalLayout {
                 width: 100%;
                 height: 18px;
                 y: (parent.height - self.height) / 2;
-                mouse-cursor: pointer;
+                // No-drop cursor over the not-yet-downloaded region.
+                mouse-cursor: (root.clamp01(self.mouse-x / self.width) > root.seekable-max)
+                    ? MouseCursor.not-allowed
+                    : MouseCursor.pointer;
                 clicked => {
-                    root.seek(root.clamp01(self.mouse-x / self.width));
+                    // Lock the seek target to what has downloaded while streaming.
+                    root.seek(Math.min(root.clamp01(self.mouse-x / self.width), root.seekable-max));
                 }
             }
 

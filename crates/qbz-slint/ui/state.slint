@@ -1311,6 +1311,19 @@ export global SettingsState {
     in-out property <bool> gapless: true;
     in-out property <bool> stream-uncached: false;
     in-out property <bool> streaming-only: false;
+    // Volume normalization (loudness leveling). Applied in the shared player
+    // and bypassed automatically when bit-perfect is active. Surfaced in the
+    // now-playing bar's normalization group as well as Settings > Playback.
+    in-out property <bool> normalization: false;
+
+    // Audio-output indicators for the now-playing song card (computed in Rust
+    // from the real backend + bit-perfect constraints). `*-label` is the fixed
+    // short text; `*-active` colours the led when a deliberate / bit-perfect
+    // mode is engaged (vs the shared system default).
+    in-out property <string> output-backend-label: "SYST";   // PIPE|ALSA|JACK|PULS|SYST
+    in-out property <string> output-mode-label: "DEFAULT";    // DACPASS|BITPERF|EXCL|DIRECT|LOCKED|ROUTED|SHARED|DEFAULT
+    in-out property <bool> output-backend-active: false;
+    in-out property <bool> output-mode-active: false;
 
     // Playback — Initial Buffer Size slider (seconds, 1-10).
     in-out property <int> buffer-seconds: 3;
@@ -1904,12 +1917,42 @@ export global NowPlayingState {
     in property <int> duration-secs: 0;
     in property <float> progress: 0.0;   // 0..1
     in property <float> cache: 0.0;       // 0..1 buffered
+    // Furthest seekable fraction. 1.0 for fully-available (local/cached)
+    // tracks; equal to the streamed buffer while a track is still downloading,
+    // so the user can't seek into not-yet-downloaded territory.
+    in property <float> seekable-max: 1.0;
     in property <string> elapsed: "0:00";
     in property <string> remaining: "0:00";
     in property <float> volume: 0.7;      // 0..1
     in property <bool> muted: false;
     in property <bool> shuffle: false;
     in property <int> repeat-mode: 0;     // 0 off, 1 all, 2 one
+
+    // Quality of the playing track, for the song-card badge.
+    in property <string> quality-tier;    // "hires" | "cd" | "mp3" | ""
+    in property <string> quality-detail;  // "24-bit / 96 kHz"
+
+    // Cast / render-aware state (Qobuz Connect). `is-remote` = a peer
+    // renderer owns playback (controls route to it); `volume-locked` =
+    // the active renderer disallows remote volume control. Both default
+    // off and are wired by the QConnect epic; the bar respects them now.
+    in property <bool> is-remote: false;
+    in property <bool> volume-locked: false;
+    // Name of the active Qobuz Connect renderer (shown under the cast button
+    // when remote). Empty when local. Populated by the QConnect epic.
+    in property <string> cast-target;
+
+    // Cast (Chromecast / DLNA) — when casting, the two output leds fuse into a
+    // single purple CAST / DLNA led (mirroring Tauri). Populated by the Cast epic.
+    in property <bool> cast-active: false;
+    in property <string> cast-protocol;  // "cast" | "dlna"
+
+    // Playback CONTEXT — the source the queue was launched from (album /
+    // playlist / artist / label / mix). Drives the song-card layers button
+    // (navigate back to that page). Set at play time, persists across track
+    // changes; falls back to the track's album when no richer source is known.
+    in property <string> context-kind;  // "album" | "playlist" | "artist" | "label" | "mix"
+    in property <string> context-id;
 
     // Transport callbacks, wired to the Rust playback controller.
     callback toggle-play();
@@ -1920,6 +1963,17 @@ export global NowPlayingState {
     callback toggle-mute();
     callback toggle-shuffle();
     callback cycle-repeat();
+}
+
+// Single global hover-tooltip channel. Each hoverable control writes its text
+// + absolute anchor (window coords: centre-x and top-y of the control) here on
+// hover; one TooltipOverlay (mounted last, on top of everything) renders the
+// bubble, clamped to the window so it never clips or hides behind a neighbour.
+export global TooltipState {
+    in-out property <string> text;
+    in-out property <length> anchor-x;  // control centre, window coords
+    in-out property <length> anchor-y;  // control top, window coords
+    in-out property <bool> show: false;
 }
 
 // Playback queue model, for the Queue sidebar.

@@ -513,6 +513,19 @@ async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindo
     let track_id = track.id.to_string();
     let duration = track.duration_secs;
     let artwork = track.artwork_ref();
+    // Quality badge: tier from bit depth (24-bit+ = Hi-Res), exact detail line
+    // reused from the shared formatter so it matches the track-row badges.
+    let quality_tier = match track.bit_depth {
+        Some(d) if d >= 24 => "hires",
+        Some(_) => "cd",
+        None if track.hires => "hires",
+        None => "",
+    };
+    let quality_detail = if quality_tier.is_empty() {
+        String::new()
+    } else {
+        crate::quality::detail(track.bit_depth, track.sample_rate)
+    };
 
     let _ = weak.upgrade_in_event_loop(move |w| {
         let np = w.global::<NowPlayingState>();
@@ -523,6 +536,8 @@ async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindo
         np.set_album_id(album_id.into());
         np.set_artist_id(artist_id.into());
         np.set_track_id(track_id.into());
+        np.set_quality_tier(quality_tier.into());
+        np.set_quality_detail(quality_detail.into());
         np.set_duration_secs(duration as i32);
         np.set_position_secs(0);
         np.set_progress(0.0);
@@ -536,6 +551,21 @@ async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindo
     });
 
     load_now_playing_artwork(weak.clone(), artwork);
+}
+
+/// Record the playback CONTEXT — the source the queue was launched from — on
+/// `NowPlayingState`, so the song-card layers button can navigate back to it.
+/// Set once at play time; `refresh_now_playing_meta` leaves it untouched so it
+/// survives track changes within the queue. Pass `("", "")` to clear it (the
+/// button then falls back to the playing track's album).
+pub fn set_now_playing_context(weak: &slint::Weak<AppWindow>, kind: &str, id: &str) {
+    let kind = kind.to_string();
+    let id = id.to_string();
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        let np = w.global::<NowPlayingState>();
+        np.set_context_kind(kind.into());
+        np.set_context_id(id.into());
+    });
 }
 
 /// Build a `QueueTrack` for the queue from the catalog `Track`, filling
@@ -737,6 +767,7 @@ pub fn play_album(
         };
         let start = start_index.min(tracks.len() - 1);
         let start_track_id = tracks[start].id;
+        set_now_playing_context(&weak, "album", &album_id);
         runtime.core().set_queue(tracks, Some(start)).await;
         after_track_change(&runtime, &weak, start_track_id).await;
         refresh_sidebar(true);
@@ -765,6 +796,7 @@ pub fn play_album_from(
             .position(|t| t.id.to_string() == clicked_id)
             .unwrap_or(0);
         let start_track_id = tracks[start].id;
+        set_now_playing_context(&weak, "album", &album_id);
         runtime.core().set_queue(tracks, Some(start)).await;
         after_track_change(&runtime, &weak, start_track_id).await;
         refresh_sidebar(true);
@@ -824,6 +856,7 @@ pub fn play_artist_top_tracks(
             return;
         };
         let start_track_id = tracks[0].id;
+        set_now_playing_context(&weak, "artist", &artist_id);
         runtime.core().set_queue(tracks, Some(0)).await;
         after_track_change(&runtime, &weak, start_track_id).await;
         refresh_sidebar(true);
@@ -846,6 +879,7 @@ pub fn play_artist_top_from(
         let Some(tracks) = fetch_artist_top_for_play(&runtime, &weak, &artist_id).await else {
             return;
         };
+        set_now_playing_context(&weak, "artist", &artist_id);
         let tracks = reorder_queue_by_visible(tracks, &visible_ids);
         let start = tracks
             .iter()
@@ -1134,6 +1168,11 @@ pub fn play_track_in_context(
     clicked_id: &str,
 ) {
     let view = window.global::<NavState>().get_view();
+    // Default: clear the playback context so the song-card layers button falls
+    // back to the track's album. The album/artist/playlist/label branches below
+    // (and the album/artist play paths they call) override it with the real
+    // source; favorites/mix/search/single-track keep the album fallback.
+    set_now_playing_context(&weak, "", "");
     match view {
         // Views with an authoritative Vec<Track> cache: order it by the
         // visible model so sort/filter are respected.
@@ -1143,6 +1182,11 @@ pub fn play_track_in_context(
                 crate::playlist::current_tracks(),
                 clicked_id,
             ) {
+                set_now_playing_context(
+                    &weak,
+                    "playlist",
+                    window.global::<PlaylistState>().get_id().as_str(),
+                );
                 play_tracks(runtime, weak, handle, tracks, idx);
                 return;
             }
@@ -1163,6 +1207,11 @@ pub fn play_track_in_context(
                 crate::label::top_tracks_for_play(),
                 clicked_id,
             ) {
+                set_now_playing_context(
+                    &weak,
+                    "label",
+                    window.global::<LabelState>().get_id().as_str(),
+                );
                 play_tracks(runtime, weak, handle, tracks, idx);
                 return;
             }
@@ -1917,6 +1966,10 @@ pub fn start_poll_loop(
             let volume = event.volume;
             // Streaming buffer fill, for the seek-bar cache overlay.
             let cache = event.buffer_progress.unwrap_or(0.0);
+            // Seek lock: while streaming (`buffer_progress` is Some), the user
+            // can only seek up to what has downloaded; fully-available tracks
+            // (None) seek freely.
+            let seekable_max = event.buffer_progress.map(|p| p.clamp(0.0, 1.0)).unwrap_or(1.0);
 
             // --- Seamless gapless transition detection -------------------
             // When the audio engine performs a gapless handoff the track
@@ -2043,6 +2096,7 @@ pub fn start_poll_loop(
                 }
                 np.set_progress(progress);
                 np.set_cache(cache);
+                np.set_seekable_max(seekable_max);
                 np.set_elapsed(elapsed.into());
                 np.set_remaining(remaining.into());
                 np.set_playing(is_playing);

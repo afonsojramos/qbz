@@ -11,6 +11,7 @@ import { NavState, ContentView, ShellState } from "../state.slint";
 import { Sidebar } from "Sidebar.slint";
 import { HeaderBar } from "HeaderBar.slint";
 import { HeaderMenuOverlay } from "HeaderMenuOverlay.slint";
+import { TooltipOverlay } from "TooltipOverlay.slint";
 import { SidebarFolderPopup } from "SidebarFolderPopup.slint";
 import { SidebarTooltip } from "SidebarTooltip.slint";
 import { SidebarPlaylistsPopup } from "SidebarPlaylistsPopup.slint";
@@ -289,6 +290,12 @@ export component AppShell inherits Rectangle {
             open-artist(id) => {
                 root.open-artist(id);
             }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
+            settings-bool(k, v) => {
+                root.settings-bool(k, v);
+            }
         }
     }
 
@@ -338,4 +345,10 @@ export component AppShell inherits Rectangle {
 
     // In-app toast notifications — bottom-center, above everything.
     Toast { }
+
+    // Global hover-tooltip overlay — drawn LAST so no control can cover it.
+    TooltipOverlay {
+        width: 100%;
+        height: 100%;
+    }
 }

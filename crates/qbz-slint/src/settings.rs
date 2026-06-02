@@ -154,9 +154,66 @@ pub struct SettingsSnapshot {
     gapless: bool,
     stream_uncached: bool,
     streaming_only: bool,
+    normalization: bool,
     buffer_seconds: i32,
     retry_behaviors: Vec<String>,
     retry_behavior_index: i32,
+    // Now-playing output indicators (backend + effective bit-perfect mode).
+    output_backend_label: String,
+    output_mode_label: String,
+    output_backend_active: bool,
+    output_mode_active: bool,
+}
+
+/// Compute the two now-playing output leds from the real audio constraints:
+/// led 1 = the active backend, led 2 = the effective output mode for THAT
+/// backend (bit-perfect / exclusive / routed / shared). `*_active` is true
+/// when a deliberate, non-shared mode is engaged (colours the led).
+fn output_labels(audio: &qbz_audio::settings::AudioSettings) -> (String, String, bool, bool) {
+    let (backend_label, backend_active) = match audio.backend_type {
+        Some(AudioBackendType::PipeWire) => ("PIPE", true),
+        Some(AudioBackendType::Alsa) => ("ALSA", true),
+        Some(AudioBackendType::Jack) => ("JACK", true),
+        Some(AudioBackendType::Pulse) => ("PULS", true),
+        Some(AudioBackendType::SystemDefault) => ("SYST", false),
+        None => ("AUTO", false),
+    };
+    let (mode_label, mode_active) = match audio.backend_type {
+        Some(AudioBackendType::PipeWire) => {
+            if audio.dac_passthrough {
+                ("DACPASS", true)
+            } else if audio.pw_force_bitperfect {
+                ("BITPERF", true)
+            } else {
+                ("SHARED", false)
+            }
+        }
+        Some(AudioBackendType::Alsa) => match audio.alsa_plugin {
+            Some(AlsaPlugin::Hw) => {
+                if audio.exclusive_mode {
+                    ("EXCL", true)
+                } else {
+                    ("DIRECT", true)
+                }
+            }
+            _ => ("SHARED", false),
+        },
+        Some(AudioBackendType::Jack) => {
+            if audio.reserve_dac_while_running {
+                ("LOCKED", true)
+            } else {
+                ("ROUTED", false)
+            }
+        }
+        Some(AudioBackendType::Pulse) => ("SHARED", false),
+        Some(AudioBackendType::SystemDefault) | None => ("DEFAULT", false),
+    };
+    (
+        backend_label.to_string(),
+        mode_label.to_string(),
+        backend_active,
+        mode_active,
+    )
 }
 
 /// Devices enumerated for one backend: parallel label / id / bit-perfect
@@ -418,6 +475,8 @@ fn build_snapshot(
     let backend_is_alsa = active_backend == AudioBackendType::Alsa;
     let backend_is_pipewire = active_backend == AudioBackendType::PipeWire;
     let alsa_plugin_is_hw = alsa_plugin == AlsaPlugin::Hw;
+    let (out_backend_label, out_mode_label, out_backend_active, out_mode_active) =
+        output_labels(&audio);
     let continue_playback = prefs.autoplay_mode == AutoplayMode::ContinueWithinSource;
 
     {
@@ -467,9 +526,14 @@ fn build_snapshot(
         gapless: audio.gapless_enabled,
         stream_uncached: audio.stream_first_track,
         streaming_only: audio.streaming_only,
+        normalization: audio.normalization_enabled,
         buffer_seconds: audio.stream_buffer_seconds as i32,
         retry_behaviors: RETRY_BEHAVIORS.iter().map(|(l, _)| l.to_string()).collect(),
         retry_behavior_index: retry_behavior_index as i32,
+        output_backend_label: out_backend_label,
+        output_mode_label: out_mode_label,
+        output_backend_active: out_backend_active,
+        output_mode_active: out_mode_active,
     }
 }
 
@@ -534,6 +598,11 @@ pub fn apply_snapshot(window: &AppWindow, snap: SettingsSnapshot) {
     st.set_gapless(snap.gapless);
     st.set_stream_uncached(snap.stream_uncached);
     st.set_streaming_only(snap.streaming_only);
+    st.set_normalization(snap.normalization);
+    st.set_output_backend_label(snap.output_backend_label.into());
+    st.set_output_mode_label(snap.output_mode_label.into());
+    st.set_output_backend_active(snap.output_backend_active);
+    st.set_output_mode_active(snap.output_mode_active);
     st.set_buffer_seconds(snap.buffer_seconds);
     st.set_retry_behaviors(string_model(snap.retry_behaviors));
     st.set_retry_behavior_index(snap.retry_behavior_index);
@@ -694,6 +763,12 @@ pub async fn handle_bool(
         // --- Playback toggles backed by AudioSettings ----------------------
         "gapless" => {
             with_audio(&ctx.audio, |s| s.set_gapless_enabled(value)).map(|_| Apply::Reload)
+        }
+        "normalization" => {
+            // Loudness leveling; the shared player applies/bypasses it (and
+            // skips it entirely under bit-perfect). Reload (not Reinit) — the
+            // audio thread re-reads the settings struct, no device re-init.
+            with_audio(&ctx.audio, |s| s.set_normalization_enabled(value)).map(|_| Apply::Reload)
         }
         "stream-uncached" => {
             with_audio(&ctx.audio, |s| s.set_stream_first_track(value)).map(|_| Apply::Reload)

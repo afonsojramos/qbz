@@ -4,7 +4,8 @@
 //
 // Intentionally not a creative reinterpretation — the Tauri layout is the
 // contract. Used wherever a track list or detail view advertises its
-// stored quality.
+// stored quality. `compact` scales it ~20% smaller for the now-playing
+// AudioStamp without touching the other call sites.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { QbzIcon } from "QbzIcon.slint";
@@ -20,23 +21,31 @@ export component QualityBadgeFull inherits Rectangle {
     // "bare" = no chip background or border, text centered — blends into a
     // track row instead of looking like a contained badge.
     in property <bool> bare: false;
+    // ~20%-smaller variant for the now-playing AudioStamp.
+    in property <bool> compact: false;
+    // Extra proportional scale on top of `compact` (1.0 = none). The
+    // now-playing stamp drops this to 0.9 below the responsive break so it
+    // never crowds the song card.
+    in property <float> scale-factor: 1.0;
 
     property <string> tier-label: root.tier == "hires"
         ? "HI-RES"
         : (root.tier == "mp3" ? "MP3" : "CD");
 
     visible: root.tier != "";
-    height: 36px;
-    width: root.bare ? content.preferred-width : Math.max(content.preferred-width, 136px);
+    height: (root.compact ? 29px : 36px) * root.scale-factor;
+    width: root.bare
+        ? content.preferred-width
+        : Math.max(content.preferred-width, (root.compact ? 108px : 136px) * root.scale-factor);
     border-radius: 4px;
     background: root.bare ? transparent : Theme.surface-hover;
     border-width: root.bare ? 0px : 1px;
     border-color: Theme.border-subtle;
 
     content := HorizontalLayout {
-        padding-left: root.bare ? 0px : 10px;
-        padding-right: root.bare ? 0px : 10px;
-        spacing: root.bare ? 0px : 6px;
+        padding-left: root.bare ? 0px : (root.compact ? 8px : 10px) * root.scale-factor;
+        padding-right: root.bare ? 0px : (root.compact ? 8px : 10px) * root.scale-factor;
+        spacing: root.bare ? 0px : (root.compact ? 5px : 6px) * root.scale-factor;
         alignment: root.bare ? center : start;
 
         // Format icon. The Hi-Res brand mark keeps its own colors; the
@@ -45,20 +54,20 @@ export component QualityBadgeFull inherits Rectangle {
             alignment: center;
             if root.tier == "hires": Image {
                 source: @image-url("../assets/hi-res.svg");
-                width: 24px;
-                height: 24px;
+                width: (root.compact ? 19px : 24px) * root.scale-factor;
+                height: (root.compact ? 19px : 24px) * root.scale-factor;
                 image-fit: contain;
             }
             if root.tier == "cd": QbzIcon {
                 source: @image-url("../assets/cd.svg");
-                width: 16px;
-                height: 16px;
+                width: (root.compact ? 13px : 16px) * root.scale-factor;
+                height: (root.compact ? 13px : 16px) * root.scale-factor;
                 tint: #b0b0b0;
             }
             if root.tier == "mp3": QbzIcon {
                 source: @image-url("../assets/mp3.svg");
-                width: 16px;
-                height: 16px;
+                width: (root.compact ? 13px : 16px) * root.scale-factor;
+                height: (root.compact ? 13px : 16px) * root.scale-factor;
                 tint: #b0b0b0;
             }
         }
@@ -69,7 +78,7 @@ export component QualityBadgeFull inherits Rectangle {
             Text {
                 text: root.tier-label;
                 color: #b0b0b0;
-                font-size: 8px;
+                font-size: (root.compact ? 7px : 8px) * root.scale-factor;
                 font-weight: 100;
                 letter-spacing: 0.5px;
                 horizontal-alignment: root.bare ? center : left;
@@ -77,7 +86,7 @@ export component QualityBadgeFull inherits Rectangle {
             Text {
                 text: root.detail;
                 color: #999999;
-                font-size: 9px;
+                font-size: (root.compact ? 8px : 9px) * root.scale-factor;
                 font-weight: 100;
                 horizontal-alignment: root.bare ? center : left;
             }

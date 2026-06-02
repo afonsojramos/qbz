@@ -1,0 +1,355 @@
+// Now-playing song card — cover (or a sleeping cat when idle) + title /
+// artist·album / optional remote-renderer badge, with the AUDIO STAMP (the
+// quality badge stacked over the backend + mode leds) to the right — a fixed
+// rectangle.
+//
+// Shared by the now-playing modes and later the miniplayer. Reads NowPlayingState
+// + SettingsState directly. Hover tooltips report to the global TooltipState
+// (rendered by TooltipOverlay), so this card may be clipped without losing them.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
+import { NowPlayingState, SettingsState, TooltipState } from "../state.slint";
+
+// Clickable artist/album link. Elides and shares the row width through a
+// stretch factor (the artist gets the larger share) so neither can be pushed
+// to zero — the album just takes the ellipsis first when the card is tight.
+component MetaLink inherits TouchArea {
+    in property <string> label;
+    // Row priority. The artist passes 2 and the album passes 1, so a long
+    // album elides before the artist does and both keep a readable slice.
+    in property <float> stretch: 1.0;
+    callback activated();
+
+    horizontal-stretch: root.stretch;
+    // Never wider than the text itself (so a short name doesn't over-stretch)
+    // and free to shrink to nothing so the audio stamp stays at the wall.
+    max-width: link-text.preferred-width;
+    min-width: 0px;
+    height: link-text.preferred-height;
+    mouse-cursor: pointer;
+    clicked => {
+        root.activated();
+    }
+    link-text := Text {
+        x: 0;
+        width: parent.width;
+        text: root.label;
+        color: root.has-hover ? Theme.text-primary : Theme.text-muted;
+        font-size: 12px;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+}
+
+// One output led (backend / mode). Fills its allotted slot so a row of leds is
+// a fixed width; coloured when a deliberate mode is engaged.
+component OutputBadge inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    in property <color> on-color: #22c55e;
+    in property <string> tooltip;
+
+    height: 15px;
+    border-radius: 3px;
+    background: root.active ? root.on-color.with-alpha(0.16) : Theme.surface-hover;
+    border-width: 1px;
+    border-color: root.active ? root.on-color.with-alpha(0.5) : Theme.border-subtle;
+
+    Text {
+        text: root.label;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        color: root.active ? root.on-color : Theme.text-muted;
+        font-size: 8px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+    }
+
+    ta := TouchArea {
+        changed has-hover => {
+            if (self.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else if (!self.has-hover) {
+                TooltipState.show = false;
+            }
+        }
+    }
+}
+
+export component SongCard inherits HorizontalLayout {
+    in property <length> art-size: 60px;
+    in property <bool> show-art: true;
+    in property <bool> show-badges: true;
+    // Below the responsive break the stamp shrinks 10% (proportional) so it
+    // keeps clear of the controls column; above the break it is full size.
+    in property <bool> narrow: false;
+
+    callback open-album(string);
+    callback open-artist(string);
+    callback open-context(string /* kind */, string /* id */);
+
+    property <string> ctx-kind: NowPlayingState.context-id != ""
+        ? NowPlayingState.context-kind
+        : "album";
+    property <string> ctx-id: NowPlayingState.context-id != ""
+        ? NowPlayingState.context-id
+        : NowPlayingState.album-id;
+
+    spacing: 11px;
+    // Default (stretch) alignment: the text column (the only stretch child)
+    // absorbs the leftover and PUSHES the audio stamp to the right wall. Do NOT
+    // set `alignment: start` here — that forces preferred sizing, kills the
+    // stretch, and collapses the album to zero width.
+
+    // --- Cover / idle cat ------------------------------------------------
+    if root.show-art: VerticalLayout {
+        alignment: center;
+        Rectangle {
+            width: root.art-size;
+            height: root.art-size;
+            border-radius: 6px;
+            background: Theme.surface-elevated;
+            clip: true;
+
+            if NowPlayingState.has-track && NowPlayingState.artwork.width > 0: Image {
+                source: NowPlayingState.artwork;
+                width: 100%;
+                height: 100%;
+                image-fit: cover;
+            }
+
+            // Idle: a sleeping cat with drifting "z"s (RunCat at rest).
+            if !NowPlayingState.has-track: QbzIcon {
+                source: @image-url("../assets/icons/cat.svg");
+                width: root.art-size * 0.5;
+                height: root.art-size * 0.5;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: (parent.height - self.height) / 2 + root.art-size * 0.06;
+                tint: Theme.text-muted;
+            }
+            if !NowPlayingState.has-track: Text {
+                property <float> ph: Math.mod(animation-tick() / 1ms, 2200) / 2200;
+                text: "z";
+                x: root.art-size * 0.60 + self.ph * 5px;
+                y: root.art-size * 0.34 - self.ph * 18px;
+                color: Theme.text-muted;
+                opacity: 1.0 - self.ph;
+                font-size: 8px + self.ph * 4px;
+                font-italic: true;
+            }
+            if !NowPlayingState.has-track: Text {
+                property <float> ph: Math.mod(animation-tick() / 1ms + 1100, 2200) / 2200;
+                text: "z";
+                x: root.art-size * 0.66 + self.ph * 5px;
+                y: root.art-size * 0.30 - self.ph * 18px;
+                color: Theme.text-muted;
+                opacity: 1.0 - self.ph;
+                font-size: 8px + self.ph * 4px;
+                font-italic: true;
+            }
+        }
+    }
+
+    // --- Title + context/artist/album + renderer badge -------------------
+    VerticalLayout {
+        horizontal-stretch: 1;
+        // Allow this column to shrink fully so it can never push the audio
+        // stamp past the song-card / controls wall.
+        min-width: 0px;
+        alignment: center;
+        spacing: 4px;
+        // Title — elides, and on hover shows the full text in a tooltip ONLY
+        // when it is actually truncated (the audio stamp ate into it).
+        Rectangle {
+            title-txt := Text {
+                width: 100%;
+                text: NowPlayingState.has-track
+                    ? NowPlayingState.title
+                    : @tr("Nothing playing");
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: Typography.medium;
+                overflow: elide;
+            }
+            ttta := TouchArea {
+                changed has-hover => {
+                    if (self.has-hover && NowPlayingState.has-track
+                        && title-txt.preferred-width > self.width) {
+                        TooltipState.text = NowPlayingState.title;
+                        TooltipState.anchor-x = ttta.absolute-position.x + ttta.width / 2;
+                        TooltipState.anchor-y = ttta.absolute-position.y;
+                        TooltipState.show = true;
+                    } else if (!self.has-hover) {
+                        TooltipState.show = false;
+                    }
+                }
+            }
+        }
+        if NowPlayingState.has-track: HorizontalLayout {
+            spacing: 7px;
+
+            // Context (layers) button — opens the page playback came from.
+            if SettingsState.show-context-icon: Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 3px;
+                background: ctxta.has-hover ? Theme.surface-hover : transparent;
+                QbzIcon {
+                    source: @image-url("../assets/icons/layers.svg");
+                    width: 13px;
+                    height: 13px;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                    tint: ctxta.has-hover ? Theme.text-primary : Theme.text-muted;
+                }
+                ctxta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (root.ctx-id != "") {
+                            root.open-context(root.ctx-kind, root.ctx-id);
+                        }
+                    }
+                    changed has-hover => {
+                        if (self.has-hover) {
+                            TooltipState.text = @tr("Go to where this is playing from");
+                            TooltipState.anchor-x = parent.absolute-position.x + parent.width / 2;
+                            TooltipState.anchor-y = parent.absolute-position.y;
+                            TooltipState.show = true;
+                        } else {
+                            TooltipState.show = false;
+                        }
+                    }
+                }
+            }
+
+            // Artist — keeps priority (stretch 2); only elides once even the
+            // album has already been squeezed to its minimum.
+            MetaLink {
+                label: NowPlayingState.artist;
+                stretch: 2.0;
+                activated => {
+                    if (NowPlayingState.artist-id != "") {
+                        root.open-artist(NowPlayingState.artist-id);
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 3px;
+                    height: 3px;
+                    border-radius: 1.5px;
+                    background: Theme.text-muted;
+                }
+            }
+            // Album — elides FIRST (stretch 1) so a long album can never push
+            // the audio stamp under the controls column (the song-card /
+            // controls divider is a hard wall), yet it always keeps a readable
+            // slice with an ellipsis instead of vanishing.
+            MetaLink {
+                label: NowPlayingState.album;
+                stretch: 1.0;
+                activated => {
+                    if (NowPlayingState.album-id != "") {
+                        root.open-album(NowPlayingState.album-id);
+                    }
+                }
+            }
+        }
+
+        // Remote-renderer badge — only when a peer renderer owns playback.
+        if NowPlayingState.has-track
+            && NowPlayingState.is-remote
+            && NowPlayingState.cast-target != "": HorizontalLayout {
+            spacing: 4px;
+            alignment: start;
+            VerticalLayout {
+                alignment: center;
+                QbzIcon {
+                    source: @image-url("../assets/icons/monitor-speaker.svg");
+                    width: 11px;
+                    height: 11px;
+                    tint: #e0b341;
+                }
+            }
+            Text {
+                text: NowPlayingState.cast-target;
+                color: #e0b341;
+                font-size: 10px;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // --- Breathing room before the audio stamp (tightened to shift it left)
+    if root.show-badges && NowPlayingState.has-track: Rectangle { width: 2px; }
+
+    // --- Audio stamp: quality badge over two leds, a fixed rectangle -----
+    if root.show-badges && NowPlayingState.has-track: VerticalLayout {
+        alignment: center;
+        VerticalLayout {
+            width: root.narrow ? 94px : 104px;
+            spacing: 3px;
+
+            Rectangle {
+                height: root.narrow ? 26px : 29px;
+                QualityBadgeFull {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    compact: true;
+                    show-icon: true;
+                    scale-factor: root.narrow ? 0.9 : 1.0;
+                    tier: NowPlayingState.quality-tier;
+                    detail: NowPlayingState.quality-detail;
+                }
+                qta := TouchArea {
+                    changed has-hover => {
+                        if (self.has-hover) {
+                            TooltipState.text = @tr("Stored audio quality");
+                            TooltipState.anchor-x = parent.absolute-position.x + parent.width / 2;
+                            TooltipState.anchor-y = parent.absolute-position.y;
+                            TooltipState.show = true;
+                        } else {
+                            TooltipState.show = false;
+                        }
+                    }
+                }
+            }
+
+            // Backend + mode leds side-by-side; while casting they fuse into
+            // one purple led.
+            HorizontalLayout {
+                spacing: 3px;
+                if !NowPlayingState.cast-active: OutputBadge {
+                    horizontal-stretch: 1;
+                    label: SettingsState.output-backend-label;
+                    active: SettingsState.output-backend-active;
+                    on-color: #5b8def;
+                    tooltip: @tr("Audio backend");
+                }
+                if !NowPlayingState.cast-active: OutputBadge {
+                    horizontal-stretch: 1;
+                    label: SettingsState.output-mode-label;
+                    active: SettingsState.output-mode-active;
+                    on-color: #22c55e;
+                    tooltip: @tr("Output mode");
+                }
+                if NowPlayingState.cast-active: OutputBadge {
+                    horizontal-stretch: 1;
+                    label: NowPlayingState.cast-protocol == "dlna" ? "DLNA" : "CAST";
+                    active: true;
+                    on-color: #a855f7;
+                    tooltip: @tr("Casting");
+                }
+            }
+        }
+    }
+}
