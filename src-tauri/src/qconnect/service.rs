@@ -304,7 +304,11 @@ impl QconnectServiceState {
             sync_state: Arc::clone(&sync_state),
             app: Arc::new(std::sync::OnceLock::new()),
         });
-        let app = Arc::new(QconnectApp::new(transport, Arc::clone(&sink)));
+        let app = Arc::new(QconnectApp::new(
+            transport,
+            Arc::clone(&sink),
+            Arc::clone(&sync_state),
+        ));
         // P1-6: wire the owning app into the sink so it can emit reports
         // (e.g. is_active=true after SetActive(true)).
         sink.set_app(&app);

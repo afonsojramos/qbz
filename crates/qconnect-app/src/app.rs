@@ -18,7 +18,10 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{QconnectAppError, QconnectAppEvent, QconnectEventSink, QconnectRuntimeState};
+use crate::{
+    QconnectAppError, QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState,
+    QconnectRuntimeState,
+};
 
 pub struct QconnectApp<TTransport, TSink>
 where
@@ -28,6 +31,15 @@ where
     transport: Arc<TTransport>,
     sink: Arc<TSink>,
     state: Arc<Mutex<QconnectRuntimeState>>,
+    /// Cross-frontend remote-sync accumulator (session topology, renderer-state
+    /// cache, materialization cache, load-attempt dedup, watchdog epoch). Held
+    /// behind its OWN Mutex, disjoint from `state`: the two are never co-locked,
+    /// so the renderer-report hot path never serializes against session/watchdog
+    /// work and there is no deadlock edge against `clear_pending_if_matches`
+    /// (which locks `state`). The session loop (slice 5) and the renderer engine
+    /// (slice 6) both lock THIS one, exactly as they share it today via the Tauri
+    /// adapter. See `MASTER-qconnect-to-slint-plan.md` §0 (one Mutex, not two).
+    sync: Arc<Mutex<QconnectRemoteSyncState>>,
 }
 
 impl<TTransport, TSink> Clone for QconnectApp<TTransport, TSink>
@@ -40,6 +52,7 @@ where
             transport: Arc::clone(&self.transport),
             sink: Arc::clone(&self.sink),
             state: Arc::clone(&self.state),
+            sync: Arc::clone(&self.sync),
         }
     }
 }
@@ -51,16 +64,32 @@ where
 {
     const PENDING_ACTION_TIMEOUT_MS: u64 = 10_000;
 
-    pub fn new(transport: Arc<TTransport>, sink: Arc<TSink>) -> Self {
+    /// Construct the app. `sync` is the shared remote-sync accumulator handle:
+    /// the Tauri adapter builds it, hands a clone to its event sink / service
+    /// loop, and passes the SAME `Arc` here so there is exactly one lock backing
+    /// the session/liveness/renderer paths. The Slint adapter will do the same.
+    pub fn new(
+        transport: Arc<TTransport>,
+        sink: Arc<TSink>,
+        sync: Arc<Mutex<QconnectRemoteSyncState>>,
+    ) -> Self {
         Self {
             transport,
             sink,
             state: Arc::new(Mutex::new(QconnectRuntimeState::default())),
+            sync,
         }
     }
 
     pub fn state_handle(&self) -> Arc<Mutex<QconnectRuntimeState>> {
         Arc::clone(&self.state)
+    }
+
+    /// Shared handle to the remote-sync accumulator. The adapter uses this so its
+    /// event sink, service loop, and CoreBridge helpers lock the very same Mutex
+    /// the app's own session/watchdog methods lock.
+    pub fn sync_handle(&self) -> Arc<Mutex<QconnectRemoteSyncState>> {
+        Arc::clone(&self.sync)
     }
 
     pub fn subscribe_transport_events(&self) -> tokio::sync::broadcast::Receiver<TransportEvent> {
@@ -1006,6 +1035,8 @@ mod tests {
     use async_trait::async_trait;
     use qconnect_core::QueueVersion;
     use qconnect_transport_ws::InMemoryWsTransport;
+
+    use crate::QconnectRemoteSyncState;
     use serde_json::json;
     use tokio::sync::Mutex;
 
@@ -1053,7 +1084,11 @@ mod tests {
     ) {
         let transport = Arc::new(InMemoryWsTransport::new());
         let sink = TestSink::default();
-        let app = QconnectApp::new(Arc::clone(&transport), Arc::new(sink.clone()));
+        let app = QconnectApp::new(
+            Arc::clone(&transport),
+            Arc::new(sink.clone()),
+            Arc::new(Mutex::new(QconnectRemoteSyncState::default())),
+        );
         let events_rx = app.subscribe_transport_events();
         app.connect(test_config()).await.expect("connect");
         (app, sink, transport, events_rx)
