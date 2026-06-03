@@ -2033,6 +2033,13 @@ pub fn start_poll_loop(
                 let elapsed = fmt_elapsed(position_secs);
                 let remaining = fmt_remaining(position_secs, duration_secs);
                 let playing = remote.playing;
+                // Reflect the PEER's actual volume on the bar so a drag starts
+                // from a safe level (never QBZ's local 100). When the peer hasn't
+                // reported a volume, clamp to 50% — the AVR-nuke safety default.
+                let remote_volume = remote
+                    .volume
+                    .map(|v| (v as f32 / 100.0).clamp(0.0, 1.0))
+                    .unwrap_or(0.5);
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     let np = w.global::<NowPlayingState>();
                     np.set_position_secs(position_secs as i32);
@@ -2044,6 +2051,7 @@ pub fn start_poll_loop(
                     np.set_elapsed(elapsed.into());
                     np.set_remaining(remaining.into());
                     np.set_playing(playing);
+                    np.set_volume(remote_volume);
                 });
                 // Reset the LOCAL edge trackers so when control returns to QBZ
                 // the end-of-track / gapless / transition logic re-detects from a

@@ -72,6 +72,10 @@ pub struct RemoteNowPlaying {
     pub position_ms: u64,
     pub updated_at_ms: u64,
     pub playing: bool,
+    /// Peer renderer's reported volume (0..=100). `None` when the peer hasn't
+    /// reported a volume yet — the bar then clamps to a safe 50% instead of
+    /// reflecting QBZ's local 100, so a drag never nukes the AVR.
+    pub volume: Option<i32>,
 }
 
 /// Process-wide QConnect service singleton (one per app, like the playback
@@ -803,6 +807,7 @@ impl SlintQconnectService {
             position_ms: renderer.current_position_ms.unwrap_or(0),
             updated_at_ms: renderer.updated_at_ms,
             playing: renderer.playing_state == Some(PLAYING_STATE_PLAYING),
+            volume: renderer.volume,
         })
     }
 
