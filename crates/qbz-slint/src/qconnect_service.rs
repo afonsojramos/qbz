@@ -63,6 +63,17 @@ fn qconnect_now_ms() -> u64 {
 
 type Runtime = Arc<AppRuntime<SlintAdapter>>;
 
+/// Reduced peer-renderer playback snapshot for the now-playing seek bar while
+/// QBZ is CONTROLLING a peer. Sourced from the effective remote renderer
+/// snapshot; the poll loop extrapolates position from `position_ms` +
+/// (now - `updated_at_ms`) while `playing`. Avoids leaking core types into the
+/// playback module. Mirrors the Svelte `effectiveCurrentTime` derivation.
+pub struct RemoteNowPlaying {
+    pub position_ms: u64,
+    pub updated_at_ms: u64,
+    pub playing: bool,
+}
+
 /// Process-wide QConnect service singleton (one per app, like the playback
 /// QueueController). Initialized once at shell setup; the connect trigger + the
 /// future `*_if_remote` transport routing reach it through `service()`.
@@ -674,6 +685,23 @@ impl SlintQconnectService {
         }
 
         Ok(Some((renderer, queue, session)))
+    }
+
+    /// Reduced peer-renderer playback snapshot for the now-playing seek bar.
+    /// Returns `Some` ONLY when a PEER renderer is active (controller mode); the
+    /// poll loop then drives the bar from the peer and skips its local body. When
+    /// `None`, the poll loop falls through to the local player path verbatim.
+    /// Sources position / updated_at / playing from the effective remote renderer
+    /// snapshot (`playing_state == PLAYING`). Title/artist/art come from the
+    /// materialized local core queue, so only these three fields are needed here.
+    pub async fn remote_now_playing(&self) -> Option<RemoteNowPlaying> {
+        let (renderer, _queue, _session) =
+            self.effective_remote_renderer_snapshot().await.ok().flatten()?;
+        Some(RemoteNowPlaying {
+            position_ms: renderer.current_position_ms.unwrap_or(0),
+            updated_at_ms: renderer.updated_at_ms,
+            playing: renderer.playing_state == Some(PLAYING_STATE_PLAYING),
+        })
     }
 
     /// Optimistically apply a queue_item_id / playing_state / position to the

@@ -480,6 +480,17 @@ fn load_now_playing_artwork(weak: slint::Weak<AppWindow>, art: qbz_models::Artwo
     });
 }
 
+/// Wall-clock now in milliseconds. Used by the poll loop to extrapolate the
+/// peer renderer's position (`position_ms + (now - updated_at_ms)`) while
+/// QBZ is CONTROLLING a peer (the local player is stopped, so the seek bar
+/// must follow the peer instead). Mirrors the Svelte `qconnectRemoteClockMs`.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// `M:SS` for the elapsed string.
 fn fmt_elapsed(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
@@ -1971,6 +1982,67 @@ pub fn start_poll_loop(
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(450));
         loop {
             ticker.tick().await;
+
+            // --- QConnect CONTROLLER mode: peer-state reflection ----------
+            // When QBZ is CONTROLLING a peer renderer, the event sink stops the
+            // LOCAL player, so `get_playback_event()` reports track_id == 0 / not
+            // playing and the seek bar would freeze. While a peer owns playback,
+            // drive the bar from the peer's renderer snapshot instead: title /
+            // artist / art come from the materialized local core queue (the sink
+            // aligns the core cursor to the peer's track), only position / playing
+            // / duration come from the peer. Returns None in every NON-controller
+            // situation (disconnected, renderer mode where active == local, no
+            // active renderer), so the local path below runs byte-unchanged.
+            if let Some(remote) = match crate::qconnect_service::service() {
+                Some(svc) => svc.remote_now_playing().await,
+                None => None,
+            } {
+                // Duration from the core queue's current track (aligned to the
+                // peer's track by the sink). Zero when unknown — clamp is skipped.
+                let duration_secs = runtime
+                    .core()
+                    .current_track()
+                    .await
+                    .map(|track| track.duration_secs)
+                    .unwrap_or(0);
+                let duration_ms = duration_secs.saturating_mul(1000);
+                // Extrapolate position while playing; clamp to the track length.
+                let mut position_ms = remote.position_ms;
+                if remote.playing && remote.updated_at_ms > 0 {
+                    position_ms = position_ms.saturating_add(now_ms().saturating_sub(remote.updated_at_ms));
+                }
+                if duration_ms > 0 && position_ms > duration_ms {
+                    position_ms = duration_ms;
+                }
+                let position_secs = position_ms / 1000;
+                let progress = if duration_ms > 0 {
+                    (position_ms as f32 / duration_ms as f32).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let elapsed = fmt_elapsed(position_secs);
+                let remaining = fmt_remaining(position_secs, duration_secs);
+                let playing = remote.playing;
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    let np = w.global::<NowPlayingState>();
+                    np.set_position_secs(position_secs as i32);
+                    if duration_secs > 0 {
+                        np.set_duration_secs(duration_secs as i32);
+                    }
+                    np.set_progress(progress);
+                    np.set_seekable_max(1.0);
+                    np.set_elapsed(elapsed.into());
+                    np.set_remaining(remaining.into());
+                    np.set_playing(playing);
+                });
+                // Reset the LOCAL edge trackers so when control returns to QBZ
+                // the end-of-track / gapless / transition logic re-detects from a
+                // clean slate (the local player was stopped while peer-active).
+                last_track_id = 0;
+                was_playing = false;
+                seen_position = 0;
+                continue;
+            }
 
             let event = runtime.core().player().get_playback_event();
 
