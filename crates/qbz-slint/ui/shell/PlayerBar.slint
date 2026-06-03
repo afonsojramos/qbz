@@ -19,7 +19,7 @@ import { IconButton, PlayButton } from "../primitives/BarControls.slint";
 import { SeekBar } from "SeekBar.slint";
 import { SongCard } from "SongCard.slint";
 import { TransportControls } from "TransportControls.slint";
-import { NowPlayingState, ShellState, AppearanceState, SettingsState, TooltipState } from "../state.slint";
+import { NowPlayingState, ShellState, AppearanceState, SettingsState, TooltipState, QconnectDevState, QconnectDevice } from "../state.slint";
 
 // IconButton + PlayButton now live in primitives/BarControls.slint (shared
 // with TransportControls). ConnectButton + ToggleRow stay local (bar-only).
@@ -365,12 +365,22 @@ export component PlayerBar inherits Rectangle {
                                             horizontal-stretch: 1;
                                         }
                                     }
+                                    // "Playing on" header — shown only when a peer
+                                    // renderer owns playback (controller mode).
+                                    if NowPlayingState.is-remote && NowPlayingState.cast-target != "": Text {
+                                        text: @tr("Playing on: {}", NowPlayingState.cast-target);
+                                        color: Theme.accent;
+                                        font-size: 11px;
+                                        overflow: elide;
+                                    }
                                     // Device list / empty state.
                                     Rectangle {
                                         vertical-stretch: 1;
                                         background: Theme.surface-elevated;
                                         border-radius: Radius.sm;
-                                        VerticalLayout {
+                                        clip: true;
+                                        // Empty state (no session renderers yet).
+                                        if QconnectDevState.devices.length == 0: VerticalLayout {
                                             alignment: center;
                                             spacing: 4px;
                                             Text {
@@ -385,6 +395,61 @@ export component PlayerBar inherits Rectangle {
                                                 font-size: 10px;
                                                 horizontal-alignment: center;
                                                 wrap: word-wrap;
+                                            }
+                                        }
+                                        // Device picker — plain rows (ADR-008: no
+                                        // pills). Tap a row to make it the active
+                                        // renderer; the local device row is
+                                        // "Play here" (pulls playback back to QBZ).
+                                        if QconnectDevState.devices.length > 0: dev-flick := Flickable {
+                                            viewport-height: dev-rows.preferred-height;
+                                            dev-rows := VerticalLayout {
+                                                padding: 4px;
+                                                spacing: 2px;
+                                                for d in QconnectDevState.devices: Rectangle {
+                                                    height: 34px;
+                                                    border-radius: Radius.sm;
+                                                    background: row-ta.has-hover ? Theme.surface-hover : transparent;
+                                                    row-ta := TouchArea {
+                                                        clicked => {
+                                                            QconnectDevState.set-active(d.renderer-id);
+                                                            qconnect-menu.close();
+                                                        }
+                                                    }
+                                                    HorizontalLayout {
+                                                        padding-left: 8px;
+                                                        padding-right: 8px;
+                                                        spacing: 8px;
+                                                        VerticalLayout {
+                                                            alignment: center;
+                                                            QbzIcon {
+                                                                source: @image-url("../assets/icons/monitor-speaker.svg");
+                                                                width: 14px;
+                                                                height: 14px;
+                                                                tint: d.is-active ? Theme.accent : Theme.text-secondary;
+                                                            }
+                                                        }
+                                                        Text {
+                                                            text: d.is-local ? @tr("Play here") : d.name;
+                                                            color: d.is-active ? Theme.text-primary : Theme.text-secondary;
+                                                            font-size: 12px;
+                                                            font-weight: d.is-active ? 600 : 400;
+                                                            vertical-alignment: center;
+                                                            horizontal-stretch: 1;
+                                                            overflow: elide;
+                                                        }
+                                                        // Active indicator dot (no pill).
+                                                        VerticalLayout {
+                                                            alignment: center;
+                                                            Rectangle {
+                                                                width: 8px;
+                                                                height: 8px;
+                                                                border-radius: 4px;
+                                                                background: d.is-active ? Theme.accent : transparent;
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }

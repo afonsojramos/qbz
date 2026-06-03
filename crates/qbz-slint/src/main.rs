@@ -2973,6 +2973,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 qconnect_service::dev_clear(&weak);
             });
     }
+    // Device picker — switch the active renderer (or pull playback back to QBZ
+    // via the local id = "Play here"). The topology refresh arrives on the next
+    // session event and re-renders the picker + is-remote state.
+    {
+        let handle = tokio_rt.handle().clone();
+        let weak = window.as_weak();
+        window
+            .global::<QconnectDevState>()
+            .on_set_active(move |renderer_id| {
+                let Some(svc) = qconnect_service::service() else {
+                    return;
+                };
+                let weak = weak.clone();
+                handle.spawn(async move {
+                    if let Err(e) = svc.set_active_renderer(renderer_id).await {
+                        log::warn!("[QConnect] set_active_renderer({renderer_id}): {e}");
+                        crate::toast::error_weak(&weak, "Failed to switch renderer");
+                    }
+                });
+            });
+    }
 
     // Transport — wired through the NowPlayingState global callbacks.
     //

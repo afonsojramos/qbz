@@ -23,9 +23,10 @@ use std::sync::{Arc, OnceLock, Weak};
 use async_trait::async_trait;
 use qbz_app::shell::AppRuntime;
 use qconnect_app::{
-    build_session_renderer_snapshot, cache_renderer_snapshot, is_peer_renderer_active, QconnectApp,
-    QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState, QconnectRendererEngine,
-    RendererCommand, RendererReport, RendererReportType,
+    build_session_renderer_snapshot, cache_renderer_snapshot, is_peer_renderer_active,
+    renderer_allows_remote_volume, QconnectApp, QconnectAppEvent, QconnectEventSink,
+    QconnectRemoteSyncState, QconnectRendererEngine, RendererCommand, RendererReport,
+    RendererReportType,
 };
 use qconnect_transport_ws::NativeWsTransport;
 use serde_json::Value;
@@ -54,9 +55,8 @@ pub struct SlintQconnectEventSink {
     /// is_active=true after SetActive(true)) and to drive the session-apply +
     /// freeze/watchdog without an ownership cycle.
     app: Arc<OnceLock<Weak<SlintQconnectApp>>>,
-    /// Window handle for future UI surfacing (toasts, badge state). Unused until
-    /// the QConnect UI-polish step.
-    #[allow(dead_code)]
+    /// Window handle for UI surfacing: the DEV modal, the device picker, and the
+    /// cast-aware now-playing state (is-remote / cast-target / volume-locked).
     window: slint::Weak<AppWindow>,
 }
 
@@ -136,6 +136,76 @@ impl SlintQconnectEventSink {
             )
         };
         crate::qconnect_service::dev_set_status(&self.window, status);
+    }
+
+    /// Rebuild the QConnect device-picker model from the live session topology
+    /// and push it to `QconnectDevState` (devices + active-renderer-id). Mirrors
+    /// the Tauri renderer-list source. Maps `session.renderers` -> rows, marking
+    /// the local device (`is-local`, rendered as "Play here") and the active one.
+    async fn refresh_device_list(&self) {
+        let (devices, active_id) = {
+            let st = self.sync_state.lock().await;
+            let session = &st.session;
+            let devices: Vec<crate::QconnectDevice> = session
+                .renderers
+                .iter()
+                .map(|r| crate::QconnectDevice {
+                    renderer_id: r.renderer_id,
+                    name: r
+                        .friendly_name
+                        .clone()
+                        .unwrap_or_else(|| "Unknown device".to_string())
+                        .into(),
+                    is_local: Some(r.renderer_id) == session.local_renderer_id,
+                    is_active: Some(r.renderer_id) == session.active_renderer_id,
+                })
+                .collect();
+            (devices, session.active_renderer_id.unwrap_or(-1))
+        };
+
+        let _ = self.window.upgrade_in_event_loop(move |w| {
+            use slint::ComponentHandle;
+            let dev = w.global::<crate::QconnectDevState>();
+            dev.set_devices(slint::ModelRc::new(slint::VecModel::from(devices)));
+            dev.set_active_renderer_id(active_id);
+        });
+    }
+
+    /// Push the cast-aware now-playing state (is-remote / cast-target /
+    /// volume-locked) to `NowPlayingState` from the live session topology.
+    /// Replaces the old `TODO(slint-qconnect-ui)`. `is-remote` is true when a
+    /// PEER renderer owns playback; `cast-target` is its friendly name;
+    /// `volume-locked` is true when that renderer disallows remote volume.
+    async fn refresh_now_playing_remote_state(&self) {
+        let (is_remote, cast_target, volume_locked) = {
+            let st = self.sync_state.lock().await;
+            let session = &st.session;
+            let is_remote = is_peer_renderer_active(session);
+            let active = session.active_renderer_id;
+            let active_info = active.and_then(|active_id| {
+                session.renderers.iter().find(|r| r.renderer_id == active_id)
+            });
+            let cast_target = if is_remote {
+                active_info
+                    .and_then(|r| r.friendly_name.clone())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let volume_locked = is_remote
+                && active_info
+                    .map(|r| !renderer_allows_remote_volume(r))
+                    .unwrap_or(false);
+            (is_remote, cast_target, volume_locked)
+        };
+
+        let _ = self.window.upgrade_in_event_loop(move |w| {
+            use slint::ComponentHandle;
+            let nps = w.global::<crate::NowPlayingState>();
+            nps.set_is_remote(is_remote);
+            nps.set_cast_target(cast_target.into());
+            nps.set_volume_locked(volume_locked);
+        });
     }
 
     /// Refresh the Slint now-playing card + queue sidebar from the current core
@@ -417,9 +487,11 @@ impl QconnectEventSink for SlintQconnectEventSink {
         crate::qconnect_service::dev_push_event(&self.window, dev_event_line(&event));
         self.refresh_dev_status().await;
 
-        // TODO(slint-qconnect-ui): route the event into NowPlayingState (is-remote,
-        // cast-target, volume-locked) + the toast surface, mirroring the Tauri
-        // blanket `qconnect:event` emit the Svelte UI consumes.
+        // Controller-mode UI: rebuild the device picker + push the cast-aware
+        // now-playing state (is-remote / cast-target / volume-locked) from the
+        // live session topology after every event.
+        self.refresh_device_list().await;
+        self.refresh_now_playing_remote_state().await;
     }
 }
 

@@ -1977,10 +1977,23 @@ export global NowPlayingState {
     callback qconnect-toggle();
 }
 
+// One row in the QConnect device picker (a session renderer). Populated by the
+// event sink from `session.renderers`.
+export struct QconnectDevice {
+    renderer-id: int,
+    name: string,
+    is-local: bool,     // this is QBZ itself ("Play here")
+    is-active: bool,    // currently the active renderer
+}
+
 // Qobuz Connect DEV diagnostics — live session topology + a rolling event log,
 // rendered by QconnectDevModal (opened from the connect flyout). Lets us inspect
 // QC behavior at runtime WITHOUT a rebuild (Slint builds are slow). `open` is
 // in-out so the flyout button + the modal backdrop toggle it directly.
+//
+// Also hosts the device-picker model (CONTROLLER mode): the available session
+// renderers + the active renderer id, plus the set-active callback the flyout
+// rows invoke to switch playback to another renderer (or back to "Play here").
 export global QconnectDevState {
     in-out property <bool> open: false;
     in property <string> status;
@@ -1988,6 +2001,11 @@ export global QconnectDevState {
     // modal can render it in a read-only TextEdit (selectable + copyable).
     in property <string> log-text;
     callback clear();
+
+    // Device picker.
+    in property <[QconnectDevice]> devices: [];
+    in property <int> active-renderer-id: -1;
+    callback set-active(int);   // renderer-id; the local id = "Play here"
 }
 
 // Single global hover-tooltip channel. Each hoverable control writes its text
