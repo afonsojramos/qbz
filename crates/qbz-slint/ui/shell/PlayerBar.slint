@@ -138,6 +138,14 @@ export component PlayerBar inherits Rectangle {
     property <float> col-side: ShellState.npb-mode == 1 ? 0.324 : root.side-frac;
     property <float> col-centre: 1.0 - 2.0 * root.col-side;
 
+    // Volume lock, mirroring Tauri's handleVolumeChange formula:
+    //   (isAlsaDirectHw && !peerActive) || (peerActive && !remoteVolumeAllowed)
+    // The local ALSA-Direct lock (bit-perfect) is LIFTED when controlling a peer
+    // (the `!is-remote` term) so the user CAN adjust the remote renderer; the
+    // peer half is the sink-pushed NowPlayingState.volume-locked.
+    property <bool> vol-locked: (SettingsState.alsa-plugin-is-hw && !NowPlayingState.is-remote)
+        || NowPlayingState.volume-locked;
+
     VerticalLayout {
         Rectangle { height: 6px; }
 
@@ -746,7 +754,7 @@ export component PlayerBar inherits Rectangle {
                         tooltip: NowPlayingState.muted ? @tr("Unmute") : @tr("Mute");
                         active: NowPlayingState.muted;
                         clicked => {
-                            if (!NowPlayingState.volume-locked) {
+                            if (!root.vol-locked) {
                                 NowPlayingState.toggle-mute();
                             }
                         }
@@ -754,14 +762,14 @@ export component PlayerBar inherits Rectangle {
                 }
                 VerticalLayout {
                     alignment: center;
-                    opacity: NowPlayingState.volume-locked ? 0.4 : 1.0;
+                    opacity: root.vol-locked ? 0.4 : 1.0;
                     QbzSlider {
                         width: 90px;
                         minimum: 0;
                         maximum: 100;
                         value: NowPlayingState.volume * 100;
                         changed(v) => {
-                            if (!NowPlayingState.volume-locked) {
+                            if (!root.vol-locked) {
                                 NowPlayingState.set-volume(v / 100.0);
                             }
                         }
@@ -775,7 +783,7 @@ export component PlayerBar inherits Rectangle {
                         btn-width: 28px;
                         tooltip: @tr("Volume down");
                         clicked => {
-                            if (!NowPlayingState.volume-locked) {
+                            if (!root.vol-locked) {
                                 NowPlayingState.set-volume(Math.max(0.0, NowPlayingState.volume - 0.05));
                             }
                         }
@@ -789,7 +797,7 @@ export component PlayerBar inherits Rectangle {
                         btn-width: 28px;
                         tooltip: @tr("Volume up");
                         clicked => {
-                            if (!NowPlayingState.volume-locked) {
+                            if (!root.vol-locked) {
                                 NowPlayingState.set-volume(Math.min(1.0, NowPlayingState.volume + 0.05));
                             }
                         }

@@ -128,8 +128,10 @@ async fn enter_shell(
     {
         let settings_ctx = settings_ctx.clone();
         let weak = weak.clone();
+        let runtime = runtime.clone();
         tokio::spawn(async move {
-            match tokio::task::spawn_blocking(move || settings::load_snapshot(&settings_ctx)).await
+            let ctx_for_load = settings_ctx.clone();
+            match tokio::task::spawn_blocking(move || settings::load_snapshot(&ctx_for_load)).await
             {
                 Ok(snap) => {
                     let _ = weak.upgrade_in_event_loop(move |w| {
@@ -138,6 +140,10 @@ async fn enter_shell(
                 }
                 Err(e) => log::error!("[qbz-slint] settings load task failed: {e}"),
             }
+            // Bit-perfect (ALSA + hw) forces local volume to 100% at startup so
+            // the bar reflects unity gain before Settings is ever opened. No-op
+            // otherwise (and while controlling a peer). Mirrors Tauri.
+            settings::apply_startup_bitperfect_volume(&settings_ctx, &runtime, &weak).await;
         });
     }
 

@@ -28,7 +28,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::adapter::SlintAdapter;
 use crate::ui_prefs::{self, STREAMING_QUALITIES};
-use crate::{AppWindow, SettingsState};
+use crate::{AppWindow, NowPlayingState, SettingsState};
 
 /// Maximum-sample-rate dropdown options. Index 0 is "No limit" (`None`).
 /// Backs `device_max_sample_rate`.
@@ -635,6 +635,61 @@ fn apply_audio(ctx: &SettingsCtx, runtime: &AppRuntime<SlintAdapter>, apply: App
     log::info!("[qbz-slint] audio settings applied to player (reinit={reinit})");
 }
 
+/// Force the local player volume to 100% in bit-perfect, mirroring Tauri's
+/// `playerSetVolume(100)`. Bit-perfect (ALSA backend + `hw` plugin) requires the
+/// software volume out of the path, so the player runs at unity gain and the
+/// hardware/DAC controls level. Gated on NOT controlling a peer — while a peer
+/// renderer owns playback the local lock is lifted and the user adjusts the
+/// remote renderer, so forcing local 100 there would be wrong.
+///
+/// `core().set_volume` is the safe seam (it does NOT touch the protected
+/// device-init). Pushes `NowPlayingState.volume = 1.0` so the bar reflects it.
+async fn maybe_force_bitperfect_volume(
+    ctx: &SettingsCtx,
+    runtime: &AppRuntime<SlintAdapter>,
+    weak: &slint::Weak<AppWindow>,
+) {
+    let audio = match with_audio(&ctx.audio, |s| s.get_settings()) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("[qbz-slint] re-read audio for force-100 failed: {e}");
+            return;
+        }
+    };
+    let is_alsa_direct_hw = audio.backend_type.unwrap_or_default() == AudioBackendType::Alsa
+        && audio.alsa_plugin.unwrap_or(AlsaPlugin::Hw) == AlsaPlugin::Hw;
+    if !is_alsa_direct_hw {
+        return;
+    }
+    // Skip while controlling a peer — the bit-perfect lock is lifted then.
+    let controlling_peer = match crate::qconnect_service::service() {
+        Some(svc) => svc.is_peer_active().await,
+        None => false,
+    };
+    if controlling_peer {
+        return;
+    }
+    if let Err(e) = runtime.core().set_volume(1.0) {
+        log::error!("[qbz-slint] force bit-perfect volume to 100 failed: {e}");
+        return;
+    }
+    log::info!("[qbz-slint] bit-perfect: forced local volume to 100%");
+    let _ = weak.upgrade_in_event_loop(|w| {
+        w.global::<NowPlayingState>().set_volume(1.0);
+    });
+}
+
+/// Public entry for the startup audio-settings load: apply the bit-perfect
+/// force-100 once the player is seeded, so the bar reflects unity gain before
+/// the user ever opens Settings. No-op unless ALSA-direct-hw and not controlling.
+pub async fn apply_startup_bitperfect_volume(
+    ctx: &SettingsCtx,
+    runtime: &AppRuntime<SlintAdapter>,
+    weak: &slint::Weak<AppWindow>,
+) {
+    maybe_force_bitperfect_volume(ctx, runtime, weak).await;
+}
+
 /// Recompute the backend/ALSA conditional flags from the current audio
 /// settings and push them onto `SettingsState`. Called after a backend or
 /// ALSA-plugin change so the `.slint` panels re-gate the conditional rows.
@@ -934,6 +989,9 @@ pub async fn handle_select(
             // gapless) and the conditional flags all reach the UI in one
             // consistent push.
             apply_audio(&ctx, &runtime, Apply::Reinit);
+            // Bit-perfect (ALSA + hw) forces local volume to 100%; lifted while
+            // controlling a peer. Mirrors Tauri's playerSetVolume(100).
+            maybe_force_bitperfect_volume(&ctx, &runtime, &weak).await;
             rebuild_and_push(ctx, weak).await;
         }
         "device" => {
@@ -966,6 +1024,9 @@ pub async fn handle_select(
             // ALSA plugin gates the Hardware Volume Control row.
             push_conditional_flags(&ctx, &weak);
             apply_audio(&ctx, &runtime, Apply::Reinit);
+            // Switching to/from the `hw` plugin changes bit-perfect status;
+            // re-apply the force-100 (no-op when not ALSA-direct-hw).
+            maybe_force_bitperfect_volume(&ctx, &runtime, &weak).await;
         }
         "retry-behavior" => {
             let behavior = RETRY_BEHAVIORS.get(index).map(|(_, v)| *v).unwrap_or("ask");

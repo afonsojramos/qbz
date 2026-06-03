@@ -793,6 +793,19 @@ impl SlintQconnectService {
         Ok(Some((renderer, queue, session)))
     }
 
+    /// True when a PEER renderer currently owns playback (controller mode);
+    /// false when not connected or when this device is the active renderer.
+    /// Used by the audio-settings force-100 path to SKIP forcing local volume
+    /// to 100% while controlling a peer (the bit-perfect lock is lifted then).
+    pub async fn is_peer_active(&self) -> bool {
+        let guard = self.inner.lock().await;
+        let Some(runtime) = guard.runtime.as_ref() else {
+            return false;
+        };
+        let state = runtime.sync_state.lock().await;
+        is_peer_renderer_active(&state.session)
+    }
+
     /// Reduced peer-renderer playback snapshot for the now-playing seek bar.
     /// Returns `Some` ONLY when a PEER renderer is active (controller mode); the
     /// poll loop then drives the bar from the peer and skips its local body. When
