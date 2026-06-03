@@ -431,7 +431,16 @@ export component PlayerBar inherits Rectangle {
                                                         VerticalLayout {
                                                             alignment: center;
                                                             QbzIcon {
-                                                                source: @image-url("../assets/icons/monitor-speaker.svg");
+                                                                // Device-type icon, mirroring Qobuz Connect (computer /
+                                                                // web / mobile / speaker). @image-url needs a literal, so
+                                                                // pick among the four by the device's icon key.
+                                                                source: d.icon == "mobile"
+                                                                    ? @image-url("../assets/icons/smartphone.svg")
+                                                                    : d.icon == "speaker"
+                                                                        ? @image-url("../assets/icons/speaker.svg")
+                                                                        : d.icon == "web"
+                                                                            ? @image-url("../assets/icons/globe.svg")
+                                                                            : @image-url("../assets/icons/monitor.svg");
                                                                 width: 14px;
                                                                 height: 14px;
                                                                 tint: d.is-active ? Theme.accent : Theme.text-secondary;

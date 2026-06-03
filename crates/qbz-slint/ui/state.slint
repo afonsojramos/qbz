@@ -1984,6 +1984,8 @@ export struct QconnectDevice {
     name: string,
     is-local: bool,     // this is QBZ itself ("Play here")
     is-active: bool,    // currently the active renderer
+    // Device-type icon key (mirrors Qobuz Connect): "computer" | "web" | "mobile" | "speaker".
+    icon: string,
 }
 
 // Qobuz Connect DEV diagnostics — live session topology + a rolling event log,

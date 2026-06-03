@@ -158,6 +158,8 @@ impl SlintQconnectEventSink {
                         .into(),
                     is_local: Some(r.renderer_id) == session.local_renderer_id,
                     is_active: Some(r.renderer_id) == session.active_renderer_id,
+                    icon: device_icon_key(r.device_type, r.friendly_name.as_deref().unwrap_or(""))
+                        .into(),
                 })
                 .collect();
             (devices, session.active_renderer_id.unwrap_or(-1))
@@ -492,6 +494,25 @@ impl QconnectEventSink for SlintQconnectEventSink {
         // live session topology after every event.
         self.refresh_device_list().await;
         self.refresh_now_playing_remote_state().await;
+    }
+}
+
+/// Map a renderer's `device_type` (+ a name heuristic for web players) to a
+/// device-icon key, mirroring the Tauri `QconnectBadge.resolveDeviceType`:
+/// 6 = mobile, 5 = computer (or "web" when the name says web player/browser),
+/// anything else (3/4/…) = speaker/receiver.
+fn device_icon_key(device_type: Option<i32>, friendly_name: &str) -> &'static str {
+    match device_type.unwrap_or(5) {
+        6 => "mobile",
+        5 => {
+            let name = friendly_name.to_ascii_lowercase();
+            if name.contains("web player") || name.contains("browser") {
+                "web"
+            } else {
+                "computer"
+            }
+        }
+        _ => "speaker",
     }
 }
 
