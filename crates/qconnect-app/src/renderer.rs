@@ -724,3 +724,338 @@ pub async fn align_queue_cursor(
     engine.set_queue(vec![queue_track], Some(0)).await;
     Ok(())
 }
+
+// ===================== Mock-engine trait tests (slice 6, step 8) =====================
+//
+// These exercise the renderer orchestration end-to-end against a recording mock
+// engine — the hard-won behavior that previously could only be tested through the
+// Tauri adapter. A passing test here proves the logic is engine-independent: any
+// future Slint regression is a wiring bug in its trait impl, not a re-derivation
+// bug in the shared logic.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    use async_trait::async_trait;
+    use qbz_models::{Quality, QueueTrack, RepeatMode, Track};
+    use qbz_player::PlaybackState;
+    use qconnect_core::{QueueItem, QueueVersion};
+    use tokio::sync::Mutex;
+
+    use crate::renderer_engine::QconnectRendererEngine;
+    use crate::{QConnectQueueState, QConnectRendererState, QconnectRemoteSyncState, RendererCommand};
+
+    #[derive(Default)]
+    struct MockCalls {
+        resumes: u32,
+        pauses: u32,
+        stops: u32,
+        seeks: Vec<u64>,
+        set_volumes: Vec<f32>,
+        set_repeat_modes: u32,
+        set_shuffles: Vec<bool>,
+        set_queue_with_order: Vec<(bool, Option<Vec<usize>>)>,
+        set_queues: u32,
+        clear_queues: Vec<bool>,
+        play_indexes: Vec<usize>,
+        get_tracks_batch: u32,
+        start_track_streams: Vec<u64>,
+    }
+
+    /// Records every engine call; serves canned `PlaybackState` + queue snapshot.
+    struct MockEngine {
+        calls: Arc<StdMutex<MockCalls>>,
+        playback: PlaybackState,
+        queue_tracks: Vec<QueueTrack>,
+        queue_index: Option<usize>,
+    }
+
+    impl MockEngine {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(StdMutex::new(MockCalls::default())),
+                playback: PlaybackState::default(),
+                queue_tracks: Vec::new(),
+                queue_index: None,
+            }
+        }
+
+        fn calls(&self) -> std::sync::MutexGuard<'_, MockCalls> {
+            self.calls.lock().unwrap()
+        }
+    }
+
+    #[async_trait]
+    impl QconnectRendererEngine for MockEngine {
+        fn resume(&self) -> Result<(), String> {
+            self.calls().resumes += 1;
+            Ok(())
+        }
+        fn pause(&self) -> Result<(), String> {
+            self.calls().pauses += 1;
+            Ok(())
+        }
+        fn stop(&self) -> Result<(), String> {
+            self.calls().stops += 1;
+            Ok(())
+        }
+        fn seek(&self, position_secs: u64) -> Result<(), String> {
+            self.calls().seeks.push(position_secs);
+            Ok(())
+        }
+        fn set_volume(&self, fraction: f32) -> Result<(), String> {
+            self.calls().set_volumes.push(fraction);
+            Ok(())
+        }
+        fn get_playback_state(&self) -> PlaybackState {
+            self.playback.clone()
+        }
+        async fn set_repeat_mode(&self, _mode: RepeatMode) {
+            self.calls().set_repeat_modes += 1;
+        }
+        async fn set_shuffle(&self, enabled: bool) {
+            self.calls().set_shuffles.push(enabled);
+        }
+        async fn get_all_queue_tracks(&self) -> (Vec<QueueTrack>, Option<usize>) {
+            (self.queue_tracks.clone(), self.queue_index)
+        }
+        async fn set_queue(&self, _tracks: Vec<QueueTrack>, _start_index: Option<usize>) {
+            self.calls().set_queues += 1;
+        }
+        async fn set_queue_with_order(
+            &self,
+            _tracks: Vec<QueueTrack>,
+            _start_index: Option<usize>,
+            shuffle_enabled: bool,
+            shuffle_order: Option<Vec<usize>>,
+        ) {
+            self.calls()
+                .set_queue_with_order
+                .push((shuffle_enabled, shuffle_order));
+        }
+        async fn clear_queue(&self, keep_current: bool) {
+            self.calls().clear_queues.push(keep_current);
+        }
+        async fn play_index(&self, index: usize) -> Option<QueueTrack> {
+            self.calls().play_indexes.push(index);
+            None
+        }
+        async fn get_track(&self, track_id: u64) -> Result<Track, String> {
+            Ok(mock_track(track_id))
+        }
+        async fn get_tracks_batch(&self, track_ids: &[u64]) -> Result<Vec<Track>, String> {
+            self.calls().get_tracks_batch += 1;
+            Ok(track_ids.iter().map(|&id| mock_track(id)).collect())
+        }
+        async fn start_track_stream(
+            &self,
+            track_id: u64,
+            _quality: Quality,
+            _duration_secs: u64,
+            _start_position_secs: u64,
+        ) -> Result<(), String> {
+            self.calls().start_track_streams.push(track_id);
+            Ok(())
+        }
+        fn current_output_format(&self) -> Option<(u32, u32)> {
+            Some((44_100, 16))
+        }
+    }
+
+    fn qi(track_id: u64, queue_item_id: u64) -> QueueItem {
+        QueueItem {
+            track_context_uuid: "ctx".to_string(),
+            track_id,
+            queue_item_id,
+        }
+    }
+
+    fn mock_track(id: u64) -> Track {
+        serde_json::from_value(serde_json::json!({ "id": id, "title": "t", "duration": 100 }))
+            .expect("mock track")
+    }
+
+    fn mock_queue_track(id: u64) -> QueueTrack {
+        model_track_to_core_queue_track(&mock_track(id))
+    }
+
+    fn queue_state(
+        version: QueueVersion,
+        items: Vec<QueueItem>,
+        shuffle_mode: bool,
+        shuffle_order: Option<Vec<usize>>,
+    ) -> QConnectQueueState {
+        QConnectQueueState {
+            version,
+            queue_items: items,
+            shuffle_mode,
+            shuffle_order,
+            autoplay_mode: false,
+            autoplay_loading: false,
+            autoplay_items: Vec::new(),
+            updated_at_ms: 0,
+            last_server_queue_hash: None,
+        }
+    }
+
+    fn sync() -> Arc<Mutex<QconnectRemoteSyncState>> {
+        Arc::new(Mutex::new(QconnectRemoteSyncState::default()))
+    }
+
+    /// #2 — two loads for the same track within the dedup window trigger exactly
+    /// one `start_track_stream`; the second is swallowed by the 5s window even
+    /// though the audio thread hasn't reported the track yet.
+    #[tokio::test]
+    async fn ensure_remote_track_loaded_dedups_within_window() {
+        let engine = MockEngine::new(); // playback track_id 0 != 42 → would reload
+        let sync = sync();
+        ensure_remote_track_loaded(&engine, &sync, 42, None)
+            .await
+            .unwrap();
+        ensure_remote_track_loaded(&engine, &sync, 42, None)
+            .await
+            .unwrap();
+        assert_eq!(engine.calls().start_track_streams, vec![42]);
+    }
+
+    /// #2 — no reload when the audio thread already plays the requested track.
+    #[tokio::test]
+    async fn ensure_remote_track_loaded_skips_when_track_unchanged() {
+        let mut engine = MockEngine::new();
+        engine.playback = PlaybackState {
+            track_id: 42,
+            ..Default::default()
+        };
+        let sync = sync();
+        ensure_remote_track_loaded(&engine, &sync, 42, None)
+            .await
+            .unwrap();
+        assert!(engine.calls().start_track_streams.is_empty());
+    }
+
+    /// #1 / #387 — a SetState targeting the SAME track at <=1s while local is well
+    /// ahead is a cloud echo: the seek is rejected.
+    #[tokio::test]
+    async fn apply_renderer_command_rejects_echo_seek() {
+        let mut engine = MockEngine::new();
+        engine.playback = PlaybackState {
+            track_id: 7,
+            position: 30,
+            ..Default::default()
+        };
+        engine.queue_tracks = vec![mock_queue_track(7)];
+        engine.queue_index = Some(0);
+        let sync = sync();
+        let cmd = RendererCommand::SetState {
+            playing_state: None,
+            current_position_ms: Some(0),
+            current_track: Some(qi(7, 0)),
+            next_track: None,
+        };
+        apply_renderer_command(&engine, &sync, &cmd, &QConnectRendererState::default())
+            .await
+            .unwrap();
+        assert!(
+            engine.calls().seeks.is_empty(),
+            "echo seek must be rejected (#387 is_echo_reset)"
+        );
+    }
+
+    /// #1 / #387 — a genuine peer seek (target far from local) IS honored, even
+    /// for the same track (the bug the all-or-nothing peer gate caused).
+    #[tokio::test]
+    async fn apply_renderer_command_honors_genuine_seek() {
+        let mut engine = MockEngine::new();
+        engine.playback = PlaybackState {
+            track_id: 7,
+            position: 10,
+            ..Default::default()
+        };
+        engine.queue_tracks = vec![mock_queue_track(7)];
+        engine.queue_index = Some(0);
+        let sync = sync();
+        let cmd = RendererCommand::SetState {
+            playing_state: None,
+            current_position_ms: Some(40_000),
+            current_track: Some(qi(7, 0)),
+            next_track: None,
+        };
+        apply_renderer_command(&engine, &sync, &cmd, &QConnectRendererState::default())
+            .await
+            .unwrap();
+        assert_eq!(engine.calls().seeks, vec![40]);
+    }
+
+    /// #3 — a state-only SetState (command.current_track = None) must NOT align the
+    /// cursor or load a track from the renderer_state's stale current_track (the
+    /// iOS-pause-jumped-back fix); the playing_state is still applied.
+    #[tokio::test]
+    async fn apply_renderer_command_skips_track_ops_on_state_only_update() {
+        let mut engine = MockEngine::new();
+        engine.playback = PlaybackState {
+            track_id: 7,
+            position: 5,
+            ..Default::default()
+        };
+        let sync = sync();
+        let cmd = RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PAUSED),
+            current_position_ms: None,
+            current_track: None,
+            next_track: None,
+        };
+        // renderer_state carries a STALE current_track the projection would fall
+        // back to — it must not drive a load/align.
+        let renderer_state = QConnectRendererState {
+            current_track: Some(qi(99, 0)),
+            ..Default::default()
+        };
+        apply_renderer_command(&engine, &sync, &cmd, &renderer_state)
+            .await
+            .unwrap();
+        let calls = engine.calls();
+        assert!(
+            calls.start_track_streams.is_empty(),
+            "no load on state-only update"
+        );
+        assert!(
+            calls.play_indexes.is_empty(),
+            "no cursor align on state-only update"
+        );
+        assert_eq!(calls.pauses, 1, "pause still applied");
+    }
+
+    /// #5 — shuffle deferral: the first event (shuffle_mode=true, order=None)
+    /// materializes with shuffle_enabled=false (no invented identity order); the
+    /// second event (authoritative order present) enables shuffle.
+    #[tokio::test]
+    async fn materialize_defers_shuffle_until_authoritative_order() {
+        let engine = MockEngine::new();
+        let sync = sync();
+        let items = vec![qi(10, 0), qi(11, 1)];
+
+        let q1 = queue_state(QueueVersion::new(1, 0), items.clone(), true, None);
+        materialize_remote_queue(&engine, &sync, &q1).await.unwrap();
+        {
+            let calls = engine.calls();
+            assert_eq!(calls.set_queue_with_order.len(), 1);
+            assert!(
+                !calls.set_queue_with_order[0].0,
+                "shuffle deferred while order absent"
+            );
+        }
+
+        let q2 = queue_state(QueueVersion::new(1, 1), items, true, Some(vec![1, 0]));
+        materialize_remote_queue(&engine, &sync, &q2).await.unwrap();
+        {
+            let calls = engine.calls();
+            assert_eq!(calls.set_queue_with_order.len(), 2);
+            assert!(
+                calls.set_queue_with_order[1].0,
+                "shuffle enabled once authoritative order present"
+            );
+        }
+    }
+}
