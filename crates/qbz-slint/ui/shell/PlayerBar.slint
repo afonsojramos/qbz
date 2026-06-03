@@ -19,7 +19,7 @@ import { IconButton, PlayButton } from "../primitives/BarControls.slint";
 import { SeekBar } from "SeekBar.slint";
 import { SongCard } from "SongCard.slint";
 import { TransportControls } from "TransportControls.slint";
-import { NowPlayingState, ShellState, AppearanceState, SettingsState, TooltipState } from "../state.slint";
+import { NowPlayingState, ShellState, AppearanceState, SettingsState, TooltipState, QconnectDevState } from "../state.slint";
 
 // IconButton + PlayButton now live in primitives/BarControls.slint (shared
 // with TransportControls). ConnectButton + ToggleRow stay local (bar-only).
@@ -352,11 +352,11 @@ export component PlayerBar inherits Rectangle {
                                                 width: 8px;
                                                 height: 8px;
                                                 border-radius: 4px;
-                                                background: NowPlayingState.is-remote ? #22c55e : Theme.text-muted;
+                                                background: NowPlayingState.qconnect-connected ? #22c55e : Theme.text-muted;
                                             }
                                         }
                                         Text {
-                                            text: NowPlayingState.is-remote
+                                            text: NowPlayingState.qconnect-connected
                                                 ? @tr("Connected")
                                                 : @tr("Disconnected");
                                             color: Theme.text-secondary;
@@ -386,6 +386,46 @@ export component PlayerBar inherits Rectangle {
                                                 horizontal-alignment: center;
                                                 wrap: word-wrap;
                                             }
+                                        }
+                                    }
+                                    // Connect / Disconnect toggle.
+                                    Rectangle {
+                                        height: 34px;
+                                        border-radius: Radius.sm;
+                                        background: connect-ta.pressed
+                                            ? Theme.accent-pressed
+                                            : connect-ta.has-hover ? Theme.accent-hover : Theme.accent;
+                                        connect-ta := TouchArea {
+                                            clicked => {
+                                                NowPlayingState.qconnect-toggle();
+                                                qconnect-menu.close();
+                                            }
+                                        }
+                                        Text {
+                                            text: NowPlayingState.qconnect-connected
+                                                ? @tr("Disconnect")
+                                                : @tr("Connect");
+                                            color: Theme.accent-text;
+                                            font-size: 13px;
+                                            font-weight: 600;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    // DEV: open the QConnect diagnostics modal.
+                                    diag-ta := TouchArea {
+                                        height: 22px;
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            QconnectDevState.open = true;
+                                            qconnect-menu.close();
+                                        }
+                                        Text {
+                                            text: "Diagnostics";
+                                            color: diag-ta.has-hover ? Theme.text-secondary : Theme.text-muted;
+                                            font-size: 11px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
                                         }
                                     }
                                 }

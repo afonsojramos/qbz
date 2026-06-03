@@ -40,6 +40,8 @@ mod play_history;
 mod strip_html;
 mod playback;
 mod qconnect_engine;
+mod qconnect_event_sink;
+mod qconnect_service;
 mod qconnect_transport;
 mod queue;
 mod drag;
@@ -2924,6 +2926,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => {}
             }
         });
+    }
+
+    // Qobuz Connect — initialize the service singleton and wire the bar's
+    // connect/disconnect toggle. The session loop + renderer engine inherit the
+    // shared qconnect-app hardening (watchdog/takeover/resync). Transport
+    // `*_if_remote` routing + device picker land in the QConnect UI-polish step.
+    {
+        let _ = qconnect_service::init_service(app_runtime.clone(), window.as_weak());
+        let handle = tokio_rt.handle().clone();
+        let weak = window.as_weak();
+        window
+            .global::<NowPlayingState>()
+            .on_qconnect_toggle(move || {
+                let Some(svc) = qconnect_service::service() else {
+                    return;
+                };
+                let weak = weak.clone();
+                handle.spawn(async move {
+                    let connected = if svc.is_running().await {
+                        if let Err(err) = svc.disconnect().await {
+                            log::warn!("[QConnect] disconnect failed: {err}");
+                        }
+                        false
+                    } else {
+                        match svc.connect().await {
+                            Ok(()) => true,
+                            Err(err) => {
+                                log::warn!("[QConnect] connect failed: {err}");
+                                false
+                            }
+                        }
+                    };
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        w.global::<NowPlayingState>()
+                            .set_qconnect_connected(connected);
+                    });
+                });
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<QconnectDevState>()
+            .on_clear(move || {
+                qconnect_service::dev_clear(&weak);
+            });
     }
 
     // Transport — wired through the NowPlayingState global callbacks.

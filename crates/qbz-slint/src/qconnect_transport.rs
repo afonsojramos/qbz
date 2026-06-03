@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qconnect_transport_ws::WsTransportConfig;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::adapter::SlintAdapter;
@@ -99,6 +100,90 @@ pub fn resolve_qconnect_friendly_name(custom_name: Option<&str>) -> String {
                 .filter(|value| !value.trim().is_empty())
         })
         .unwrap_or_else(resolve_default_qconnect_device_name)
+}
+
+// ---------------------------------------------------------------------------
+// Device-info + join payload shapes (piece a). Mirror the Tauri adapter
+// `types.rs` `QconnectDeviceInfoPayload` / `QconnectDeviceCapabilitiesPayload` /
+// `QconnectJoinSessionRequest` exactly so the wire frames the server sees are
+// byte-identical between the two frontends. Built from the device-identity
+// resolvers above; the uuid delegates to the shared `qbz_app::qconnect_identity`
+// so a device keeps ONE identity across both frontends.
+// ---------------------------------------------------------------------------
+
+// AudioQuality wire levels: 1=mp3, 4=hires_l2(192k). Capabilities advertise the
+// device's min/max decode support; VOLUME_REMOTE_CONTROL_ALLOWED(2) means a
+// controller may set our volume.
+pub const AUDIO_QUALITY_MP3: i32 = 1;
+pub const AUDIO_QUALITY_HIRES_LEVEL2: i32 = 4;
+const VOLUME_REMOTE_CONTROL_ALLOWED: i32 = 2;
+/// Renderer buffer-state wire value for OK/ready (mirrors the Tauri adapter).
+pub const BUFFER_STATE_OK: i32 = 2;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QconnectDeviceCapabilitiesPayload {
+    pub min_audio_quality: Option<i32>,
+    pub max_audio_quality: Option<i32>,
+    pub volume_remote_control: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QconnectDeviceInfoPayload {
+    pub device_uuid: Option<String>,
+    pub friendly_name: Option<String>,
+    pub brand: Option<String>,
+    pub model: Option<String>,
+    pub serial_number: Option<String>,
+    pub device_type: Option<i32>,
+    pub capabilities: Option<QconnectDeviceCapabilitiesPayload>,
+    pub software_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QconnectJoinSessionRequest {
+    pub session_uuid: Option<String>,
+    pub device_info: Option<QconnectDeviceInfoPayload>,
+}
+
+/// Build the device-info payload with the default friendly name.
+pub fn default_qconnect_device_info() -> QconnectDeviceInfoPayload {
+    default_qconnect_device_info_with_name(None)
+}
+
+/// Build the device-info payload, overriding the friendly name when a custom
+/// device name is set. Mirrors the Tauri `default_qconnect_device_info_with_name`.
+pub fn default_qconnect_device_info_with_name(
+    custom_name: Option<&str>,
+) -> QconnectDeviceInfoPayload {
+    QconnectDeviceInfoPayload {
+        device_uuid: Some(resolve_qconnect_device_uuid()),
+        friendly_name: Some(resolve_qconnect_friendly_name(custom_name)),
+        brand: Some(resolve_qconnect_device_brand()),
+        model: Some(resolve_qconnect_device_model()),
+        serial_number: None,
+        device_type: Some(resolve_qconnect_device_type()),
+        capabilities: Some(QconnectDeviceCapabilitiesPayload {
+            min_audio_quality: Some(AUDIO_QUALITY_MP3),
+            max_audio_quality: Some(AUDIO_QUALITY_HIRES_LEVEL2),
+            volume_remote_control: Some(VOLUME_REMOTE_CONTROL_ALLOWED),
+        }),
+        software_version: Some(resolve_qconnect_software_version()),
+    }
+}
+
+/// Resolve THIS device's identity for injection into the frontend-agnostic
+/// session-apply logic in qconnect-app (`apply_session_management_event` takes a
+/// `LocalIdentity` so the crate never depends on the persistence layer). Mirrors
+/// the Tauri `resolve_local_identity`.
+pub fn resolve_local_identity() -> qconnect_app::LocalIdentity {
+    let info = default_qconnect_device_info();
+    qconnect_app::LocalIdentity {
+        device_uuid: info.device_uuid.unwrap_or_default(),
+        friendly_name: info.friendly_name,
+        brand: info.brand,
+        model: info.model,
+        device_type: info.device_type,
+    }
 }
 
 fn qconnect_settings_db_path() -> Option<std::path::PathBuf> {

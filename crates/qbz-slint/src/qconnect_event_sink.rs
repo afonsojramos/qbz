@@ -1,0 +1,463 @@
+//! Slint `QconnectEventSink` (piece b, Phase S).
+//!
+//! Receives `QconnectAppEvent`s from the qconnect-app crate and dispatches them
+//! into the Slint `SlintRendererEngine` (the renderer seam), the shared
+//! `QconnectRemoteSyncState` accumulator, and — eventually — the Slint UI.
+//!
+//! This mirrors the Tauri `src-tauri/src/qconnect/event_sink.rs` arm-for-arm,
+//! but routes through the frontend-agnostic `qconnect_app::renderer` orchestration
+//! (materialize / apply / loop-mode / cursor-align) and the relocated projection
+//! helpers (`build_session_renderer_snapshot` / `cache_renderer_snapshot`) instead
+//! of the Tauri `CoreBridge` wrappers. The session-management critical section is
+//! delegated to `QconnectApp::apply_session_management_event`; only the post-lock
+//! work the returned `SessionApplyOutcome` asks for runs here.
+//!
+//! UI surfacing (the `is-remote`/badge state, the six toasts, the auto-skip on
+//! PlaybackError) is intentionally deferred to the QConnect UI-polish step — those
+//! arms log a TODO for now. The renderer-critical arms (QueueUpdated,
+//! RendererCommandApplied, SessionManagementEvent, RendererUpdated) are fully
+//! wired so this device functions AS a renderer.
+
+use std::sync::{Arc, OnceLock, Weak};
+
+use async_trait::async_trait;
+use qbz_app::shell::AppRuntime;
+use qconnect_app::{
+    build_session_renderer_snapshot, cache_renderer_snapshot, is_peer_renderer_active, QconnectApp,
+    QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState, QconnectRendererEngine,
+    RendererCommand, RendererReport, RendererReportType,
+};
+use qconnect_transport_ws::NativeWsTransport;
+use serde_json::Value;
+use tokio::sync::Mutex;
+use uuid::Uuid;
+
+use crate::adapter::SlintAdapter;
+use crate::qconnect_engine::SlintRendererEngine;
+use crate::qconnect_transport::{resolve_local_identity, BUFFER_STATE_OK};
+use crate::AppWindow;
+
+/// Concrete `QconnectApp` type used by the Slint adapter.
+pub type SlintQconnectApp = QconnectApp<NativeWsTransport, SlintQconnectEventSink>;
+
+pub struct SlintQconnectEventSink {
+    /// Renderer seam — forwards the `qconnect_app::renderer` orchestration onto
+    /// `runtime.core()` + the protected player.
+    engine: SlintRendererEngine,
+    /// Shared runtime — used to refresh the Slint now-playing card + queue
+    /// sidebar from the (remotely-mutated) core state after inbound events.
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    /// THE shared remote-sync accumulator (one Mutex, shared with `QconnectApp`).
+    sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
+    /// Late-bound weak handle to the owning app, wired via `set_app` after the
+    /// app is built FROM this sink. Used to emit renderer reports (e.g.
+    /// is_active=true after SetActive(true)) and to drive the session-apply +
+    /// freeze/watchdog without an ownership cycle.
+    app: Arc<OnceLock<Weak<SlintQconnectApp>>>,
+    /// Window handle for future UI surfacing (toasts, badge state). Unused until
+    /// the QConnect UI-polish step.
+    #[allow(dead_code)]
+    window: slint::Weak<AppWindow>,
+}
+
+impl SlintQconnectEventSink {
+    pub fn new(
+        engine: SlintRendererEngine,
+        runtime: Arc<AppRuntime<SlintAdapter>>,
+        sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
+        window: slint::Weak<AppWindow>,
+    ) -> Self {
+        Self {
+            engine,
+            runtime,
+            sync_state,
+            app: Arc::new(OnceLock::new()),
+            window,
+        }
+    }
+
+    /// Rebuild the DEV-modal status block (session topology / renderer roles /
+    /// queue) from the live sync state + app snapshot, and push it to the modal.
+    async fn refresh_dev_status(&self) {
+        let Some(app) = self.app.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        let queue = app.queue_state_snapshot().await;
+        let status = {
+            let st = self.sync_state.lock().await;
+            let session = &st.session;
+            let role = match (session.active_renderer_id, session.local_renderer_id) {
+                (Some(a), Some(l)) if a == l => "renderer (this device active)",
+                (Some(_), Some(_)) => "controller (peer active)",
+                (Some(_), None) => "joined (local id pending)",
+                _ => "no active renderer",
+            };
+            let renderers = if session.renderers.is_empty() {
+                "  (none)".to_string()
+            } else {
+                session
+                    .renderers
+                    .iter()
+                    .map(|r| {
+                        let local = if Some(r.renderer_id) == session.local_renderer_id {
+                            " LOCAL"
+                        } else {
+                            ""
+                        };
+                        let active = if Some(r.renderer_id) == session.active_renderer_id {
+                            " ACTIVE"
+                        } else {
+                            ""
+                        };
+                        format!(
+                            "  #{} {}{}{}",
+                            r.renderer_id,
+                            r.friendly_name.clone().unwrap_or_default(),
+                            local,
+                            active
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            format!(
+                "Role: {role}\nsession_uuid: {}\nactive_renderer_id: {:?}   local_renderer_id: {:?}\nqueue: v{}.{}  items={}  autoplay={}\nrenderers:\n{}",
+                session
+                    .session_uuid
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string()),
+                session.active_renderer_id,
+                session.local_renderer_id,
+                queue.version.major,
+                queue.version.minor,
+                queue.queue_items.len(),
+                queue.autoplay_items.len(),
+                renderers,
+            )
+        };
+        crate::qconnect_service::dev_set_status(&self.window, status);
+    }
+
+    /// Refresh the Slint now-playing card + queue sidebar from the current core
+    /// state. The inbound renderer orchestration (materialize / apply) mutates
+    /// the core player+queue but does NOT touch the UI; without this the card +
+    /// queue stay on whatever was loaded at connect time while the audio follows
+    /// the remote controller. Reads core `current_track()` so it is authoritative
+    /// regardless of the order QueueUpdated / SetState arrive in.
+    async fn refresh_local_ui(&self) {
+        crate::playback::refresh_now_playing_meta(&self.runtime, &self.window).await;
+        crate::playback::refresh_sidebar(true);
+    }
+
+    /// Wire the owning app after construction. Idempotent (OnceLock).
+    pub fn set_app(&self, app: &Arc<SlintQconnectApp>) {
+        let _ = self.app.set(Arc::downgrade(app));
+    }
+
+    /// Emit a StateUpdated report announcing this renderer is now active. Sent
+    /// after SetActive(true) is applied so the controller learns we are ready.
+    async fn report_active_renderer_ready(&self) {
+        let Some(app) = self.app.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        let queue_version = app.queue_state_snapshot().await.version;
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrStateUpdated,
+            Uuid::new_v4().to_string(),
+            queue_version,
+            serde_json::json!({
+                "is_active": true,
+                "buffer_state": BUFFER_STATE_OK,
+                "queue_version": {
+                    "major": queue_version.major,
+                    "minor": queue_version.minor
+                }
+            }),
+        );
+        if let Err(err) = app.send_renderer_report_command(report).await {
+            log::warn!("[QConnect] Failed to report active-renderer-ready: {err}");
+        }
+    }
+
+    /// Apply a server session-management event by delegating the locked critical
+    /// section to qconnect-app, then running the post-lock renderer-engine work
+    /// the returned `SessionApplyOutcome` asks for. Mirrors the Tauri
+    /// `apply_session_management_event`; the post-lock ordering (loop mode ->
+    /// local-playback handoff -> projection -> freeze -> watchdog) is identical.
+    async fn apply_session_management_event(&self, message_type: &str, payload: &Value) {
+        let Some(app) = self.app.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        let identity = resolve_local_identity();
+        let outcome = app
+            .apply_session_management_event(message_type, payload, &identity)
+            .await;
+
+        if let Some(loop_mode) = outcome.apply_loop_mode {
+            if let Err(err) = qconnect_app::renderer::apply_remote_loop_mode(&self.engine, loop_mode)
+                .await
+            {
+                log::warn!("[QConnect] Failed to apply remote loop mode: {err}");
+            }
+        }
+
+        if outcome.sync_local_playback {
+            self.sync_local_playback_for_renderer_ownership().await;
+        }
+
+        if let Some(renderer_id) = outcome.remote_projection_renderer_id {
+            self.sync_active_renderer_projection(renderer_id).await;
+        }
+
+        if let Some(renderer_id) = outcome.disconnected_renderer_id {
+            app.freeze_active_renderer_projection(
+                renderer_id,
+                QconnectAppEvent::RendererDisconnected { renderer_id },
+            )
+            .await;
+        }
+
+        if let Some((renderer_id, generation)) = outcome.watchdog_arm {
+            app.arm_renderer_watchdog(renderer_id, generation);
+        }
+    }
+
+    /// When an active PEER renderer now owns playback, stop our local playback so
+    /// the two don't double-play. Mirrors the Tauri helper, with the engine seam
+    /// in place of `CoreBridge`.
+    async fn sync_local_playback_for_renderer_ownership(&self) {
+        let peer_renderer_active = {
+            let state = self.sync_state.lock().await;
+            is_peer_renderer_active(&state.session)
+        };
+        if !peer_renderer_active {
+            return;
+        }
+
+        let playback_state = self.engine.get_playback_state();
+        if playback_state.track_id == 0 {
+            return;
+        }
+
+        log::info!(
+            "[QConnect] Stopping local playback because active renderer is a peer (track_id={})",
+            playback_state.track_id
+        );
+        if let Err(err) = self.engine.stop() {
+            log::warn!("[QConnect] Failed to stop local playback after renderer handoff: {err}");
+        }
+    }
+
+    /// Refresh the cached projection for the active renderer and, when a peer owns
+    /// playback, align the local queue cursor to the peer's current track (so the
+    /// controller view + a later takeover land on the right track). Mirrors the
+    /// Tauri helper.
+    async fn sync_active_renderer_projection(&self, renderer_id: i32) {
+        let (queue_state, renderer_state, session_loop_mode, should_align_engine) = {
+            let state = self.sync_state.lock().await;
+            let Some(active_renderer_id) = state.session.active_renderer_id else {
+                return;
+            };
+            if active_renderer_id != renderer_id {
+                return;
+            }
+
+            (
+                state.last_remote_queue_state.clone(),
+                state
+                    .session_renderer_states
+                    .get(&active_renderer_id)
+                    .cloned(),
+                state.session_loop_mode,
+                state.session.local_renderer_id != Some(active_renderer_id),
+            )
+        };
+
+        let (Some(queue_state), Some(renderer_state)) = (queue_state, renderer_state) else {
+            return;
+        };
+
+        let renderer_snapshot =
+            build_session_renderer_snapshot(&queue_state, Some(&renderer_state), session_loop_mode);
+        {
+            let mut state = self.sync_state.lock().await;
+            cache_renderer_snapshot(&mut state, &renderer_snapshot);
+        }
+
+        if !should_align_engine {
+            return;
+        }
+
+        let Some(current_track) = renderer_snapshot.current_track.as_ref() else {
+            return;
+        };
+
+        if let Err(err) =
+            qconnect_app::renderer::align_queue_cursor(&self.engine, current_track.track_id).await
+        {
+            log::warn!("[QConnect] Failed to sync peer renderer cursor into engine: {err}");
+        }
+    }
+}
+
+#[async_trait]
+impl QconnectEventSink for SlintQconnectEventSink {
+    async fn on_event(&self, event: QconnectAppEvent) {
+        match &event {
+            QconnectAppEvent::SessionManagementEvent {
+                message_type,
+                payload,
+            } => {
+                log::info!(
+                    "[QConnect] Session management: {} payload={}",
+                    message_type,
+                    serde_json::to_string(payload).unwrap_or_else(|_| "?".to_string())
+                );
+                self.apply_session_management_event(message_type, payload)
+                    .await;
+            }
+            QconnectAppEvent::RendererUpdated(renderer_state) => {
+                log::info!(
+                    "[QConnect] Renderer updated: playing_state={:?} volume={:?} position={:?}",
+                    renderer_state.playing_state,
+                    renderer_state.volume,
+                    renderer_state.current_position_ms,
+                );
+                let mut sync_state = self.sync_state.lock().await;
+                cache_renderer_snapshot(&mut sync_state, renderer_state);
+            }
+            QconnectAppEvent::QueueUpdated(queue_state) => {
+                log::debug!(
+                    "[QConnect] QueueUpdated: items={} shuffle_mode={} version={}.{}",
+                    queue_state.queue_items.len(),
+                    queue_state.shuffle_mode,
+                    queue_state.version.major,
+                    queue_state.version.minor,
+                );
+                {
+                    let mut sync_state = self.sync_state.lock().await;
+                    sync_state.last_remote_queue_state = Some(queue_state.clone());
+                }
+                if let Err(err) = qconnect_app::renderer::materialize_remote_queue(
+                    &self.engine,
+                    &self.sync_state,
+                    queue_state,
+                )
+                .await
+                {
+                    log::warn!("[QConnect] Failed to materialize remote queue: {err}");
+                }
+                // Reflect the remote queue change in the QBZ UI (queue sidebar +
+                // now-playing card). materialize already set the core queue +
+                // cursor; this just pushes it to Slint.
+                self.refresh_local_ui().await;
+            }
+            QconnectAppEvent::RendererCommandApplied { command, state } => {
+                log::info!("[QConnect] Renderer command applied: {:?}", command);
+                let became_active =
+                    matches!(command, RendererCommand::SetActive { active: true });
+                if let Err(err) = qconnect_app::renderer::apply_renderer_command(
+                    &self.engine,
+                    &self.sync_state,
+                    command,
+                    state,
+                )
+                .await
+                {
+                    log::warn!("[QConnect] Failed to apply renderer command: {err}");
+                } else if became_active {
+                    self.report_active_renderer_ready().await;
+                }
+                // A SetState changes the current track / play-state — reflect it
+                // in the QBZ now-playing card + queue cursor highlight. (Other
+                // commands — volume/mute/shuffle/loop — don't move the track, so
+                // skip the card/art refresh.)
+                if matches!(command, RendererCommand::SetState { .. }) {
+                    self.refresh_local_ui().await;
+                }
+            }
+            QconnectAppEvent::RendererUnreachable { renderer_id } => {
+                log::warn!("[QConnect] Renderer {renderer_id} unreachable");
+                crate::toast::error_weak(&self.window, "Qobuz Connect renderer unreachable");
+            }
+            QconnectAppEvent::RendererDisconnected { renderer_id } => {
+                log::warn!("[QConnect] Renderer {renderer_id} disconnected");
+                crate::toast::error_weak(&self.window, "Qobuz Connect renderer disconnected");
+            }
+            QconnectAppEvent::PlaybackError {
+                queue_item_id,
+                error_type,
+                ..
+            } => {
+                // TODO(slint-qconnect-ui): when QBZ is the controller, auto-skip the
+                // current item. For now surface the failure.
+                log::warn!(
+                    "[QConnect] Playback error on queue_item {queue_item_id}: {error_type:?}"
+                );
+                crate::toast::error_weak(&self.window, "Track unavailable on Qobuz Connect");
+            }
+            QconnectAppEvent::ResyncComplete => {
+                log::info!("[QConnect] Post-reconnect resync complete");
+            }
+            QconnectAppEvent::LifecycleChanged { state } => {
+                // TODO(slint-qconnect-ui): drive the connect badge state.
+                log::info!("[QConnect] Lifecycle -> {state:?} (UI badge TODO)");
+            }
+            QconnectAppEvent::Diagnostic {
+                channel, level, ..
+            } => {
+                log::debug!("[QConnect] diagnostic {channel} [{level}]");
+            }
+            _ => {}
+        }
+
+        // DEV diagnostics: log every event (with a relative timestamp) + refresh
+        // the live status block, so the QconnectDevModal reflects QC state at
+        // runtime without a rebuild.
+        crate::qconnect_service::dev_push_event(&self.window, dev_event_line(&event));
+        self.refresh_dev_status().await;
+
+        // TODO(slint-qconnect-ui): route the event into NowPlayingState (is-remote,
+        // cast-target, volume-locked) + the toast surface, mirroring the Tauri
+        // blanket `qconnect:event` emit the Svelte UI consumes.
+    }
+}
+
+/// Format a QConnect event into a one-line DEV-log entry. Big payloads
+/// (QueueUpdated / SessionManagement) are summarized; the rest use Debug.
+fn dev_event_line(event: &QconnectAppEvent) -> String {
+    match event {
+        QconnectAppEvent::SessionManagementEvent { message_type, .. } => {
+            format!("SESSION {message_type}")
+        }
+        QconnectAppEvent::QueueUpdated(q) => format!(
+            "QueueUpdated v{}.{} items={} shuffle={}",
+            q.version.major,
+            q.version.minor,
+            q.queue_items.len(),
+            q.shuffle_mode
+        ),
+        QconnectAppEvent::RendererUpdated(r) => format!(
+            "RendererUpdated playing={:?} pos={:?}ms vol={:?}",
+            r.playing_state, r.current_position_ms, r.volume
+        ),
+        QconnectAppEvent::RendererCommandApplied { command, .. } => format!("Cmd {command:?}"),
+        QconnectAppEvent::RendererUnreachable { renderer_id } => {
+            format!("RendererUnreachable #{renderer_id}")
+        }
+        QconnectAppEvent::RendererDisconnected { renderer_id } => {
+            format!("RendererDisconnected #{renderer_id}")
+        }
+        QconnectAppEvent::PlaybackError {
+            queue_item_id,
+            error_type,
+            ..
+        } => format!("PlaybackError qid={queue_item_id} {error_type:?}"),
+        QconnectAppEvent::LifecycleChanged { state } => format!("Lifecycle {state:?}"),
+        QconnectAppEvent::ResyncComplete => "ResyncComplete".to_string(),
+        QconnectAppEvent::TransportConnected => "TransportConnected".to_string(),
+        QconnectAppEvent::TransportDisconnected => "TransportDisconnected".to_string(),
+        QconnectAppEvent::Diagnostic { channel, level, .. } => format!("diag {channel} [{level}]"),
+        other => format!("{other:?}"),
+    }
+}

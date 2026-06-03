@@ -1942,6 +1942,10 @@ export global NowPlayingState {
     // off and are wired by the QConnect epic; the bar respects them now.
     in property <bool> is-remote: false;
     in property <bool> volume-locked: false;
+    // Whether THIS device currently has a Qobuz Connect session running (drives
+    // the connect flyout's Connect/Disconnect button). Distinct from `is-remote`,
+    // which means a PEER renderer owns playback. Set by the connect callback.
+    in property <bool> qconnect-connected: false;
     // Name of the active Qobuz Connect renderer (shown under the cast button
     // when remote). Empty when local. Populated by the QConnect epic.
     in property <string> cast-target;
@@ -1967,6 +1971,23 @@ export global NowPlayingState {
     callback toggle-mute();
     callback toggle-shuffle();
     callback cycle-repeat();
+
+    // Qobuz Connect — toggle the session on/off from the bar's connect flyout.
+    // Wired in main.rs to SlintQconnectService::connect/disconnect.
+    callback qconnect-toggle();
+}
+
+// Qobuz Connect DEV diagnostics — live session topology + a rolling event log,
+// rendered by QconnectDevModal (opened from the connect flyout). Lets us inspect
+// QC behavior at runtime WITHOUT a rebuild (Slint builds are slow). `open` is
+// in-out so the flyout button + the modal backdrop toggle it directly.
+export global QconnectDevState {
+    in-out property <bool> open: false;
+    in property <string> status;
+    // Joined log text (newest first, one entry per line). A single string so the
+    // modal can render it in a read-only TextEdit (selectable + copyable).
+    in property <string> log-text;
+    callback clear();
 }
 
 // Single global hover-tooltip channel. Each hoverable control writes its text

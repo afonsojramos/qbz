@@ -22,6 +22,7 @@ import { CreateFolderModal } from "../primitives/CreateFolderModal.slint";
 import { FolderEditModal } from "../primitives/FolderEditModal.slint";
 import { LibFolderEditModal } from "../settings/LibFolderEditModal.slint";
 import { TagEditorModal } from "../primitives/TagEditorModal.slint";
+import { QconnectDevModal } from "QconnectDevModal.slint";
 import { DragGhost } from "../primitives/DragGhost.slint";
 import { Toast } from "../primitives/Toast.slint";
 import { PlayerBar } from "PlayerBar.slint";
@@ -339,6 +340,12 @@ export component AppShell inherits Rectangle {
 
     // Global "Tag editor" modal (local album metadata).
     TagEditorModal { }
+
+    // Qobuz Connect DEV diagnostics modal (opened from the connect flyout).
+    QconnectDevModal {
+        width: 100%;
+        height: 100%;
+    }
 
     // Floating track-drag ghost (follows the cursor, on top of all).
     DragGhost { }

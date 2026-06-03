@@ -15,6 +15,7 @@ use std::sync::{Arc, OnceLock};
 
 use qbz_app::shell::AppRuntime;
 use qbz_models::{Quality, QueueTrack, RepeatMode, Track};
+use qconnect_app::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING};
 use slint::{ComponentHandle, Model, ModelRc};
 
 use crate::adapter::SlintAdapter;
@@ -37,7 +38,7 @@ pub fn set_queue_controller(controller: QueueController) {
 /// Refresh the Queue sidebar from the current core queue state. No-op
 /// before the controller is registered. `with_favorites` re-pulls the
 /// favorite-track cache as well (used after a fresh play starts).
-fn refresh_sidebar(with_favorites: bool) {
+pub(crate) fn refresh_sidebar(with_favorites: bool) {
     if let Some(controller) = QUEUE_CONTROLLER.get() {
         if with_favorites {
             controller.refresh_with_favorites();
@@ -493,7 +494,7 @@ fn fmt_remaining(position: u64, duration: u64) -> String {
 /// Push the now-playing values for the current queue track onto
 /// `NowPlayingState`. Called when a new track starts so the song card
 /// updates immediately (the poll loop only refreshes position/progress).
-async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
+pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
     let state = runtime.core().get_queue_state().await;
     let Some(track) = state.current_track else {
         let _ = weak.upgrade_in_event_loop(|w| {
@@ -1953,6 +1954,14 @@ pub fn start_poll_loop(
         // 450ms ticker does not re-request it every tick.
         let mut gapless_requested_for: u64 = 0;
 
+        // QConnect renderer-report throttle: the official client reports
+        // RndrSrvrStateUpdated ~every 2s while playing PLUS immediately on a
+        // transition (track / play-state change). At a 450ms tick, ~4 ticks ≈ 2s.
+        let mut last_reported_track_id: u64 = 0;
+        let mut last_reported_playing = false;
+        let mut report_tick: u64 = 0;
+        const QCONNECT_REPORT_EVERY_N_TICKS: u64 = 4;
+
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(450));
         loop {
             ticker.tick().await;
@@ -2102,6 +2111,42 @@ pub fn start_poll_loop(
                 np.set_playing(is_playing);
                 np.set_volume(volume.clamp(0.0, 1.0));
             });
+
+            // --- QConnect: outbound renderer state report -----------------
+            // When QBZ is the ACTIVE LOCAL renderer (controlled by a remote
+            // controller like the iOS app), report our playback state so the
+            // controller's seek bar + current-track follow. Mirrors the official
+            // client: position/duration in MILLISECONDS, ~2s periodic while
+            // playing + an immediate report on every transition. The service
+            // self-gates on is_local_renderer_active (no-op when we're a peer
+            // controller or not connected) and resolves the queue_item_ids.
+            report_tick = report_tick.wrapping_add(1);
+            if track_id != 0 {
+                let transition =
+                    track_id != last_reported_track_id || is_playing != last_reported_playing;
+                let periodic = is_playing && report_tick % QCONNECT_REPORT_EVERY_N_TICKS == 0;
+                if transition || periodic {
+                    if let Some(svc) = crate::qconnect_service::service() {
+                        let playing_state = if is_playing {
+                            PLAYING_STATE_PLAYING
+                        } else {
+                            PLAYING_STATE_PAUSED
+                        };
+                        let position_ms = (position as i64) * 1000;
+                        let duration_ms = (duration as i64) * 1000;
+                        svc.report_playback_state(playing_state, position_ms, duration_ms, track_id)
+                            .await;
+                        // On a track change, also reconcile the session queue: if the
+                        // user started a new album/playlist on QBZ, push it so the
+                        // controller (iOS) follows. Self-gates + echo-suppresses.
+                        if transition {
+                            svc.sync_local_queue_if_changed().await;
+                        }
+                    }
+                    last_reported_track_id = track_id;
+                    last_reported_playing = is_playing;
+                }
+            }
 
             if track_id != 0 {
                 last_track_id = track_id;
