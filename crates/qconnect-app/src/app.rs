@@ -173,6 +173,10 @@ where
                 command.command_type,
                 QueueCommandType::CtrlSrvrSetLoopMode
             ),
+            is_set_volume_action: matches!(
+                command.command_type,
+                QueueCommandType::CtrlSrvrSetVolume
+            ),
             is_set_active_renderer_action,
             expected_active_renderer_id: if is_set_active_renderer_action {
                 pending_active_renderer_id_from_payload(&command.payload)
@@ -1092,6 +1096,16 @@ fn session_management_event_completes_pending_action(
         // Loop mode changes come back as session-management events without a
         // stable action_uuid ack. Treat the first loop-mode-set echo as the
         // completion signal so repeat toggles are not blocked behind the
+        // generic 10s pending timeout.
+        return true;
+    }
+
+    if pending.is_set_volume_action
+        && matches!(event_type, QueueEventType::SrvrCtrlVolumeChanged)
+    {
+        // Volume changes come back as session-management events without a
+        // stable action_uuid ack. Treat the first volume-changed echo as the
+        // completion signal so a rapid volume drag is not blocked behind the
         // generic 10s pending timeout.
         return true;
     }
