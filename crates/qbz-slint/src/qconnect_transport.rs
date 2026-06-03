@@ -145,6 +145,82 @@ pub struct QconnectJoinSessionRequest {
     pub device_info: Option<QconnectDeviceInfoPayload>,
 }
 
+// ---------------------------------------------------------------------------
+// Controller-mode transport request DTOs (Slint CONTROLLER port). Mirror the
+// Tauri adapter `types.rs` (`QconnectQueueVersionPayload`,
+// `QconnectSetPlayerStateQueueItemPayload`, `QconnectSetPlayerStateRequest`,
+// `QconnectSetVolumeRequest`, `QconnectMuteVolumeRequest`) field-for-field so the
+// wire frames the cloud parses are byte-identical between both frontends. Do NOT
+// rename/reorder optionals.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QconnectQueueVersionPayload {
+    pub major: u64,
+    pub minor: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QconnectSetPlayerStateQueueItemPayload {
+    pub queue_version: Option<QconnectQueueVersionPayload>,
+    pub id: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QconnectSetPlayerStateRequest {
+    pub playing_state: Option<i32>,
+    pub current_position: Option<i32>,
+    pub current_queue_item: Option<QconnectSetPlayerStateQueueItemPayload>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QconnectSetVolumeRequest {
+    pub renderer_id: Option<i32>,
+    pub volume: Option<i32>,
+    pub volume_delta: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QconnectMuteVolumeRequest {
+    pub renderer_id: Option<i32>,
+    pub value: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QconnectSetActiveRendererRequest {
+    pub renderer_id: Option<i32>,
+}
+
+/// Build a `CtrlSrvrSetPlayerState` request that seeks the remote renderer to
+/// `position_ms` for `current_queue_item_id` under optimistic concurrency.
+///
+/// `playing_state` is intentionally `None`: a seek must not toggle play/pause.
+/// Pure mirror of the Tauri `build_set_position_player_state_request`
+/// (`src-tauri/src/qconnect/commands.rs`).
+pub fn build_set_position_player_state_request(
+    position_ms: i64,
+    current_queue_item_id: Option<u64>,
+    queue_version: QconnectQueueVersionPayload,
+) -> QconnectSetPlayerStateRequest {
+    let current_position = i32::try_from(position_ms.max(0)).ok();
+    let current_queue_item = current_queue_item_id.and_then(|qid| {
+        i32::try_from(qid)
+            .ok()
+            .map(|id| QconnectSetPlayerStateQueueItemPayload {
+                queue_version: Some(QconnectQueueVersionPayload {
+                    major: queue_version.major,
+                    minor: queue_version.minor,
+                }),
+                id: Some(id),
+            })
+    });
+    QconnectSetPlayerStateRequest {
+        playing_state: None,
+        current_position,
+        current_queue_item,
+    }
+}
+
 /// Build the device-info payload with the default friendly name.
 pub fn default_qconnect_device_info() -> QconnectDeviceInfoPayload {
     default_qconnect_device_info_with_name(None)

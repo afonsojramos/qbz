@@ -15,15 +15,25 @@
 
 use std::sync::Arc;
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use qbz_app::shell::AppRuntime;
-use qconnect_app::renderer::PLAYING_STATE_STOPPED;
+use qconnect_app::queue_resolution::{
+    resolve_controller_queue_item_from_snapshots, resolve_queue_item_ids_from_queue_state,
+    QconnectRemoteSkipDirection,
+};
+use qconnect_app::renderer::{
+    PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING, PLAYING_STATE_STOPPED,
+};
 use qconnect_app::{
-    is_local_renderer_active, QconnectApp, QconnectAppEvent, QconnectEventSink,
+    build_effective_renderer_snapshot, ensure_session_renderer_state, is_local_renderer_active,
+    is_peer_renderer_active, renderer_allows_remote_volume, QConnectQueueState,
+    QConnectRendererState, QconnectApp, QconnectAppEvent, QconnectEventSink,
     QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRemoteSyncState,
-    QueueCommandType, RendererReport, RendererReportType, SessionLoopHost,
+    QconnectSessionState, QueueCommandType, RendererReport, RendererReportType, SessionLoopHost,
 };
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -31,11 +41,25 @@ use crate::adapter::SlintAdapter;
 use crate::qconnect_engine::SlintRendererEngine;
 use crate::qconnect_event_sink::{SlintQconnectApp, SlintQconnectEventSink};
 use crate::qconnect_transport::{
-    default_qconnect_device_info, default_qconnect_device_info_with_name, load_persisted_device_name,
-    resolve_transport_config, QconnectJoinSessionRequest, AUDIO_QUALITY_HIRES_LEVEL2,
-    BUFFER_STATE_OK,
+    build_set_position_player_state_request, default_qconnect_device_info,
+    default_qconnect_device_info_with_name, load_persisted_device_name, resolve_transport_config,
+    QconnectJoinSessionRequest, QconnectMuteVolumeRequest, QconnectQueueVersionPayload,
+    QconnectSetPlayerStateQueueItemPayload, QconnectSetPlayerStateRequest, QconnectSetVolumeRequest,
+    AUDIO_QUALITY_HIRES_LEVEL2, BUFFER_STATE_OK,
 };
 use crate::AppWindow;
+
+const QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS: u64 = 1_500;
+const QCONNECT_PLAY_TRACK_HANDOFF_POLL_MS: u64 = 50;
+
+/// Wall-clock now in ms (mirrors the Tauri `qconnect_now_ms`, which is
+/// Tauri-local; reimplemented inline here per the controller-port spec).
+fn qconnect_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 type Runtime = Arc<AppRuntime<SlintAdapter>>;
 
@@ -503,6 +527,771 @@ impl SlintQconnectService {
             }
             Err(err) => log::warn!("[QConnect] Failed to push local queue: {err}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // CONTROLLER-mode transport routing (`*_if_remote`). Mirror of the Tauri
+    // `src-tauri/src/qconnect/service.rs` adapter. Return contract:
+    // `Ok(true)` = handled remotely (do NOT run local), `Ok(false)` = fall back
+    // to the local path. The load-bearing safety property: every method begins
+    // with `effective_remote_renderer_snapshot()`, which returns `Some` ONLY
+    // when a PEER renderer is active (both active+local ids Some AND differ).
+    // In every non-controller situation it returns `Ok(false)` and the existing
+    // local path runs verbatim. Diagnostics are emitted via log + dev_push_event
+    // (no Tauri AppHandle in this crate).
+    // -----------------------------------------------------------------------
+
+    /// Send a controller command to the cloud. Mirrors the Tauri
+    /// `QconnectServiceState::send_command`, including the pending-transport
+    /// clear for superseded `CtrlSrvrSetPlayerState` actions.
+    async fn send_command(
+        &self,
+        command_type: QueueCommandType,
+        payload: Value,
+    ) -> Result<String, String> {
+        let app = {
+            let guard = self.inner.lock().await;
+            guard
+                .runtime
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.app))
+                .ok_or_else(|| "QConnect service is not running".to_string())?
+        };
+
+        if matches!(command_type, QueueCommandType::CtrlSrvrSetPlayerState) {
+            let state_handle = app.state_handle();
+            let mut state = state_handle.lock().await;
+            let should_clear_transport_pending = state
+                .pending
+                .current()
+                .map(|pending| pending.is_transport_control_action)
+                .unwrap_or(false);
+            if should_clear_transport_pending {
+                log::info!(
+                    "[QConnect] Clearing superseded pending transport control before sending next SET_PLAYER_STATE"
+                );
+                state.pending.clear();
+            }
+        }
+
+        let command = app.build_queue_command(command_type, payload).await;
+        app.send_queue_command(command)
+            .await
+            .map_err(|err| format!("qconnect send command failed: {err}"))
+    }
+
+    /// Update the app's cached renderer position (controller optimistic seek).
+    async fn update_renderer_position(&self, position_ms: u64) {
+        let guard = self.inner.lock().await;
+        if let Some(runtime) = &guard.runtime {
+            runtime.app.update_renderer_position(position_ms).await;
+        }
+    }
+
+    /// Best-effort local cursor alignment after a remote handoff so a later
+    /// local takeover ("Play here") continues at the right track.
+    /// `sync_current_to_id` only moves the queue pointer; it never starts
+    /// audible playback. Never fails the handoff.
+    async fn align_local_cursor(&self, track_id: u64) {
+        if self
+            .runtime
+            .core()
+            .sync_current_to_id(track_id)
+            .await
+            .is_none()
+        {
+            log::warn!(
+                "[QConnect] cursor align: track {track_id} not found in local queue (best-effort)"
+            );
+        }
+    }
+
+    /// The active renderer's effective snapshot (base local view merged with the
+    /// cloud's cached per-renderer state + session loop mode). Returns `None`
+    /// when not connected or no active renderer. Mirrors the Tauri
+    /// `effective_active_renderer_snapshot`.
+    pub(crate) async fn effective_active_renderer_snapshot(
+        &self,
+    ) -> Result<
+        Option<(
+            QConnectRendererState,
+            QConnectQueueState,
+            QconnectSessionState,
+        )>,
+        String,
+    > {
+        let (app, sync_state) = {
+            let guard = self.inner.lock().await;
+            let Some(runtime) = guard.runtime.as_ref() else {
+                return Ok(None);
+            };
+            (Arc::clone(&runtime.app), Arc::clone(&runtime.sync_state))
+        };
+
+        let queue = app.queue_state_snapshot().await;
+        let base_renderer = app.renderer_state_snapshot().await;
+        let state = sync_state.lock().await;
+        let session = state.session.clone();
+        let Some(active_renderer_id) = session.active_renderer_id else {
+            return Ok(None);
+        };
+
+        let renderer_state = state
+            .session_renderer_states
+            .get(&active_renderer_id)
+            .cloned();
+        let renderer = build_effective_renderer_snapshot(
+            &queue,
+            &base_renderer,
+            renderer_state.as_ref(),
+            state.session_loop_mode,
+        );
+
+        Ok(Some((renderer, queue, session)))
+    }
+
+    /// Like `effective_active_renderer_snapshot` but gated: returns `Some` ONLY
+    /// when a PEER renderer is active (controller mode). Mirrors the Tauri
+    /// `effective_remote_renderer_snapshot`. This is the gate for all
+    /// `*_if_remote` methods.
+    pub(crate) async fn effective_remote_renderer_snapshot(
+        &self,
+    ) -> Result<
+        Option<(
+            QConnectRendererState,
+            QConnectQueueState,
+            QconnectSessionState,
+        )>,
+        String,
+    > {
+        let Some((renderer, queue, session)) = self.effective_active_renderer_snapshot().await?
+        else {
+            return Ok(None);
+        };
+
+        if !is_peer_renderer_active(&session) {
+            return Ok(None);
+        }
+
+        Ok(Some((renderer, queue, session)))
+    }
+
+    /// Optimistically apply a queue_item_id / playing_state / position to the
+    /// active peer renderer's cached state, so the UI doesn't bounce back before
+    /// the cloud echo. Mirrors the Tauri `prime_remote_renderer_state`.
+    async fn prime_remote_renderer_state(
+        &self,
+        queue_item_id: u64,
+        playing_state: Option<i32>,
+        current_position_ms: Option<u64>,
+    ) {
+        let guard = self.inner.lock().await;
+        let Some(runtime) = guard.runtime.as_ref() else {
+            return;
+        };
+
+        let mut sync_state = runtime.sync_state.lock().await;
+        let Some(active_renderer_id) = sync_state.session.active_renderer_id else {
+            return;
+        };
+        if sync_state.session.local_renderer_id == Some(active_renderer_id) {
+            return;
+        }
+
+        let renderer_state = ensure_session_renderer_state(&mut sync_state, active_renderer_id);
+        renderer_state.current_queue_item_id = Some(queue_item_id);
+        if let Some(playing_state) = playing_state {
+            renderer_state.playing_state = Some(playing_state);
+        }
+        if let Some(current_position_ms) = current_position_ms {
+            renderer_state.current_position_ms = Some(current_position_ms);
+        }
+        renderer_state.updated_at_ms = qconnect_now_ms();
+    }
+
+    /// Optimistically apply only a playing_state to the active peer renderer.
+    /// Mirrors the Tauri `prime_remote_renderer_playing_state`.
+    async fn prime_remote_renderer_playing_state(&self, playing_state: i32) {
+        let guard = self.inner.lock().await;
+        let Some(runtime) = guard.runtime.as_ref() else {
+            return;
+        };
+
+        let mut sync_state = runtime.sync_state.lock().await;
+        let Some(active_renderer_id) = sync_state.session.active_renderer_id else {
+            return;
+        };
+        if sync_state.session.local_renderer_id == Some(active_renderer_id) {
+            return;
+        }
+
+        let renderer_state = ensure_session_renderer_state(&mut sync_state, active_renderer_id);
+        renderer_state.playing_state = Some(playing_state);
+        renderer_state.updated_at_ms = qconnect_now_ms();
+    }
+
+    pub async fn skip_next_if_remote(&self) -> Result<bool, String> {
+        self.skip_remote_renderer_if_active(QconnectRemoteSkipDirection::Next)
+            .await
+    }
+
+    pub async fn skip_previous_if_remote(&self) -> Result<bool, String> {
+        self.skip_remote_renderer_if_active(QconnectRemoteSkipDirection::Previous)
+            .await
+    }
+
+    /// Skip the active PEER renderer next/previous. Mirrors the Tauri
+    /// `skip_remote_renderer_if_active`.
+    async fn skip_remote_renderer_if_active(
+        &self,
+        direction: QconnectRemoteSkipDirection,
+    ) -> Result<bool, String> {
+        let direction_label = match direction {
+            QconnectRemoteSkipDirection::Next => "next",
+            QconnectRemoteSkipDirection::Previous => "previous",
+        };
+
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((renderer, queue, session)) = remote_context else {
+            let reason = {
+                let guard = self.inner.lock().await;
+                let Some(runtime) = guard.runtime.as_ref() else {
+                    return Ok(false);
+                };
+                let session = runtime.sync_state.lock().await.session.clone();
+                if session.active_renderer_id.is_none() {
+                    "missing_active_renderer_id"
+                } else if session.local_renderer_id.is_none() {
+                    "missing_local_renderer_id"
+                } else {
+                    "active_renderer_is_local"
+                }
+            };
+            log::info!("[QConnect] skip {direction_label} handoff skipped: {reason}");
+            dev_push_event(
+                &self.window,
+                format!("controller skip {direction_label}: local ({reason})"),
+            );
+            return Ok(false);
+        };
+
+        let resolution =
+            resolve_controller_queue_item_from_snapshots(&queue, &renderer, direction);
+
+        let Some(target_queue_item_id) = resolution.target_queue_item_id else {
+            log::warn!(
+                "[QConnect] skip {direction_label} handoff: no target queue item resolved (strategy={})",
+                resolution.strategy
+            );
+            dev_push_event(
+                &self.window,
+                format!("controller skip {direction_label}: NO TARGET ({})", resolution.strategy),
+            );
+            return Err(format!(
+                "remote renderer active but no {direction_label} target queue item could be resolved"
+            ));
+        };
+
+        let target_queue_item_id_i32 = i32::try_from(target_queue_item_id)
+            .map_err(|_| format!("target queue item id out of range: {target_queue_item_id}"))?;
+        let payload = serde_json::to_value(QconnectSetPlayerStateRequest {
+            playing_state: renderer.playing_state,
+            current_position: Some(0),
+            current_queue_item: Some(QconnectSetPlayerStateQueueItemPayload {
+                queue_version: Some(QconnectQueueVersionPayload {
+                    major: queue.version.major,
+                    minor: queue.version.minor,
+                }),
+                id: Some(target_queue_item_id_i32),
+            }),
+        })
+        .map_err(|err| format!("serialize controller skip payload: {err}"))?;
+
+        self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
+            .await?;
+        self.prime_remote_renderer_state(target_queue_item_id, renderer.playing_state, Some(0))
+            .await;
+        if let Some(target_track_id) = resolution.matched_track_id {
+            self.align_local_cursor(target_track_id).await;
+        }
+
+        log::info!(
+            "[QConnect] skip {direction_label} handoff -> queue_item {target_queue_item_id} (strategy={})",
+            resolution.strategy
+        );
+        dev_push_event(
+            &self.window,
+            format!("controller skip {direction_label} -> qid {target_queue_item_id} (active={:?})", session.active_renderer_id),
+        );
+
+        Ok(true)
+    }
+
+    /// Toggle play/pause on the active PEER renderer. Mirrors the Tauri
+    /// `toggle_remote_renderer_playback_if_active`.
+    pub async fn toggle_remote_renderer_playback_if_active(&self) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((renderer, queue, session)) = remote_context else {
+            let reason = {
+                let guard = self.inner.lock().await;
+                let Some(runtime) = guard.runtime.as_ref() else {
+                    return Ok(false);
+                };
+                let session = runtime.sync_state.lock().await.session.clone();
+                if session.active_renderer_id.is_none() {
+                    "missing_active_renderer_id"
+                } else if session.local_renderer_id.is_none() {
+                    "missing_local_renderer_id"
+                } else {
+                    "active_renderer_is_local"
+                }
+            };
+            log::info!("[QConnect] toggle_play handoff skipped: {reason}");
+            dev_push_event(&self.window, format!("controller toggle_play: local ({reason})"));
+            return Ok(false);
+        };
+
+        let next_playing_state = match renderer.playing_state {
+            Some(PLAYING_STATE_PLAYING) => PLAYING_STATE_PAUSED,
+            _ => PLAYING_STATE_PLAYING,
+        };
+        let current_position = renderer
+            .current_position_ms
+            .and_then(|value| i32::try_from(value).ok());
+        let current_queue_item = renderer.current_track.as_ref().and_then(|item| {
+            i32::try_from(item.queue_item_id).ok().map(|queue_item_id| {
+                QconnectSetPlayerStateQueueItemPayload {
+                    queue_version: Some(QconnectQueueVersionPayload {
+                        major: queue.version.major,
+                        minor: queue.version.minor,
+                    }),
+                    id: Some(queue_item_id),
+                }
+            })
+        });
+
+        let payload = serde_json::to_value(QconnectSetPlayerStateRequest {
+            playing_state: Some(next_playing_state),
+            current_position,
+            current_queue_item,
+        })
+        .map_err(|err| format!("serialize toggle_play request: {err}"))?;
+
+        self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
+            .await?;
+        self.prime_remote_renderer_playing_state(next_playing_state)
+            .await;
+
+        log::info!("[QConnect] toggle_play handoff -> playing_state {next_playing_state}");
+        dev_push_event(
+            &self.window,
+            format!("controller toggle_play -> {next_playing_state} (active={:?})", session.active_renderer_id),
+        );
+
+        Ok(true)
+    }
+
+    /// Hand off a "play this track" to the active PEER renderer. Polls the cloud
+    /// queue until the track appears, then SetPlayerState to it. Mirrors the
+    /// Tauri `play_remote_renderer_track_if_active`.
+    pub async fn play_remote_renderer_track_if_active(
+        &self,
+        track_id: u64,
+    ) -> Result<bool, String> {
+        let (app, session, sync_state) = {
+            let guard = self.inner.lock().await;
+            let Some(runtime) = guard.runtime.as_ref() else {
+                return Ok(false);
+            };
+            let session = runtime.sync_state.lock().await.session.clone();
+            (
+                Arc::clone(&runtime.app),
+                session,
+                Arc::clone(&runtime.sync_state),
+            )
+        };
+
+        let active_renderer_id = session.active_renderer_id;
+        let local_renderer_id = session.local_renderer_id;
+        let early_return_reason = if active_renderer_id.is_none() {
+            Some("missing_active_renderer_id")
+        } else if local_renderer_id.is_none() {
+            Some("missing_local_renderer_id")
+        } else if active_renderer_id == local_renderer_id {
+            Some("active_renderer_is_local")
+        } else {
+            None
+        };
+
+        if let Some(reason) = early_return_reason {
+            if reason == "active_renderer_is_local" {
+                let mut state = sync_state.lock().await;
+                state.last_load_attempt = Some((track_id, std::time::Instant::now()));
+            }
+            log::info!("[QConnect] play_track handoff skipped: {reason} (track {track_id})");
+            dev_push_event(
+                &self.window,
+                format!("controller play_track {track_id}: local ({reason})"),
+            );
+            return Ok(false);
+        }
+
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_millis(QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS);
+        let poll_interval =
+            std::time::Duration::from_millis(QCONNECT_PLAY_TRACK_HANDOFF_POLL_MS);
+        let mut attempts: u32 = 0;
+        loop {
+            attempts += 1;
+            let queue = app.queue_state_snapshot().await;
+
+            let (resolved_queue_item_id, _, _) =
+                resolve_queue_item_ids_from_queue_state(&queue, track_id);
+
+            if let Some(target_queue_item_id) = resolved_queue_item_id {
+                let target_queue_item_id_i32 =
+                    i32::try_from(target_queue_item_id).map_err(|_| {
+                        format!("target queue item id out of range: {target_queue_item_id}")
+                    })?;
+
+                let payload = serde_json::to_value(QconnectSetPlayerStateRequest {
+                    playing_state: Some(PLAYING_STATE_PLAYING),
+                    current_position: Some(0),
+                    current_queue_item: Some(QconnectSetPlayerStateQueueItemPayload {
+                        queue_version: Some(QconnectQueueVersionPayload {
+                            major: queue.version.major,
+                            minor: queue.version.minor,
+                        }),
+                        id: Some(target_queue_item_id_i32),
+                    }),
+                })
+                .map_err(|err| format!("serialize play_track handoff payload: {err}"))?;
+
+                self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
+                    .await?;
+                self.prime_remote_renderer_state(
+                    target_queue_item_id,
+                    Some(PLAYING_STATE_PLAYING),
+                    Some(0),
+                )
+                .await;
+                self.align_local_cursor(track_id).await;
+
+                log::info!(
+                    "[QConnect] play_track handoff -> qid {target_queue_item_id} (track {track_id}, attempts={attempts})"
+                );
+                dev_push_event(
+                    &self.window,
+                    format!("controller play_track {track_id} -> qid {target_queue_item_id}"),
+                );
+
+                return Ok(true);
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+
+        log::warn!(
+            "[QConnect] play_track handoff: track {track_id} not present in remote queue after {QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS}ms"
+        );
+        dev_push_event(
+            &self.window,
+            format!("controller play_track {track_id}: NOT IN QUEUE (timeout)"),
+        );
+        Err(format!(
+            "remote renderer active but track {track_id} was not present in qconnect queue after {QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS}ms"
+        ))
+    }
+
+    /// Toggle shuffle on the active PEER renderer. Mirrors the Tauri
+    /// `toggle_shuffle_if_remote`.
+    pub async fn toggle_shuffle_if_remote(&self) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((renderer, _queue, session)) = remote_context else {
+            return Ok(false);
+        };
+
+        let current_shuffle = renderer.shuffle_mode.unwrap_or(false);
+        let next_shuffle = !current_shuffle;
+
+        let payload = json!({ "shuffle_mode": next_shuffle });
+        self.send_command(QueueCommandType::CtrlSrvrSetShuffleMode, payload)
+            .await?;
+
+        log::info!("[QConnect] toggle_shuffle handoff -> {next_shuffle}");
+        dev_push_event(
+            &self.window,
+            format!("controller shuffle -> {next_shuffle} (active={:?})", session.active_renderer_id),
+        );
+
+        Ok(true)
+    }
+
+    /// Cycle repeat mode on the active PEER renderer. QConnect loop wire values:
+    /// 1=off, 3=all, 2=one; cycle off->all->one->off. Mirrors the Tauri
+    /// `cycle_repeat_if_remote`.
+    pub async fn cycle_repeat_if_remote(&self) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((renderer, _queue, session)) = remote_context else {
+            return Ok(false);
+        };
+
+        let current_loop = renderer.loop_mode.unwrap_or(1);
+        let next_loop = match current_loop {
+            0 | 1 => 3, // off -> all
+            3 => 2,     // all -> one
+            _ => 1,     // one -> off
+        };
+
+        let payload = json!({ "loop_mode": next_loop });
+        self.send_command(QueueCommandType::CtrlSrvrSetLoopMode, payload)
+            .await?;
+
+        log::info!("[QConnect] cycle_repeat handoff -> {next_loop}");
+        dev_push_event(
+            &self.window,
+            format!("controller repeat -> {next_loop} (active={:?})", session.active_renderer_id),
+        );
+
+        Ok(true)
+    }
+
+    /// Set volume on the active PEER renderer. Special case: if the renderer
+    /// disallows remote volume, return `Ok(true)` (handled no-op) so the
+    /// frontend does NOT fall back to local volume. Mirrors the Tauri
+    /// `set_volume_if_remote`.
+    pub async fn set_volume_if_remote(&self, volume: i32) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((_renderer, _queue, session)) = remote_context else {
+            return Ok(false);
+        };
+
+        if let Some(active_id) = session.active_renderer_id {
+            if let Some(info) = session
+                .renderers
+                .iter()
+                .find(|r| r.renderer_id == active_id)
+            {
+                if !renderer_allows_remote_volume(info) {
+                    log::info!(
+                        "[QConnect] set_volume_if_remote short-circuited: renderer {active_id} disallows remote volume"
+                    );
+                    dev_push_event(
+                        &self.window,
+                        "controller volume: renderer disallows remote volume (no-op)".to_string(),
+                    );
+                    return Ok(true);
+                }
+            }
+        }
+
+        let payload = serde_json::to_value(QconnectSetVolumeRequest {
+            renderer_id: session.active_renderer_id,
+            volume: Some(volume),
+            volume_delta: None,
+        })
+        .map_err(|err| format!("serialize set_volume request: {err}"))?;
+
+        self.send_command(QueueCommandType::CtrlSrvrSetVolume, payload)
+            .await?;
+
+        log::info!("[QConnect] set_volume handoff -> {volume}");
+        dev_push_event(
+            &self.window,
+            format!("controller volume -> {volume} (active={:?})", session.active_renderer_id),
+        );
+
+        Ok(true)
+    }
+
+    /// Mute/unmute the active PEER renderer. Mirrors the Tauri `mute_if_remote`.
+    pub async fn mute_if_remote(&self, value: bool) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((_renderer, _queue, session)) = remote_context else {
+            return Ok(false);
+        };
+
+        let payload = serde_json::to_value(QconnectMuteVolumeRequest {
+            renderer_id: session.active_renderer_id,
+            value,
+        })
+        .map_err(|err| format!("serialize mute_volume request: {err}"))?;
+
+        self.send_command(QueueCommandType::CtrlSrvrMuteVolume, payload)
+            .await?;
+
+        log::info!("[QConnect] mute handoff -> {value}");
+        dev_push_event(
+            &self.window,
+            format!("controller mute -> {value} (active={:?})", session.active_renderer_id),
+        );
+
+        Ok(true)
+    }
+
+    /// Set autoplay mode on the active PEER renderer. Mirrors the Tauri
+    /// `set_autoplay_mode_if_remote`.
+    pub async fn set_autoplay_mode_if_remote(&self, enabled: bool) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((_renderer, _queue, session)) = remote_context else {
+            return Ok(false);
+        };
+
+        let payload = json!({
+            "autoplay_mode": enabled,
+            "autoplay_reset": true,
+            "autoplay_loading": false
+        });
+        self.send_command(QueueCommandType::CtrlSrvrSetAutoplayMode, payload)
+            .await?;
+
+        log::info!("[QConnect] set_autoplay_mode handoff -> {enabled}");
+        dev_push_event(
+            &self.window,
+            format!("controller autoplay -> {enabled} (active={:?})", session.active_renderer_id),
+        );
+
+        Ok(true)
+    }
+
+    /// Load autoplay tracks onto the active PEER renderer. Empty list = handled
+    /// no-op. Mirrors the Tauri `autoplay_load_tracks_if_remote`.
+    pub async fn autoplay_load_tracks_if_remote(
+        &self,
+        track_ids: Vec<u32>,
+    ) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((_renderer, _queue, session)) = remote_context else {
+            return Ok(false);
+        };
+
+        if track_ids.is_empty() {
+            return Ok(true); // nothing to load, but handled remotely
+        }
+
+        let track_count = track_ids.len();
+        let payload = json!({
+            "track_ids": track_ids,
+            "context_uuid": Uuid::new_v4().to_string()
+        });
+        self.send_command(QueueCommandType::CtrlSrvrAutoplayLoadTracks, payload)
+            .await?;
+
+        log::info!("[QConnect] autoplay_load_tracks handoff -> {track_count} tracks");
+        dev_push_event(
+            &self.window,
+            format!("controller autoplay_load {track_count} (active={:?})", session.active_renderer_id),
+        );
+
+        Ok(true)
+    }
+
+    /// Stop the active PEER renderer. Mirrors the Tauri `stop_if_remote`.
+    pub async fn stop_if_remote(&self) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((renderer, queue, session)) = remote_context else {
+            return Ok(false);
+        };
+
+        let current_position = renderer
+            .current_position_ms
+            .and_then(|value| i32::try_from(value).ok());
+        let current_queue_item = renderer.current_track.as_ref().and_then(|item| {
+            i32::try_from(item.queue_item_id).ok().map(|queue_item_id| {
+                QconnectSetPlayerStateQueueItemPayload {
+                    queue_version: Some(QconnectQueueVersionPayload {
+                        major: queue.version.major,
+                        minor: queue.version.minor,
+                    }),
+                    id: Some(queue_item_id),
+                }
+            })
+        });
+
+        let payload = serde_json::to_value(QconnectSetPlayerStateRequest {
+            playing_state: Some(PLAYING_STATE_STOPPED),
+            current_position,
+            current_queue_item,
+        })
+        .map_err(|err| format!("serialize stop request: {err}"))?;
+
+        self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
+            .await?;
+        self.prime_remote_renderer_playing_state(PLAYING_STATE_STOPPED)
+            .await;
+
+        log::info!("[QConnect] stop handoff");
+        dev_push_event(
+            &self.window,
+            format!("controller stop (active={:?})", session.active_renderer_id),
+        );
+
+        Ok(true)
+    }
+
+    /// Seek the active PEER renderer to `position_ms`. `playing_state` is not
+    /// touched (a seek must not toggle play/pause). Mirrors the Tauri
+    /// `set_position_if_remote`.
+    pub async fn set_position_if_remote(&self, position_ms: i64) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((renderer, queue, session)) = remote_context else {
+            return Ok(false);
+        };
+
+        let current_queue_item_id = renderer
+            .current_track
+            .as_ref()
+            .map(|item| item.queue_item_id);
+
+        let request = build_set_position_player_state_request(
+            position_ms,
+            current_queue_item_id,
+            QconnectQueueVersionPayload {
+                major: queue.version.major,
+                minor: queue.version.minor,
+            },
+        );
+        let payload = serde_json::to_value(request)
+            .map_err(|err| format!("serialize set_position request: {err}"))?;
+
+        self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
+            .await?;
+
+        if position_ms >= 0 {
+            self.update_renderer_position(position_ms as u64).await;
+        }
+
+        log::info!("[QConnect] set_position handoff -> {position_ms}ms");
+        dev_push_event(
+            &self.window,
+            format!("controller seek -> {position_ms}ms (active={:?})", session.active_renderer_id),
+        );
+
+        Ok(true)
+    }
+
+    /// Switch the active renderer (device picker / "Play here"). Thin wrapper
+    /// over `QconnectApp::send_set_active_renderer` (guard + clear-pending).
+    /// Mirrors the Tauri `v2_qconnect_set_active_renderer`.
+    pub async fn set_active_renderer(&self, renderer_id: i32) -> Result<bool, String> {
+        let app = {
+            let guard = self.inner.lock().await;
+            guard
+                .runtime
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.app))
+                .ok_or_else(|| "QConnect service is not running".to_string())?
+        };
+        let handled = app.send_set_active_renderer(renderer_id).await?;
+        dev_push_event(
+            &self.window,
+            format!("controller set_active_renderer -> {renderer_id} (sent={handled})"),
+        );
+        Ok(handled)
     }
 }
 
