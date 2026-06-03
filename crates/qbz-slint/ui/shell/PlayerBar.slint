@@ -19,7 +19,7 @@ import { IconButton, PlayButton } from "../primitives/BarControls.slint";
 import { SeekBar } from "SeekBar.slint";
 import { SongCard } from "SongCard.slint";
 import { TransportControls } from "TransportControls.slint";
-import { NowPlayingState, ShellState, AppearanceState, SettingsState, TooltipState, QconnectDevState } from "../state.slint";
+import { NowPlayingState, ShellState, AppearanceState, SettingsState, TooltipState } from "../state.slint";
 
 // IconButton + PlayButton now live in primitives/BarControls.slint (shared
 // with TransportControls). ConnectButton + ToggleRow stay local (bar-only).
@@ -408,22 +408,6 @@ export component PlayerBar inherits Rectangle {
                                             color: Theme.accent-text;
                                             font-size: 13px;
                                             font-weight: 600;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                    // DEV: open the QConnect diagnostics modal.
-                                    diag-ta := TouchArea {
-                                        height: 22px;
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            QconnectDevState.open = true;
-                                            qconnect-menu.close();
-                                        }
-                                        Text {
-                                            text: "Diagnostics";
-                                            color: diag-ta.has-hover ? Theme.text-secondary : Theme.text-muted;
-                                            font-size: 11px;
                                             horizontal-alignment: center;
                                             vertical-alignment: center;
                                         }
