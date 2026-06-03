@@ -1,112 +1,26 @@
-//! Remote track loading for QConnect: stream URL resolution, FLAC probe,
-//! progressive HTTP streaming into the player engine, full-download
-//! fallback, and the dedup window that prevents echo SetState frames
-//! from re-triggering an in-progress load.
+//! Remote track loading for QConnect: the protected `CoreBridge` renderer-engine
+//! impl plus its private HTTP streaming feeder (stream URL probe, progressive
+//! streaming into the player, full-download fallback).
+//!
+//! The dedup window, `should_reload`, and `ensure_remote_track_loaded`
+//! orchestration moved to `qconnect_app::renderer` (slice 6, step 6); what stays
+//! here is the engine-/reqwest-bound code that cannot cross the qconnect-app
+//! boundary: the protected bit-perfect seams (`play_streaming_dynamic` /
+//! `play_data`) and the detached HTTP feeder that owns the `BufferWriter`.
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::Mutex;
-
 use crate::core_bridge::CoreBridge;
-
-/// `quality_from_max_audio_quality` now lives in the frontend-agnostic
-/// `qconnect_app::session` module. Re-exported here so the existing call sites in
-/// this module compile unchanged.
-use qconnect_app::quality_from_max_audio_quality;
 
 use async_trait::async_trait;
 use qbz_models::{Quality, QueueTrack, RepeatMode, Track};
 use qbz_player::PlaybackState;
 use qconnect_app::QconnectRendererEngine;
 
-use super::QconnectRemoteSyncState;
-
-const LOAD_ATTEMPT_DEDUP_WINDOW: Duration = Duration::from_secs(5);
-
-pub(super) fn should_reload_remote_track(
-    playback_state: &qbz_player::PlaybackState,
-    track_id: u64,
-) -> bool {
-    // Only reload when the track ID actually changed. The previous
-    // !has_loaded_audio gate fired during the buffering window of an
-    // initial load (qbz already started fetching but the audio engine
-    // hasn't reported the track as loaded yet) — when the cloud echo
-    // SetState arrived for the same track, this caused a redundant
-    // load_remote_track_into_player that interrupted the in-progress
-    // load. That was the residual first-track hiccup.
-    playback_state.track_id != track_id
-}
-
-async fn load_remote_track_into_player(
-    bridge: &CoreBridge,
-    track_id: u64,
-    max_audio_quality: Option<i32>,
-) -> Result<(), String> {
-    let quality = quality_from_max_audio_quality(max_audio_quality);
-    let stream_url = bridge
-        .get_stream_url(track_id, quality)
-        .await
-        .map_err(|err| format!("resolve stream url for remote track {track_id}: {err}"))?;
-    let duration_secs = bridge
-        .get_track(track_id)
-        .await
-        .map(|track| u64::from(track.duration))
-        .unwrap_or(0);
-
-    match stream_remote_track_into_player(bridge, track_id, duration_secs, 0, &stream_url.url).await {
-        Ok(()) => Ok(()),
-        Err(stream_err) => {
-            log::warn!(
-                "[QConnect] Streaming handoff unavailable for track {}: {}. Falling back to full download.",
-                track_id,
-                stream_err
-            );
-            let audio_data = download_remote_audio(&stream_url.url).await?;
-            bridge
-                .player()
-                .play_data(audio_data, track_id)
-                .map_err(|err| format!("play remote track {track_id}: {err}"))?;
-            Ok(())
-        }
-    }
-}
-
-/// Returns true if a load attempt for `track_id` was registered within the
-/// dedup window. The audio thread updates `playback_state.track_id` only
-/// after `engine.append(source)` succeeds — the buffer/decode window
-/// before that creates a gap during which an echoed SetState would
-/// otherwise re-trigger the same load and interrupt the in-progress one.
-fn is_recent_load_attempt(state: &QconnectRemoteSyncState, track_id: u64) -> bool {
-    match state.last_load_attempt {
-        Some((tid, ts)) => tid == track_id && ts.elapsed() < LOAD_ATTEMPT_DEDUP_WINDOW,
-        None => false,
-    }
-}
-
-pub(super) async fn ensure_remote_track_loaded(
-    bridge: &CoreBridge,
-    sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
-    track_id: u64,
-    max_audio_quality: Option<i32>,
-) -> Result<(), String> {
-    {
-        let state = sync_state.lock().await;
-        if is_recent_load_attempt(&state, track_id) {
-            return Ok(());
-        }
-    }
-    let playback_state = bridge.get_playback_state();
-    if !should_reload_remote_track(&playback_state, track_id) {
-        return Ok(());
-    }
-
-    {
-        let mut state = sync_state.lock().await;
-        state.last_load_attempt = Some((track_id, std::time::Instant::now()));
-    }
-    load_remote_track_into_player(bridge, track_id, max_audio_quality).await
-}
+/// Re-exported for `tests.rs` (`super::track_loading::should_reload_remote_track`);
+/// the non-test orchestration that consumed it moved to `qconnect_app::renderer`.
+#[cfg(test)]
+pub(super) use qconnect_app::renderer::should_reload_remote_track;
 
 struct QconnectRemoteStreamInfo {
     content_length: u64,

@@ -33,14 +33,17 @@ pub use types::*;
 /// `qconnect_app::renderer` module (slice 6). Re-exported here so existing
 /// `super::…` references inside this module compile unchanged.
 pub(super) use qconnect_app::renderer::{
-    model_track_to_core_queue_track, normalize_volume_to_fraction,
-    qconnect_repeat_mode_from_loop_mode,
+    PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING, PLAYING_STATE_STOPPED,
 };
 
-pub(super) const PLAYING_STATE_UNKNOWN: i32 = 0;
-pub(super) const PLAYING_STATE_STOPPED: i32 = 1;
-pub(super) const PLAYING_STATE_PLAYING: i32 = 2;
-pub(super) const PLAYING_STATE_PAUSED: i32 = 3;
+// Consumed only by the test module now (their non-test callers moved into
+// `qconnect_app::renderer` in slice 6); gate to avoid unused-import warnings in
+// lib builds.
+#[cfg(test)]
+pub(super) use qconnect_app::renderer::{
+    normalize_volume_to_fraction, qconnect_repeat_mode_from_loop_mode,
+};
+
 pub(super) const BUFFER_STATE_OK: i32 = 2;
 
 // AudioQuality enum: 0=unknown, 1=mp3, 2=cd, 3=hires_l1, 4=hires_l2(192k), 5=hires_l3(384k)
