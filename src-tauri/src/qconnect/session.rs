@@ -9,14 +9,9 @@ use qconnect_app::{QConnectQueueState, QConnectRendererState};
 use qconnect_core::QueueItem;
 use serde::Serialize;
 
-use super::queue_resolution::{
-    find_cursor_index_by_queue_item_id, normalize_current_queue_item_id_from_queue_state,
-    ordered_queue_cursors, QconnectOrderedQueueCursor,
-};
+use super::queue_resolution::{find_cursor_index_by_queue_item_id, ordered_queue_cursors};
 use super::transport::default_qconnect_device_info;
-use super::{
-    QconnectQueueVersionPayload, QconnectRemoteSyncState, QconnectVisibleQueueProjection,
-};
+use super::{QconnectQueueVersionPayload, QconnectVisibleQueueProjection};
 
 /// Session topology types now live in the frontend-agnostic `qconnect_app::session`
 /// module (slice 2+4). Re-exported here so existing `super::session::…` /
@@ -31,26 +26,20 @@ pub(super) use qconnect_app::{
     ensure_session_renderer_state, is_local_renderer_active, is_peer_renderer_active,
     renderer_allows_remote_volume, QconnectFileAudioQualitySnapshot,
 };
+
+/// The session-projection helpers (`queue_item_snapshot_for_cursor`,
+/// `build_session_renderer_snapshot`) and the renderer-snapshot cache mutator
+/// (`cache_renderer_snapshot`) also moved to qconnect-app (slice 6, Slint port)
+/// so the Tauri and Slint event sinks share one definition. Re-exported so the
+/// existing `super::session::…` / `super::…` callers compile unchanged.
+pub(super) use qconnect_app::{
+    build_session_renderer_snapshot, cache_renderer_snapshot, queue_item_snapshot_for_cursor,
+};
 // find_unique_renderer_id's sole non-test caller (refresh_local_renderer_id)
 // moved to qconnect-app, so it is referenced only by the test module now; gate
 // the re-export to test builds.
 #[cfg(test)]
 pub(super) use qconnect_app::find_unique_renderer_id;
-
-pub(super) fn queue_item_snapshot_for_cursor(
-    queue: &QConnectQueueState,
-    cursor: QconnectOrderedQueueCursor,
-) -> Option<QueueItem> {
-    match cursor {
-        QconnectOrderedQueueCursor::Queue(index) => {
-            queue.queue_items.get(index).cloned().map(|mut item| {
-                item.queue_item_id = normalize_current_queue_item_id_from_queue_state(queue, index);
-                item
-            })
-        }
-        QconnectOrderedQueueCursor::Autoplay(index) => queue.autoplay_items.get(index).cloned(),
-    }
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct QconnectRendererReportDebugEvent {
@@ -82,37 +71,6 @@ pub(super) fn resolve_local_identity() -> qconnect_app::LocalIdentity {
         brand: info.brand,
         model: info.model,
         device_type: info.device_type,
-    }
-}
-
-pub(super) fn build_session_renderer_snapshot(
-    queue: &QConnectQueueState,
-    renderer_state: Option<&QconnectSessionRendererState>,
-    session_loop_mode: Option<i32>,
-) -> QConnectRendererState {
-    let renderer_state = renderer_state.cloned().unwrap_or_default();
-    let cursors = ordered_queue_cursors(queue);
-    let current_index =
-        find_cursor_index_by_queue_item_id(&cursors, queue, renderer_state.current_queue_item_id);
-    let current_track =
-        current_index.and_then(|index| queue_item_snapshot_for_cursor(queue, cursors[index]));
-    let next_track = current_index
-        .and_then(|index| cursors.get(index + 1).copied())
-        .and_then(|cursor| queue_item_snapshot_for_cursor(queue, cursor));
-
-    QConnectRendererState {
-        active: renderer_state.active,
-        playing_state: renderer_state.playing_state,
-        current_position_ms: renderer_state.current_position_ms,
-        current_track,
-        next_track,
-        volume: renderer_state.volume,
-        volume_delta: None,
-        muted: renderer_state.muted,
-        max_audio_quality: renderer_state.max_audio_quality,
-        loop_mode: renderer_state.loop_mode.or(session_loop_mode),
-        shuffle_mode: renderer_state.shuffle_mode,
-        updated_at_ms: renderer_state.updated_at_ms,
     }
 }
 
@@ -235,25 +193,3 @@ pub(super) fn build_visible_queue_projection(
     }
 }
 
-pub(super) fn cache_renderer_snapshot(
-    sync_state: &mut QconnectRemoteSyncState,
-    renderer_snapshot: &QConnectRendererState,
-) {
-    sync_state.last_renderer_queue_item_id = renderer_snapshot
-        .current_track
-        .as_ref()
-        .map(|item| item.queue_item_id);
-    sync_state.last_renderer_next_queue_item_id = renderer_snapshot
-        .next_track
-        .as_ref()
-        .map(|item| item.queue_item_id);
-    sync_state.last_renderer_track_id = renderer_snapshot
-        .current_track
-        .as_ref()
-        .map(|item| item.track_id);
-    sync_state.last_renderer_next_track_id = renderer_snapshot
-        .next_track
-        .as_ref()
-        .map(|item| item.track_id);
-    sync_state.last_renderer_playing_state = renderer_snapshot.playing_state;
-}

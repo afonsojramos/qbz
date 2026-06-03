@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use qconnect_core::QConnectQueueState;
+use qconnect_core::{QConnectQueueState, QConnectRendererState};
 
 use crate::session::{
     QconnectFileAudioQualitySnapshot, QconnectSessionRendererState, QconnectSessionState,
@@ -93,4 +93,32 @@ pub fn ensure_session_renderer_state(
             active,
             ..Default::default()
         })
+}
+
+/// Cache the queue_item/track ids + playing_state derived from a renderer
+/// snapshot into the accumulator, so subsequent outbound reports and visible
+/// projections reuse them. Pure mutation; relocated from the Tauri adapter
+/// (slice 6, Slint port) so both the Tauri and Slint event sinks share one
+/// definition. Byte-identical behavior.
+pub fn cache_renderer_snapshot(
+    state: &mut QconnectRemoteSyncState,
+    renderer_snapshot: &QConnectRendererState,
+) {
+    state.last_renderer_queue_item_id = renderer_snapshot
+        .current_track
+        .as_ref()
+        .map(|item| item.queue_item_id);
+    state.last_renderer_next_queue_item_id = renderer_snapshot
+        .next_track
+        .as_ref()
+        .map(|item| item.queue_item_id);
+    state.last_renderer_track_id = renderer_snapshot
+        .current_track
+        .as_ref()
+        .map(|item| item.track_id);
+    state.last_renderer_next_track_id = renderer_snapshot
+        .next_track
+        .as_ref()
+        .map(|item| item.track_id);
+    state.last_renderer_playing_state = renderer_snapshot.playing_state;
 }

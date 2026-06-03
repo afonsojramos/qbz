@@ -6,7 +6,13 @@
 //! byte-for-byte identical to the prior Tauri-side definitions.
 
 use qbz_models::Quality;
+use qconnect_core::{QConnectQueueState, QConnectRendererState, QueueItem};
 use serde::{Deserialize, Serialize};
+
+use crate::queue_resolution::{
+    find_cursor_index_by_queue_item_id, normalize_current_queue_item_id_from_queue_state,
+    ordered_queue_cursors, QconnectOrderedQueueCursor,
+};
 
 /// Lifecycle state surfaced to the UI so the toggle can reflect what the user
 /// asked for (`running`) separately from what the transport currently has
@@ -358,6 +364,66 @@ pub fn find_unique_renderer_id(
     }
 
     Some(first)
+}
+
+// ---------------------------------------------------------------------------
+// Session-projection helpers (relocated from the Tauri adapter — slice 6, Slint
+// port). Pure functions over the cloud queue + cached per-renderer state. They
+// move here (frontend-agnostic) so the Tauri event sink AND the Slint event sink
+// build the same renderer projection from one definition. Byte-for-byte
+// identical to the prior Tauri-side bodies.
+// ---------------------------------------------------------------------------
+
+/// Snapshot the queue item a cursor points at, normalizing the queue_item_id for
+/// in-queue cursors (autoplay items carry their own id verbatim).
+pub fn queue_item_snapshot_for_cursor(
+    queue: &QConnectQueueState,
+    cursor: QconnectOrderedQueueCursor,
+) -> Option<QueueItem> {
+    match cursor {
+        QconnectOrderedQueueCursor::Queue(index) => {
+            queue.queue_items.get(index).cloned().map(|mut item| {
+                item.queue_item_id = normalize_current_queue_item_id_from_queue_state(queue, index);
+                item
+            })
+        }
+        QconnectOrderedQueueCursor::Autoplay(index) => queue.autoplay_items.get(index).cloned(),
+    }
+}
+
+/// Build a renderer-state projection from the cloud queue + a cached per-renderer
+/// state, resolving the current/next track by the renderer's current_queue_item_id
+/// against the ordered cursors. `session_loop_mode` is the fallback loop mode when
+/// the renderer state omits one.
+pub fn build_session_renderer_snapshot(
+    queue: &QConnectQueueState,
+    renderer_state: Option<&QconnectSessionRendererState>,
+    session_loop_mode: Option<i32>,
+) -> QConnectRendererState {
+    let renderer_state = renderer_state.cloned().unwrap_or_default();
+    let cursors = ordered_queue_cursors(queue);
+    let current_index =
+        find_cursor_index_by_queue_item_id(&cursors, queue, renderer_state.current_queue_item_id);
+    let current_track =
+        current_index.and_then(|index| queue_item_snapshot_for_cursor(queue, cursors[index]));
+    let next_track = current_index
+        .and_then(|index| cursors.get(index + 1).copied())
+        .and_then(|cursor| queue_item_snapshot_for_cursor(queue, cursor));
+
+    QConnectRendererState {
+        active: renderer_state.active,
+        playing_state: renderer_state.playing_state,
+        current_position_ms: renderer_state.current_position_ms,
+        current_track,
+        next_track,
+        volume: renderer_state.volume,
+        volume_delta: None,
+        muted: renderer_state.muted,
+        max_audio_quality: renderer_state.max_audio_quality,
+        loop_mode: renderer_state.loop_mode.or(session_loop_mode),
+        shuffle_mode: renderer_state.shuffle_mode,
+        updated_at_ms: renderer_state.updated_at_ms,
+    }
 }
 
 #[cfg(test)]
