@@ -2975,13 +2975,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Transport — wired through the NowPlayingState global callbacks.
+    //
+    // QConnect CONTROLLER gating: each callback first tries the remote handoff
+    // (`*_if_remote`). When a PEER renderer is active the command is forwarded
+    // to it and `Ok(true)` short-circuits. In EVERY non-controller situation
+    // (disconnected, RENDERER mode where active==local, or no active renderer)
+    // the remote method returns `Ok(false)` and the existing local `playback::*`
+    // call runs unchanged — see qconnect_service.rs §safety. This cannot regress
+    // renderer/local playback because the gate is `is_peer_renderer_active`.
     {
         let runtime = app_runtime.clone();
         let handle = tokio_rt.handle().clone();
         window
             .global::<NowPlayingState>()
             .on_toggle_play(move || {
-                playback::toggle_play_pause(runtime.clone(), handle.clone());
+                let runtime = runtime.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    if let Some(svc) = qconnect_service::service() {
+                        match svc.toggle_remote_renderer_playback_if_active().await {
+                            Ok(true) => return,
+                            Ok(false) => {}
+                            Err(e) => {
+                                log::warn!("[QConnect] toggle_play handoff: {e}");
+                                return;
+                            }
+                        }
+                    }
+                    playback::toggle_play_pause(runtime, handle);
+                });
             });
     }
     {
@@ -2989,7 +3011,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         window.global::<NowPlayingState>().on_next(move || {
-            playback::next(runtime.clone(), weak.clone(), handle.clone());
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let handle = handle.clone();
+            handle.clone().spawn(async move {
+                if let Some(svc) = qconnect_service::service() {
+                    match svc.skip_next_if_remote().await {
+                        Ok(true) => return,
+                        Ok(false) => {}
+                        Err(e) => {
+                            log::warn!("[QConnect] next handoff: {e}");
+                            return;
+                        }
+                    }
+                }
+                playback::next(runtime, weak, handle);
+            });
         });
     }
     {
@@ -2997,7 +3034,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         window.global::<NowPlayingState>().on_previous(move || {
-            playback::previous(runtime.clone(), weak.clone(), handle.clone());
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let handle = handle.clone();
+            handle.clone().spawn(async move {
+                if let Some(svc) = qconnect_service::service() {
+                    match svc.skip_previous_if_remote().await {
+                        Ok(true) => return,
+                        Ok(false) => {}
+                        Err(e) => {
+                            log::warn!("[QConnect] previous handoff: {e}");
+                            return;
+                        }
+                    }
+                }
+                playback::previous(runtime, weak, handle);
+            });
         });
     }
     {
@@ -3006,7 +3058,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window
             .global::<NowPlayingState>()
             .on_seek(move |fraction| {
-                playback::seek(runtime.clone(), handle.clone(), fraction);
+                let runtime = runtime.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    if let Some(svc) = qconnect_service::service() {
+                        // Remote API wants absolute position in ms; the bar gives
+                        // a 0..1 fraction. Derive ms from the locally-known
+                        // duration (seconds). Until Slice 4 reflects the peer's
+                        // duration on the bar, this is the local track's duration
+                        // (acceptable interim).
+                        let fraction = fraction.clamp(0.0, 1.0);
+                        let duration_secs = runtime.core().get_playback_state().duration;
+                        let position_ms =
+                            (fraction as f64 * duration_secs as f64 * 1000.0).round() as i64;
+                        match svc.set_position_if_remote(position_ms).await {
+                            Ok(true) => return,
+                            Ok(false) => {}
+                            Err(e) => {
+                                log::warn!("[QConnect] seek handoff: {e}");
+                                return;
+                            }
+                        }
+                    }
+                    playback::seek(runtime, handle, fraction);
+                });
             });
     }
     {
@@ -3016,7 +3091,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window
             .global::<NowPlayingState>()
             .on_set_volume(move |fraction| {
-                playback::set_volume(runtime.clone(), weak.clone(), handle.clone(), fraction);
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    if let Some(svc) = qconnect_service::service() {
+                        // Remote API wants 0..100; the bar gives a 0..1 fraction.
+                        let volume = (fraction.clamp(0.0, 1.0) * 100.0).round() as i32;
+                        match svc.set_volume_if_remote(volume).await {
+                            Ok(true) => return,
+                            Ok(false) => {}
+                            Err(e) => {
+                                log::warn!("[QConnect] set_volume handoff: {e}");
+                                return;
+                            }
+                        }
+                    }
+                    playback::set_volume(runtime, weak, handle, fraction);
+                });
             });
     }
     {
@@ -3026,7 +3118,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window
             .global::<NowPlayingState>()
             .on_toggle_mute(move || {
-                playback::toggle_mute(runtime.clone(), weak.clone(), handle.clone());
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    if let Some(svc) = qconnect_service::service() {
+                        // Remote API wants the target value; send the negation of
+                        // the authoritative local MUTED flag.
+                        let target = !playback::is_muted();
+                        match svc.mute_if_remote(target).await {
+                            Ok(true) => return,
+                            Ok(false) => {}
+                            Err(e) => {
+                                log::warn!("[QConnect] toggle_mute handoff: {e}");
+                                return;
+                            }
+                        }
+                    }
+                    playback::toggle_mute(runtime, weak, handle);
+                });
             });
     }
 
@@ -3037,7 +3147,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window
             .global::<NowPlayingState>()
             .on_toggle_shuffle(move || {
-                playback::toggle_shuffle(runtime.clone(), weak.clone(), handle.clone());
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    if let Some(svc) = qconnect_service::service() {
+                        match svc.toggle_shuffle_if_remote().await {
+                            Ok(true) => return,
+                            Ok(false) => {}
+                            Err(e) => {
+                                log::warn!("[QConnect] toggle_shuffle handoff: {e}");
+                                return;
+                            }
+                        }
+                    }
+                    playback::toggle_shuffle(runtime, weak, handle);
+                });
             });
     }
     {
@@ -3047,7 +3172,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window
             .global::<NowPlayingState>()
             .on_cycle_repeat(move || {
-                playback::cycle_repeat(runtime.clone(), weak.clone(), handle.clone());
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                handle.clone().spawn(async move {
+                    if let Some(svc) = qconnect_service::service() {
+                        match svc.cycle_repeat_if_remote().await {
+                            Ok(true) => return,
+                            Ok(false) => {}
+                            Err(e) => {
+                                log::warn!("[QConnect] cycle_repeat handoff: {e}");
+                                return;
+                            }
+                        }
+                    }
+                    playback::cycle_repeat(runtime, weak, handle);
+                });
             });
     }
 

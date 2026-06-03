@@ -1848,6 +1848,12 @@ pub fn set_volume(
     });
 }
 
+/// Read the authoritative local mute flag (used by the QConnect controller
+/// gate to compute the target mute value to forward to a remote renderer).
+pub fn is_muted() -> bool {
+    MUTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Toggle mute: silence the player and remember the level, or restore it.
 pub fn toggle_mute(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
     use std::sync::atomic::Ordering;
