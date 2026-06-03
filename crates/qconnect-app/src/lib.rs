@@ -22,7 +22,8 @@ pub use startup::{compute_effective_startup, QconnectStartupMode};
 pub use error::QconnectAppError;
 pub use events::{NoOpEventSink, QconnectAppEvent, QconnectEventSink};
 pub use session::{
-    build_session_renderer_snapshot, compute_connection_state, deferred_join_reason,
+    build_effective_renderer_snapshot, build_session_renderer_snapshot, compute_connection_state,
+    deferred_join_reason,
     find_unique_renderer_id, is_local_renderer_active, is_peer_renderer_active,
     normalize_active_renderer_id, quality_from_max_audio_quality, queue_item_snapshot_for_cursor,
     refresh_local_renderer_id, renderer_allows_remote_volume, should_arm_renderer_watchdog,

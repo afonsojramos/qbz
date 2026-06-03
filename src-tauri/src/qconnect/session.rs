@@ -17,7 +17,13 @@ use super::{QconnectQueueVersionPayload, QconnectVisibleQueueProjection};
 /// module (slice 2+4). Re-exported here so existing `super::session::…` /
 /// `super::…` references inside this module compile unchanged, and so the Tauri
 /// command surface keeps the same serialized shape.
-pub use qconnect_app::{QconnectRendererInfo, QconnectSessionRendererState, QconnectSessionState};
+pub use qconnect_app::{QconnectRendererInfo, QconnectSessionState};
+// `QconnectSessionRendererState` is only re-exported onward for the test module
+// (mod.rs gates its re-export to `#[cfg(test)]`); since
+// `build_effective_renderer_snapshot` moved to qconnect-app, no non-test code in
+// this module references it, so gate it here too to avoid an unused-import warning.
+#[cfg(test)]
+pub use qconnect_app::QconnectSessionRendererState;
 
 /// Pure session mutators + the file-audio-quality snapshot type also moved to
 /// qconnect-app (slice 2+4). Re-exported so existing `super::session::…` /
@@ -74,60 +80,10 @@ pub(super) fn resolve_local_identity() -> qconnect_app::LocalIdentity {
     }
 }
 
-pub(super) fn build_effective_renderer_snapshot(
-    queue: &QConnectQueueState,
-    base_renderer_state: &QConnectRendererState,
-    session_renderer_state: Option<&QconnectSessionRendererState>,
-    session_loop_mode: Option<i32>,
-) -> QConnectRendererState {
-    let mut renderer_snapshot = base_renderer_state.clone();
-
-    if let Some(session_renderer_state) = session_renderer_state {
-        if let Some(active) = session_renderer_state.active {
-            renderer_snapshot.active = Some(active);
-        }
-        if let Some(playing_state) = session_renderer_state.playing_state {
-            renderer_snapshot.playing_state = Some(playing_state);
-        }
-        if let Some(current_position_ms) = session_renderer_state.current_position_ms {
-            renderer_snapshot.current_position_ms = Some(current_position_ms);
-        }
-        if let Some(volume) = session_renderer_state.volume {
-            renderer_snapshot.volume = Some(volume);
-        }
-        if let Some(muted) = session_renderer_state.muted {
-            renderer_snapshot.muted = Some(muted);
-        }
-        if let Some(max_audio_quality) = session_renderer_state.max_audio_quality {
-            renderer_snapshot.max_audio_quality = Some(max_audio_quality);
-        }
-        if let Some(loop_mode) = session_renderer_state.loop_mode.or(session_loop_mode) {
-            renderer_snapshot.loop_mode = Some(loop_mode);
-        }
-        if let Some(shuffle_mode) = session_renderer_state.shuffle_mode {
-            renderer_snapshot.shuffle_mode = Some(shuffle_mode);
-        }
-        if session_renderer_state.updated_at_ms > 0 {
-            renderer_snapshot.updated_at_ms = session_renderer_state.updated_at_ms;
-        }
-
-        if session_renderer_state.current_queue_item_id.is_some() {
-            let session_snapshot = build_session_renderer_snapshot(
-                queue,
-                Some(session_renderer_state),
-                session_loop_mode,
-            );
-            if session_snapshot.current_track.is_some() {
-                renderer_snapshot.current_track = session_snapshot.current_track;
-                renderer_snapshot.next_track = session_snapshot.next_track;
-            }
-        }
-    } else if let Some(loop_mode) = session_loop_mode {
-        renderer_snapshot.loop_mode = Some(loop_mode);
-    }
-
-    renderer_snapshot
-}
+// `build_effective_renderer_snapshot` is now defined in qconnect-app (ADR-006
+// hoist) so the Tauri and Slint controller paths share one definition. Re-exported
+// here so existing `super::session::…` / `super::…` callers compile unchanged.
+pub(super) use qconnect_app::build_effective_renderer_snapshot;
 
 pub(super) fn build_visible_queue_projection(
     queue: &QConnectQueueState,
