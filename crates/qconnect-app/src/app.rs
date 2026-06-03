@@ -5,7 +5,7 @@ use std::{
 
 use qconnect_core::{
     apply_event, apply_renderer_command, telemetry, PendingCorrelation, PendingQueueAction,
-    QConnectQueueState, QConnectRendererState, QueueEvent, QueueItem, RendererCommand,
+    QConnectQueueState, QConnectRendererState, QueueEvent, QueueItem, QueueVersion, RendererCommand,
 };
 use qconnect_protocol::{
     build_qconnect_outbound_envelope, build_qconnect_renderer_outbound_envelope,
@@ -23,9 +23,10 @@ use async_trait::async_trait;
 use crate::session::{
     compute_connection_state, deferred_join_reason, is_local_renderer_active,
     is_peer_renderer_active, normalize_active_renderer_id, refresh_local_renderer_id,
-    should_arm_renderer_watchdog, should_reask_queue_state, LocalIdentity, QconnectLifecycleState,
-    QconnectRendererInfo, RendererStatus, ServerActiveState, PLAYING_STATE_PLAYING,
-    PLAYING_STATE_UNKNOWN, QCONNECT_RENDERER_LOST_TIMEOUT_MS,
+    should_arm_renderer_watchdog, should_reask_queue_state, LocalIdentity,
+    QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRendererInfo, RendererStatus,
+    ServerActiveState, PLAYING_STATE_PLAYING, PLAYING_STATE_UNKNOWN,
+    QCONNECT_RENDERER_LOST_TIMEOUT_MS,
 };
 use crate::{
     ensure_session_renderer_state, sync_session_renderer_active_flags, QconnectAppError,
@@ -208,6 +209,84 @@ where
         report: RendererReport,
     ) -> Result<(), QconnectAppError> {
         self.send_renderer_report(report).await
+    }
+
+    /// Emit a RndrSrvrFileAudioQualityChanged report describing the decoded file
+    /// format, deduped against the last reported value. Returns Ok(true) when a
+    /// report was sent. Frontend-agnostic (slice 6, step 7): both the Tauri and
+    /// Slint report loops feed this; the snapshot is produced from the engine's
+    /// `current_output_format()`.
+    pub async fn report_file_audio_quality_if_changed(
+        &self,
+        queue_version: QueueVersion,
+        audio_quality: QconnectFileAudioQualitySnapshot,
+    ) -> Result<bool, String> {
+        let sync_state = self.sync_handle();
+        {
+            let state = sync_state.lock().await;
+            if state.last_reported_file_audio_quality == Some(audio_quality) {
+                return Ok(false);
+            }
+        }
+
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrFileAudioQualityChanged,
+            Uuid::new_v4().to_string(),
+            queue_version,
+            serde_json::json!({
+                "sampling_rate": audio_quality.sampling_rate,
+                "bit_depth": audio_quality.bit_depth,
+                "nb_channels": audio_quality.nb_channels,
+                "audio_quality": audio_quality.audio_quality
+            }),
+        );
+
+        self.send_renderer_report_command(report)
+            .await
+            .map_err(|err| format!("send file audio quality report failed: {err}"))?;
+
+        let mut state = sync_state.lock().await;
+        state.last_reported_file_audio_quality = Some(audio_quality);
+        Ok(true)
+    }
+
+    /// Emit a RndrSrvrDeviceAudioQualityChanged(27) report describing the actual
+    /// DAC output format (sampling_rate / bit_depth / nb_channels), deduped against
+    /// the last reported value. Returns Ok(true) when a report was sent.
+    pub async fn report_device_audio_quality_if_changed(
+        &self,
+        queue_version: QueueVersion,
+        sampling_rate: i32,
+        bit_depth: i32,
+        nb_channels: i32,
+    ) -> Result<bool, String> {
+        let sync_state = self.sync_handle();
+        let key = (sampling_rate, bit_depth, nb_channels);
+        {
+            let state = sync_state.lock().await;
+            if state.last_reported_device_audio_quality == Some(key) {
+                return Ok(false);
+            }
+        }
+
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrDeviceAudioQualityChanged,
+            Uuid::new_v4().to_string(),
+            queue_version,
+            serde_json::json!({
+                "sampling_rate": sampling_rate,
+                "bit_depth": bit_depth,
+                "nb_channels": nb_channels
+            }),
+        );
+
+        self.send_renderer_report_command(report)
+            .await
+            .map_err(|err| format!("send device audio quality report failed: {err}"))?;
+
+        let mut state = sync_state.lock().await;
+        state.last_reported_device_audio_quality = Some(key);
+        Ok(true)
     }
 
     /// Update the renderer state's position from the frontend's playback position.

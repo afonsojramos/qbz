@@ -595,40 +595,17 @@ impl QconnectServiceState {
         queue_version: qconnect_app::QueueVersion,
         audio_quality: QconnectFileAudioQualitySnapshot,
     ) -> Result<bool, String> {
-        let (app, sync_state) = {
+        let app = {
             let guard = self.inner.lock().await;
             let Some(runtime) = guard.runtime.as_ref() else {
                 return Err("QConnect service is not running".to_string());
             };
-            (Arc::clone(&runtime.app), Arc::clone(&runtime.sync_state))
+            Arc::clone(&runtime.app)
         };
-
-        {
-            let state = sync_state.lock().await;
-            if state.last_reported_file_audio_quality == Some(audio_quality) {
-                return Ok(false);
-            }
-        }
-
-        let report = RendererReport::new(
-            RendererReportType::RndrSrvrFileAudioQualityChanged,
-            Uuid::new_v4().to_string(),
-            queue_version,
-            serde_json::json!({
-                "sampling_rate": audio_quality.sampling_rate,
-                "bit_depth": audio_quality.bit_depth,
-                "nb_channels": audio_quality.nb_channels,
-                "audio_quality": audio_quality.audio_quality
-            }),
-        );
-
-        app.send_renderer_report_command(report)
+        // Dedup + report build + send live in qconnect-app (slice 6, step 7);
+        // `runtime.app` shares the very sync Mutex this used to lock directly.
+        app.report_file_audio_quality_if_changed(queue_version, audio_quality)
             .await
-            .map_err(|err| format!("send file audio quality report failed: {err}"))?;
-
-        let mut state = sync_state.lock().await;
-        state.last_reported_file_audio_quality = Some(audio_quality);
-        Ok(true)
     }
 
     /// Emit a RndrSrvrDeviceAudioQualityChanged(27) report describing the actual
@@ -641,40 +618,15 @@ impl QconnectServiceState {
         bit_depth: i32,
         nb_channels: i32,
     ) -> Result<bool, String> {
-        let (app, sync_state) = {
+        let app = {
             let guard = self.inner.lock().await;
             let Some(runtime) = guard.runtime.as_ref() else {
                 return Err("QConnect service is not running".to_string());
             };
-            (Arc::clone(&runtime.app), Arc::clone(&runtime.sync_state))
+            Arc::clone(&runtime.app)
         };
-
-        let key = (sampling_rate, bit_depth, nb_channels);
-        {
-            let state = sync_state.lock().await;
-            if state.last_reported_device_audio_quality == Some(key) {
-                return Ok(false);
-            }
-        }
-
-        let report = RendererReport::new(
-            RendererReportType::RndrSrvrDeviceAudioQualityChanged,
-            Uuid::new_v4().to_string(),
-            queue_version,
-            serde_json::json!({
-                "sampling_rate": sampling_rate,
-                "bit_depth": bit_depth,
-                "nb_channels": nb_channels
-            }),
-        );
-
-        app.send_renderer_report_command(report)
+        app.report_device_audio_quality_if_changed(queue_version, sampling_rate, bit_depth, nb_channels)
             .await
-            .map_err(|err| format!("send device audio quality report failed: {err}"))?;
-
-        let mut state = sync_state.lock().await;
-        state.last_reported_device_audio_quality = Some(key);
-        Ok(true)
     }
 
     /// Update the renderer's internal position from the frontend's actual playback position.
