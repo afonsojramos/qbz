@@ -540,6 +540,108 @@ impl SlintQconnectService {
         }
     }
 
+    /// Controller play-routing: when QBZ is CONTROLLING a peer renderer and the
+    /// user plays a new album/track on QBZ, route it to the peer instead of
+    /// playing it locally. Returns `true` when handled remotely (caller MUST
+    /// NOT play locally) and `false` when no peer is active (caller plays
+    /// locally — the existing behavior runs byte-unchanged).
+    ///
+    /// Unlike `sync_local_queue_if_changed`, the queue push here is
+    /// UNCONDITIONAL (no echo-gate, no is_local_renderer_active gate) — the user
+    /// just issued a fresh play, so the current core queue IS what should run on
+    /// the peer. Admission is the SAME all-or-nothing rule: a queue containing
+    /// any local / Plex track is refused whole (a renderer can only play Qobuz
+    /// catalog ids; offline qobuz_download IS eligible). On refusal it toasts and
+    /// returns `true` (handled — do NOT fall back to playing a mixed queue
+    /// locally that we just declined to cast). On any send error it logs and
+    /// still returns `true` (a peer owns playback; falling back to local audio
+    /// would double-play).
+    pub async fn play_on_peer_if_active(&self, track_id: u64) -> bool {
+        let (app, peer_active) = {
+            let guard = self.inner.lock().await;
+            let Some(runtime) = guard.runtime.as_ref() else {
+                return false;
+            };
+            let peer_active = {
+                let state = runtime.sync_state.lock().await;
+                is_peer_renderer_active(&state.session)
+            };
+            (Arc::clone(&runtime.app), peer_active)
+        };
+        if !peer_active {
+            return false;
+        }
+
+        // (a) Push the CURRENT core queue to the peer (unconditional).
+        let (tracks, current_index) = self.runtime.core().get_all_queue_tracks().await;
+        if tracks.is_empty() {
+            return false;
+        }
+        let ordered_ids: Vec<u64> = tracks.iter().map(|track| track.id).collect();
+
+        // Admission: refuse the whole push if any track isn't Qobuz-castable.
+        let all_eligible = tracks.iter().all(|track| {
+            let source = track
+                .source
+                .as_deref()
+                .unwrap_or("qobuz")
+                .to_ascii_lowercase();
+            source != "local" && source != "plex" && track.id > 0
+        });
+        if !all_eligible {
+            log::info!("[QConnect] Local queue has non-Qobuz tracks; not casting to Connect");
+            crate::toast::error_weak(&self.window, "Mixed queue — not cast to Qobuz Connect");
+            dev_push_event(&self.window, "-> queue push REFUSED (mixed/non-Qobuz)".to_string());
+            // Remember it so the poll loop's sync doesn't re-toast this queue.
+            *self.last_pushed_queue_ids.lock().await = Some(ordered_ids);
+            // Handled: do NOT play a refused queue locally.
+            return true;
+        }
+
+        let count = ordered_ids.len();
+        let track_ids: Vec<i64> = ordered_ids.iter().map(|id| *id as i64).collect();
+        let start_index = current_index.unwrap_or(0);
+        let payload = json!({
+            "track_ids": track_ids,
+            "queue_position": start_index,
+            "shuffle_mode": false,
+            "shuffle_pivot_index": start_index,
+            "context_uuid": Uuid::new_v4().to_string(),
+            "autoplay_reset": true,
+            "autoplay_loading": false,
+        });
+        let command = app
+            .build_queue_command(QueueCommandType::CtrlSrvrQueueLoadTracks, payload)
+            .await;
+        match app.send_queue_command(command).await {
+            Ok(_) => {
+                log::info!(
+                    "[QConnect] play_on_peer: pushed queue ({count} tracks, start={start_index})"
+                );
+                dev_push_event(
+                    &self.window,
+                    format!("-> play_on_peer QueueLoadTracks {count} start={start_index}"),
+                );
+                *self.last_pushed_queue_ids.lock().await = Some(ordered_ids);
+            }
+            Err(err) => {
+                log::warn!("[QConnect] play_on_peer: queue push failed: {err}");
+                // Still handled: a peer owns playback; never fall back to local.
+                return true;
+            }
+        }
+
+        // (b) SetPlayerState the peer to the requested track (polls the peer
+        // queue until the track appears). Errors are logged, never fall back.
+        match self.play_remote_renderer_track_if_active(track_id).await {
+            Ok(_) => {}
+            Err(err) => {
+                log::warn!("[QConnect] play_on_peer: play_remote_track failed: {err}");
+            }
+        }
+        true
+    }
+
     // -----------------------------------------------------------------------
     // CONTROLLER-mode transport routing (`*_if_remote`). Mirror of the Tauri
     // `src-tauri/src/qconnect/service.rs` adapter. Return contract:

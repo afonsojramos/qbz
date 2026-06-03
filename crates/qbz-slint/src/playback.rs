@@ -134,6 +134,16 @@ type Runtime = Arc<AppRuntime<SlintAdapter>>;
 /// the player's self-contained `play_track`. Errors are logged, not
 /// surfaced — the poll loop keeps the UI consistent regardless.
 async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id: u64) {
+    // QConnect CONTROLLER mode: when a PEER renderer owns playback, route the
+    // new play to the peer instead of playing locally. `play_on_peer_if_active`
+    // returns false in every non-controller situation (disconnected, renderer
+    // mode where active == local, no peer), so the existing local path below
+    // runs byte-unchanged and renderer / local playback do not regress.
+    if let Some(svc) = crate::qconnect_service::service() {
+        if svc.play_on_peer_if_active(track_id).await {
+            return;
+        }
+    }
     // Source-aware: a LOCAL user file plays from disk via the play_data seam.
     // Offline-cached + Qobuz keep the existing tier-walk below (unchanged), so
     // streaming playback can't regress. The current queue track tells us which
