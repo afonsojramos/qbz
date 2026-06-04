@@ -1861,10 +1861,20 @@ async fn deferred_renderer_join(
     log::info!("[QConnect] Deferred renderer join with session_uuid={session_uuid}");
 
     // 1. Renderer JoinSession with session_uuid.
+    // Do NOT auto-steal the render on a fresh connect: join as an AVAILABLE
+    // renderer (is_active=false), not the active one. Joining with is_active=true
+    // on every connect made QBZ grab playback from whatever peer was rendering
+    // the instant it came online (the "se robó solo apenas lo encendí" behavior),
+    // and the self-state echo from the post-join AskForRendererState then reset
+    // the cursor to the queue head. Taking over is now explicit (the device
+    // picker's "Play here", or the phone selecting QBZ — both arrive as a
+    // SET_ACTIVE command). Only a post-drop RECONNECTION rejoins as active, so a
+    // network blip mid-render does not lose the render.
+    let join_as_active = join_reason == qconnect_app::JOIN_SESSION_REASON_RECONNECTION;
     let renderer_join_payload = json!({
         "session_uuid": session_uuid,
         "device_info": serde_json::to_value(&device_info).unwrap_or_default(),
-        "is_active": true,
+        "is_active": join_as_active,
         "reason": join_reason,
         "initial_state": {
             "playing_state": PLAYING_STATE_STOPPED,
