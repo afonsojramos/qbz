@@ -1195,8 +1195,8 @@ export component FavoritesView inherits Rectangle {
                                 font-size: Typography.body;
                             }
                             if FavoritesState.playlists-view-mode != "list": playlists-grid := Rectangle {
-                                property <length> pl-w: 220px;
-                                property <length> pl-h: 266px;
+                                property <length> pl-w: 200px;
+                                property <length> pl-h: 246px;
                                 property <int> columns: Math.max(
                                     1,
                                     Math.floor((self.width + root.gap) / (self.pl-w + root.gap)));

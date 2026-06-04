@@ -15,8 +15,8 @@ import { AlbumListRow, AlbumListHeader } from "../primitives/AlbumListRow.slint"
 // the flat grid and each group-by section.
 component AlbumGrid inherits Rectangle {
     in property <[AlbumCardItem]> albums;
-    in property <length> card-width: 220px;
-    in property <length> card-height: 266px;
+    in property <length> card-width: 200px;
+    in property <length> card-height: 246px;
     in property <length> card-gap: 24px;
     in property <bool> show-favorite: true;
     in property <bool> show-source-badge: false;
@@ -65,8 +65,8 @@ export component AlbumCollectionView inherits VerticalLayout {
     // Forwarded to AlbumCard — show the always-visible source badge on the
     // grid card art (Local Library: local | qobuz-offline | plex).
     in property <bool> show-source-badge: false;
-    in property <length> card-width: 220px;
-    in property <length> card-height: 266px;
+    in property <length> card-width: 200px;
+    in property <length> card-height: 246px;
     in property <length> card-gap: 24px;
     in property <length> list-row-gap: 4px;
     callback open-album(string);

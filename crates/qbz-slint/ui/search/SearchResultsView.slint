@@ -183,8 +183,8 @@ component AlbumGrid inherits Rectangle {
     callback open(string);
     callback media-action(string, string, string);
 
-    property <length> card-w: 220px;
-    property <length> card-h: 266px;
+    property <length> card-w: 200px;
+    property <length> card-h: 246px;
     property <length> gap: 24px;
     property <int> columns:
         Math.max(1, Math.floor((self.width + root.gap) / (root.card-w + root.gap)));
@@ -242,8 +242,8 @@ component PlaylistGrid inherits Rectangle {
     in property <[SearchPlaylistItem]> playlists;
     callback media-action(string, string, string);
 
-    property <length> card-w: 220px;
-    property <length> card-h: 266px;
+    property <length> card-w: 200px;
+    property <length> card-h: 246px;
     property <length> gap: 24px;
     property <int> columns:
         Math.max(1, Math.floor((self.width + root.gap) / (root.card-w + root.gap)));

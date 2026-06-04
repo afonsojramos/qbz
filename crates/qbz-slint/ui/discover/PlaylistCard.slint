@@ -56,8 +56,8 @@ export component PlaylistCard inherits Rectangle {
     // button=play. Discover/Search leave it false (body=play), unchanged.
     in property <bool> body-opens: false;
 
-    width: 220px;
-    height: 266px;
+    width: 200px;
+    height: 246px;
 
     property <bool> overlay-on: hover.has-hover
         || fav-btn.hovered || play-btn.hovered || more-btn.hovered;
@@ -68,14 +68,14 @@ export component PlaylistCard inherits Rectangle {
 
         // --- Cover collage + hover overlay -------------------------------
         Rectangle {
-            width: 220px;
-            height: 220px;
+            width: 200px;
+            height: 200px;
             border-radius: Radius.sm;
             clip: true;
 
             PlaylistCollage {
                 playlist: root.playlist;
-                size: 220px;
+                size: 200px;
             }
 
             Rectangle {
@@ -97,8 +97,8 @@ export component PlaylistCard inherits Rectangle {
 
             HorizontalLayout {
                 x: 0px;
-                y: 132px;
-                width: 220px;
+                y: 120px;
+                width: 200px;
                 height: 44px;
                 alignment: center;
                 spacing: 12px;
@@ -183,7 +183,7 @@ export component PlaylistCard inherits Rectangle {
                 text: root.playlist.title;
                 height: 20px;
                 color: Theme.text-primary;
-                font-size: Typography.body;
+                font-size: Typography.body - 2px;
                 font-weight: Typography.semibold;
                 vertical-alignment: center;
                 overflow: elide;
@@ -192,7 +192,7 @@ export component PlaylistCard inherits Rectangle {
                 text: root.playlist.subtitle;
                 height: 16px;
                 color: Theme.text-muted;
-                font-size: Typography.link;
+                font-size: Typography.link - 1px;
                 vertical-alignment: center;
                 overflow: elide;
             }

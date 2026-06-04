@@ -1,6 +1,6 @@
 // Album card for the Discover sections.
 //
-// Mirrors the Svelte AlbumCardLite: 220px column, 220px square artwork
+// Mirrors the Svelte AlbumCardLite, scaled to a 200px column / 200px artwork
 // with a bottom-left award ribbon and a hover overlay (dark scrim,
 // genre/year meta, and play / favorite / more action buttons), then a
 // tight title / artist stack alongside an icon-only quality badge.
@@ -84,9 +84,9 @@ export component AlbumCard inherits Rectangle {
     // kind ("album") , album id, action ("play" | "queue" | "favorite").
     callback media-action(string, string, string);
 
-    // Fully deterministic height: artwork 220 + 6 spacer + 40 meta.
-    width: 220px;
-    height: 266px;
+    // Fully deterministic height: artwork 200 + 6 spacer + 40 meta.
+    width: 200px;
+    height: 246px;
 
     // The overlay stays up while the pointer is anywhere over the artwork
     // OR over one of its buttons. A child button steals `has-hover` from
@@ -100,8 +100,8 @@ export component AlbumCard inherits Rectangle {
 
         // --- Artwork + hover overlay -------------------------------------
         Rectangle {
-            width: 220px;
-            height: 220px;
+            width: 200px;
+            height: 200px;
             border-radius: Radius.sm;
             background: Theme.surface-elevated;
             clip: true;
@@ -137,7 +137,7 @@ export component AlbumCard inherits Rectangle {
                     text: root.album.genre;
                     height: 20px;
                     color: #ffffffeb;
-                    font-size: 15px;
+                    font-size: 13px;
                     font-weight: Typography.bold;
                     vertical-alignment: center;
                 }
@@ -145,7 +145,7 @@ export component AlbumCard inherits Rectangle {
                     text: root.album.year;
                     height: 17px;
                     color: #ffffffcc;
-                    font-size: 13px;
+                    font-size: 12px;
                     vertical-alignment: center;
                 }
             }
@@ -164,8 +164,8 @@ export component AlbumCard inherits Rectangle {
             // Hover action buttons — favorite / play / more.
             HorizontalLayout {
                 x: 0px;
-                y: 132px;
-                width: 220px;
+                y: 120px;
+                width: 200px;
                 height: 44px;
                 alignment: center;
                 spacing: 12px;
@@ -237,7 +237,7 @@ export component AlbumCard inherits Rectangle {
                         color: root.album.ribbon-kind == "press"
                             ? #1f1407
                             : #ffffff;
-                        font-size: 10px;
+                        font-size: 9px;
                         font-weight: Typography.semibold;
                         vertical-alignment: center;
                         overflow: elide;
@@ -334,7 +334,7 @@ export component AlbumCard inherits Rectangle {
                     text: root.album.title;
                     height: 20px;
                     color: Theme.text-primary;
-                    font-size: Typography.body;
+                    font-size: Typography.body - 2px;
                     font-weight: Typography.medium;
                     vertical-alignment: center;
                     overflow: elide;
@@ -360,7 +360,7 @@ export component AlbumCard inherits Rectangle {
                         color: root.album.artist-id != "" && artist-area.has-hover
                             ? Theme.text-primary
                             : Theme.text-muted;
-                        font-size: Typography.link;
+                        font-size: Typography.link - 1px;
                         vertical-alignment: center;
                         overflow: elide;
                     }
