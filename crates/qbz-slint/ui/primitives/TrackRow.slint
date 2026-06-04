@@ -47,20 +47,12 @@ export component TrackRow inherits Rectangle {
     // Whether the row can be dragged onto sidebar playlists.
     in property <bool> draggable: true;
     callback media-action(string, string, string);
-    // Reports the row's overall hover state so a list view can reveal its
-    // scrollbar while the pointer is anywhere over the rows (the proven sidebar
-    // pattern — a background/Flickable-level TouchArea can't see hover over a
-    // row's own touch areas).
-    callback hover-changed(bool);
 
     // Explicit track number, else the 1-based list position.
     property <string> number-text:
         root.track.number != "" ? root.track.number : "\{root.index + 1}";
     property <bool> row-hovered:
         ta.has-hover || play-cell.hovered || more-ta.has-hover;
-    changed row-hovered => {
-        root.hover-changed(self.row-hovered);
-    }
 
     height: 50px;
     border-radius: 8px;

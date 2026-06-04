@@ -11,18 +11,9 @@ export component ListScrollbar inherits Rectangle {
     in property <length> viewport-height;
     in property <length> visible-height;
     in-out property <length> viewport-y;
-    // Hover-reveal: the owning view sets this true while the pointer is over the
-    // scrollable rows; the bar also reveals on its own gutter hover/drag. When
-    // false it fades out. DEFAULTS TRUE so views that don't wire it keep the bar
-    // always visible (no behaviour change until a view opts in).
-    in property <bool> reveal: true;
 
     // Only meaningful when the content overflows.
     property <length> max-scroll: max(0px, root.viewport-height - root.visible-height);
-
-    // Fade out unless revealed (by row hover) or the gutter itself is engaged.
-    opacity: (root.reveal || bar-ta.has-hover || bar-ta.pressed) ? 1.0 : 0.0;
-    animate opacity { duration: 150ms; }
     property <length> thumb-h:
         root.viewport-height > 0px
             ? max(48px, root.visible-height / root.viewport-height * root.height)

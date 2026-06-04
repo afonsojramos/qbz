@@ -117,10 +117,6 @@ export component AlbumPageView inherits Rectangle {
     callback open-artist(string);
     callback media-action(string, string, string);
 
-    // Count of track rows currently hovered (>0 = pointer over the list) — the
-    // hover-reveal source for the scrollbar (sidebar pattern).
-    property <int> scroll-hover-rows: 0;
-
     // Whether the full-description modal is open.
     property <bool> show-description: false;
 
@@ -603,11 +599,6 @@ export component AlbumPageView inherits Rectangle {
                         media-action(kind, id, action) => {
                             root.media-action(kind, id, action);
                         }
-                        hover-changed(h) => {
-                            root.scroll-hover-rows = h
-                                ? root.scroll-hover-rows + 1
-                                : Math.max(0, root.scroll-hover-rows - 1);
-                        }
                     }
                 }
 
@@ -646,8 +637,7 @@ export component AlbumPageView inherits Rectangle {
         }
     }
 
-    // Shared scrollbar in the right gutter (homologated cross-view). Hover-
-    // reveal: shown while the pointer is over the track rows (or the gutter).
+    // Shared scrollbar in the right gutter (homologated cross-view).
     ListScrollbar {
         x: parent.width - self.width - 4px;
         width: 14px;
@@ -655,7 +645,6 @@ export component AlbumPageView inherits Rectangle {
         viewport-height: flick.viewport-height;
         visible-height: flick.height;
         viewport-y <=> flick.viewport-y;
-        reveal: root.scroll-hover-rows > 0;
     }
 
     // --- Full-description modal --------------------------------------------
