@@ -20,24 +20,25 @@ export component RadioCard inherits Rectangle {
     callback clicked();
     callback play();
 
-    width: 180px;
-    height: 234px;
+    // Matches AlbumCard / PlaylistCard (200 x 246): panel 200 + 8 + meta.
+    width: 200px;
+    height: 246px;
 
     VerticalLayout {
         spacing: 8px;
 
         // Display panel.
         panel := Rectangle {
-            width: 180px;
-            height: 180px;
+            width: 200px;
+            height: 200px;
             border-radius: Radius.sm;
             background: Theme.surface-elevated;
             clip: true;
 
             // Centered artwork "display".
             Rectangle {
-                width: 114px;
-                height: 114px;
+                width: 126px;
+                height: 126px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2 - 8px;
                 border-radius: 4px;
@@ -110,14 +111,14 @@ export component RadioCard inherits Rectangle {
             font-size: Typography.body;
             font-weight: Typography.medium;
             overflow: elide;
-            width: 180px;
+            width: 200px;
         }
         if root.seed-subtitle != "": Text {
             text: root.seed-subtitle;
             color: Theme.text-muted;
             font-size: Typography.legal;
             overflow: elide;
-            width: 180px;
+            width: 200px;
         }
     }
 }

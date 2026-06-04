@@ -45,10 +45,10 @@ export component Spotlight inherits VerticalLayout {
     callback media-action(string, string, string);
 
     property <length> gap: 24px;
-    // Row content width: TopTracks(180) + Radio(180) + albums(220 each)
+    // Row content width: TopTracks(200) + Radio(200) + albums(200 each)
     // + gaps. has-top-tracks toggles the first card.
     property <length> radio-cards-width:
-        (ForYouState.spotlight-has-top-tracks ? 180px + root.gap : 0px) + 180px + root.gap;
+        (ForYouState.spotlight-has-top-tracks ? 200px + root.gap : 0px) + 200px + root.gap;
     property <int> album-count: ForYouState.spotlight-albums.length;
     property <length> content-width:
         root.radio-cards-width
