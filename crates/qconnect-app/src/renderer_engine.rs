@@ -52,6 +52,14 @@ pub trait QconnectRendererEngine: Send + Sync {
     // ---- queue / mode (async) ----
     async fn set_repeat_mode(&self, mode: RepeatMode);
     async fn set_shuffle(&self, enabled: bool);
+    /// Set the shuffle FLAG only, WITHOUT generating any local order. QConnect is
+    /// WS-authoritative for shuffle: the renderer must never invent a random
+    /// order; the cloud's authoritative order is applied separately via
+    /// `set_queue_with_order` (`sync_remote_shuffle_projection` /
+    /// `materialize_remote_queue`). Forwards to
+    /// `QbzCore::set_shuffle_with_order(enabled, None)` -> identity order on
+    /// enable (current order preserved, NO RNG), clear on disable.
+    async fn set_shuffle_flag(&self, enabled: bool);
     async fn get_all_queue_tracks(&self) -> (Vec<QueueTrack>, Option<usize>);
     async fn set_queue(&self, tracks: Vec<QueueTrack>, start_index: Option<usize>);
     /// The deferred-shuffle core: a real shuffle order, never an invented

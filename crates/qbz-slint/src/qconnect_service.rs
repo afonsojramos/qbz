@@ -818,6 +818,153 @@ impl SlintQconnectService {
         true
     }
 
+    /// Controller add-to-queue routing for a MULTI-track batch (album / playlist /
+    /// favorites bulk). Same contract as the single-track
+    /// `add_to_queue_on_peer_if_active`, but admission is ALL-OR-NOTHING: if ANY
+    /// track in the batch is non-castable (`local` / `plex`), the WHOLE batch is
+    /// refused (toast + `return true`, nothing routed and nothing added locally) —
+    /// mirroring the queue-sync's all-or-nothing rule. A single
+    /// `CtrlSrvrQueueAddTracks` carries every id (the protocol `track_ids` is a
+    /// full `Vec`), and the cloud echoes a `QueueUpdated` that
+    /// `materialize_remote_queue` applies locally, so we never mutate the local
+    /// queue here. Returns `false` only when no peer is active (caller appends
+    /// locally) or the batch is empty (caller no-ops).
+    pub async fn add_to_queue_batch_on_peer_if_active(
+        &self,
+        tracks: &[(u64, Option<String>)],
+    ) -> bool {
+        if !self.is_peer_renderer_active().await {
+            return false;
+        }
+        if tracks.is_empty() {
+            return false;
+        }
+
+        if let Some((bad_id, _)) = tracks
+            .iter()
+            .find(|(id, source)| !self.is_track_castable(*id, source.as_deref()))
+        {
+            log::info!(
+                "[QConnect] add_to_queue_batch_on_peer: track {bad_id} not Qobuz-castable; refusing whole batch"
+            );
+            crate::toast::error_weak(&self.window, "Some tracks can't be cast to Qobuz Connect");
+            dev_push_event(
+                &self.window,
+                format!(
+                    "-> add_to_queue REFUSED (non-Qobuz track {bad_id} in batch of {})",
+                    tracks.len()
+                ),
+            );
+            return true;
+        }
+
+        let ids: Vec<i64> = tracks.iter().map(|(id, _)| *id as i64).collect();
+        let count = ids.len();
+        let payload = json!({
+            "track_ids": ids,
+            "context_uuid": Uuid::new_v4().to_string(),
+            "autoplay_reset": false,
+            "autoplay_loading": false,
+        });
+
+        match self
+            .send_command(QueueCommandType::CtrlSrvrQueueAddTracks, payload)
+            .await
+        {
+            Ok(_) => {
+                log::info!("[QConnect] add_to_queue_batch_on_peer: appended {count} tracks");
+                dev_push_event(
+                    &self.window,
+                    format!("-> add_to_queue QueueAddTracks {count} tracks"),
+                );
+            }
+            Err(err) => {
+                log::warn!("[QConnect] add_to_queue_batch_on_peer: append failed: {err}");
+            }
+        }
+        true
+    }
+
+    /// Controller play-next routing for a MULTI-track batch. Same all-or-nothing
+    /// admission as `add_to_queue_batch_on_peer_if_active`. The server
+    /// `CtrlSrvrQueueInsertTracks` inserts the whole `track_ids` block right after
+    /// `insert_after` and PRESERVES the list order, so the ids are passed in
+    /// NATURAL order here (unlike the LOCAL fall-through, which reverses per-track
+    /// `add_track_next` inserts to achieve the same effect).
+    pub async fn play_next_batch_on_peer_if_active(
+        &self,
+        tracks: &[(u64, Option<String>)],
+    ) -> bool {
+        if !self.is_peer_renderer_active().await {
+            return false;
+        }
+        if tracks.is_empty() {
+            return false;
+        }
+
+        if let Some((bad_id, _)) = tracks
+            .iter()
+            .find(|(id, source)| !self.is_track_castable(*id, source.as_deref()))
+        {
+            log::info!(
+                "[QConnect] play_next_batch_on_peer: track {bad_id} not Qobuz-castable; refusing whole batch"
+            );
+            crate::toast::error_weak(&self.window, "Some tracks can't be cast to Qobuz Connect");
+            dev_push_event(
+                &self.window,
+                format!(
+                    "-> play_next REFUSED (non-Qobuz track {bad_id} in batch of {})",
+                    tracks.len()
+                ),
+            );
+            return true;
+        }
+
+        // Resolve insert_after from the peer's current track (omit when unknown).
+        let insert_after = self
+            .effective_remote_renderer_snapshot()
+            .await
+            .ok()
+            .flatten()
+            .and_then(|(renderer, _queue, _session)| {
+                renderer
+                    .current_track
+                    .as_ref()
+                    .and_then(|item| i64::try_from(item.queue_item_id).ok())
+            });
+
+        let ids: Vec<i64> = tracks.iter().map(|(id, _)| *id as i64).collect();
+        let count = ids.len();
+        let mut payload = json!({
+            "track_ids": ids,
+            "context_uuid": Uuid::new_v4().to_string(),
+            "autoplay_reset": false,
+            "autoplay_loading": false,
+        });
+        if let Some(insert_after) = insert_after {
+            payload["insert_after"] = json!(insert_after);
+        }
+
+        match self
+            .send_command(QueueCommandType::CtrlSrvrQueueInsertTracks, payload)
+            .await
+        {
+            Ok(_) => {
+                log::info!(
+                    "[QConnect] play_next_batch_on_peer: inserted {count} tracks (after={insert_after:?})"
+                );
+                dev_push_event(
+                    &self.window,
+                    format!("-> play_next QueueInsertTracks {count} tracks after={insert_after:?}"),
+                );
+            }
+            Err(err) => {
+                log::warn!("[QConnect] play_next_batch_on_peer: insert failed: {err}");
+            }
+        }
+        true
+    }
+
     /// True when a PEER renderer currently owns playback (controller mode). Reads
     /// the session under the sync-state lock. Shared by the play-next /
     /// add-to-queue routing entry points.
@@ -1224,17 +1371,38 @@ impl SlintQconnectService {
         let current_position = renderer
             .current_position_ms
             .and_then(|value| i32::try_from(value).ok());
-        let current_queue_item = renderer.current_track.as_ref().and_then(|item| {
-            i32::try_from(item.queue_item_id).ok().map(|queue_item_id| {
-                QconnectSetPlayerStateQueueItemPayload {
-                    queue_version: Some(QconnectQueueVersionPayload {
-                        major: queue.version.major,
-                        minor: queue.version.minor,
-                    }),
-                    id: Some(queue_item_id),
-                }
+        // Resolve the current queue item from the CORE-aligned cursor, NOT the
+        // renderer snapshot. `align_queue_cursor` keeps the core on the peer's
+        // ACTUAL track even when the peer reports a null `current_queue_item_id`
+        // (iOS does this continuously while playing). The renderer snapshot's
+        // `current_track`, by contrast, goes stale on a null-qid report
+        // (`build_effective_renderer_snapshot` only refreshes it when the qid is
+        // Some), and sending that stale qid made iOS REJECT the pause (the
+        // official Qobuz client CAN pause iOS, so this was our bug, not an iOS
+        // limitation — only remote VOLUME is genuinely refused by iOS). WebPlayer
+        // reports its qid, so the core and the snapshot agree there: no change.
+        // Falls back to omitting the item (a bare play/pause the renderer applies
+        // to whatever it is currently on) rather than ever sending a stale qid.
+        let current_queue_item = self
+            .runtime
+            .core()
+            .current_track()
+            .await
+            .and_then(|core_track| {
+                queue
+                    .queue_items
+                    .iter()
+                    .find(|item| item.track_id == core_track.id)
+                    .map(|item| item.queue_item_id)
             })
-        });
+            .and_then(|queue_item_id| i32::try_from(queue_item_id).ok())
+            .map(|queue_item_id| QconnectSetPlayerStateQueueItemPayload {
+                queue_version: Some(QconnectQueueVersionPayload {
+                    major: queue.version.major,
+                    minor: queue.version.minor,
+                }),
+                id: Some(queue_item_id),
+            });
 
         let payload = serde_json::to_value(QconnectSetPlayerStateRequest {
             playing_state: Some(next_playing_state),
@@ -1377,14 +1545,40 @@ impl SlintQconnectService {
     /// `toggle_shuffle_if_remote`.
     pub async fn toggle_shuffle_if_remote(&self) -> Result<bool, String> {
         let remote_context = self.effective_remote_renderer_snapshot().await?;
-        let Some((renderer, _queue, session)) = remote_context else {
+        let Some((renderer, queue, session)) = remote_context else {
             return Ok(false);
         };
 
         let current_shuffle = renderer.shuffle_mode.unwrap_or(false);
         let next_shuffle = !current_shuffle;
 
-        let payload = json!({ "shuffle_mode": next_shuffle });
+        // The cloud REQUIRES a `shuffle_seed` when enabling shuffle ("shuffleSeed
+        // is undefined" error otherwise) and uses it to generate the authoritative
+        // order — WS-authoritative is preserved: QBZ supplies only a seed + pivot,
+        // never a local order, and applies only the cloud's echoed order. No `rand`
+        // crate here (unlike Tauri), so seed from the wall clock; mask to i32::MAX
+        // so it fits the wire `fixed32` as a positive value. The pivot keeps the
+        // currently-playing track at the front of the shuffled order. Mirrors the
+        // Tauri `apply_qconnect_shuffle_mode` payload.
+        let shuffle_seed: Option<u32> = next_shuffle.then(|| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u32)
+                .unwrap_or(1);
+            nanos & (i32::MAX as u32)
+        });
+        let pivot_queue_item_id =
+            qconnect_app::queue_resolution::resolve_qconnect_shuffle_pivot(&queue, &renderer);
+
+        let payload = json!({
+            "shuffle_mode": next_shuffle,
+            "shuffle_seed": shuffle_seed.map(i64::from),
+            "shuffle_pivot_queue_item_id": pivot_queue_item_id
+                .and_then(|value| i32::try_from(value).ok())
+                .map(i64::from),
+            "autoplay_reset": false,
+            "autoplay_loading": false,
+        });
         self.send_command(QueueCommandType::CtrlSrvrSetShuffleMode, payload)
             .await?;
 

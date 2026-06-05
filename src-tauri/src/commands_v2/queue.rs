@@ -1,6 +1,7 @@
 use tauri::State;
 
 use qbz_models::{QueueState, QueueTrack as CoreQueueTrack, RepeatMode};
+use qconnect_app::queue_resolution::resolve_qconnect_shuffle_pivot;
 use qconnect_app::QueueCommandType;
 use qconnect_app::{QConnectQueueState, QConnectRendererState};
 
@@ -273,43 +274,15 @@ fn qconnect_loop_mode_from_repeat_mode(mode: RepeatMode) -> i32 {
     }
 }
 
-fn resolve_qconnect_shuffle_pivot(
-    queue: &QConnectQueueState,
-    renderer: &QConnectRendererState,
-) -> Option<u64> {
-    let Some(current_track) = renderer.current_track.as_ref() else {
-        return None;
-    };
-
-    if queue
-        .queue_items
-        .iter()
-        .position(|item| item.queue_item_id == current_track.queue_item_id)
-        .is_some()
-    {
-        return Some(current_track.queue_item_id);
-    }
-
-    if let Some((_, item)) = queue
-        .queue_items
-        .iter()
-        .enumerate()
-        .find(|(_, item)| item.track_id == current_track.track_id)
-    {
-        return Some(item.queue_item_id);
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         build_qconnect_remove_upcoming_payload, build_qconnect_reorder_payload,
-        qconnect_loop_mode_from_repeat_mode, resolve_qconnect_shuffle_pivot,
+        qconnect_loop_mode_from_repeat_mode,
     };
     use crate::qconnect::QconnectVisibleQueueProjection;
     use qbz_models::RepeatMode;
+    use qconnect_app::queue_resolution::resolve_qconnect_shuffle_pivot;
     use qconnect_app::{QConnectQueueState, QConnectRendererState};
     use qconnect_core::QueueItem;
     use serde_json::json;

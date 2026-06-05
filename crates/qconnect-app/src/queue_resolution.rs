@@ -374,7 +374,22 @@ pub fn resolve_remote_start_index(
             .iter()
             .position(|item| item.queue_item_id == queue_item_id)
         {
-            return Some(index);
+            // Only trust the queue_item_id when the track at that position matches
+            // the renderer's reported track (or no track was reported). A qid that
+            // resolves to a DIFFERENT track means the cached renderer projection is
+            // STALE relative to THIS queue — e.g. a fresh album was just pushed (new
+            // track_context_uuid, autoplay_reset) while the projection still names
+            // the PREVIOUS queue's item. Trusting the stale qid lands the cursor on
+            // the wrong track (the "NowPlayingBar shows track 4 on a freshly-pushed
+            // album" bug, controlling a peer that was already rendering). Fall
+            // through to the track_id lookup; it won't find the old track in the new
+            // queue, so the caller defaults to the queue head.
+            let track_matches = renderer_track_id
+                .map(|track_id| queue_state.queue_items[index].track_id == track_id)
+                .unwrap_or(true);
+            if track_matches {
+                return Some(index);
+            }
         }
     }
 
@@ -386,6 +401,38 @@ pub fn resolve_remote_start_index(
         {
             return Some(index);
         }
+    }
+
+    None
+}
+
+/// Resolve the `shuffle_pivot_queue_item_id` for an outbound
+/// `CtrlSrvrSetShuffleMode` command: the queue item the cloud keeps fixed while
+/// it generates the shuffled order (so the currently-playing track stays at the
+/// front). Prefers the renderer's reported `queue_item_id`; falls back to the
+/// item carrying the renderer's `track_id` when the qid is a placeholder; `None`
+/// when the renderer has no current track. Frontend-agnostic (ADR-006): used by
+/// both the Tauri and Slint controller shuffle paths.
+pub fn resolve_qconnect_shuffle_pivot(
+    queue: &QConnectQueueState,
+    renderer: &QConnectRendererState,
+) -> Option<u64> {
+    let current_track = renderer.current_track.as_ref()?;
+
+    if queue
+        .queue_items
+        .iter()
+        .any(|item| item.queue_item_id == current_track.queue_item_id)
+    {
+        return Some(current_track.queue_item_id);
+    }
+
+    if let Some(item) = queue
+        .queue_items
+        .iter()
+        .find(|item| item.track_id == current_track.track_id)
+    {
+        return Some(item.queue_item_id);
     }
 
     None
@@ -477,5 +524,92 @@ pub fn normalize_current_queue_item_id_from_queue_state(
         0
     } else {
         queue.queue_items[current_index].queue_item_id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qconnect_core::QueueItem;
+
+    fn item(queue_item_id: u64, track_id: u64) -> QueueItem {
+        QueueItem {
+            track_context_uuid: String::new(),
+            track_id,
+            queue_item_id,
+        }
+    }
+
+    fn queue(items: Vec<QueueItem>) -> QConnectQueueState {
+        QConnectQueueState {
+            queue_items: items,
+            ..Default::default()
+        }
+    }
+
+    /// Regression (controller of a peer that was already rendering): a fresh album
+    /// is pushed, but the cached renderer projection still names the PREVIOUS
+    /// queue's item (qid=3 + the old track_id). The old track is absent from the
+    /// new queue, so the stale qid must NOT resolve the cursor to the new queue's
+    /// item 3 ("NowPlayingBar shows track 4 on a freshly-pushed album"). It falls
+    /// through to the track_id lookup (miss) → None → caller defaults to the head.
+    #[test]
+    fn stale_qid_with_mismatched_track_does_not_land_on_wrong_track() {
+        let q = queue(vec![
+            item(0, 52848233),
+            item(1, 52848234),
+            item(2, 52848235),
+            item(3, 52848236),
+        ]);
+        assert_eq!(
+            resolve_remote_start_index(&q, Some(3), Some(126886856)),
+            None
+        );
+    }
+
+    /// A consistent projection (qid + the matching track at that position) still
+    /// resolves to its index — the normal track-change / takeback path is unchanged.
+    #[test]
+    fn consistent_qid_and_track_resolves_to_index() {
+        let q = queue(vec![item(0, 100), item(1, 200), item(2, 300)]);
+        assert_eq!(resolve_remote_start_index(&q, Some(2), Some(300)), Some(2));
+    }
+
+    /// When no track is reported, the qid is trusted as before (some events carry
+    /// only a queue_item_id).
+    #[test]
+    fn qid_without_track_id_is_trusted() {
+        let q = queue(vec![item(0, 100), item(1, 200)]);
+        assert_eq!(resolve_remote_start_index(&q, Some(1), None), Some(1));
+    }
+
+    /// An absent qid falls through to the track_id lookup.
+    #[test]
+    fn track_id_lookup_when_qid_absent_from_queue() {
+        let q = queue(vec![item(0, 100), item(7, 200)]);
+        assert_eq!(resolve_remote_start_index(&q, Some(99), Some(200)), Some(1));
+    }
+
+    /// Shuffle pivot prefers the renderer's reported queue_item_id.
+    #[test]
+    fn shuffle_pivot_from_renderer_queue_item_id() {
+        let q = queue(vec![item(10, 100), item(11, 101), item(12, 102)]);
+        let renderer = QConnectRendererState {
+            current_track: Some(item(11, 101)),
+            ..Default::default()
+        };
+        assert_eq!(resolve_qconnect_shuffle_pivot(&q, &renderer), Some(11));
+    }
+
+    /// When the renderer's qid is a placeholder (0), fall back to the item that
+    /// carries the renderer's track_id.
+    #[test]
+    fn shuffle_pivot_by_track_id_when_qid_is_placeholder() {
+        let q = queue(vec![item(20, 200), item(21, 201), item(22, 202)]);
+        let renderer = QConnectRendererState {
+            current_track: Some(item(0, 202)),
+            ..Default::default()
+        };
+        assert_eq!(resolve_qconnect_shuffle_pivot(&q, &renderer), Some(22));
     }
 }

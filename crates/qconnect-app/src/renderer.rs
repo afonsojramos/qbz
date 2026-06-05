@@ -480,7 +480,12 @@ pub async fn apply_renderer_command(
         }
         RendererCommand::SetShuffleMode { shuffle_mode } => {
             let enabled = renderer_state.shuffle_mode.unwrap_or(*shuffle_mode);
-            engine.set_shuffle(enabled).await;
+            // WS-authoritative: flip ONLY the flag here. Never generate a local
+            // shuffle order — the cloud owns queue order, which arrives separately
+            // via `sync_remote_shuffle_projection` / `materialize_remote_queue`.
+            // Calling the order-generating `set_shuffle` would produce a divergent
+            // local random order ("es un infierno" — the documented failure mode).
+            engine.set_shuffle_flag(enabled).await;
         }
     }
 
@@ -839,6 +844,7 @@ mod tests {
         set_volumes: Vec<f32>,
         set_repeat_modes: u32,
         set_shuffles: Vec<bool>,
+        set_shuffle_flags: Vec<bool>,
         set_queue_with_order: Vec<(bool, Option<Vec<usize>>)>,
         set_queues: u32,
         clear_queues: Vec<bool>,
@@ -906,6 +912,9 @@ mod tests {
         }
         async fn set_shuffle(&self, enabled: bool) {
             self.calls().set_shuffles.push(enabled);
+        }
+        async fn set_shuffle_flag(&self, enabled: bool) {
+            self.calls().set_shuffle_flags.push(enabled);
         }
         async fn get_all_queue_tracks(&self) -> (Vec<QueueTrack>, Option<usize>) {
             (self.queue_tracks.clone(), self.queue_index)
@@ -1077,6 +1086,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(engine.calls().seeks, vec![40]);
+    }
+
+    /// #4 — WS-authoritative shuffle: a standalone SetShuffleMode must flip the
+    /// flag ONLY (set_shuffle_flag), NEVER generate a local order. It must not
+    /// call the order-generating set_shuffle, and must not apply any queue order
+    /// (set_queue_with_order) — the cloud's order arrives separately.
+    #[tokio::test]
+    async fn apply_renderer_command_setshufflemode_is_flag_only() {
+        let mut engine = MockEngine::new();
+        engine.queue_tracks = vec![mock_queue_track(1), mock_queue_track(2), mock_queue_track(3)];
+        engine.queue_index = Some(0);
+        let sync = sync();
+        let cmd = RendererCommand::SetShuffleMode { shuffle_mode: true };
+        apply_renderer_command(&engine, &sync, &cmd, &QConnectRendererState::default())
+            .await
+            .unwrap();
+        let calls = engine.calls();
+        assert_eq!(
+            calls.set_shuffle_flags,
+            vec![true],
+            "SetShuffleMode must take the flag-only path"
+        );
+        assert!(
+            calls.set_shuffles.is_empty(),
+            "SetShuffleMode must NEVER call the order-generating set_shuffle (WS-authoritative rule)"
+        );
+        assert!(
+            calls.set_queue_with_order.is_empty(),
+            "SetShuffleMode must not apply any local order; the cloud's order arrives separately"
+        );
     }
 
     /// #3 — a state-only SetState (command.current_track = None) must NOT align the

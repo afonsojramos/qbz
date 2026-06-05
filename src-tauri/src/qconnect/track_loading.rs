@@ -310,6 +310,9 @@ impl QconnectRendererEngine for CoreBridge {
     async fn set_shuffle(&self, enabled: bool) {
         CoreBridge::set_shuffle(self, enabled).await
     }
+    async fn set_shuffle_flag(&self, enabled: bool) {
+        CoreBridge::set_shuffle_with_order(self, enabled, None).await
+    }
     async fn get_all_queue_tracks(&self) -> (Vec<QueueTrack>, Option<usize>) {
         CoreBridge::get_all_queue_tracks(self).await
     }

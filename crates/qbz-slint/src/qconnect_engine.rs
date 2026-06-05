@@ -83,6 +83,9 @@ impl QconnectRendererEngine for SlintRendererEngine {
     async fn set_shuffle(&self, enabled: bool) {
         self.core().set_shuffle(enabled).await
     }
+    async fn set_shuffle_flag(&self, enabled: bool) {
+        self.core().set_shuffle_with_order(enabled, None).await
+    }
     async fn get_all_queue_tracks(&self) -> (Vec<QueueTrack>, Option<usize>) {
         self.core().get_all_queue_tracks().await
     }

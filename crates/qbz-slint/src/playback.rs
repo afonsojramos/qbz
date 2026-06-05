@@ -1484,6 +1484,16 @@ pub fn enqueue_album(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
         if tracks.is_empty() {
             return;
         }
+        // QConnect CONTROLLER mode: route the whole album to the peer's queue when
+        // a PEER renderer owns playback. All-or-nothing admission inside the
+        // router; returns false when no peer is active, so the local append runs.
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
+            if svc.add_to_queue_batch_on_peer_if_active(&routed).await {
+                return;
+            }
+        }
         runtime.core().add_tracks(tracks).await;
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, "Added to queue");
@@ -1565,6 +1575,16 @@ pub fn enqueue_album_next(
             .collect();
         if tracks.is_empty() {
             return;
+        }
+        // QConnect CONTROLLER mode: route the whole album to the peer (single
+        // QueueInsertTracks in NATURAL order — the server preserves block order).
+        // All-or-nothing admission inside the router; false when no peer is active.
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
+            if svc.play_next_batch_on_peer_if_active(&routed).await {
+                return;
+            }
         }
         // Insert in reverse so the tracks end up in the correct order.
         for track in tracks.into_iter().rev() {
@@ -1721,6 +1741,21 @@ pub fn enqueue_playlist(
         if tracks.is_empty() {
             return;
         }
+        // QConnect CONTROLLER mode: route the whole playlist to the peer's queue
+        // (insert-next or append). All-or-nothing admission inside the router;
+        // returns false when no peer is active, so the local path runs unchanged.
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
+            let handled = if next {
+                svc.play_next_batch_on_peer_if_active(&routed).await
+            } else {
+                svc.add_to_queue_batch_on_peer_if_active(&routed).await
+            };
+            if handled {
+                return;
+            }
+        }
         if next {
             // Reverse so the inserted block keeps the playlist's order.
             for track in tracks.into_iter().rev() {
@@ -1746,6 +1781,23 @@ pub fn enqueue_tracks(
         return;
     }
     handle.spawn(async move {
+        // QConnect CONTROLLER mode: route the batch to the peer's queue when a
+        // PEER renderer owns playback. The favorites bulk bar holds Qobuz catalog
+        // tracks (source defaults to "qobuz" => castable); all-or-nothing admission
+        // inside the router refuses the whole batch if any item is local/plex.
+        // Returns false when no peer is active, so the local loop runs unchanged.
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|track| (track.id, None)).collect();
+            let handled = if next {
+                svc.play_next_batch_on_peer_if_active(&routed).await
+            } else {
+                svc.add_to_queue_batch_on_peer_if_active(&routed).await
+            };
+            if handled {
+                return;
+            }
+        }
         // For "play next" each insert lands right after the current track,
         // so reverse the batch to preserve the selection's order.
         let ordered: Vec<qbz_models::Track> = if next {

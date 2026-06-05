@@ -722,11 +722,19 @@ impl QueueManager {
             return None;
         }
 
-        // Save current to history
+        // Save current to history — ONLY when actually moving to a DIFFERENT
+        // track. Jumping to the index already current (e.g. the QConnect
+        // controller's `materialize_remote_queue` re-aligning the cursor to the
+        // same index via `play_index`, since the stopped local player makes the
+        // alignment fire unconditionally) must NOT record a spurious "previous"
+        // entry, or the current track shows up duplicated in the History tab.
+        // Matches `sync_current_to_id`'s `moved` guard.
         if let Some(curr_idx) = state.current_index {
-            state.history.push_back(curr_idx);
-            while state.history.len() > 50 {
-                state.history.pop_front();
+            if curr_idx != index {
+                state.history.push_back(curr_idx);
+                while state.history.len() > 50 {
+                    state.history.pop_front();
+                }
             }
         }
 
@@ -1211,6 +1219,29 @@ mod tests {
         let after = queue.get_state();
         assert_eq!(after.history.len(), 1);
         assert_eq!(after.history[0].id, 123);
+    }
+
+    #[test]
+    fn play_index_to_same_track_does_not_push_history() {
+        let queue = QueueManager::new();
+        queue.add_track(create_test_track(1));
+        queue.add_track(create_test_track(2));
+        queue.play_index(0); // current None -> 0, no push
+
+        // Re-align to the SAME index — the QConnect controller materialize path
+        // calls play_index with the index already current. It must NOT record a
+        // spurious "previous" entry (the track-shows-twice-in-History bug).
+        queue.play_index(0);
+        assert!(
+            queue.get_state().history.is_empty(),
+            "re-aligning to the current track must not add a history entry"
+        );
+
+        // A genuine move still records the outgoing track.
+        queue.play_index(1);
+        let history = queue.get_state().history;
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, 1);
     }
 
     #[test]

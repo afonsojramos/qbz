@@ -188,10 +188,23 @@ impl SlintQconnectEventSink {
     /// PEER renderer owns playback; `cast-target` is its friendly name;
     /// `volume-locked` is true when that renderer disallows remote volume.
     async fn refresh_now_playing_remote_state(&self) {
+        // Badge gate: if the transport is down (terminal teardown OR a transient
+        // reconnect blip), the renderer/controller badge must read NOT remote. The
+        // in-memory session can still name a peer as active_renderer_id long after
+        // the session ended (freeze sets playing_state=UNKNOWN but leaves
+        // active_renderer_id, and disconnect() only runs on the user toggle, not on
+        // transport-drop / reconnect-exhausted). Mirrors the Tauri
+        // fetchQconnectRuntimeState early-return on !transport_connected. On
+        // reconnect, TransportConnected re-runs this refresh and the repopulated
+        // session restores the badge.
+        let transport_connected = match self.app.get().and_then(Weak::upgrade) {
+            Some(app) => app.state_handle().lock().await.transport_connected,
+            None => false,
+        };
         let (is_remote, cast_target, volume_locked) = {
             let st = self.sync_state.lock().await;
             let session = &st.session;
-            let is_remote = is_peer_renderer_active(session);
+            let is_remote = transport_connected && is_peer_renderer_active(session);
             let active = session.active_renderer_id;
             let active_info = active.and_then(|active_id| {
                 session.renderers.iter().find(|r| r.renderer_id == active_id)
