@@ -360,6 +360,11 @@ impl Default for RuntimeManager {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", content = "data")]
 pub enum RuntimeEvent {
+    /// A live (cold) bundle-token extraction has started — no cache was
+    /// available, so we must download Qobuz's ~7 MB bundle before the UI can
+    /// proceed. The frontend shows a "connecting to Qobuz" state. Only emitted
+    /// on a cold start (first run or after a cache wipe); warm starts skip it.
+    BundleFetchStarted,
     /// Runtime initialized (client ready)
     RuntimeInitialized,
     /// Authentication state changed

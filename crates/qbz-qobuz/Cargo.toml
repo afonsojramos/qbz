@@ -27,6 +27,9 @@ base64 = { workspace = true }
 # Time
 chrono = { workspace = true }
 
+# Filesystem (bundle-token cache location)
+dirs = "6"
+
 # Regex
 regex = { workspace = true }
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::auth::{get_timestamp, parse_login_response, sign_get_favorites, sign_get_file_url};
-use super::bundle::{extract_bundle_tokens, BundleTokens};
+use super::bundle::BundleTokens;
 use super::endpoints::{self, paths};
 use super::error::{ApiError, Result};
 use super::models::*;
@@ -40,6 +40,9 @@ impl QobuzClient {
         let http = Client::builder()
             .user_agent(USER_AGENT)
             .cookie_store(true)
+            // Bound the TCP connect phase so a dead route can't hang startup.
+            // Body-read time is unaffected, so streaming reads are fine.
+            .connect_timeout(std::time::Duration::from_secs(10))
             .build()?;
 
         Ok(Self {
@@ -51,10 +54,50 @@ impl QobuzClient {
         })
     }
 
-    /// Initialize client by extracting bundle tokens
+    /// Initialize client by extracting bundle tokens.
+    ///
+    /// Shares the on-disk token cache with the qbz_qobuz core client (same
+    /// `~/.cache/qbz/bundle_tokens.json`), so a cold start downloads Qobuz's
+    /// ~7 MB bundle at most once across both clients, and warm starts never
+    /// block the UI on it. On a warm start the cached tokens are applied
+    /// immediately and refreshed in the background (re-downloading only if
+    /// Qobuz rotated the bundle version).
     pub async fn init(&self) -> Result<()> {
-        let tokens = extract_bundle_tokens(&self.http).await?;
-        *self.tokens.write().await = Some(tokens);
+        if let Some(cached) = qbz_qobuz::bundle::load_cached_bundle() {
+            let version = cached.bundle_version.clone();
+            log::info!("[Bundle] (api) Using cached tokens (version {})", version);
+            *self.tokens.write().await = Some(BundleTokens {
+                app_id: cached.app_id,
+                secrets: cached.secrets,
+                private_key: cached.private_key,
+            });
+
+            let http = self.http.clone();
+            let tokens_arc = Arc::clone(&self.tokens);
+            tokio::spawn(async move {
+                if let Some(fresh) =
+                    qbz_qobuz::bundle::refresh_bundle_if_changed(&http, &version).await
+                {
+                    *tokens_arc.write().await = Some(BundleTokens {
+                        app_id: fresh.app_id,
+                        secrets: fresh.secrets,
+                        private_key: fresh.private_key,
+                    });
+                    log::info!("[Bundle] (api) Background refresh applied rotated tokens");
+                }
+            });
+            return Ok(());
+        }
+
+        log::info!("[Bundle] (api) No cached tokens, extracting from Qobuz...");
+        let fresh = qbz_qobuz::bundle::extract_and_cache_bundle_tokens(&self.http)
+            .await
+            .map_err(|e| ApiError::BundleExtractionError(e.to_string()))?;
+        *self.tokens.write().await = Some(BundleTokens {
+            app_id: fresh.app_id,
+            secrets: fresh.secrets,
+            private_key: fresh.private_key,
+        });
         Ok(())
     }
 
