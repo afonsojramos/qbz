@@ -1039,6 +1039,21 @@ fn v2_resolve_local_artwork(url: &str) -> Option<PathBuf> {
     None
 }
 
+/// Shared blocking HTTP client for notification artwork downloads. Reused across
+/// track changes so a long listening session doesn't leak a file descriptor per
+/// track via a fresh `reqwest::blocking::Client::new()` (EMFILE — see the image
+/// cache for the same fix on the Discover grid).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn notification_http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .pool_max_idle_per_host(2)
+            .build()
+            .expect("failed to build shared notification HTTP client")
+    })
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn v2_cache_notification_artwork(url: &str) -> Result<PathBuf, String> {
     if let Some(local_path) = v2_resolve_local_artwork(url) {
@@ -1056,7 +1071,7 @@ pub fn v2_cache_notification_artwork(url: &str) -> Result<PathBuf, String> {
         return Ok(cache_path);
     }
 
-    let response = reqwest::blocking::Client::new()
+    let response = notification_http_client()
         .get(url)
         .header("User-Agent", "Mozilla/5.0")
         .timeout(std::time::Duration::from_secs(5))
