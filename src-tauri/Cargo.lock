@@ -5194,7 +5194,7 @@ dependencies = [
 
 [[package]]
 name = "qbz-nix"
-version = "1.2.14"
+version = "1.2.15"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -5335,6 +5335,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "dirs",
  "futures-util",
  "log",
  "md-5",

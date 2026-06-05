@@ -53,8 +53,14 @@ pub async fn runtime_bootstrap(
 
     log::info!("[Runtime] Bootstrap starting...");
 
-    // Step 1: Initialize API client (bundle tokens)
+    // Step 1: Initialize API client (bundle tokens).
+    // On a cold start (no cached tokens) this must download Qobuz's ~7 MB bundle,
+    // which can take many seconds when their CDN is slow — tell the frontend so it
+    // shows a "connecting to Qobuz" state instead of a frozen splash.
     {
+        if qbz_qobuz::bundle::load_cached_bundle().is_none() {
+            let _ = app.emit("runtime:event", RuntimeEvent::BundleFetchStarted);
+        }
         let client = app_state.client.read().await;
         match client.init().await {
             Ok(_) => {

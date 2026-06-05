@@ -9,7 +9,7 @@ use super::auth::{
     get_timestamp, parse_login_response, sign_file_url, sign_get_favorites, sign_get_file_url,
     sign_request, sign_search, sign_session_start,
 };
-use super::bundle::{extract_bundle_tokens, BundleTokens};
+use super::bundle::{self, BundleTokens};
 use super::endpoints::{self, paths};
 use super::error::{ApiError, Result};
 use qbz_models::*;
@@ -52,6 +52,10 @@ impl QobuzClient {
         let http = Client::builder()
             .user_agent(USER_AGENT)
             .cookie_store(true)
+            // Bound the TCP connect phase so a dead route (e.g. a stale CDN
+            // address) can't hang startup. Does not affect body-read time, so
+            // long streaming reads are unaffected.
+            .connect_timeout(std::time::Duration::from_secs(10))
             .build()?;
 
         Ok(Self {
@@ -64,11 +68,39 @@ impl QobuzClient {
         })
     }
 
-    /// Initialize client by extracting bundle tokens
-    pub async fn init(&self) -> Result<()> {
-        let tokens = extract_bundle_tokens(&self.http).await?;
+    /// Initialize client by extracting bundle tokens.
+    ///
+    /// Warm start: if cached tokens exist, use them immediately so the UI never
+    /// blocks on Qobuz's (sometimes very slow) ~7 MB bundle download, then
+    /// refresh in the background — re-downloading only if Qobuz rotated the
+    /// bundle version. Cold start (first run or after a cache wipe): fetch now,
+    /// bounded by a per-request timeout + a small retry so a slow/dead CDN can't
+    /// hang forever.
+    ///
+    /// Returns `true` if it served cached tokens (warm), `false` if it had to do
+    /// a live extraction (cold) — callers can use this to drive a "connecting"
+    /// UI only when it actually matters.
+    pub async fn init(&self) -> Result<bool> {
+        if let Some(cached) = bundle::load_cached_bundle() {
+            let version = cached.bundle_version.clone();
+            log::info!("[Bundle] Using cached tokens (version {})", version);
+            *self.tokens.write().await = Some(cached.into());
+
+            let client = self.http.clone();
+            let tokens_arc = Arc::clone(&self.tokens);
+            tokio::spawn(async move {
+                if let Some(fresh) = bundle::refresh_bundle_if_changed(&client, &version).await {
+                    *tokens_arc.write().await = Some(fresh);
+                    log::info!("[Bundle] Background refresh applied rotated tokens");
+                }
+            });
+            return Ok(true);
+        }
+
+        log::info!("[Bundle] No cached tokens, extracting from Qobuz...");
+        let tokens = bundle::extract_and_cache_bundle_tokens(&self.http).await?;
         *self.tokens.write().await = Some(tokens);
-        Ok(())
+        Ok(false)
     }
 
     /// Set the locale for API requests
