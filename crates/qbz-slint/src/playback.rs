@@ -515,10 +515,18 @@ fn fmt_remaining(position: u64, duration: u64) -> String {
 /// Push the now-playing values for the current queue track onto
 /// `NowPlayingState`. Called when a new track starts so the song card
 /// updates immediately (the poll loop only refreshes position/progress).
+/// Last track id we fired a desktop notification for. `refresh_now_playing_meta`
+/// runs on resume/seek too, so we de-dupe to only notify on an actual track
+/// change. `u64::MAX` = "nothing notified yet" (no real track id collides).
+static NOTIFY_LAST_TRACK: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(u64::MAX);
+
 pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
     let state = runtime.core().get_queue_state().await;
     let Some(track) = state.current_track else {
         // No current track → clear the tray tooltip (Linux) + stop media controls.
+        // Reset the notify guard so replaying the same track after a stop fires.
+        NOTIFY_LAST_TRACK.store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
         if let Some(t) = crate::tray::handle() {
             t.clear_track();
         }
@@ -577,6 +585,28 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
             qbz_media_controls::PlaybackStatus::Playing,
             Some(std::time::Duration::ZERO),
         );
+    }
+
+    // Desktop "now playing" notification (1:1 with the Tauri path). De-dupe so
+    // only an actual track change fires; skip while a remote QConnect renderer
+    // drives playback (matches the Svelte `skipIfRemote`). Fire-and-forget.
+    if NOTIFY_LAST_TRACK.swap(track.id, std::sync::atomic::Ordering::Relaxed) != track.id {
+        let notify_meta = qbz_media_controls::NotificationMeta {
+            title: title.clone(),
+            artist: artist.clone(),
+            album: album.clone(),
+            bit_depth: track.bit_depth,
+            sample_rate: track.sample_rate,
+            art_url: artwork.to_mpris_url(),
+        };
+        tokio::spawn(async move {
+            if let Some(svc) = crate::qconnect_service::service() {
+                if svc.is_peer_active().await {
+                    return;
+                }
+            }
+            qbz_media_controls::show_track_notification(notify_meta).await;
+        });
     }
 
     let _ = weak.upgrade_in_event_loop(move |w| {
