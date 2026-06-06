@@ -17,6 +17,8 @@ pub struct TraySettings {
     /// Hide window to tray when clicking minimize.
     pub minimize_to_tray: bool,
     /// Hide window to tray instead of quitting when clicking close.
+    /// Opt-out: enabled by default (closing sends the window to the tray and
+    /// keeps the app running, like Spotify/Discord).
     pub close_to_tray: bool,
     /// Tray icon variant override:
     /// - "auto" follows system color scheme,
@@ -25,6 +27,11 @@ pub struct TraySettings {
     /// - "color" uses the full-color vinyl logo.
     #[serde(default = "default_tray_icon_theme")]
     pub tray_icon_theme: String,
+    /// macOS only: when closed to the menu bar, switch the activation policy
+    /// to `.accessory` (no Dock icon, menu-bar-only). Off keeps the Dock icon
+    /// (Spotify-style). Ignored on Linux/Windows.
+    #[serde(default)]
+    pub mac_hide_dock: bool,
 }
 
 fn default_tray_icon_theme() -> String {
@@ -51,8 +58,9 @@ impl Default for TraySettings {
         Self {
             enable_tray: true,
             minimize_to_tray: false,
-            close_to_tray: false,
+            close_to_tray: true,
             tray_icon_theme: default_tray_icon_theme(),
+            mac_hide_dock: false,
         }
     }
 }
@@ -78,7 +86,7 @@ impl TraySettingsStore {
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 enable_tray INTEGER NOT NULL DEFAULT 1,
                 minimize_to_tray INTEGER NOT NULL DEFAULT 0,
-                close_to_tray INTEGER NOT NULL DEFAULT 0
+                close_to_tray INTEGER NOT NULL DEFAULT 1
             );",
         )
         .map_err(|e| format!("Failed to create tray settings table: {}", e))?;
@@ -97,9 +105,23 @@ impl TraySettingsStore {
             .map_err(|e| format!("Failed to add tray_icon_theme column: {}", e))?;
         }
 
+        let has_mac_hide_dock_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('tray_settings') WHERE name = 'mac_hide_dock'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to check mac_hide_dock column: {}", e))?;
+        if has_mac_hide_dock_column == 0 {
+            conn.execute_batch(
+                "ALTER TABLE tray_settings ADD COLUMN mac_hide_dock INTEGER NOT NULL DEFAULT 0;",
+            )
+            .map_err(|e| format!("Failed to add mac_hide_dock column: {}", e))?;
+        }
+
         conn.execute(
-            "INSERT OR IGNORE INTO tray_settings (id, enable_tray, minimize_to_tray, close_to_tray, tray_icon_theme)
-            VALUES (1, 1, 0, 0, 'auto')",
+            "INSERT OR IGNORE INTO tray_settings (id, enable_tray, minimize_to_tray, close_to_tray, tray_icon_theme, mac_hide_dock)
+            VALUES (1, 1, 0, 1, 'auto', 0)",
             [],
         )
         .map_err(|e| format!("Failed to insert default tray settings: {}", e))?;
@@ -123,18 +145,20 @@ impl TraySettingsStore {
     pub fn get_settings(&self) -> Result<TraySettings, String> {
         self.conn
             .query_row(
-                "SELECT enable_tray, minimize_to_tray, close_to_tray, tray_icon_theme FROM tray_settings WHERE id = 1",
+                "SELECT enable_tray, minimize_to_tray, close_to_tray, tray_icon_theme, mac_hide_dock FROM tray_settings WHERE id = 1",
                 [],
                 |row| {
                     let enable_tray: i32 = row.get(0)?;
                     let minimize_to_tray: i32 = row.get(1)?;
                     let close_to_tray: i32 = row.get(2)?;
                     let tray_icon_theme: String = row.get(3)?;
+                    let mac_hide_dock: i32 = row.get(4)?;
                     Ok(TraySettings {
                         enable_tray: enable_tray != 0,
                         minimize_to_tray: minimize_to_tray != 0,
                         close_to_tray: close_to_tray != 0,
                         tray_icon_theme: normalize_tray_icon_theme(&tray_icon_theme),
+                        mac_hide_dock: mac_hide_dock != 0,
                     })
                 },
             )
@@ -179,6 +203,16 @@ impl TraySettingsStore {
                 params![normalized],
             )
             .map_err(|e| format!("Failed to set tray_icon_theme: {}", e))?;
+        Ok(())
+    }
+
+    pub fn set_mac_hide_dock(&self, value: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE tray_settings SET mac_hide_dock = ?1 WHERE id = 1",
+                params![if value { 1 } else { 0 }],
+            )
+            .map_err(|e| format!("Failed to set mac_hide_dock: {}", e))?;
         Ok(())
     }
 }
@@ -264,6 +298,15 @@ impl TraySettingsState {
         let store = guard.as_ref().ok_or("No active session - please log in")?;
         store.set_tray_icon_theme(value)
     }
+
+    pub fn set_mac_hide_dock(&self, value: bool) -> Result<(), String> {
+        let guard = self
+            .store
+            .lock()
+            .map_err(|_| "Failed to lock tray settings store".to_string())?;
+        let store = guard.as_ref().ok_or("No active session - please log in")?;
+        store.set_mac_hide_dock(value)
+    }
 }
 
 #[cfg(test)]
@@ -290,7 +333,7 @@ mod tests {
 
         assert!(settings.enable_tray);
         assert!(!settings.minimize_to_tray);
-        assert!(!settings.close_to_tray);
+        assert!(settings.close_to_tray);
         assert_eq!(settings.tray_icon_theme, "auto");
     }
 
@@ -302,7 +345,7 @@ mod tests {
 
         assert!(settings.enable_tray);
         assert!(!settings.minimize_to_tray);
-        assert!(!settings.close_to_tray);
+        assert!(settings.close_to_tray);
         assert_eq!(settings.tray_icon_theme, "auto");
         let _ = std::fs::remove_dir_all(dir);
     }
