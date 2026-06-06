@@ -23,6 +23,7 @@ members = [
     "qconnect-app",
     "qbz-slint",
     "qbz-credentials",
+    "qbz-media-controls",
 ]
 
 [workspace.package]

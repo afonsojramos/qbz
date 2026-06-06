@@ -49,6 +49,7 @@ mod folders;
 mod library_db;
 mod local_library;
 mod local_library_settings;
+mod media_controls;
 mod locallibrary_prefs;
 mod tag_editor;
 mod offline;
@@ -111,6 +112,15 @@ async fn enter_shell(
         tokio::runtime::Handle::current(),
         tray.tray_icon_theme.clone(),
         tray.enable_tray,
+    );
+
+    // System media controls — MPRIS on Linux (publishes DesktopEntry so GNOME
+    // shows the app icon), SMTC/MediaRemote on macOS/Windows. Independent of
+    // the tray; pushes metadata/state from the playback paths.
+    media_controls::init(
+        runtime.clone(),
+        weak.clone(),
+        tokio::runtime::Handle::current(),
     );
 
     let _ = weak.upgrade_in_event_loop(move |w| {

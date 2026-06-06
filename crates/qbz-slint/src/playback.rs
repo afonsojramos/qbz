@@ -518,9 +518,12 @@ fn fmt_remaining(position: u64, duration: u64) -> String {
 pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
     let state = runtime.core().get_queue_state().await;
     let Some(track) = state.current_track else {
-        // No current track → clear the tray tooltip (Linux).
+        // No current track → clear the tray tooltip (Linux) + stop media controls.
         if let Some(t) = crate::tray::handle() {
             t.clear_track();
+        }
+        if let Some(mc) = crate::media_controls::handle() {
+            mc.set_playback(qbz_media_controls::PlaybackStatus::Stopped, None);
         }
         let _ = weak.upgrade_in_event_loop(|w| {
             w.global::<NowPlayingState>().set_has_track(false);
@@ -556,6 +559,23 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     // Mirror the now-playing metadata into the system tray tooltip (Linux).
     if let Some(t) = crate::tray::handle() {
         t.set_track(title.clone(), artist.clone(), album.clone());
+    }
+
+    // Push to the OS media controls (MPRIS / SMTC / MediaRemote). The app icon
+    // GNOME shows comes from the MPRIS DesktopEntry, not from album art; art_url
+    // (album art) is a later refinement.
+    if let Some(mc) = crate::media_controls::handle() {
+        mc.set_metadata(&qbz_media_controls::TrackMeta {
+            title: title.clone(),
+            artist: artist.clone(),
+            album: album.clone(),
+            duration: (duration > 0).then(|| std::time::Duration::from_secs(duration as u64)),
+            art_url: None,
+        });
+        mc.set_playback(
+            qbz_media_controls::PlaybackStatus::Playing,
+            Some(std::time::Duration::ZERO),
+        );
     }
 
     let _ = weak.upgrade_in_event_loop(move |w| {
@@ -2408,6 +2428,14 @@ pub fn start_poll_loop(
             if is_playing != was_playing {
                 if let Some(t) = crate::tray::handle() {
                     t.set_playing(is_playing);
+                }
+                if let Some(mc) = crate::media_controls::handle() {
+                    let status = if is_playing {
+                        qbz_media_controls::PlaybackStatus::Playing
+                    } else {
+                        qbz_media_controls::PlaybackStatus::Paused
+                    };
+                    mc.set_playback(status, Some(std::time::Duration::from_secs(position as u64)));
                 }
             }
             was_playing = is_playing;
