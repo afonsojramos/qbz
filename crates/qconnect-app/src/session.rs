@@ -112,12 +112,19 @@ pub fn compute_connection_state(
     was_playing: bool,
     server: ServerActiveState,
     queue_equal: bool,
+    auto_take_when_idle: bool,
 ) -> ConnectionDecision {
     use ServerActiveState::*;
     match server {
         None => ConnectionDecision {
-            should_be_active: was_active,
-            should_set_active_renderer: was_active,
+            // Auto-take the render when the cloud reports NO active renderer and
+            // `auto_take_when_idle` is set (the caller gates this to a FRESH
+            // connect — see run_session_loop), so the user does not need an extra
+            // "Play here" click when QBZ is the only candidate. This NEVER steals
+            // from an active peer: an active peer is server==Other*/Me, not None,
+            // and those branches keep should_set_active_renderer=false.
+            should_be_active: was_active || auto_take_when_idle,
+            should_set_active_renderer: was_active || auto_take_when_idle,
             should_set_queue: was_active,
             should_ask_queue: false,
         },
@@ -510,26 +517,34 @@ mod tests {
     #[test]
     fn compute_connection_state_matrix() {
         use ServerActiveState::*;
-        let d = compute_connection_state(true, true, None, false);
+        let d = compute_connection_state(true, true, None, false, false);
         assert!(
             d.should_be_active
                 && d.should_set_active_renderer
                 && d.should_set_queue
                 && !d.should_ask_queue
         );
-        let d = compute_connection_state(true, false, Me, false);
+        let d = compute_connection_state(true, false, Me, false, false);
         assert!(d.should_be_active && !d.should_set_active_renderer && d.should_set_queue);
-        let d = compute_connection_state(false, false, Me, true);
+        let d = compute_connection_state(false, false, Me, true, false);
         assert!(d.should_ask_queue && !d.should_set_queue && !d.should_set_active_renderer);
-        let d = compute_connection_state(false, false, OtherPlaying, false);
+        let d = compute_connection_state(false, false, OtherPlaying, false, false);
         assert!(!d.should_be_active && !d.should_set_active_renderer && d.should_ask_queue);
-        let d = compute_connection_state(false, false, None, false);
+        let d = compute_connection_state(false, false, None, false, false);
         assert!(
             !d.should_be_active
                 && !d.should_set_active_renderer
                 && !d.should_set_queue
                 && !d.should_ask_queue
         );
+        // Fresh connect, cloud reports nobody active, auto_take_when_idle set ->
+        // QBZ claims the render (no extra "Play here" click).
+        let d = compute_connection_state(false, false, None, false, true);
+        assert!(d.should_be_active && d.should_set_active_renderer);
+        // An active peer is server==OtherPlaying/Other Paused, never None, so
+        // auto_take_when_idle can never steal it (guard at the call site too).
+        let d = compute_connection_state(false, false, OtherPlaying, false, true);
+        assert!(!d.should_set_active_renderer);
     }
 
     #[test]

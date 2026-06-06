@@ -1587,10 +1587,14 @@ where
         let local_id = st.session.local_renderer_id;
         let was_active = is_local_renderer_active(&st.session);
         let was_playing = st.last_renderer_playing_state == Some(PLAYING_STATE_PLAYING);
-        let incoming_active = payload
-            .get("active_renderer_id")
-            .and_then(Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok());
+        // Normalize identically to the apply path (`normalize_active_renderer_id`):
+        // the cloud encodes "no active renderer" as `active_renderer_id: -1`, so a
+        // raw parse would classify -1 as `Some(-1)` and fall into the `Some(_)`
+        // peer-active arm — suppressing the idle auto-take. Filtering `>= 0` maps
+        // -1 (and any negative sentinel) to None, the genuine "session idle" state.
+        let incoming_active = normalize_active_renderer_id(
+            payload.get("active_renderer_id").and_then(Value::as_i64),
+        );
         let server = match incoming_active {
             None => ServerActiveState::None,
             Some(id) if Some(id) == local_id => ServerActiveState::Me,
@@ -1775,6 +1779,18 @@ where
         log::info!("[QConnect/EventLoop] Started listening for transport events");
         let mut renderer_joined = false;
         let mut has_disconnected = false;
+        // One-shot latch: auto-take the render at most ONCE per fresh connect, on
+        // the first SESSION_STATE that reports no active renderer. Prevents
+        // re-grabbing after the user later gives the render to a peer (which makes
+        // the session go idle again). Reset on disconnect (a reconnect rejoins via
+        // the RECONNECTION reason, not via auto-take).
+        let mut auto_take_attempted = false;
+        // Set when we DECIDED to auto-take on a no-active SESSION_STATE but our
+        // local_renderer_id was not known yet (the cloud's ADD_RENDERER for our
+        // just-sent join lands a beat later). The per-iteration check below fires
+        // the SET_ACTIVE as soon as the id arrives — and ONLY if nobody else has
+        // become active meanwhile (anti-steal). Reset on disconnect.
+        let mut pending_auto_take = false;
         // P1-8: budget for re-AskForQueueState after Lagged broadcast drops,
         // until the session_uuid is confirmed. Reset on disconnect.
         let mut lagged_reask_attempts: u32 = 0;
@@ -1814,6 +1830,8 @@ where
                             log::warn!("[QConnect/Transport] WebSocket disconnected — resetting renderer_joined flag");
                             renderer_joined = false;
                             has_disconnected = true;
+                            auto_take_attempted = false;
+                            pending_auto_take = false;
                             lagged_reask_attempts = 0;
                             // Surface "Reconnecting" to the UI, but only if we're
                             // not in a teardown path (Off/Exhausted). The host gates
@@ -1996,6 +2014,16 @@ where
                     // Only the claim-active path is wired here; never resets
                     // reconnect counters (#358 latch untouched).
                     if let Some(input) = takeover_input {
+                        // Auto-take the render only on a FRESH connect (never a
+                        // reconnect — that rejoins active via the RECONNECTION join
+                        // reason), only when the cloud reports nobody active, and
+                        // only ONCE per connect (the latch). This can never steal
+                        // from an active peer: an active peer classifies as
+                        // server==Other*/Me, not None.
+                        let auto_take_when_idle = !has_disconnected
+                            && matches!(input.server, ServerActiveState::None)
+                            && !auto_take_attempted
+                            && !pending_auto_take;
                         let decision = compute_connection_state(
                             input.was_active,
                             input.was_playing,
@@ -2004,18 +2032,62 @@ where
                             // controller/renderer queue diff; default false so the
                             // reduced matrix never spuriously suppresses a push.
                             false,
+                            auto_take_when_idle,
                         );
                         if decision.should_set_active_renderer {
                             let local_id = {
                                 let st = self.sync.lock().await;
                                 st.session.local_renderer_id
                             };
-                            if let Some(local_id) = local_id {
-                                if let Err(err) = self.send_set_active_renderer(local_id).await {
-                                    log::warn!(
-                                        "[QConnect] takeover set_active_renderer failed: {err}"
-                                    );
+                            match local_id {
+                                Some(local_id) => {
+                                    // Latch ONLY on an actual send (reconnect
+                                    // re-claim, or the idle auto-take when our
+                                    // ADD_RENDERER already landed).
+                                    auto_take_attempted = true;
+                                    if let Err(err) =
+                                        self.send_set_active_renderer(local_id).await
+                                    {
+                                        log::warn!(
+                                            "[QConnect] takeover set_active_renderer failed: {err}"
+                                        );
+                                    }
                                 }
+                                None if auto_take_when_idle => {
+                                    // Our just-sent join is not yet confirmed, so
+                                    // local_renderer_id is unknown. Defer to the
+                                    // per-iteration check below, which fires once
+                                    // the cloud's ADD_RENDERER for us lands.
+                                    pending_auto_take = true;
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+
+                    // Fire a deferred idle auto-take as soon as our
+                    // local_renderer_id lands — but ONLY while the session is still
+                    // idle (no active renderer), so we never steal a peer that
+                    // became active while we waited for our id.
+                    if pending_auto_take {
+                        let (local_id, active_id) = {
+                            let st = self.sync.lock().await;
+                            (st.session.local_renderer_id, st.session.active_renderer_id)
+                        };
+                        if active_id.is_some() {
+                            // Someone is active now — abandon the auto-take.
+                            pending_auto_take = false;
+                            auto_take_attempted = true;
+                        } else if let Some(local_id) = local_id {
+                            pending_auto_take = false;
+                            auto_take_attempted = true;
+                            log::info!(
+                                "[QConnect] idle auto-take: claiming render (local_id={local_id})"
+                            );
+                            if let Err(err) = self.send_set_active_renderer(local_id).await {
+                                log::warn!(
+                                    "[QConnect] idle auto-take set_active_renderer failed: {err}"
+                                );
                             }
                         }
                     }
@@ -2058,7 +2130,7 @@ mod tests {
     use qconnect_core::QueueVersion;
     use qconnect_transport_ws::InMemoryWsTransport;
 
-    use crate::session::{LocalIdentity, QconnectRendererInfo};
+    use crate::session::{LocalIdentity, QconnectRendererInfo, ServerActiveState};
     use crate::QconnectRemoteSyncState;
     use serde_json::json;
     use tokio::sync::Mutex;
@@ -2164,6 +2236,45 @@ mod tests {
         assert_eq!(state.session.session_uuid.as_deref(), Some("sess-1"));
         assert_eq!(state.session.active_renderer_id, Some(2));
         assert_eq!(state.session_loop_mode, Some(3));
+    }
+
+    /// Regression (take-renderer-when-idle): the cloud encodes "no active
+    /// renderer" as `active_renderer_id: -1`. The takeover classifier must
+    /// normalize it to `ServerActiveState::None` — identical to the apply
+    /// path's `normalize_active_renderer_id` — so the idle auto-take fires on a
+    /// fresh connect. A raw parse mis-read -1 as `Some(-1)` (a peer is active),
+    /// classified it as `OtherPaused`, and silently suppressed the auto-take.
+    #[tokio::test]
+    async fn capture_takeover_treats_negative_active_renderer_as_none() {
+        let (app, _sink, _transport, _rx) = build_connected_app().await;
+        {
+            let handle = app.sync_handle();
+            let mut state = handle.lock().await;
+            state.session.local_renderer_id = Some(8);
+        }
+        let input = app
+            .capture_session_state_takeover_input(&json!({ "active_renderer_id": -1 }))
+            .await;
+        assert_eq!(input.server, ServerActiveState::None);
+    }
+
+    /// A real active peer (id >= 0, not us) still classifies as a peer, so the
+    /// auto-take never steals it.
+    #[tokio::test]
+    async fn capture_takeover_treats_active_peer_as_other() {
+        let (app, _sink, _transport, _rx) = build_connected_app().await;
+        {
+            let handle = app.sync_handle();
+            let mut state = handle.lock().await;
+            state.session.local_renderer_id = Some(8);
+        }
+        let input = app
+            .capture_session_state_takeover_input(&json!({ "active_renderer_id": 5 }))
+            .await;
+        assert!(matches!(
+            input.server,
+            ServerActiveState::OtherPlaying | ServerActiveState::OtherPaused
+        ));
     }
 
     /// A RENDERER_STATE_UPDATED for a PLAYING active peer arms the watchdog and
