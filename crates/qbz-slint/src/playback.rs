@@ -562,15 +562,16 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     }
 
     // Push to the OS media controls (MPRIS / SMTC / MediaRemote). The app icon
-    // GNOME shows comes from the MPRIS DesktopEntry, not from album art; art_url
-    // (album art) is a later refinement.
+    // GNOME shows comes from the MPRIS DesktopEntry; `art_url` is the album art
+    // (`mpris:artUrl`) — remote Qobuz covers pass through, local covers become a
+    // file:// URI, matching the Tauri `normalizeCoverUrlForMetadata` workaround.
     if let Some(mc) = crate::media_controls::handle() {
         mc.set_metadata(&qbz_media_controls::TrackMeta {
             title: title.clone(),
             artist: artist.clone(),
             album: album.clone(),
             duration: (duration > 0).then(|| std::time::Duration::from_secs(duration as u64)),
-            art_url: None,
+            art_url: artwork.to_mpris_url(),
         });
         mc.set_playback(
             qbz_media_controls::PlaybackStatus::Playing,

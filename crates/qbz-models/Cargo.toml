@@ -21,3 +21,6 @@ thiserror = { workspace = true }
 
 # Time
 chrono = { workspace = true }
+
+# Correct file:// URI building for media-controls art (ArtworkRef::to_mpris_url)
+url = "2"

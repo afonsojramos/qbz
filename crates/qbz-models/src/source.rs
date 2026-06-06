@@ -144,6 +144,37 @@ impl ArtworkRef {
             ArtworkRef::PlexThumb { path, .. } => path.is_empty(),
         }
     }
+
+    /// A URL suitable for the MPRIS `mpris:artUrl` property (and other OS media
+    /// controls). Mirrors the Tauri frontend's `normalizeCoverUrlForMetadata`:
+    /// - **Remote** HTTP(S) covers (Qobuz) pass through — clients fetch them.
+    /// - **LocalFile** bare paths become a proper percent-encoded `file://`
+    ///   URI (MPRIS clients cannot read a bare path or an `asset://` URL).
+    /// - **PlexThumb** becomes the tokenized HTTP URL the client can fetch.
+    /// - **Embedded** bytes / **None** have no URL (`None`).
+    pub fn to_mpris_url(&self) -> Option<String> {
+        match self {
+            ArtworkRef::Remote(s) if !s.is_empty() => Some(s.clone()),
+            ArtworkRef::LocalFile(p) if !p.is_empty() => {
+                // Already a file URL? keep it. Otherwise build one (absolute
+                // paths only — `from_file_path` rejects relative, → None).
+                if p.starts_with("file://") {
+                    Some(p.clone())
+                } else {
+                    url::Url::from_file_path(p).ok().map(|u| u.to_string())
+                }
+            }
+            ArtworkRef::PlexThumb {
+                base_url,
+                token,
+                path,
+            } if !path.is_empty() => {
+                let sep = if path.contains('?') { '&' } else { '?' };
+                Some(format!("{base_url}{path}{sep}X-Plex-Token={token}"))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl QueueTrack {
