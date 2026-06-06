@@ -3012,11 +3012,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // renderer/local playback because the gate is `is_peer_renderer_active`.
     {
         let runtime = app_runtime.clone();
+        let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         window
             .global::<NowPlayingState>()
             .on_toggle_play(move || {
                 let runtime = runtime.clone();
+                let weak = weak.clone();
                 let handle = handle.clone();
                 handle.clone().spawn(async move {
                     if let Some(svc) = qconnect_service::service() {
@@ -3029,7 +3031,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    playback::toggle_play_pause(runtime, handle);
+                    playback::toggle_play_pause(runtime, weak, handle);
                 });
             });
     }

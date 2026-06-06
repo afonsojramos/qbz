@@ -1868,16 +1868,50 @@ pub fn enqueue_local_tracks(
 }
 
 /// Toggle play / pause on the live player.
-pub fn toggle_play_pause(runtime: Runtime, handle: tokio::runtime::Handle) {
+///
+/// Resume is only valid when the audio engine actually holds a loaded stream.
+/// When the player has NO loaded audio but the queue has a current track —
+/// e.g. a freshly materialized QConnect renderer queue whose cursor sits on a
+/// track that was never loaded, or a cold cursor after the queue ended — a
+/// bare `resume()` fails with "cannot resume - no audio data available" and the
+/// user sees a dead Play button. In that case LOAD and play the current queue
+/// track instead, so Play works from a cold cursor. A normal pause leaves the
+/// stream loaded (`has_loaded_audio` stays true), so the pause/resume path is
+/// unchanged.
+pub fn toggle_play_pause(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+) {
     handle.spawn(async move {
-        let playing = runtime.core().get_playback_state().is_playing;
-        let result = if playing {
-            runtime.core().pause()
-        } else {
-            runtime.core().resume()
-        };
-        if let Err(e) = result {
-            log::error!("[qbz-slint] playback: toggle play/pause failed: {e}");
+        if runtime.core().get_playback_state().is_playing {
+            if let Err(e) = runtime.core().pause() {
+                log::error!("[qbz-slint] playback: pause failed: {e}");
+            }
+            return;
+        }
+        // Not playing: resume an existing stream, or cold-start the current
+        // queue track when nothing is loaded.
+        if runtime.core().player().has_loaded_audio() {
+            if let Err(e) = runtime.core().resume() {
+                log::error!("[qbz-slint] playback: resume failed: {e}");
+            }
+            return;
+        }
+        match runtime.core().current_track().await {
+            Some(track) => {
+                log::info!(
+                    "[qbz-slint] playback: play with no loaded audio -> cold-starting current track {}",
+                    track.id
+                );
+                after_track_change(&runtime, &weak, track.id).await;
+                refresh_sidebar(true);
+            }
+            None => {
+                log::info!(
+                    "[qbz-slint] playback: toggle play ignored (no loaded audio, empty queue)"
+                );
+            }
         }
     });
 }
