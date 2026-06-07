@@ -31,6 +31,7 @@
 pub mod album_grouping;
 mod cue_parser;
 mod database;
+pub mod ephemeral;
 mod errors;
 mod metadata;
 mod models;
