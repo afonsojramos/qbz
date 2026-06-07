@@ -128,8 +128,8 @@ component GearButton inherits Rectangle {
         source: @image-url("../assets/icons/home-gear.svg");
         width: 20px;
         height: 20px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: ta.has-hover ? Theme.text-primary : Theme.text-muted;
     }
 

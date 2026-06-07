@@ -89,8 +89,8 @@ export component LabelPageView inherits Rectangle {
                         source: @image-url("../assets/icons/disc-3.svg");
                         width: 60px;
                         height: 60px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                         tint: Theme.text-muted;
                     }
                     Image {
@@ -243,8 +243,8 @@ export component LabelPageView inherits Rectangle {
                         width: 28px;
                         height: 28px;
                         Rectangle {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             width: 22px;
                             height: 22px;
                             border-radius: 11px;
@@ -300,8 +300,8 @@ export component LabelPageView inherits Rectangle {
                             : @tr("View less");
                         color: reveal-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
                         font-size: 13px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     }
                     reveal-ta := TouchArea {
                         mouse-cursor: pointer;
@@ -438,8 +438,8 @@ export component LabelPageView inherits Rectangle {
         Rectangle {
             width: Math.min(root.width - 80px, 560px);
             height: Math.min(root.height - 120px, 460px);
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             border-radius: Radius.md;
             background: Theme.surface-card;
             border-width: 1px;
@@ -470,8 +470,8 @@ export component LabelPageView inherits Rectangle {
                             source: @image-url("../assets/icons/x.svg");
                             width: 18px;
                             height: 18px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             tint: close-desc.has-hover ? Theme.text-primary : Theme.text-muted;
                         }
                     }

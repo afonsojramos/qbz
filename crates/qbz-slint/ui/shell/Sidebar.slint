@@ -84,8 +84,8 @@ component HeaderIconButton inherits Rectangle {
         source: root.icon;
         width: root.icon-size;
         height: root.icon-size;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: (btn-ta.has-hover || root.active) ? Theme.text-primary : Theme.text-muted;
     }
     btn-ta := TouchArea {
@@ -226,23 +226,23 @@ component SidebarRow inherits Rectangle {
                     : @image-url("../assets/icons/folder.svg");
                 width: 15px;
                 height: 15px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 // Folder icon tinted accent; the name keeps text color.
                 tint: Theme.accent;
             }
             if !root.is-folder && root.use-collage: SidebarPlaylistCollage {
                 entry: root.entry;
                 size: 20px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             }
             if !root.is-folder && !root.use-collage: QbzIcon {
                 source: @image-url("../assets/icons/list-music.svg");
                 width: 15px;
                 height: 15px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 tint: root.active ? Theme.text-primary : Theme.text-muted;
             }
         }
@@ -278,8 +278,8 @@ component SidebarRow inherits Rectangle {
                         : @image-url("../assets/icons/chevron-right.svg");
                     width: 14px;
                     height: 14px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: chevron-ta.has-hover ? Theme.text-primary : Theme.text-muted;
                 }
                 chevron-ta := TouchArea {
@@ -409,7 +409,7 @@ component SidebarRow inherits Rectangle {
                 height: 7px;
                 Rectangle {
                     height: 1px;
-                    y: (parent.height - self.height) / 2;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     background: Theme.border-subtle;
                 }
             }

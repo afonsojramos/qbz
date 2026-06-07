@@ -27,7 +27,7 @@ component SceneArtistCard inherits Rectangle {
         Rectangle {
             width: 140px;
             height: 140px;
-            x: (parent.width - self.width) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
             border-radius: 70px;
             background: Theme.surface-elevated;
             drop-shadow-blur: 16px;
@@ -44,8 +44,8 @@ component SceneArtistCard inherits Rectangle {
                 source: @image-url("../assets/icons/user.svg");
                 width: 48px;
                 height: 48px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 tint: Theme.text-muted;
             }
             ta := TouchArea {
@@ -185,8 +185,8 @@ export component ArtistsByLocationView inherits Rectangle {
                             ? Theme.text-primary
                             : Theme.text-secondary;
                         font-size: 13px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     }
                     load-more-ta := TouchArea {
                         mouse-cursor: pointer;

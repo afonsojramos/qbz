@@ -45,6 +45,7 @@ mod qconnect_service;
 mod qconnect_transport;
 mod queue;
 mod drag;
+mod ephemeral;
 mod folders;
 mod library_db;
 mod local_library;
@@ -997,7 +998,10 @@ fn navigate_local_library(
             local_library::ensure_albums_loaded(weak, handle.clone(), image_cache);
         }
         local_library::LibTab::Folders => {
-            local_library::ensure_folders_loaded(weak, handle.clone(), image_cache);
+            // Tree is the default mode → load the tree roots too (the flat set
+            // stays loaded so toggling to flat is instant).
+            local_library::ensure_folders_loaded(weak.clone(), handle.clone(), image_cache);
+            local_library::ensure_folder_tree_loaded(weak, handle.clone());
         }
         local_library::LibTab::Tracks => {
             local_library::ensure_tracks_loaded(weak, handle.clone());
@@ -4936,6 +4940,104 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // ---- Folders tree rail: search / collapse / multi-select ----
+    {
+        let weak = window.as_weak();
+        window
+            .global::<LocalLibraryActions>()
+            .on_folders_tree_search(move |query| {
+                if let Some(w) = weak.upgrade() {
+                    local_library::folders_tree_search(&w, query.as_str());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<LocalLibraryActions>()
+            .on_folders_collapse_all(move || {
+                if let Some(w) = weak.upgrade() {
+                    local_library::collapse_all_tree(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<LocalLibraryActions>()
+            .on_folders_toggle_select_mode(move || {
+                if let Some(w) = weak.upgrade() {
+                    local_library::toggle_tree_select_mode(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_folders_toggle_folder_select(move |path| {
+                local_library::toggle_tree_folder_select(weak.clone(), handle.clone(), path.to_string());
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_folders_toggle_track_select(move |path| {
+                local_library::toggle_tree_track_select(weak.clone(), handle.clone(), path.to_string());
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_folders_bulk_action(move |action| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                match action.as_str() {
+                    "select-all" => {
+                        local_library::tree_select_all(weak.clone(), handle.clone());
+                    }
+                    "clear" => local_library::tree_clear_selection(&w),
+                    "queue" => {
+                        let rows = local_library::tree_selected_snapshot();
+                        playback::enqueue_local_tracks(runtime.clone(), handle.clone(), rows, false);
+                        local_library::tree_clear_selection(&w);
+                    }
+                    "play-next" => {
+                        let rows = local_library::tree_selected_snapshot();
+                        playback::enqueue_local_tracks(runtime.clone(), handle.clone(), rows, true);
+                        local_library::tree_clear_selection(&w);
+                    }
+                    "add-to-playlist" => {
+                        let rows = local_library::tree_selected_snapshot();
+                        let ids: Vec<String> = rows
+                            .iter()
+                            .filter(|t| t.source.as_deref() != Some("plex"))
+                            .map(|t| t.id.to_string())
+                            .collect();
+                        if !ids.is_empty() {
+                            playlist_picker::open_multi(&w, &ids, true);
+                            let runtime = runtime.clone();
+                            let weak2 = weak.clone();
+                            handle.spawn(async move {
+                                let playlists = playlist_picker::load(&runtime).await;
+                                let _ = weak2.upgrade_in_event_loop(move |w| {
+                                    playlist_picker::apply(&w, playlists);
+                                });
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            });
+    }
+
     // ---- Folders tab actions ----
     {
         let weak = window.as_weak();
@@ -5003,15 +5105,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
         window
             .global::<LocalLibraryActions>()
             .on_folders_select(move |path, segment| {
                 local_library::select_folder(
                     weak.clone(),
                     handle.clone(),
+                    image_cache.clone(),
                     path.to_string(),
                     segment.to_string(),
                 );
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<LocalLibraryActions>()
+            .on_folder_detail_search(move |query| {
+                if let Some(w) = weak.upgrade() {
+                    local_library::folder_detail_search(&w, query.as_str());
+                }
             });
     }
     {
@@ -5057,6 +5171,144 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
     }
+
+    // ---- Ephemeral folder actions ----
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_ephemeral_open(move || {
+                local_library::open_ephemeral(runtime.clone(), weak.clone(), handle.clone());
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_ephemeral_play_all(move || {
+                playback::ephemeral_play_or_prompt(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    "all".to_string(),
+                    String::new(),
+                );
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_ephemeral_play_track(move |id| {
+                playback::ephemeral_play_or_prompt(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    "track".to_string(),
+                    id.to_string(),
+                );
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_ephemeral_play_album(move |key| {
+                playback::ephemeral_play_or_prompt(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    "album".to_string(),
+                    key.to_string(),
+                );
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_ephemeral_clear(move || {
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                handle.spawn(async move {
+                    // Stop a playing ephemeral track before dropping the session
+                    // so its (about-to-be-reused) id can't false-highlight rows.
+                    playback::wipe_ephemeral_if_playing(&runtime, &weak).await;
+                    let _ = weak.upgrade_in_event_loop(|w| {
+                        local_library::clear_ephemeral(&w);
+                    });
+                });
+            });
+    }
+    // Ephemeral "already playing" choice modal — clear-and-play vs add-to-queue.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<EphemeralPlayChoiceActions>()
+            .on_replace(move || {
+                if let Some(w) = weak.upgrade() {
+                    let s = w.global::<EphemeralPlayChoiceState>();
+                    let kind = s.get_intent_kind().to_string();
+                    let arg = s.get_intent_arg().to_string();
+                    s.set_open(false);
+                    playback::ephemeral_play(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        kind,
+                        arg,
+                    );
+                }
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<EphemeralPlayChoiceActions>()
+            .on_enqueue(move || {
+                if let Some(w) = weak.upgrade() {
+                    let s = w.global::<EphemeralPlayChoiceState>();
+                    let kind = s.get_intent_kind().to_string();
+                    let arg = s.get_intent_arg().to_string();
+                    s.set_open(false);
+                    playback::ephemeral_enqueue(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        kind,
+                        arg,
+                    );
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<EphemeralPlayChoiceActions>()
+            .on_close(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<EphemeralPlayChoiceState>().set_open(false);
+                }
+            });
+    }
+
+    // Restore a previously-open ephemeral folder (re-scans the path; does NOT
+    // switch the landing view). Runs once at startup.
+    local_library::rehydrate_ephemeral(window.as_weak(), tokio_rt.handle().clone());
 
     // ---- Artists tab actions ----
     {

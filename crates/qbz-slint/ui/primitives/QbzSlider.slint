@@ -25,7 +25,7 @@ export component QbzSlider inherits Rectangle {
 
     // Track.
     Rectangle {
-        y: (parent.height - self.height) / 2;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         height: 4px;
         border-radius: 2px;
         background: Theme.surface-elevated;
@@ -34,7 +34,7 @@ export component QbzSlider inherits Rectangle {
     // Accent fill.
     Rectangle {
         x: 0;
-        y: (parent.height - self.height) / 2;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         width: root.thumb-size / 2 + root.fraction * root.travel;
         height: 4px;
         border-radius: 2px;
@@ -44,7 +44,7 @@ export component QbzSlider inherits Rectangle {
     // Thumb.
     Rectangle {
         x: root.fraction * root.travel;
-        y: (parent.height - self.height) / 2;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         width: root.thumb-size;
         height: root.thumb-size;
         border-radius: root.thumb-size / 2;

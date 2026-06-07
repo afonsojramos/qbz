@@ -19,8 +19,8 @@ export component QbzCheckbox inherits Rectangle {
         visible: root.checked;
         width: 12px;
         height: 12px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: Theme.accent-text;
     }
 

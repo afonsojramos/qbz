@@ -85,6 +85,9 @@ pub enum ArtworkTarget {
     LocalAlbumCard { index: usize, gen: u64 },
     /// A card in LocalLibraryState.folders[index] (Folders-flat grid).
     LocalFolderCard { index: usize },
+    /// A subfolder cover card in LocalLibraryState.folder-detail-subfolders[index]
+    /// (Folders-tree detail pane).
+    LocalFolderDetailCard { index: usize },
     /// A card in LocalLibraryState.artists-selected-albums[index] (the
     /// Artists tab right pane — the selected artist's albums).
     LocalArtistAlbumCard { index: usize },
@@ -634,6 +637,15 @@ fn apply_artwork(
                 // Dual-set by id onto the full set + visible + grouped sections.
                 let id = item.id.to_string();
                 crate::local_library::set_local_folder_artwork(window, &id, image);
+            }
+        }
+        ArtworkTarget::LocalFolderDetailCard { index } => {
+            let model = window
+                .global::<crate::LocalLibraryState>()
+                .get_folder_detail_subfolders();
+            if let Some(item) = model.row_data(index) {
+                let path = item.path.to_string();
+                crate::local_library::set_folder_detail_subfolder_artwork(window, &path, image);
             }
         }
         ArtworkTarget::LocalArtistAlbumCard { index } => {

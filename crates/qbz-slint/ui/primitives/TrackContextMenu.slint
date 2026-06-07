@@ -8,10 +8,20 @@ import { ContextMenuItem } from "ContextMenuItem.slint";
 
 export component TrackContextMenu inherits PopupWindow {
     in property <string> track-id;
+    // Per-source applicability (the surrounding row sets these from the track's
+    // source). `qobuz-actions` = the Qobuz-backed block (favorite, radio,
+    // mixtape, share, make-offline, go-to album/artist, track info) — on for
+    // Qobuz + offline, off for local / Plex / ephemeral. `playlist-action` =
+    // Add to playlist — on for Qobuz + offline + local (local playlists), off
+    // for Plex + ephemeral. The transient actions (play / next / queue) always
+    // show.
+    in property <bool> qobuz-actions: true;
+    in property <bool> playlist-action: true;
     callback media-action(string, string, string);
 
     width: 224px;
-    height: 392px;
+    // 3 transient + optional add-to-playlist + the 9-item Qobuz block.
+    height: (3 + (root.playlist-action ? 1 : 0) + (root.qobuz-actions ? 9 : 0)) * 30px;
 
     ContextMenu {
         ContextMenuItem {
@@ -35,70 +45,70 @@ export component TrackContextMenu inherits PopupWindow {
                 root.media-action("track", root.track-id, "queue");
             }
         }
-        ContextMenuItem {
+        if root.qobuz-actions: ContextMenuItem {
             icon: @image-url("../assets/icons/radio.svg");
             label: @tr("Create radio");
             clicked => {
                 root.media-action("track", root.track-id, "create-radio");
             }
         }
-        ContextMenuItem {
+        if root.qobuz-actions: ContextMenuItem {
             icon: @image-url("../assets/icons/heart.svg");
             label: @tr("Add to library");
             clicked => {
                 root.media-action("track", root.track-id, "favorite");
             }
         }
-        ContextMenuItem {
+        if root.qobuz-actions: ContextMenuItem {
             icon: @image-url("../assets/icons/cassette-tape.svg");
             label: @tr("Add to mixtape");
             clicked => {
                 root.media-action("track", root.track-id, "add-to-mixtape");
             }
         }
-        ContextMenuItem {
+        if root.playlist-action: ContextMenuItem {
             icon: @image-url("../assets/icons/list-music.svg");
             label: @tr("Add to playlist");
             clicked => {
                 root.media-action("track", root.track-id, "add-to-playlist");
             }
         }
-        ContextMenuItem {
+        if root.qobuz-actions: ContextMenuItem {
             icon: @image-url("../assets/icons/link.svg");
             label: @tr("Share Qobuz link");
             clicked => {
                 root.media-action("track", root.track-id, "share-qobuz");
             }
         }
-        ContextMenuItem {
+        if root.qobuz-actions: ContextMenuItem {
             icon: @image-url("../assets/icons/link.svg");
             label: @tr("Share Song.link");
             clicked => {
                 root.media-action("track", root.track-id, "share-songlink");
             }
         }
-        ContextMenuItem {
+        if root.qobuz-actions: ContextMenuItem {
             icon: @image-url("../assets/icons/cloud-download.svg");
             label: @tr("Make available offline");
             clicked => {
                 root.media-action("track", root.track-id, "download");
             }
         }
-        ContextMenuItem {
+        if root.qobuz-actions: ContextMenuItem {
             icon: @image-url("../assets/icons/disc-3.svg");
             label: @tr("Go to album");
             clicked => {
                 root.media-action("track", root.track-id, "go-to-album");
             }
         }
-        ContextMenuItem {
+        if root.qobuz-actions: ContextMenuItem {
             icon: @image-url("../assets/icons/user.svg");
             label: @tr("Go to artist");
             clicked => {
                 root.media-action("track", root.track-id, "go-to-artist");
             }
         }
-        ContextMenuItem {
+        if root.qobuz-actions: ContextMenuItem {
             icon: @image-url("../assets/icons/info.svg");
             label: @tr("Track info");
             clicked => {

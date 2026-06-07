@@ -56,8 +56,8 @@ export component LibFolderEditModal inherits Rectangle {
         Rectangle {
             width: Math.min(root.width - 80px, 520px);
             height: Math.min(root.height - 80px, panel.preferred-height);
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             border-radius: Radius.md;
             background: Theme.surface-card;
             border-width: 1px;
@@ -90,8 +90,8 @@ export component LibFolderEditModal inherits Rectangle {
                             source: @image-url("../assets/icons/x.svg");
                             width: 17px;
                             height: 17px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             tint: close-x.has-hover ? Theme.text-primary : Theme.text-muted;
                         }
                     }
@@ -132,7 +132,7 @@ export component LibFolderEditModal inherits Rectangle {
                             border-color: Theme.border-subtle;
                             background: change-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
                             change-row := HorizontalLayout {
-                                x: (parent.width - self.width) / 2;
+                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                                 spacing: 6px;
                                 VerticalLayout {
                                     alignment: center;
@@ -309,7 +309,7 @@ export component LibFolderEditModal inherits Rectangle {
                         border-color: Theme.border-subtle;
                         background: scan-ta.has-hover && self.can-scan ? Theme.surface-hover : Theme.surface-elevated;
                         scan-row := HorizontalLayout {
-                            x: (parent.width - self.width) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                             spacing: 7px;
                             VerticalLayout {
                                 alignment: center;
@@ -353,8 +353,8 @@ export component LibFolderEditModal inherits Rectangle {
                             color: Theme.text-secondary;
                             font-size: Typography.body;
                             font-weight: Typography.medium;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                         }
                         cancel-ta := TouchArea {
                             mouse-cursor: pointer;
@@ -372,8 +372,8 @@ export component LibFolderEditModal inherits Rectangle {
                             color: Theme.accent-text;
                             font-size: Typography.body;
                             font-weight: Typography.semibold;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                         }
                         save-ta := TouchArea {
                             mouse-cursor: pointer;

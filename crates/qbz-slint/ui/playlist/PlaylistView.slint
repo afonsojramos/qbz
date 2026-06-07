@@ -44,8 +44,8 @@ component CircleAction inherits Rectangle {
         source: root.icon;
         width: root.primary ? 19px : 17px;
         height: root.primary ? 19px : 17px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.active
             ? Theme.accent
             : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
@@ -226,8 +226,8 @@ export component PlaylistView inherits Rectangle {
                         source: @image-url("../assets/icons/list-music.svg");
                         width: 56px;
                         height: 56px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                         tint: Theme.text-muted;
                     }
 
@@ -255,8 +255,8 @@ export component PlaylistView inherits Rectangle {
                             width: 44px;
                             height: 44px;
                             border-radius: 22px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             background: cover-btn-ta.has-hover
                                 ? (PlaylistState.has-custom ? #ef4444 : Theme.accent)
                                 : #000000aa;
@@ -266,8 +266,8 @@ export component PlaylistView inherits Rectangle {
                                     : @image-url("../assets/icons/image-plus.svg");
                                 width: PlaylistState.has-custom ? 20px : 22px;
                                 height: PlaylistState.has-custom ? 20px : 22px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
+                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                                 tint: #ffffff;
                             }
                             cover-btn-ta := TouchArea {
@@ -674,8 +674,8 @@ export component PlaylistView inherits Rectangle {
             source: @image-url("../assets/icons/chevron-up.svg");
             width: 20px;
             height: 20px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             tint: btt-ta.has-hover ? #ffffff : Theme.text-secondary;
         }
         btt-ta := TouchArea {
@@ -698,8 +698,8 @@ export component PlaylistView inherits Rectangle {
         Rectangle {
             width: Math.min(root.width - 80px, 560px);
             height: Math.min(root.height - 120px, 460px);
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             border-radius: Radius.md;
             background: Theme.surface-card;
             border-width: 1px;
@@ -730,8 +730,8 @@ export component PlaylistView inherits Rectangle {
                             source: @image-url("../assets/icons/x.svg");
                             width: 18px;
                             height: 18px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             tint: desc-close.has-hover ? Theme.text-primary : Theme.text-muted;
                         }
                     }

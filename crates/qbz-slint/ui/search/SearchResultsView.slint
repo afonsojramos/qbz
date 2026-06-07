@@ -81,8 +81,8 @@ component FilterRadio inherits Rectangle {
                     height: 8px;
                     border-radius: 4px;
                     background: root.selected ? Theme.accent : transparent;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 }
             }
         }
@@ -131,8 +131,8 @@ component SectionHeader inherits Rectangle {
                 color: Theme.accent;
                 font-size: 14px;
                 font-weight: Typography.medium;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             }
             more-ta := TouchArea {
                 mouse-cursor: pointer;
@@ -165,8 +165,8 @@ component LoadMoreButton inherits Rectangle {
             text: @tr("Load more") + " (\{root.loaded} / \{root.total})";
             color: Theme.text-secondary;
             font-size: 13px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         }
         btn-ta := TouchArea {
             mouse-cursor: pointer;
@@ -375,8 +375,8 @@ export component SearchResultsView inherits Rectangle {
                             source: @image-url("../assets/icons/x.svg");
                             width: 13px;
                             height: 13px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             tint: clear-ta.has-hover
                                 ? Theme.text-primary
                                 : Theme.text-muted;

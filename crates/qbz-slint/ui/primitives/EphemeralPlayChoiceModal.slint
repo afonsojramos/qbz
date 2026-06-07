@@ -1,22 +1,22 @@
-// "Edit playlist" modal — rename + delete. Opened from the playlist
-// detail header's edit button (EditPlaylistState.open).
+// "Already playing" choice modal — shown when an ephemeral play action is
+// triggered while a queue is already playing. Two outcomes: add the selection
+// to the queue, or clear the queue and start playing it.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { EditPlaylistState, EditPlaylistActions } from "../state.slint";
+import { EphemeralPlayChoiceState, EphemeralPlayChoiceActions } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
-import { LineEdit, TextEdit } from "std-widgets.slint";
 
-export component EditPlaylistModal inherits Rectangle {
-    visible: EditPlaylistState.open;
+export component EphemeralPlayChoiceModal inherits Rectangle {
+    visible: EphemeralPlayChoiceState.open;
 
-    if EditPlaylistState.open: Rectangle {
+    if EphemeralPlayChoiceState.open: Rectangle {
         background: #000000bf;
         TouchArea {
             mouse-cursor: default;
             clicked => {
-                EditPlaylistActions.close();
+                EphemeralPlayChoiceActions.close();
             }
         }
         Rectangle {
@@ -38,7 +38,7 @@ export component EditPlaylistModal inherits Rectangle {
 
                 HorizontalLayout {
                     Text {
-                        text: @tr("Edit playlist");
+                        text: @tr("Something is already playing");
                         color: Theme.text-primary;
                         font-size: Typography.heading;
                         font-weight: Typography.semibold;
@@ -50,7 +50,7 @@ export component EditPlaylistModal inherits Rectangle {
                         height: 28px;
                         mouse-cursor: pointer;
                         clicked => {
-                            EditPlaylistActions.close();
+                            EphemeralPlayChoiceActions.close();
                         }
                         QbzIcon {
                             source: @image-url("../assets/icons/x.svg");
@@ -63,76 +63,60 @@ export component EditPlaylistModal inherits Rectangle {
                     }
                 }
 
-                name-input := LineEdit {
-                    placeholder-text: @tr("Playlist name");
-                    text <=> EditPlaylistState.name;
-                    accepted => {
-                        EditPlaylistActions.save();
-                    }
-                }
-
                 Text {
-                    text: @tr("Description");
-                    color: Theme.text-muted;
-                    font-size: Typography.legal;
-                }
-                desc-input := TextEdit {
-                    height: 90px;
+                    text: @tr("Add this to the current queue, or clear the queue and start playing it?");
+                    color: Theme.text-secondary;
+                    font-size: Typography.body;
                     wrap: word-wrap;
-                    text <=> EditPlaylistState.description;
                 }
 
                 HorizontalLayout {
+                    alignment: end;
                     spacing: 10px;
-                    // Delete (destructive, left).
-                    Rectangle {
-                        width: del-label.preferred-width + 28px;
+
+                    // Add to queue (secondary, ghost) — only when the current
+                    // queue is itself all-ephemeral (no mixing).
+                    if EphemeralPlayChoiceState.enqueue-allowed: Rectangle {
+                        width: enqueue-label.preferred-width + 32px;
                         height: 36px;
                         border-radius: Radius.sm;
-                        background: del-ta.has-hover ? #ef444433 : transparent;
                         border-width: 1px;
-                        border-color: #ef4444;
-                        del-label := Text {
-                            text: @tr("Delete");
-                            color: #ef4444;
-                            font-size: Typography.body;
-                            font-weight: Typography.medium;
-                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                        }
-                        del-ta := TouchArea {
-                            mouse-cursor: EditPlaylistState.busy ? default : pointer;
-                            clicked => {
-                                if (!EditPlaylistState.busy) {
-                                    EditPlaylistActions.delete();
-                                }
-                            }
-                        }
-                    }
-                    // Spacer.
-                    Rectangle { horizontal-stretch: 1; }
-                    // Save (right).
-                    Rectangle {
-                        width: save-label.preferred-width + 36px;
-                        height: 36px;
-                        border-radius: Radius.sm;
-                        opacity: (EditPlaylistState.name != "" && !EditPlaylistState.busy) ? 1.0 : 0.5;
-                        background: save-ta.has-hover ? #ffffffd6 : Theme.accent;
-                        save-label := Text {
-                            text: @tr("Save");
-                            color: #ffffff;
+                        border-color: Theme.border-subtle;
+                        background: enqueue-ta.has-hover ? Theme.surface-hover : transparent;
+                        enqueue-label := Text {
+                            text: @tr("Add to queue");
+                            color: Theme.text-primary;
                             font-size: Typography.body;
                             font-weight: Typography.semibold;
                             x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                             y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                         }
-                        save-ta := TouchArea {
-                            mouse-cursor: (EditPlaylistState.name != "" && !EditPlaylistState.busy)
-                                ? pointer : default;
+                        enqueue-ta := TouchArea {
+                            mouse-cursor: pointer;
                             clicked => {
-                                if (EditPlaylistState.name != "" && !EditPlaylistState.busy) {
-                                    EditPlaylistActions.save();
-                                }
+                                EphemeralPlayChoiceActions.enqueue();
+                            }
+                        }
+                    }
+
+                    // Clear queue and play (accent).
+                    Rectangle {
+                        width: replace-label.preferred-width + 32px;
+                        height: 36px;
+                        border-radius: Radius.sm;
+                        background: replace-ta.has-hover ? Theme.accent-hover : Theme.accent;
+                        replace-label := Text {
+                            text: @tr("Clear queue and play");
+                            color: Theme.accent-text;
+                            font-size: Typography.body;
+                            font-weight: Typography.semibold;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                        }
+                        replace-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                EphemeralPlayChoiceActions.replace();
                             }
                         }
                     }

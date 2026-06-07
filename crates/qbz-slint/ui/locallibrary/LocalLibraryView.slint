@@ -18,9 +18,10 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { LocalLibraryState, LocalLibraryActions, FolderNode, LocalArtistItem, AlphaJump, LibAlbumFilterState, AppearanceState } from "../state.slint";
+import { LocalLibraryState, LocalLibraryActions, FolderNode, FolderSubcardItem, LocalArtistItem, AlphaJump, LibAlbumFilterState, AppearanceState } from "../state.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { CircleAction } from "../primitives/CircleAction.slint";
 import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
 import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
@@ -29,6 +30,7 @@ import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { ToggleButton } from "../primitives/ToggleButton.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
+import { TooltipState } from "../state.slint";
 import { SegmentedTabBar, SegTab } from "../primitives/SegmentedTabBar.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -48,6 +50,259 @@ component LibTabMenu inherits SegmentedTabBar {
     selected(id) => { LocalLibraryActions.select-tab(id); }
 }
 
+// Subfolder cover card for the tree-mode folder-detail pane — 1:1 with Tauri's
+// `.subfolder-card`: bordered card, square cover (folder placeholder when none),
+// name (13px/medium) + recursive track count (11px/muted). Clicking drills in.
+component FolderSubcard inherits Rectangle {
+    in property <FolderSubcardItem> item;
+    callback clicked(string /* path */);
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: card-ta.has-hover ? Theme.accent : Theme.border-subtle;
+    background: card-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+        // Square cover (width = card width minus h-padding).
+        Rectangle {
+            height: root.width - 16px;
+            border-radius: 4px;
+            background: Theme.surface-main;
+            clip: true;
+            QbzIcon {
+                source: @image-url("../assets/icons/folder.svg");
+                width: 32px;
+                height: 32px;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                tint: Theme.text-muted;
+            }
+            Image {
+                width: 100%;
+                height: 100%;
+                source: root.item.artwork;
+                image-fit: cover;
+            }
+        }
+        Text {
+            text: root.item.name;
+            color: Theme.text-primary;
+            font-size: 13px;
+            font-weight: Typography.medium;
+            overflow: elide;
+        }
+        Text {
+            text: root.item.track-count + " " + @tr("tracks");
+            color: Theme.text-muted;
+            font-size: 11px;
+        }
+    }
+    card-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked(root.item.path);
+        }
+    }
+}
+
+// Ephemeral-folder pane — shown in the Folders tab while an ad-hoc folder is
+// open. Album-grouped (a folder can hold several albums), each block with its
+// cover + tracks; per-album play appears only for multi-album sessions. The
+// whole pane replaces the normal flat/tree browse. Metadata-bound actions
+// (favorite/playlist) are off — ephemeral tracks have no DB row.
+component EphemeralPane inherits Rectangle {
+    eph-flick := Flickable {
+        viewport-width: self.width;
+        viewport-height: eph-page.preferred-height;
+        eph-page := VerticalLayout {
+            width: parent.width;
+            padding-left: 32px;
+            padding-right: 32px;
+            padding-top: 16px;
+            padding-bottom: 100px;
+            spacing: 14px;
+            alignment: start;
+
+            // Header: folder name + subtitle (count · path) + Play all + Clear.
+            HorizontalLayout {
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text {
+                        text: LocalLibraryState.ephemeral-name;
+                        color: Theme.text-primary;
+                        font-size: Typography.section;
+                        font-weight: Typography.bold;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: LocalLibraryState.ephemeral-track-count + " " + @tr("tracks") + " · " + LocalLibraryState.ephemeral-path;
+                        color: Theme.text-muted;
+                        font-size: Typography.legal;
+                        overflow: elide;
+                    }
+                }
+                // Play all (primary) + Clear session — app-standard CircleActions.
+                VerticalLayout {
+                    alignment: center;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/play-fill.svg");
+                        primary: true;
+                        diameter: 44px;
+                        tooltip: @tr("Play all");
+                        clicked => {
+                            LocalLibraryActions.ephemeral-play-all();
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    CircleAction {
+                        icon: @image-url("../assets/icons/x.svg");
+                        diameter: 40px;
+                        tooltip: @tr("Clear session");
+                        clicked => {
+                            LocalLibraryActions.ephemeral-clear();
+                        }
+                    }
+                }
+            }
+
+            // Scanning.
+            if LocalLibraryState.ephemeral-loading: HorizontalLayout {
+                alignment: center;
+                padding-top: 30px;
+                LoadingSpinner { size: 28px; }
+            }
+
+            // Empty (no playable tracks).
+            if !LocalLibraryState.ephemeral-loading
+                && LocalLibraryState.ephemeral-albums.length == 0: VerticalLayout {
+                padding-top: 24px;
+                Text {
+                    text: @tr("No playable tracks in this folder.");
+                    color: Theme.text-muted;
+                    font-size: Typography.body;
+                    horizontal-alignment: center;
+                }
+            }
+
+            // Album blocks.
+            if !LocalLibraryState.ephemeral-loading: VerticalLayout {
+                spacing: 22px;
+                for album[ai] in LocalLibraryState.ephemeral-albums: VerticalLayout {
+                    spacing: 6px;
+                    // Album header: cover + title/artist/meta + per-album play.
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Rectangle {
+                            width: 56px;
+                            height: 56px;
+                            border-radius: 6px;
+                            background: Theme.surface-hover;
+                            clip: true;
+                            QbzIcon {
+                                source: @image-url("../assets/icons/disc-3.svg");
+                                width: 24px;
+                                height: 24px;
+                                tint: Theme.text-muted;
+                            }
+                            Image {
+                                width: 100%;
+                                height: 100%;
+                                source: album.artwork;
+                                image-fit: cover;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            spacing: 2px;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Text {
+                                    text: album.title;
+                                    color: Theme.text-primary;
+                                    font-size: Typography.body;
+                                    font-weight: Typography.semibold;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                }
+                                // CUE badge — single-file rip (not a pill, ADR-008).
+                                if album.is-cue: VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        height: 16px;
+                                        border-radius: 3px;
+                                        background: Theme.surface-elevated;
+                                        HorizontalLayout {
+                                            padding-left: 6px;
+                                            padding-right: 6px;
+                                            Text {
+                                                text: "CUE";
+                                                color: Theme.text-secondary;
+                                                font-size: Typography.legal;
+                                                font-weight: Typography.semibold;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Text {
+                                text: album.artist;
+                                color: Theme.text-secondary;
+                                font-size: Typography.legal;
+                                overflow: elide;
+                            }
+                            if album.meta != "": Text {
+                                text: album.meta;
+                                color: Theme.text-muted;
+                                font-size: Typography.legal;
+                            }
+                        }
+                        if LocalLibraryState.ephemeral-multi-album: VerticalLayout {
+                            alignment: center;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/play-fill.svg");
+                                diameter: 34px;
+                                tooltip: @tr("Play this album");
+                                clicked => {
+                                    LocalLibraryActions.ephemeral-play-album(album.group-key);
+                                }
+                            }
+                        }
+                    }
+                    // Album tracks.
+                    for track[ti] in album.tracks: TrackRow {
+                        track: track;
+                        index: ti;
+                        show-artwork: false;
+                        show-album: false;
+                        show-favorite: false;
+                        show-download: false;
+                        show-source: false;
+                        show-menu: false;
+                        media-action(kind, id, action) => {
+                            LocalLibraryActions.ephemeral-play-track(id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ListScrollbar {
+        x: parent.width - self.width - 4px;
+        width: 14px;
+        height: 100%;
+        viewport-height: eph-flick.viewport-height;
+        visible-height: eph-flick.height;
+        viewport-y <=> eph-flick.viewport-y;
+    }
+}
+
 // Standalone icon-only circle (ADR-008 permits a full circle for an
 // icon-only control that stands alone) — matches NavButtons' history pair.
 // Used for the "Local Library settings" gear (management lives in Settings).
@@ -62,8 +317,8 @@ component CircleIconBtn inherits Rectangle {
         source: root.icon;
         width: 15px;
         height: 15px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: Theme.text-primary;
     }
     ta := TouchArea {
@@ -112,13 +367,13 @@ component ModeToggle inherits Rectangle {
     clip: true;
     HorizontalLayout {
         ToggleButton {
-            icon: @image-url("../assets/icons/disc.svg");
+            icon: @image-url("../assets/icons/disc-album.svg");
             active: root.mode == "flat";
             sm: true;
             clicked => { root.set-mode("flat"); }
         }
         ToggleButton {
-            icon: @image-url("../assets/icons/folder.svg");
+            icon: @image-url("../assets/icons/folder-tree.svg");
             active: root.mode == "tree";
             sm: true;
             clicked => { root.set-mode("tree"); }
@@ -126,15 +381,104 @@ component ModeToggle inherits Rectangle {
     }
 }
 
+// Flat/Tree toggle with TEXT labels (1:1 with Tauri's `.folders-mode-btn`):
+// ghost buttons, the active one highlighted.
+// Inherits Rectangle (content-sized) so the buttons render identically in flat
+// and tree mode regardless of the surrounding toolbar's fill; `alignment: end`
+// keeps the pair floated to the right.
+component ModeTextToggle inherits Rectangle {
+    in property <string> mode;        // "flat" | "tree"
+    callback set-mode(string);
+    HorizontalLayout {
+        alignment: end;
+        spacing: 2px;
+        Rectangle {
+            height: 30px;
+            width: flat-lbl.preferred-width + 24px;
+            border-radius: 6px;
+            background: root.mode == "flat"
+                ? Theme.surface-elevated
+                : (flat-ta.has-hover ? Theme.surface-hover : transparent);
+            flat-lbl := Text {
+                text: @tr("Flat");
+                color: root.mode == "flat" ? Theme.text-primary : Theme.text-secondary;
+                font-size: Typography.legal;
+                font-weight: Typography.medium;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+            }
+            flat-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.set-mode("flat"); }
+            }
+        }
+        Rectangle {
+            height: 30px;
+            width: tree-lbl.preferred-width + 24px;
+            border-radius: 6px;
+            background: root.mode == "tree"
+                ? Theme.surface-elevated
+                : (tree-ta.has-hover ? Theme.surface-hover : transparent);
+            tree-lbl := Text {
+                text: @tr("Tree");
+                color: root.mode == "tree" ? Theme.text-primary : Theme.text-secondary;
+                font-size: Typography.legal;
+                font-weight: Typography.medium;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+            }
+            tree-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.set-mode("tree"); }
+            }
+        }
+    }
+}
+
+// Compact icon button for the tree select bar — icon-only with a hover tooltip.
+component RailBulkBtn inherits Rectangle {
+    in property <image> icon;
+    in property <string> tooltip;
+    callback clicked();
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: rb-ta.has-hover ? Theme.surface-hover : transparent;
+    QbzIcon {
+        source: root.icon;
+        width: 15px;
+        height: 15px;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        tint: rb-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+    }
+    rb-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        changed has-hover => {
+            if (self.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else if (!self.has-hover) {
+                TooltipState.show = false;
+            }
+        }
+    }
+}
+
 // One row of the flattened folder tree (tree mode, left rail). Carries its
 // `depth` (indent), an expand chevron for folders with content, a folder /
-// music icon, the segment name and (for folders) the recursive track count.
+// music icon and the segment name.
 component TreeRow inherits Rectangle {
     in property <FolderNode> node;
     in property <bool> selected;
+    in property <bool> select-mode: false;
     callback toggle();        // chevron — expand/collapse
     callback activate();      // row body — select folder (load detail)
-    height: 32px;
+    callback toggle-select(); // select-mode checkbox
+    height: 26px;
     border-radius: 6px;
     background: root.selected
         ? Theme.surface-elevated
@@ -163,6 +507,44 @@ component TreeRow inherits Rectangle {
         padding-right: 10px;
         spacing: 6px;
 
+        // Select-mode checkbox (track = checked; folder tri-state: all=check,
+        // partial=dash, none=empty). Driven purely by the node state — the row
+        // emits `toggle-select` and the controller rebuilds the model.
+        if root.select-mode: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                property <bool> on: root.node.is-folder
+                    ? root.node.select-state == 2
+                    : root.node.selected;
+                property <bool> partial: root.node.is-folder && root.node.select-state == 1;
+                // Circular checkbox, homologated with the app-wide selection
+                // checkbox (TrackRow): 13px, fully rounded, 8px glyph.
+                width: 13px;
+                height: 13px;
+                border-radius: 6.5px;
+                background: (self.on || self.partial) ? Theme.accent : transparent;
+                border-width: (self.on || self.partial) ? 0px : 1.5px;
+                border-color: cb-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                QbzIcon {
+                    source: parent.partial
+                        ? @image-url("../assets/icons/minus.svg")
+                        : @image-url("../assets/icons/check.svg");
+                    visible: parent.on || parent.partial;
+                    width: 8px;
+                    height: 8px;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                    tint: #ffffff;
+                }
+                cb-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.toggle-select();
+                    }
+                }
+            }
+        }
+
         // Expand chevron — its own hit target so toggling doesn't select.
         Rectangle {
             width: 18px;
@@ -174,8 +556,8 @@ component TreeRow inherits Rectangle {
                         source: root.node.expanded
                             ? @image-url("../assets/icons/chevron-down.svg")
                             : @image-url("../assets/icons/chevron-right.svg");
-                        width: 13px;
-                        height: 13px;
+                        width: 11px;
+                        height: 11px;
                         tint: Theme.text-muted;
                     }
                 }
@@ -197,32 +579,23 @@ component TreeRow inherits Rectangle {
                         ? @image-url("../assets/icons/folder-open.svg")
                         : @image-url("../assets/icons/folder.svg"))
                     : @image-url("../assets/icons/music.svg");
-                width: 16px;
-                height: 16px;
+                width: 14px;
+                height: 14px;
                 tint: root.node.is-folder ? Theme.accent : Theme.text-muted;
             }
         }
 
-        // Name.
+        // Name. (No trailing count — the tree mixes folders + tracks, so a
+        // bare number would be ambiguous.)
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
             Text {
                 text: root.node.segment;
                 color: root.selected ? Theme.text-primary : Theme.text-secondary;
-                font-size: Typography.body;
+                font-size: 13px;
                 font-weight: root.selected ? Typography.semibold : Typography.regular;
                 overflow: elide;
-            }
-        }
-
-        // Recursive track count (folders only).
-        if root.node.is-folder && root.node.track-count > 0: VerticalLayout {
-            alignment: center;
-            Text {
-                text: root.node.track-count;
-                color: Theme.text-muted;
-                font-size: Typography.legal;
             }
         }
     }
@@ -289,8 +662,8 @@ component LocalArtistRow inherits Rectangle {
                     source: @image-url("../assets/icons/user.svg");
                     width: 22px;
                     height: 22px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: Theme.text-muted;
                 }
                 if root.item.image-path != "": Image {
@@ -347,8 +720,8 @@ component FilterChip inherits Rectangle {
         color: root.active ? Theme.accent-text : Theme.text-secondary;
         font-size: Typography.legal;
         font-weight: root.active ? Typography.semibold : Typography.regular;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
     }
     chip-ta := TouchArea {
         mouse-cursor: pointer;
@@ -496,8 +869,8 @@ export component LocalLibraryView inherits Rectangle {
                             source: @image-url("../assets/icons/list-filter.svg");
                             width: 15px;
                             height: 15px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             tint: LibAlbumFilterState.count > 0 ? Theme.accent : Theme.text-secondary;
                         }
                         if LibAlbumFilterState.count > 0: Rectangle {
@@ -512,8 +885,8 @@ export component LocalLibraryView inherits Rectangle {
                                 color: Theme.accent-text;
                                 font-size: 9px;
                                 font-weight: Typography.bold;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
+                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             }
                         }
                         filt-ta := TouchArea {
@@ -584,30 +957,32 @@ export component LocalLibraryView inherits Rectangle {
                 }
             }
 
-            // Folders toolbar — search (both modes); flat adds sort + group +
-            // grid/list; a flat/tree mode toggle sits at the far right.
+            // Folders toolbar — flat mode adds search + sort + group + grid/list;
+            // the Flat/Tree text toggle is always visible. Tree-mode search lives
+            // in the tree rail header (not here), 1:1 with Tauri.
             if LocalLibraryState.active-tab == "folders"
-                && (LocalLibraryState.folders.length > 0
-                    || LocalLibraryState.folders-search != ""): HorizontalLayout {
+                && !LocalLibraryState.ephemeral-active: HorizontalLayout {
                 spacing: 8px;
-                VerticalLayout {
-                    alignment: center;
-                    ExpandableSearch {
-                        placeholder: @tr("Search");
-                        sm: true;
-                        query <=> LocalLibraryState.folders-search;
-                        edited(q) => {
-                            LocalLibraryActions.folders-search(q);
-                        }
-                    }
-                }
-                // Flat-only controls: sort, group-by, grid/list.
-                if LocalLibraryState.folders-view-mode == "flat": HorizontalLayout {
+                // Flat-only controls: search, sort, group-by, grid/list.
+                if LocalLibraryState.folders-view-mode == "flat"
+                    && (LocalLibraryState.folders.length > 0
+                        || LocalLibraryState.folders-search != ""): HorizontalLayout {
                     spacing: 8px;
                     VerticalLayout {
                         alignment: center;
+                        ExpandableSearch {
+                            placeholder: @tr("Search");
+                            sm: true;
+                            query <=> LocalLibraryState.folders-search;
+                            edited(q) => {
+                                LocalLibraryActions.folders-search(q);
+                            }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
                         QbzSelect {
-                            menu-width: 180px;
+                            menu-width: 150px;
                             options: [
                                 @tr("Artist A-Z"),
                                 @tr("Artist Z-A"),
@@ -637,7 +1012,7 @@ export component LocalLibraryView inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         QbzSelect {
-                            menu-width: 160px;
+                            menu-width: 150px;
                             options: [
                                 @tr("No grouping"),
                                 @tr("Group by letter"),
@@ -663,7 +1038,8 @@ export component LocalLibraryView inherits Rectangle {
                         }
                     }
                 }
-                // Flat/tree mode toggle (always visible).
+                // Flat/Tree icon toggle (segmented, like Grid/List). Always
+                // visible on the Folders tab, floated right.
                 VerticalLayout {
                     alignment: center;
                     ModeToggle {
@@ -739,8 +1115,8 @@ export component LocalLibraryView inherits Rectangle {
                                 text: @tr("Retry");
                                 color: Theme.text-primary;
                                 font-size: Typography.legal;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
+                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             }
                             retry-ta := TouchArea {
                                 mouse-cursor: pointer;
@@ -875,8 +1251,8 @@ export component LocalLibraryView inherits Rectangle {
                                 text: @tr("Retry");
                                 color: Theme.text-primary;
                                 font-size: Typography.legal;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
+                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             }
                             tretry-ta := TouchArea {
                                 mouse-cursor: pointer;
@@ -1037,8 +1413,13 @@ export component LocalLibraryView inherits Rectangle {
 
             // -------- Folders tab — flat grid/list OR tree two-pane ------
             if LocalLibraryState.active-tab == "folders": Rectangle {
+                // Ephemeral pane — replaces the normal browse while a folder is
+                // open ad-hoc (see EphemeralPane below).
+                if LocalLibraryState.ephemeral-active: EphemeralPane { }
+
                 // Initial flat load.
-                if LocalLibraryState.folders-loading: VerticalLayout {
+                if LocalLibraryState.folders-loading
+                    && !LocalLibraryState.ephemeral-active: VerticalLayout {
                     alignment: center;
                     HorizontalLayout {
                         alignment: center;
@@ -1047,6 +1428,7 @@ export component LocalLibraryView inherits Rectangle {
                 }
                 // Empty — nothing indexed.
                 if !LocalLibraryState.folders-loading
+                    && !LocalLibraryState.ephemeral-active
                     && LocalLibraryState.folders.length == 0
                     && LocalLibraryState.folders-search == "": VerticalLayout {
                     alignment: center;
@@ -1060,6 +1442,7 @@ export component LocalLibraryView inherits Rectangle {
 
                 // ===================== FLAT MODE =====================
                 if !LocalLibraryState.folders-loading
+                    && !LocalLibraryState.ephemeral-active
                     && LocalLibraryState.folders.length > 0
                     && LocalLibraryState.folders-view-mode == "flat": Rectangle {
                     // Search matched nothing.
@@ -1119,43 +1502,270 @@ export component LocalLibraryView inherits Rectangle {
 
                 // ===================== TREE MODE =====================
                 if !LocalLibraryState.folders-loading
+                    && !LocalLibraryState.ephemeral-active
                     && LocalLibraryState.folders.length > 0
-                    && LocalLibraryState.folders-view-mode == "tree": HorizontalLayout {
+                    && LocalLibraryState.folders-view-mode == "tree": tree-cols := HorizontalLayout {
                     spacing: 0px;
 
-                    // ---- Left rail: the flattened folder tree ----
+                    // ---- Left rail: header (select / collapse-all / open
+                    //      ephemeral / search) + the flattened folder tree ----
                     Rectangle {
-                        width: 340px;
-                        if LocalLibraryState.folder-tree-loading: VerticalLayout {
-                            alignment: center;
-                            HorizontalLayout {
-                                alignment: center;
-                                LoadingSpinner { size: 28px; }
-                            }
-                        }
-                        if !LocalLibraryState.folder-tree-loading: VerticalLayout {
-                            padding-left: 24px;
+                        width: LocalLibraryState.tree-sidebar-width;
+                        VerticalLayout {
+                            padding-left: 12px;
                             padding-right: 8px;
                             padding-top: 12px;
-                            tree-list := ListView {
-                                for node[i] in LocalLibraryState.folder-tree: TreeRow {
+                            padding-bottom: 8px;
+                            spacing: 8px;
+
+                            // Header toolbar.
+                            HorizontalLayout {
+                                spacing: 4px;
+                                // Select mode.
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 30px;
+                                        height: 30px;
+                                        border-radius: 6px;
+                                        background: LocalLibraryState.tree-select-mode
+                                            ? Theme.surface-elevated
+                                            : (selm-ta.has-hover ? Theme.surface-hover : transparent);
+                                        QbzIcon {
+                                            source: @image-url("../assets/icons/square-check-big.svg");
+                                            width: 15px;
+                                            height: 15px;
+                                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                                            tint: LocalLibraryState.tree-select-mode
+                                                ? Theme.accent
+                                                : (selm-ta.has-hover ? Theme.text-primary : Theme.text-secondary);
+                                        }
+                                        selm-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { LocalLibraryActions.folders-toggle-select-mode(); }
+                                        }
+                                    }
+                                }
+                                // Collapse all.
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 30px;
+                                        height: 30px;
+                                        border-radius: 6px;
+                                        background: colap-ta.has-hover ? Theme.surface-hover : transparent;
+                                        QbzIcon {
+                                            source: @image-url("../assets/icons/chevron-up.svg");
+                                            width: 15px;
+                                            height: 15px;
+                                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                                            tint: colap-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                        }
+                                        colap-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { LocalLibraryActions.folders-collapse-all(); }
+                                        }
+                                    }
+                                }
+                                // Open ephemeral folder.
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 30px;
+                                        height: 30px;
+                                        border-radius: 6px;
+                                        background: eopen-ta.has-hover ? Theme.surface-hover : transparent;
+                                        QbzIcon {
+                                            source: @image-url("../assets/icons/folder-open.svg");
+                                            width: 15px;
+                                            height: 15px;
+                                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                                            tint: eopen-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                        }
+                                        eopen-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { LocalLibraryActions.ephemeral-open(); }
+                                        }
+                                    }
+                                }
+                                // Search box (stretches).
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: 30px;
+                                    border-radius: 6px;
+                                    background: Theme.surface-card;
+                                    border-width: 1px;
+                                    border-color: tree-search-input.has-focus
+                                        ? Theme.accent : Theme.border-subtle;
+                                    clip: true;
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 6px;
+                                        spacing: 6px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            QbzIcon {
+                                                source: @image-url("../assets/icons/search.svg");
+                                                width: 13px;
+                                                height: 13px;
+                                                tint: Theme.text-muted;
+                                            }
+                                        }
+                                        Rectangle {
+                                            horizontal-stretch: 1;
+                                            clip: true;
+                                            tree-search-input := TextInput {
+                                                width: 100%;
+                                                height: 100%;
+                                                color: Theme.text-primary;
+                                                font-size: 12px;
+                                                vertical-alignment: center;
+                                                single-line: true;
+                                                text <=> LocalLibraryState.folders-tree-search;
+                                                edited => {
+                                                    LocalLibraryActions.folders-tree-search(self.text);
+                                                }
+                                            }
+                                            Text {
+                                                visible: tree-search-input.text == "";
+                                                width: 100%;
+                                                height: 100%;
+                                                text: @tr("Search folders");
+                                                color: Theme.text-muted;
+                                                font-size: 12px;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Compact bulk bar (select mode + selection) — icon
+                            // buttons with tooltips; the rail is narrow.
+                            if LocalLibraryState.tree-select-mode
+                                && LocalLibraryState.tree-selected-count > 0: Rectangle {
+                                height: 36px;
+                                border-radius: 8px;
+                                background: Theme.surface-elevated;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 6px;
+                                    spacing: 2px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        horizontal-stretch: 1;
+                                        Text {
+                                            text: LocalLibraryState.tree-selected-count + " " + @tr("sel");
+                                            color: Theme.text-secondary;
+                                            font-size: Typography.legal;
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        RailBulkBtn {
+                                            icon: @image-url("../assets/icons/folder-check.svg");
+                                            tooltip: @tr("Check all");
+                                            clicked => { LocalLibraryActions.folders-bulk-action("select-all"); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        RailBulkBtn {
+                                            icon: @image-url("../assets/icons/list-plus.svg");
+                                            tooltip: @tr("Play next");
+                                            clicked => { LocalLibraryActions.folders-bulk-action("play-next"); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        RailBulkBtn {
+                                            icon: @image-url("../assets/icons/list-end.svg");
+                                            tooltip: @tr("Add to queue");
+                                            clicked => { LocalLibraryActions.folders-bulk-action("queue"); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        RailBulkBtn {
+                                            icon: @image-url("../assets/icons/list-music.svg");
+                                            tooltip: @tr("Add to playlist");
+                                            clicked => { LocalLibraryActions.folders-bulk-action("add-to-playlist"); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        RailBulkBtn {
+                                            icon: @image-url("../assets/icons/x.svg");
+                                            tooltip: @tr("Clear");
+                                            clicked => { LocalLibraryActions.folders-bulk-action("clear"); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // The tree.
+                            if LocalLibraryState.folder-tree-loading: HorizontalLayout {
+                                alignment: center;
+                                padding-top: 20px;
+                                LoadingSpinner { size: 28px; }
+                            }
+                            if !LocalLibraryState.folder-tree-loading: tree-list := ListView {
+                                vertical-stretch: 1;
+                                for node[i] in LocalLibraryState.folder-tree-visible: TreeRow {
                                     node: node;
                                     selected: node.path == LocalLibraryState.folders-selected-path;
+                                    select-mode: LocalLibraryState.tree-select-mode;
                                     toggle => {
                                         LocalLibraryActions.folders-toggle-node(node.path, !node.expanded);
                                     }
                                     activate => {
                                         LocalLibraryActions.folders-select(node.path, node.segment);
                                     }
+                                    toggle-select => {
+                                        if (node.is-folder) {
+                                            LocalLibraryActions.folders-toggle-folder-select(node.path);
+                                        } else {
+                                            LocalLibraryActions.folders-toggle-track-select(node.path);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
 
-                    // Divider.
+                    // Divider — also the drag handle to resize the rail. Min =
+                    // 50% of the default width; max = 50% of the content area.
                     Rectangle {
-                        width: 1px;
-                        background: Theme.border-subtle;
+                        width: 7px;
+                        // The visible 1px line, centred in the grab area.
+                        Rectangle {
+                            width: 1px;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            background: drag-ta.has-hover || drag-ta.pressed
+                                ? Theme.accent : Theme.border-subtle;
+                        }
+                        drag-ta := TouchArea {
+                            mouse-cursor: ew-resize;
+                            property <length> start-w: 272px;
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down) {
+                                    self.start-w = LocalLibraryState.tree-sidebar-width;
+                                }
+                            }
+                            moved => {
+                                if (self.pressed) {
+                                    LocalLibraryState.tree-sidebar-width = Math.max(
+                                        136px,
+                                        Math.min(
+                                            tree-cols.width / 2,
+                                            self.start-w + (self.mouse-x - self.pressed-x)));
+                                }
+                            }
+                        }
                     }
 
                     // ---- Right pane: selected folder detail ----
@@ -1186,55 +1796,102 @@ export component LocalLibraryView inherits Rectangle {
                                     spacing: 14px;
                                     alignment: start;
 
-                                    // Header: folder name + Play all.
+                                    // Header: circular Play + folder name +
+                                    // recursive count + search + grid/list toggle.
                                     HorizontalLayout {
                                         spacing: 12px;
                                         VerticalLayout {
                                             alignment: center;
-                                            horizontal-stretch: 1;
-                                            Text {
-                                                text: LocalLibraryState.folders-selected-name;
-                                                color: Theme.text-primary;
-                                                font-size: Typography.section;
-                                                font-weight: Typography.bold;
-                                                overflow: elide;
+                                            CircleAction {
+                                                icon: @image-url("../assets/icons/play-fill.svg");
+                                                primary: true;
+                                                diameter: 40px;
+                                                tooltip: @tr("Play all");
+                                                clicked => {
+                                                    LocalLibraryActions.folders-play-node(
+                                                        LocalLibraryState.folders-selected-path);
+                                                }
                                             }
                                         }
                                         VerticalLayout {
                                             alignment: center;
-                                            Rectangle {
-                                                width: playall-row.preferred-width + 28px;
-                                                height: 34px;
-                                                border-radius: 6px;
-                                                background: playall-ta.has-hover
-                                                    ? Theme.accent-hover : Theme.accent;
-                                                playall-row := HorizontalLayout {
-                                                    x: (parent.width - self.width) / 2;
-                                                    spacing: 7px;
-                                                    VerticalLayout {
-                                                        alignment: center;
-                                                        QbzIcon {
-                                                            source: @image-url("../assets/icons/play-fill.svg");
-                                                            width: 13px;
-                                                            height: 13px;
-                                                            tint: Theme.accent-text;
+                                            horizontal-stretch: 1;
+                                            spacing: 2px;
+                                            Text {
+                                                text: LocalLibraryState.folders-selected-name;
+                                                color: Theme.text-primary;
+                                                font-size: Typography.section;
+                                                font-weight: Typography.semibold;
+                                                overflow: elide;
+                                            }
+                                            Text {
+                                                text: LocalLibraryState.folder-detail-track-count + " " + @tr("tracks");
+                                                color: Theme.text-muted;
+                                                font-size: Typography.legal;
+                                            }
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            HorizontalLayout {
+                                                spacing: 8px;
+                                                // Persistent subfolder name search (1:1 Tauri).
+                                                Rectangle {
+                                                    width: 200px;
+                                                    height: 30px;
+                                                    border-radius: 6px;
+                                                    background: Theme.surface-card;
+                                                    border-width: 1px;
+                                                    border-color: detail-search-input.has-focus
+                                                        ? Theme.accent : Theme.border-subtle;
+                                                    clip: true;
+                                                    HorizontalLayout {
+                                                        padding-left: 10px;
+                                                        padding-right: 8px;
+                                                        spacing: 6px;
+                                                        VerticalLayout {
+                                                            alignment: center;
+                                                            QbzIcon {
+                                                                source: @image-url("../assets/icons/search.svg");
+                                                                width: 14px;
+                                                                height: 14px;
+                                                                tint: Theme.text-muted;
+                                                            }
                                                         }
-                                                    }
-                                                    VerticalLayout {
-                                                        alignment: center;
-                                                        Text {
-                                                            text: @tr("Play all");
-                                                            color: Theme.accent-text;
-                                                            font-size: Typography.legal;
-                                                            font-weight: Typography.semibold;
+                                                        Rectangle {
+                                                            horizontal-stretch: 1;
+                                                            clip: true;
+                                                            detail-search-input := TextInput {
+                                                                width: 100%;
+                                                                height: 100%;
+                                                                color: Theme.text-primary;
+                                                                font-size: 12px;
+                                                                vertical-alignment: center;
+                                                                single-line: true;
+                                                                text <=> LocalLibraryState.folder-detail-search;
+                                                                edited => {
+                                                                    LocalLibraryActions.folder-detail-search(self.text);
+                                                                }
+                                                            }
+                                                            Text {
+                                                                visible: detail-search-input.text == "";
+                                                                width: 100%;
+                                                                height: 100%;
+                                                                text: @tr("Search albums...");
+                                                                color: Theme.text-muted;
+                                                                font-size: 12px;
+                                                                vertical-alignment: center;
+                                                                overflow: elide;
+                                                            }
                                                         }
                                                     }
                                                 }
-                                                playall-ta := TouchArea {
-                                                    mouse-cursor: pointer;
-                                                    clicked => {
-                                                        LocalLibraryActions.folders-play-node(
-                                                            LocalLibraryState.folders-selected-path);
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    ViewToggle {
+                                                        view-mode: LocalLibraryState.folder-detail-view;
+                                                        set-view(v) => {
+                                                            LocalLibraryState.folder-detail-view = v;
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1247,56 +1904,92 @@ export component LocalLibraryView inherits Rectangle {
                                         LoadingSpinner { size: 28px; }
                                     }
 
-                                    // Subfolders (drill-down), if any.
+                                    // Subfolders — cover grid (or list), 1:1 with Tauri.
                                     if !LocalLibraryState.folder-detail-loading
                                         && LocalLibraryState.folder-detail-subfolders.length > 0: VerticalLayout {
-                                        spacing: 6px;
+                                        spacing: 12px;
                                         Text {
-                                            text: @tr("Subfolders");
-                                            color: Theme.text-muted;
-                                            font-size: Typography.legal;
+                                            text: @tr("Folders");
+                                            color: Theme.text-secondary;
+                                            font-size: 12px;
                                             font-weight: Typography.semibold;
+                                            letter-spacing: 0.5px;
                                         }
-                                        for sub[si] in LocalLibraryState.folder-detail-subfolders: Rectangle {
-                                            height: 34px;
-                                            border-radius: 6px;
-                                            background: sub-ta.has-hover ? Theme.surface-hover : transparent;
-                                            HorizontalLayout {
-                                                padding-left: 8px;
-                                                padding-right: 10px;
-                                                spacing: 8px;
-                                                VerticalLayout {
-                                                    alignment: center;
-                                                    QbzIcon {
-                                                        source: @image-url("../assets/icons/folder.svg");
-                                                        width: 16px;
-                                                        height: 16px;
-                                                        tint: Theme.accent;
-                                                    }
-                                                }
-                                                VerticalLayout {
-                                                    alignment: center;
-                                                    horizontal-stretch: 1;
-                                                    Text {
-                                                        text: sub.segment;
-                                                        color: Theme.text-secondary;
-                                                        font-size: Typography.body;
-                                                        overflow: elide;
-                                                    }
-                                                }
-                                                if sub.track-count > 0: VerticalLayout {
-                                                    alignment: center;
-                                                    Text {
-                                                        text: sub.track-count;
-                                                        color: Theme.text-muted;
-                                                        font-size: Typography.legal;
-                                                    }
+                                        if LocalLibraryState.folder-detail-subfolders-visible.length == 0: VerticalLayout {
+                                            padding-top: 8px;
+                                            Text {
+                                                text: @tr("No folders match your search.");
+                                                color: Theme.text-muted;
+                                                font-size: Typography.body;
+                                                horizontal-alignment: center;
+                                            }
+                                        }
+                                        // Grid view — wrapping cover cards.
+                                        if LocalLibraryState.folder-detail-view == "grid"
+                                            && LocalLibraryState.folder-detail-subfolders-visible.length > 0: subgrid := Rectangle {
+                                            property <length> gap: 12px;
+                                            property <length> min-cw: 140px;
+                                            property <int> cols: Math.max(1, Math.floor((self.width + self.gap) / (self.min-cw + self.gap)));
+                                            property <length> cw: (self.width - (self.cols - 1) * self.gap) / self.cols;
+                                            property <length> ch: self.cw + 42px;
+                                            property <int> rws: Math.ceil(LocalLibraryState.folder-detail-subfolders-visible.length / self.cols);
+                                            height: self.rws > 0 ? self.rws * self.ch + (self.rws - 1) * self.gap : 0px;
+                                            for sub[i] in LocalLibraryState.folder-detail-subfolders-visible: FolderSubcard {
+                                                x: Math.mod(i, subgrid.cols) * (subgrid.cw + subgrid.gap);
+                                                y: Math.floor(i / subgrid.cols) * (subgrid.ch + subgrid.gap);
+                                                width: subgrid.cw;
+                                                height: subgrid.ch;
+                                                item: sub;
+                                                clicked(path) => {
+                                                    LocalLibraryActions.folders-select(path, "");
                                                 }
                                             }
-                                            sub-ta := TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    LocalLibraryActions.folders-select(sub.path, sub.segment);
+                                        }
+                                        // List view — compact rows.
+                                        if LocalLibraryState.folder-detail-view == "list"
+                                            && LocalLibraryState.folder-detail-subfolders-visible.length > 0: VerticalLayout {
+                                            spacing: 2px;
+                                            for sub[si] in LocalLibraryState.folder-detail-subfolders-visible: Rectangle {
+                                                height: 34px;
+                                                border-radius: 6px;
+                                                background: subrow-ta.has-hover ? Theme.surface-hover : transparent;
+                                                HorizontalLayout {
+                                                    padding-left: 8px;
+                                                    padding-right: 10px;
+                                                    spacing: 8px;
+                                                    VerticalLayout {
+                                                        alignment: center;
+                                                        QbzIcon {
+                                                            source: @image-url("../assets/icons/folder.svg");
+                                                            width: 14px;
+                                                            height: 14px;
+                                                            tint: Theme.text-muted;
+                                                        }
+                                                    }
+                                                    VerticalLayout {
+                                                        alignment: center;
+                                                        horizontal-stretch: 1;
+                                                        Text {
+                                                            text: sub.name;
+                                                            color: Theme.text-primary;
+                                                            font-size: 13px;
+                                                            overflow: elide;
+                                                        }
+                                                    }
+                                                    VerticalLayout {
+                                                        alignment: center;
+                                                        Text {
+                                                            text: sub.track-count;
+                                                            color: Theme.text-muted;
+                                                            font-size: 11px;
+                                                        }
+                                                    }
+                                                }
+                                                subrow-ta := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        LocalLibraryActions.folders-select(sub.path, "");
+                                                    }
                                                 }
                                             }
                                         }
@@ -1305,7 +1998,14 @@ export component LocalLibraryView inherits Rectangle {
                                     // Direct tracks.
                                     if !LocalLibraryState.folder-detail-loading
                                         && LocalLibraryState.folder-detail-tracks.length > 0: VerticalLayout {
-                                        spacing: 0px;
+                                        spacing: 6px;
+                                        Text {
+                                            text: @tr("Tracks");
+                                            color: Theme.text-secondary;
+                                            font-size: 12px;
+                                            font-weight: Typography.semibold;
+                                            letter-spacing: 0.5px;
+                                        }
                                         for track[ti] in LocalLibraryState.folder-detail-tracks: TrackRow {
                                             track: track;
                                             index: ti;
@@ -1641,8 +2341,8 @@ export component LocalLibraryView inherits Rectangle {
                                 color: Theme.accent;
                                 font-size: Typography.legal;
                                 font-weight: Typography.medium;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
+                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             }
                             clr-ta := TouchArea {
                                 mouse-cursor: pointer;

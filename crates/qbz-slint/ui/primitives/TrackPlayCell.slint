@@ -97,8 +97,8 @@ export component TrackPlayCell inherits Rectangle {
             source: @image-url("../assets/icons/music.svg");
             width: root.art-size * 0.45;
             height: root.art-size * 0.45;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             tint: Theme.text-muted;
         }
         Image {
@@ -115,8 +115,8 @@ export component TrackPlayCell inherits Rectangle {
             animate opacity { duration: 150ms; }
         }
         if root.show-bars: EqualizerBars {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         }
         if root.show-overlay && !root.show-bars: QbzIcon {
             source: (root.is-playing && root.row-hovered)
@@ -124,8 +124,8 @@ export component TrackPlayCell inherits Rectangle {
                 : @image-url("../assets/icons/play-fill.svg");
             width: 20px;
             height: 20px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             tint: #ffffff;
         }
     }
@@ -139,12 +139,12 @@ export component TrackPlayCell inherits Rectangle {
             text: root.number;
             color: Theme.text-muted;
             font-size: Typography.body;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         }
         if root.show-bars: EqualizerBars {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         }
         if root.show-overlay && !root.show-bars: QbzIcon {
             source: (root.is-playing && root.row-hovered)
@@ -152,8 +152,8 @@ export component TrackPlayCell inherits Rectangle {
                 : @image-url("../assets/icons/play-fill.svg");
             width: 16px;
             height: 16px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             tint: #ffffff;
         }
     }

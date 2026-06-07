@@ -41,8 +41,8 @@ export component PmFolderIcon inherits Rectangle {
             : @image-url("../assets/icons/folder.svg");
         width: root.glyph-size;
         height: root.glyph-size;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: #ffffff;
     }
 }

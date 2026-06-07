@@ -89,8 +89,8 @@ component PmSearch inherits Rectangle {
                     source: @image-url("../assets/icons/x.svg");
                     width: 12px;
                     height: 12px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: clear-ta.has-hover ? Theme.text-primary : Theme.text-muted;
                 }
                 clear-ta := TouchArea {
@@ -208,8 +208,8 @@ component PmIconButton inherits Rectangle {
         source: root.icon;
         width: 16px;
         height: 16px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.active ? #ffffff : Theme.text-secondary;
     }
     ta := TouchArea {
@@ -236,8 +236,8 @@ component PmActionButton inherits Rectangle {
         source: root.icon;
         width: root.glyph;
         height: root.glyph;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.filled ? Theme.accent : (ta.has-hover ? Theme.text-primary : Theme.text-muted);
     }
     ta := TouchArea {
@@ -262,8 +262,8 @@ component PmLocalBadge inherits Rectangle {
             : @image-url("../assets/icons/cloud-download.svg");
         width: 13px;
         height: 13px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.status == "all_local" ? #22c55e : #f59e0b;
     }
 }
@@ -335,8 +335,8 @@ component PmFolderCard inherits Rectangle {
             source: @image-url("../assets/icons/pen-line.svg");
             width: 12px;
             height: 12px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             tint: edit-ta.has-hover ? Theme.text-primary : Theme.text-muted;
         }
         edit-ta := TouchArea {
@@ -423,8 +423,8 @@ component PmFolderChip inherits Rectangle {
                     source: @image-url("../assets/icons/pen-line.svg");
                     width: 12px;
                     height: 12px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: edit-ta.has-hover ? Theme.text-primary : Theme.text-muted;
                 }
                 edit-ta := TouchArea {
@@ -1005,8 +1005,8 @@ component PmSectionHeader inherits Rectangle {
                         : @image-url("../assets/icons/chevron-down.svg");
                     width: 14px;
                     height: 14px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: Theme.text-muted;
                 }
                 chev-ta := TouchArea {

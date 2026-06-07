@@ -1,10 +1,12 @@
-// Ghost circular action button — translucent fill with a faint ring,
-// icon tinted on hover/active (never a solid accent fill, mirroring the
-// Tauri transport controls). Shared by the artist + label page headers
-// and their Popular Tracks clusters (Play all / Select / More).
+// Circular header/action button — matches the album-card hover OVERLAY
+// buttons: a semi-transparent white fill (stable hit surface) with a bright
+// 1.5px ring, white icon; `primary` is a solid white circle with a dark icon
+// (the play affordance). Shared by the album/artist/label page headers, their
+// Popular Tracks clusters, and the ephemeral pane.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { QbzIcon } from "QbzIcon.slint";
+import { TooltipState } from "../state.slint";
 
 export component CircleAction inherits Rectangle {
     in property <image> icon;
@@ -12,30 +14,46 @@ export component CircleAction inherits Rectangle {
     // Stays "pressed" — same surface as hover, icon tinted accent.
     in property <bool> active: false;
     in property <length> diameter: 40px;
+    // Optional hover tooltip (empty = none), using the global TooltipOverlay.
+    in property <string> tooltip;
     callback clicked();
 
     width: root.diameter;
     height: root.diameter;
     border-radius: root.diameter / 2;
-    background: (ta.has-hover || root.active) ? Theme.surface-hover : transparent;
-    border-width: 1px;
-    border-color: (ta.has-hover || root.active) ? Theme.text-disabled : Theme.border-subtle;
+    // Overlay-matched contrast: solid white for the primary play, semi-
+    // transparent white fill + bright 1.5px ring otherwise.
+    background: root.primary
+        ? (ta.has-hover ? #ffffffd6 : #ffffff)
+        : ((ta.has-hover || root.active) ? #ffffff3d : #ffffff24);
+    border-width: root.primary ? 0px : 1.5px;
+    border-color: #ffffffcc;
 
     QbzIcon {
         source: root.icon;
         width: root.primary ? 19px : 17px;
         height: root.primary ? 19px : 17px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.active
             ? Theme.accent
-            : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
+            : (root.primary ? #000000 : #ffffff);
     }
 
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => {
             root.clicked();
+        }
+        changed has-hover => {
+            if (self.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else if (!self.has-hover) {
+                TooltipState.show = false;
+            }
         }
     }
 }

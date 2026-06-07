@@ -13,12 +13,17 @@ use crate::{AppWindow, LocalLibraryState};
 struct Prefs {
     #[serde(default = "d_off")]
     tracks_group: String,
+    // Path of the last-opened ephemeral folder, re-scanned on startup. None when
+    // no ephemeral session is active.
+    #[serde(default)]
+    ephemeral_folder: Option<String>,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
         Self {
             tracks_group: d_off(),
+            ephemeral_folder: None,
         }
     }
 }
@@ -49,21 +54,37 @@ pub fn load(window: &AppWindow) {
         .set_tracks_group_mode(p.tracks_group.into());
 }
 
-/// Persist the current toolbar choices read from LocalLibraryState.
-pub fn save(window: &AppWindow) {
+fn write(p: &Prefs) {
     let Some(path) = store_path() else {
         return;
-    };
-    let p = Prefs {
-        tracks_group: window
-            .global::<LocalLibraryState>()
-            .get_tracks_group_mode()
-            .into(),
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(json) = serde_json::to_vec_pretty(&p) {
+    if let Ok(json) = serde_json::to_vec_pretty(p) {
         let _ = std::fs::write(&path, json);
     }
+}
+
+/// Persist the current toolbar choices read from LocalLibraryState. Preserves
+/// the ephemeral-folder path (read-modify-write).
+pub fn save(window: &AppWindow) {
+    let mut p = read();
+    p.tracks_group = window
+        .global::<LocalLibraryState>()
+        .get_tracks_group_mode()
+        .into();
+    write(&p);
+}
+
+/// The persisted ephemeral-folder path, if any (rehydrated on startup).
+pub fn ephemeral_path() -> Option<String> {
+    read().ephemeral_folder.filter(|s| !s.is_empty())
+}
+
+/// Persist (or clear) the ephemeral-folder path (read-modify-write).
+pub fn save_ephemeral_path(path: Option<&str>) {
+    let mut p = read();
+    p.ephemeral_folder = path.map(|s| s.to_string());
+    write(&p);
 }

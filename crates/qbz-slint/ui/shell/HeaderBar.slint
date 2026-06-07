@@ -211,8 +211,8 @@ component CompactNavBtn inherits Rectangle {
         source: root.icon;
         width: 16px;
         height: 16px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.active ? Theme.text-primary : Theme.text-secondary;
     }
     cn-ta := TouchArea {
@@ -247,8 +247,8 @@ component CompactPlaylistsBtn inherits Rectangle {
         source: @image-url("../assets/icons/list-music.svg");
         width: 16px;
         height: 16px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.active ? Theme.text-primary : Theme.text-secondary;
     }
     cp-ta := TouchArea {
@@ -280,8 +280,8 @@ component HeaderNavBtn inherits Rectangle {
         source: root.icon;
         width: 15px;
         height: 15px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.enabled ? Theme.text-primary : Theme.text-muted;
     }
 
@@ -368,7 +368,7 @@ export component HeaderBar inherits Rectangle {
             width: 14px;
             height: 14px;
             x: 10px;
-            y: (parent.height - self.height) / 2;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             tint: Theme.text-muted;
         }
 
@@ -565,7 +565,7 @@ export component HeaderBar inherits Rectangle {
             Rectangle {
                 width: 1px;
                 height: 18px;
-                y: (parent.height - self.height) / 2;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 background: Theme.border-subtle;
             }
             VerticalLayout {

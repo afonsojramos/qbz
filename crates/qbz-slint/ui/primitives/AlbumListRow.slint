@@ -209,8 +209,8 @@ export component AlbumListRow inherits Rectangle {
                     source: @image-url("../assets/icons/play-fill.svg");
                     width: 22px;
                     height: 22px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: #ffffff;
                 }
                 art-ta := TouchArea {
@@ -282,7 +282,7 @@ export component AlbumListRow inherits Rectangle {
                 width: root.album.source == "local" ? 15px : 16px;
                 height: self.width;
                 x: 0;
-                y: (parent.height - self.height) / 2;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 image-fit: contain;
             }
         }
@@ -331,8 +331,8 @@ export component AlbumListRow inherits Rectangle {
                     source: @image-url("../assets/icons/ellipsis.svg");
                     width: 18px;
                     height: 18px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: more-ta.has-hover ? Theme.text-primary : Theme.text-muted;
                 }
                 more-ta := TouchArea {

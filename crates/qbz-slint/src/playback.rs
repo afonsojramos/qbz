@@ -151,7 +151,9 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
     // current track and `track_id` momentarily disagree. Auto-advance, skip and
     // play-all all flow through here, so they become source-aware for free.
     if let Some(qt) = runtime.core().current_track().await {
-        if qt.id == track_id && qt.source.as_deref() == Some("local") {
+        if qt.id == track_id
+            && matches!(qt.source.as_deref(), Some("local") | Some("ephemeral"))
+        {
             play_local_file_audible(runtime, track_id).await;
             return;
         }
@@ -176,14 +178,45 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
 /// file, so seek to the track start. `row_id` is the library row id. Called
 /// by `play_audible` when the current queue track's source is `"local"`.
 async fn play_local_file_audible(runtime: &Runtime, row_id: u64) {
-    let info = tokio::task::spawn_blocking(move || {
-        crate::library_db::with_db(|db| db.get_track(row_id as i64))
-    })
-    .await
-    .ok()
-    .flatten()
-    .flatten()
-    .map(|t| (t.file_path, t.cue_start_secs));
+    // Ephemeral tracks (synthetic id >= 2^48) resolve from the in-memory
+    // session, never the DB. Everything downstream (read bytes, play_data, CUE
+    // seek) is identical to a real local file.
+    //
+    // FAST PATH for CUE virtual tracks: all the tracks of a CUE album share ONE
+    // big audio file. If that file is already loaded in the player (the loaded
+    // track is ephemeral and points at the same path), DON'T re-read + re-decode
+    // the whole FLAC — just seek to the new track's start. Re-reading a multi-
+    // hundred-MB single-file album on every track click was "infierno de lento".
+    // The seekbar then reports absolute file time (accepted limitation, as in
+    // the Tauri build); the now-playing title/artist still update from the queue
+    // cursor.
+    if crate::ephemeral::is_ephemeral_id(row_id as i64) {
+        if let Some(target) = crate::ephemeral::get_track(row_id as i64) {
+            let loaded_id = runtime.core().player().state.current_track_id();
+            if runtime.core().player().has_loaded_audio()
+                && crate::ephemeral::is_ephemeral_id(loaded_id as i64)
+                && crate::ephemeral::get_track(loaded_id as i64)
+                    .map(|l| l.file_path == target.file_path)
+                    .unwrap_or(false)
+            {
+                let pos = target.cue_start_secs.unwrap_or(0.0).max(0.0);
+                let _ = runtime.core().player().seek(pos as u64);
+                return;
+            }
+        }
+    }
+    let info = if crate::ephemeral::is_ephemeral_id(row_id as i64) {
+        crate::ephemeral::get_track(row_id as i64).map(|t| (t.file_path, t.cue_start_secs))
+    } else {
+        tokio::task::spawn_blocking(move || {
+            crate::library_db::with_db(|db| db.get_track(row_id as i64))
+        })
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .map(|t| (t.file_path, t.cue_start_secs))
+    };
     let Some((path, cue)) = info else {
         log::error!("[qbz-slint] local play: track {row_id} not found");
         return;
@@ -259,6 +292,168 @@ pub fn play_local_album(
             None => 0,
         };
         play_local_tracks_now(&runtime, &weak, tracks, start).await;
+    });
+}
+
+/// If the track currently playing is from an ephemeral folder, stop it and
+/// clear the queue + now-playing chrome. Mirrors Tauri's
+/// `wipeEphemeralPlaybackArtifacts`: called when the ephemeral session is
+/// cleared or replaced, so a stale ephemeral track (whose synthetic id will be
+/// reused by the next session) can't linger in the bar or false-highlight a row
+/// in the newly-loaded folder.
+pub async fn wipe_ephemeral_if_playing(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
+    let is_eph = runtime
+        .core()
+        .current_track()
+        .await
+        .map(|t| crate::ephemeral::is_ephemeral_id(t.id as i64))
+        .unwrap_or(false);
+    if !is_eph {
+        return;
+    }
+    let _ = runtime.core().stop();
+    runtime.core().clear_queue(false).await;
+    let _ = weak.upgrade_in_event_loop(|w| {
+        w.global::<NowPlayingState>().set_has_track(false);
+    });
+    refresh_sidebar(true);
+}
+
+/// Play the whole ephemeral folder (every album, scan order). The in-memory
+/// snapshot becomes the queue; playback routes through the shared local-file
+/// seam (the synthetic ids resolve via `crate::ephemeral`).
+pub fn play_ephemeral_all(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+) {
+    handle.spawn(async move {
+        let tracks = crate::ephemeral::tracks_snapshot();
+        play_local_tracks_now(&runtime, &weak, tracks, 0).await;
+    });
+}
+
+/// Play one ephemeral album (its tracks become the queue, in scan order).
+pub fn play_ephemeral_album(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    group_key: String,
+) {
+    handle.spawn(async move {
+        let tracks = crate::ephemeral::album_tracks(&group_key);
+        play_local_tracks_now(&runtime, &weak, tracks, 0).await;
+    });
+}
+
+/// Play one ephemeral track — its album group becomes the queue, starting at
+/// the clicked track (mirrors Tauri's `playEphemeralTrack`).
+pub fn play_ephemeral_track(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    track_id: i64,
+) {
+    handle.spawn(async move {
+        let Some(track) = crate::ephemeral::get_track(track_id) else {
+            return;
+        };
+        let key = crate::ephemeral::ephemeral_album_key(&track);
+        let tracks = crate::ephemeral::album_tracks(&key);
+        let start = tracks
+            .iter()
+            .position(|t| t.id == track_id)
+            .unwrap_or(0);
+        play_local_tracks_now(&runtime, &weak, tracks, start).await;
+    });
+}
+
+/// Replace the queue with an ephemeral selection identified by intent.
+pub fn ephemeral_play(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    kind: String,
+    arg: String,
+) {
+    match kind.as_str() {
+        "all" => play_ephemeral_all(runtime, weak, handle),
+        "album" => play_ephemeral_album(runtime, weak, handle, arg),
+        "track" => {
+            if let Ok(id) = arg.parse::<i64>() {
+                play_ephemeral_track(runtime, weak, handle, id);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Append an ephemeral selection to the CURRENT queue (no replace).
+pub fn ephemeral_enqueue(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    kind: String,
+    arg: String,
+) {
+    handle.spawn(async move {
+        let tracks = match kind.as_str() {
+            "all" => crate::ephemeral::tracks_snapshot(),
+            "album" => crate::ephemeral::album_tracks(&arg),
+            "track" => arg
+                .parse::<i64>()
+                .ok()
+                .and_then(crate::ephemeral::get_track)
+                .into_iter()
+                .collect(),
+            _ => Vec::new(),
+        };
+        if tracks.is_empty() {
+            return;
+        }
+        let queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
+        runtime.core().add_tracks(queue).await;
+        refresh_sidebar(true);
+        crate::toast::success_weak(&weak, "Added to queue");
+    });
+}
+
+/// Either play the ephemeral selection now, or — if a queue is already active —
+/// prompt add-to-queue vs clear-and-play. Only the ephemeral pane uses this
+/// (user decision 2026-06-06: ephemeral-only, dialog-on-play).
+pub fn ephemeral_play_or_prompt(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    kind: String,
+    arg: String,
+) {
+    let rt = runtime.clone();
+    let wk = weak.clone();
+    let hd = handle.clone();
+    handle.spawn(async move {
+        let active = rt.core().current_track().await.is_some();
+        if active {
+            // "Add to queue" only when the existing queue is itself all-ephemeral
+            // (no mixing ephemeral with persistent tracks).
+            let (queue, _) = rt.core().get_all_queue_tracks().await;
+            let enqueue_allowed = !queue.is_empty()
+                && queue.iter().all(|t| {
+                    crate::ephemeral::is_ephemeral_id(t.id as i64)
+                        || t.source.as_deref() == Some("ephemeral")
+                });
+            let k = kind.clone();
+            let a = arg.clone();
+            let _ = wk.upgrade_in_event_loop(move |w| {
+                let s = w.global::<crate::EphemeralPlayChoiceState>();
+                s.set_intent_kind(k.into());
+                s.set_intent_arg(a.into());
+                s.set_enqueue_allowed(enqueue_allowed);
+                s.set_open(true);
+            });
+        } else {
+            ephemeral_play(rt, wk, hd, kind, arg);
+        }
     });
 }
 
@@ -398,7 +593,16 @@ fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
     } else {
         track.sample_rate
     };
-    let is_offline = track.source.as_deref() == Some("qobuz_download");
+    // Source-aware: offline copies read as Qobuz downloads (carry the Qobuz id
+    // so the shared resolver finds them); ephemeral tracks keep their synthetic
+    // high id + an "ephemeral" tag so playback routes to the in-memory store;
+    // everything else is a real local user file.
+    let src = match track.source.as_deref() {
+        Some("qobuz_download") => "qobuz_download",
+        Some("ephemeral") => "ephemeral",
+        _ => "local",
+    };
+    let is_offline = src == "qobuz_download";
     QueueTrack {
         id: if is_offline {
             track.qobuz_track_id.unwrap_or(track.id) as u64
@@ -418,11 +622,7 @@ fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
         album_id: Some(track.album_group_key.clone()),
         artist_id: None,
         streamable: true,
-        source: Some(if is_offline {
-            "qobuz_download".to_string()
-        } else {
-            "local".to_string()
-        }),
+        source: Some(src.to_string()),
         parental_warning: false,
         source_item_id_hint: None,
     }
@@ -548,6 +748,9 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     let album_id = track.album_id.clone().unwrap_or_default();
     let artist_id = track.artist_id.map(|id| id.to_string()).unwrap_or_default();
     let track_id = track.id.to_string();
+    // Ephemeral tracks have no DB row → metadata-bound actions (favorite,
+    // add-to-playlist, track-info) are gated off in the UI via this flag.
+    let is_ephemeral = crate::ephemeral::is_ephemeral_id(track.id as i64);
     let duration = track.duration_secs;
     let artwork = track.artwork_ref();
     // Quality badge: tier from bit depth (24-bit+ = Hi-Res), exact detail line
@@ -618,6 +821,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         np.set_album_id(album_id.into());
         np.set_artist_id(artist_id.into());
         np.set_track_id(track_id.into());
+        np.set_is_ephemeral(is_ephemeral);
         np.set_quality_tier(quality_tier.into());
         np.set_quality_detail(quality_detail.into());
         np.set_duration_secs(duration as i32);

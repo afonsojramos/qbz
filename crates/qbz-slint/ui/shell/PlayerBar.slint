@@ -203,7 +203,7 @@ export component PlayerBar inherits Rectangle {
                     // and floated above the album art. Mirror classic: fixed
                     // height + y-centre in the column.
                     height: Layout.player-bar-height - 38px;
-                    y: (parent.height - self.height) / 2;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     art-size: Layout.player-bar-height - 38px;
                     // Homologate the stamp with classic: full-size badge + LEDs,
                     // not the compact variant.
@@ -220,7 +220,10 @@ export component PlayerBar inherits Rectangle {
                         root.media-action(kind, id, "open");
                     }
                     track-info() => {
-                        root.media-action("track", NowPlayingState.track-id, "track-info");
+                        // Ephemeral tracks have no DB row → no track-info page.
+                        if (!NowPlayingState.is-ephemeral) {
+                            root.media-action("track", NowPlayingState.track-id, "track-info");
+                        }
                     }
                 }
                 // Classic: transport cluster, left-aligned, plain play glyph.
@@ -285,7 +288,7 @@ export component PlayerBar inherits Rectangle {
                     // +4px taller (2px top/bottom) so the title + audio stamp are
                     // not glued to the card edge; art + stamp grow in step.
                     height: 64px;
-                    y: (parent.height - self.height) / 2;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     art-size: 60px;
                     // Full-size 1:1-Tauri stamp at every width.
                     compact-stamp: false;
@@ -300,7 +303,10 @@ export component PlayerBar inherits Rectangle {
                         root.media-action(kind, id, "open");
                     }
                     track-info() => {
-                        root.media-action("track", NowPlayingState.track-id, "track-info");
+                        // Ephemeral tracks have no DB row → no track-info page.
+                        if (!NowPlayingState.is-ephemeral) {
+                            root.media-action("track", NowPlayingState.track-id, "track-info");
+                        }
                     }
                 }
             }

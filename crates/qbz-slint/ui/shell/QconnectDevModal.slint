@@ -27,8 +27,8 @@ export component QconnectDevModal inherits Rectangle {
         Rectangle {
             width: Math.min(root.width - 80px, 600px);
             height: Math.min(root.height - 80px, 640px);
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             border-radius: Radius.md;
             background: Theme.surface-card;
             border-width: 1px;
@@ -63,8 +63,8 @@ export component QconnectDevModal inherits Rectangle {
                             source: @image-url("../assets/icons/x.svg");
                             width: 17px;
                             height: 17px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             tint: close-x.has-hover ? Theme.text-primary : Theme.text-muted;
                         }
                     }
@@ -109,8 +109,8 @@ export component QconnectDevModal inherits Rectangle {
                             text: "Clear";
                             color: Theme.text-secondary;
                             font-size: 12px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                         }
                         clear-ta := TouchArea {
                             mouse-cursor: pointer;

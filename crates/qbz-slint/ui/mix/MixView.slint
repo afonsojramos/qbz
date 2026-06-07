@@ -34,8 +34,8 @@ component CircleAction inherits Rectangle {
         source: root.icon;
         width: root.primary ? 18px : 16px;
         height: root.primary ? 18px : 16px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.primary ? #ffffff : Theme.text-secondary;
     }
     ta := TouchArea {
@@ -100,8 +100,8 @@ export component MixView inherits Rectangle {
                     background: root.mix-gradient;
                     Text {
                         text: MixState.title;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                         color: #ffffff;
                         font-size: 34px;
                         font-weight: Typography.bold;

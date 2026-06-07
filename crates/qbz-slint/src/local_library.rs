@@ -20,8 +20,8 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use crate::adapter::SlintAdapter;
 use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
 use crate::{
-    AlbumCardItem, AlphaJump, AppWindow, DiscoverSection, FolderNode, LocalArtistItem,
-    LocalArtistSection, LocalLibraryState, TrackItem,
+    AlbumCardItem, AlphaJump, AppWindow, DiscoverSection, EphemeralAlbum, FolderNode,
+    FolderSubcardItem, LocalArtistItem, LocalArtistSection, LocalLibraryState, TrackItem,
 };
 
 /// The four browse tabs. Order mirrors Tauri's default tab order
@@ -652,10 +652,12 @@ fn map_local_track(t: qbz_library::LocalTrack) -> TrackItem {
         removing: false,
         cache_status: 0,
         cache_progress: 0.0,
-        // Source indicator: offline copies read as Qobuz, user files as local.
+        // Source indicator: offline copies read as Qobuz, user files as local,
+        // ephemeral tracks tagged so the UI can gate persistence actions.
         source: match t.source.as_deref() {
             Some("qobuz_download") => "qobuz",
             Some("plex") => "plex",
+            Some("ephemeral") => "ephemeral",
             _ => "local",
         }
         .into(),
@@ -1359,6 +1361,8 @@ fn entry_to_node(entry: &qbz_library::FolderTreeEntry, depth: i32) -> FolderNode
             expanded: false,
             can_expand: *track_count_under > 0,
             track_count: *track_count_under as i32,
+            selected: false,
+            select_state: 0,
         },
         qbz_library::FolderTreeEntry::Track { path, segment } => FolderNode {
             path: path.clone().into(),
@@ -1368,6 +1372,8 @@ fn entry_to_node(entry: &qbz_library::FolderTreeEntry, depth: i32) -> FolderNode
             expanded: false,
             can_expand: false,
             track_count: 0,
+            selected: false,
+            select_state: 0,
         },
     }
 }
@@ -1409,10 +1415,12 @@ pub fn ensure_folder_tree_loaded(weak: slint::Weak<AppWindow>, handle: tokio::ru
                         expanded: false,
                         can_expand: cnt > 0,
                         track_count: cnt as i32,
+                        selected: false,
+                        select_state: 0,
                     })
                     .collect();
                 let s = w.global::<LocalLibraryState>();
-                s.set_folder_tree(ModelRc::new(VecModel::from(nodes)));
+                apply_tree(&s, nodes);
                 s.set_folder_tree_loading(false);
             });
         });
@@ -1445,7 +1453,7 @@ pub fn toggle_folder_node(
                     end += 1;
                 }
                 nodes.drain(pos + 1..end);
-                s.set_folder_tree(ModelRc::new(VecModel::from(nodes)));
+                apply_tree(&s, nodes);
             }
         });
         return;
@@ -1472,10 +1480,244 @@ pub fn toggle_folder_node(
                 for (i, cn) in child_nodes.into_iter().enumerate() {
                     nodes.insert(pos + 1 + i, cn);
                 }
-                s.set_folder_tree(ModelRc::new(VecModel::from(nodes)));
+                apply_tree(&s, nodes);
             }
         });
     });
+}
+
+// ---- Tree rail: search filter + multi-select ----
+
+use std::collections::HashMap;
+
+// Selected tracks in the tree (path -> record), for the bulk bar.
+static TREE_SELECTED: LazyLock<Mutex<HashMap<String, qbz_library::LocalTrack>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn tree_selected() -> std::sync::MutexGuard<'static, HashMap<String, qbz_library::LocalTrack>> {
+    TREE_SELECTED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Apply the current selection to `nodes` (track `selected`, folder tri-state),
+/// commit the tree model, refresh the selected count, and derive the visible
+/// (search-filtered) set. The single sink for every tree mutation.
+fn apply_tree(s: &LocalLibraryState, mut nodes: Vec<FolderNode>) {
+    {
+        let sel = tree_selected();
+        for n in nodes.iter_mut() {
+            if n.is_folder {
+                let prefix = format!("{}/", n.path);
+                let under = sel.keys().filter(|p| p.starts_with(&prefix)).count();
+                n.select_state = if under == 0 {
+                    0
+                } else if n.track_count > 0 && under as i32 >= n.track_count {
+                    2
+                } else {
+                    1
+                };
+                n.selected = false;
+            } else {
+                n.selected = sel.contains_key(n.path.as_str());
+                n.select_state = 0;
+            }
+        }
+        s.set_tree_selected_count(sel.len() as i32);
+    }
+    s.set_folder_tree(ModelRc::new(VecModel::from(nodes)));
+    derive_folder_tree_visible(s);
+}
+
+/// Derive `folder-tree-visible` from `folder-tree`, filtered by the rail search
+/// (keeps matching nodes AND their ancestors so the tree stays navigable).
+fn derive_folder_tree_visible(s: &LocalLibraryState) {
+    let full = s.get_folder_tree();
+    let nodes: Vec<FolderNode> = (0..full.row_count()).filter_map(|i| full.row_data(i)).collect();
+    let q = s.get_folders_tree_search().as_str().trim().to_lowercase();
+    if q.is_empty() {
+        s.set_folder_tree_visible(ModelRc::new(VecModel::from(nodes)));
+        return;
+    }
+    let matches: Vec<String> = nodes
+        .iter()
+        .filter(|n| n.segment.as_str().to_lowercase().contains(&q))
+        .map(|n| n.path.to_string())
+        .collect();
+    let kept: Vec<FolderNode> = nodes
+        .into_iter()
+        .filter(|n| {
+            let p = n.path.as_str();
+            n.segment.as_str().to_lowercase().contains(&q)
+                || matches.iter().any(|m| m.starts_with(&format!("{p}/")))
+        })
+        .collect();
+    s.set_folder_tree_visible(ModelRc::new(VecModel::from(kept)));
+}
+
+/// Re-run the visible filter after a search-text change.
+pub fn folders_tree_search(window: &AppWindow, query: &str) {
+    let s = window.global::<LocalLibraryState>();
+    s.set_folders_tree_search(query.into());
+    derive_folder_tree_visible(&s);
+}
+
+/// Collapse every expanded folder — keep only the depth-0 roots.
+pub fn collapse_all_tree(window: &AppWindow) {
+    let s = window.global::<LocalLibraryState>();
+    let mut nodes = collect_tree(&s);
+    nodes.retain(|n| n.depth == 0);
+    for n in nodes.iter_mut() {
+        n.expanded = false;
+    }
+    apply_tree(&s, nodes);
+}
+
+/// Toggle multi-select mode; leaving it clears the selection.
+pub fn toggle_tree_select_mode(window: &AppWindow) {
+    let s = window.global::<LocalLibraryState>();
+    let on = !s.get_tree_select_mode();
+    s.set_tree_select_mode(on);
+    if !on {
+        tree_selected().clear();
+        let nodes = collect_tree(&s);
+        apply_tree(&s, nodes);
+    }
+}
+
+/// Toggle every track under a folder (recursive). 'all' → deselect; else select.
+pub fn toggle_tree_folder_select(
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    path: String,
+) {
+    handle.spawn(async move {
+        let p = path.clone();
+        let tracks = tokio::task::spawn_blocking(move || {
+            crate::library_db::with_db(|db| db.list_folder_tracks_recursive(&p, false))
+                .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
+        if tracks.is_empty() {
+            return;
+        }
+        let all_selected = {
+            let sel = tree_selected();
+            tracks.iter().all(|t| sel.contains_key(&t.file_path))
+        };
+        {
+            let mut sel = tree_selected();
+            if all_selected {
+                for t in &tracks {
+                    sel.remove(&t.file_path);
+                }
+            } else {
+                for t in tracks {
+                    sel.insert(t.file_path.clone(), t);
+                }
+            }
+        }
+        let _ = weak.upgrade_in_event_loop(|w| {
+            let s = w.global::<LocalLibraryState>();
+            let nodes = collect_tree(&s);
+            apply_tree(&s, nodes);
+        });
+    });
+}
+
+/// Toggle a single track row by path.
+pub fn toggle_tree_track_select(
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    path: String,
+) {
+    handle.spawn(async move {
+        let was_selected = tree_selected().contains_key(&path);
+        if was_selected {
+            tree_selected().remove(&path);
+        } else {
+            // Resolve the track record from its parent folder listing.
+            let parent = std::path::Path::new(&path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let p = parent.clone();
+            let tracks = tokio::task::spawn_blocking(move || {
+                crate::library_db::with_db(|db| db.list_folder_tracks(&p, false)).unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default();
+            if let Some(t) = tracks.into_iter().find(|t| t.file_path == path) {
+                tree_selected().insert(path.clone(), t);
+            }
+        }
+        let _ = weak.upgrade_in_event_loop(|w| {
+            let s = w.global::<LocalLibraryState>();
+            let nodes = collect_tree(&s);
+            apply_tree(&s, nodes);
+        });
+    });
+}
+
+/// Snapshot the currently-selected tree tracks (scan order by path).
+pub fn tree_selected_snapshot() -> Vec<qbz_library::LocalTrack> {
+    let sel = tree_selected();
+    let mut v: Vec<qbz_library::LocalTrack> = sel.values().cloned().collect();
+    v.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+    v
+}
+
+/// Toggle "select all": if every track under the roots is already selected,
+/// clear the selection; otherwise select them all. Two-way (the bulk button
+/// flips select-all / un-select-all).
+pub fn tree_select_all(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    handle.spawn(async move {
+        // Roots = the registered library folders.
+        let paths = tokio::task::spawn_blocking(|| {
+            crate::library_db::with_db(|db| db.get_folders()).unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
+        let all = tokio::task::spawn_blocking(move || {
+            let mut acc: Vec<qbz_library::LocalTrack> = Vec::new();
+            for p in paths {
+                let mut t =
+                    crate::library_db::with_db(|db| db.list_folder_tracks_recursive(&p, false))
+                        .unwrap_or_default();
+                acc.append(&mut t);
+            }
+            acc
+        })
+        .await
+        .unwrap_or_default();
+        {
+            let mut sel = tree_selected();
+            let all_selected =
+                !all.is_empty() && all.iter().all(|t| sel.contains_key(&t.file_path));
+            if all_selected {
+                // Un-select everything under the roots.
+                for t in &all {
+                    sel.remove(&t.file_path);
+                }
+            } else {
+                for t in all {
+                    sel.insert(t.file_path.clone(), t);
+                }
+            }
+        }
+        let _ = weak.upgrade_in_event_loop(|w| {
+            let s = w.global::<LocalLibraryState>();
+            let nodes = collect_tree(&s);
+            apply_tree(&s, nodes);
+        });
+    });
+}
+
+/// Clear the tree selection.
+pub fn tree_clear_selection(window: &AppWindow) {
+    tree_selected().clear();
+    let s = window.global::<LocalLibraryState>();
+    let nodes = collect_tree(&s);
+    apply_tree(&s, nodes);
 }
 
 /// Select a folder in the tree: load its detail pane — direct child tracks
@@ -1483,17 +1725,26 @@ pub fn toggle_folder_node(
 pub fn select_folder(
     weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
+    image_cache: ImageCache,
     path: String,
     segment: String,
 ) {
     let _ = weak.upgrade_in_event_loop({
         let path = path.clone();
-        let segment = segment.clone();
+        // Drill-in from a subfolder card passes an empty segment — derive the
+        // display name from the path so the detail header is never blank.
+        let segment = if segment.is_empty() {
+            path_basename(&path)
+        } else {
+            segment.clone()
+        };
         move |w| {
             let s = w.global::<LocalLibraryState>();
             s.set_folders_selected_path(path.clone().into());
             s.set_folders_selected_name(segment.clone().into());
             s.set_folder_detail_loading(true);
+            // Reset the per-folder subfolder filter on navigation.
+            s.set_folder_detail_search("".into());
         }
     });
     let path_for_fetch = path.clone();
@@ -1513,17 +1764,94 @@ pub fn select_folder(
         .unwrap_or_default();
         let _ = weak.upgrade_in_event_loop(move |w| {
             let track_items: Vec<TrackItem> = tracks.into_iter().map(map_local_track).collect();
-            let sub_nodes: Vec<FolderNode> = subfolders
+            // Subfolders become cover cards (1:1 with Tauri). The cover comes from
+            // FolderTreeEntry::Folder.artwork (resolved async below).
+            let cards: Vec<FolderSubcardItem> = subfolders
                 .iter()
-                .filter(|e| matches!(e, qbz_library::FolderTreeEntry::Folder { .. }))
-                .map(|e| entry_to_node(e, 0))
+                .filter_map(|e| match e {
+                    qbz_library::FolderTreeEntry::Folder {
+                        path,
+                        segment,
+                        track_count_under,
+                        artwork,
+                    } => Some(FolderSubcardItem {
+                        path: path.clone().into(),
+                        name: segment.clone().into(),
+                        track_count: *track_count_under as i32,
+                        artwork: slint::Image::default(),
+                        artwork_url: artwork.clone().unwrap_or_default().into(),
+                    }),
+                    _ => None,
+                })
                 .collect();
+            // Recursive count = sum of subfolder counts + this folder's direct tracks.
+            let recursive: i32 =
+                cards.iter().map(|c| c.track_count).sum::<i32>() + track_items.len() as i32;
             let s = w.global::<LocalLibraryState>();
             s.set_folder_detail_tracks(ModelRc::new(VecModel::from(track_items)));
-            s.set_folder_detail_subfolders(ModelRc::new(VecModel::from(sub_nodes)));
+            s.set_folder_detail_track_count(recursive);
+            s.set_folder_detail_subfolders(ModelRc::new(VecModel::from(cards)));
             s.set_folder_detail_loading(false);
+            derive_folder_detail(&w);
+
+            // Spawn cover artwork jobs over the full subfolder set.
+            let full = s.get_folder_detail_subfolders();
+            let mut jobs: Vec<ArtworkJob> = Vec::new();
+            for i in 0..full.row_count() {
+                if let Some(it) = full.row_data(i) {
+                    let url = it.artwork_url.to_string();
+                    if !url.is_empty() {
+                        jobs.push(ArtworkJob {
+                            target: ArtworkTarget::LocalFolderDetailCard { index: i },
+                            url,
+                        });
+                    }
+                }
+            }
+            if !jobs.is_empty() {
+                crate::artwork::spawn_local_loads(jobs, w.as_weak(), image_cache.clone());
+            }
         });
     });
+}
+
+/// Re-derive the rendered subfolder set (`-visible`) from the full set, filtered
+/// by the subfolder name search. Mirrors `derive_folders`.
+fn derive_folder_detail(window: &AppWindow) {
+    let s = window.global::<LocalLibraryState>();
+    let full = s.get_folder_detail_subfolders();
+    let q = s.get_folder_detail_search().as_str().trim().to_lowercase();
+    let rows: Vec<FolderSubcardItem> = (0..full.row_count())
+        .filter_map(|i| full.row_data(i))
+        .filter(|it| q.is_empty() || it.name.as_str().to_lowercase().contains(&q))
+        .collect();
+    s.set_folder_detail_subfolders_visible(ModelRc::new(VecModel::from(rows)));
+}
+
+/// Set the search filter for the subfolder cards and re-derive.
+pub fn folder_detail_search(window: &AppWindow, query: &str) {
+    window
+        .global::<LocalLibraryState>()
+        .set_folder_detail_search(query.into());
+    derive_folder_detail(window);
+}
+
+/// Dual-set a resolved cover onto the full + visible subfolder sets by path.
+pub fn set_folder_detail_subfolder_artwork(window: &AppWindow, path: &str, image: slint::Image) {
+    let s = window.global::<LocalLibraryState>();
+    let set_in = |m: &ModelRc<FolderSubcardItem>| {
+        for i in 0..m.row_count() {
+            if let Some(mut it) = m.row_data(i) {
+                if it.path.as_str() == path {
+                    it.artwork = image.clone();
+                    m.set_row_data(i, it);
+                    break;
+                }
+            }
+        }
+    };
+    set_in(&s.get_folder_detail_subfolders());
+    set_in(&s.get_folder_detail_subfolders_visible());
 }
 
 // ============================== Artists tab ===============================
@@ -2121,6 +2449,239 @@ pub fn fetch_album_tracks_blocking(group_key: &str) -> Vec<qbz_library::LocalTra
         db.get_album_tracks(group_key)
     })
     .unwrap_or_default()
+}
+
+// ======================= Ephemeral folder =========================
+// Open a folder OUTSIDE the indexed library, browse + play it without writing
+// to library.db. The scan/metadata logic is shared (`qbz_library::ephemeral`);
+// here we drive the picker, build the album-grouped pane, and persist the path.
+
+/// Last path segment (folder name) for the header.
+fn folder_display_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// Load a cover from a cached artwork path (strips an optional `file://`).
+fn load_cover(path: &Option<String>) -> slint::Image {
+    let Some(p) = path.as_deref().filter(|s| !s.is_empty()) else {
+        return slint::Image::default();
+    };
+    let p = p.strip_prefix("file://").unwrap_or(p);
+    slint::Image::load_from_path(std::path::Path::new(p)).unwrap_or_default()
+}
+
+/// Group ephemeral tracks into album blocks (sorted by title), each with its
+/// cover + tracks. Returns the blocks and whether the session spans >1 album.
+/// MUST run on the UI thread — it loads `slint::Image`s (not Send).
+fn build_ephemeral_albums(tracks: &[qbz_library::LocalTrack]) -> (Vec<EphemeralAlbum>, bool) {
+    use std::collections::BTreeMap;
+    // Preserve scan order within a group; key order is stabilized by title sort.
+    let mut groups: BTreeMap<String, Vec<qbz_library::LocalTrack>> = BTreeMap::new();
+    for t in tracks {
+        groups
+            .entry(crate::ephemeral::ephemeral_album_key(t))
+            .or_default()
+            .push(t.clone());
+    }
+    let multi = groups.len() > 1;
+    let mut albums: Vec<EphemeralAlbum> = groups
+        .into_iter()
+        .map(|(key, group)| {
+            let first = &group[0];
+            let title = if first.album_group_title.is_empty() {
+                first.album.clone()
+            } else {
+                first.album_group_title.clone()
+            };
+            let artist = first
+                .album_artist
+                .clone()
+                .unwrap_or_else(|| first.artist.clone());
+            let count = group.len();
+            let meta = match first.year {
+                Some(y) if y > 0 => format!("{y} · {count} tracks"),
+                _ => format!("{count} tracks"),
+            };
+            let tier = if first.format.to_string().eq_ignore_ascii_case("mp3") {
+                "mp3"
+            } else {
+                match first.bit_depth {
+                    Some(b) if b >= 24 => "hires",
+                    Some(_) => "cd",
+                    None => "",
+                }
+            };
+            let is_cue = first.cue_file_path.is_some() || first.cue_start_secs.is_some();
+            let artwork = load_cover(&first.artwork_path);
+            let items: Vec<TrackItem> = group.into_iter().map(map_local_track).collect();
+            EphemeralAlbum {
+                group_key: key.into(),
+                title: title.into(),
+                artist: artist.into(),
+                meta: meta.into(),
+                quality_tier: tier.into(),
+                is_cue,
+                artwork,
+                tracks: ModelRc::new(VecModel::from(items)),
+            }
+        })
+        .collect();
+    albums.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    (albums, multi)
+}
+
+/// Push a scanned ephemeral result onto the UI (UI thread). `focus` switches to
+/// the Folders tab (true for an explicit open; false on startup rehydrate so we
+/// don't hijack the landing view).
+fn apply_ephemeral(
+    window: &AppWindow,
+    name: &str,
+    path: &str,
+    tracks: &[qbz_library::LocalTrack],
+    focus: bool,
+) {
+    let (albums, multi) = build_ephemeral_albums(tracks);
+    let s = window.global::<LocalLibraryState>();
+    s.set_ephemeral_active(true);
+    s.set_ephemeral_loading(false);
+    s.set_ephemeral_name(name.into());
+    s.set_ephemeral_path(path.into());
+    s.set_ephemeral_track_count(tracks.len() as i32);
+    s.set_ephemeral_multi_album(multi);
+    s.set_ephemeral_albums(ModelRc::new(VecModel::from(albums)));
+    if focus {
+        s.set_active_tab("folders".into());
+    }
+}
+
+type EphRuntime = Arc<AppRuntime<SlintAdapter>>;
+
+/// Open the native folder picker, then scan + show the ephemeral pane.
+pub fn open_ephemeral(
+    runtime: EphRuntime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+) {
+    handle.spawn(async move {
+        let Some(dir) = rfd::AsyncFileDialog::new()
+            .set_title("Choose a folder to play")
+            .pick_folder()
+            .await
+        else {
+            return;
+        };
+        let path = dir.path().to_string_lossy().to_string();
+        scan_ephemeral(Some(runtime), weak, path, true).await;
+    });
+}
+
+/// Re-open a previously-persisted ephemeral path on startup (no picker). Skips
+/// silently if the path is gone, clearing the stale pref.
+pub fn rehydrate_ephemeral(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    let Some(path) = crate::locallibrary_prefs::ephemeral_path() else {
+        return;
+    };
+    handle.spawn(async move {
+        scan_ephemeral(None, weak, path, false).await;
+    });
+}
+
+/// Shared scan path used by both the picker and rehydrate. When a `runtime` is
+/// given (explicit open), any ephemeral track currently playing is wiped first
+/// so it can't bleed into the freshly-loaded session (its synthetic id would be
+/// reused). Rehydrate passes `None` (startup — nothing is playing).
+async fn scan_ephemeral(
+    runtime: Option<EphRuntime>,
+    weak: slint::Weak<AppWindow>,
+    path: String,
+    from_picker: bool,
+) {
+    if let Some(rt) = &runtime {
+        crate::playback::wipe_ephemeral_if_playing(rt, &weak).await;
+    }
+    let name = folder_display_name(&path);
+    {
+        let nm = name.clone();
+        let p = path.clone();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            let s = w.global::<LocalLibraryState>();
+            s.set_ephemeral_active(true);
+            s.set_ephemeral_loading(true);
+            s.set_ephemeral_name(nm.into());
+            s.set_ephemeral_path(p.into());
+            s.set_ephemeral_albums(ModelRc::new(VecModel::from(Vec::<EphemeralAlbum>::new())));
+            if from_picker {
+                s.set_active_tab("folders".into());
+            }
+        });
+    }
+    let scan_path = path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::ephemeral::open(std::path::Path::new(&scan_path))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(res)) => {
+            let tracks = res.tracks;
+            let skipped = res.skipped_files;
+            let nm = name.clone();
+            let p = path.clone();
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                apply_ephemeral(&w, &nm, &p, &tracks, from_picker);
+            });
+            crate::locallibrary_prefs::save_ephemeral_path(Some(&path));
+            if from_picker {
+                if skipped > 0 {
+                    crate::toast::success_weak(
+                        &weak,
+                        format!("Opened folder ({skipped} files skipped)"),
+                    );
+                } else {
+                    crate::toast::success_weak(&weak, "Folder opened");
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            log::warn!("[qbz-slint] ephemeral open failed: {e}");
+            let _ = weak.upgrade_in_event_loop(|w| {
+                reset_ephemeral_state(&w);
+            });
+            crate::ephemeral::clear();
+            crate::locallibrary_prefs::save_ephemeral_path(None);
+            if from_picker {
+                crate::toast::error_weak(&weak, "Couldn't open that folder");
+            }
+        }
+        Err(_) => {
+            let _ = weak.upgrade_in_event_loop(|w| {
+                reset_ephemeral_state(&w);
+            });
+        }
+    }
+}
+
+/// Reset the ephemeral UI state to its closed defaults.
+fn reset_ephemeral_state(window: &AppWindow) {
+    let s = window.global::<LocalLibraryState>();
+    s.set_ephemeral_active(false);
+    s.set_ephemeral_loading(false);
+    s.set_ephemeral_name("".into());
+    s.set_ephemeral_path("".into());
+    s.set_ephemeral_track_count(0);
+    s.set_ephemeral_multi_album(false);
+    s.set_ephemeral_albums(ModelRc::new(VecModel::from(Vec::<EphemeralAlbum>::new())));
+}
+
+/// Clear the ephemeral session: drop the pane, the in-memory store, and the
+/// persisted path.
+pub fn clear_ephemeral(window: &AppWindow) {
+    reset_ephemeral_state(window);
+    crate::ephemeral::clear();
+    crate::locallibrary_prefs::save_ephemeral_path(None);
 }
 
 #[cfg(test)]

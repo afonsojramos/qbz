@@ -40,8 +40,8 @@ component CircleAction inherits Rectangle {
         source: root.icon;
         width: root.primary ? 19px : 17px;
         height: root.primary ? 19px : 17px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
     }
 
@@ -79,8 +79,8 @@ component SidebarCard inherits Rectangle {
                     source: root.icon;
                     width: 18px;
                     height: 18px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: #ffffff;
                 }
             }
@@ -564,8 +564,8 @@ export component AlbumPageView inherits Rectangle {
                                 source: @image-url("../assets/icons/heart.svg");
                                 width: 14px;
                                 height: 14px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
+                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                                 tint: Theme.text-muted;
                             }
                         }
@@ -575,8 +575,8 @@ export component AlbumPageView inherits Rectangle {
                                 source: @image-url("../assets/icons/cloud-download.svg");
                                 width: 14px;
                                 height: 14px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
+                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                                 tint: Theme.text-muted;
                             }
                         }
@@ -662,8 +662,8 @@ export component AlbumPageView inherits Rectangle {
         Rectangle {
             width: Math.min(root.width - 80px, 560px);
             height: Math.min(root.height - 120px, 460px);
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             border-radius: Radius.md;
             background: Theme.surface-card;
             border-width: 1px;
@@ -698,8 +698,8 @@ export component AlbumPageView inherits Rectangle {
                             source: @image-url("../assets/icons/x.svg");
                             width: 18px;
                             height: 18px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                             tint: close-x.has-hover ? Theme.text-primary : Theme.text-muted;
                         }
                     }

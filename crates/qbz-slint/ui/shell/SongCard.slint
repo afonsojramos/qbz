@@ -190,7 +190,7 @@ export component SongCard inherits Rectangle {
                 width: root.art-size * 0.5;
                 height: root.art-size * 0.5;
                 x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                y: (parent.height - self.height) / 2 + root.art-size * 0.06;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px + root.art-size * 0.06;
                 tint: Theme.text-muted;
             }
             if !NowPlayingState.has-track: Text {
@@ -244,9 +244,11 @@ export component SongCard inherits Rectangle {
                 overflow: elide;
             }
             ttta := TouchArea {
-                mouse-cursor: NowPlayingState.has-track ? pointer : default;
+                mouse-cursor: (NowPlayingState.has-track && !NowPlayingState.is-ephemeral)
+                    ? pointer : default;
                 clicked => {
-                    if (NowPlayingState.has-track) {
+                    // Ephemeral tracks have no track-info page.
+                    if (NowPlayingState.has-track && !NowPlayingState.is-ephemeral) {
                         root.track-info();
                     }
                 }
@@ -273,10 +275,11 @@ export component SongCard inherits Rectangle {
                 border-radius: 3px;
                 background: ctxta.has-hover ? Theme.surface-hover : transparent;
                 QbzIcon {
-                    // disc-album, pinned flush-LEFT (x:0): centering the glyph in
-                    // its box left a ~2px indent so the artist·album line started
-                    // further right than the title above it and read as misaligned.
-                    source: @image-url("../assets/icons/disc-album.svg");
+                    // turntable (the "playing from" context), pinned flush-LEFT
+                    // (x:0): centering the glyph in its box left a ~2px indent so
+                    // the artist·album line read as misaligned vs the title.
+                    // (disc-album now means "flat folders" in the Folders toggle.)
+                    source: @image-url("../assets/icons/turntable.svg");
                     width: 13px;
                     height: 13px;
                     x: 0;
@@ -309,7 +312,7 @@ export component SongCard inherits Rectangle {
                 label: NowPlayingState.artist;
                 stretch: 2.0;
                 activated => {
-                    if (NowPlayingState.artist-id != "") {
+                    if (NowPlayingState.artist-id != "" && !NowPlayingState.is-ephemeral) {
                         root.open-artist(NowPlayingState.artist-id);
                     }
                 }
@@ -331,7 +334,7 @@ export component SongCard inherits Rectangle {
                 label: NowPlayingState.album;
                 stretch: 1.0;
                 activated => {
-                    if (NowPlayingState.album-id != "") {
+                    if (NowPlayingState.album-id != "" && !NowPlayingState.is-ephemeral) {
                         root.open-album(NowPlayingState.album-id);
                     }
                 }

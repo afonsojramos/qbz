@@ -16,7 +16,7 @@ import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
-import { ShellState, QueueState, QueueItem } from "../state.slint";
+import { ShellState, QueueState, QueueItem, NowPlayingState } from "../state.slint";
 
 // Close button — mirrors the X control used by LyricsSidebar.
 component CloseButton inherits Rectangle {
@@ -30,8 +30,8 @@ component CloseButton inherits Rectangle {
         source: @image-url("../assets/icons/x.svg");
         width: 15px;
         height: 15px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
     }
 
@@ -219,7 +219,7 @@ component QueueRow inherits Rectangle {
             border-radius: 4px;
             background: Theme.surface-elevated;
             clip: true;
-            y: (parent.height - self.height) / 2;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             if root.item.artwork.width > 0: Image {
                 source: root.item.artwork;
                 width: 100%;
@@ -279,8 +279,8 @@ component QueueRow inherits Rectangle {
                     source: @image-url("../assets/icons/ellipsis.svg");
                     width: 16px;
                     height: 16px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: mta.has-hover ? Theme.text-primary : Theme.text-muted;
                 }
                 mta := TouchArea {
@@ -299,7 +299,8 @@ component QueueRow inherits Rectangle {
         x: root.width - 200px;
         y: 44px;
         width: 196px;
-        height: 175px;
+        // Ephemeral rows drop the persistence items (Add to playlist / Track info).
+        height: root.item.is-ephemeral ? 105px : 175px;
         ContextMenu {
             ContextMenuItem {
                 icon: @image-url("../assets/icons/trash-2.svg");
@@ -316,11 +317,11 @@ component QueueRow inherits Rectangle {
                 icon: @image-url("../assets/icons/list-x.svg");
                 label: @tr("Remove all after");
             }
-            ContextMenuItem {
+            if !root.item.is-ephemeral: ContextMenuItem {
                 icon: @image-url("../assets/icons/list-plus.svg");
                 label: @tr("Add to playlist");
             }
-            ContextMenuItem {
+            if !root.item.is-ephemeral: ContextMenuItem {
                 icon: @image-url("../assets/icons/info.svg");
                 label: @tr("Track info");
             }
@@ -518,8 +519,9 @@ export component QueueSidebar inherits Rectangle {
                                         overflow: elide;
                                     }
                                 }
-                                // Favorite (heart) toggle.
-                                VerticalLayout {
+                                // Favorite (heart) toggle — hidden for ephemeral
+                                // tracks (no DB row to favorite).
+                                if !NowPlayingState.is-ephemeral: VerticalLayout {
                                     alignment: center;
                                     fav := Rectangle {
                                         width: 28px;
@@ -534,8 +536,8 @@ export component QueueSidebar inherits Rectangle {
                                                 : @image-url("../assets/icons/heart.svg");
                                             width: 17px;
                                             height: 17px;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
+                                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                                             tint: QueueState.now-playing-favorite
                                                 ? Theme.favorite
                                                 : (fav-ta.has-hover
@@ -750,8 +752,9 @@ export component QueueSidebar inherits Rectangle {
                     }
                 }
             }
-            // Action 2 — Save the queue as a playlist.
-            VerticalLayout {
+            // Action 2 — Save the queue as a playlist. Hidden while an ephemeral
+            // track is playing (an ephemeral queue can't be persisted).
+            if !NowPlayingState.is-ephemeral: VerticalLayout {
                 alignment: center;
                 IconButton {
                     icon: @image-url("../assets/icons/add-to-list.svg");

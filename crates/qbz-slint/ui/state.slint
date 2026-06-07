@@ -385,6 +385,36 @@ export struct FolderNode {
     expanded: bool,       // folder open?
     can-expand: bool,     // has children (track_count_under > 0)
     track-count: int,     // recursive track count under a folder
+    // Select-mode: track rows carry `selected`; folder rows carry a tri-state
+    // `select-state` (0 none / 1 partial / 2 all) over their descendant tracks.
+    selected: bool,
+    select-state: int,
+}
+
+// One subfolder cover card in the tree-mode folder-detail pane (1:1 with
+// Tauri's `.subfolder-card`). `artwork` is loaded async from the folder cover.
+export struct FolderSubcardItem {
+    path: string,         // absolute path (the node id)
+    name: string,         // last path component (display)
+    track-count: int,     // recursive track count under the folder
+    artwork: image,
+    artwork-url: string,  // cover file path (artwork-pipeline source)
+}
+
+// One album block in the ephemeral-folder pane (an ad-hoc folder can hold
+// several albums). `artwork` is loaded from the cached cover file on the UI
+// thread; `tracks` are the album's tracks in scan order.
+export struct EphemeralAlbum {
+    group-key: string,
+    title: string,
+    artist: string,
+    // "year · N tracks" (already formatted).
+    meta: string,
+    quality-tier: string,
+    // This album is a single-file CUE rip (one audio file, virtual tracks).
+    is-cue: bool,
+    artwork: image,
+    tracks: [TrackItem],
 }
 
 export global LocalLibraryState {
@@ -444,7 +474,8 @@ export global LocalLibraryState {
 
     // --- Folders tab ---------------------------------------------------
     // flat = album grid grouped by directory; tree = two-pane lazy filesystem.
-    in-out property <string> folders-view-mode: "flat";   // "flat" | "tree"
+    // Tree is the Slint default (user 2026-06-06).
+    in-out property <string> folders-view-mode: "tree";   // "flat" | "tree"
     // Flat mode: `folders` is the full set (artwork target); `folders-visible`
     // / `folders-grouped` are the search/sort/group-derived render sets.
     in property <[AlbumCardItem]> folders: [];
@@ -457,14 +488,44 @@ export global LocalLibraryState {
     in-out property <string> folders-group: "off";         // off | alpha | artist
     in-out property <string> folders-grid-view: "grid";    // grid | list
     // Tree mode: a flattened visible-node list + the selected folder's detail
-    // (its direct tracks; subfolders shown as a grid).
+    // (its direct tracks; subfolders shown as a grid). `folder-tree` is the full
+    // flattened set; `folder-tree-visible` is the search-filtered render set.
     in property <[FolderNode]> folder-tree: [];
+    in property <[FolderNode]> folder-tree-visible: [];
     in property <bool> folder-tree-loading: false;
+    // Tree rail width (resizable). Default ~20% narrower than the old 340px;
+    // clamped in the UI to [50% of default, 50% of the content area].
+    in-out property <length> tree-sidebar-width: 272px;
+    // Tree rail header: search box + multi-select mode (1:1 with Tauri).
+    in-out property <string> folders-tree-search: "";
+    in-out property <bool> tree-select-mode: false;
+    in property <int> tree-selected-count: 0;
     in-out property <string> folders-selected-path: "";
     in property <string> folders-selected-name: "";
-    in property <[FolderNode]> folder-detail-subfolders: [];
+    // Subfolder cover cards (1:1 with Tauri): `folder-detail-subfolders` is the
+    // full set (artwork target); `-visible` is the search-filtered render set.
+    in property <[FolderSubcardItem]> folder-detail-subfolders: [];
+    in property <[FolderSubcardItem]> folder-detail-subfolders-visible: [];
     in property <[TrackItem]> folder-detail-tracks: [];
     in property <bool> folder-detail-loading: false;
+    // Recursive track count under the selected folder (the header "N tracks").
+    in property <int> folder-detail-track-count: 0;
+    // Per-pane grid/list toggle + subfolder name filter.
+    in-out property <string> folder-detail-view: "grid";   // "grid" | "list"
+    in-out property <string> folder-detail-search: "";
+
+    // --- Ephemeral folder (ad-hoc play, NOT indexed into library.db) ----
+    // When `ephemeral-active`, the Folders tab shows the ephemeral pane
+    // (album-grouped) instead of the normal flat/tree browse. The session is
+    // in-memory; the folder path is persisted so it rehydrates on restart.
+    in property <bool> ephemeral-active: false;
+    in property <bool> ephemeral-loading: false;
+    in property <string> ephemeral-path: "";
+    in property <string> ephemeral-name: "";
+    in property <int> ephemeral-track-count: 0;
+    // True when the session spans more than one album → show per-album play.
+    in property <bool> ephemeral-multi-album: false;
+    in property <[EphemeralAlbum]> ephemeral-albums: [];
 
     // --- Artists tab — two-column master/detail (1:1 with Tauri) --------
     // Left rail: the merged/deduped artist master list. `artists` is the full
@@ -547,6 +608,29 @@ export global LocalLibraryActions {
     // Tree: play one track from the selected folder's direct tracks (the
     // folder's direct list becomes the queue, starting at this track).
     callback folders-play-track(string /* track id */);
+    // Tree detail pane: filter the subfolder cards by name.
+    callback folder-detail-search(string /* query */);
+    // Tree rail header: filter the tree by name; collapse every folder.
+    callback folders-tree-search(string /* query */);
+    callback folders-collapse-all();
+    // Multi-select mode (tree rail): toggle the mode; toggle a folder's
+    // descendant tracks / a single track; run a bulk action on the selection.
+    callback folders-toggle-select-mode();
+    callback folders-toggle-folder-select(string /* folder path */);
+    callback folders-toggle-track-select(string /* track path */);
+    callback folders-bulk-action(string /* select-all|clear|queue|play-next|add-to-playlist */);
+
+    // --- Ephemeral folder (ad-hoc play) ---
+    // Open the native folder picker → scan → show the ephemeral pane.
+    callback ephemeral-open();
+    // Play the whole ephemeral folder (all albums, scan order).
+    callback ephemeral-play-all();
+    // Play one ephemeral track — its album group becomes the queue.
+    callback ephemeral-play-track(string /* track id */);
+    // Play one ephemeral album (its tracks become the queue).
+    callback ephemeral-play-album(string /* album group key */);
+    // Clear the ephemeral session (drop the pane + forget the path).
+    callback ephemeral-clear();
 
     // --- Artists tab ---
     // Filter the master list (two-way bound to artists-search; re-derive).
@@ -948,6 +1032,26 @@ export global CreateFolderState {
 
 export global CreateFolderActions {
     callback submit();
+    callback close();
+}
+
+// Ephemeral "play with active queue" choice — shown when the user triggers an
+// ephemeral play action while a queue is already playing. Two outcomes:
+// add to the queue, or clear the queue and start playing.
+export global EphemeralPlayChoiceState {
+    in-out property <bool> open: false;
+    // "all" | "album" | "track" — what the user pressed play on.
+    in-out property <string> intent-kind: "";
+    // group key (album) or track id (track); empty for "all".
+    in-out property <string> intent-arg: "";
+    // Whether "Add to queue" is offered — only when the current queue is itself
+    // entirely ephemeral (queue ops may not mix ephemeral with persistent tracks).
+    in-out property <bool> enqueue-allowed: false;
+}
+
+export global EphemeralPlayChoiceActions {
+    callback enqueue();   // add the selection to the current queue
+    callback replace();   // clear the queue and start playing the selection
     callback close();
 }
 
@@ -1914,6 +2018,8 @@ export struct QueueItem {
     playing: bool,
     duration: string,    // "M:SS"
     explicit: bool,
+    // From an ephemeral folder — gates persistence actions in the row menu.
+    is-ephemeral: bool,
 }
 
 // Now-playing / transport state. The Rust playback poll loop pushes the
@@ -1927,6 +2033,9 @@ export global NowPlayingState {
     in property <string> artist-id;
     in property <image> artwork;
     in property <string> track-id;
+    // True when the playing track is from an ephemeral folder (synthetic id):
+    // it has no DB row, so favorite / add-to-playlist / track-info are gated off.
+    in property <bool> is-ephemeral: false;
     in property <bool> playing: false;
     in property <int> position-secs: 0;
     in property <int> duration-secs: 0;

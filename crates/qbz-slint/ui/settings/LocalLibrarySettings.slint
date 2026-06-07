@@ -70,8 +70,8 @@ component IconBtn inherits Rectangle {
         source: root.icon;
         width: 16px;
         height: 16px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: Theme.text-secondary;
     }
     ta := TouchArea {
@@ -142,8 +142,8 @@ component FolderRow inherits Rectangle {
                 border-width: 1px;
                 border-color: !root.enabled-folder ? Theme.border-subtle : #e0564f;
                 badge-text := Text {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     text: !root.enabled-folder ? @tr("Disabled") : @tr("Unavailable");
                     color: !root.enabled-folder ? Theme.text-muted : #e0564f;
                     font-size: Typography.legal;
@@ -263,7 +263,7 @@ export component LocalLibrarySettings inherits VerticalLayout {
                         border-color: #e0564f;
                         background: stop-ta.has-hover ? #e0564f22 : transparent;
                         stop-row := HorizontalLayout {
-                            x: (parent.width - self.width) / 2;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                             spacing: 6px;
                             VerticalLayout {
                                 alignment: center;

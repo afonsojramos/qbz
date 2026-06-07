@@ -123,8 +123,8 @@ export component MusicianPageView inherits Rectangle {
                         source: @image-url("../assets/icons/user.svg");
                         width: 28px;
                         height: 28px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                         tint: Theme.text-muted;
                     }
                 }
@@ -253,8 +253,8 @@ export component MusicianPageView inherits Rectangle {
                             ? Theme.text-primary
                             : Theme.text-secondary;
                         font-size: 13px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     }
                     load-more-ta := TouchArea {
                         mouse-cursor: pointer;

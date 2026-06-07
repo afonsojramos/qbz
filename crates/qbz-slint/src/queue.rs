@@ -79,6 +79,7 @@ struct RowData {
     explicit: bool,
     artwork_url: String,
     playing: bool,
+    is_ephemeral: bool,
 }
 
 /// `M:SS` duration string.
@@ -132,6 +133,8 @@ fn row_from(track: &QueueTrack, playing: bool) -> RowData {
         explicit: track.parental_warning,
         artwork_url: track.artwork_url.clone().unwrap_or_default(),
         playing,
+        is_ephemeral: track.source.as_deref() == Some("ephemeral")
+            || crate::ephemeral::is_ephemeral_id(track.id as i64),
     }
 }
 
@@ -646,6 +649,7 @@ fn to_item(row: &RowData) -> QueueItem {
         playing: row.playing,
         duration: row.duration.clone().into(),
         explicit: row.explicit,
+        is_ephemeral: row.is_ephemeral,
     }
 }
 

@@ -34,8 +34,8 @@ component BulkButton inherits Rectangle {
         color: root.danger ? #ef4444 : Theme.text-secondary;
         font-size: Typography.legal;
         font-weight: root.danger ? Typography.medium : Typography.regular;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
     }
 
     ta := TouchArea {

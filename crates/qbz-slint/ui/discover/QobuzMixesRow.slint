@@ -37,8 +37,8 @@ component MixTile inherits Rectangle {
             }
             Text {
                 text: root.name;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 color: #ffffff;
                 font-size: 22px;
                 font-weight: Typography.bold;

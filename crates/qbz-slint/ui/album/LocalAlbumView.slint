@@ -47,7 +47,7 @@ component VersionPicker inherits Rectangle {
     background: pick-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
 
     pick-row := HorizontalLayout {
-        x: (parent.width - self.width) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         spacing: 7px;
         VerticalLayout {
             alignment: center;

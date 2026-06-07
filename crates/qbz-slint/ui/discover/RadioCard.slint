@@ -39,8 +39,8 @@ export component RadioCard inherits Rectangle {
             Rectangle {
                 width: 126px;
                 height: 126px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2 - 8px;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px - 8px;
                 border-radius: 4px;
                 background: Theme.surface-card;
                 clip: true;
@@ -59,7 +59,7 @@ export component RadioCard inherits Rectangle {
                 font-size: 15px;
                 font-weight: Typography.bold;
                 letter-spacing: 2px;
-                x: (parent.width - self.width) / 2;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                 y: parent.height - self.height - 16px;
             }
 
@@ -76,16 +76,16 @@ export component RadioCard inherits Rectangle {
                 height: 44px;
                 border-radius: 22px;
                 background: #ffffff;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 opacity: ta.has-hover || play-ta.has-hover ? 1.0 : 0.0;
                 animate opacity { duration: 150ms; }
                 QbzIcon {
                     source: @image-url("../assets/icons/play-fill.svg");
                     width: 18px;
                     height: 18px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: #000000;
                 }
                 play-ta := TouchArea {

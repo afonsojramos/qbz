@@ -23,8 +23,8 @@ export component QualityBadge inherits Rectangle {
         source: @image-url("../assets/hi-res.svg");
         width: 42px;
         height: 28px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         image-fit: contain;
     }
     if root.tier == "cd": Rectangle {
@@ -35,8 +35,8 @@ export component QualityBadge inherits Rectangle {
         border-width: 1px;
         border-color: Theme.border-subtle;
         QbzIcon {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             width: 16px;
             height: 16px;
             source: @image-url("../assets/cd.svg");
@@ -53,8 +53,8 @@ export component QualityBadge inherits Rectangle {
         border-width: 1px;
         border-color: Theme.border-subtle;
         QbzIcon {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             width: 16px;
             height: 16px;
             source: @image-url("../assets/mp3.svg");

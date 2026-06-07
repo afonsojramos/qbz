@@ -20,6 +20,7 @@ import { PlaylistPickerModal } from "../primitives/PlaylistPickerModal.slint";
 import { CreatePlaylistModal } from "../primitives/CreatePlaylistModal.slint";
 import { EditPlaylistModal } from "../primitives/EditPlaylistModal.slint";
 import { CreateFolderModal } from "../primitives/CreateFolderModal.slint";
+import { EphemeralPlayChoiceModal } from "../primitives/EphemeralPlayChoiceModal.slint";
 import { FolderEditModal } from "../primitives/FolderEditModal.slint";
 import { LibFolderEditModal } from "../settings/LibFolderEditModal.slint";
 import { TagEditorModal } from "../primitives/TagEditorModal.slint";
@@ -369,6 +370,9 @@ export component AppShell inherits Rectangle {
 
     // Global "Create folder" modal.
     CreateFolderModal { }
+
+    // Ephemeral "already playing" add-vs-replace choice.
+    EphemeralPlayChoiceModal { }
 
     // Global "Folder editor" modal (Playlist Manager create/edit folder).
     FolderEditModal { }

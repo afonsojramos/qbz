@@ -26,7 +26,7 @@ export component ListScrollbar inherits Rectangle {
     // Track.
     Rectangle {
         width: 6px;
-        x: (parent.width - self.width) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         height: 100%;
         background: #ffffff12;
         border-radius: 3px;
@@ -35,7 +35,7 @@ export component ListScrollbar inherits Rectangle {
     // Thumb.
     thumb := Rectangle {
         width: bar-ta.has-hover || bar-ta.pressed ? 10px : 8px;
-        x: (parent.width - self.width) / 2;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         height: root.thumb-h;
         y: root.max-scroll > 0px
             ? (-root.viewport-y / root.max-scroll) * root.travel
