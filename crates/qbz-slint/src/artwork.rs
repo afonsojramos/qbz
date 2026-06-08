@@ -186,6 +186,16 @@ pub fn open_cache() -> ImageCache {
 /// resolve cover art. Set once at startup.
 static SHARED_CACHE: std::sync::OnceLock<ImageCache> = std::sync::OnceLock::new();
 
+/// Process-wide async HTTP client for artwork downloads. A single client pools
+/// connections / reuses keep-alive across all concurrent artwork jobs
+/// (`MAX_CONCURRENT` = 16), instead of `reqwest::get` building a fresh client +
+/// connection pool on every cache miss (the fd-churn / deferred EMFILE risk).
+/// rustls per the workspace default; if the builder fails, fall back to the
+/// default client (equivalent to `Client::new()`), keeping this infallible —
+/// matching the silent-fallback style of `open_cache`.
+static HTTP: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(|| reqwest::Client::builder().build().unwrap_or_default());
+
 /// Publish the image cache for `shared_cache()` consumers. Call once.
 pub fn set_shared_cache(cache: ImageCache) {
     let _ = SHARED_CACHE.set(cache);
@@ -306,6 +316,10 @@ pub fn spawn_local_or_plex_loads(
                     base_url: (*plex_base_url).clone(),
                     token: (*plex_token).clone(),
                     path: job.url.clone(),
+                    // Request a server-side transcode at the surface's decode
+                    // size (grid cards 264, row thumbs 96, …) instead of the
+                    // full-res original.
+                    size: Some(decode_size),
                 }
             } else {
                 ArtworkRef::LocalFile(job.url.clone())
@@ -331,7 +345,7 @@ async fn fetch_cached_http(url: &str, cache: &ImageCache) -> Option<Vec<u8>> {
     match cached_path {
         Some(path) => tokio::fs::read(&path).await.ok(),
         None => {
-            let downloaded = reqwest::get(url).await.ok()?.bytes().await.ok()?.to_vec();
+            let downloaded = HTTP.get(url).send().await.ok()?.bytes().await.ok()?.to_vec();
             if let Ok(guard) = cache.lock() {
                 if let Some(service) = guard.as_ref() {
                     let _ = service.store(url, &downloaded);
@@ -375,9 +389,12 @@ pub async fn fetch_and_decode_ref(
             base_url,
             token,
             path,
+            size,
         } => {
-            let sep = if path.contains('?') { '&' } else { '?' };
-            let url = format!("{base_url}{path}{sep}X-Plex-Token={token}");
+            // Shared builder: `Some(size)` → server-side transcode (downscaled),
+            // `None` → raw full-res. The cache key is this final URL, so each
+            // surface's transcode size caches independently.
+            let url = qbz_models::plex_thumb_url(base_url, token, path, *size);
             fetch_cached_http(&url, cache).await?
         }
     };

@@ -788,6 +788,9 @@ fn load_artwork(
                 base_url: plex_base_url.clone(),
                 token: plex_token.clone(),
                 path: url,
+                // Queue rows + now-playing item render small; request a
+                // 96px server-side transcode (the decode size used below).
+                size: Some(96),
             }
         } else {
             qbz_models::ArtworkRef::LocalFile(url)

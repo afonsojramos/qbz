@@ -122,10 +122,16 @@ pub enum ArtworkRef {
     LocalFile(String),
     /// A Plex thumbnail fetched with an auth token appended. `path` is the
     /// server-relative thumb path (e.g. `/library/metadata/42/thumb/1`).
+    ///
+    /// `size` selects the URL form (see [`plex_thumb_url`]): `Some(n)` builds
+    /// a server-side transcode URL downscaled to `n`×`n` (so we download what
+    /// we render, not the full-res original); `None` keeps the raw full-res
+    /// tokenized path (album-detail full covers / fallbacks).
     PlexThumb {
         base_url: String,
         token: String,
         path: String,
+        size: Option<u32>,
     },
     /// Cover bytes already in memory (e.g. embedded tags).
     Embedded(Vec<u8>),
@@ -168,11 +174,35 @@ impl ArtworkRef {
                 base_url,
                 token,
                 path,
-            } if !path.is_empty() => {
-                let sep = if path.contains('?') { '&' } else { '?' };
-                Some(format!("{base_url}{path}{sep}X-Plex-Token={token}"))
-            }
+                size,
+            } if !path.is_empty() => Some(plex_thumb_url(base_url, token, path, *size)),
             _ => None,
+        }
+    }
+}
+
+/// Build the fetchable Plex artwork URL.
+///
+/// `Some(size)` → a server-side **transcode** URL downscaled to `size`×`size`
+/// (so the client downloads roughly what it renders instead of the full-res
+/// original). `None` (or `Some(0)`) → the raw full-res tokenized path.
+///
+/// Mirrors the Tauri frontend's `buildPlexArtworkUrl` exactly: the base is
+/// trailing-slash-stripped, the inner `url=` (the original `/library` path)
+/// and the token are percent-encoded, and `minSize=1` is appended. The raw
+/// fallback keeps the non-percent-encoded token to match the historical
+/// behavior (and the existing regression tests).
+pub fn plex_thumb_url(base_url: &str, token: &str, path: &str, size: Option<u32>) -> String {
+    let base = base_url.trim_end_matches('/');
+    match size {
+        Some(n) if n > 0 => format!(
+            "{base}/photo/:/transcode?url={}&width={n}&height={n}&minSize=1&X-Plex-Token={}",
+            urlencoding::encode(path),
+            urlencoding::encode(token),
+        ),
+        _ => {
+            let sep = if path.contains('?') { '&' } else { '?' };
+            format!("{base}{path}{sep}X-Plex-Token={token}")
         }
     }
 }
@@ -217,7 +247,17 @@ impl QueueTrack {
     /// `{base_url, token}` (from the Slint Plex settings store) and threads them
     /// in. When creds are missing, or the path is not a Plex thumb path, this
     /// falls back to [`artwork_ref`](Self::artwork_ref).
-    pub fn artwork_ref_with_plex(&self, base_url: &str, token: &str) -> ArtworkRef {
+    ///
+    /// `size` is threaded into the resulting [`ArtworkRef::PlexThumb`] so the
+    /// caller picks the render-target size: `Some(n)` → server-side transcode
+    /// at `n`×`n`; `None` → raw full-res (e.g. for MPRIS art that wants a
+    /// larger image). See [`plex_thumb_url`].
+    pub fn artwork_ref_with_plex(
+        &self,
+        base_url: &str,
+        token: &str,
+        size: Option<u32>,
+    ) -> ArtworkRef {
         let raw = self.artwork_url.as_deref().unwrap_or("");
         let is_plex_path = raw.starts_with("/library/") || raw.starts_with("/photo/");
         if is_plex_path && !base_url.is_empty() && !token.is_empty() {
@@ -225,6 +265,7 @@ impl QueueTrack {
                 base_url: base_url.to_string(),
                 token: token.to_string(),
                 path: raw.to_string(),
+                size,
             };
         }
         self.artwork_ref()
@@ -334,21 +375,34 @@ mod tests {
         // Plex thumb path + creds → PlexThumb (the now-playing/queue/MPRIS path).
         assert_eq!(
             track_with(Some("plex"), Some("/library/metadata/42/thumb/1"))
-                .artwork_ref_with_plex("http://plex.local:32400", "tok"),
+                .artwork_ref_with_plex("http://plex.local:32400", "tok", None),
             ArtworkRef::PlexThumb {
                 base_url: "http://plex.local:32400".into(),
                 token: "tok".into(),
                 path: "/library/metadata/42/thumb/1".into(),
+                size: None,
             }
         );
         // `/photo/...` transcode paths classify the same way.
         assert_eq!(
             track_with(Some("plex"), Some("/photo/:/transcode?url=x"))
-                .artwork_ref_with_plex("http://plex.local:32400", "tok"),
+                .artwork_ref_with_plex("http://plex.local:32400", "tok", None),
             ArtworkRef::PlexThumb {
                 base_url: "http://plex.local:32400".into(),
                 token: "tok".into(),
                 path: "/photo/:/transcode?url=x".into(),
+                size: None,
+            }
+        );
+        // A size is threaded straight into the ref (URL form decided later).
+        assert_eq!(
+            track_with(Some("plex"), Some("/library/metadata/42/thumb/1"))
+                .artwork_ref_with_plex("http://plex.local:32400", "tok", Some(264)),
+            ArtworkRef::PlexThumb {
+                base_url: "http://plex.local:32400".into(),
+                token: "tok".into(),
+                path: "/library/metadata/42/thumb/1".into(),
+                size: Some(264),
             }
         );
     }
@@ -358,29 +412,31 @@ mod tests {
         // Missing creds → no PlexThumb; falls back to LocalFile (the raw path).
         assert_eq!(
             track_with(Some("plex"), Some("/library/metadata/42/thumb/1"))
-                .artwork_ref_with_plex("", ""),
+                .artwork_ref_with_plex("", "", Some(264)),
             ArtworkRef::LocalFile("/library/metadata/42/thumb/1".into())
         );
         // Non-Plex value is untouched: http stays Remote even with creds.
         assert_eq!(
             track_with(Some("qobuz"), Some("https://x/cover.jpg"))
-                .artwork_ref_with_plex("http://plex.local:32400", "tok"),
+                .artwork_ref_with_plex("http://plex.local:32400", "tok", Some(264)),
             ArtworkRef::Remote("https://x/cover.jpg".into())
         );
         // A local file:// path stays LocalFile, never mistaken for Plex.
         assert_eq!(
             track_with(Some("local"), Some("file:///home/u/cover.jpg"))
-                .artwork_ref_with_plex("http://plex.local:32400", "tok"),
+                .artwork_ref_with_plex("http://plex.local:32400", "tok", Some(264)),
             ArtworkRef::LocalFile("/home/u/cover.jpg".into())
         );
     }
 
     #[test]
     fn plex_thumb_to_mpris_url_tokenizes() {
+        // size: None → raw full-res tokenized path (historical behavior).
         let no_query = ArtworkRef::PlexThumb {
             base_url: "http://plex.local:32400".into(),
             token: "tok".into(),
             path: "/library/metadata/42/thumb/1".into(),
+            size: None,
         };
         assert_eq!(
             no_query.to_mpris_url().as_deref(),
@@ -390,10 +446,46 @@ mod tests {
             base_url: "http://plex.local:32400".into(),
             token: "tok".into(),
             path: "/photo/:/transcode?url=x".into(),
+            size: None,
         };
         assert_eq!(
             with_query.to_mpris_url().as_deref(),
             Some("http://plex.local:32400/photo/:/transcode?url=x&X-Plex-Token=tok")
+        );
+    }
+
+    #[test]
+    fn plex_thumb_url_size_emits_transcode_form() {
+        // Some(size) → server-side transcode URL, percent-encoded url + token,
+        // trailing-slash-stripped base, minSize=1 (1:1 with Tauri's
+        // buildPlexArtworkUrl). The `/` in the path is encoded to %2F.
+        assert_eq!(
+            plex_thumb_url(
+                "http://plex.local:32400",
+                "tok",
+                "/library/metadata/42/thumb/1",
+                Some(264),
+            ),
+            "http://plex.local:32400/photo/:/transcode?url=%2Flibrary%2Fmetadata%2F42%2Fthumb%2F1&width=264&height=264&minSize=1&X-Plex-Token=tok"
+        );
+        // Trailing slashes on the base are stripped before composing.
+        assert_eq!(
+            plex_thumb_url(
+                "http://plex.local:32400/",
+                "t/k",
+                "/library/metadata/7/thumb/9",
+                Some(96),
+            ),
+            "http://plex.local:32400/photo/:/transcode?url=%2Flibrary%2Fmetadata%2F7%2Fthumb%2F9&width=96&height=96&minSize=1&X-Plex-Token=t%2Fk"
+        );
+        // None / Some(0) → raw tokenized path (no transcode).
+        assert_eq!(
+            plex_thumb_url("http://plex.local:32400", "tok", "/library/metadata/42/thumb/1", None),
+            "http://plex.local:32400/library/metadata/42/thumb/1?X-Plex-Token=tok"
+        );
+        assert_eq!(
+            plex_thumb_url("http://plex.local:32400", "tok", "/library/metadata/42/thumb/1", Some(0)),
+            "http://plex.local:32400/library/metadata/42/thumb/1?X-Plex-Token=tok"
         );
     }
 }

@@ -818,7 +818,14 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     // get the fetchable cover. For non-Plex tracks this is identical to
     // `artwork_ref()` (it falls back cleanly).
     let plex = crate::plex_settings::get();
-    let artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token);
+    // Two refs from the same track: MPRIS / desktop-notification art wants a
+    // larger image, so it gets the raw full-res Plex path (`size: None`). The
+    // now-playing bar renders small and decodes to 160 (see
+    // `load_now_playing_artwork`), so it requests a 160px server-side
+    // transcode — downloading ~what it renders instead of the full original.
+    // For non-Plex tracks both collapse to the same `artwork_ref()`.
+    let artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, None);
+    let bar_artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, Some(160));
     // Quality badge: tier from bit depth (24-bit+ = Hi-Res), exact detail line
     // reused from the shared formatter so it matches the track-row badges.
     let quality_tier = match track.bit_depth {
@@ -902,7 +909,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         np.set_artwork(slint::Image::default());
     });
 
-    load_now_playing_artwork(weak.clone(), artwork);
+    load_now_playing_artwork(weak.clone(), bar_artwork);
 }
 
 /// Record the playback CONTEXT — the source the queue was launched from — on
