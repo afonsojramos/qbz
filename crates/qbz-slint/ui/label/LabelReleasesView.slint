@@ -10,7 +10,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { LabelState, LabelActions } from "../state.slint";
+import { LabelState, LabelActions, NavState } from "../state.slint";
 import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
@@ -32,6 +32,18 @@ export component LabelReleasesView inherits Rectangle {
     flick := Flickable {
         viewport-width: self.width;
         viewport-height: page.preferred-height;
+        // Scroll-position restore on back/forward (see nav::scope_for).
+        property <string> sr-armed: NavState.restore-scope;
+        function sr-restore() {
+            if (NavState.restore-scope == "label-releases" && self.viewport-height > self.height) {
+                self.viewport-y = NavState.scroll-restore;
+                NavState.restore-scope = "";
+            }
+        }
+        init => { self.sr-restore(); }
+        changed sr-armed => { self.sr-restore(); }
+        changed viewport-height => { self.sr-restore(); }
+        changed viewport-y => { NavState.report-scroll(self.viewport-y); }
 
         page := VerticalLayout {
             width: parent.width;

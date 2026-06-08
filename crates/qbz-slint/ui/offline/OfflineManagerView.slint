@@ -13,6 +13,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { OfflineManagerState, OfflineManagerActions, OfflineRow, OfflineArtist } from "../state.slint";
+import { NavState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -394,6 +395,18 @@ export component OfflineManagerView inherits Rectangle {
                     }
                 }
                 if !OfflineManagerState.loading && OfflineManagerState.rows.length > 0: ScrollView {
+                    // Scroll-position restore on back/forward (see nav::scope_for).
+                    property <string> sr-armed: NavState.restore-scope;
+                    function sr-restore() {
+                        if (NavState.restore-scope == "offline-manager" && self.viewport-height > self.visible-height) {
+                            self.viewport-y = NavState.scroll-restore;
+                            NavState.restore-scope = "";
+                        }
+                    }
+                    init => { self.sr-restore(); }
+                    changed sr-armed => { self.sr-restore(); }
+                    changed viewport-height => { self.sr-restore(); }
+                    changed viewport-y => { NavState.report-scroll(self.viewport-y); }
                     VerticalLayout {
                         spacing: 2px;
                         for row in OfflineManagerState.rows: Rectangle {

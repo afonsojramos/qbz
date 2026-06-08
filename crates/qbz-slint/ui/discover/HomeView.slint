@@ -254,6 +254,18 @@ export component HomeView inherits Rectangle {
             height: 100%;
             viewport-width: self.width;
             viewport-height: home-content.preferred-height;
+            // Scroll-position restore on back/forward (see nav::scope_for).
+            property <string> sr-armed: NavState.restore-scope;
+            function sr-restore() {
+                if (NavState.restore-scope == "home" && self.viewport-height > self.height) {
+                    self.viewport-y = NavState.scroll-restore;
+                    NavState.restore-scope = "";
+                }
+            }
+            init => { self.sr-restore(); }
+            changed sr-armed => { self.sr-restore(); }
+            changed viewport-height => { self.sr-restore(); }
+            changed viewport-y => { NavState.report-scroll(self.viewport-y); }
 
             home-content := VerticalLayout {
                 padding: 32px;

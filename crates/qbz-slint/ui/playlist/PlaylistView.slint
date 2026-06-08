@@ -6,7 +6,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { PlaylistState, PlaylistActions, DragState } from "../state.slint";
+import { PlaylistState, PlaylistActions, DragState, NavState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
@@ -625,6 +625,18 @@ export component PlaylistView inherits Rectangle {
                     track-list := ListView {
                         vertical-stretch: 1;
                         vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                        // Scroll-position restore on back/forward (see nav::scope_for).
+                        property <string> sr-armed: NavState.restore-scope;
+                        function sr-restore() {
+                            if (NavState.restore-scope == "playlist" && self.viewport-height > self.height) {
+                                self.viewport-y = NavState.scroll-restore;
+                                NavState.restore-scope = "";
+                            }
+                        }
+                        init => { self.sr-restore(); }
+                        changed sr-armed => { self.sr-restore(); }
+                        changed viewport-height => { self.sr-restore(); }
+                        changed viewport-y => { NavState.report-scroll(self.viewport-y); }
                         for track[i] in PlaylistState.tracks: TrackRow {
                             track: track;
                             index: i;

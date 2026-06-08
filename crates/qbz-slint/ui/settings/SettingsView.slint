@@ -165,6 +165,18 @@ export component SettingsView inherits Rectangle {
             ScrollView {
                 horizontal-stretch: 1;
                 horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                // Scroll-position restore on back/forward (see nav::scope_for).
+                property <string> sr-armed: NavState.restore-scope;
+                function sr-restore() {
+                    if (NavState.restore-scope == "settings" && self.viewport-height > self.visible-height) {
+                        self.viewport-y = NavState.scroll-restore;
+                        NavState.restore-scope = "";
+                    }
+                }
+                init => { self.sr-restore(); }
+                changed sr-armed => { self.sr-restore(); }
+                changed viewport-height => { self.sr-restore(); }
+                changed viewport-y => { NavState.report-scroll(self.viewport-y); }
                 VerticalLayout {
                     padding-left: 20px;
                     padding-right: 40px;

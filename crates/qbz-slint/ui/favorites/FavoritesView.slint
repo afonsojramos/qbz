@@ -20,6 +20,7 @@ import {
     GenreFilterState,
     GenreFilterActions,
     AlphaJump,
+    NavState,
 } from "../state.slint";
 import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
 import { PlaylistCard } from "../discover/PlaylistCard.slint";
@@ -963,6 +964,18 @@ export component FavoritesView inherits Rectangle {
                 track-list := ListView {
                     vertical-stretch: 1;
                     vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                    // Scroll-position restore on back/forward (see nav::scope_for).
+                    property <string> sr-armed: NavState.restore-scope;
+                    function sr-restore() {
+                        if (NavState.restore-scope == "fav:tracks" && self.viewport-height > self.height) {
+                            self.viewport-y = NavState.scroll-restore;
+                            NavState.restore-scope = "";
+                        }
+                    }
+                    init => { self.sr-restore(); }
+                    changed sr-armed => { self.sr-restore(); }
+                    changed viewport-height => { self.sr-restore(); }
+                    changed viewport-y => { NavState.report-scroll(self.viewport-y); }
                         for track[i] in FavoritesState.tracks-visible: VerticalLayout {
                             spacing: 0px;
                             // Group header rows when grouping by album / artist.
@@ -1050,6 +1063,21 @@ export component FavoritesView inherits Rectangle {
                     interactive: !DragState.active;
                     viewport-width: self.width;
                     viewport-height: other-page.preferred-height;
+                    // Scroll-position restore on back/forward. One Flickable serves the
+                    // albums/artists/playlists/labels tabs, so match the active tab's
+                    // scope dynamically (see nav::scope_for → "fav:<tab>").
+                    property <string> sr-armed: NavState.restore-scope;
+                    function sr-restore() {
+                        if (NavState.restore-scope == "fav:" + FavoritesState.active-tab
+                            && self.viewport-height > self.height) {
+                            self.viewport-y = NavState.scroll-restore;
+                            NavState.restore-scope = "";
+                        }
+                    }
+                    init => { self.sr-restore(); }
+                    changed sr-armed => { self.sr-restore(); }
+                    changed viewport-height => { self.sr-restore(); }
+                    changed viewport-y => { NavState.report-scroll(self.viewport-y); }
 
                     other-page := VerticalLayout {
                         width: parent.width;

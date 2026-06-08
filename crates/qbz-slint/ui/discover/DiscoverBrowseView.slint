@@ -10,7 +10,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { DiscoverBrowseState, DiscoverBrowseActions, GenreFilterState, GenreFilterActions } from "../state.slint";
+import { DiscoverBrowseState, DiscoverBrowseActions, GenreFilterState, GenreFilterActions, NavState } from "../state.slint";
 import { AlbumCollectionView } from "AlbumCollectionView.slint";
 import { GenreFilterPopup } from "GenreFilterPopup.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -248,12 +248,24 @@ export component DiscoverBrowseView inherits Rectangle {
             vertical-stretch: 1;
             viewport-width: self.width;
             viewport-height: page.preferred-height;
+            // Scroll-position restore on back/forward (see nav::scope_for).
+            property <string> sr-armed: NavState.restore-scope;
+            function sr-restore() {
+                if (NavState.restore-scope == "discover-browse" && self.viewport-height > self.height) {
+                    self.viewport-y = NavState.scroll-restore;
+                    NavState.restore-scope = "";
+                }
+            }
+            init => { self.sr-restore(); }
+            changed sr-armed => { self.sr-restore(); }
+            changed viewport-height => { self.sr-restore(); }
 
             // Infinite scroll — when the viewport nears the bottom of the
             // content (within 600px), pull the next page. Guarded by
             // has-more + the loading flags AND an empty search query, so a
             // client-side search filter does not keep paging in the catalog.
             changed viewport-y => {
+                NavState.report-scroll(self.viewport-y);
                 if (-self.viewport-y + self.height >= self.viewport-height - 600px
                     && DiscoverBrowseState.has-more
                     && !DiscoverBrowseState.loading-more

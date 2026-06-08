@@ -7,7 +7,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { LocalAlbumState, LocalAlbumActions, LocalAlbumVersion, NowPlayingState } from "../state.slint";
+import { LocalAlbumState, LocalAlbumActions, LocalAlbumVersion, NowPlayingState, NavState } from "../state.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
@@ -320,6 +320,18 @@ export component LocalAlbumView inherits Rectangle {
                     padding-top: 12px;
                     tracks-list := ListView {
                         vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                        // Scroll-position restore on back/forward (see nav::scope_for).
+                        property <string> sr-armed: NavState.restore-scope;
+                        function sr-restore() {
+                            if (NavState.restore-scope == "local-album" && self.viewport-height > self.height) {
+                                self.viewport-y = NavState.scroll-restore;
+                                NavState.restore-scope = "";
+                            }
+                        }
+                        init => { self.sr-restore(); }
+                        changed sr-armed => { self.sr-restore(); }
+                        changed viewport-height => { self.sr-restore(); }
+                        changed viewport-y => { NavState.report-scroll(self.viewport-y); }
                         for track[i] in LocalAlbumState.tracks: TrackRow {
                             track: track;
                             index: i;

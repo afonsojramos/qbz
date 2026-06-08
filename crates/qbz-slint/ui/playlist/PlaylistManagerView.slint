@@ -18,6 +18,7 @@ import {
     PmFolderItem,
     PmPlaylistItem,
     PmTreeRow,
+    NavState,
 } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -1233,6 +1234,18 @@ export component PlaylistManagerView inherits Rectangle {
             vertical-stretch: 1;
             viewport-width: self.width;
             viewport-height: page.preferred-height;
+            // Scroll-position restore on back/forward (see nav::scope_for).
+            property <string> sr-armed: NavState.restore-scope;
+            function sr-restore() {
+                if (NavState.restore-scope == "playlist-manager" && self.viewport-height > self.height) {
+                    self.viewport-y = NavState.scroll-restore;
+                    NavState.restore-scope = "";
+                }
+            }
+            init => { self.sr-restore(); }
+            changed sr-armed => { self.sr-restore(); }
+            changed viewport-height => { self.sr-restore(); }
+            changed viewport-y => { NavState.report-scroll(self.viewport-y); }
 
             page := VerticalLayout {
                 width: parent.width;

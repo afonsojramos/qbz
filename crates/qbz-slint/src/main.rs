@@ -664,20 +664,31 @@ fn navigate_search(
 
 /// Apply a history entry — set the view and re-load entity pages.
 /// Stable scroll-restore id for an entry's primary list container, matching
-/// the `scope` strings the Slint scroll containers compare against. Returns
-/// `""` for views without a wired scroll memory (no container will match, so
-/// nothing restores). Keep in sync with the `restore-scope` checks in the
-/// `.slint` views.
-fn scope_for(entry: &nav::NavEntry) -> &'static str {
+/// the `restore-scope` strings the Slint scroll containers compare against.
+/// Returns `""` for views without a wired scroll memory (no container will
+/// match, so nothing restores). Tab/sub-page views carry the tab in the id so
+/// each tab keeps its own position. Keep in sync with the `.slint` views.
+fn scope_for(entry: &nav::NavEntry) -> String {
     match entry {
-        nav::NavEntry::LocalLibrary { tab } => match tab.as_str() {
-            "albums" => "ll:albums",
-            "tracks" => "ll:tracks",
-            "folders" => "ll:folders",
-            "artists" => "ll:artists",
-            _ => "",
-        },
-        _ => "",
+        // HomeView is one persistent Flickable shared by the Discover tabs;
+        // a single scope is enough (each tab entry stores its own scroll).
+        nav::NavEntry::Home | nav::NavEntry::Discover { .. } => "home".into(),
+        nav::NavEntry::Favorites { tab } => format!("fav:{tab}"),
+        nav::NavEntry::LocalLibrary { tab } => format!("ll:{tab}"),
+        nav::NavEntry::DiscoverBrowse { .. } => "discover-browse".into(),
+        nav::NavEntry::Mix { .. } => "mix".into(),
+        nav::NavEntry::Playlist(_) => "playlist".into(),
+        nav::NavEntry::PlaylistManager => "playlist-manager".into(),
+        nav::NavEntry::OfflineManager => "offline-manager".into(),
+        nav::NavEntry::Album(_) => "album".into(),
+        nav::NavEntry::LocalAlbum(_) => "local-album".into(),
+        nav::NavEntry::Artist(_) => "artist".into(),
+        nav::NavEntry::Settings => "settings".into(),
+        nav::NavEntry::Search(_) => "search".into(),
+        nav::NavEntry::Musician { .. } => "musician".into(),
+        nav::NavEntry::Label { .. } => "label".into(),
+        nav::NavEntry::LabelReleases { .. } => "label-releases".into(),
+        nav::NavEntry::Location { .. } => "location".into(),
     }
 }
 

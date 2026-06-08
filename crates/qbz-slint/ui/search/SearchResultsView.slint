@@ -8,7 +8,7 @@
 // per-type tabs show the full loaded set as a card grid or row list with
 // a load-more button.
 
-import { SearchState, SearchActions, TrackItem, SearchPlaylistItem, AlbumCardItem, SlimItem, DragState } from "../state.slint";
+import { SearchState, SearchActions, TrackItem, SearchPlaylistItem, AlbumCardItem, SlimItem, DragState, NavState } from "../state.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
@@ -436,6 +436,18 @@ export component SearchResultsView inherits Rectangle {
             vertical-stretch: 1;
             viewport-width: self.width;
             viewport-height: body.preferred-height;
+            // Scroll-position restore on back/forward (see nav::scope_for).
+            property <string> sr-armed: NavState.restore-scope;
+            function sr-restore() {
+                if (NavState.restore-scope == "search" && self.viewport-height > self.height) {
+                    self.viewport-y = NavState.scroll-restore;
+                    NavState.restore-scope = "";
+                }
+            }
+            init => { self.sr-restore(); }
+            changed sr-armed => { self.sr-restore(); }
+            changed viewport-height => { self.sr-restore(); }
+            changed viewport-y => { NavState.report-scroll(self.viewport-y); }
 
             body := VerticalLayout {
                 padding-left: 32px;
