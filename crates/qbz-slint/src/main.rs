@@ -491,6 +491,18 @@ fn navigate_local_album(
     local_library::open_local_album(weak, handle.clone(), image_cache, group_key);
 }
 
+/// True when an "album id" is actually a Local-Library / Plex metadata group
+/// key rather than a numeric Qobuz album id. Qobuz album ids are numeric
+/// strings; local group keys are `album|artist`, a folder path, the
+/// `__unknown_album__` sentinel, or a `plex:` cache key (see
+/// qbz_library::album_grouping + local_queue_track / map_plex_cached_to_local_track).
+/// Lets the shared `open-album` callback route Plex/local items (now-playing
+/// bar, Home "Recently played", etc.) to the LocalAlbum view instead of the
+/// empty Qobuz album view.
+fn is_local_album_key(id: &str) -> bool {
+    id.starts_with("plex:") || id.contains('|') || id.contains('/') || id == "__unknown_album__"
+}
+
 /// Load an artist page and show the artist view, then fetch the portrait.
 /// Shared by the `open-artist` callback and by history back/forward.
 fn navigate_artist(
@@ -1982,14 +1994,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let image_cache = image_cache.clone();
         window.on_open_album(move |album_id| {
             let album_id = album_id.to_string();
-            nav::record(nav::NavEntry::Album(album_id.clone()));
-            navigate_album(
-                runtime.clone(),
-                weak.clone(),
-                &handle,
-                image_cache.clone(),
-                album_id,
-            );
+            // A Plex/local item carries a metadata group key, not a Qobuz id —
+            // route it to the LocalAlbum view (Home "Recently played", the
+            // now-playing bar's "Go to album", etc.) instead of the empty
+            // Qobuz album view.
+            if is_local_album_key(&album_id) {
+                nav::record(nav::NavEntry::LocalAlbum(album_id.clone()));
+                navigate_local_album(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    album_id,
+                );
+            } else {
+                nav::record(nav::NavEntry::Album(album_id.clone()));
+                navigate_album(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    album_id,
+                );
+            }
             if let Some(w) = weak.upgrade() {
                 update_nav_flags(&w);
             }
