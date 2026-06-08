@@ -4,10 +4,16 @@
 //! `[<] [>]` button pair (and the mouse back/forward buttons) walk the
 //! stack. UI thread only, hence `thread_local`.
 //!
-//! Scroll-position restoration per entry is a planned follow-up; for now
-//! the stack tracks which page was visited, not where it was scrolled.
+//! Scroll-position restoration: each entry remembers the viewport-y of the
+//! scroll container that was showing it. The mounted view continuously
+//! reports its live scroll via [`set_live_scroll`] (a NavState callback), so
+//! every navigation — fresh [`record`] or [`go_back`]/[`go_forward`] — can
+//! stamp the outgoing entry without touching the ~30 `record` call sites.
+//! `go_back`/`go_forward` hand the restored scroll back to the shell, which
+//! arms `NavState.restore-scope` + `scroll-restore`; the destination's scroll
+//! container picks it up once its content has laid out.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 /// One navigable destination.
 #[derive(Clone, Debug, PartialEq)]
@@ -94,17 +100,41 @@ pub enum NavEntry {
     },
 }
 
+/// One slot in the history stack: where we went, and how far it was
+/// scrolled when we last left it.
+#[derive(Clone, Debug)]
+struct Entry {
+    nav: NavEntry,
+    /// Saved Flickable `viewport-y` (logical px; 0 at top, negative when
+    /// scrolled down — Slint's convention).
+    scroll: f32,
+}
+
 struct History {
-    entries: Vec<NavEntry>,
+    entries: Vec<Entry>,
     /// Index of the entry currently shown.
     cursor: usize,
 }
 
 thread_local! {
     static HISTORY: RefCell<History> = RefCell::new(History {
-        entries: vec![NavEntry::Home],
+        entries: vec![Entry { nav: NavEntry::Home, scroll: 0.0 }],
         cursor: 0,
     });
+    /// Live `viewport-y` of the scroll container currently on screen, kept
+    /// fresh by the mounted view via [`set_live_scroll`]. Read when leaving
+    /// a page so its entry can be stamped without per-call-site plumbing.
+    static LIVE_SCROLL: Cell<f32> = const { Cell::new(0.0) };
+}
+
+/// Record the on-screen scroll container's current `viewport-y`. Wired to
+/// `NavState.report-scroll`, fired from the view's `changed viewport-y`.
+pub fn set_live_scroll(y: f32) {
+    LIVE_SCROLL.with(|s| s.set(y));
+}
+
+fn live_scroll() -> f32 {
+    LIVE_SCROLL.with(|s| s.get())
 }
 
 /// Push a Search history entry, OR replace the cursor entry in place
@@ -114,14 +144,25 @@ thread_local! {
 pub fn push_or_replace_search(query: String) {
     HISTORY.with(|h| {
         let h = &mut *h.borrow_mut();
-        match h.entries.get(h.cursor) {
+        match h.entries.get(h.cursor).map(|e| &e.nav) {
             Some(NavEntry::Search(_)) => {
+                // Replace in place: same Search page, keep its scroll.
+                let scroll = h.entries[h.cursor].scroll;
                 h.entries.truncate(h.cursor + 1);
-                h.entries[h.cursor] = NavEntry::Search(query);
+                h.entries[h.cursor] = Entry {
+                    nav: NavEntry::Search(query),
+                    scroll,
+                };
             }
             _ => {
+                if let Some(cur) = h.entries.get_mut(h.cursor) {
+                    cur.scroll = live_scroll();
+                }
                 h.entries.truncate(h.cursor + 1);
-                h.entries.push(NavEntry::Search(query));
+                h.entries.push(Entry {
+                    nav: NavEntry::Search(query),
+                    scroll: 0.0,
+                });
                 h.cursor = h.entries.len() - 1;
             }
         }
@@ -132,41 +173,69 @@ pub fn push_or_replace_search(query: String) {
 /// no-op when the destination already is the current entry, so repeated
 /// clicks on the same page do not pile up.
 pub fn record(entry: NavEntry) {
-    HISTORY.with(|h| {
+    let pushed = HISTORY.with(|h| {
         let h = &mut *h.borrow_mut();
-        if h.entries.get(h.cursor) == Some(&entry) {
-            return;
+        if h.entries.get(h.cursor).map(|e| &e.nav) == Some(&entry) {
+            return false;
+        }
+        // Stamp the page we are leaving with its live scroll position.
+        if let Some(cur) = h.entries.get_mut(h.cursor) {
+            cur.scroll = live_scroll();
         }
         h.entries.truncate(h.cursor + 1);
-        h.entries.push(entry);
+        h.entries.push(Entry {
+            nav: entry,
+            scroll: 0.0,
+        });
         h.cursor = h.entries.len() - 1;
+        true
     });
+    // A fresh page starts at the top; the new view will report its own
+    // scroll as the user moves it.
+    if pushed {
+        set_live_scroll(0.0);
+    }
 }
 
-/// Step back; returns the entry that is now current, or `None` at the
-/// start of the stack.
-pub fn go_back() -> Option<NavEntry> {
-    HISTORY.with(|h| {
+/// Step back; returns the entry that is now current plus its saved scroll
+/// position, or `None` at the start of the stack.
+pub fn go_back() -> Option<(NavEntry, f32)> {
+    let res = HISTORY.with(|h| {
         let h = &mut *h.borrow_mut();
         if h.cursor == 0 {
             return None;
         }
+        // Stamp the page we are leaving before stepping away.
+        if let Some(cur) = h.entries.get_mut(h.cursor) {
+            cur.scroll = live_scroll();
+        }
         h.cursor -= 1;
-        h.entries.get(h.cursor).cloned()
-    })
+        h.entries.get(h.cursor).map(|e| (e.nav.clone(), e.scroll))
+    });
+    if let Some((_, scroll)) = &res {
+        set_live_scroll(*scroll);
+    }
+    res
 }
 
-/// Step forward; returns the entry that is now current, or `None` at the
-/// end of the stack.
-pub fn go_forward() -> Option<NavEntry> {
-    HISTORY.with(|h| {
+/// Step forward; returns the entry that is now current plus its saved scroll
+/// position, or `None` at the end of the stack.
+pub fn go_forward() -> Option<(NavEntry, f32)> {
+    let res = HISTORY.with(|h| {
         let h = &mut *h.borrow_mut();
         if h.cursor + 1 >= h.entries.len() {
             return None;
         }
+        if let Some(cur) = h.entries.get_mut(h.cursor) {
+            cur.scroll = live_scroll();
+        }
         h.cursor += 1;
-        h.entries.get(h.cursor).cloned()
-    })
+        h.entries.get(h.cursor).map(|e| (e.nav.clone(), e.scroll))
+    });
+    if let Some((_, scroll)) = &res {
+        set_live_scroll(*scroll);
+    }
+    res
 }
 
 /// Whether a back step is available.
@@ -189,10 +258,20 @@ mod tests {
     fn reset() {
         HISTORY.with(|h| {
             *h.borrow_mut() = History {
-                entries: vec![NavEntry::Home],
+                entries: vec![Entry {
+                    nav: NavEntry::Home,
+                    scroll: 0.0,
+                }],
                 cursor: 0,
             };
         });
+        set_live_scroll(0.0);
+    }
+
+    /// Drop the scroll component for the assertions that only care about the
+    /// destination page.
+    fn nav_of(res: Option<(NavEntry, f32)>) -> Option<NavEntry> {
+        res.map(|(e, _)| e)
     }
 
     #[test]
@@ -203,10 +282,10 @@ mod tests {
         record(NavEntry::Artist("2".into()));
         assert!(can_back());
         assert!(!can_forward());
-        assert_eq!(go_back(), Some(NavEntry::Album("1".into())));
-        assert_eq!(go_back(), Some(NavEntry::Home));
-        assert_eq!(go_back(), None);
-        assert_eq!(go_forward(), Some(NavEntry::Album("1".into())));
+        assert_eq!(nav_of(go_back()), Some(NavEntry::Album("1".into())));
+        assert_eq!(nav_of(go_back()), Some(NavEntry::Home));
+        assert_eq!(nav_of(go_back()), None);
+        assert_eq!(nav_of(go_forward()), Some(NavEntry::Album("1".into())));
     }
 
     #[test]
@@ -217,7 +296,7 @@ mod tests {
         go_back();
         record(NavEntry::Artist("3".into()));
         assert!(!can_forward());
-        assert_eq!(go_back(), Some(NavEntry::Album("1".into())));
+        assert_eq!(nav_of(go_back()), Some(NavEntry::Album("1".into())));
     }
 
     #[test]
@@ -225,8 +304,11 @@ mod tests {
         reset();
         record(NavEntry::Search("metallica".into()));
         record(NavEntry::Album("5".into()));
-        assert_eq!(go_back(), Some(NavEntry::Search("metallica".into())));
-        assert_eq!(go_back(), Some(NavEntry::Home));
+        assert_eq!(
+            nav_of(go_back()),
+            Some(NavEntry::Search("metallica".into()))
+        );
+        assert_eq!(nav_of(go_back()), Some(NavEntry::Home));
     }
 
     #[test]
@@ -234,6 +316,25 @@ mod tests {
         reset();
         record(NavEntry::Album("1".into()));
         record(NavEntry::Album("1".into()));
-        assert_eq!(go_back(), Some(NavEntry::Home));
+        assert_eq!(nav_of(go_back()), Some(NavEntry::Home));
+    }
+
+    #[test]
+    fn scroll_is_stamped_on_leave_and_restored_on_return() {
+        reset();
+        // On Home, scroll down a bit, then navigate away.
+        set_live_scroll(-420.0);
+        record(NavEntry::Album("1".into()));
+        // Fresh page starts at the top.
+        assert_eq!(live_scroll(), 0.0);
+        // Scroll the album page, then go back to Home.
+        set_live_scroll(-90.0);
+        let (entry, scroll) = go_back().expect("back to Home");
+        assert_eq!(entry, NavEntry::Home);
+        assert_eq!(scroll, -420.0);
+        // Going forward returns to the album at its saved scroll.
+        let (entry, scroll) = go_forward().expect("forward to album");
+        assert_eq!(entry, NavEntry::Album("1".into()));
+        assert_eq!(scroll, -90.0);
     }
 }

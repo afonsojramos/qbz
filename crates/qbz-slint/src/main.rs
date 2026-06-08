@@ -663,6 +663,34 @@ fn navigate_search(
 }
 
 /// Apply a history entry — set the view and re-load entity pages.
+/// Stable scroll-restore id for an entry's primary list container, matching
+/// the `scope` strings the Slint scroll containers compare against. Returns
+/// `""` for views without a wired scroll memory (no container will match, so
+/// nothing restores). Keep in sync with the `restore-scope` checks in the
+/// `.slint` views.
+fn scope_for(entry: &nav::NavEntry) -> &'static str {
+    match entry {
+        nav::NavEntry::LocalLibrary { tab } => match tab.as_str() {
+            "albums" => "ll:albums",
+            "tracks" => "ll:tracks",
+            "folders" => "ll:folders",
+            "artists" => "ll:artists",
+            _ => "",
+        },
+        _ => "",
+    }
+}
+
+/// Arm `NavState` so the destination scroll container restores its saved
+/// position once it mounts. Must run before `apply_entry` switches the view.
+fn arm_scroll_restore(weak: &slint::Weak<AppWindow>, entry: &nav::NavEntry, scroll: f32) {
+    if let Some(w) = weak.upgrade() {
+        let ns = w.global::<NavState>();
+        ns.set_restore_scope(scope_for(entry).into());
+        ns.set_scroll_restore(scroll);
+    }
+}
+
 fn apply_entry(
     entry: nav::NavEntry,
     runtime: &Arc<AppRuntime<SlintAdapter>>,
@@ -2156,7 +2184,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let handle = tokio_rt.handle().clone();
         let image_cache = image_cache.clone();
         window.global::<NavState>().on_request_back(move || {
-            if let Some(entry) = nav::go_back() {
+            if let Some((entry, scroll)) = nav::go_back() {
+                arm_scroll_restore(&weak, &entry, scroll);
                 apply_entry(entry, &runtime, &weak, &handle, &image_cache);
             }
             if let Some(w) = weak.upgrade() {
@@ -2170,13 +2199,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let handle = tokio_rt.handle().clone();
         let image_cache = image_cache.clone();
         window.global::<NavState>().on_request_forward(move || {
-            if let Some(entry) = nav::go_forward() {
+            if let Some((entry, scroll)) = nav::go_forward() {
+                arm_scroll_restore(&weak, &entry, scroll);
                 apply_entry(entry, &runtime, &weak, &handle, &image_cache);
             }
             if let Some(w) = weak.upgrade() {
                 update_nav_flags(&w);
             }
         });
+    }
+    {
+        // The mounted scroll container reports its live viewport-y here so the
+        // nav module can stamp the outgoing entry on the next navigation.
+        window
+            .global::<NavState>()
+            .on_report_scroll(|y| nav::set_live_scroll(y));
     }
 
     // Log out: clear the session and return to the login screen.

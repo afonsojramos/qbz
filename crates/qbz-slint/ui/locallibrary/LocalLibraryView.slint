@@ -18,7 +18,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { LocalLibraryState, LocalLibraryActions, FolderNode, FolderSubcardItem, LocalArtistItem, AlphaJump, LibAlbumFilterState, AppearanceState } from "../state.slint";
+import { LocalLibraryState, LocalLibraryActions, FolderNode, FolderSubcardItem, LocalArtistItem, AlphaJump, LibAlbumFilterState, AppearanceState, NavState } from "../state.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
@@ -1163,6 +1163,21 @@ export component LocalLibraryView inherits Rectangle {
                     albums-flick := Flickable {
                         viewport-width: self.width;
                         viewport-height: albums-page.preferred-height;
+                        // Scroll-position restore on back/forward (nav::scope_for → "ll:albums").
+                        property <bool> restored: false;
+                        function restore-scroll() {
+                            if (!self.restored && NavState.restore-scope == "ll:albums"
+                                && self.viewport-height > self.height) {
+                                self.viewport-y = NavState.scroll-restore;
+                                self.restored = true;
+                                // Consume the arm so a later fresh re-mount of this
+                                // tab does not replay a stale position.
+                                NavState.restore-scope = "";
+                            }
+                        }
+                        init => { self.restore-scroll(); }
+                        changed viewport-height => { self.restore-scroll(); }
+                        changed viewport-y => { NavState.report-scroll(self.viewport-y); }
                         albums-page := VerticalLayout {
                             width: parent.width;
                             padding-left: 32px;
@@ -1325,7 +1340,22 @@ export component LocalLibraryView inherits Rectangle {
                         tracks-list := ListView {
                             vertical-stretch: 1;
                             vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                            // Scroll-position restore on back/forward (nav::scope_for → "ll:tracks").
+                            // Best-effort on this paginated list: restores when the
+                            // saved position falls within already-loaded pages.
+                            property <bool> restored: false;
+                            function restore-scroll() {
+                                if (!self.restored && NavState.restore-scope == "ll:tracks"
+                                    && self.viewport-height > self.height) {
+                                    self.viewport-y = NavState.scroll-restore;
+                                    self.restored = true;
+                                    NavState.restore-scope = "";
+                                }
+                            }
+                            init => { self.restore-scroll(); }
+                            changed viewport-height => { self.restore-scroll(); }
                             changed viewport-y => {
+                                NavState.report-scroll(self.viewport-y);
                                 if (-self.viewport-y + self.visible-height >= self.viewport-height - 600px
                                     && LocalLibraryState.tracks-has-more
                                     && !LocalLibraryState.tracks-loading-more
@@ -1462,6 +1492,19 @@ export component LocalLibraryView inherits Rectangle {
                         folders-flick := Flickable {
                             viewport-width: self.width;
                             viewport-height: folders-page.preferred-height;
+                            // Scroll-position restore on back/forward (nav::scope_for → "ll:folders").
+                            property <bool> restored: false;
+                            function restore-scroll() {
+                                if (!self.restored && NavState.restore-scope == "ll:folders"
+                                    && self.viewport-height > self.height) {
+                                    self.viewport-y = NavState.scroll-restore;
+                                    self.restored = true;
+                                    NavState.restore-scope = "";
+                                }
+                            }
+                            init => { self.restore-scroll(); }
+                            changed viewport-height => { self.restore-scroll(); }
+                            changed viewport-y => { NavState.report-scroll(self.viewport-y); }
                             folders-page := VerticalLayout {
                                 width: parent.width;
                                 padding-left: 32px;
@@ -2114,6 +2157,19 @@ export component LocalLibraryView inherits Rectangle {
                                 rail-flick := Flickable {
                                     viewport-width: self.width;
                                     viewport-height: rail-col.preferred-height;
+                                    // Scroll-position restore on back/forward (nav::scope_for → "ll:artists").
+                                    property <bool> restored: false;
+                                    function restore-scroll() {
+                                        if (!self.restored && NavState.restore-scope == "ll:artists"
+                                            && self.viewport-height > self.height) {
+                                            self.viewport-y = NavState.scroll-restore;
+                                            self.restored = true;
+                                            NavState.restore-scope = "";
+                                        }
+                                    }
+                                    init => { self.restore-scroll(); }
+                                    changed viewport-height => { self.restore-scroll(); }
+                                    changed viewport-y => { NavState.report-scroll(self.viewport-y); }
                                     rail-col := VerticalLayout {
                                         width: parent.width;
                                         padding-right: 22px;

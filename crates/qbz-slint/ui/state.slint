@@ -1692,6 +1692,19 @@ export global NavState {
     callback request-back();
     callback request-forward();
     callback request-settings();
+
+    // ---- Scroll-position restore (browser-like, per history entry) ----
+    // The mounted scroll container reports its live viewport-y here on every
+    // `changed viewport-y`; the Rust nav module stamps it onto the outgoing
+    // entry so back/forward can put it back.
+    callback report-scroll(length /* viewport-y */);
+    // Armed by Rust right before a back/forward view switch: `restore-scope`
+    // names which scroll container should restore (a stable per-list id, see
+    // nav::scope_for), and `scroll-restore` is the viewport-y to apply. A
+    // container restores only when its own scope matches, exactly once per
+    // mount, and only after its content has laid out (viewport overflows).
+    in-out property <string> restore-scope: "";
+    in-out property <length> scroll-restore: 0;
 }
 
 // Artist detail screen state.
