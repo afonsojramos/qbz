@@ -151,11 +151,25 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
     // current track and `track_id` momentarily disagree. Auto-advance, skip and
     // play-all all flow through here, so they become source-aware for free.
     if let Some(qt) = runtime.core().current_track().await {
-        if qt.id == track_id
-            && matches!(qt.source.as_deref(), Some("local") | Some("ephemeral"))
-        {
-            play_local_file_audible(runtime, track_id).await;
-            return;
+        if qt.id == track_id {
+            match qt.source.as_deref() {
+                Some("local") | Some("ephemeral") => {
+                    play_local_file_audible(runtime, track_id).await;
+                    return;
+                }
+                Some("plex") => {
+                    // The string rating_key rides in `source_item_id_hint`;
+                    // fall back to the numeric id (= rating_key for the common
+                    // numeric-key case) if the hint is absent.
+                    let rating_key = qt
+                        .source_item_id_hint
+                        .clone()
+                        .unwrap_or_else(|| track_id.to_string());
+                    play_plex_audible(runtime, track_id, rating_key).await;
+                    return;
+                }
+                _ => {}
+            }
         }
     }
     // Offline-cached copy (preferred, decrypted to FLAC + played via play_data)
@@ -239,6 +253,38 @@ async fn play_local_file_audible(runtime: &Runtime, row_id: u64) {
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
             let _ = runtime.core().player().seek(start as u64);
         }
+    }
+}
+
+/// Audible step for a Plex track: resolve the original part bytes from the
+/// user's LAN Plex server and hand them to the player's `play_data` seam —
+/// exactly like the local-file path, but the bytes come from the network
+/// instead of disk. `play_data` extracts the sample rate and drives the
+/// PROTECTED device init from the DECODED bytes (bit-perfect), so the Plex
+/// `sampling_rate_hz`/`bit_depth` are display-only and never touched here.
+/// `play_id` is the queue id (numeric rating key); `rating_key` is the string
+/// key the resolve needs.
+async fn play_plex_audible(runtime: &Runtime, play_id: u64, rating_key: String) {
+    let cfg = crate::plex_settings::get();
+    if cfg.base_url.is_empty() || cfg.token.is_empty() {
+        log::error!("[qbz-slint] plex play: no Plex credentials configured");
+        return;
+    }
+    let resolved = match qbz_plex::plex_resolve_track_media(
+        cfg.base_url,
+        cfg.token,
+        rating_key.clone(),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("[qbz-slint] plex play: resolve {rating_key} failed: {e}");
+            return;
+        }
+    };
+    if let Err(e) = runtime.core().player().play_data(resolved.bytes, play_id) {
+        log::error!("[qbz-slint] plex play: play_data {play_id} failed: {e}");
     }
 }
 
@@ -600,9 +646,11 @@ fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
     let src = match track.source.as_deref() {
         Some("qobuz_download") => "qobuz_download",
         Some("ephemeral") => "ephemeral",
+        Some("plex") => "plex",
         _ => "local",
     };
     let is_offline = src == "qobuz_download";
+    let is_plex = src == "plex";
     QueueTrack {
         id: if is_offline {
             track.qobuz_track_id.unwrap_or(track.id) as u64
@@ -624,7 +672,14 @@ fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
         streamable: true,
         source: Some(src.to_string()),
         parental_warning: false,
-        source_item_id_hint: None,
+        // For Plex, carry the string rating_key (the numeric queue `id` is a
+        // hashed/parsed form; the resolve needs the original key). Persisted in
+        // the session queue store so playback survives a restart.
+        source_item_id_hint: if is_plex {
+            Some(track.file_path.clone())
+        } else {
+            None
+        },
     }
 }
 
