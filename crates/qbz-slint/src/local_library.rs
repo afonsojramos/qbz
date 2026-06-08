@@ -6,12 +6,12 @@
 //! It reads the shared per-user `library.db` through the already
 //! frontend-agnostic `qbz-library` crate (see `library_db::with_db`).
 //!
-//! NOTE (2026-06-07): Plex is NOT yet wired into this view. The Slint Plex
-//! port is in progress — spec at
+//! Plex (2026-06-07): the Plex port is landing slice by slice — spec at
 //! `qbz-nix-docs/plex-integration/2026-06-07-plex-slint-build-spec.md`.
-//! Until it lands there is no Plex play path, queue builder, creds
-//! plumbing, or hydration trigger here, and the Albums tab uses the
-//! non-Plex query (see the Albums-tab note below).
+//! WIRED so far: creds + PIN auth (Settings > Local Library), and the
+//! Albums tab (grid union + album-detail tracks + covers). NOT yet wired
+//! here: the Artists + flat Tracks tabs (still Plex-blind), the Plex play
+//! path / queue builder, and quality hydration.
 //!
 //! Folder management, scan, maintenance, and the danger zone do NOT live in
 //! this view — they belong under Settings > Local Library. The view's gear
@@ -78,15 +78,14 @@ impl LibTab {
 
 // =============================== Albums tab ===============================
 //
-// The Albums tab browses the metadata-grouped local albums via
-// `get_albums_metadata_grouped` (the non-Plex grouped path). Sort + search
-// are pushed to SQL; the grid pages on scroll. The shared
-// `AlbumCollectionView` renders the result, covers load from the local
-// filesystem via the source-aware artwork pipeline.
-//
-// TODO (Plex port, slice 3): switch to `get_albums_metadata_page(…,
-// Some(plex_cache_path))` so the `plex_aggregated` union surfaces Plex
-// albums in the grid. See the build spec referenced in the module header.
+// The Albums tab browses the metadata-grouped albums via
+// `get_albums_metadata_page(…, Some(plex_cache_path))` — the `plex_aggregated`
+// union surfaces Plex albums alongside local ones when Plex is enabled
+// (`plex_cache_db_path()` returns `None` when disabled → local-only). Sort,
+// search, group + filter are derived client-side over the full-loaded set.
+// Covers load via the source-aware artwork pipeline
+// (`spawn_local_or_plex_loads`): local files from disk, Plex `/library/...`
+// thumbs via `ArtworkRef::PlexThumb`.
 
 /// Generation guard, bumped on every (re)load. A stale in-flight
 /// fetch (older search/sort) is discarded on apply, and an in-flight
@@ -449,9 +448,32 @@ pub fn clear_album_filter(window: &AppWindow) {
     derive_albums(window);
 }
 
+/// Resolve the Plex cache DB path (`<data_dir>/qbz/plex_cache.db`), gated on
+/// the user's Plex master toggle being ON. Returns `None` when Plex is
+/// disabled OR the data dir is unavailable, so the Albums union degrades to
+/// local-only (identical behaviour to before Plex existed). Mirrors the Tauri
+/// command's resolution (`commands_v2/library.rs`).
+fn plex_cache_db_path() -> Option<std::path::PathBuf> {
+    if !crate::plex_settings::get().enabled {
+        return None;
+    }
+    dirs::data_dir().map(|d| d.join("qbz").join("plex_cache.db"))
+}
+
+/// Upper bound for the full-load page. The Albums tab loads the entire set in
+/// one shot (search/sort/filter/group are all derived client-side over the
+/// cached set in `derive_albums`), so we request a single large page rather
+/// than truly paginating. `total` from the page is informational here.
+const ALBUMS_FULL_LOAD_LIMIT: u64 = 1_000_000;
+
 /// Full-load the metadata-grouped albums off the UI thread (mapping + cover
 /// fallback resolution all happen on the blocking thread), store the raw cache
 /// + the mapped card set, then derive + spawn covers on the UI thread.
+///
+/// Uses the Plex-aware paginated query so that when the Plex master toggle is
+/// ON, the `plex_aggregated` union surfaces Plex albums in the grid (with
+/// covers via the source-aware artwork pipeline). When Plex is OFF the path is
+/// `None` → the query runs local-only, exactly as before.
 fn spawn_albums_load(
     window: &AppWindow,
     handle: tokio::runtime::Handle,
@@ -459,15 +481,30 @@ fn spawn_albums_load(
     gen: u64,
 ) {
     let weak = window.as_weak();
+    let plex_path = plex_cache_db_path();
+    let plex = crate::plex_settings::get();
     handle.spawn(async move {
         let loaded: Option<(Vec<qbz_library::LocalAlbum>, Vec<crate::album_map::AlbumCard>)> =
-            tokio::task::spawn_blocking(|| {
+            tokio::task::spawn_blocking(move || {
                 crate::library_db::with_db(|db| {
-                    let albums = db.get_albums_metadata_grouped(false, true, false)?;
+                    let page = db.get_albums_metadata_page(
+                        0,
+                        ALBUMS_FULL_LOAD_LIMIT,
+                        None,
+                        "artist",
+                        "asc",
+                        false,
+                        true,
+                        plex_path.as_deref(),
+                    )?;
+                    let albums = page.albums;
                     let cards: Vec<crate::album_map::AlbumCard> = albums
                         .iter()
                         .map(|a| {
                             let mut card = map_local_album(a.clone());
+                            // Local-cover fallback scans the on-disk folder; it
+                            // never applies to Plex rows (their artwork_url is a
+                            // non-empty /library/... path, so this no-ops).
                             if card.artwork_url.is_empty() {
                                 if let Some(cover) = db.resolve_album_cover_fallback(&card.id) {
                                     card.artwork_url = cover;
@@ -499,7 +536,15 @@ fn spawn_albums_load(
                     s.set_albums_loading(false);
                     s.set_albums_load_failed(false);
                     derive_albums(&w);
-                    crate::artwork::spawn_local_loads(jobs, w.as_weak(), image_cache);
+                    // Route covers through the Plex-aware spawn: Plex rows carry
+                    // a /library/... path → PlexThumb; local rows → LocalFile.
+                    crate::artwork::spawn_local_or_plex_loads(
+                        jobs,
+                        plex.base_url.clone(),
+                        plex.token.clone(),
+                        w.as_weak(),
+                        image_cache,
+                    );
                 }
                 None => {
                     s.set_albums_loading(false);
@@ -529,15 +574,28 @@ pub fn reload_albums(
 /// counts) so the nav shows numbers without visiting each tab. Cheap:
 /// bounded album/folder/artist reads + a `COUNT(*)` for the (potentially
 /// huge) tracks table. Album/artist counts match each tab's own loader
-/// exactly (same `get_albums_metadata_grouped` set; same `normalize_artist`
-/// grouping the rail uses), so badges never jump when a tab is opened.
+/// exactly (same `get_albums_metadata_page` set incl. the Plex union; same
+/// `normalize_artist` grouping the rail uses), so badges never jump when a
+/// tab is opened.
 pub fn seed_counts(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    let plex_path = plex_cache_db_path();
     handle.spawn(async move {
-        let counts: Option<(usize, usize, usize, usize)> = tokio::task::spawn_blocking(|| {
+        let counts: Option<(usize, usize, usize, usize)> = tokio::task::spawn_blocking(move || {
             crate::library_db::with_db(|db| {
+                // Total under the same filter the Albums tab uses, incl. the
+                // Plex union when enabled, so the badge matches the grid.
                 let albums = db
-                    .get_albums_metadata_grouped(false, true, false)
-                    .map(|v| v.len())
+                    .get_albums_metadata_page(
+                        0,
+                        ALBUMS_FULL_LOAD_LIMIT,
+                        None,
+                        "artist",
+                        "asc",
+                        false,
+                        true,
+                        plex_path.as_deref(),
+                    )
+                    .map(|p| p.total as usize)
                     .unwrap_or(0);
                 let folders = db
                     .get_folders_with_metadata()
@@ -1097,12 +1155,17 @@ pub fn open_local_album(
             s.set_cover_url(album_cover.clone().into());
             apply_album_version(&w, 0);
             // Decode the album cover once (stable across version switches).
+            // Plex-aware: a Plex album's cover is a raw `/library/...` thumb
+            // path that needs the token (PlexThumb), not a local file read.
             if !album_cover.is_empty() {
-                crate::artwork::spawn_local_loads(
+                let plex = crate::plex_settings::get();
+                crate::artwork::spawn_local_or_plex_loads(
                     vec![ArtworkJob {
                         target: ArtworkTarget::LocalAlbumViewCover,
                         url: album_cover,
                     }],
+                    plex.base_url,
+                    plex.token,
                     w.as_weak(),
                     image_cache,
                 );
@@ -2447,9 +2510,61 @@ pub fn select_local_artist(
     });
 }
 
+/// Map a format string (Plex container/codec, e.g. "flac", "alac") to the
+/// `AudioFormat` enum the UI quality badge expects. Mirrors the private
+/// `Database::parse_format`, but case-insensitive on the lowercase Plex value.
+fn parse_audio_format(s: &str) -> qbz_library::AudioFormat {
+    use qbz_library::AudioFormat;
+    match s.to_ascii_lowercase().as_str() {
+        "flac" => AudioFormat::Flac,
+        "alac" => AudioFormat::Alac,
+        "wav" | "wave" => AudioFormat::Wav,
+        "aiff" | "aif" => AudioFormat::Aiff,
+        "ape" => AudioFormat::Ape,
+        "mp3" => AudioFormat::Mp3,
+        _ => AudioFormat::Unknown,
+    }
+}
+
+/// Map a Plex-cache track row to the `LocalTrack` shape the album-detail view
+/// renders. The `file_path` carries the Plex `rating_key` (the playback slice
+/// resolves the stream URL from it); `artwork_path` is the raw `/library/...`
+/// thumb path (tokenized at decode time by the PlexThumb artwork arm);
+/// `source` is `"plex"` so the UI classifies the row correctly.
+fn map_plex_cached_to_local_track(t: qbz_plex::PlexCachedTrack) -> qbz_library::LocalTrack {
+    qbz_library::LocalTrack {
+        id: t.id as i64,
+        file_path: t.rating_key,
+        title: t.title,
+        artist: t.artist,
+        album: t.album.clone(),
+        album_group_key: t.album_key.clone(),
+        // Feeds the album-detail header title (apply_album_version reads
+        // tracks.first().album_group_title) — use the Plex album name.
+        album_group_title: t.album.clone(),
+        track_number: t.track_number,
+        disc_number: t.disc_number,
+        duration_secs: t.duration_secs,
+        format: parse_audio_format(&t.format),
+        bit_depth: t.bit_depth,
+        sample_rate: t.sample_rate as f64,
+        artwork_path: t.artwork_path,
+        source: Some("plex".to_string()),
+        ..Default::default()
+    }
+}
+
 /// Fetch an album's tracks by group key, trying the metadata grouping first
-/// (Albums tab) then the folder grouping (Folders tab). Blocking.
+/// (Albums tab) then the folder grouping (Folders tab). Blocking. Plex albums
+/// (`plex:<hash>` group keys) are served from the Plex cache DB instead.
 pub fn fetch_album_tracks_blocking(group_key: &str) -> Vec<qbz_library::LocalTrack> {
+    if group_key.starts_with("plex:") {
+        return qbz_plex::plex_cache_get_album_tracks(group_key.to_string())
+            .unwrap_or_default()
+            .into_iter()
+            .map(map_plex_cached_to_local_track)
+            .collect();
+    }
     crate::library_db::with_db(|db| {
         let meta = db.get_album_tracks_metadata(group_key)?;
         if !meta.is_empty() {

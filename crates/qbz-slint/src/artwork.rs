@@ -270,6 +270,56 @@ pub fn spawn_local_loads(jobs: Vec<ArtworkJob>, window: slint::Weak<AppWindow>, 
     }
 }
 
+/// Like `spawn_local_loads`, but Plex-aware: each job's `url` is either a
+/// LOCAL filesystem path (Local Library covers) OR a raw Plex thumbnail path
+/// (`/library/...`, `/photo/...`). When the path looks like a Plex thumb AND
+/// Plex creds are present, the job is decoded via `ArtworkRef::PlexThumb`
+/// (tokenized HTTP through the disk cache); otherwise it falls back to the
+/// local-file path. The path prefix is self-describing, so no per-job source
+/// tag is needed (local covers are always absolute filesystem paths, never
+/// `/library/` or `/photo/`). Used by the Local Library Albums grid + album
+/// detail so Plex albums render covers. Browse-only; the queue/now-playing
+/// /MPRIS artwork is unaffected.
+pub fn spawn_local_or_plex_loads(
+    jobs: Vec<ArtworkJob>,
+    plex_base_url: String,
+    plex_token: String,
+    window: slint::Weak<AppWindow>,
+    cache: ImageCache,
+) {
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT));
+    let plex_base_url = Arc::new(plex_base_url);
+    let plex_token = Arc::new(plex_token);
+    for job in jobs {
+        let semaphore = semaphore.clone();
+        let window = window.clone();
+        let cache = cache.clone();
+        let plex_base_url = plex_base_url.clone();
+        let plex_token = plex_token.clone();
+        tokio::spawn(async move {
+            let _permit = semaphore.acquire().await.ok()?;
+            let decode_size = job.target.decode_size();
+            let is_plex_path =
+                job.url.starts_with("/library/") || job.url.starts_with("/photo/");
+            let art = if is_plex_path && !plex_base_url.is_empty() && !plex_token.is_empty() {
+                ArtworkRef::PlexThumb {
+                    base_url: (*plex_base_url).clone(),
+                    token: (*plex_token).clone(),
+                    path: job.url.clone(),
+                }
+            } else {
+                ArtworkRef::LocalFile(job.url.clone())
+            };
+            let (pixels, width, height) = fetch_and_decode_ref(&art, &cache, decode_size).await?;
+            let target = job.target;
+            let _ = window.upgrade_in_event_loop(move |w| {
+                apply_artwork(&w, target, &pixels, width, height);
+            });
+            Some(())
+        });
+    }
+}
+
 /// Resolve a remote URL to raw bytes via the shared disk cache: a hit reads
 /// from disk, a miss downloads and stores. HTTP(S) only.
 async fn fetch_cached_http(url: &str, cache: &ImageCache) -> Option<Vec<u8>> {
