@@ -44,6 +44,7 @@ mod qconnect_event_sink;
 mod qconnect_service;
 mod qconnect_transport;
 mod queue;
+mod remote_stream;
 mod drag;
 mod ephemeral;
 mod folders;

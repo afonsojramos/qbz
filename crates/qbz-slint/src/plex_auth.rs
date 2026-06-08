@@ -757,12 +757,19 @@ async fn sync_selected_libraries(
     let server_id = (!machine_id.is_empty()).then_some(machine_id.clone());
     let selected = plex_settings::get().selected_section_keys;
 
-    // cache_clear + re-save sections (blocking).
+    // Prune ONLY the de-selected sections + re-save sections (blocking). Do
+    // NOT cache_clear here: a full wipe deletes the hydrated rows BEFORE the
+    // per-section save_tracks can carry their quality over, so already-hydrated
+    // albums would revert to a bare FLAC badge on every re-sync (settings open /
+    // background refresh / section toggle). Pruning keeps the selected sections
+    // (and their hydration); save_tracks below re-applies the per-section
+    // carry-over.
     {
         let sections = sections.clone();
         let server_id = server_id.clone();
+        let keep = selected.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            let _ = qbz_plex::plex_cache_clear();
+            let _ = qbz_plex::plex_cache_prune_sections(&keep);
             if !sections.is_empty() {
                 let _ = qbz_plex::plex_cache_save_sections(server_id, sections);
             }

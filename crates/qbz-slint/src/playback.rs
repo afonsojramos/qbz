@@ -245,7 +245,8 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
                         .source_item_id_hint
                         .clone()
                         .unwrap_or_else(|| track_id.to_string());
-                    play_plex_audible(runtime, weak, track_id, rating_key).await;
+                    play_plex_audible(runtime, weak, track_id, rating_key, qt.duration_secs)
+                        .await;
                     return;
                 }
                 _ => {}
@@ -346,19 +347,30 @@ async fn play_local_file_audible(
     }
 }
 
-/// Audible step for a Plex track: resolve the original part bytes from the
-/// user's LAN Plex server and hand them to the player's `play_data` seam —
-/// exactly like the local-file path, but the bytes come from the network
-/// instead of disk. `play_data` extracts the sample rate and drives the
-/// PROTECTED device init from the DECODED bytes (bit-perfect), so the Plex
+/// Audible step for a Plex track: PROGRESSIVE STREAMING.
+///
+/// Resolves ONLY the direct-play part URL (no body download — that was the
+/// ~10s stall) and feeds it into the player's progressive streaming sink via
+/// the shared `remote_stream` feeder (the same one QConnect uses). Playback
+/// starts as soon as the initial buffer fills (~1s), not after the whole FLAC
+/// lands. The feeder decodes the same original bytes and drives the PROTECTED
+/// device init from the DECODED stream (bit-perfect), so the Plex
 /// `sampling_rate_hz`/`bit_depth` are display-only and never touched here.
+///
+/// On any streaming-setup failure (resolve / probe / sink open) it falls back
+/// to the old whole-file `plex_resolve_track_media` + `play_data` so a server
+/// that breaks streaming still plays. The loading spinner is cleared only on
+/// the hard-error paths; the poll loop clears it on the first decoded-audio
+/// edge (same as Qobuz / QConnect).
+///
 /// `play_id` is the queue id (numeric rating key); `rating_key` is the string
-/// key the resolve needs.
+/// key the resolve needs; `duration_secs` comes from the queue track.
 async fn play_plex_audible(
     runtime: &Runtime,
     weak: &slint::Weak<AppWindow>,
     play_id: u64,
     rating_key: String,
+    duration_secs: u64,
 ) {
     let cfg = crate::plex_settings::get();
     if cfg.base_url.is_empty() || cfg.token.is_empty() {
@@ -366,23 +378,84 @@ async fn play_plex_audible(
         clear_loading(weak, play_id);
         return;
     }
-    let resolved = match qbz_plex::plex_resolve_track_media(
-        cfg.base_url,
-        cfg.token,
+
+    // 1. Resolve JUST the direct-play part URL — no body download.
+    let loc = match qbz_plex::plex_resolve_part_url(
+        cfg.base_url.clone(),
+        cfg.token.clone(),
         rating_key.clone(),
     )
     .await
     {
-        Ok(r) => r,
+        Ok(l) => l,
         Err(e) => {
             log::error!("[qbz-slint] plex play: resolve {rating_key} failed: {e}");
             clear_loading(weak, play_id);
             return;
         }
     };
-    if let Err(e) = runtime.core().player().play_data(resolved.bytes, play_id) {
-        log::error!("[qbz-slint] plex play: play_data {play_id} failed: {e}");
-        clear_loading(weak, play_id);
+
+    if !loc.direct_play_confirmed {
+        // Not a direct `/library/parts/.../file` part: the server may force a
+        // transcode and the streamed bytes would not be bit-perfect. Fall back
+        // to the whole-file resolve so the track still plays.
+        log::warn!(
+            "[qbz-slint] plex play: {rating_key} part is not a direct /file part ({}); \
+             full-download fallback",
+            loc.part_key
+        );
+        plex_full_download_fallback(runtime, weak, play_id, rating_key).await;
+        return;
+    }
+
+    // 2. Stream the part URL progressively (same feeder QConnect uses). On
+    //    setup failure (probe / sink open), fall back to whole-file download.
+    let player = runtime.core().player();
+    match crate::remote_stream::stream_remote_track_into_player(
+        &player,
+        play_id,
+        duration_secs,
+        0, // Plex callers don't resume mid-track; start at 0 (like QConnect).
+        &loc.part_url,
+        "Plex",
+    )
+    .await
+    {
+        Ok(()) => {
+            // Buffering started — the poll loop clears the spinner on the first
+            // decoded-audio edge. Nothing else to do here.
+        }
+        Err(e) => {
+            log::warn!(
+                "[qbz-slint] plex play: streaming setup for {play_id} failed ({e}); \
+                 full-download fallback"
+            );
+            plex_full_download_fallback(runtime, weak, play_id, rating_key).await;
+        }
+    }
+}
+
+/// Whole-file Plex fallback: resolve + download the entire part body and hand
+/// it to `play_data`. Slow (the original ~10s path), but keeps a track playable
+/// when progressive streaming setup fails or the part is not direct-play.
+async fn plex_full_download_fallback(
+    runtime: &Runtime,
+    weak: &slint::Weak<AppWindow>,
+    play_id: u64,
+    rating_key: String,
+) {
+    let cfg = crate::plex_settings::get();
+    match qbz_plex::plex_resolve_track_media(cfg.base_url, cfg.token, rating_key.clone()).await {
+        Ok(r) => {
+            if let Err(e) = runtime.core().player().play_data(r.bytes, play_id) {
+                log::error!("[qbz-slint] plex play: fallback play_data {play_id} failed: {e}");
+                clear_loading(weak, play_id);
+            }
+        }
+        Err(e) => {
+            log::error!("[qbz-slint] plex play: fallback resolve {rating_key} failed: {e}");
+            clear_loading(weak, play_id);
+        }
     }
 }
 

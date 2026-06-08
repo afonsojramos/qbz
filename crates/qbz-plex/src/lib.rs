@@ -1726,6 +1726,29 @@ pub fn plex_cache_clear() -> Result<(), String> {
     Ok(())
 }
 
+/// Remove cached tracks for sections NOT in `keep`, leaving the kept sections
+/// (and their hydrated quality) intact. Use this before a re-sync instead of
+/// the full `plex_cache_clear`: a full wipe deletes the rows BEFORE
+/// `plex_cache_save_tracks` can read them for its hydration carry-over, so
+/// already-hydrated albums lose their bit-depth/sample-rate on every re-sync.
+/// Pruning only the de-selected sections preserves the kept sections' quality
+/// (and `save_tracks` then re-applies its per-section carry-over). An empty
+/// `keep` removes all tracks (nothing selected). Returns rows deleted.
+pub fn plex_cache_prune_sections(keep: &[String]) -> Result<usize, String> {
+    let conn = open_plex_cache_db()?;
+    if keep.is_empty() {
+        return conn
+            .execute("DELETE FROM plex_cache_tracks", [])
+            .map_err(|e| format!("Failed to prune Plex cache tracks: {}", e));
+    }
+    let placeholders = keep.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("DELETE FROM plex_cache_tracks WHERE section_key NOT IN ({placeholders})");
+    let params: Vec<&dyn rusqlite::ToSql> =
+        keep.iter().map(|k| k as &dyn rusqlite::ToSql).collect();
+    conn.execute(&sql, params.as_slice())
+        .map_err(|e| format!("Failed to prune Plex cache tracks: {}", e))
+}
+
 pub async fn plex_resolve_track_media(
     base_url: String,
     token: String,
@@ -1785,6 +1808,76 @@ pub async fn plex_resolve_track_media(
         bytes: bytes.to_vec(),
         direct_play_confirmed: is_direct_part_key(&part_key),
         content_type,
+        sampling_rate_hz: track.sampling_rate_hz,
+        bit_depth: track.bit_depth,
+    })
+}
+
+/// Direct-play part location resolved WITHOUT downloading the body.
+///
+/// `plex_resolve_part_url` returns this so the player's progressive streaming
+/// feeder can Range-stream the original on-disk bytes (bit-perfect, ~1s to
+/// first audio) instead of buffering the whole FLAC into RAM first. Cast/DLNA
+/// keep using `plex_resolve_track_media` (full body).
+#[derive(Debug, Clone)]
+pub struct PlexPartLocation {
+    pub rating_key: String,
+    pub playback_id: u64,
+    pub part_key: String,
+    pub part_url: String,
+    pub direct_play_confirmed: bool,
+    pub content_type: Option<String>,
+    pub sampling_rate_hz: Option<u32>,
+    pub bit_depth: Option<u32>,
+}
+
+/// Resolve the direct-play part URL for a Plex track WITHOUT downloading the
+/// body. Same metadata GET + `with_token` derivation as
+/// `plex_resolve_track_media`, but stops at the URL — no `.bytes()`. The
+/// streaming feeder then Range-streams the original bytes progressively, so the
+/// FLAC stays bit-perfect. `content_type` is taken from the metadata container
+/// (e.g. `"flac"`) to avoid an extra round-trip; it is display-only (the feeder
+/// sniffs the format from the FLAC magic bytes in its Range probe).
+pub async fn plex_resolve_part_url(
+    base_url: String,
+    token: String,
+    rating_key: String,
+) -> Result<PlexPartLocation, String> {
+    let client = build_plex_client()?;
+    let base = normalize_base_url(&base_url);
+
+    let metadata_url = with_token(&format!("{base}/library/metadata/{rating_key}"), &token);
+    let metadata_xml = client
+        .get(metadata_url)
+        .send()
+        .await
+        .map_err(|e| format!("Plex metadata request failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| format!("Plex metadata status error: {}", e))?
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read Plex metadata response: {}", e))?;
+
+    let mut tracks = parse_tracks(&metadata_xml, Some(1));
+    let track = tracks
+        .pop()
+        .ok_or_else(|| format!("Track {rating_key} not found in Plex metadata"))?;
+
+    let part_key = track
+        .part_key
+        .clone()
+        .ok_or_else(|| format!("Track {rating_key} does not include a playable Part key"))?;
+
+    let part_url = with_token(&format!("{base}{part_key}"), &token);
+    let playback_id = playback_track_id(&rating_key);
+
+    Ok(PlexPartLocation {
+        rating_key,
+        playback_id,
+        direct_play_confirmed: is_direct_part_key(&part_key),
+        part_key,
+        part_url,
+        content_type: track.container.clone(),
         sampling_rate_hz: track.sampling_rate_hz,
         bit_depth: track.bit_depth,
     })
