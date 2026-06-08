@@ -130,6 +130,20 @@ pub struct PlexCachedTrack {
     pub disc_number: Option<u32>,
 }
 
+/// An artist aggregated client-side from the flat `plex_cache_tracks` table
+/// (there is no `plex_cache_artists` table). Mirrors `PlexCachedAlbum`'s
+/// aggregation shape; `artwork_path` is a representative track/album thumb
+/// (`/library/...`) used as a portrait fallback by the Local Library artists
+/// rail when no custom/Qobuz portrait exists.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlexCachedArtist {
+    pub name: String,
+    pub album_count: u32,
+    pub track_count: u32,
+    pub artwork_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexTrackQualityUpdate {
@@ -1200,6 +1214,93 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
         a.title.to_lowercase().cmp(&b.title.to_lowercase())
     });
     Ok(albums)
+}
+
+/// Count of cached Plex tracks — a cheap `COUNT(*)` for the Local Library
+/// Tracks-tab badge (so the count includes Plex alongside the albums/artists
+/// badges, which already do). Avoids loading every row just to take a length.
+pub fn plex_cache_count_tracks() -> Result<usize, String> {
+    let conn = open_plex_cache_db()?;
+    conn.query_row("SELECT COUNT(*) FROM plex_cache_tracks", [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .map(|n| n as usize)
+    .map_err(|e| format!("Failed to count Plex cache tracks: {}", e))
+}
+
+/// Aggregate Plex artists client-side from the flat `plex_cache_tracks` table
+/// (there is no `plex_cache_artists` table). Mirrors `plex_cache_get_albums`:
+/// reads all rows, groups by normalized artist, counts distinct albums (by the
+/// same `plex_album_key` the albums aggregator uses), sums track counts, and
+/// keeps the first non-empty `artwork_path` as a representative portrait. The
+/// returned `name` carries the decoded, display-ready spelling; counts feed the
+/// Local Library artists rail's `LocalArtist`-shaped merge.
+pub fn plex_cache_get_artists() -> Result<Vec<PlexCachedArtist>, String> {
+    let conn = open_plex_cache_db()?;
+    let mut stmt = conn
+        .prepare("SELECT artist, album, artwork_path FROM plex_cache_tracks")
+        .map_err(|e| format!("Failed to prepare Plex cache artist aggregation query: {}", e))?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .map_err(|e| format!("Failed to query Plex cache tracks for artist aggregation: {}", e))?;
+
+    struct Acc {
+        name: String,
+        albums: std::collections::HashSet<String>,
+        track_count: u32,
+        artwork_path: Option<String>,
+    }
+    // Key by lowercase artist (matches the albums aggregator's case-folded
+    // sort key); the first seen spelling is the display name.
+    let mut grouped: HashMap<String, Acc> = HashMap::new();
+
+    for row in rows {
+        let (artist_opt, album_opt, artwork_path) =
+            row.map_err(|e| format!("Failed to read Plex cache artist row: {}", e))?;
+        let artist = artist_opt
+            .map(|v| decode_xml_entities(v.trim()))
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "Unknown Artist".to_string());
+        let album_raw = album_opt
+            .map(|v| decode_xml_entities(v.trim()))
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "Unknown Album".to_string());
+        let album = normalize_album_title(Some(&artist), &album_raw);
+        let album_key = plex_album_key(&artist, &album);
+
+        let entry = grouped.entry(artist.to_lowercase()).or_insert_with(|| Acc {
+            name: artist.clone(),
+            albums: std::collections::HashSet::new(),
+            track_count: 0,
+            artwork_path: None,
+        });
+        entry.albums.insert(album_key);
+        entry.track_count += 1;
+        if entry.artwork_path.is_none() {
+            if let Some(p) = artwork_path.filter(|p| !p.is_empty()) {
+                entry.artwork_path = Some(p);
+            }
+        }
+    }
+
+    let mut artists: Vec<PlexCachedArtist> = grouped
+        .into_values()
+        .map(|a| PlexCachedArtist {
+            name: a.name,
+            album_count: a.albums.len() as u32,
+            track_count: a.track_count,
+            artwork_path: a.artwork_path,
+        })
+        .collect();
+    artists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(artists)
 }
 
 pub fn plex_cache_get_album_tracks(album_key: String) -> Result<Vec<PlexCachedTrack>, String> {
