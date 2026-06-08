@@ -204,6 +204,31 @@ impl QueueTrack {
             ArtworkRef::LocalFile(raw.to_string())
         }
     }
+
+    /// A uniform reference to this track's cover art, Plex-aware.
+    ///
+    /// Same value-driven classification as [`artwork_ref`](Self::artwork_ref),
+    /// except a bare server-relative Plex thumb path (`/library/...` or
+    /// `/photo/...`) is resolved to [`ArtworkRef::PlexThumb`] using the supplied
+    /// current credentials — so the now-playing bar, queue panel, and MPRIS get
+    /// the tokenized cover instead of a `file://`-poisoned local-read miss.
+    ///
+    /// `qbz-models` stays credential-free: the caller fetches the live
+    /// `{base_url, token}` (from the Slint Plex settings store) and threads them
+    /// in. When creds are missing, or the path is not a Plex thumb path, this
+    /// falls back to [`artwork_ref`](Self::artwork_ref).
+    pub fn artwork_ref_with_plex(&self, base_url: &str, token: &str) -> ArtworkRef {
+        let raw = self.artwork_url.as_deref().unwrap_or("");
+        let is_plex_path = raw.starts_with("/library/") || raw.starts_with("/photo/");
+        if is_plex_path && !base_url.is_empty() && !token.is_empty() {
+            return ArtworkRef::PlexThumb {
+                base_url: base_url.to_string(),
+                token: token.to_string(),
+                path: raw.to_string(),
+            };
+        }
+        self.artwork_ref()
+    }
 }
 
 #[cfg(test)]
@@ -295,6 +320,80 @@ mod tests {
         assert_eq!(
             track_with(Some("local"), Some("file:///home/u/cover.jpg")).artwork_ref(),
             ArtworkRef::LocalFile("/home/u/cover.jpg".into())
+        );
+        // A raw Plex thumb path stays LocalFile here (no creds at the model
+        // layer); PlexThumb is produced only by `artwork_ref_with_plex`.
+        assert_eq!(
+            track_with(Some("plex"), Some("/library/metadata/42/thumb/1")).artwork_ref(),
+            ArtworkRef::LocalFile("/library/metadata/42/thumb/1".into())
+        );
+    }
+
+    #[test]
+    fn artwork_ref_with_plex_resolves_library_path() {
+        // Plex thumb path + creds → PlexThumb (the now-playing/queue/MPRIS path).
+        assert_eq!(
+            track_with(Some("plex"), Some("/library/metadata/42/thumb/1"))
+                .artwork_ref_with_plex("http://plex.local:32400", "tok"),
+            ArtworkRef::PlexThumb {
+                base_url: "http://plex.local:32400".into(),
+                token: "tok".into(),
+                path: "/library/metadata/42/thumb/1".into(),
+            }
+        );
+        // `/photo/...` transcode paths classify the same way.
+        assert_eq!(
+            track_with(Some("plex"), Some("/photo/:/transcode?url=x"))
+                .artwork_ref_with_plex("http://plex.local:32400", "tok"),
+            ArtworkRef::PlexThumb {
+                base_url: "http://plex.local:32400".into(),
+                token: "tok".into(),
+                path: "/photo/:/transcode?url=x".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn artwork_ref_with_plex_falls_back_without_creds_or_non_plex() {
+        // Missing creds → no PlexThumb; falls back to LocalFile (the raw path).
+        assert_eq!(
+            track_with(Some("plex"), Some("/library/metadata/42/thumb/1"))
+                .artwork_ref_with_plex("", ""),
+            ArtworkRef::LocalFile("/library/metadata/42/thumb/1".into())
+        );
+        // Non-Plex value is untouched: http stays Remote even with creds.
+        assert_eq!(
+            track_with(Some("qobuz"), Some("https://x/cover.jpg"))
+                .artwork_ref_with_plex("http://plex.local:32400", "tok"),
+            ArtworkRef::Remote("https://x/cover.jpg".into())
+        );
+        // A local file:// path stays LocalFile, never mistaken for Plex.
+        assert_eq!(
+            track_with(Some("local"), Some("file:///home/u/cover.jpg"))
+                .artwork_ref_with_plex("http://plex.local:32400", "tok"),
+            ArtworkRef::LocalFile("/home/u/cover.jpg".into())
+        );
+    }
+
+    #[test]
+    fn plex_thumb_to_mpris_url_tokenizes() {
+        let no_query = ArtworkRef::PlexThumb {
+            base_url: "http://plex.local:32400".into(),
+            token: "tok".into(),
+            path: "/library/metadata/42/thumb/1".into(),
+        };
+        assert_eq!(
+            no_query.to_mpris_url().as_deref(),
+            Some("http://plex.local:32400/library/metadata/42/thumb/1?X-Plex-Token=tok")
+        );
+        let with_query = ArtworkRef::PlexThumb {
+            base_url: "http://plex.local:32400".into(),
+            token: "tok".into(),
+            path: "/photo/:/transcode?url=x".into(),
+        };
+        assert_eq!(
+            with_query.to_mpris_url().as_deref(),
+            Some("http://plex.local:32400/photo/:/transcode?url=x&X-Plex-Token=tok")
         );
     }
 }

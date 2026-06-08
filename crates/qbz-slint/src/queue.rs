@@ -320,7 +320,11 @@ impl QueueController {
             qs.set_tab(tab);
         });
 
-        load_artwork(self.weak.clone(), art_jobs);
+        // Plex creds for source-aware art: a Plex queue row carries a raw
+        // `/library/...` thumb path that must resolve to a tokenized PlexThumb,
+        // not a local-file read miss. Non-Plex paths ignore these.
+        let plex = crate::plex_settings::get();
+        load_artwork(self.weak.clone(), art_jobs, plex.base_url, plex.token);
     }
 
     // --- Callbacks --------------------------------------------------------
@@ -756,7 +760,12 @@ mod tests {
 
 /// Resolve cover art for each job and apply it onto the matching row in
 /// the `QueueState` global. One task per cover; misses are skipped.
-fn load_artwork(weak: slint::Weak<AppWindow>, jobs: Vec<(ArtTarget, String)>) {
+fn load_artwork(
+    weak: slint::Weak<AppWindow>,
+    jobs: Vec<(ArtTarget, String)>,
+    plex_base_url: String,
+    plex_token: String,
+) {
     let Some(cache) = crate::artwork::shared_cache() else {
         return;
     };
@@ -764,13 +773,22 @@ fn load_artwork(weak: slint::Weak<AppWindow>, jobs: Vec<(ArtTarget, String)>) {
         let weak = weak.clone();
         let cache = cache.clone();
         // Source-aware: queue covers may be remote (Qobuz) OR local file
-        // paths (Local Library / offline). Route file paths through
-        // ArtworkRef::LocalFile so they decode from disk instead of an HTTP
-        // fetch (which silently failed, leaving local rows art-less).
+        // paths (Local Library / offline) OR a raw Plex thumb path. Route file
+        // paths through ArtworkRef::LocalFile (decode from disk), and a bare
+        // `/library/`-or-`/photo/` Plex path through ArtworkRef::PlexThumb with
+        // current creds (tokenized HTTP fetch) — a raw local read of a Plex
+        // path 404s/misses, leaving Plex rows art-less.
+        let is_plex_path = url.starts_with("/library/") || url.starts_with("/photo/");
         let art = if url.starts_with("http://") || url.starts_with("https://") {
             qbz_models::ArtworkRef::Remote(url)
         } else if let Some(p) = url.strip_prefix("file://") {
             qbz_models::ArtworkRef::LocalFile(p.to_string())
+        } else if is_plex_path && !plex_base_url.is_empty() && !plex_token.is_empty() {
+            qbz_models::ArtworkRef::PlexThumb {
+                base_url: plex_base_url.clone(),
+                token: plex_token.clone(),
+                path: url,
+            }
         } else {
             qbz_models::ArtworkRef::LocalFile(url)
         };

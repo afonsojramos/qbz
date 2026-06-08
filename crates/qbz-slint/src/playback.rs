@@ -627,18 +627,6 @@ pub fn play_local_tracks_from(
 /// them) + `source = "qobuz_download"`; user files carry the library row id +
 /// `source = "local"`.
 fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
-    let artwork_url = track.artwork_path.as_ref().map(|p| {
-        if p.starts_with("file://") {
-            p.clone()
-        } else {
-            format!("file://{p}")
-        }
-    });
-    let sample_rate_khz = if track.sample_rate >= 1000.0 {
-        track.sample_rate / 1000.0
-    } else {
-        track.sample_rate
-    };
     // Source-aware: offline copies read as Qobuz downloads (carry the Qobuz id
     // so the shared resolver finds them); ephemeral tracks keep their synthetic
     // high id + an "ephemeral" tag so playback routes to the in-memory store;
@@ -651,6 +639,23 @@ fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
     };
     let is_offline = src == "qobuz_download";
     let is_plex = src == "plex";
+    // Artwork: a Plex row carries a raw server-relative thumb path
+    // (`/library/metadata/.../thumb/...`); it must stay RAW so the now-playing
+    // bar, queue panel, and MPRIS resolve it to a tokenized `PlexThumb` from
+    // current creds. `file://`-prefixing it (as for real local files) poisons
+    // it into a local-read miss on all three surfaces.
+    let artwork_url = track.artwork_path.as_ref().map(|p| {
+        if is_plex || p.starts_with("file://") {
+            p.clone()
+        } else {
+            format!("file://{p}")
+        }
+    });
+    let sample_rate_khz = if track.sample_rate >= 1000.0 {
+        track.sample_rate / 1000.0
+    } else {
+        track.sample_rate
+    };
     QueueTrack {
         id: if is_offline {
             track.qobuz_track_id.unwrap_or(track.id) as u64
@@ -807,7 +812,13 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     // add-to-playlist, track-info) are gated off in the UI via this flag.
     let is_ephemeral = crate::ephemeral::is_ephemeral_id(track.id as i64);
     let duration = track.duration_secs;
-    let artwork = track.artwork_ref();
+    // Plex-aware: a Plex track carries a raw `/library/...` thumb path that
+    // must resolve to a tokenized `PlexThumb` (from current creds) so the
+    // now-playing bar, MPRIS (`to_mpris_url`), and the desktop notification all
+    // get the fetchable cover. For non-Plex tracks this is identical to
+    // `artwork_ref()` (it falls back cleanly).
+    let plex = crate::plex_settings::get();
+    let artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token);
     // Quality badge: tier from bit depth (24-bit+ = Hi-Res), exact detail line
     // reused from the shared formatter so it matches the track-row badges.
     let quality_tier = match track.bit_depth {
