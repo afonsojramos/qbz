@@ -35,13 +35,18 @@ import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { SourceGlyph } from "../primitives/SourceGlyph.slint";
+import { SelectionCheckbox } from "../primitives/SelectionCheckbox.slint";
+import { LoadingDots } from "../primitives/LoadingDots.slint";
 import { CollectionMosaic } from "CollectionMosaic.slint";
 
-// --- One type / source filter dropdown row ------------------------------
+// --- One type / source filter CHECKBOX row ------------------------------
+// A leading circular SelectionCheckbox (the app-wide multi-select idiom) + a
+// label. Used for both the single-select Type section (exclusive — picking one
+// unchecks the others, handled controller-side) and the multi-select Source
+// section. Replaces the old text+trailing-check dropdown row.
 component MenuOption inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
-    in property <bool> check: false;       // trailing Check (filter selection)
     callback chosen();
     height: 30px;
     border-radius: 4px;
@@ -50,21 +55,19 @@ component MenuOption inherits Rectangle {
         padding-left: 8px;
         padding-right: 8px;
         spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            SelectionCheckbox {
+                checked: root.selected;
+                toggled => { root.chosen(); }
+            }
+        }
         Text {
             text: root.label;
             color: root.selected ? Theme.accent : Theme.text-primary;
             font-size: Typography.legal;
             vertical-alignment: center;
             horizontal-stretch: 1;
-        }
-        if root.check && root.selected: VerticalLayout {
-            alignment: center;
-            QbzIcon {
-                source: @image-url("../assets/icons/check.svg");
-                width: 12px;
-                height: 12px;
-                tint: Theme.accent;
-            }
         }
     }
     mo-ta := TouchArea {
@@ -84,13 +87,20 @@ component ToolBtn inherits Rectangle {
     in property <string> label;       // "" -> icon-only
     in property <int> badge: 0;       // filter count badge (0 = hidden)
     in property <bool> active: false;
+    // Labeled-active idiom (the Favorites FavGenreButton): active = accent FILL +
+    // white icon/text. When false (icon-only ToolBtns: select/reset), active is
+    // the LocalLibrary accent-BORDER idiom instead. Defaults to whichever fits
+    // the label state so callers don't have to set it.
+    in property <bool> fill-active: root.label != "";
     callback clicked();
     height: 30px;
     border-radius: 6px;
     width: row.preferred-width + (root.label == "" ? 16px : 20px);
-    background: cb-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+    background: (root.active && root.fill-active)
+        ? Theme.accent
+        : (cb-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated);
     border-width: 1px;
-    border-color: root.active ? Theme.accent : Theme.border-subtle;
+    border-color: (root.active && !root.fill-active) ? Theme.accent : Theme.border-subtle;
     row := HorizontalLayout {
         x: root.label == "" ? 8px : 10px;
         height: 100%;
@@ -102,12 +112,16 @@ component ToolBtn inherits Rectangle {
                 source: root.icon;
                 width: 15px;
                 height: 15px;
-                tint: root.active ? Theme.text-primary : Theme.text-muted;
+                tint: (root.active && root.fill-active)
+                    ? #ffffff
+                    : (root.active ? Theme.text-primary : Theme.text-muted);
             }
         }
         if root.label != "": Text {
             text: root.label;
-            color: root.active ? Theme.text-primary : Theme.text-secondary;
+            color: (root.active && root.fill-active)
+                ? #ffffff
+                : (root.active ? Theme.text-primary : Theme.text-secondary);
             font-size: 12px;
             vertical-alignment: center;
         }
@@ -115,10 +129,10 @@ component ToolBtn inherits Rectangle {
             width: 16px;
             height: 16px;
             border-radius: 8px;
-            background: Theme.accent;
+            background: (root.active && root.fill-active) ? #ffffff : Theme.accent;
             Text {
                 text: root.badge;
-                color: Theme.accent-text;
+                color: (root.active && root.fill-active) ? Theme.accent : Theme.accent-text;
                 font-size: 10px;
                 font-weight: Typography.semibold;
                 horizontal-alignment: center;
@@ -190,27 +204,11 @@ component DetailRow inherits Rectangle {
         // Col 1 — # / checkbox (40px).
         Rectangle {
             width: 40px;
-            if root.select-mode: Rectangle {
-                width: 15px;
-                height: 15px;
+            if root.select-mode: SelectionCheckbox {
                 x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                 y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                border-radius: 3px;
-                border-width: 1px;
-                border-color: root.item.selected ? Theme.accent : Theme.text-muted;
-                background: root.item.selected ? Theme.accent : transparent;
-                if root.item.selected: QbzIcon {
-                    source: @image-url("../assets/icons/check.svg");
-                    width: 11px;
-                    height: 11px;
-                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                    tint: Theme.accent-text;
-                }
-                cb-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { MyQbzDetailActions.toggle-item-select(root.item.position); }
-                }
+                checked: root.item.selected;
+                toggled => { MyQbzDetailActions.toggle-item-select(root.item.position); }
             }
             if !root.select-mode: Text {
                 text: root.index;
@@ -357,12 +355,18 @@ component DetailRow inherits Rectangle {
         }
 
         // Col 5 — quality (160px). Fed from the resolveItems pass (the row's
-        // album-level quality, derived from its first resolved track).
+        // album-level quality, derived from its first resolved track). While
+        // that async resolve is pending, a LoadingDots skeleton (the app's
+        // loading idiom) fills the cell instead of leaving it empty.
         Rectangle {
             width: 160px;
             if root.item.quality-tier != "": QualityBadgeFull {
                 tier: root.item.quality-tier;
                 detail: root.item.quality-detail;
+                x: 0;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+            }
+            if root.item.quality-tier == "" && root.item.quality-resolving: LoadingDots {
                 x: 0;
                 y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             }
@@ -505,27 +509,21 @@ component DetailCard inherits Rectangle {
                 y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 tint: Theme.text-muted;
             }
-            // Select checkbox (top-left) OR hover play overlay.
+            // Select checkbox (top-left) OR hover play overlay. The circular
+            // checkbox sits on a dark disc so it stays legible over a bright
+            // cover (the row variant rides surface-hover and needs no backing).
             if root.select-mode: Rectangle {
-                x: 8px;
-                y: 8px;
-                width: 18px;
-                height: 18px;
-                border-radius: 3px;
-                background: root.item.selected ? Theme.accent : #0000008c;
-                border-width: 1px;
-                border-color: root.item.selected ? Theme.accent : Theme.text-muted;
-                if root.item.selected: QbzIcon {
-                    source: @image-url("../assets/icons/check.svg");
-                    width: 12px;
-                    height: 12px;
+                x: 6px;
+                y: 6px;
+                width: 22px;
+                height: 22px;
+                border-radius: 11px;
+                background: root.item.selected ? transparent : #0000008c;
+                SelectionCheckbox {
                     x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                     y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                    tint: Theme.accent-text;
-                }
-                gcb-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { MyQbzDetailActions.toggle-item-select(root.item.position); }
+                    checked: root.item.selected;
+                    toggled => { MyQbzDetailActions.toggle-item-select(root.item.position); }
                 }
             }
             if !root.select-mode: Rectangle {
@@ -896,15 +894,20 @@ export component MixtapeDetailView inherits Rectangle {
                         }
                     }
 
-                    // Type + source filter (bordered icon button + badge, the
-                    // LocalLibrary quality-filter idiom; multi-section popup).
+                    // Type + source filter — LABELED filter button (the
+                    // Favorites FavGenreButton idiom: icon + text, active =
+                    // accent fill + "N filters") opening a CHECKBOX popup.
                     Rectangle {
                         width: filter-btn.width;
                         VerticalLayout {
                             alignment: center;
                             filter-btn := ToolBtn {
                                 icon: @image-url("../assets/icons/list-filter.svg");
-                                badge: MyQbzDetailState.filter-count;
+                                label: MyQbzDetailState.filter-count > 0
+                                    ? (MyQbzDetailState.filter-count == 1
+                                        ? @tr("1 filter")
+                                        : @tr("{} filters", MyQbzDetailState.filter-count))
+                                    : @tr("Filter");
                                 active: MyQbzDetailState.filter-count > 0;
                                 clicked => { filter-menu.show(); }
                             }
@@ -936,25 +939,21 @@ export component MixtapeDetailView inherits Rectangle {
                                     MenuOption {
                                         label: @tr("All types");
                                         selected: MyQbzDetailState.type-filter == "all";
-                                        check: true;
                                         chosen => { MyQbzDetailActions.set-type-filter("all"); }
                                     }
                                     MenuOption {
                                         label: @tr("Album");
                                         selected: MyQbzDetailState.type-filter == "album";
-                                        check: true;
                                         chosen => { MyQbzDetailActions.set-type-filter("album"); }
                                     }
                                     MenuOption {
                                         label: @tr("Track");
                                         selected: MyQbzDetailState.type-filter == "track";
-                                        check: true;
                                         chosen => { MyQbzDetailActions.set-type-filter("track"); }
                                     }
                                     MenuOption {
                                         label: @tr("Playlist");
                                         selected: MyQbzDetailState.type-filter == "playlist";
-                                        check: true;
                                         chosen => { MyQbzDetailActions.set-type-filter("playlist"); }
                                     }
                                     Rectangle { height: 1px; background: Theme.surface-elevated; }
@@ -972,19 +971,16 @@ export component MixtapeDetailView inherits Rectangle {
                                     MenuOption {
                                         label: @tr("Qobuz");
                                         selected: MyQbzDetailState.src-qobuz;
-                                        check: true;
                                         chosen => { MyQbzDetailActions.toggle-source-filter("qobuz"); }
                                     }
                                     MenuOption {
                                         label: @tr("Plex");
                                         selected: MyQbzDetailState.src-plex;
-                                        check: true;
                                         chosen => { MyQbzDetailActions.toggle-source-filter("plex"); }
                                     }
                                     MenuOption {
                                         label: @tr("Local");
                                         selected: MyQbzDetailState.src-local;
-                                        check: true;
                                         chosen => { MyQbzDetailActions.toggle-source-filter("local"); }
                                     }
                                 }
@@ -1002,12 +998,13 @@ export component MixtapeDetailView inherits Rectangle {
                         }
                     }
 
-                    // Select / Cancel.
+                    // Select / Cancel — ICON-ONLY (no text label), matching the
+                    // app's Favorites/LocalLibrary multi-select toggle. `active`
+                    // (select-mode on) is the only state cue.
                     VerticalLayout {
                         alignment: center;
                         ToolBtn {
                             icon: @image-url("../assets/icons/square-check-big.svg");
-                            label: MyQbzDetailState.select-mode ? @tr("Cancel") : @tr("Select");
                             active: MyQbzDetailState.select-mode;
                             clicked => { MyQbzDetailActions.toggle-select-mode(); }
                         }

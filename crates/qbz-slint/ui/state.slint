@@ -1586,9 +1586,14 @@ export struct MixtapeDetailItem {
     // Type-cell label (already localized): "ALBUM" / "TRACK" / "PLAYLIST"
     // (or an EP/Single/… release-type override — overrides are a later slice).
     type-label: string,
-    // Quality badge inputs (resolved; empty/0 until resolveItems — deferred).
+    // Quality badge inputs (resolved by the resolveItems pass).
     quality-tier: string,    // "hires" | "cd" | ""
     quality-detail: string,  // "24-bit / 96 kHz" | ""
+    // True while the async resolveItems pass is still pending for this row (no
+    // cached resolution yet). Drives the quality-cell LoadingDots skeleton —
+    // shown only during the resolve window, collapsing to the real badge (or an
+    // empty cell for a no-quality item) once resolution completes.
+    quality-resolving: bool,
     // TRACKS column: "1" for a track, else the count or "—".
     tracks-text: string,
     // YEAR column: the year or "".

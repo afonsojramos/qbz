@@ -407,7 +407,15 @@ pub fn fetch_local_and_plex(artist_name: &str) -> Vec<Candidate> {
         return Vec::new();
     }
     let plex_path = plex_cache_db_path();
-    let albums = crate::library_db::with_db(|db| {
+    // Map INSIDE the `with_db` closure so `db.resolve_album_cover_fallback` is
+    // reachable (mirrors the Albums grid at local_library.rs:500-514): the cover
+    // PATH rides on the candidate's `artwork_url`, so the saved collection item
+    // carries it and the detail rows render the real cover instead of the disc
+    // placeholder. Plex rows arrive with a non-empty `/library/...` thumb path;
+    // local rows carry `a.artwork_path`, with the same cover.jpg/folder.jpg
+    // on-disk fallback the grid uses so a DB row missing artwork_path still
+    // resolves a cover.
+    crate::library_db::with_db(|db| {
         let page = db.get_albums_metadata_page(
             0,
             1_000_000,
@@ -418,58 +426,66 @@ pub fn fetch_local_and_plex(artist_name: &str) -> Vec<Candidate> {
             true,
             plex_path.as_deref(),
         )?;
-        Ok(page.albums)
+        let out: Vec<Candidate> = page
+            .albums
+            .into_iter()
+            .filter(|a| matches_artist(&a.artist, &a.all_artists, artist_name))
+            .map(|a| {
+                let source = if a.source == "plex" { "plex" } else { "local" }.to_string();
+                let year = a.year.map(|y| y as i32);
+                let track_count = if a.track_count > 0 {
+                    Some(a.track_count as i32)
+                } else {
+                    None
+                };
+                let bit = a.bit_depth;
+                // LocalAlbum.sample_rate is Hz; the candidate carries kHz.
+                let rate_khz = if a.sample_rate >= 1000.0 {
+                    Some(a.sample_rate / 1000.0)
+                } else if a.sample_rate > 0.0 {
+                    Some(a.sample_rate)
+                } else {
+                    None
+                };
+                // Cover path: the row's own artwork_path, else the on-disk
+                // cover.jpg/folder.jpg fallback (local only — Plex rows already
+                // carry a non-empty thumb path so the fallback no-ops).
+                let artwork_url = a
+                    .artwork_path
+                    .clone()
+                    .filter(|p| !p.is_empty())
+                    .or_else(|| db.resolve_album_cover_fallback(&a.id));
+                let format = a.format.to_string();
+                let title = a.title.clone();
+                let title_comp = title_is_compilation(&title);
+                let release_type = classify_release(&title, track_count, None, None, title_comp);
+                let is_comp = release_type == "compilation";
+                let group_key = format!(
+                    "{}|{}",
+                    normalize_title(&title),
+                    year.map(|y| y.to_string()).unwrap_or_default()
+                );
+                Candidate {
+                    group_key,
+                    source,
+                    source_item_id: a.id,
+                    title,
+                    artist: a.artist,
+                    year,
+                    artwork_url,
+                    track_count,
+                    max_bit_depth: bit,
+                    max_sample_rate: rate_khz,
+                    format,
+                    is_compilation: is_comp,
+                    release_type,
+                    quality_score: quality_score(bit, rate_khz, &a.format.to_string()),
+                }
+            })
+            .collect();
+        Ok(out)
     })
-    .unwrap_or_default();
-
-    albums
-        .into_iter()
-        .filter(|a| matches_artist(&a.artist, &a.all_artists, artist_name))
-        .map(|a| {
-            let source = if a.source == "plex" { "plex" } else { "local" }.to_string();
-            let year = a.year.map(|y| y as i32);
-            let track_count = if a.track_count > 0 {
-                Some(a.track_count as i32)
-            } else {
-                None
-            };
-            let bit = a.bit_depth;
-            // LocalAlbum.sample_rate is Hz; the candidate carries kHz.
-            let rate_khz = if a.sample_rate >= 1000.0 {
-                Some(a.sample_rate / 1000.0)
-            } else if a.sample_rate > 0.0 {
-                Some(a.sample_rate)
-            } else {
-                None
-            };
-            let format = a.format.to_string();
-            let title = a.title.clone();
-            let title_comp = title_is_compilation(&title);
-            let release_type = classify_release(&title, track_count, None, None, title_comp);
-            let is_comp = release_type == "compilation";
-            let group_key = format!(
-                "{}|{}",
-                normalize_title(&title),
-                year.map(|y| y.to_string()).unwrap_or_default()
-            );
-            Candidate {
-                group_key,
-                source,
-                source_item_id: a.id,
-                title,
-                artist: a.artist,
-                year,
-                artwork_url: None,
-                track_count,
-                max_bit_depth: bit,
-                max_sample_rate: rate_khz,
-                format,
-                is_compilation: is_comp,
-                release_type,
-                quality_score: quality_score(bit, rate_khz, &a.format.to_string()),
-            }
-        })
-        .collect()
+    .unwrap_or_default()
 }
 
 // ──────────────────────────── buildGroups ─────────────────────────────────

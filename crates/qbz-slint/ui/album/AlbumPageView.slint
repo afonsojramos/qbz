@@ -19,48 +19,8 @@ import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
 import { TrackContextMenu } from "../primitives/TrackContextMenu.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
+import { CircleAction } from "../primitives/CircleAction.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
-
-component CircleAction inherits Rectangle {
-    in property <image> icon;
-    in property <bool> primary: false;
-    // While the album's first track is fetching, the icon swaps for a spinner.
-    in property <bool> loading: false;
-    in property <length> diameter: 40px;
-    callback clicked();
-
-    width: root.diameter;
-    height: root.diameter;
-    border-radius: root.diameter / 2;
-    // Ghost circle — translucent fill with a faint ring, never a solid
-    // accent fill (mirrors the Tauri transport controls).
-    background: ta.has-hover ? Theme.surface-hover : transparent;
-    border-width: 1px;
-    border-color: ta.has-hover ? Theme.text-disabled : Theme.border-subtle;
-
-    if !root.loading: QbzIcon {
-        source: root.icon;
-        width: root.primary ? 19px : 17px;
-        height: root.primary ? 19px : 17px;
-        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-        tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
-    }
-
-    if root.loading: LoadingSpinner {
-        size: root.diameter * 0.45;
-        tint: Theme.accent;
-        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
 
 // One label/award entry in the album sidebar — a round gradient avatar
 // and a name.

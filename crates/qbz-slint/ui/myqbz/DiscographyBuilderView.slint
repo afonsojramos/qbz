@@ -20,6 +20,7 @@ import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { QbzPrimaryButton } from "../primitives/QbzPrimaryButton.slint";
 import { SecondaryButton } from "../primitives/SecondaryButton.slint";
 import { SourceGlyph } from "../primitives/SourceGlyph.slint";
+import { SelectionCheckbox } from "../primitives/SelectionCheckbox.slint";
 
 // ── Release-type label tints (spec §0) ────────────────────────────────────
 // The ONE legitimately-hardcoded palette in this view: the per-release-type
@@ -289,27 +290,11 @@ component CandidateRow inherits Rectangle {
                 }
                 VerticalLayout {
                     alignment: center;
-                    Rectangle {
-                        width: 15px;
-                        height: 15px;
-                        border-radius: 3px;
-                        background: root.candidate.checked ? Theme.accent : transparent;
-                        border-width: root.candidate.checked ? 0px : 1.5px;
-                        border-color: Theme.text-muted;
-                        if root.candidate.checked: QbzIcon {
-                            source: @image-url("../assets/icons/check.svg");
-                            width: 11px;
-                            height: 11px;
-                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                            tint: Theme.accent-text;
-                        }
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                DiscoBuilderActions.toggle-checked(
-                                    root.group-key, root.candidate.key);
-                            }
+                    SelectionCheckbox {
+                        checked: root.candidate.checked;
+                        toggled => {
+                            DiscoBuilderActions.toggle-checked(
+                                root.group-key, root.candidate.key);
                         }
                     }
                 }
@@ -665,43 +650,22 @@ export component DiscographyBuilderView inherits Rectangle {
                             padding-left: 8px;
                             padding-right: 8px;
                             spacing: 10px;
-                            // [0] 28px — select-all checkbox (tri-state).
+                            // [0] 28px — select-all checkbox (tri-state). The
+                            // indeterminate state renders minus.svg inside the
+                            // same circular accent box (the TreeRow idiom), NOT a
+                            // hand-drawn dash.
                             Rectangle {
                                 width: 28px;
                                 HorizontalLayout {
                                     alignment: start;
                                     VerticalLayout {
                                         alignment: center;
-                                        Rectangle {
-                                            width: 15px;
-                                            height: 15px;
-                                            border-radius: 3px;
-                                            background: DiscoBuilderState.all-checked
-                                                ? Theme.accent : transparent;
-                                            border-width: DiscoBuilderState.all-checked ? 0px : 1.5px;
-                                            border-color: Theme.text-muted;
-                                            if DiscoBuilderState.all-checked: QbzIcon {
-                                                source: @image-url("../assets/icons/check.svg");
-                                                width: 11px;
-                                                height: 11px;
-                                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                                                tint: Theme.accent-text;
-                                            }
-                                            // Indeterminate dash.
-                                            if !DiscoBuilderState.all-checked
-                                                && DiscoBuilderState.some-checked: Rectangle {
-                                                width: 9px;
-                                                height: 2px;
-                                                background: Theme.accent;
-                                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                                            }
-                                            TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    DiscoBuilderActions.toggle-all();
-                                                }
+                                        SelectionCheckbox {
+                                            checked: DiscoBuilderState.all-checked;
+                                            partial: !DiscoBuilderState.all-checked
+                                                && DiscoBuilderState.some-checked;
+                                            toggled => {
+                                                DiscoBuilderActions.toggle-all();
                                             }
                                         }
                                     }

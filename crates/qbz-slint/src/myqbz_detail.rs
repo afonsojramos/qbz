@@ -110,6 +110,11 @@ struct ResolvedItem {
     quality_detail: String,
     /// Uppercased TYPE-column label (ALBUM / EP / SINGLE / TRACK / PLAYLIST).
     type_label: String,
+    /// First resolved track's artwork (bare local file path / Plex
+    /// `/library/...` thumb / Qobuz URL — the `file://` prefix is stripped).
+    /// Backfills rows whose stored `artwork_url` was empty (e.g. disco-builder
+    /// local items saved with NULL art before the builder carried the cover).
+    artwork_url: String,
 }
 
 /// Persist the open collection's current toolbar prefs (spec 12 §18), gated on
@@ -253,7 +258,7 @@ fn to_item(item: &MixtapeCollectionItem) -> MixtapeDetailItem {
     // a LOCAL filesystem path (or a Plex `/library/...` path) corrupts/no-ops it.
     // Gate the rewrite to Qobuz items; local/plex artwork passes through raw so
     // the source-aware artwork dispatch can read it as a file/Plex thumb.
-    let artwork_url = item
+    let mut artwork_url = item
         .artwork_url
         .as_deref()
         .filter(|u| !u.is_empty())
@@ -267,19 +272,30 @@ fn to_item(item: &MixtapeCollectionItem) -> MixtapeDetailItem {
         .unwrap_or_default();
 
     // Re-hydrate the live-resolved display values (source kind, quality
-    // tier/detail, type label) from the resolveItems cache so a filter/sort/
-    // search re-derive keeps the columns populated without re-fetching. A miss
-    // falls back to the stored-source defaults (qobuz/local + no quality), which
-    // the `resolve_items` pass then fills in.
+    // tier/detail, type label, backfilled artwork) from the resolveItems cache
+    // so a filter/sort/search re-derive keeps the columns populated without
+    // re-fetching. A miss falls back to the stored-source defaults (qobuz/local
+    // + no quality), which the `resolve_items` pass then fills in. On a miss the
+    // row is flagged `quality_resolving` so the quality cell shows a skeleton
+    // until the async pass lands.
     let cache_key = inline_cache_key(source, &item.source_item_id);
     let resolved = RESOLVE_CACHE.with(|cell| cell.borrow().get(&cache_key).cloned());
-    let (source_kind, quality_tier, quality_detail, type_label) = match resolved {
-        Some(r) => (r.source_kind, r.quality_tier, r.quality_detail, r.type_label),
+    let (source_kind, quality_tier, quality_detail, type_label, quality_resolving) = match resolved
+    {
+        Some(r) => {
+            // Backfill the row cover from the resolved track when the stored
+            // `artwork_url` was empty (disco-builder local items, older saves).
+            if artwork_url.is_empty() && !r.artwork_url.is_empty() {
+                artwork_url = r.artwork_url.clone();
+            }
+            (r.source_kind, r.quality_tier, r.quality_detail, r.type_label, false)
+        }
         None => (
             source.to_string(),
             String::new(),
             String::new(),
             type_label(item.item_type).to_string(),
+            true,
         ),
     };
 
@@ -311,6 +327,7 @@ fn to_item(item: &MixtapeCollectionItem) -> MixtapeDetailItem {
         type_label: type_label.into(),
         quality_tier: quality_tier.into(),
         quality_detail: quality_detail.into(),
+        quality_resolving,
         tracks_text: tracks_text(item).into(),
         year_text: year_text(item).into(),
         artwork_url: artwork_url.into(),
@@ -819,11 +836,23 @@ fn resolve_from_tracks(
         other => type_label(other).to_string(),
     };
 
+    // First resolved track's artwork — backfills rows whose stored
+    // `artwork_url` was empty (disco-builder local items saved with NULL art).
+    // Strip the `file://` prefix that `local_queue_track` adds: the source-aware
+    // artwork dispatch reads a bare filesystem path (a raw `tokio::fs::read` of a
+    // `file://…` URI fails). Plex `/library/...` thumbs and Qobuz CDN urls have
+    // no prefix and pass through unchanged.
+    let artwork_url = first
+        .and_then(|t| t.artwork_url.clone())
+        .map(|u| u.strip_prefix("file://").map(str::to_string).unwrap_or(u))
+        .unwrap_or_default();
+
     ResolvedItem {
         source_kind,
         quality_tier: quality_tier.to_string(),
         quality_detail,
         type_label,
+        artwork_url,
     }
 }
 
@@ -840,6 +869,7 @@ pub fn resolve_items(
     runtime: std::sync::Arc<qbz_app::shell::AppRuntime<crate::adapter::SlintAdapter>>,
     weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
+    image_cache: ImageCache,
 ) {
     let Some(window) = weak.upgrade() else { return };
 
@@ -861,24 +891,58 @@ pub fn resolve_items(
     for full_item in pending {
         let runtime = runtime.clone();
         let weak = weak.clone();
+        let image_cache = image_cache.clone();
         handle.spawn(async move {
             let tracks = crate::myqbz_play::fetch_item_tracks(&runtime, &full_item).await;
             let resolved = resolve_from_tracks(&full_item, &tracks);
             let source = source_str(full_item.source).to_string();
             let source_item_id = full_item.source_item_id.clone();
+            let stored_artwork_empty = full_item
+                .artwork_url
+                .as_deref()
+                .map(|u| u.is_empty())
+                .unwrap_or(true);
             let _ = weak.upgrade_in_event_loop(move |w| {
                 let key = inline_cache_key(&source, &source_item_id);
                 RESOLVE_CACHE.with(|cell| {
                     cell.borrow_mut().insert(key, resolved.clone());
                 });
                 // Push the resolved values into the currently-rendered row (if
-                // still present after any re-derive).
+                // still present after any re-derive). Clear `quality_resolving`
+                // (the skeleton) and backfill the row cover when the stored
+                // `artwork_url` was empty (disco-builder local items, older
+                // saves) so the disc placeholder is replaced by the real art —
+                // the album-view pattern applied to the detail rows.
+                let mut backfilled_pos: Option<i32> = None;
                 with_row_by_source_id(&w, &source_item_id, |it| {
                     it.source_kind = resolved.source_kind.clone().into();
                     it.quality_tier = resolved.quality_tier.clone().into();
                     it.quality_detail = resolved.quality_detail.clone().into();
                     it.type_label = resolved.type_label.clone().into();
+                    it.quality_resolving = false;
+                    if it.artwork_url.is_empty() && !resolved.artwork_url.is_empty() {
+                        it.artwork_url = resolved.artwork_url.clone().into();
+                        backfilled_pos = Some(it.position);
+                    }
                 });
+                // Dispatch the one backfilled cover through the source-aware
+                // path (qobuz CDN -> HTTP; local/plex -> source-aware decode).
+                // Only when the stored art was empty AND a row was actually
+                // backfilled (skips the common already-had-art case).
+                if stored_artwork_empty {
+                    if let Some(pos) = backfilled_pos {
+                        let job = ArtworkJob {
+                            target: ArtworkTarget::MyQbzDetailRow { position: pos },
+                            url: resolved.artwork_url.clone(),
+                        };
+                        let split = if resolved.source_kind == "qobuz" {
+                            ArtworkJobSplit { remote: vec![job], ..Default::default() }
+                        } else {
+                            ArtworkJobSplit { local_or_plex: vec![job], ..Default::default() }
+                        };
+                        dispatch_artwork(split, w.as_weak(), image_cache.clone());
+                    }
+                }
             });
         });
     }
@@ -1175,8 +1239,9 @@ pub fn navigate(
                 let split = artwork_jobs(&w);
                 dispatch_artwork(split, w.as_weak(), image_cache.clone());
                 // resolveItems (spec §17): resolve each item's quality / source
-                // kind / type from the backends and hydrate the rows.
-                resolve_items(runtime, w.as_weak(), resolve_handle);
+                // kind / type from the backends and hydrate the rows (also
+                // backfills + dispatches covers for rows stored with empty art).
+                resolve_items(runtime, w.as_weak(), resolve_handle, image_cache.clone());
             }
             None => {
                 log::warn!("[qbz-slint] myqbz_detail navigate({id}): collection not found");
