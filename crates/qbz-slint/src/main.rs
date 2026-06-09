@@ -2399,52 +2399,84 @@ fn wire_myqbz_detail(
         artwork::spawn_loads(jobs, window.as_weak(), image_cache.clone());
     }
 
+    // A toolbar re-derive rebuilds the rendered model with fresh rows
+    // (tracks_loaded reset to false). While in expanded view-mode the new
+    // visible rows must (re-)fetch their inline tracks (spec §8 auto-fetch).
+    fn ensure_expanded_if_active(
+        window: &AppWindow,
+        runtime: &Arc<AppRuntime<SlintAdapter>>,
+        handle: &tokio::runtime::Handle,
+    ) {
+        if window.global::<MyQbzDetailState>().get_view_mode() == "expanded" {
+            myqbz_detail::ensure_expanded(runtime.clone(), window.as_weak(), handle.clone());
+        }
+    }
+
     // --- Toolbar (client-side re-derive) --------------------------------
     {
         let weak = window.as_weak();
         let image_cache = image_cache.clone();
+        let runtime = app_runtime.clone();
+        let handle = tokio_rt.handle().clone();
         window.global::<Act>().on_search_changed(move |q| {
             if let Some(w) = weak.upgrade() {
                 myqbz_detail::search(&w, q.as_str());
                 refresh_row_covers(&w, &image_cache);
+                ensure_expanded_if_active(&w, &runtime, &handle);
             }
         });
     }
     {
         let weak = window.as_weak();
         let image_cache = image_cache.clone();
+        let runtime = app_runtime.clone();
+        let handle = tokio_rt.handle().clone();
         window.global::<Act>().on_set_sort(move |field| {
             if let Some(w) = weak.upgrade() {
                 myqbz_detail::set_sort(&w, field.as_str());
                 refresh_row_covers(&w, &image_cache);
+                ensure_expanded_if_active(&w, &runtime, &handle);
             }
         });
     }
     {
         let weak = window.as_weak();
         let image_cache = image_cache.clone();
+        let runtime = app_runtime.clone();
+        let handle = tokio_rt.handle().clone();
         window.global::<Act>().on_set_type_filter(move |value| {
             if let Some(w) = weak.upgrade() {
                 myqbz_detail::set_type_filter(&w, value.as_str());
                 refresh_row_covers(&w, &image_cache);
+                ensure_expanded_if_active(&w, &runtime, &handle);
             }
         });
     }
     {
         let weak = window.as_weak();
         let image_cache = image_cache.clone();
+        let runtime = app_runtime.clone();
+        let handle = tokio_rt.handle().clone();
         window.global::<Act>().on_toggle_source_filter(move |kind| {
             if let Some(w) = weak.upgrade() {
                 myqbz_detail::toggle_source_filter(&w, kind.as_str());
                 refresh_row_covers(&w, &image_cache);
+                ensure_expanded_if_active(&w, &runtime, &handle);
             }
         });
     }
     {
         let weak = window.as_weak();
+        let runtime = app_runtime.clone();
+        let handle = tokio_rt.handle().clone();
         window.global::<Act>().on_set_view_mode(move |mode| {
             if let Some(w) = weak.upgrade() {
-                w.global::<MyQbzDetailState>().set_view_mode(mode);
+                w.global::<MyQbzDetailState>().set_view_mode(mode.clone());
+                // Entering expanded mode: fetch every expandable item's tracks
+                // (spec §8 — tracks render directly under each row).
+                if mode == "expanded" {
+                    myqbz_detail::ensure_expanded(runtime.clone(), weak.clone(), handle.clone());
+                }
             }
         });
     }
@@ -2467,10 +2499,13 @@ fn wire_myqbz_detail(
     {
         let weak = window.as_weak();
         let image_cache = image_cache.clone();
+        let runtime = app_runtime.clone();
+        let handle = tokio_rt.handle().clone();
         window.global::<Act>().on_reset_filters(move || {
             if let Some(w) = weak.upgrade() {
                 myqbz_detail::reset_filters(&w);
                 refresh_row_covers(&w, &image_cache);
+                ensure_expanded_if_active(&w, &runtime, &handle);
             }
         });
     }
@@ -2862,6 +2897,49 @@ fn wire_myqbz_detail(
                     handle.clone(),
                     id,
                     source_item_id.to_string(),
+                    action.to_string(),
+                );
+            });
+    }
+
+    // --- Expanded view-mode: inline tracks under every album/playlist (§8) -
+    // Fired when the expanded view-mode becomes active; fetches each
+    // expandable item's tracks (skipping already-cached rows).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<Act>().on_ensure_expanded(move || {
+            myqbz_detail::ensure_expanded(runtime.clone(), weak.clone(), handle.clone());
+        });
+    }
+    // Inline-track row actions (play / play-next / play-later / go-to-album).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<Act>()
+            .on_inline_track_action(move |item_source_item_id, track_id, action| {
+                let Some(w) = weak.upgrade() else { return };
+                // go-to-album routes through the existing open-item path (Qobuz
+                // album view vs local-album by id), keeping nav in one place.
+                if action == "go-to-album" {
+                    w.global::<Act>()
+                        .invoke_open_item("".into(), "album".into(), item_source_item_id);
+                    return;
+                }
+                let id = w.global::<MyQbzDetailState>().get_id().to_string();
+                if id.is_empty() {
+                    return;
+                }
+                myqbz_play::play_inline_track(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id,
+                    item_source_item_id.to_string(),
+                    track_id.to_string(),
                     action.to_string(),
                 );
             });

@@ -23,8 +23,9 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { MyQbzDetailState, MyQbzDetailActions, MixtapeDetailItem, NavState } from "../state.slint";
+import { MyQbzDetailState, MyQbzDetailActions, MixtapeDetailItem, TrackItem, NavState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { TrackRow } from "../primitives/TrackRow.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
@@ -1326,28 +1327,85 @@ export component MixtapeDetailView inherits Rectangle {
                         background: Theme.surface-elevated;
                     }
 
-                    // Rows. Expanded mode renders the same rows; per-item inline
-                    // track expansion is DEFERRED (a later slice) — the mode
-                    // toggle + shell are present, but no inline TrackRows yet.
-                    for item[i] in MyQbzDetailState.items: DetailRow {
-                        item: item;
-                        index: i + 1;
-                        select-mode: MyQbzDetailState.select-mode;
-                    }
-
-                    // Expanded-mode deferred note (only when no rows would
-                    // otherwise hint at it): a thin caption so the toggle's
-                    // effect is discoverable without faking the feature.
-                    if MyQbzDetailState.view-mode == "expanded": Rectangle {
-                        height: 28px;
-                        Text {
-                            text: @tr("Inline tracks coming soon");
-                            color: Theme.text-muted;
-                            font-size: 11px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                    // Rows. In LIST mode each item is just its row. In EXPANDED
+                    // mode every album / playlist row is followed by its tracks
+                    // rendered directly underneath (spec 12 §8 — no chevron,
+                    // always visible, fetched once on entering expanded mode).
+                    for item[i] in MyQbzDetailState.items: VerticalLayout {
+                        spacing: 0px;
+                        DetailRow {
+                            item: item;
+                            index: i + 1;
+                            select-mode: MyQbzDetailState.select-mode;
+                        }
+                        // Inline tracks (.expanded-tracks): only in expanded
+                        // mode, only for album / playlist items. Left-indented
+                        // 52px to align under the artwork + gap.
+                        if MyQbzDetailState.view-mode == "expanded" && item.can-expand: Rectangle {
+                            // content-sized: the VerticalLayout below drives the
+                            // height (loading row / empty caption / N TrackRows).
+                            height: tracks-col.preferred-height;
+                            tracks-col := VerticalLayout {
+                                padding-left: 52px;
+                                padding-right: 12px;
+                                padding-top: 4px;
+                                padding-bottom: 8px;
+                                spacing: 0px;
+                                // Loading: spinner while the fetch is in flight
+                                // and nothing is cached yet.
+                                if item.expand-loading && item.inline-tracks.length == 0: Rectangle {
+                                    height: 32px;
+                                    LoadingSpinner {
+                                        size: 16px;
+                                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                                    }
+                                }
+                                // Loaded but empty: the "no results" caption.
+                                if !item.expand-loading && item.tracks-loaded
+                                        && item.inline-tracks.length == 0: Rectangle {
+                                    height: 32px;
+                                    Text {
+                                        text: @tr("No results found");
+                                        color: Theme.text-muted;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                                    }
+                                }
+                                // Tracks: one shared TrackRow per resolved track.
+                                // hide-download + hide-favorite for inline rows
+                                // (spec 12 §8 props); per-source menu logic is
+                                // handled inside TrackRow by track.source.
+                                for et[ti] in item.inline-tracks: TrackRow {
+                                    track: et;
+                                    index: ti;
+                                    show-artwork: false;
+                                    show-favorite: false;
+                                    show-download: false;
+                                    show-source: false;
+                                    draggable: false;
+                                    media-action(kind, id, action) => {
+                                        // The artist link emits ("artist", id, "open"); the
+                                        // context menu emits ("track", id, "go-to-artist").
+                                        // Both -> the parent item's artist navigation.
+                                        if ((kind == "artist" && action == "open") || action == "go-to-artist") {
+                                            MyQbzDetailActions.open-artist(item.source, et.artist);
+                                        } else {
+                                            // play / play-next / queue / go-to-album (album-link
+                                            // "open" too) all route through inline-track-action;
+                                            // the album link's id is ignored — go-to-album always
+                                            // opens the PARENT item (spec §8 menuActions).
+                                            MyQbzDetailActions.inline-track-action(
+                                                item.source-item-id,
+                                                et.id,
+                                                (kind == "album" && action == "open") ? "go-to-album" : action);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

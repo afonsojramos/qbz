@@ -170,6 +170,52 @@ async fn resolve_single_item(
     }
 }
 
+/// Resolve a single item's tracks for the **expanded view-mode inline track
+/// expansion** (spec 12 §8). Same resolver path as `resolve_single_item`
+/// (Qobuz album/track/playlist + local/Plex via `resolve_local`), but used for
+/// DISPLAY only — no queue mutation, no `source_item_id_hint` stamping. The
+/// per-(item_type, source) routing the spec's `fetchTracksForItem` matrix
+/// describes already lives inside the shared `ProdItemResolver::resolve` /
+/// `resolve_local_item` (qobuz album->tracks, local album->tracks, plex
+/// cache->tracks; a local/Plex playlist returns its own resolver error → []),
+/// so this stays a thin wrapper. Returns the resolved tracks (empty on any
+/// resolver error, so the caller shows the per-item "no results" state).
+pub(crate) async fn fetch_item_tracks(
+    runtime: &Runtime,
+    item: &MixtapeCollectionItem,
+) -> Vec<QueueTrack> {
+    use qbz_mixtape::enqueue::ItemResolver;
+
+    let client_lock = runtime.core().client();
+    let client = {
+        let guard = client_lock.read().await;
+        match guard.as_ref() {
+            Some(c) => c.clone(),
+            None => {
+                log::warn!("[qbz-slint] myqbz_play: no Qobuz client; cannot fetch item tracks");
+                // Local/Plex items resolve without the client, but the resolver
+                // needs a client ref to build, so bail empty (the caller shows
+                // the per-item empty state).
+                return Vec::new();
+            }
+        }
+    };
+
+    let resolver = ProdItemResolver::new(&client, resolve_local);
+    match resolver.resolve(item).await {
+        Ok(tracks) => tracks,
+        Err(e) => {
+            log::warn!(
+                "[qbz-slint] myqbz_play: fetch_item_tracks {}/{} failed: {}",
+                item.source_item_id,
+                item.title,
+                e
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Best-effort `repo::touch_play` (bumps last_played_at + play_count). Errors
 /// ignored, exactly like the Tauri command. Runs synchronously via `with_db` —
 /// safe to call from the async context (no `&Connection` crosses an `.await`).
@@ -326,6 +372,97 @@ pub fn item_action(
     });
 }
 
+/// The inline-track menu mode (expanded view-mode TrackRow actions, spec §8
+/// `menuActions`): play-now / play-next / play-later for ONE track resolved
+/// from its parent item. (go-to-album routes through `open-item` in main.rs,
+/// not here.)
+enum InlineTrackMode {
+    Play,
+    PlayNext,
+    PlayLater,
+}
+
+impl InlineTrackMode {
+    fn parse(action: &str) -> Option<Self> {
+        match action {
+            "play" => Some(Self::Play),
+            "play-next" | "play_next" => Some(Self::PlayNext),
+            "play-later" | "play_later" | "queue" | "add-to-queue" | "append" => {
+                Some(Self::PlayLater)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Play / queue a SINGLE inline track from an expanded item (spec 12 §8
+/// `onPlayTrackFromItem` / `onPlayTrackNext` / `onPlayTrackLater`). Re-resolves
+/// the parent item's tracks (the inline view holds only display rows, not the
+/// numeric `QueueTrack`s) and selects the one matching `track_id`:
+/// - **Play**: replace-play just that track (no queue-source stamp, per-row).
+/// - **PlayNext**: insert immediately after the current track.
+/// - **PlayLater**: append at the end of the queue.
+pub fn play_inline_track(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    collection_id: String,
+    item_source_item_id: String,
+    track_id: String,
+    action: String,
+) {
+    let Some(mode) = InlineTrackMode::parse(&action) else {
+        log::warn!("[qbz-slint] myqbz_play: unknown inline-track action {action}");
+        return;
+    };
+    let Ok(track_id) = track_id.parse::<u64>() else {
+        log::warn!("[qbz-slint] myqbz_play: inline-track non-numeric id {track_id}");
+        return;
+    };
+    handle.spawn(async move {
+        let Some(collection) = load_collection(&collection_id).await else {
+            crate::toast::error_weak(&weak, "Couldn't load this collection");
+            return;
+        };
+        let Some(item) = collection
+            .items
+            .iter()
+            .find(|it| it.source_item_id == item_source_item_id)
+            .cloned()
+        else {
+            log::warn!(
+                "[qbz-slint] myqbz_play: inline-track item {item_source_item_id} not found"
+            );
+            return;
+        };
+
+        let tracks = fetch_item_tracks(&runtime, &item).await;
+        let Some(track) = tracks.into_iter().find(|t| t.id == track_id) else {
+            crate::toast::error_weak(&weak, "This track is no longer available");
+            return;
+        };
+
+        match mode {
+            InlineTrackMode::Play => {
+                let first_id = track.id;
+                runtime.core().set_queue(vec![track], Some(0)).await;
+                after_track_change(&runtime, &weak, first_id).await;
+                refresh_sidebar(true);
+            }
+            InlineTrackMode::PlayNext => {
+                runtime.core().add_track_next(track).await;
+                refresh_sidebar(false);
+                crate::toast::success_weak(&weak, "Playing next");
+            }
+            InlineTrackMode::PlayLater => {
+                runtime.core().add_tracks(vec![track]).await;
+                refresh_sidebar(false);
+                crate::toast::success_weak(&weak, "Added to queue");
+            }
+        }
+    });
+}
+
 /// Load a collection (items hydrated) off the UI/event-loop thread, on a
 /// blocking worker, reusing the detail module's read path. Returns `None` when
 /// the DB is unavailable or the id is unknown.
@@ -335,4 +472,81 @@ pub(crate) async fn load_collection(collection_id: &str) -> Option<MixtapeCollec
         .await
         .ok()
         .flatten()
+}
+
+// ─────────────────────── Part B: skip-to-ITEM (boundary nav) ───────────────
+//
+// Spec 40 §5.6 + §6 (`v2_skip_to_next_item` / `v2_skip_to_previous_item`):
+// jump the queue cursor to the START of the next / previous ITEM (album /
+// playlist / track group) rather than the next / previous TRACK. The boundary
+// key per track = `source_item_id_hint` (stamped by the resolver), else the
+// `album_id` fallback — both already on `QueueTrack`. The math is the PURE,
+// already-shared `qbz_mixtape::enqueue::{next_item_index, previous_item_index}`
+// (the 3-second prev rule lives there); these helpers only read the live queue
+// from `qbz-core`, call that math, and `play_index` the target.
+//
+// **These NEVER touch the global `playback::next()` / `previous()`** — the
+// normal transport stays track-by-track. They are headless entry points over
+// `qbz-core` so a future UI trigger (or QConnect / CLI) can drive them without
+// re-implementing the boundary detection.
+//
+// **UI trigger: DEFERRED.** Tauri registers both commands
+// (`src-tauri/src/lib.rs`) but has ZERO frontend callsites — there is no
+// skip-album button anywhere in the Tauri UI, so there is no faithful UI home
+// to port 1:1. Forcing a button into the shared next/prev transport would risk
+// the global transport for a behavior Tauri itself never surfaced. So the
+// helpers land headless + tested-by-shared-crate; wiring a UI trigger waits
+// until the product asks for one (then it calls these, no transport rewrite).
+
+/// Skip to the START of the NEXT item in the live queue (spec 40 §6
+/// `v2_skip_to_next_item`). Reads the current queue + cursor from `qbz-core`,
+/// finds the first track whose item-boundary differs from the current item via
+/// `next_item_index`, and `play_index`es it. No-op at the last item / empty
+/// queue / no current cursor.
+pub async fn skip_to_next_item(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
+    let (queue, current) = runtime.core().get_all_queue_tracks().await;
+    let Some(current) = current else {
+        log::debug!("[qbz-slint] myqbz_play: skip_to_next_item — no current track");
+        return;
+    };
+    match qbz_mixtape::enqueue::next_item_index(&queue, current) {
+        Some(target) => {
+            if let Some(track) = runtime.core().play_index(target).await {
+                let track_id = track.id;
+                after_track_change(runtime, weak, track_id).await;
+                refresh_sidebar(true);
+            }
+        }
+        None => {
+            log::debug!("[qbz-slint] myqbz_play: skip_to_next_item — already at last item");
+        }
+    }
+}
+
+/// Skip to the START of the PREVIOUS item (or restart the current one) in the
+/// live queue (spec 40 §6 `v2_skip_to_previous_item`). Reads the current queue
+/// + cursor + elapsed position from `qbz-core`, applies the 3-second prev rule
+/// via `previous_item_index` (elapsed > 3s OR mid-item → restart current item;
+/// else jump to the previous item's start), and `play_index`es the target.
+pub async fn skip_to_previous_item(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
+    let (queue, current) = runtime.core().get_all_queue_tracks().await;
+    let Some(current) = current else {
+        log::debug!("[qbz-slint] myqbz_play: skip_to_previous_item — no current track");
+        return;
+    };
+    // `PlaybackState.position` is in whole seconds (same unit the seek path
+    // multiplies against `duration`); the boundary math wants elapsed ms.
+    let elapsed_ms = runtime.core().get_playback_state().position * 1_000;
+    match qbz_mixtape::enqueue::previous_item_index(&queue, current, elapsed_ms) {
+        Some(target) => {
+            if let Some(track) = runtime.core().play_index(target).await {
+                let track_id = track.id;
+                after_track_change(runtime, weak, track_id).await;
+                refresh_sidebar(true);
+            }
+        }
+        None => {
+            log::debug!("[qbz-slint] myqbz_play: skip_to_previous_item — no previous item");
+        }
+    }
 }

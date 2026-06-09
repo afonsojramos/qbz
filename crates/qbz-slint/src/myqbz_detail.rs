@@ -32,7 +32,7 @@ use qbz_models::mixtape::{
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::artwork::{self, ArtworkJob, ArtworkTarget, ImageCache};
-use crate::{AppWindow, ContentView, MixtapeDetailItem, MyQbzDetailState, NavState};
+use crate::{AppWindow, ContentView, MixtapeDetailItem, MyQbzDetailState, NavState, TrackItem};
 
 thread_local! {
     /// The full, original-order item list for the open collection — the
@@ -175,6 +175,12 @@ fn to_item(item: &MixtapeCollectionItem) -> MixtapeDetailItem {
         artwork_url: artwork_url.into(),
         artwork: slint::Image::default(),
         selected: false,
+        // Expanded-mode inline tracks (spec 12 §8): albums and playlists can
+        // host inline tracks; a bare track item is itself (no expansion).
+        can_expand: matches!(item.item_type, ItemType::Album | ItemType::Playlist),
+        tracks_loaded: false,
+        expand_loading: false,
+        inline_tracks: ModelRc::new(VecModel::from(Vec::<TrackItem>::new())),
     }
 }
 
@@ -422,6 +428,154 @@ pub fn selected_full_items(window: &AppWindow) -> Vec<MixtapeCollectionItem> {
             .filter_map(|p| items.iter().find(|it| it.position == *p).cloned())
             .collect()
     })
+}
+
+// ──────────────────────── expanded-mode inline tracks ─────────────────────
+
+/// The full `MixtapeCollectionItem` for one `source_item_id` (the row's stable
+/// key). Sourced from `FULL_ITEMS` so the resolver gets the numeric
+/// year/track_count + the typed item_type/source. UI thread.
+fn full_item_by_source_id(source_item_id: &str) -> Option<MixtapeCollectionItem> {
+    FULL_ITEMS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .find(|it| it.source_item_id == source_item_id)
+            .cloned()
+    })
+}
+
+/// "m:ss" track duration (spec 12 §8 `formatSec`, the common positive case;
+/// the inline resolver always yields a concrete `duration_secs`).
+fn track_duration_str(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
+
+/// Title + parenthesized Qobuz version suffix (spec 12 §8 `formatTrackTitle`).
+fn inline_track_title(track: &qbz_models::QueueTrack) -> String {
+    match track.version.as_deref().filter(|v| !v.is_empty()) {
+        Some(version) => format!("{} ({version})", track.title),
+        None => track.title.clone(),
+    }
+}
+
+/// Map one resolved `QueueTrack` into the shared `TrackItem` the inline
+/// `TrackRow`s render. Quality tier/detail are derived the same way as the
+/// now-playing + album-row badges (24-bit+ = Hi-Res), so the inline badge
+/// matches every other surface. `source` drives the per-source `TrackRow`
+/// affordances (Plex/local rows hide the favorite + offline columns).
+fn track_to_item(track: &qbz_models::QueueTrack) -> TrackItem {
+    let quality_tier = match track.bit_depth {
+        Some(d) if d >= 24 => "hires",
+        Some(_) => "cd",
+        None if track.hires => "hires",
+        None => "",
+    };
+    let quality_detail = if quality_tier.is_empty() {
+        String::new()
+    } else {
+        crate::quality::detail(track.bit_depth, track.sample_rate)
+    };
+    let source = track
+        .source
+        .clone()
+        .unwrap_or_else(|| if track.is_local { "local".into() } else { "qobuz".into() });
+
+    TrackItem {
+        id: track.id.to_string().into(),
+        number: String::new().into(),
+        title: inline_track_title(track).into(),
+        artist: track.artist.clone().into(),
+        album: String::new().into(),
+        duration: track_duration_str(track.duration_secs).into(),
+        quality_tier: quality_tier.into(),
+        quality_detail: quality_detail.into(),
+        explicit: track.parental_warning,
+        selected: false,
+        artwork_url: String::new().into(),
+        artwork: slint::Image::default(),
+        is_favorite: false,
+        artist_id: track.artist_id.map(|id| id.to_string()).unwrap_or_default().into(),
+        album_id: track.album_id.clone().unwrap_or_default().into(),
+        source: source.into(),
+        removing: false,
+        cache_status: 0,
+        cache_progress: 0.0,
+        unlocking: false,
+    }
+}
+
+/// Find the rendered row for `source_item_id` and mutate it in place. UI thread.
+fn with_row_by_source_id<F: FnOnce(&mut MixtapeDetailItem)>(
+    window: &AppWindow,
+    source_item_id: &str,
+    f: F,
+) {
+    let model = window.global::<MyQbzDetailState>().get_items();
+    for i in 0..model.row_count() {
+        if let Some(mut it) = model.row_data(i) {
+            if it.source_item_id == source_item_id {
+                f(&mut it);
+                model.set_row_data(i, it);
+                break;
+            }
+        }
+    }
+}
+
+/// Ensure every expandable item's inline tracks are loaded (spec 12 §8). Fired
+/// when the "expanded" view-mode becomes active. For each rendered row that
+/// `can_expand` and is not already loaded / loading, flips `expand-loading` on
+/// and spawns a per-item fetch via the shared enqueue resolver
+/// (`myqbz_play::fetch_item_tracks`); on completion it populates that row's
+/// inline-tracks model + marks it loaded. Idempotent: already-cached rows are
+/// skipped, so re-entering expanded mode is instant (and re-deriving the model
+/// after a filter/sort resets `tracks_loaded`, so the new rows re-fetch).
+pub fn ensure_expanded(
+    runtime: std::sync::Arc<qbz_app::shell::AppRuntime<crate::adapter::SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+) {
+    let Some(window) = weak.upgrade() else { return };
+    let model = window.global::<MyQbzDetailState>().get_items();
+
+    // Snapshot the rows that still need a fetch (source-item-ids), then mark
+    // them loading in one pass (mutating the model while iterating is fine —
+    // we set_row_data the same index we read).
+    let mut pending: Vec<String> = Vec::new();
+    for i in 0..model.row_count() {
+        if let Some(mut it) = model.row_data(i) {
+            if it.can_expand && !it.tracks_loaded && !it.expand_loading {
+                it.expand_loading = true;
+                let id = it.source_item_id.to_string();
+                model.set_row_data(i, it);
+                pending.push(id);
+            }
+        }
+    }
+
+    for source_item_id in pending {
+        let Some(full_item) = full_item_by_source_id(&source_item_id) else {
+            // No backing item (shouldn't happen) — clear the spinner.
+            with_row_by_source_id(&window, &source_item_id, |it| it.expand_loading = false);
+            continue;
+        };
+        let runtime = runtime.clone();
+        let weak = weak.clone();
+        handle.spawn(async move {
+            // `Vec<QueueTrack>` is `Send`; the mapped `Vec<TrackItem>` carries
+            // a `slint::Image` (!Send), so it must be built INSIDE the event
+            // loop, not moved across the thread boundary.
+            let tracks = crate::myqbz_play::fetch_item_tracks(&runtime, &full_item).await;
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                let items: Vec<TrackItem> = tracks.iter().map(track_to_item).collect();
+                with_row_by_source_id(&w, &source_item_id, |it| {
+                    it.expand_loading = false;
+                    it.tracks_loaded = true;
+                    it.inline_tracks = ModelRc::new(VecModel::from(items));
+                });
+            });
+        });
+    }
 }
 
 /// Clear the current selection (uncheck every row + zero the count), staying in

@@ -1599,6 +1599,21 @@ export struct MixtapeDetailItem {
     // UI-owned multi-select state (select-mode — deferred wiring; the column
     // renders when select-mode is on so geometry matches the PSD).
     selected: bool,
+    // --- Expanded view-mode inline tracks (spec 12 §8) --------------------
+    // In the "expanded" view-mode every album / playlist item shows its
+    // tracks rendered directly underneath — always visible, no chevron (1:1
+    // with Tauri: "like LocalLibrary's Tracks page with Group-by-album").
+    // Whether this item can host inline tracks (album / playlist; never a
+    // bare track) — gates the inline section + the auto-fetch.
+    can-expand: bool,
+    // True once the per-item track fetch has completed (success OR empty), so
+    // the view can distinguish "still loading" from "loaded, no results".
+    tracks-loaded: bool,
+    // True while the per-item track fetch is in flight (spinner state).
+    expand-loading: bool,
+    // The resolved inline tracks (rendered as shared TrackRows under the row).
+    // Fetched once on entering expanded mode, then cached on the row.
+    inline-tracks: [TrackItem],
 }
 
 export global MyQbzDetailState {
@@ -1693,6 +1708,17 @@ export global MyQbzDetailActions {
     callback item-action(string /* source-item-id */, string /* action */);
     // Toggle one row's selection (select-mode).
     callback toggle-item-select(int /* position */);
+    // --- Expanded view-mode inline tracks (spec 12 §8) --------------------
+    // Fired when the "expanded" view-mode becomes active (and on the initial
+    // open in expanded mode): the Rust side fetches every expandable item's
+    // tracks (via the enqueue resolver) that aren't already cached, populating
+    // each row's inline-tracks model. Idempotent — cached rows are skipped, so
+    // re-entering expanded mode is instant.
+    callback ensure-expanded();
+    // Play / queue / navigate from an inline track row. `action` is one of
+    //   "play" | "play-next" | "play-later" | "go-to-album".
+    // The parent item's source-item-id scopes the fetch + go-to-album target.
+    callback inline-track-action(string /* item-source-item-id */, string /* track-id */, string /* action */);
     // --- Bulk action bar (select-mode, spec 12 §13) -----------------------
     // The bar emits the chosen action id verbatim; the Rust side maps it:
     //   "add-to-mixtape" -> open the global AddToMixtapeModal with the
