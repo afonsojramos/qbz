@@ -260,14 +260,28 @@ async fn reload_home(
                     url: slim.artwork_url.clone(),
                 })
             }));
-            jobs.extend(data.recent_albums.iter().enumerate().filter_map(|(idx, card)| {
-                (!card.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+            // Recently-played album covers: Qobuz covers use the plain loader;
+            // Plex/local covers need the source-aware funnel (PlexThumb
+            // tokenization / local file read), else they never resolve.
+            let mut plex_album_jobs: Vec<artwork::ArtworkJob> = Vec::new();
+            for (idx, card) in data.recent_albums.iter().enumerate() {
+                if card.artwork_url.is_empty() {
+                    continue;
+                }
+                let job = artwork::ArtworkJob {
                     target: artwork::ArtworkTarget::RecentAlbum { idx },
                     url: card.artwork_url.clone(),
-                })
-            }));
+                };
+                if card.source == "plex" || card.source == "local" {
+                    plex_album_jobs.push(job);
+                } else {
+                    jobs.push(job);
+                }
+            }
 
             let weak_for_artwork = weak.clone();
+            let weak_for_local = weak.clone();
+            let image_cache_local = image_cache.clone();
             let _ = weak.upgrade_in_event_loop(move |w| {
                 home::apply_home(&w, data);
                 // apply_home shows the home set; swap to the requested
@@ -276,6 +290,16 @@ async fn reload_home(
                 w.global::<HomeState>().set_loading(false);
             });
             artwork::spawn_loads(jobs, weak_for_artwork, image_cache.clone());
+            if !plex_album_jobs.is_empty() {
+                let plex = crate::plex_settings::get();
+                artwork::spawn_local_or_plex_loads(
+                    plex_album_jobs,
+                    plex.base_url,
+                    plex.token,
+                    weak_for_local,
+                    image_cache_local,
+                );
+            }
         }
         Err(e) => {
             log::error!("[qbz-slint] discover load failed: {e}");
@@ -1026,6 +1050,37 @@ fn navigate_favorites(
             }
         }
     });
+}
+
+/// Navigate to the LocalLibrary Artists tab and auto-select `name`. Local/Plex
+/// artists have no id — they're keyed by NAME. The selection is latched and
+/// consumed by `ensure_artists_loaded` once the tab's data is ready (handles
+/// both the already-loaded and still-loading cases). Used by the LocalAlbum
+/// header artist link, the now-playing "Go to artist", and local track menus.
+fn open_local_artist(
+    runtime: &Arc<AppRuntime<SlintAdapter>>,
+    weak: &slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: &artwork::ImageCache,
+    name: String,
+) {
+    if name.trim().is_empty() {
+        return;
+    }
+    local_library::set_pending_artist(name);
+    nav::record(nav::NavEntry::LocalLibrary {
+        tab: "artists".to_string(),
+    });
+    navigate_local_library(
+        runtime.clone(),
+        weak.clone(),
+        handle,
+        image_cache.clone(),
+        local_library::LibTab::Artists,
+    );
+    if let Some(w) = weak.upgrade() {
+        update_nav_flags(&w);
+    }
 }
 
 /// Open a Local Library browse tab (Albums / Artists / Folders / Tracks).
@@ -2029,18 +2084,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         let image_cache = image_cache.clone();
-        window.on_open_artist(move |artist_id| {
-            let artist_id = artist_id.to_string();
-            nav::record(nav::NavEntry::Artist(artist_id.clone()));
-            navigate_artist(
-                runtime.clone(),
-                weak.clone(),
-                &handle,
-                image_cache.clone(),
-                artist_id,
-            );
-            if let Some(w) = weak.upgrade() {
-                update_nav_flags(&w);
+        window.on_open_artist(move |artist_ref| {
+            let artist_ref = artist_ref.to_string();
+            // Qobuz artists are numeric ids → the Qobuz artist page. Local/Plex
+            // artists have no id, so their surfaces (LocalAlbum link, now-playing
+            // "Go to artist") pass the NAME instead → the LocalLibrary Artists
+            // tab, focused on that artist.
+            if artist_ref.parse::<u64>().is_ok() {
+                nav::record(nav::NavEntry::Artist(artist_ref.clone()));
+                navigate_artist(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    artist_ref,
+                );
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
+            } else if !artist_ref.trim().is_empty() {
+                open_local_artist(&runtime, &weak, &handle, &image_cache, artist_ref);
             }
         });
     }
@@ -2440,13 +2503,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         crate::ui_prefs::save(&prefs);
                     }
                 }
-                ("album", "play") => playback::play_album(
-                    runtime.clone(),
-                    weak.clone(),
-                    handle.clone(),
-                    id,
-                    0,
-                ),
+                ("album", "play") => {
+                    // A Plex/local id is a metadata group key, not a Qobuz id —
+                    // play it from the local/Plex cache (Home "Recently played",
+                    // etc.) instead of trying to fetch a Qobuz album.
+                    if is_local_album_key(&id) {
+                        playback::play_local_album(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            id,
+                            None,
+                        );
+                    } else {
+                        playback::play_album(runtime.clone(), weak.clone(), handle.clone(), id, 0);
+                    }
+                }
                 ("track", "play") => {
                     // Universal per-row play: queue the current view's VISIBLE
                     // tracklist starting at the clicked track (see
@@ -4499,6 +4571,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LibraryManageActions>()
+            .on_remove_folder(move |id| {
+                local_library_settings::remove_folder(weak.clone(), handle.clone(), id as i64)
+            });
+    }
+    {
+        let weak = window.as_weak();
         window
             .global::<LibraryManageActions>()
             .on_toggle_folder_select(move |id| {
@@ -4844,6 +4925,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+    {
+        let weak = window.as_weak();
+        window.global::<LocalAlbumActions>().on_search(move |q| {
+            local_library::search_album(weak.clone(), q.to_string());
+        });
+    }
 
     // Local Library — Albums tab controls (search / sort re-query page 1;
     // load-more pages on scroll; retry) + the shared AlbumCollectionView's
@@ -4940,11 +5027,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
         window
             .global::<LocalLibraryActions>()
-            .on_open_artist(move |id| {
-                // TODO(locallibrary): open the local Artists tab / artist.
-                log::debug!("[qbz-slint] local artist open (Artists slice pending): {id}");
+            .on_open_artist(move |name| {
+                // `name` is the artist NAME (local/Plex artists have no id).
+                open_local_artist(&runtime, &weak, &handle, &image_cache, name.to_string());
             });
     }
     {

@@ -699,6 +699,9 @@ export global LocalAlbumActions {
     callback add-to-playlist();
     callback play-track(string /* track id */);
     callback select-version(int);
+    // Client-side track filter (mirrors AlbumActions.search), applied over the
+    // current version's tracks.
+    callback search(string /* query */);
 }
 
 // ============================ Local Library management ====================
@@ -767,6 +770,7 @@ export global LibraryManageActions {
     callback load();                             // (re)load the folder list (panel init)
     callback add-folder();                       // native dir picker (Rust)
     callback remove-folders();                   // bulk-remove selected (confirm)
+    callback remove-folder(int /* id */);        // remove ONE folder directly (confirm)
     callback toggle-folder-select(int /* id */);
     callback edit-folder(int /* id */);          // open the settings modal
     callback save-folder-settings(int /* id */, string /* alias */, bool /* enabled */,

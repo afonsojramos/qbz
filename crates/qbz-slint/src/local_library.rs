@@ -1081,6 +1081,23 @@ fn album_versions() -> std::sync::MutexGuard<'static, Vec<(String, Vec<qbz_libra
     ALBUM_VERSIONS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Client-side track filter for the open local album (mirrors the Qobuz album
+/// view's track search). Applied over the current version's tracks at render.
+static ALBUM_QUERY: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
+
+fn album_query() -> String {
+    ALBUM_QUERY.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Set the album track filter and re-render the current version in place.
+pub fn search_album(weak: slint::Weak<AppWindow>, query: String) {
+    *ALBUM_QUERY.lock().unwrap_or_else(|e| e.into_inner()) = query;
+    let _ = weak.upgrade_in_event_loop(|w| {
+        let index = w.global::<crate::LocalAlbumState>().get_version_index();
+        apply_album_version(&w, index);
+    });
+}
+
 /// Quality rank for ordering versions (hi-res first).
 fn version_rank(t: &qbz_library::LocalTrack) -> (u32, u64) {
     (t.bit_depth.unwrap_or(0), t.sample_rate as u64)
@@ -1121,6 +1138,8 @@ pub fn open_local_album(
     image_cache: ImageCache,
     group_key: String,
 ) {
+    // Fresh album → clear any leftover track filter from the previous one.
+    *ALBUM_QUERY.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
     let _ = weak.upgrade_in_event_loop(|w| {
         let s = w.global::<crate::LocalAlbumState>();
         s.set_loading(true);
@@ -1266,8 +1285,16 @@ pub fn apply_album_version(window: &AppWindow, index: i32) {
         }
         None => (String::new(), String::new()),
     };
+    // Client-side filter (Qobuz album view parity): match title/artist; the
+    // header badge/info stay album-level (computed from the full version above).
+    let q = album_query().to_lowercase();
     let items: Vec<TrackItem> = tracks
         .iter()
+        .filter(|t| {
+            q.is_empty()
+                || t.title.to_lowercase().contains(&q)
+                || t.artist.to_lowercase().contains(&q)
+        })
         .cloned()
         .map(|t| {
             let mut it = map_local_track(t);
@@ -2177,10 +2204,35 @@ pub fn select_folder(
                 db.list_folder_tracks(&path_for_fetch, false)
             })
             .unwrap_or_default();
+            // Resolve a real on-disk cover for each subfolder whose indexed
+            // artwork_path is empty (no embedded art / never backfilled) — the
+            // image can sit under any of a dozen names (cover/folder/front/art/
+            // <album>.jpg, …). Off-thread, so the fs scan is fine here.
             let children = crate::library_db::with_db(|db| {
                 db.list_folder_children(&path_for_fetch, false)
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| match e {
+                qbz_library::FolderTreeEntry::Folder {
+                    path,
+                    segment,
+                    track_count_under,
+                    artwork,
+                } => {
+                    let artwork = artwork.filter(|a| !a.is_empty()).or_else(|| {
+                        find_folder_cover(std::path::Path::new(&path))
+                    });
+                    qbz_library::FolderTreeEntry::Folder {
+                        path,
+                        segment,
+                        track_count_under,
+                        artwork,
+                    }
+                }
+                other => other,
+            })
+            .collect::<Vec<_>>();
             (tracks, children)
         })
         .await
@@ -2294,6 +2346,82 @@ pub fn set_folder_detail_subfolder_artwork(window: &AppWindow, path: &str, image
 /// re-hit the DB — mirrors Tauri filtering its in-memory `albums` array.
 static ARTIST_ALBUMS: std::sync::Mutex<Vec<qbz_library::LocalAlbum>> =
     std::sync::Mutex::new(Vec::new());
+
+/// An artist name to auto-select once the Artists tab finishes loading — set
+/// when navigating to a local artist from outside the tab (LocalAlbum header
+/// link, now-playing "Go to artist", a track's context menu). Consumed once.
+static PENDING_ARTIST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Queue an artist to be selected as soon as the Artists tab is ready.
+pub fn set_pending_artist(name: String) {
+    *PENDING_ARTIST.lock().unwrap_or_else(|e| e.into_inner()) = Some(name);
+}
+
+fn take_pending_artist() -> Option<String> {
+    PENDING_ARTIST.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// Best-effort on-disk cover for a folder. The index often has no
+/// `artwork_path` (no embedded art + no backfill), yet a cover image sits in
+/// the folder under any of a dozen names. Priority: a known cover stem
+/// (cover/folder/front/art/album/…), then `<foldername>.<ext>` (a file named
+/// after the album), then the first image file as a last resort. Case- and
+/// extension-insensitive. Returns an absolute path; must run off the UI thread.
+pub fn find_folder_cover(folder: &std::path::Path) -> Option<String> {
+    const STEMS: &[&str] = &[
+        "cover",
+        "folder",
+        "front",
+        "art",
+        "album",
+        "albumart",
+        "albumartsmall",
+        "thumb",
+        "artwork",
+        "scan",
+        "booklet",
+        "title",
+    ];
+    const EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"];
+    let is_img = |p: &std::path::Path| {
+        p.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+            .unwrap_or(false)
+    };
+    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && is_img(p))
+        .collect();
+    if entries.is_empty() {
+        return None;
+    }
+    entries.sort();
+    let stem_lower = |p: &std::path::Path| {
+        p.file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default()
+    };
+    let folder_name = folder
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let by_stem = entries
+        .iter()
+        .find(|p| STEMS.contains(&stem_lower(p).as_str()));
+    let by_name = entries
+        .iter()
+        .find(|p| !folder_name.is_empty() && stem_lower(p) == folder_name);
+    by_stem
+        .or(by_name)
+        .cloned()
+        .or_else(|| entries.into_iter().next())
+        .map(|p| p.to_string_lossy().into_owned())
+}
 
 /// Fold a common Latin accented char to its ASCII base (best-effort, no
 /// `unicode-normalization` dep). Covers Spanish/European music metadata; the
@@ -2642,6 +2770,12 @@ pub fn ensure_artists_loaded(
     let _ = weak.upgrade_in_event_loop(move |w| {
         let s = w.global::<LocalLibraryState>();
         if s.get_artists().row_count() != 0 || s.get_artists_loading() {
+            // Already loaded → satisfy a pending open-artist immediately.
+            if s.get_artists().row_count() != 0 {
+                if let Some(name) = take_pending_artist() {
+                    select_local_artist(w.as_weak(), handle.clone(), image_cache.clone(), name);
+                }
+            }
             return;
         }
         s.set_artists_loading(true);
@@ -2727,6 +2861,16 @@ pub fn ensure_artists_loaded(
             .unwrap_or_default();
             let _ = weak2.upgrade_in_event_loop(move |w| {
                 apply_artists(&w, items);
+                // Satisfy a pending open-artist now that the set + ARTIST_ALBUMS
+                // cache are loaded (navigated here from a "Go to artist" link).
+                if let Some(name) = take_pending_artist() {
+                    select_local_artist(
+                        w.as_weak(),
+                        handle_inner.clone(),
+                        image_cache.clone(),
+                        name,
+                    );
+                }
                 // Seed decode jobs for rows that already carry an image-path.
                 // Non-http paths now split into local files vs Plex `/library/`
                 // thumbs: both go through the source-aware dispatcher (which

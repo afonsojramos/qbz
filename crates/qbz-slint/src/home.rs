@@ -193,6 +193,9 @@ where
             ribbon: String::new(),
             ribbon_kind: String::new(),
             artwork_url: album.artwork_url,
+            // Carry the origin so the card resolves source-aware artwork
+            // (PlexThumb / local file) and the play/open route correctly.
+            source: album.source,
             // Recently-played cards render in the grid only — list-row
             // extras stay default.
             ..CardData::default()

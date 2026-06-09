@@ -844,7 +844,17 @@ fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
         bit_depth: track.bit_depth,
         sample_rate: Some(sample_rate_khz),
         is_local: true,
-        album_id: Some(track.album_group_key.clone()),
+        // album_id is the navigation key (now-playing "go to album", Recently
+        // Played, record_recent). For Plex the track's `album_group_key` is the
+        // per-edition SPLIT key (plex:album:<parentRatingKey>) which the album
+        // cache is NOT keyed by — recover the content-hash album key instead so
+        // open-album finds it. Local files: the group key is already the right
+        // navigation key.
+        album_id: Some(if is_plex {
+            qbz_plex::plex_album_key(&track.artist, &track.album)
+        } else {
+            track.album_group_key.clone()
+        }),
         artist_id: None,
         streamable: true,
         source: Some(src.to_string()),
@@ -884,13 +894,9 @@ pub fn fill_missing_covers(tracks: &mut [qbz_library::LocalTrack]) {
         let key = folder.to_string_lossy().into_owned();
         let cover = memo
             .entry(key)
-            .or_insert_with(|| {
-                ["cover.jpg", "cover.png", "folder.jpg", "front.jpg"]
-                    .iter()
-                    .map(|n| folder.join(n))
-                    .find(|c| c.is_file())
-                    .map(|c| c.to_string_lossy().into_owned())
-            })
+            // Robust on-disk cover lookup (cover/folder/front/art/<album>.jpg,
+            // any image as a last resort) — shared with the Folders subcards.
+            .or_insert_with(|| crate::local_library::find_folder_cover(&folder))
             .clone();
         if cover.is_some() {
             t.artwork_path = cover;
@@ -1224,6 +1230,7 @@ async fn record_recent(runtime: &Runtime) {
         genre: meta.genre,
         release_date: meta.release_date,
         artist_id: track.artist_id,
+        source: track.source.clone().unwrap_or_else(|| "qobuz".to_string()),
     });
     // Per-artist play count — feeds the discovery filter "skip
     // artists I already know" (HavingCount > threshold). artist_id

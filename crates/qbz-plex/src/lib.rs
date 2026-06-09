@@ -740,7 +740,12 @@ fn playback_track_id(rating_key: &str) -> u64 {
         .unwrap_or_else(|_| synthetic_track_id(rating_key))
 }
 
-fn plex_album_key(artist: &str, album: &str) -> String {
+/// Content-hash album key for a Plex album (`plex:<hash(artist::album)>`). This
+/// is the stable per-album identity the grid card carries and that
+/// `plex_cache_get_album_tracks` queries by — distinct from the per-edition
+/// `parent_rating_key`. Public so the frontend can recover it for a played
+/// track (whose `album_group_key` is the per-edition split key, not this).
+pub fn plex_album_key(artist: &str, album: &str) -> String {
     let mut hasher = DefaultHasher::new();
     artist.hash(&mut hasher);
     "::".hash(&mut hasher);

@@ -278,41 +278,74 @@ pub fn add_folder(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
 
 /// Bulk-remove the selected folders (with confirm + cascade track delete).
 pub fn remove_folders(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
-    let ids: Vec<i64> = folders_lock()
+    // Removes only the LocalLibrary DB entries + their indexed tracks — never
+    // the files on disk. Reversible (re-add + re-scan reindexes), so we skip a
+    // confirm dialog: rfd's message dialog needs `zenity`, which isn't present
+    // on every Linux box, and silently fails-closed there (the original "delete
+    // does nothing" bug). A Toast gives feedback instead.
+    let paths: Vec<String> = folders_lock()
         .iter()
         .filter(|f| f.selected)
-        .map(|f| f.id)
+        .map(|f| f.path.clone())
         .collect();
-    if ids.is_empty() {
+    if paths.is_empty() {
         return;
     }
-    let count = ids.len();
+    let count = paths.len();
     let h = handle.clone();
     handle.spawn(async move {
-        let ok = rfd::AsyncMessageDialog::new()
-            .set_title("Remove folders")
-            .set_description(format!(
-                "Remove {count} selected folder(s)? Their indexed tracks will be removed. Your audio files are not deleted."
-            ))
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show()
-            .await;
-        if ok != rfd::MessageDialogResult::Yes {
-            return;
-        }
-        let ids2 = ids.clone();
-        tokio::task::spawn_blocking(move || {
+        let paths2 = paths.clone();
+        let keys = tokio::task::spawn_blocking(move || {
             crate::library_db::with_db(|db| {
-                for id in &ids2 {
-                    if let Some(f) = db.get_folder_by_id(*id)? {
-                        db.remove_folder_with_tracks(&f.path)?;
-                    }
+                let mut keys: Vec<String> = Vec::new();
+                for p in &paths2 {
+                    keys.extend(db.album_keys_in_folder(p).unwrap_or_default());
+                    db.remove_folder_with_tracks(p)?;
                 }
-                Ok(())
+                Ok(keys)
             })
         })
         .await
-        .ok();
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+        crate::recently::prune_albums(&keys);
+        crate::toast::success_weak(&weak, format!("Removed {count} folder(s)"));
+        load_folders(weak, h);
+    });
+}
+
+/// Remove ONE folder by id (confirm + cascade track delete). The per-row
+/// delete button; independent of the multi-select state, so a previously
+/// added folder can be removed without first selecting it + the toolbar trash.
+pub fn remove_folder(weak: Weak<AppWindow>, handle: tokio::runtime::Handle, id: i64) {
+    // DB-only removal (entry + indexed tracks), never the files. No confirm
+    // dialog — see remove_folders for why (zenity-less boxes fail-closed).
+    let (path, name) = {
+        let g = folders_lock();
+        match g.iter().find(|f| f.id == id) {
+            Some(f) => (f.path.clone(), display_name(f)),
+            None => return,
+        }
+    };
+    let h = handle.clone();
+    handle.spawn(async move {
+        let p = path.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::library_db::with_db(|db| {
+                // Capture album keys BEFORE the delete so we can prune them out
+                // of Recently Played too (not just the DB rows).
+                let keys = db.album_keys_in_folder(&p).unwrap_or_default();
+                let n = db.remove_folder_with_tracks(&p)?;
+                Ok((n, keys))
+            })
+        })
+        .await
+        .ok()
+        .flatten();
+        let (n, keys) = result.unwrap_or((0, Vec::new()));
+        crate::recently::prune_albums(&keys);
+        crate::toast::success_weak(&weak, format!("Removed \"{name}\" ({n} tracks)"));
         load_folders(weak, h);
     });
 }

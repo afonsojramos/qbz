@@ -90,6 +90,11 @@ pub struct RecentTrack {
     /// Artist id for navigation / scrobble context.
     #[serde(default)]
     pub artist_id: Option<u64>,
+    /// Origin: "qobuz" | "plex" | "local". Drives source-aware artwork
+    /// (PlexThumb / local file) and routing for the Recently Played cards.
+    /// Empty for pre-source entries (serde default) → treated as "qobuz".
+    #[serde(default)]
+    pub source: String,
 }
 
 /// One recently-played album, derived from the track history.
@@ -104,6 +109,8 @@ pub struct RecentAlbum {
     pub genre: String,
     /// Raw ISO release date; localized at render time.
     pub release_date: String,
+    /// "qobuz" | "plex" | "local" — see RecentTrack::source.
+    pub source: String,
 }
 
 fn store_path() -> Option<PathBuf> {
@@ -139,9 +146,32 @@ pub fn load_albums() -> Vec<RecentAlbum> {
             quality_label: track.quality_label,
             genre: track.genre,
             release_date: track.release_date,
+            source: track.source,
         });
     }
     albums
+}
+
+/// Remove every recently-played entry whose `album_id` is in `album_ids`.
+/// Used when a Local Library folder is deleted so its albums/tracks no longer
+/// linger in Recently Played. Returns how many track entries were removed.
+pub fn prune_albums(album_ids: &[String]) -> usize {
+    if album_ids.is_empty() {
+        return 0;
+    }
+    let Some(path) = store_path() else {
+        return 0;
+    };
+    let mut list = load();
+    let before = list.len();
+    list.retain(|t| !album_ids.iter().any(|k| k == &t.album_id));
+    let removed = before - list.len();
+    if removed > 0 {
+        if let Ok(json) = serde_json::to_vec_pretty(&list) {
+            let _ = std::fs::write(&path, json);
+        }
+    }
+    removed
 }
 
 /// Record a played track at the front of the list. Deduplicates by id and

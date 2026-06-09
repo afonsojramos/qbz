@@ -1215,6 +1215,29 @@ impl LibraryDatabase {
         Ok(count)
     }
 
+    /// Distinct `album_group_key`s of the indexed tracks under `folder` — the
+    /// same keys used as the playback/Recently-Played album id. Call BEFORE
+    /// deleting the folder so the frontend can prune those albums from the
+    /// recently-played store.
+    pub fn album_keys_in_folder(&self, folder: &str) -> Result<Vec<String>, LibraryError> {
+        let pattern = format!("{}/%", folder.trim_end_matches('/'));
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT album_group_key FROM local_tracks
+                 WHERE file_path LIKE ? AND album_group_key IS NOT NULL AND album_group_key != ''",
+            )
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![pattern], |row| row.get::<_, String>(0))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        let mut keys = Vec::new();
+        for k in rows {
+            keys.push(k.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(keys)
+    }
+
     /// Remove a folder and its indexed tracks (separator-safe cascade). Mirrors
     /// the Tauri remove-folder command order: drop the folder row, then the
     /// tracks under it. Returns the number of tracks removed.
