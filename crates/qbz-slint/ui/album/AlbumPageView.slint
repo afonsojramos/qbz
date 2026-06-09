@@ -420,7 +420,12 @@ export component AlbumPageView inherits Rectangle {
                         }
                         VerticalLayout {
                             alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/cassette-tape.svg"); }
+                            CircleAction {
+                                icon: @image-url("../assets/icons/cassette-tape.svg");
+                                clicked => {
+                                    root.media-action("album", AlbumState.id, "add-to-mixtape");
+                                }
+                            }
                         }
                         VerticalLayout {
                             alignment: center;

@@ -304,6 +304,15 @@ export component LocalAlbumView inherits Rectangle {
                                 }
                             }
                         }
+                        VerticalLayout {
+                            alignment: center;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/cassette-tape.svg");
+                                clicked => {
+                                    LocalAlbumActions.add-to-mixtape();
+                                }
+                            }
+                        }
                     }
 
                     // Version picker (only with multiple physical copies).

@@ -1330,6 +1330,7 @@ export component LocalLibraryView inherits Rectangle {
                                 { id: "queue", label: @tr("Add to queue"), danger: false, needs-selection: true },
                                 { id: "play-next", label: @tr("Play next"), danger: false, needs-selection: true },
                                 { id: "add-to-playlist", label: @tr("Add to playlist"), danger: false, needs-selection: true },
+                                { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), danger: false, needs-selection: true },
                                 { id: "clear", label: @tr("Clear"), danger: false, needs-selection: true },
                             ];
                             action(id) => {
@@ -1737,6 +1738,14 @@ export component LocalLibraryView inherits Rectangle {
                                             icon: @image-url("../assets/icons/list-music.svg");
                                             tooltip: @tr("Add to playlist");
                                             clicked => { LocalLibraryActions.folders-bulk-action("add-to-playlist"); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        RailBulkBtn {
+                                            icon: @image-url("../assets/icons/cassette-tape.svg");
+                                            tooltip: @tr("Add to Mixtape/Collection");
+                                            clicked => { LocalLibraryActions.folders-bulk-action("add-to-mixtape"); }
                                         }
                                     }
                                     VerticalLayout {

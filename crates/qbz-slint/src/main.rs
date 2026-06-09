@@ -36,6 +36,7 @@ mod location_view;
 mod mix;
 mod musician;
 mod myqbz;
+mod myqbz_add;
 mod myqbz_cover;
 mod myqbz_detail;
 mod myqbz_edit;
@@ -384,6 +385,47 @@ fn set_row_favorite(window: &AppWindow, track_id: &str, favorite: bool) {
         hero.is_favorite = favorite;
         search.set_most_popular_track(hero);
     }
+}
+
+/// Look up the display name of an "Add to Mixtape/Collection" picker row by id
+/// (for the post-add toast). Returns "" if not found.
+fn myqbz_add_row_name(window: &AppWindow, collection_id: &str) -> String {
+    use slint::Model;
+    let model = window.global::<MyQbzAddState>().get_rows();
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .find(|r| r.id == collection_id)
+        .map(|r| r.name.to_string())
+        .unwrap_or_default()
+}
+
+/// Open the global "Add to Mixtape/Collection" picker for `items` (mirrors
+/// Tauri's `openAddToMixtape`). Hops onto the event loop to show the modal,
+/// then loads the picker rows (kind-restricted + recency-sorted +
+/// `item_exists`-resolved) on a blocking worker. Empty `items` is a no-op
+/// (the controller guards too). Callable from any thread.
+fn open_add_to_mixtape(
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    items: Vec<myqbz_add::AddItem>,
+) {
+    if items.is_empty() {
+        return;
+    }
+    let restrict = items.iter().any(|it| it.item_type != "album");
+    let items_for_open = items.clone();
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        myqbz_add::open(&w, items_for_open);
+    });
+    handle.spawn(async move {
+        let rows =
+            tokio::task::spawn_blocking(move || myqbz_add::load_rows(restrict, &items))
+                .await
+                .unwrap_or_default();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            myqbz_add::apply_rows(&w, rows);
+        });
+    });
 }
 
 /// Update the offline cache-status (+ progress) of every visible row matching
@@ -1556,12 +1598,36 @@ fn wire_playlist_manager(
             });
     }
     {
-        // Add-to-mixtape — the mixtape system is not yet ported to Slint;
-        // log and no-op (matches the deferred mixtape surface).
+        // Add a whole playlist to a Mixtape/Collection (callsite O). Builds the
+        // `playlist` payload from the PM grid row (id / name / track count /
+        // first cover); the owner subtitle isn't carried in the PM model, so it
+        // is omitted (optional in the contract).
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
         window
             .global::<PlaylistManagerActions>()
             .on_add_to_mixtape(move |id| {
-                log::info!("[qbz-slint] add-to-mixtape not yet implemented (playlist {id})");
+                use slint::Model;
+                let Some(w) = weak.upgrade() else { return };
+                let model = w.global::<PlaylistManagerState>().get_playlists();
+                let Some(row) = (0..model.row_count())
+                    .filter_map(|i| model.row_data(i))
+                    .find(|it| it.id == id)
+                else {
+                    return;
+                };
+                let artwork = row.url1.to_string();
+                let item = myqbz_add::AddItem {
+                    item_type: "playlist".into(),
+                    source: "qobuz".into(),
+                    source_item_id: id.to_string(),
+                    title: row.name.to_string(),
+                    subtitle: None,
+                    artwork_url: (!artwork.is_empty()).then_some(artwork),
+                    year: None,
+                    track_count: (row.total_count > 0).then_some(row.total_count),
+                };
+                open_add_to_mixtape(weak.clone(), handle.clone(), vec![item]);
             });
     }
 
@@ -1980,6 +2046,132 @@ fn wire_myqbz(
                         }
                     }
                 });
+            });
+        });
+    }
+
+    // --- Add to Mixtape/Collection picker (global singleton) ------------
+    {
+        // close — clear the pending payload + hide.
+        let weak = window.as_weak();
+        window.global::<MyQbzAddActions>().on_close(move || {
+            if let Some(w) = weak.upgrade() {
+                myqbz_add::close(&w);
+            }
+        });
+    }
+    {
+        // search — re-filter the loaded rows client-side.
+        let weak = window.as_weak();
+        window
+            .global::<MyQbzAddActions>()
+            .on_search_changed(move |_query| {
+                if let Some(w) = weak.upgrade() {
+                    myqbz_add::rebuild(&w);
+                }
+            });
+    }
+    {
+        // show-create — open the create sub-panel preset to a kind.
+        let weak = window.as_weak();
+        window
+            .global::<MyQbzAddActions>()
+            .on_show_create(move |kind| {
+                if let Some(w) = weak.upgrade() {
+                    let st = w.global::<MyQbzAddState>();
+                    st.set_create_kind(kind);
+                    st.set_create_name("".into());
+                    st.set_creating(true);
+                }
+            });
+    }
+    {
+        // create-back — return to the picker list.
+        let weak = window.as_weak();
+        window.global::<MyQbzAddActions>().on_create_back(move || {
+            if let Some(w) = weak.upgrade() {
+                w.global::<MyQbzAddState>().set_creating(false);
+            }
+        });
+    }
+    {
+        // pick — add the pending items to the chosen collection.
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<MyQbzAddActions>()
+            .on_pick(move |collection_id| {
+                let Some(w) = weak.upgrade() else { return };
+                let st = w.global::<MyQbzAddState>();
+                if st.get_busy_id() != "" {
+                    return;
+                }
+                st.set_busy_id(collection_id.clone());
+                // The chosen collection's display name (for the toast).
+                let name = myqbz_add_row_name(&w, collection_id.as_str());
+                let items = myqbz_add::take_pending();
+                let cid = collection_id.to_string();
+
+                let weak = weak.clone();
+                handle.spawn(async move {
+                    let outcome = tokio::task::spawn_blocking(move || {
+                        myqbz_add::add_items(&cid, &items)
+                    })
+                    .await
+                    .unwrap_or(myqbz_add::AddOutcome { added: 0, skipped: 0 });
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        myqbz_add::toast_outcome(&w, &name, &outcome);
+                        myqbz_add::close(&w);
+                    });
+                });
+            });
+    }
+    {
+        // create-and-add — create a new collection then add the items.
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<MyQbzAddActions>().on_create_and_add(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let st = w.global::<MyQbzAddState>();
+            let name = st.get_create_name().trim().to_string();
+            if name.is_empty() || st.get_create_busy() {
+                return;
+            }
+            let kind = st.get_create_kind().to_string();
+            st.set_create_busy(true);
+            let items = myqbz_add::take_pending();
+
+            let weak = weak.clone();
+            handle.spawn(async move {
+                let created = {
+                    let kind = kind.clone();
+                    let name = name.clone();
+                    tokio::task::spawn_blocking(move || {
+                        myqbz_add::create_collection(&kind, &name)
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                };
+                match created {
+                    Some((cid, cname)) => {
+                        let outcome = tokio::task::spawn_blocking(move || {
+                            myqbz_add::add_items(&cid, &items)
+                        })
+                        .await
+                        .unwrap_or(myqbz_add::AddOutcome { added: 0, skipped: 0 });
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            myqbz_add::toast_outcome(&w, &cname, &outcome);
+                            myqbz_add::close(&w);
+                        });
+                    }
+                    None => {
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            w.global::<MyQbzAddState>().set_create_busy(false);
+                            crate::toast::error(&w, "Failed to create");
+                        });
+                    }
+                }
             });
         });
     }
@@ -3241,6 +3433,79 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // for folder-grouped local albums).
                     tag_editor::open_tag_editor(weak.clone(), handle.clone(), id.clone(), id);
                 }
+                ("album", "add-to-mixtape") => {
+                    // The cassette button on the album header. Local albums
+                    // (incl. Plex, stored as source "local") build the payload
+                    // from AlbumState + the loaded tracks; Qobuz albums resolve
+                    // via get_album (the proven fail-safe resolver).
+                    let Some(w) = weak.upgrade() else { return };
+                    let st = w.global::<AlbumState>();
+                    if st.get_is_local() {
+                        let item = myqbz_add::AddItem {
+                            item_type: "album".into(),
+                            source: "local".into(),
+                            source_item_id: st.get_id().to_string(),
+                            title: st.get_title().to_string(),
+                            subtitle: {
+                                let a = st.get_artist().to_string();
+                                (!a.is_empty()).then_some(a)
+                            },
+                            artwork_url: None, // local albums omit artwork_url (1:1 PSD)
+                            year: None,
+                            track_count: {
+                                use slint::Model;
+                                let n = st.get_tracks().row_count();
+                                (n > 0).then_some(n as i32)
+                            },
+                        };
+                        open_add_to_mixtape(weak.clone(), handle.clone(), vec![item]);
+                    } else {
+                        let runtime = runtime.clone();
+                        let weak = weak.clone();
+                        let handle2 = handle.clone();
+                        let album_id = id.clone();
+                        handle.spawn(async move {
+                            let item = match runtime.core().get_album(&album_id).await {
+                                Ok(album) => {
+                                    let artwork_url = album
+                                        .image
+                                        .thumbnail
+                                        .clone()
+                                        .or_else(|| album.image.small.clone());
+                                    let year = album
+                                        .release_date_original
+                                        .as_deref()
+                                        .and_then(|d| d.get(0..4))
+                                        .and_then(|y| y.parse::<i32>().ok());
+                                    let track_count = album
+                                        .tracks_count
+                                        .or(album.track_count)
+                                        .map(|n| n as i32);
+                                    myqbz_add::AddItem {
+                                        item_type: "album".into(),
+                                        source: "qobuz".into(),
+                                        source_item_id: album.id.clone(),
+                                        title: album.title.clone(),
+                                        subtitle: {
+                                            let a = album.artist.name.clone();
+                                            (!a.is_empty()).then_some(a)
+                                        },
+                                        artwork_url,
+                                        year,
+                                        track_count,
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[qbz-slint] add-to-mixtape: get_album {album_id} failed: {e}"
+                                    );
+                                    return;
+                                }
+                            };
+                            open_add_to_mixtape(weak, handle2, vec![item]);
+                        });
+                    }
+                }
                 ("album", "radio") => playback::play_album_radio(
                     runtime.clone(),
                     weak.clone(),
@@ -3359,6 +3624,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             playlist_picker::apply(&w, playlists);
                         });
                     });
+                }
+                ("track", "add-to-mixtape") => {
+                    // The menu only carries the track id; resolve the Qobuz
+                    // track (this entry is gated to Qobuz/offline in the menu)
+                    // to build the AddToMixtape payload, then open the picker.
+                    if let Ok(track_id) = id.parse::<u64>() {
+                        let runtime = runtime.clone();
+                        let weak = weak.clone();
+                        let handle2 = handle.clone();
+                        handle.spawn(async move {
+                            let item = match runtime.core().get_track(track_id).await {
+                                Ok(track) => {
+                                    let artist = track
+                                        .performer
+                                        .as_ref()
+                                        .map(|p| p.name.clone())
+                                        .unwrap_or_default();
+                                    let album = track
+                                        .album
+                                        .as_ref()
+                                        .map(|a| a.title.clone())
+                                        .unwrap_or_default();
+                                    let subtitle = [artist, album]
+                                        .into_iter()
+                                        .filter(|s| !s.is_empty())
+                                        .collect::<Vec<_>>()
+                                        .join(" · ");
+                                    let artwork_url = track.album.as_ref().and_then(|a| {
+                                        a.image
+                                            .thumbnail
+                                            .clone()
+                                            .or_else(|| a.image.small.clone())
+                                    });
+                                    myqbz_add::AddItem {
+                                        item_type: "track".into(),
+                                        source: "qobuz".into(),
+                                        source_item_id: track_id.to_string(),
+                                        title: track.title.clone(),
+                                        subtitle: (!subtitle.is_empty()).then_some(subtitle),
+                                        artwork_url,
+                                        year: None,
+                                        track_count: None,
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[qbz-slint] add-to-mixtape: get_track {track_id} failed: {e}"
+                                    );
+                                    return;
+                                }
+                            };
+                            open_add_to_mixtape(weak, handle2, vec![item]);
+                        });
+                    }
                 }
                 ("track", "share-qobuz") => {
                     share::copy_to_clipboard(share::qobuz_track_url(&id));
@@ -5620,6 +5939,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
+        // Add the whole local/Plex album to a Mixtape/Collection. Builds the
+        // `album` payload (source "local", no artwork_url — 1:1 PSD) from the
+        // LocalAlbumState header + the current version's track count.
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<LocalAlbumActions>().on_add_to_mixtape(move || {
+            if let Some(w) = weak.upgrade() {
+                let st = w.global::<LocalAlbumState>();
+                let id = st.get_id().to_string();
+                if id.is_empty() {
+                    return;
+                }
+                let tracks = local_library::current_album_version_tracks(&w);
+                let item = myqbz_add::AddItem {
+                    item_type: "album".into(),
+                    source: "local".into(),
+                    source_item_id: id,
+                    title: st.get_title().to_string(),
+                    subtitle: {
+                        let a = st.get_artist().to_string();
+                        (!a.is_empty()).then_some(a)
+                    },
+                    artwork_url: None,
+                    year: None,
+                    track_count: (!tracks.is_empty()).then_some(tracks.len() as i32),
+                };
+                open_add_to_mixtape(weak.clone(), handle.clone(), vec![item]);
+            }
+        });
+    }
+    {
         let weak = window.as_weak();
         window.global::<LocalAlbumActions>().on_select_version(move |i| {
             if let Some(w) = weak.upgrade() {
@@ -5913,6 +6263,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             });
                         }
                     }
+                    "add-to-mixtape" => {
+                        // All selected tracks (Plex INCLUDED — Plex rows are
+                        // stored as source "local" in the mixtape contract).
+                        let rows = local_library::selected_local_tracks(&w);
+                        let items = myqbz_add::track_items_from_local(&rows);
+                        if !items.is_empty() {
+                            open_add_to_mixtape(weak.clone(), handle.clone(), items);
+                            local_library::clear_tracks_selection(&w);
+                        }
+                    }
                     _ => {}
                 }
             });
@@ -6009,6 +6369,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     playlist_picker::apply(&w, playlists);
                                 });
                             });
+                        }
+                    }
+                    "add-to-mixtape" => {
+                        // All selected tracks (Plex included — stored as "local").
+                        let rows = local_library::tree_selected_snapshot();
+                        let items = myqbz_add::track_items_from_local(&rows);
+                        if !items.is_empty() {
+                            open_add_to_mixtape(weak.clone(), handle.clone(), items);
+                            local_library::tree_clear_selection(&w);
                         }
                     }
                     _ => {}
