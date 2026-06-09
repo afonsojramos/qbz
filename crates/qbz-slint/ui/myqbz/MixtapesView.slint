@@ -155,7 +155,7 @@ export component MixtapesView inherits Rectangle {
             Rectangle { height: 16px; }
 
             // ====================== EMPTY STATE ========================
-            if MyQbzState.mixtapes.length == 0 && MyQbzState.mix-search == "" && !MyQbzState.loading: VerticalLayout {
+            if MyQbzState.mixtapes.length == 0 && MyQbzState.mix-search == "": VerticalLayout {
                 padding-top: 80px;
                 padding-bottom: 80px;
                 spacing: 16px;

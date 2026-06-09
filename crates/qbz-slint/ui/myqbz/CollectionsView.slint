@@ -162,7 +162,7 @@ export component CollectionsView inherits Rectangle {
             Rectangle { height: 16px; }
 
             // ====================== EMPTY STATE ========================
-            if MyQbzState.collections.length == 0 && MyQbzState.col-search == "" && MyQbzState.col-kind-filter == "all" && !MyQbzState.loading: VerticalLayout {
+            if MyQbzState.collections.length == 0 && MyQbzState.col-search == "" && MyQbzState.col-kind-filter == "all": VerticalLayout {
                 padding-top: 80px;
                 padding-bottom: 80px;
                 spacing: 16px;
