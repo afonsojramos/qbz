@@ -2657,17 +2657,66 @@ fn wire_myqbz_detail(
         });
     }
 
-    // --- Bulk action bar (select-mode, spec 12 §13) --------------------
-    // "add-to-mixtape" opens the global AddToMixtapeModal with the selected
-    // items' payloads; "remove-selected" removes each selected position
-    // (highest-first) then reloads the detail + clears selection.
+    // --- Bulk action bar (select-mode, spec 12 §13.1) ------------------
+    // The full §13.1 group set:
+    //  - "add-to-queue" / "play-next": resolve the selected items via the shared
+    //    enqueue resolver + append / insert-next (no replace, no queue-source
+    //    stamp — mirrors the per-row contract).
+    //  - "add-to-playlist": resolve the selected items to their Qobuz track ids
+    //    and open the existing playlist picker (Qobuz mode) with them.
+    //  - "add-to-mixtape": open the global AddToMixtapeModal with the payloads.
+    //  - "remove-selected": remove each selected position (highest-first) then
+    //    reload the detail + clear selection.
+    //  - "clear": clear the selection (exit-select / uncheck all).
     {
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         let image_cache = image_cache.clone();
+        let runtime = app_runtime.clone();
         window.global::<Act>().on_bulk_action(move |id| {
             let Some(w) = weak.upgrade() else { return };
             match id.as_str() {
+                "add-to-queue" | "play-next" => {
+                    let selected = myqbz_detail::selected_full_items(&w);
+                    if selected.is_empty() {
+                        return;
+                    }
+                    myqbz_play::bulk_enqueue(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        selected,
+                        id.as_str() == "play-next",
+                    );
+                }
+                "add-to-playlist" => {
+                    let selected = myqbz_detail::selected_full_items(&w);
+                    if selected.is_empty() {
+                        return;
+                    }
+                    // Resolve to Qobuz track ids on a worker, then open the
+                    // global picker (Qobuz mode) + load the user's playlists.
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    handle.spawn(async move {
+                        let ids =
+                            myqbz_play::resolve_bulk_qobuz_track_ids(&runtime, &selected).await;
+                        if ids.is_empty() {
+                            crate::toast::error_weak(
+                                &weak,
+                                "No Qobuz tracks in the selection to add to a playlist",
+                            );
+                            return;
+                        }
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            playlist_picker::open_multi(&w, &ids, false);
+                        });
+                        let playlists = playlist_picker::load(&runtime).await;
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            playlist_picker::apply(&w, playlists);
+                        });
+                    });
+                }
                 "add-to-mixtape" => {
                     let selected = myqbz_detail::selected_full_items(&w);
                     let items: Vec<myqbz_add::AddItem> = selected
@@ -2695,6 +2744,11 @@ fn wire_myqbz_detail(
                         cid,
                         positions,
                     );
+                }
+                "clear" => {
+                    // Clear-X: uncheck every row + zero the count, staying in
+                    // select-mode (spec §13.1 clear control).
+                    myqbz_detail::clear_selection(&w);
                 }
                 other => {
                     log::warn!("[qbz-slint] myqbz_detail bulk-action: unknown id {other}");
@@ -2924,9 +2978,25 @@ fn wire_myqbz_detail(
                 let Some(w) = weak.upgrade() else { return };
                 // go-to-album routes through the existing open-item path (Qobuz
                 // album view vs local-album by id), keeping nav in one place.
+                // It must open the PARENT item (spec 12 §8) — so route with the
+                // parent's REAL item_type (album/playlist), not a hardcoded
+                // "album": a playlist parent must reach the playlist view, not
+                // be mis-routed to the album view. The parent's type is read off
+                // the rendered row carrying this source-item-id.
                 if action == "go-to-album" {
-                    w.global::<Act>()
-                        .invoke_open_item("".into(), "album".into(), item_source_item_id);
+                    let parent_type = {
+                        let model = w.global::<MyQbzDetailState>().get_items();
+                        (0..model.row_count())
+                            .filter_map(|i| model.row_data(i))
+                            .find(|it| it.source_item_id == item_source_item_id)
+                            .map(|it| it.item_type.to_string())
+                            .unwrap_or_else(|| "album".to_string())
+                    };
+                    w.global::<Act>().invoke_open_item(
+                        "".into(),
+                        parent_type.into(),
+                        item_source_item_id,
+                    );
                     return;
                 }
                 let id = w.global::<MyQbzDetailState>().get_id().to_string();

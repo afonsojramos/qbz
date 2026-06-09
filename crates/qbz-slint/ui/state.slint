@@ -1797,6 +1797,11 @@ export global DiscoBuilderState {
 
     // The collection-name input (defaulted to "<artist> — Complete Discography").
     in-out property <string> collection-name: "";
+    // Whether the name is empty AFTER trimming whitespace (Slint can't trim, so
+    // the controller computes this on every name change). Gates the Create
+    // button so a whitespace-only name disables it (spec 13 §2.13 / §10.19:
+    // disabled = creating || selectedCount===0 || !collectionName.trim()).
+    in property <bool> name-trimmed-empty: true;
 
     // Order segmented control: "release_date" | "title" | "manual".
     in-out property <string> order-by: "release_date";

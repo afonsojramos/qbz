@@ -10,9 +10,10 @@
 // hybrid_sample and replaces the queue.
 //
 // Chrome mirrors MyQbzEditModal: an own backdrop (#000000bf) + a 440px panel,
-// h2 title (18px bold), and a footer with secondary Cancel + a primary Shuffle.
-// Backdrop click + Cancel close without committing; Shuffle is disabled while
-// loading / busy or when no size is available.
+// h2 title (18px bold), and a footer with secondary Cancel + a primary
+// "Add to queue" button. Backdrop click + Cancel close without committing;
+// the primary action is disabled while loading / busy or when no size is
+// available.
 //
 // Per spec §23 the button labels are HARDCODED English in the Tauri source; we
 // keep them @tr here (translate hardcoded UI strings on port).
@@ -29,8 +30,8 @@ import { SecondaryButton } from "../primitives/SecondaryButton.slint";
 export component MyQbzMixModal inherits Rectangle {
     visible: MyQbzMixState.open;
 
-    // Shuffle is allowed once a count is loaded (a non-empty options list) and
-    // nothing is in flight.
+    // The primary "Add to queue" action is allowed once a count is loaded (a
+    // non-empty options list) and nothing is in flight.
     property <bool> can-shuffle:
         !MyQbzMixState.loading
         && !MyQbzMixState.busy

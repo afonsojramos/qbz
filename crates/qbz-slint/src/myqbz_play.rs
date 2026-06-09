@@ -372,6 +372,140 @@ pub fn item_action(
     });
 }
 
+/// **Bulk** enqueue for the detail select-mode bulk bar (spec 12 §13.1 Add to
+/// queue / Play next). Resolves EACH selected `MixtapeCollectionItem` through
+/// the same `ProdItemResolver` the per-row path uses (so Qobuz albums/tracks/
+/// playlists + local/Plex all resolve), flattens them in selection order, then:
+/// - **play_next = true**: insert the whole batch immediately after the current
+///   track, in REVERSE so the first resolved track lands first (same rule as the
+///   per-row `PlayNext`).
+/// - **play_next = false**: append the batch at the end of the queue.
+///
+/// Never replaces the queue and never stamps the queue-source collection
+/// (append/play-next preserve context, mirroring the per-row contract). Items
+/// that resolve to nothing are logged + skipped; an all-empty batch toasts.
+pub fn bulk_enqueue(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    items: Vec<MixtapeCollectionItem>,
+    play_next: bool,
+) {
+    if items.is_empty() {
+        return;
+    }
+    handle.spawn(async move {
+        let client_lock = runtime.core().client();
+        let client = {
+            let guard = client_lock.read().await;
+            match guard.as_ref() {
+                Some(c) => c.clone(),
+                None => {
+                    log::warn!("[qbz-slint] myqbz_play: no Qobuz client; cannot bulk-enqueue");
+                    crate::toast::error_weak(&weak, "These items resolved to 0 playable tracks");
+                    return;
+                }
+            }
+        };
+        let resolver = ProdItemResolver::new(&client, resolve_local);
+
+        // Resolve each item in selection order, stamping the per-item boundary
+        // hint inline (this path bypasses resolve_collection_tracks).
+        use qbz_mixtape::enqueue::ItemResolver;
+        let mut tracks: Vec<QueueTrack> = Vec::new();
+        for item in &items {
+            match resolver.resolve(item).await {
+                Ok(mut resolved) => {
+                    let hint = item.source_item_id.clone();
+                    for t in &mut resolved {
+                        t.source_item_id_hint = Some(hint.clone());
+                    }
+                    tracks.extend(resolved);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[qbz-slint] myqbz_play: bulk item {}/{} resolve failed: {}",
+                        item.source_item_id,
+                        item.title,
+                        e
+                    );
+                }
+            }
+        }
+
+        if tracks.is_empty() {
+            crate::toast::error_weak(&weak, "These items resolved to 0 playable tracks");
+            return;
+        }
+
+        if play_next {
+            // REVERSE so the first resolved track lands immediately after the
+            // current track (spec §9.8).
+            for track in tracks.into_iter().rev() {
+                runtime.core().add_track_next(track).await;
+            }
+            refresh_sidebar(false);
+            crate::toast::success_weak(&weak, "Playing next");
+        } else {
+            runtime.core().add_tracks(tracks).await;
+            refresh_sidebar(false);
+            crate::toast::success_weak(&weak, "Added to queue");
+        }
+    });
+}
+
+/// Resolve the selected items' Qobuz track IDs for the bulk "Add to playlist"
+/// flow (spec 12 §13.1). Qobuz playlists only accept Qobuz track ids, so each
+/// item is resolved and only `source == "qobuz"` tracks contribute their ids
+/// (local/Plex tracks are skipped — same constraint the Local Library bulk
+/// add-to-playlist applies). Returns the ids in resolution order; an empty
+/// result means nothing playable-to-a-Qobuz-playlist was selected.
+pub async fn resolve_bulk_qobuz_track_ids(
+    runtime: &Runtime,
+    items: &[MixtapeCollectionItem],
+) -> Vec<String> {
+    use qbz_mixtape::enqueue::ItemResolver;
+
+    let client_lock = runtime.core().client();
+    let client = {
+        let guard = client_lock.read().await;
+        match guard.as_ref() {
+            Some(c) => c.clone(),
+            None => {
+                log::warn!("[qbz-slint] myqbz_play: no Qobuz client; cannot resolve bulk ids");
+                return Vec::new();
+            }
+        }
+    };
+    let resolver = ProdItemResolver::new(&client, resolve_local);
+
+    let mut ids: Vec<String> = Vec::new();
+    for item in items {
+        match resolver.resolve(item).await {
+            Ok(tracks) => {
+                for t in tracks {
+                    // Qobuz-only: a local/Plex track id is not a Qobuz playlist
+                    // member. `source` is the resolver's per-track stamp.
+                    let is_qobuz = t.source.as_deref() == Some("qobuz")
+                        || (t.source.is_none() && !t.is_local);
+                    if is_qobuz {
+                        ids.push(t.id.to_string());
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "[qbz-slint] myqbz_play: bulk add-to-playlist resolve {}/{} failed: {}",
+                    item.source_item_id,
+                    item.title,
+                    e
+                );
+            }
+        }
+    }
+    ids
+}
+
 /// The inline-track menu mode (expanded view-mode TrackRow actions, spec §8
 /// `menuActions`): play-now / play-next / play-later for ONE track resolved
 /// from its parent item. (go-to-album routes through `open-item` in main.rs,

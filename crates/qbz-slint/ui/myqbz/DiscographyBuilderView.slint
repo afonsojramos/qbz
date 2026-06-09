@@ -523,12 +523,17 @@ export component DiscographyBuilderView inherits Rectangle {
                         spacing: 4px;
                         horizontal-stretch: 1;
                         Text {
-                            text: @tr("Build Artist Collection");
+                            // Eyebrow is uppercased (spec 13 §0: eyebrow/field-
+                            // label/col-label use text-transform:uppercase). Slint
+                            // has no text-transform, so the literal is written in
+                            // caps (same idiom as the other MyQBZ eyebrows —
+                            // AddToMixtapeModal "ADD TO MIXTAPE/COLLECTION", the
+                            // grid card label from Rust kind_label).
+                            text: @tr("BUILD ARTIST COLLECTION");
                             color: D.text-muted;
                             font-size: 10px;
                             font-weight: 600;
                             letter-spacing: 1.5px;
-                            // uppercase via the literal (en already caps the eyebrow).
                         }
                         Text {
                             text: DiscoBuilderState.artist-name == ""
@@ -585,7 +590,9 @@ export component DiscographyBuilderView inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         Text {
-                            text: @tr("Order by");
+                            // .field-label is uppercased (spec §2.6 — same
+                            // text-transform:uppercase as the eyebrow / NAME label).
+                            text: @tr("ORDER BY");
                             color: D.text-muted;
                             font-size: 10px;
                             font-weight: 600;
@@ -743,30 +750,31 @@ export component DiscographyBuilderView inherits Rectangle {
                                     }
                                 }
                             }
-                            // [1..6] column labels.
+                            // [1..6] column labels — uppercased (spec §2.9
+                            // header-row text-transform:uppercase; literal caps).
                             Rectangle {
                                 width: 56px;
-                                Text { text: @tr("Year"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: left; }
+                                Text { text: @tr("YEAR"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: left; }
                             }
                             Rectangle {
                                 width: 72px;
-                                Text { text: @tr("Type"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: left; }
+                                Text { text: @tr("TYPE"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: left; }
                             }
                             Rectangle {
                                 horizontal-stretch: 1;
-                                Text { text: @tr("Album"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; horizontal-alignment: left; }
+                                Text { text: @tr("ALBUM"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; horizontal-alignment: left; }
                             }
                             Rectangle {
                                 width: 72px;
-                                Text { text: @tr("Tracks"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
+                                Text { text: @tr("TRACKS"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
                             }
                             Rectangle {
                                 width: 60px;
-                                Text { text: @tr("Source"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
+                                Text { text: @tr("SOURCE"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
                             }
                             Rectangle {
                                 width: 156px;
-                                Text { text: @tr("Quality"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
+                                Text { text: @tr("QUALITY"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
                             }
                         }
                     }
@@ -825,10 +833,14 @@ export component DiscographyBuilderView inherits Rectangle {
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: end;
+                    // disabled = creating || selectedCount===0 ||
+                    // !collectionName.trim() (spec §2.13 / §10.19). The trim is
+                    // computed in the controller (Slint can't trim) and exposed
+                    // as `name-trimmed-empty`, so a whitespace-only name disables.
                     property <bool> create-disabled:
                         DiscoBuilderState.creating
                         || DiscoBuilderState.selected-count == 0
-                        || DiscoBuilderState.collection-name == "";
+                        || DiscoBuilderState.name-trimmed-empty;
                     // Cancel (secondary).
                     SecondaryButton {
                         label: @tr("Cancel");

@@ -854,7 +854,8 @@ export component MixtapeDetailView inherits Rectangle {
                                 clicked => { MyQbzDetailActions.shuffle(); }
                             }
                         }
-                        // (3) DJ-mix (DjIcon) — STUB click (modal is a later slice).
+                        // (3) DJ-mix (DjIcon) — opens the MyQbzMixModal (the
+                        // "Random queue" sampler) via the dj-mix action.
                         VerticalLayout {
                             alignment: center;
                             CircleAction {
@@ -1386,10 +1387,13 @@ export component MixtapeDetailView inherits Rectangle {
     // ===================== BULK ACTION BAR =============================
     // Spec 12 §13: a bottom-docked bar that appears while items are selected
     // (placement='bottom' default). Mirrors the local-library MultiSelectBar
-    // chrome. The action set in THIS view (§13.1, minus the split-queue and
-    // add-to-playlist/favorites buttons not threaded by this slice): Add to
-    // Mixtape/Collection + Remove from this collection (danger). The bar emits
-    // the id; the Rust side routes it (open AddToMixtapeModal / remove + reload).
+    // chrome (a flat [BulkAction] row — the §13.1 split-queue dropdown isn't
+    // expressible in MultiSelectBar, so its two actions are flattened to the
+    // adjacent "Add to queue" + "Play next" buttons, same idiom the Local
+    // Library tracks bar uses). The §13.1 action set, in order: Add to queue
+    // (play-later), Play next, Add to playlist, Add to Mixtape/Collection,
+    // Remove from this collection (danger), Clear (exit-select). The bar emits
+    // the id; the Rust side routes it.
     if MyQbzDetailState.select-mode && MyQbzDetailState.selected-count > 0: Rectangle {
         x: 18px;
         // Sit just above the fixed player bar (the scroller reserves 100px at
@@ -1401,8 +1405,12 @@ export component MixtapeDetailView inherits Rectangle {
             width: 100%;
             selected-count: MyQbzDetailState.selected-count;
             actions: [
+                { id: "add-to-queue", label: @tr("Add to queue"), danger: false, needs-selection: true },
+                { id: "play-next", label: @tr("Play next"), danger: false, needs-selection: true },
+                { id: "add-to-playlist", label: @tr("Add to playlist"), danger: false, needs-selection: true },
                 { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), danger: false, needs-selection: true },
                 { id: "remove-selected", label: @tr("Remove"), danger: true, needs-selection: true },
+                { id: "clear", label: @tr("Clear"), danger: false, needs-selection: true },
             ];
             action(id) => {
                 MyQbzDetailActions.bulk-action(id);

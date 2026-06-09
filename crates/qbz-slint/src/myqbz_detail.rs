@@ -40,6 +40,26 @@ thread_local! {
     /// only (mirrors `playlist::FULL_ITEMS`).
     static FULL_ITEMS: std::cell::RefCell<Vec<MixtapeCollectionItem>> =
         const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Expanded-mode inline-tracks cache, keyed by a STABLE per-item key
+    /// (`source|source_item_id`). Populated ONCE per item when its inline tracks
+    /// are first resolved (spec 12 §8). It is the durable home of the resolved
+    /// tracks: `refresh_view` rebuilds the `MixtapeDetailItem` render rows on
+    /// every filter/sort/search (so the per-row `inline_tracks` would be wiped),
+    /// so after each re-derive we re-hydrate the rows from THIS cache instead of
+    /// re-fetching. The cached `Vec<TrackItem>` carries `slint::Image`s (`!Send`)
+    /// — safe here because the cache lives on the UI thread only. Cleared on
+    /// `reset` (a fresh collection open). Mirrors the Tauri per-item track cache
+    /// that survives the client-side re-derive.
+    static INLINE_CACHE: std::cell::RefCell<std::collections::HashMap<String, Vec<TrackItem>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Stable per-item key for the inline-tracks cache (`source|source_item_id`).
+/// `source_item_id` alone is the row's logical key, but pairing it with the
+/// source keeps qobuz-vs-local collisions impossible.
+fn inline_cache_key(source: &str, source_item_id: &str) -> String {
+    format!("{source}|{source_item_id}")
 }
 
 // ──────────────────────────── DB read path ────────────────────────────
@@ -153,6 +173,18 @@ fn to_item(item: &MixtapeCollectionItem) -> MixtapeDetailItem {
         .map(|u| crate::myqbz::small_qobuz_url(u, 50))
         .unwrap_or_default();
 
+    // Re-hydrate inline tracks from the controller-level cache (keyed
+    // `source|source_item_id`) so a filter/sort/search re-derive does NOT lose
+    // already-resolved tracks or trigger a re-fetch (spec 12 §8 — the cache
+    // survives the re-derive). A cache hit marks the row loaded.
+    let cache_key = inline_cache_key(source, &item.source_item_id);
+    let (cached_tracks, tracks_loaded) = INLINE_CACHE.with(|cell| {
+        match cell.borrow().get(&cache_key) {
+            Some(tracks) => (tracks.clone(), true),
+            None => (Vec::new(), false),
+        }
+    });
+
     MixtapeDetailItem {
         position: item.position,
         item_type: item_type_str(item.item_type).into(),
@@ -178,9 +210,11 @@ fn to_item(item: &MixtapeCollectionItem) -> MixtapeDetailItem {
         // Expanded-mode inline tracks (spec 12 §8): albums and playlists can
         // host inline tracks; a bare track item is itself (no expansion).
         can_expand: matches!(item.item_type, ItemType::Album | ItemType::Playlist),
-        tracks_loaded: false,
+        // Loaded/tracks come from the per-item cache (above) so the re-derive
+        // keeps previously-resolved tracks instead of re-fetching.
+        tracks_loaded,
         expand_loading: false,
-        inline_tracks: ModelRc::new(VecModel::from(Vec::<TrackItem>::new())),
+        inline_tracks: ModelRc::new(VecModel::from(cached_tracks)),
     }
 }
 
@@ -444,10 +478,16 @@ fn full_item_by_source_id(source_item_id: &str) -> Option<MixtapeCollectionItem>
     })
 }
 
-/// "m:ss" track duration (spec 12 §8 `formatSec`, the common positive case;
-/// the inline resolver always yields a concrete `duration_secs`).
+/// "m:ss" track duration (spec 12 §8 `formatSec`). A zero/missing duration
+/// renders the placeholder "--:--" (NOT "0:00") so an unresolved length reads as
+/// unknown, matching the Tauri formatter. (`duration_secs` is `u64`, so the
+/// "negative" case collapses to the zero case.)
 fn track_duration_str(secs: u64) -> String {
-    format!("{}:{:02}", secs / 60, secs % 60)
+    if secs == 0 {
+        "--:--".to_string()
+    } else {
+        format!("{}:{:02}", secs / 60, secs % 60)
+    }
 }
 
 /// Title + parenthesized Qobuz version suffix (spec 12 §8 `formatTrackTitle`).
@@ -463,7 +503,14 @@ fn inline_track_title(track: &qbz_models::QueueTrack) -> String {
 /// now-playing + album-row badges (24-bit+ = Hi-Res), so the inline badge
 /// matches every other surface. `source` drives the per-source `TrackRow`
 /// affordances (Plex/local rows hide the favorite + offline columns).
-fn track_to_item(track: &qbz_models::QueueTrack) -> TrackItem {
+///
+/// `resolver_index` is the 0-based position of this track in the resolver's
+/// output. The resolved `QueueTrack` carries no explicit album track number, so
+/// the displayed number is the resolver's order (1-based) — i.e. "use the
+/// resolver's track number when present", which for this model is the resolved
+/// sequence position. (`TrackRow` would otherwise index-fall-back, but baking
+/// the number here keeps the row number correct regardless of the caller.)
+fn track_to_item(track: &qbz_models::QueueTrack, resolver_index: usize) -> TrackItem {
     let quality_tier = match track.bit_depth {
         Some(d) if d >= 24 => "hires",
         Some(_) => "cd",
@@ -482,7 +529,7 @@ fn track_to_item(track: &qbz_models::QueueTrack) -> TrackItem {
 
     TrackItem {
         id: track.id.to_string().into(),
-        number: String::new().into(),
+        number: (resolver_index + 1).to_string().into(),
         title: inline_track_title(track).into(),
         artist: track.artist.clone().into(),
         album: String::new().into(),
@@ -538,22 +585,25 @@ pub fn ensure_expanded(
     let Some(window) = weak.upgrade() else { return };
     let model = window.global::<MyQbzDetailState>().get_items();
 
-    // Snapshot the rows that still need a fetch (source-item-ids), then mark
-    // them loading in one pass (mutating the model while iterating is fine —
-    // we set_row_data the same index we read).
-    let mut pending: Vec<String> = Vec::new();
+    // Snapshot the rows that still need a fetch (source + source-item-id), then
+    // mark them loading in one pass (mutating the model while iterating is fine
+    // — we set_row_data the same index we read). `tracks_loaded` rows are
+    // skipped: the cache already re-hydrated them in `to_item`, so a re-derive
+    // is instant (no re-fetch).
+    let mut pending: Vec<(String, String)> = Vec::new();
     for i in 0..model.row_count() {
         if let Some(mut it) = model.row_data(i) {
             if it.can_expand && !it.tracks_loaded && !it.expand_loading {
                 it.expand_loading = true;
+                let source = it.source.to_string();
                 let id = it.source_item_id.to_string();
                 model.set_row_data(i, it);
-                pending.push(id);
+                pending.push((source, id));
             }
         }
     }
 
-    for source_item_id in pending {
+    for (source, source_item_id) in pending {
         let Some(full_item) = full_item_by_source_id(&source_item_id) else {
             // No backing item (shouldn't happen) — clear the spinner.
             with_row_by_source_id(&window, &source_item_id, |it| it.expand_loading = false);
@@ -567,7 +617,19 @@ pub fn ensure_expanded(
             // loop, not moved across the thread boundary.
             let tracks = crate::myqbz_play::fetch_item_tracks(&runtime, &full_item).await;
             let _ = weak.upgrade_in_event_loop(move |w| {
-                let items: Vec<TrackItem> = tracks.iter().map(track_to_item).collect();
+                let items: Vec<TrackItem> = tracks
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| track_to_item(t, i))
+                    .collect();
+                // Persist into the controller-level cache (keyed
+                // `source|source_item_id`) so a later filter/sort/search
+                // re-derive re-hydrates this row from the cache instead of
+                // re-fetching (spec 12 §8 — cache survives the re-derive).
+                let cache_key = inline_cache_key(&source, &source_item_id);
+                INLINE_CACHE.with(|cell| {
+                    cell.borrow_mut().insert(cache_key, items.clone());
+                });
                 with_row_by_source_id(&w, &source_item_id, |it| {
                     it.expand_loading = false;
                     it.tracks_loaded = true;
@@ -600,6 +662,9 @@ pub fn clear_selection(window: &AppWindow) {
 /// not flash the previous collection's hero + rows).
 pub fn reset(window: &AppWindow) {
     FULL_ITEMS.with(|cell| cell.borrow_mut().clear());
+    // Drop the inline-tracks cache — a different collection's tracks must not
+    // leak into the freshly-opened one.
+    INLINE_CACHE.with(|cell| cell.borrow_mut().clear());
     let state = window.global::<MyQbzDetailState>();
     state.set_loading(true);
     state.set_found(true);

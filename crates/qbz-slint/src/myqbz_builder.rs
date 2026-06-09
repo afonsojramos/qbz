@@ -663,6 +663,9 @@ pub fn reset(window: &AppWindow, artist_id: &str) {
     state.set_creating(false);
     state.set_open_type_menu_key("".into());
     state.set_collection_name("".into());
+    // Empty name -> trimmed-empty (Create disabled until a name is typed or the
+    // default is installed).
+    state.set_name_trimmed_empty(true);
     state.set_order_by("release_date".into());
     state.set_artist_id(artist_id.into());
     state.set_artist_name("".into());
@@ -711,6 +714,10 @@ pub fn install(
         };
         state.set_collection_name(format!("{base} — Complete Discography").into());
     }
+    // Keep the trimmed-empty gate in sync with whatever the name now holds
+    // (the default name is non-empty; a pre-existing whitespace name stays
+    // disabled).
+    state.set_name_trimmed_empty(state.get_collection_name().trim().is_empty());
     state.set_loading(false);
     apply(window);
 }
@@ -774,11 +781,13 @@ pub fn set_order(window: &AppWindow, order_by: &str) {
 }
 
 /// Sync the collection-name into the state (the input is bound but we mirror
-/// it so the save flow reads a single source).
+/// it so the save flow reads a single source). Also recomputes the
+/// trimmed-empty flag that gates the Create button (Slint can't trim, so a
+/// whitespace-only name must be detected here — spec §10.19).
 pub fn name_changed(window: &AppWindow, name: &str) {
-    window
-        .global::<DiscoBuilderState>()
-        .set_collection_name(name.into());
+    let state = window.global::<DiscoBuilderState>();
+    state.set_collection_name(name.into());
+    state.set_name_trimmed_empty(name.trim().is_empty());
 }
 
 /// Apply a release-type override (persisted) + re-render.
