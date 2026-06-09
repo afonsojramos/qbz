@@ -37,6 +37,7 @@ mod mix;
 mod musician;
 mod myqbz;
 mod myqbz_detail;
+mod myqbz_play;
 mod nav;
 mod play_history;
 mod strip_html;
@@ -2232,7 +2233,38 @@ fn wire_myqbz_detail(
             });
     }
 
-    // --- READ-ONLY STUBS (the slice boundary) ---------------------------
+    // --- Hero PLAY / SHUFFLE (Slice 5: detail playback) -----------------
+    // Resolve the collection's items through the qbz-mixtape ENQUEUE resolver
+    // and drive the queue (replace + auto-play). DJ-mix / edit / delete / sync
+    // stay logging stubs (later slices).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<Act>().on_play_all(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let id = w.global::<MyQbzDetailState>().get_id().to_string();
+            if id.is_empty() {
+                return;
+            }
+            myqbz_play::play_all(runtime.clone(), weak.clone(), handle.clone(), id);
+        });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<Act>().on_shuffle(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let id = w.global::<MyQbzDetailState>().get_id().to_string();
+            if id.is_empty() {
+                return;
+            }
+            myqbz_play::shuffle(runtime.clone(), weak.clone(), handle.clone(), id);
+        });
+    }
+
+    // --- STILL-STUBBED hero/CTA actions (later slices) ------------------
     {
         let weak = window.as_weak();
         let log_stub = move |what: &str| {
@@ -2245,10 +2277,6 @@ fn wire_myqbz_detail(
             );
         };
         let s = log_stub.clone();
-        window.global::<Act>().on_play_all(move || s("play-all"));
-        let s = log_stub.clone();
-        window.global::<Act>().on_shuffle(move || s("shuffle"));
-        let s = log_stub.clone();
         window.global::<Act>().on_dj_mix(move || s("dj-mix"));
         let s = log_stub.clone();
         window.global::<Act>().on_edit(move || s("edit"));
@@ -2257,19 +2285,48 @@ fn wire_myqbz_detail(
         let s = log_stub.clone();
         window.global::<Act>().on_sync(move || s("sync"));
     }
+
+    // --- Per-row PLAY (default) -----------------------------------------
     {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
         window.global::<Act>().on_play_item(move |source_item_id| {
-            log::info!(
-                "[qbz-slint] myqbz_detail play-item({source_item_id}) — not yet wired (read-only slice)"
+            let Some(w) = weak.upgrade() else { return };
+            let id = w.global::<MyQbzDetailState>().get_id().to_string();
+            if id.is_empty() {
+                return;
+            }
+            myqbz_play::play_item(
+                runtime.clone(),
+                weak.clone(),
+                handle.clone(),
+                id,
+                source_item_id.to_string(),
             );
         });
     }
+
+    // --- Per-row context menu (play / play-next / add-to-queue) ---------
     {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
         window
             .global::<Act>()
             .on_item_action(move |source_item_id, action| {
-                log::info!(
-                    "[qbz-slint] myqbz_detail item-action({source_item_id}, {action}) — not yet wired (read-only slice)"
+                let Some(w) = weak.upgrade() else { return };
+                let id = w.global::<MyQbzDetailState>().get_id().to_string();
+                if id.is_empty() {
+                    return;
+                }
+                myqbz_play::item_action(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id,
+                    source_item_id.to_string(),
+                    action.to_string(),
                 );
             });
     }
