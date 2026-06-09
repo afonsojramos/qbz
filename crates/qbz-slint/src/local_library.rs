@@ -3007,7 +3007,18 @@ fn map_plex_cached_to_local_track(t: qbz_plex::PlexCachedTrack) -> qbz_library::
         title: t.title,
         artist: t.artist,
         album: t.album.clone(),
-        album_group_key: t.album_key.clone(),
+        // Version key: open_local_album groups tracks into selectable versions
+        // by album_group_key. `album_key` is a title+artist hash, so two
+        // distinct Plex albums with the same name collapse into one group and
+        // their tracks interleave (1,1,2,2,...). Key on the Plex album
+        // (parent_rating_key) instead so each edition is its own version; fall
+        // back to album_key on pre-resync rows that lack it (one merged group).
+        album_group_key: t
+            .parent_rating_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .map(|k| format!("plex:album:{k}"))
+            .unwrap_or_else(|| t.album_key.clone()),
         // Feeds the album-detail header title (apply_album_version reads
         // tracks.first().album_group_title) — use the Plex album name.
         album_group_title: t.album.clone(),
