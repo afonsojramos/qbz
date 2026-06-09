@@ -20,6 +20,7 @@ import { PlaylistPickerModal } from "../primitives/PlaylistPickerModal.slint";
 import { CreatePlaylistModal } from "../primitives/CreatePlaylistModal.slint";
 import { EditPlaylistModal } from "../primitives/EditPlaylistModal.slint";
 import { CreateFolderModal } from "../primitives/CreateFolderModal.slint";
+import { CreateMyQbzModal } from "../myqbz/CreateMyQbzModal.slint";
 import { EphemeralPlayChoiceModal } from "../primitives/EphemeralPlayChoiceModal.slint";
 import { FolderEditModal } from "../primitives/FolderEditModal.slint";
 import { LibFolderEditModal } from "../settings/LibFolderEditModal.slint";
@@ -380,6 +381,9 @@ export component AppShell inherits Rectangle {
 
     // Global "Create folder" modal.
     CreateFolderModal { }
+
+    // Global "Create Mixtape / Collection" modal (My QBZ "+ New").
+    CreateMyQbzModal { }
 
     // Ephemeral "already playing" add-vs-replace choice.
     EphemeralPlayChoiceModal { }

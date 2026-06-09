@@ -1108,6 +1108,23 @@ export global CreateFolderActions {
     callback close();
 }
 
+// "Create Mixtape / Collection" modal state (My QBZ). Opened from either
+// grid's "+ New" CTA / empty-state button. `kind` is preset by the opening
+// grid ("mixtape" | "collection") and can be flipped via the radio toggle
+// (artist_collection is created via the Discography Builder, not here).
+// `name` is capped at 80 chars (mirrors Tauri's maxlength="80").
+export global MyQbzCreateState {
+    in-out property <bool> open: false;
+    in-out property <string> kind: "mixtape";
+    in-out property <string> name;
+    in property <bool> creating: false;
+}
+
+export global MyQbzCreateActions {
+    callback submit();
+    callback close();
+}
+
 // Ephemeral "play with active queue" choice — shown when the user triggers an
 // ephemeral play action while a queue is already playing. Two outcomes:
 // add to the queue, or clear the queue and start playing.
