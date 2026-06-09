@@ -345,7 +345,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings, search, musician, label, label-releases, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager, local-library, local-album, mixtapes, collections, mixtape-detail }
+export enum ContentView { home, album, artist, settings, search, musician, label, label-releases, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder }
 
 // In-app toast (transient notification). Mirrors Tauri's toastStore:
 // a single toast at a time (a new one replaces the current), auto-hidden
@@ -1701,6 +1701,115 @@ export global MyQbzDetailActions {
     //                        (highest-first so compaction doesn't shift),
     //                        then reload the detail + clear selection.
     callback bulk-action(string /* id */);
+}
+
+// ─────────────────────── Discography Builder (spec 13) ───────────────────
+// The full-page flow that assembles an artist's complete discography into a
+// saved `kind='artist_collection'` collection. It fetches every release for
+// the artist from three sources (Qobuz artist page + local library + Plex
+// cache), dedupes them into GROUPS (one logical album = a chosen "primary" +
+// "alternates"), lets the user check which to include, reorder (by sort),
+// rename, and correct release-type mislabels, then persists the result.
+//
+// One candidate row (a primary OR an alternate). Every display string is
+// precomputed in Rust (crate::myqbz_builder) so the view does no lookups.
+export struct DiscoCandidate {
+    // `${source}|${source_item_id}` — the per-candidate selection key.
+    key: string,
+    // "qobuz" | "local" | "plex" — drives the source indicator icon.
+    source: string,
+    source-item-id: string,
+    title: string,
+    artist: string,
+    // "2019" or "—" (em-dash placeholder).
+    year: string,
+    // "12" or "—".
+    tracks: string,
+    artwork-url: string,
+    // Effective release type AFTER the user's override is applied:
+    // "album" | "ep" | "single" | "live" | "compilation".
+    release-type: string,
+    // True when a user override is active for this candidate (drives the
+    // dotted-underline marker on the type button).
+    is-overridden: bool,
+    // QualityBadgeFull inputs.
+    quality-tier: string,
+    quality-detail: string,
+    // Whether THIS candidate is currently checked (included on save).
+    checked: bool,
+}
+
+// One dedupe GROUP: a primary candidate plus zero or more alternates.
+export struct DiscoGroup {
+    // group_key (`${normalizedTitle}|${year}`) — stable row key.
+    key: string,
+    title: string,
+    // "2019" / "—".
+    year: string,
+    primary: DiscoCandidate,
+    alternates: [DiscoCandidate],
+    // ALL candidates are compilations → the group is treated as a comp
+    // (dimmed primary row, ignored by select-all).
+    is-compilation: bool,
+}
+
+export global DiscoBuilderState {
+    // The artist being built (id + resolved display name + portrait URL).
+    in property <string> artist-id;
+    in property <string> artist-name;
+    in property <string> artist-avatar-url;
+    in property <image> artist-avatar;
+
+    // Render states (spec 13 §4). `loading` true initially + during load;
+    // `load-error` non-empty shows the raw error message; otherwise the
+    // groups table renders (empty groups -> "No results found").
+    in property <bool> loading: true;
+    in property <string> load-error: "";
+
+    // The dedupe groups in CURRENT sort order (Rust re-sorts on order change).
+    in property <[DiscoGroup]> groups: [];
+
+    // The collection-name input (defaulted to "<artist> — Complete Discography").
+    in-out property <string> collection-name: "";
+
+    // Order segmented control: "release_date" | "title" | "manual".
+    in-out property <string> order-by: "release_date";
+
+    // Select-all header checkbox state (tri-state via the two flags).
+    in property <bool> all-checked: false;
+    in property <bool> some-checked: false;
+
+    // Footer: total checked candidate count + total group count.
+    in property <int> selected-count: 0;
+    in property <int> group-count: 0;
+
+    // Disables the Create button while a save is in flight.
+    in property <bool> creating: false;
+
+    // The per-row type-override popover open key (`${source}|${source_item_id}`),
+    // or "" when none is open. One menu open at a time.
+    in-out property <string> open-type-menu-key: "";
+}
+
+export global DiscoBuilderActions {
+    // Back to the artist page (clears builder state).
+    callback back();
+    // Collection-name input edited.
+    callback name-changed(string);
+    // Order segmented control: "release_date" | "title" | "manual".
+    callback set-order(string);
+    // Toggle one candidate's checked state (group-key + candidate-key).
+    callback toggle-checked(string /* group-key */, string /* candidate-key */);
+    // Header tri-state select-all toggle (non-compilation primaries only).
+    callback toggle-all();
+    // Open an album (Qobuz album view, or local/Plex local-album view).
+    callback open-album(string /* source */, string /* source-item-id */);
+    // Apply a release-type override to a candidate (writes the sidecar).
+    callback set-type-override(string /* source */, string /* source-item-id */, string /* type */);
+    // Clear a candidate's override (revert to auto-detected).
+    callback reset-type-override(string /* source */, string /* source-item-id */);
+    // Save: create the artist_collection + bulk-add the checked groups.
+    callback create();
 }
 
 // ──────────────────────────── DJ-mix modal ────────────────────────────

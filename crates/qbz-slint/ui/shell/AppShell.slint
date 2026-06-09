@@ -50,6 +50,7 @@ import { PlaylistManagerView } from "../playlist/PlaylistManagerView.slint";
 import { MixtapesView } from "../myqbz/MixtapesView.slint";
 import { CollectionsView } from "../myqbz/CollectionsView.slint";
 import { MixtapeDetailView } from "../myqbz/MixtapeDetailView.slint";
+import { DiscographyBuilderView } from "../myqbz/DiscographyBuilderView.slint";
 import { OfflineManagerView } from "../offline/OfflineManagerView.slint";
 import { LocalLibraryView } from "../locallibrary/LocalLibraryView.slint";
 import { SettingsView } from "../settings/SettingsView.slint";
@@ -239,6 +240,7 @@ export component AppShell inherits Rectangle {
                 if NavState.view == ContentView.mixtapes: MixtapesView { }
                 if NavState.view == ContentView.collections: CollectionsView { }
                 if NavState.view == ContentView.mixtape-detail: MixtapeDetailView { }
+                if NavState.view == ContentView.discography-builder: DiscographyBuilderView { }
                 if NavState.view == ContentView.offline-manager: OfflineManagerView { }
                 if NavState.view == ContentView.local-library: LocalLibraryView { }
                 if NavState.view == ContentView.mix: MixView {

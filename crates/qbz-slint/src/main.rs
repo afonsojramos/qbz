@@ -37,6 +37,7 @@ mod mix;
 mod musician;
 mod myqbz;
 mod myqbz_add;
+mod myqbz_builder;
 mod myqbz_cover;
 mod myqbz_detail;
 mod myqbz_edit;
@@ -712,6 +713,85 @@ fn navigate_artist(
     });
 }
 
+/// Open the Discography Builder for `artist_id` (spec 13). Fetches the artist's
+/// releases from Qobuz (sets name + avatar), then local + Plex by that name
+/// (sequential — parallelizing drops local matches against an empty name),
+/// dedupes into groups, installs the default selection, and decodes the avatar.
+/// Plex gets a single 2-second cold-start retry when enabled and the first
+/// fetch returns nothing.
+fn navigate_discography_builder(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+    artist_id: String,
+) {
+    let id_for_reset = artist_id.clone();
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            myqbz_builder::reset(&w, &id_for_reset);
+            w.global::<NavState>().set_view(ContentView::DiscographyBuilder);
+        });
+
+        // 1. Qobuz first — sets artist name + avatar URL (side effect).
+        match myqbz_builder::fetch_qobuz(&runtime, &artist_id).await {
+            Ok((qobuz, artist_name, avatar_url)) => {
+                // 2. Local + Plex by the resolved name (sequential, mandatory).
+                let name_for_local = artist_name.clone();
+                let mut local = tokio::task::spawn_blocking(move || {
+                    myqbz_builder::fetch_local_and_plex(&name_for_local)
+                })
+                .await
+                .unwrap_or_default();
+
+                // 2b. Plex cold-start retry: if Plex is enabled and we got
+                //     nothing from the Plex source, wait 2s and refetch once.
+                let plex_enabled = crate::plex_settings::get().enabled;
+                let got_plex = local.iter().any(|c| c.source == "plex");
+                if plex_enabled && !got_plex {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let name_retry = artist_name.clone();
+                    let retried = tokio::task::spawn_blocking(move || {
+                        myqbz_builder::fetch_local_and_plex(&name_retry)
+                    })
+                    .await
+                    .unwrap_or_default();
+                    if retried.iter().any(|c| c.source == "plex") {
+                        local = retried;
+                    }
+                }
+
+                // 3. Merge + group (Qobuz first so it wins primary ties).
+                let mut all = qobuz;
+                all.extend(local);
+                let groups = myqbz_builder::build_groups(all);
+
+                let avatar_for_fetch = avatar_url.clone();
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    myqbz_builder::install(&w, artist_name, avatar_url, groups);
+                });
+
+                // 4. Decode the avatar (72px circle).
+                if !avatar_for_fetch.is_empty() {
+                    if let Some((pixels, width, height)) =
+                        artwork::fetch_and_decode(&avatar_for_fetch, &image_cache, 144).await
+                    {
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            myqbz_builder::apply_avatar(&w, &pixels, width, height);
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("[qbz-slint] discography builder load failed: {e}");
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    myqbz_builder::fail(&w, e);
+                });
+            }
+        }
+    });
+}
+
 thread_local! {
     /// Debounce timer for the header live search — restarted on every
     /// keystroke, fires the search 300 ms after typing stops.
@@ -779,6 +859,7 @@ fn scope_for(entry: &nav::NavEntry) -> String {
         nav::NavEntry::Mixtapes => "mixtapes".into(),
         nav::NavEntry::Collections => "collections".into(),
         nav::NavEntry::MixtapeDetail(_) => "mixtape-detail".into(),
+        nav::NavEntry::DiscographyBuilder(_) => "discography-builder".into(),
         nav::NavEntry::Album(_) => "album".into(),
         nav::NavEntry::LocalAlbum(_) => "local-album".into(),
         nav::NavEntry::Artist(_) => "artist".into(),
@@ -942,6 +1023,15 @@ fn apply_entry(
         }
         nav::NavEntry::MixtapeDetail(id) => {
             myqbz_detail::navigate(weak.clone(), handle.clone(), image_cache.clone(), id);
+        }
+        nav::NavEntry::DiscographyBuilder(artist_id) => {
+            navigate_discography_builder(
+                runtime.clone(),
+                weak.clone(),
+                handle,
+                image_cache.clone(),
+                artist_id,
+            );
         }
         nav::NavEntry::Location {
             mbid,
@@ -2769,6 +2859,156 @@ fn wire_myqbz_detail(
     }
 }
 
+/// Wire the Discography Builder (spec 13). Back -> browser-back (returns to the
+/// artist page). Name / order / checkbox / select-all / type-override drive the
+/// `crate::myqbz_builder` session re-renders. Open-album routes through the
+/// top-level `open-album` (Qobuz album view vs local-album by id). Create runs
+/// the save flow on a blocking worker then navigates to the new collection.
+fn wire_disco_builder(
+    window: &AppWindow,
+    tokio_rt: &tokio::runtime::Runtime,
+    image_cache: &artwork::ImageCache,
+) {
+    use DiscoBuilderActions as Act;
+
+    // Back / Cancel -> browser-back to the artist page.
+    {
+        let weak = window.as_weak();
+        window.global::<Act>().on_back(move || {
+            if let Some(w) = weak.upgrade() {
+                w.global::<NavState>().invoke_request_back();
+            }
+        });
+    }
+    // Collection-name input.
+    {
+        let weak = window.as_weak();
+        window.global::<Act>().on_name_changed(move |name| {
+            if let Some(w) = weak.upgrade() {
+                myqbz_builder::name_changed(&w, name.as_str());
+            }
+        });
+    }
+    // Order segmented control.
+    {
+        let weak = window.as_weak();
+        window.global::<Act>().on_set_order(move |order| {
+            if let Some(w) = weak.upgrade() {
+                myqbz_builder::set_order(&w, order.as_str());
+            }
+        });
+    }
+    // Per-row checkbox.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<Act>()
+            .on_toggle_checked(move |group_key, cand_key| {
+                if let Some(w) = weak.upgrade() {
+                    myqbz_builder::toggle_checked(&w, group_key.as_str(), cand_key.as_str());
+                }
+            });
+    }
+    // Header select-all.
+    {
+        let weak = window.as_weak();
+        window.global::<Act>().on_toggle_all(move || {
+            if let Some(w) = weak.upgrade() {
+                myqbz_builder::toggle_all(&w);
+            }
+        });
+    }
+    // Open an album (Qobuz album view, or local-album by group key).
+    {
+        let weak = window.as_weak();
+        window
+            .global::<Act>()
+            .on_open_album(move |_source, source_item_id| {
+                if let Some(w) = weak.upgrade() {
+                    if !source_item_id.trim().is_empty() {
+                        w.invoke_open_album(source_item_id);
+                    }
+                }
+            });
+    }
+    // Release-type override set / reset.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<Act>()
+            .on_set_type_override(move |source, id, choice| {
+                if let Some(w) = weak.upgrade() {
+                    myqbz_builder::set_type_override(
+                        &w,
+                        source.as_str(),
+                        id.as_str(),
+                        choice.as_str(),
+                    );
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<Act>()
+            .on_reset_type_override(move |source, id| {
+                if let Some(w) = weak.upgrade() {
+                    myqbz_builder::reset_type_override(&w, source.as_str(), id.as_str());
+                }
+            });
+    }
+    // Create — save the artist_collection + bulk-add, then navigate to detail.
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_create(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // Snapshot the selection in current sort order (UI thread).
+            let Some(payload) = myqbz_builder::save_payload(&w) else {
+                return;
+            };
+            if w.global::<DiscoBuilderState>().get_creating() {
+                return;
+            }
+            myqbz_builder::set_creating(&w, true);
+
+            let weak = weak.clone();
+            let handle = handle.clone();
+            let image_cache = image_cache.clone();
+            handle.clone().spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    myqbz_builder::create_collection(&payload)
+                })
+                .await
+                .ok()
+                .flatten();
+
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    myqbz_builder::set_creating(&w, false);
+                    match result {
+                        Some(collection_id) => {
+                            myqbz_builder::toast_created(&w);
+                            // Navigate to the new collection's detail.
+                            nav::record(nav::NavEntry::MixtapeDetail(collection_id.clone()));
+                            myqbz_detail::navigate(
+                                w.as_weak(),
+                                handle.clone(),
+                                image_cache.clone(),
+                                collection_id,
+                            );
+                            update_nav_flags(&w);
+                        }
+                        None => {
+                            myqbz_builder::toast_failed(&w);
+                        }
+                    }
+                });
+            });
+        });
+    }
+}
+
 /// Open a MusicianPageView for `name + role`. Routes to the artist
 /// page instead when the resolved musician has a Confirmed Qobuz
 /// match (Tauri's `confidence === 'confirmed'` shortcut). Fetches
@@ -3844,6 +4084,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         image_cache.clone(),
                         id.clone(),
                     );
+                }
+                // Build Artist Collection — open the Discography Builder for the
+                // current artist (the button passes an empty id, so resolve it
+                // from ArtistState). Records a history entry then routes.
+                ("artist", "build-collection") => {
+                    if let Some(w) = weak.upgrade() {
+                        let artist_id = if id.is_empty() {
+                            w.global::<ArtistState>().get_id().to_string()
+                        } else {
+                            id.clone()
+                        };
+                        if !artist_id.is_empty() {
+                            nav::record(nav::NavEntry::DiscographyBuilder(artist_id.clone()));
+                            navigate_discography_builder(
+                                runtime.clone(),
+                                weak.clone(),
+                                &handle,
+                                image_cache.clone(),
+                                artist_id,
+                            );
+                            update_nav_flags(&w);
+                        }
+                    }
                 }
                 ("artist", "play-top") => playback::play_artist_top_tracks(
                     runtime.clone(),
@@ -7429,6 +7692,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wire_playlist_manager(&window, &app_runtime, &tokio_rt, &image_cache);
     wire_myqbz(&window, &tokio_rt, &image_cache);
     wire_myqbz_detail(&window, &app_runtime, &tokio_rt, &image_cache);
+    wire_disco_builder(&window, &tokio_rt, &image_cache);
     {
         let weak = window.as_weak();
         window

@@ -1,0 +1,886 @@
+// Discography Builder — the full-page flow that assembles an artist's
+// complete discography into a saved `kind='artist_collection'` collection
+// (spec 13). A 1:1 port of the Tauri DiscographyBuilderView.svelte.
+//
+// Two-part layout: `.builder-scroll` holds everything that scrolls; the
+// footer is a fixed-height flex sibling pinned at the bottom (NOT
+// sticky-inside-scroll) so last rows never peek past the footer.
+//
+// CSS variable values are resolved to the concrete dark-theme values from
+// spec §0 (this view hardcodes them rather than going through the Theme
+// global so the port stays pixel-exact to the quoted PSD).
+
+import { Typography } from "../foundation/typography.slint";
+import { DiscoBuilderState, DiscoBuilderActions, DiscoGroup, DiscoCandidate } from "../state.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
+
+// ── Concrete dark-theme values (spec §0) ──────────────────────────────────
+// Resolved here as global consts so the whole view shares one source.
+global D {
+    out property <color> bg-primary: #0f0f0f;     // footer bg
+    out property <color> bg-secondary: #1a1a1a;    // input/segment/menu/secondary-btn
+    out property <color> bg-tertiary: #2a2a2a;     // avatar placeholder, hairlines
+    out property <color> bg-hover: #1f1f1f;         // row/segment/menu-item hover
+    out property <color> text-primary: #ffffff;
+    out property <color> text-secondary: #cccccc;
+    out property <color> text-muted: #888888;
+    out property <color> accent: #4285F4;
+    out property <color> btn-primary-text: #ffffff;
+    out property <color> alpha-6: #ffffff0f;        // rgba(255,255,255,0.06)
+    out property <color> error: #e57373;
+    // Type-label tints (hardcoded non-var colors, spec §0).
+    out property <color> tint-compilation: #f59e0b;  // amber
+    out property <color> tint-live: #e91e63;          // pink
+    out property <color> tint-ep: #60a5fa;             // blue
+    out property <color> tint-single: #a78bfa;         // violet
+}
+
+// Resolve a release-type to its tint (plain "album" = muted, no tint).
+component TypeColor {
+    in property <string> kind;
+    out property <color> color:
+        root.kind == "compilation" ? D.tint-compilation
+        : root.kind == "live" ? D.tint-live
+        : root.kind == "ep" ? D.tint-ep
+        : root.kind == "single" ? D.tint-single
+        : D.text-muted;
+}
+
+// ── Source indicator (Qobuz / Plex / Local accent-tinted silhouette) ──────
+component SourceIndicator inherits Rectangle {
+    in property <string> source;
+    width: 28px;
+    height: 28px;
+    opacity: 0.9;
+    HorizontalLayout {
+        alignment: center;
+        VerticalLayout {
+            alignment: center;
+            if root.source == "plex": QbzIcon {
+                source: @image-url("../assets/icons/plex-logo.svg");
+                width: 14px;
+                height: 14px;
+                tint: D.accent;
+            }
+            if root.source == "qobuz": QbzIcon {
+                source: @image-url("../assets/icons/qobuz-logo-filled.svg");
+                width: 16px;
+                height: 16px;
+                tint: D.accent;
+            }
+            if root.source != "plex" && root.source != "qobuz": QbzIcon {
+                source: @image-url("../assets/icons/hard-drive.svg");
+                width: 14px;
+                height: 14px;
+                tint: D.accent;
+            }
+        }
+    }
+}
+
+// ── Per-row release-type override button + popover (spec §7.1) ─────────────
+component TypeOverride inherits Rectangle {
+    in property <DiscoCandidate> candidate;
+    // 11px primary / 10px alternate.
+    in property <length> font-size: 11px;
+
+    property <string> menu-key: root.candidate.source + "|" + root.candidate.source-item-id;
+    property <bool> menu-open: DiscoBuilderState.open-type-menu-key == root.menu-key;
+
+    // The wrapper anchors the absolute popover; it sizes to the button.
+    width: type-btn.preferred-width;
+    height: type-btn.preferred-height;
+
+    type-btn := Rectangle {
+        // .type-btn negative margin (0 -4px) is replicated by a -4px touch
+        // bleed; the visual glyph stays put.
+        background: btn-ta.has-hover ? D.alpha-6 : transparent;
+        border-radius: 4px;
+        HorizontalLayout {
+            padding-left: 4px;
+            padding-right: 4px;
+            padding-top: 2px;
+            padding-bottom: 2px;
+            label := Text {
+                text: root.candidate.release-type;
+                color: type-color.color;
+                font-size: root.font-size;
+                font-weight: 600;
+                letter-spacing: 0.4px;
+                vertical-alignment: center;
+            }
+        }
+        type-color := TypeColor { kind: root.candidate.release-type; }
+        // Dotted-underline marker for an active override (Slint has no
+        // text-decoration; draw a 1px dotted rule under the label).
+        if root.candidate.is-overridden: Rectangle {
+            x: label.x;
+            y: parent.height - 3px;
+            width: label.width;
+            height: 1px;
+            background: type-color.color;
+            opacity: 0.6;
+        }
+        btn-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                DiscoBuilderState.open-type-menu-key =
+                    root.menu-open ? "" : root.menu-key;
+            }
+        }
+    }
+
+    // Backdrop + menu (rendered above siblings; z-order is paint order).
+    if root.menu-open: Rectangle {
+        // Backdrop click-catcher — full-row local catch; closes the menu.
+        // (A true full-viewport backdrop isn't expressible here without a
+        // global overlay; the menu's close-on-outside is handled by the
+        // backdrop TouchArea plus re-clicking the button.)
+        TouchArea {
+            x: -2000px;
+            y: -2000px;
+            width: 4000px;
+            height: 4000px;
+            clicked => {
+                DiscoBuilderState.open-type-menu-key = "";
+            }
+        }
+        menu := Rectangle {
+            x: 0;
+            y: parent.height + 4px;
+            width: 160px;
+            background: D.bg-secondary;
+            border-width: 1px;
+            border-color: D.bg-tertiary;
+            border-radius: 6px;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #00000059;  // rgba(0,0,0,0.35)
+            drop-shadow-offset-y: 4px;
+            VerticalLayout {
+                padding: 4px;
+                // Album, EP, Single, Live, Compilation (spec order).
+                for choice in [
+                    { id: "album", lbl: "Album" },
+                    { id: "ep", lbl: "EP" },
+                    { id: "single", lbl: "Single" },
+                    { id: "live", lbl: "Live" },
+                    { id: "compilation", lbl: "Compilation" },
+                ]: Rectangle {
+                    height: 28px;
+                    border-radius: 4px;
+                    background: item-ta.has-hover ? D.bg-hover : transparent;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            // Check glyph if this is the selected type; else a
+                            // 12px placeholder so labels stay aligned.
+                            if root.candidate.release-type == choice.id: QbzIcon {
+                                source: @image-url("../assets/icons/check.svg");
+                                width: 12px;
+                                height: 12px;
+                                tint: D.accent;
+                            }
+                            if root.candidate.release-type != choice.id: Rectangle {
+                                width: 12px;
+                                height: 12px;
+                            }
+                        }
+                        Text {
+                            text: choice.lbl;
+                            color: root.candidate.release-type == choice.id
+                                ? D.accent : D.text-primary;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    item-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            DiscoBuilderActions.set-type-override(
+                                root.candidate.source,
+                                root.candidate.source-item-id,
+                                choice.id);
+                            DiscoBuilderState.open-type-menu-key = "";
+                        }
+                    }
+                }
+                // Reset row — only when an override is active.
+                if root.candidate.is-overridden: Rectangle {
+                    height: 9px;
+                    Rectangle {
+                        y: 4px;
+                        height: 1px;
+                        background: D.bg-tertiary;
+                    }
+                }
+                if root.candidate.is-overridden: Rectangle {
+                    height: 28px;
+                    border-radius: 4px;
+                    background: reset-ta.has-hover ? D.bg-hover : transparent;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            QbzIcon {
+                                source: @image-url("../assets/icons/rotate-ccw.svg");
+                                width: 12px;
+                                height: 12px;
+                                tint: D.text-muted;
+                            }
+                        }
+                        Text {
+                            text: @tr("Use auto-detected");
+                            color: D.text-muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    reset-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            DiscoBuilderActions.reset-type-override(
+                                root.candidate.source,
+                                root.candidate.source-item-id);
+                            DiscoBuilderState.open-type-menu-key = "";
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 7-column row grid — the alignment backbone (spec §2.9):
+// grid-template-columns: 28px 56px 72px minmax(0,1fr) 72px 60px 156px, gap 10px.
+// Each row below inlines this template (header/primary/alternate share it).
+//
+// One candidate row (primary or alternate). `alt` dims it + swaps the col[0]
+// checkbox for a connector + checkbox and shrinks/mutes the text.
+component CandidateRow inherits Rectangle {
+    in property <DiscoCandidate> candidate;
+    in property <string> group-key;
+    in property <bool> alt: false;
+    // Whether the OWNING group is a compilation — drives the primary row's
+    // "compilation" tag (spec §2.10: tag is `{#if grp.is_compilation}`, the
+    // group flag, not the candidate's effective type).
+    in property <bool> group-is-compilation: false;
+    // Persistent dim (compilation primary 0.65 / alternate 0.72); lifts to 1
+    // on hover. The parent passes the resting opacity.
+    in property <float> rest-opacity: 1.0;
+
+    height: 36px;
+    border-radius: 6px;
+    background: row-ta.has-hover ? D.bg-hover : transparent;
+    opacity: row-ta.has-hover ? 1.0 : root.rest-opacity;
+
+    row-ta := TouchArea { mouse-cursor: default; }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+        // [0] 28px — checkbox cell (alt: connector + checkbox).
+        Rectangle {
+            width: 28px;
+            HorizontalLayout {
+                alignment: start;
+                spacing: 3px;
+                if root.alt: Text {
+                    text: "↳";
+                    color: D.text-muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 15px;
+                        height: 15px;
+                        border-radius: 3px;
+                        background: root.candidate.checked ? D.accent : transparent;
+                        border-width: root.candidate.checked ? 0px : 1.5px;
+                        border-color: D.text-muted;
+                        if root.candidate.checked: QbzIcon {
+                            source: @image-url("../assets/icons/check.svg");
+                            width: 11px;
+                            height: 11px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            tint: D.btn-primary-text;
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                DiscoBuilderActions.toggle-checked(
+                                    root.group-key, root.candidate.key);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // [1] 56px — year.
+        Rectangle {
+            width: 56px;
+            Text {
+                text: root.candidate.year;
+                color: root.alt ? D.text-muted : D.text-secondary;
+                font-size: root.alt ? 12px : 13px;
+                vertical-alignment: center;
+                horizontal-alignment: left;
+                width: 100%;
+            }
+        }
+        // [2] 72px — type override button + popover.
+        Rectangle {
+            width: 72px;
+            HorizontalLayout {
+                alignment: start;
+                VerticalLayout {
+                    alignment: center;
+                    TypeOverride {
+                        candidate: root.candidate;
+                        font-size: root.alt ? 10px : 11px;
+                    }
+                }
+            }
+        }
+        // [3] 1fr — title (flexes) + tag.
+        Rectangle {
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                alignment: start;
+                spacing: 8px;
+                title-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        DiscoBuilderActions.open-album(
+                            root.candidate.source, root.candidate.source-item-id);
+                    }
+                    title := Text {
+                        text: root.candidate.title;
+                        color: title-ta.has-hover
+                            ? D.accent
+                            : (root.alt ? D.text-muted : D.text-primary);
+                        font-size: root.alt ? 13px : 14px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        width: 100%;
+                    }
+                }
+                // alternates always show the "alternate" tag; primaries show
+                // "compilation" only when the group is a compilation (passed
+                // by the parent baking it into the candidate's title? No —
+                // the parent sets `tag` separately). Here we infer from the
+                // row kind + the candidate's own type.
+                if root.alt: Text {
+                    text: @tr("alternate");
+                    color: D.text-muted;
+                    font-size: 10px;
+                    font-weight: 500;
+                    font-italic: true;
+                    letter-spacing: 0.8px;
+                    vertical-alignment: center;
+                }
+                if !root.alt && root.group-is-compilation: Text {
+                    text: @tr("compilation");
+                    color: D.text-muted;
+                    font-size: 10px;
+                    font-weight: 500;
+                    font-italic: true;
+                    letter-spacing: 0.8px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        // [4] 72px — tracks (centered, tabular).
+        Rectangle {
+            width: 72px;
+            Text {
+                text: root.candidate.tracks;
+                color: root.alt ? D.text-muted : D.text-secondary;
+                font-size: root.alt ? 12px : 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+            }
+        }
+        // [5] 60px — source indicator.
+        Rectangle {
+            width: 60px;
+            HorizontalLayout {
+                alignment: center;
+                VerticalLayout {
+                    alignment: center;
+                    SourceIndicator { source: root.candidate.source; }
+                }
+            }
+        }
+        // [6] 156px — quality badge.
+        Rectangle {
+            width: 156px;
+            HorizontalLayout {
+                alignment: center;
+                VerticalLayout {
+                    alignment: center;
+                    QualityBadgeFull {
+                        tier: root.candidate.quality-tier;
+                        detail: root.candidate.quality-detail;
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component DiscographyBuilderView inherits Rectangle {
+    background: transparent;
+
+    // ── .builder-view (flex column, full size) ──
+    VerticalLayout {
+        // ── .builder-scroll (scrolls everything) ──
+        scroll := Flickable {
+            vertical-stretch: 1;
+            viewport-width: self.width;
+            viewport-height: content.preferred-height;
+
+            content := VerticalLayout {
+                width: scroll.width;
+                padding-left: 32px;
+                padding-right: 32px;
+                padding-top: 24px;
+                padding-bottom: 24px;
+                spacing: 0px;
+                alignment: start;
+
+                // ── .back-btn ──
+                Rectangle {
+                    height: 20px;
+                    horizontal-stretch: 0;
+                    back-ta := TouchArea {
+                        width: back-row.preferred-width;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            DiscoBuilderActions.back();
+                        }
+                        back-row := HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                QbzIcon {
+                                    source: @image-url("../assets/icons/arrow-left.svg");
+                                    width: 16px;
+                                    height: 16px;
+                                    tint: back-ta.has-hover ? D.text-secondary : D.text-muted;
+                                }
+                            }
+                            Text {
+                                text: @tr("Back");
+                                color: back-ta.has-hover ? D.text-secondary : D.text-muted;
+                                font-size: 14px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+                Rectangle { height: 24px; }
+
+                // ── header.builder-header ──
+                HorizontalLayout {
+                    spacing: 20px;
+                    alignment: start;
+                    // Avatar (img or placeholder) — 72px circle.
+                    Rectangle {
+                        width: 72px;
+                        height: 72px;
+                        border-radius: 36px;
+                        background: D.bg-tertiary;
+                        clip: true;
+                        if DiscoBuilderState.artist-avatar-url != "": Image {
+                            width: 100%;
+                            height: 100%;
+                            source: DiscoBuilderState.artist-avatar;
+                            image-fit: cover;
+                        }
+                    }
+                    // Header text — eyebrow + title.
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 4px;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: @tr("Build Artist Collection");
+                            color: D.text-muted;
+                            font-size: 10px;
+                            font-weight: 600;
+                            letter-spacing: 1.5px;
+                            // uppercase via the literal (en already caps the eyebrow).
+                        }
+                        Text {
+                            text: DiscoBuilderState.artist-name == ""
+                                ? "—" : DiscoBuilderState.artist-name;
+                            color: D.text-primary;
+                            font-size: 28px;
+                            font-weight: 700;
+                            overflow: elide;
+                        }
+                    }
+                }
+                Rectangle { height: 24px; }
+
+                // ── label.field (collection-name input) ──
+                VerticalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Text {
+                        text: @tr("NAME");
+                        color: D.text-muted;
+                        font-size: 10px;
+                        font-weight: 600;
+                        letter-spacing: 1.5px;
+                    }
+                    Rectangle {
+                        width: 540px;
+                        height: 40px;
+                        background: D.bg-secondary;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: name-input.has-focus ? D.accent : D.bg-tertiary;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            name-input := TextInput {
+                                color: D.text-primary;
+                                font-size: 14px;
+                                vertical-alignment: center;
+                                single-line: true;
+                                text: DiscoBuilderState.collection-name;
+                                edited => {
+                                    DiscoBuilderActions.name-changed(self.text);
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle { height: 16px; }
+
+                // ── .order-row (segmented control) ──
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: @tr("Order by");
+                            color: D.text-muted;
+                            font-size: 10px;
+                            font-weight: 600;
+                            letter-spacing: 1.5px;
+                        }
+                    }
+                    // .segmented — 8px corners, NO pills.
+                    Rectangle {
+                        width: seg.preferred-width;
+                        height: 32px;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: D.bg-tertiary;
+                        clip: true;
+                        seg := HorizontalLayout {
+                            spacing: 0px;
+                            for s[i] in [
+                                { id: "release_date", lbl: "Release date" },
+                                { id: "title", lbl: "Title" },
+                                { id: "manual", lbl: "Manual" },
+                            ]: seg-rect := Rectangle {
+                                property <bool> active: DiscoBuilderState.order-by == s.id;
+                                background: seg-rect.active
+                                    ? D.accent
+                                    : (seg-ta.has-hover ? D.bg-hover : D.bg-secondary);
+                                // Divider between segments.
+                                if i > 0: Rectangle {
+                                    x: 0;
+                                    width: 1px;
+                                    height: 100%;
+                                    background: D.bg-tertiary;
+                                }
+                                HorizontalLayout {
+                                    padding-left: 14px;
+                                    padding-right: 14px;
+                                    padding-top: 7px;
+                                    padding-bottom: 7px;
+                                    Text {
+                                        text: s.lbl;
+                                        color: seg-rect.active ? D.btn-primary-text
+                                            : (seg-ta.has-hover ? D.text-primary : D.text-secondary);
+                                        font-size: 12px;
+                                        font-weight: 500;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                seg-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        DiscoBuilderActions.set-order(s.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle { height: 20px; }
+
+                // ── {state branch} ──
+                // loading
+                if DiscoBuilderState.loading: Rectangle {
+                    height: 96px;
+                    Text {
+                        text: @tr("Loading...");
+                        color: D.text-muted;
+                        font-size: 14px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                // error
+                if !DiscoBuilderState.loading && DiscoBuilderState.load-error != "": Rectangle {
+                    height: 96px;
+                    Text {
+                        text: DiscoBuilderState.load-error;
+                        color: D.error;
+                        font-size: 14px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                // empty
+                if !DiscoBuilderState.loading
+                    && DiscoBuilderState.load-error == ""
+                    && DiscoBuilderState.groups.length == 0: Rectangle {
+                    height: 96px;
+                    Text {
+                        text: @tr("No results found");
+                        color: D.text-muted;
+                        font-size: 14px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                // populated — .groups table
+                if !DiscoBuilderState.loading
+                    && DiscoBuilderState.load-error == ""
+                    && DiscoBuilderState.groups.length > 0: VerticalLayout {
+                    spacing: 0px;
+                    // border-top + 4px pad-top.
+                    Rectangle { height: 1px; background: D.bg-tertiary; }
+                    Rectangle { height: 4px; }
+
+                    // ── header row (.row.header-row) ──
+                    Rectangle {
+                        height: 36px;
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: D.bg-tertiary;
+                        }
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 10px;
+                            // [0] 28px — select-all checkbox (tri-state).
+                            Rectangle {
+                                width: 28px;
+                                HorizontalLayout {
+                                    alignment: start;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 15px;
+                                            height: 15px;
+                                            border-radius: 3px;
+                                            background: DiscoBuilderState.all-checked
+                                                ? D.accent : transparent;
+                                            border-width: DiscoBuilderState.all-checked ? 0px : 1.5px;
+                                            border-color: D.text-muted;
+                                            if DiscoBuilderState.all-checked: QbzIcon {
+                                                source: @image-url("../assets/icons/check.svg");
+                                                width: 11px;
+                                                height: 11px;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                tint: D.btn-primary-text;
+                                            }
+                                            // Indeterminate dash.
+                                            if !DiscoBuilderState.all-checked
+                                                && DiscoBuilderState.some-checked: Rectangle {
+                                                width: 9px;
+                                                height: 2px;
+                                                background: D.accent;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                            }
+                                            TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    DiscoBuilderActions.toggle-all();
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // [1..6] column labels.
+                            Rectangle {
+                                width: 56px;
+                                Text { text: @tr("Year"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: left; }
+                            }
+                            Rectangle {
+                                width: 72px;
+                                Text { text: @tr("Type"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: left; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                Text { text: @tr("Album"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; horizontal-alignment: left; }
+                            }
+                            Rectangle {
+                                width: 72px;
+                                Text { text: @tr("Tracks"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
+                            }
+                            Rectangle {
+                                width: 60px;
+                                Text { text: @tr("Source"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
+                            }
+                            Rectangle {
+                                width: 156px;
+                                Text { text: @tr("Quality"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
+                            }
+                        }
+                    }
+
+                    // ── per group ──
+                    for grp in DiscoBuilderState.groups: VerticalLayout {
+                        spacing: 0px;
+                        // primary row (dimmed when the group is a compilation).
+                        CandidateRow {
+                            candidate: grp.primary;
+                            group-key: grp.key;
+                            alt: false;
+                            group-is-compilation: grp.is-compilation;
+                            rest-opacity: grp.is-compilation ? 0.65 : 1.0;
+                        }
+                        // alternate rows.
+                        for alt in grp.alternates: CandidateRow {
+                            candidate: alt;
+                            group-key: grp.key;
+                            alt: true;
+                            rest-opacity: 0.72;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── footer.builder-footer (fixed-height flex sibling) ──
+        Rectangle {
+            vertical-stretch: 0;
+            height: 60px;
+            background: D.bg-primary;
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: D.bg-tertiary;
+            }
+            HorizontalLayout {
+                padding-left: 32px;
+                padding-right: 88px;  // asymmetric — clears the back-to-top FAB.
+                padding-top: 12px;
+                padding-bottom: 12px;
+                spacing: 16px;
+                // .footer-count.
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: DiscoBuilderState.selected-count + " of "
+                            + DiscoBuilderState.group-count + " albums selected";
+                        color: D.text-secondary;
+                        font-size: 13px;
+                    }
+                }
+                // .footer-actions.
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    // Cancel (secondary-btn).
+                    Rectangle {
+                        width: cancel-row.preferred-width + 32px;
+                        height: 36px;
+                        background: cancel-ta.has-hover ? D.bg-hover : D.bg-secondary;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: D.bg-tertiary;
+                        cancel-row := HorizontalLayout {
+                            alignment: center;
+                            Text {
+                                text: @tr("Cancel");
+                                color: D.text-primary;
+                                font-size: 13px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+                        cancel-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                DiscoBuilderActions.back();
+                            }
+                        }
+                    }
+                    // Create (primary-btn).
+                    create-btn := Rectangle {
+                        property <bool> disabled:
+                            DiscoBuilderState.creating
+                            || DiscoBuilderState.selected-count == 0
+                            || DiscoBuilderState.collection-name == "";
+                        width: create-row.preferred-width + 40px;
+                        height: 36px;
+                        background: D.accent;
+                        border-radius: 8px;
+                        opacity: create-btn.disabled ? 0.45 : 1.0;
+                        create-row := HorizontalLayout {
+                            alignment: center;
+                            Text {
+                                text: DiscoBuilderState.creating
+                                    ? @tr("Loading...") : @tr("Create Collection");
+                                color: D.btn-primary-text;
+                                font-size: 13px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+                        TouchArea {
+                            mouse-cursor: create-btn.disabled ? default : pointer;
+                            clicked => {
+                                if (!create-btn.disabled) {
+                                    DiscoBuilderActions.create();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

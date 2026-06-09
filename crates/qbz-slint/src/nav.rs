@@ -72,6 +72,13 @@ pub enum NavEntry {
     /// view-mode) is session-scoped in the controller, so the entry carries
     /// only the id.
     MixtapeDetail(String),
+    /// The Discography Builder full-page flow (spec 13). The string is the
+    /// artist id; the builder fetches that artist's releases from Qobuz +
+    /// local + Plex, dedupes into groups, and saves a `kind='artist_collection'`
+    /// collection. Mirrors `MixtapeDetail` / `Artist` — session-scoped builder
+    /// state (selection / order / name) lives in the controller, so the entry
+    /// carries only the id.
+    DiscographyBuilder(String),
     Album(String),
     /// A Local Library album detail page (dedicated view, separate from the
     /// Qobuz Album view); the string is the metadata group key.
