@@ -28,6 +28,7 @@ import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
+import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { CollectionMosaic } from "CollectionMosaic.slint";
 
 // --- Hero action button (.action-btn-circle family) ---------------------
@@ -1364,5 +1365,32 @@ export component MixtapeDetailView inherits Rectangle {
         viewport-height: flick.viewport-height;
         visible-height: flick.height;
         viewport-y <=> flick.viewport-y;
+    }
+
+    // ===================== BULK ACTION BAR =============================
+    // Spec 12 §13: a bottom-docked bar that appears while items are selected
+    // (placement='bottom' default). Mirrors the local-library MultiSelectBar
+    // chrome. The action set in THIS view (§13.1, minus the split-queue and
+    // add-to-playlist/favorites buttons not threaded by this slice): Add to
+    // Mixtape/Collection + Remove from this collection (danger). The bar emits
+    // the id; the Rust side routes it (open AddToMixtapeModal / remove + reload).
+    if MyQbzDetailState.select-mode && MyQbzDetailState.selected-count > 0: Rectangle {
+        x: 18px;
+        // Sit just above the fixed player bar (the scroller reserves 100px at
+        // its bottom; the bar floats over that gutter).
+        y: parent.height - self.height - 12px;
+        width: parent.width - 18px - 22px;
+        height: 44px;
+        MultiSelectBar {
+            width: 100%;
+            selected-count: MyQbzDetailState.selected-count;
+            actions: [
+                { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), danger: false, needs-selection: true },
+                { id: "remove-selected", label: @tr("Remove"), danger: true, needs-selection: true },
+            ];
+            action(id) => {
+                MyQbzDetailActions.bulk-action(id);
+            }
+        }
     }
 }

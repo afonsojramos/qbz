@@ -59,6 +59,9 @@ qbz-mixtape = { path = "../qbz-mixtape" }
 qbz-qobuz = { path = "../qbz-qobuz" }
 qbz-integrations = { path = "../qbz-integrations" }
 rusqlite = { version = "0.31", features = ["bundled"] }
+# DJ-mix sampler thread RNG (rand::rng()), confined to a sync scope — the
+# same crate qbz-mixtape::shuffle is generic over (spec 40 §6).
+rand = { workspace = true }
 qbz-cache = { path = "../qbz-cache" }
 qbz-credentials = { path = "../qbz-credentials" }
 

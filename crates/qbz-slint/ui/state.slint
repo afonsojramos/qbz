@@ -1693,6 +1693,50 @@ export global MyQbzDetailActions {
     callback item-action(string /* source-item-id */, string /* action */);
     // Toggle one row's selection (select-mode).
     callback toggle-item-select(int /* position */);
+    // --- Bulk action bar (select-mode, spec 12 §13) -----------------------
+    // The bar emits the chosen action id verbatim; the Rust side maps it:
+    //   "add-to-mixtape" -> open the global AddToMixtapeModal with the
+    //                       selected items' payloads.
+    //   "remove-selected" -> repo::remove_item each selected position
+    //                        (highest-first so compaction doesn't shift),
+    //                        then reload the detail + clear selection.
+    callback bulk-action(string /* id */);
+}
+
+// ──────────────────────────── DJ-mix modal ────────────────────────────
+// The "Random queue" sampler (TrackMixModal, spec 21 §C / spec 12 §12).
+// Opened from the hero DJ-mix CTA. On open the Rust controller resolves the
+// collection in-order + computes shuffle::unique_track_count (the slider max);
+// the slider snaps to the discrete buildSizeOptions set (50,100,150,…,All).
+// On confirm it runs dedup_by_similarity + hybrid_sample (thread RNG, sync
+// scope) -> set_queue + play -> stamp queue-source + touch_play, toasting
+// "Playing N of M" when the sampled count is below the requested size.
+export global MyQbzMixState {
+    in property <bool> open: false;
+    // True while resolving + counting unique tracks ("Loading…" state).
+    in property <bool> loading: false;
+    // Deduped unique-track count = the slider MAX (and the "All" size).
+    in property <int> unique-count: 0;
+    // The discrete size options (buildSizeOptions): the slider index maps into
+    // this list. e.g. [50,100,150,All(187)]. Empty while loading / for an
+    // empty collection.
+    in property <[int]> size-options: [];
+    // Current slider index into `size-options` (0-based).
+    in-out property <int> selected-index: 0;
+    // The size at `selected-index` (the value handed to the sampler).
+    in property <int> selected-size: 0;
+    // True when the selected option is the trailing "All (N)" entry.
+    in property <bool> selected-is-all: false;
+    // Disables Shuffle while a sample + play is in flight.
+    in property <bool> busy: false;
+}
+
+export global MyQbzMixActions {
+    callback close();
+    // Slider moved: the new index into size-options (Rust re-derives the size).
+    callback set-index(int /* index */);
+    // Confirm -> run the sample + play.
+    callback shuffle();
 }
 
 // ──────────────────────────── MyQBZ edit modals ───────────────────────

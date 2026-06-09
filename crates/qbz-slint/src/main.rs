@@ -40,6 +40,7 @@ mod myqbz_add;
 mod myqbz_cover;
 mod myqbz_detail;
 mod myqbz_edit;
+mod myqbz_mix;
 mod myqbz_play;
 mod nav;
 mod play_history;
@@ -2458,25 +2459,114 @@ fn wire_myqbz_detail(
         });
     }
 
-    // --- STILL-STUBBED hero CTAs (DJ-mix modal + discography sync) -------
-    // DJ-mix: the TrackMixModal is a later slice — keep the existing stub.
+    // --- Hero DJ-mix CTA — open the "Random queue" sampler modal --------
+    // Resolves the collection in-order + counts unique tracks (the slider max),
+    // then the modal samples + replace-plays on confirm (myqbz_mix).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<Act>().on_dj_mix(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let id = w.global::<MyQbzDetailState>().get_id().to_string();
+            if id.is_empty() {
+                return;
+            }
+            myqbz_mix::open(runtime.clone(), weak.clone(), handle.clone(), id);
+        });
+    }
+
+    // --- STILL-STUBBED hero CTA: discography sync -----------------------
     // Sync: artist_discography has NO sync impl (spec §8) — no-op stub (the
     // hero button is shown only for artist_collection for Tauri parity).
     {
         let weak = window.as_weak();
-        let log_stub = move |what: &str| {
+        window.global::<Act>().on_sync(move || {
             let id = weak
                 .upgrade()
                 .map(|w| w.global::<MyQbzDetailState>().get_id().to_string())
                 .unwrap_or_default();
-            log::info!(
-                "[qbz-slint] myqbz_detail {what}({id}) — not yet wired (later slice / no impl)"
-            );
-        };
-        let s = log_stub.clone();
-        window.global::<Act>().on_dj_mix(move || s("dj-mix"));
-        let s = log_stub.clone();
-        window.global::<Act>().on_sync(move || s("sync"));
+            log::info!("[qbz-slint] myqbz_detail sync({id}) — no discography sync impl (spec §8)");
+        });
+    }
+
+    // --- DJ-mix modal actions (slider / cancel / confirm) ---------------
+    {
+        let weak = window.as_weak();
+        window.global::<MyQbzMixActions>().on_close(move || {
+            if let Some(w) = weak.upgrade() {
+                myqbz_mix::close(&w);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<MyQbzMixActions>().on_set_index(move |index| {
+            if let Some(w) = weak.upgrade() {
+                myqbz_mix::apply_index(&w, index);
+            }
+        });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<MyQbzMixActions>().on_shuffle(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let ms = w.global::<MyQbzMixState>();
+            let id = w.global::<MyQbzDetailState>().get_id().to_string();
+            let size = ms.get_selected_size();
+            if id.is_empty() || size <= 0 {
+                return;
+            }
+            myqbz_mix::shuffle(runtime.clone(), weak.clone(), handle.clone(), id, size);
+        });
+    }
+
+    // --- Bulk action bar (select-mode, spec 12 §13) --------------------
+    // "add-to-mixtape" opens the global AddToMixtapeModal with the selected
+    // items' payloads; "remove-selected" removes each selected position
+    // (highest-first) then reloads the detail + clears selection.
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_bulk_action(move |id| {
+            let Some(w) = weak.upgrade() else { return };
+            match id.as_str() {
+                "add-to-mixtape" => {
+                    let selected = myqbz_detail::selected_full_items(&w);
+                    let items: Vec<myqbz_add::AddItem> = selected
+                        .iter()
+                        .map(|it| myqbz_add::AddItem {
+                            item_type: myqbz_detail::item_type_str(it.item_type).to_string(),
+                            source: myqbz_detail::source_str(it.source).to_string(),
+                            source_item_id: it.source_item_id.clone(),
+                            title: it.title.clone(),
+                            subtitle: it.subtitle.clone(),
+                            artwork_url: it.artwork_url.clone(),
+                            year: it.year,
+                            track_count: it.track_count,
+                        })
+                        .collect();
+                    open_add_to_mixtape(weak.clone(), handle.clone(), items);
+                }
+                "remove-selected" => {
+                    let cid = w.global::<MyQbzDetailState>().get_id().to_string();
+                    let positions = myqbz_detail::selected_positions(&w);
+                    myqbz_edit::remove_selected(
+                        weak.clone(),
+                        handle.clone(),
+                        image_cache.clone(),
+                        cid,
+                        positions,
+                    );
+                }
+                other => {
+                    log::warn!("[qbz-slint] myqbz_detail bulk-action: unknown id {other}");
+                }
+            }
+        });
     }
 
     // --- Hero overflow (⋯) menu — open the edit modals (spec 12 §10/§11) ---

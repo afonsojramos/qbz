@@ -85,14 +85,14 @@ fn play_mode_str(mode: CollectionPlayMode) -> &'static str {
     }
 }
 
-fn source_str(source: AlbumSource) -> &'static str {
+pub fn source_str(source: AlbumSource) -> &'static str {
     match source {
         AlbumSource::Qobuz => "qobuz",
         AlbumSource::Local => "local",
     }
 }
 
-fn item_type_str(t: ItemType) -> &'static str {
+pub fn item_type_str(t: ItemType) -> &'static str {
     match t {
         ItemType::Album => "album",
         ItemType::Track => "track",
@@ -395,6 +395,49 @@ pub fn toggle_item_select(window: &AppWindow, position: i32) {
         .filter(|&i| model.row_data(i).map(|it| it.selected).unwrap_or(false))
         .count() as i32;
     state.set_selected_count(count);
+}
+
+/// The set of currently-selected row positions (select-mode), read off the
+/// rendered item model. UI thread.
+pub fn selected_positions(window: &AppWindow) -> Vec<i32> {
+    let model = window.global::<MyQbzDetailState>().get_items();
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .filter(|it| it.selected)
+        .map(|it| it.position)
+        .collect()
+}
+
+/// The full `MixtapeCollectionItem`s (with year / track_count) for the
+/// currently-selected positions, in ascending position order. Sourced from
+/// `FULL_ITEMS` (the slint `MixtapeDetailItem` carries only display text, not
+/// the numeric year/track_count the add payload needs). UI thread.
+pub fn selected_full_items(window: &AppWindow) -> Vec<MixtapeCollectionItem> {
+    let mut positions = selected_positions(window);
+    positions.sort_unstable();
+    FULL_ITEMS.with(|cell| {
+        let items = cell.borrow();
+        positions
+            .iter()
+            .filter_map(|p| items.iter().find(|it| it.position == *p).cloned())
+            .collect()
+    })
+}
+
+/// Clear the current selection (uncheck every row + zero the count), staying in
+/// select-mode. Used after a bulk action completes. UI thread.
+pub fn clear_selection(window: &AppWindow) {
+    let state = window.global::<MyQbzDetailState>();
+    let model = state.get_items();
+    for i in 0..model.row_count() {
+        if let Some(mut it) = model.row_data(i) {
+            if it.selected {
+                it.selected = false;
+                model.set_row_data(i, it);
+            }
+        }
+    }
+    state.set_selected_count(0);
 }
 
 // ──────────────────────────── reset / apply ───────────────────────────

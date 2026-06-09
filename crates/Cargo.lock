@@ -5495,6 +5495,7 @@ dependencies = [
  "qbz-qobuz",
  "qconnect-app",
  "qconnect-transport-ws",
+ "rand 0.10.1",
  "reqwest",
  "rfd",
  "rusqlite",

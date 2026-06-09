@@ -90,7 +90,7 @@ fn resolve_local(item: &MixtapeCollectionItem) -> Result<Vec<QueueTrack>, String
 /// `resolve_collection_tracks`. `force_shuffle` overrides the persisted mode
 /// with `AlbumShuffle` (time-seeded whole-item shuffle) for the hero Shuffle
 /// CTA; otherwise the collection's persisted `play_mode` is used.
-async fn resolve_collection(
+pub(crate) async fn resolve_collection(
     runtime: &Runtime,
     collection: &MixtapeCollection,
     force_shuffle: bool,
@@ -186,7 +186,7 @@ fn touch_play(collection_id: &str) {
 /// Replace the queue with `tracks`, start at index 0, stamp the queue-source
 /// collection, and `touch_play`. Shared by hero Play + hero Shuffle (the two
 /// whole-collection replace paths). Empty `tracks` → toast + no-op.
-async fn play_all_tracks(
+pub(crate) async fn play_all_tracks(
     runtime: &Runtime,
     weak: &slint::Weak<AppWindow>,
     collection_id: &str,
@@ -329,7 +329,7 @@ pub fn item_action(
 /// Load a collection (items hydrated) off the UI/event-loop thread, on a
 /// blocking worker, reusing the detail module's read path. Returns `None` when
 /// the DB is unavailable or the id is unknown.
-async fn load_collection(collection_id: &str) -> Option<MixtapeCollection> {
+pub(crate) async fn load_collection(collection_id: &str) -> Option<MixtapeCollection> {
     let id = collection_id.to_string();
     tokio::task::spawn_blocking(move || crate::myqbz_detail::get_collection(&id))
         .await
