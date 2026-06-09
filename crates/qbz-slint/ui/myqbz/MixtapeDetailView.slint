@@ -47,8 +47,10 @@ component ActionCircle inherits Rectangle {
     height: root.diameter;
     border-radius: root.diameter / 2;
     opacity: root.enabled ? 1.0 : 0.4;
-    background: ac-ta.has-hover ? Theme.surface-hover : transparent;
-    border-width: 1px;
+    background: root.primary
+        ? (ac-ta.has-hover ? #ffffffd6 : #ffffff)
+        : (ac-ta.has-hover ? Theme.surface-hover : transparent);
+    border-width: root.primary ? 0px : 1px;
     border-color: ac-ta.has-hover ? Theme.text-disabled : Theme.border-subtle;
     QbzIcon {
         source: root.icon;
@@ -56,7 +58,7 @@ component ActionCircle inherits Rectangle {
         height: root.glyph;
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-        tint: ac-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+        tint: root.primary ? #000000 : (ac-ta.has-hover ? Theme.text-primary : Theme.text-secondary);
     }
     ac-ta := TouchArea {
         mouse-cursor: root.enabled ? pointer : default;
@@ -862,10 +864,15 @@ export component MixtapeDetailView inherits Rectangle {
                         font-size: 13px;
                     }
                     Rectangle { height: 4px; }
-                    // Action row (play / shuffle / dj-mix / edit / delete / sync).
+                    // Hero action row (spec 12 §3.6): EXACTLY four controls from
+                    // the shared circular-icon-button family — Play (primary),
+                    // Shuffle, DJ-mix, and the Overflow (⋯) menu trigger. Edit /
+                    // delete / cover / convert / play-mode now live in the ⋯ menu
+                    // (spec §10), NOT as flat circles.
                     HorizontalLayout {
                         spacing: 8px;
                         alignment: start;
+                        // (1) Play — primary.
                         ActionCircle {
                             icon: @image-url("../assets/icons/play-fill.svg");
                             primary: true;
@@ -874,6 +881,7 @@ export component MixtapeDetailView inherits Rectangle {
                             enabled: MyQbzDetailState.item-count > 0;
                             clicked => { MyQbzDetailActions.play-all(); }
                         }
+                        // (2) Shuffle.
                         VerticalLayout {
                             alignment: center;
                             ActionCircle {
@@ -884,43 +892,95 @@ export component MixtapeDetailView inherits Rectangle {
                                 clicked => { MyQbzDetailActions.shuffle(); }
                             }
                         }
+                        // (3) DJ-mix (DjIcon) — STUB click (modal is a later slice).
                         VerticalLayout {
                             alignment: center;
                             ActionCircle {
-                                icon: @image-url("../assets/icons/cassette-tape.svg");
+                                icon: @image-url("../assets/icons/turntable.svg");
                                 diameter: 40px;
                                 glyph: 18px;
                                 enabled: MyQbzDetailState.item-count > 0;
                                 clicked => { MyQbzDetailActions.dj-mix(); }
                             }
                         }
+                        // (4) Overflow (⋯) — toggles the hero overflow menu.
                         VerticalLayout {
                             alignment: center;
-                            ActionCircle {
-                                icon: @image-url("../assets/icons/pen-line.svg");
-                                diameter: 40px;
-                                glyph: 18px;
-                                clicked => { MyQbzDetailActions.edit(); }
-                            }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            ActionCircle {
-                                icon: @image-url("../assets/icons/trash-2.svg");
-                                diameter: 40px;
-                                glyph: 18px;
-                                clicked => { MyQbzDetailActions.delete(); }
-                            }
-                        }
-                        // Sync — artist collections only (parity with Tauri's
-                        // discography sync surface; stub here).
-                        if MyQbzDetailState.kind == "artist_collection": VerticalLayout {
-                            alignment: center;
-                            ActionCircle {
-                                icon: @image-url("../assets/icons/refresh-cw.svg");
-                                diameter: 40px;
-                                glyph: 18px;
-                                clicked => { MyQbzDetailActions.sync(); }
+                            overflow-anchor := Rectangle {
+                                width: 40px;
+                                height: 40px;
+                                ActionCircle {
+                                    icon: @image-url("../assets/icons/ellipsis.svg");
+                                    diameter: 40px;
+                                    glyph: 18px;
+                                    clicked => { overflow-menu.show(); }
+                                }
+                                overflow-menu := PopupWindow {
+                                    x: 0;
+                                    y: 44px;
+                                    width: 220px;
+                                    Rectangle {
+                                        background: Theme.surface-main;
+                                        border-width: 1px;
+                                        border-color: Theme.surface-elevated;
+                                        border-radius: 8px;
+                                        drop-shadow-blur: 24px;
+                                        drop-shadow-color: #00000066;
+                                        VerticalLayout {
+                                            padding: 4px;
+                                            spacing: 1px;
+                                            // 1 — Rename.
+                                            RowMenuItem {
+                                                icon: @image-url("../assets/icons/pen-line.svg");
+                                                label: @tr("Rename");
+                                                chosen => { MyQbzDetailActions.open-rename(); }
+                                            }
+                                            // 2 — Edit description.
+                                            RowMenuItem {
+                                                icon: @image-url("../assets/icons/pen-line.svg");
+                                                label: @tr("Edit description");
+                                                chosen => { MyQbzDetailActions.open-description(); }
+                                            }
+                                            // 3 — Set custom cover.
+                                            RowMenuItem {
+                                                icon: @image-url("../assets/icons/image.svg");
+                                                label: @tr("Upload cover");
+                                                chosen => { MyQbzDetailActions.upload-cover(); }
+                                            }
+                                            // 4 — Remove custom cover (only when set).
+                                            if MyQbzDetailState.has-custom-cover: RowMenuItem {
+                                                icon: @image-url("../assets/icons/x.svg");
+                                                label: @tr("Clear custom cover");
+                                                chosen => { MyQbzDetailActions.remove-cover(); }
+                                            }
+                                            Rectangle { height: 1px; background: Theme.surface-elevated; }
+                                            // 5 — Play-mode toggle (label = the OTHER mode).
+                                            RowMenuItem {
+                                                icon: @image-url("../assets/icons/shuffle.svg");
+                                                label: MyQbzDetailState.play-mode == "in_order"
+                                                    ? @tr("Album shuffle")
+                                                    : @tr("In order");
+                                                chosen => { MyQbzDetailActions.toggle-play-mode(); }
+                                            }
+                                            // 6 — Convert kind (hidden for artist collections).
+                                            if MyQbzDetailState.kind != "artist_collection": RowMenuItem {
+                                                icon: @image-url("../assets/icons/cassette-tape.svg");
+                                                label: MyQbzDetailState.kind == "mixtape"
+                                                    ? @tr("Convert to Collection")
+                                                    : @tr("Convert to Mixtape");
+                                                chosen => { MyQbzDetailActions.convert-kind(); }
+                                            }
+                                            Rectangle { height: 1px; background: Theme.surface-elevated; }
+                                            // 7 — Delete (destructive).
+                                            RowMenuItem {
+                                                icon: @image-url("../assets/icons/trash-2.svg");
+                                                label: @tr("Delete");
+                                                destructive: true;
+                                                chosen => { MyQbzDetailActions.open-delete(); }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

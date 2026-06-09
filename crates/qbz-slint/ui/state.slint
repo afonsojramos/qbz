@@ -1603,19 +1603,50 @@ export global MyQbzDetailActions {
     callback open-item(string /* source */, string /* item-type */, string /* source-item-id */);
     // Open an item's artist page by name (qobuz items only).
     callback open-artist(string /* source */, string /* artist-name */);
-    // --- READ-ONLY STUBS (logged; not yet wired) --------------------------
-    // Hero CTAs.
+    // --- Hero CTAs --------------------------------------------------------
     callback play-all();
     callback shuffle();
-    callback dj-mix();
-    callback edit();        // overflow: rename / description / cover / convert
-    callback delete();
-    callback sync();
+    callback dj-mix();       // STUB (the DJ-mix modal is a later slice).
+    callback sync();         // STUB / no-op (no discography sync impl, spec §8).
+    // --- Hero overflow (⋯) menu (spec 12 §10) -----------------------------
+    // Each opens the matching modal or fires the matching mutation + reload.
+    callback open-rename();        // -> Rename modal (prefilled with name).
+    callback open-description();   // -> Description modal (prefilled).
+    callback upload-cover();       // native file picker -> resize -> set + reload.
+    callback remove-cover();       // clear custom cover -> reload.
+    callback toggle-play-mode();   // in_order <-> album_shuffle -> reload.
+    callback convert-kind();       // mixtape <-> collection -> reload + toast.
+    callback open-delete();        // -> Delete-confirm modal.
     // Per-row affordances.
     callback play-item(string /* source-item-id */);
     callback item-action(string /* source-item-id */, string /* action */);
     // Toggle one row's selection (select-mode).
     callback toggle-item-select(int /* position */);
+}
+
+// ──────────────────────────── MyQBZ edit modals ───────────────────────
+// The Rename / Description / Delete-confirm modals (spec 12 §11), driven
+// from the hero overflow (⋯) menu. One global backs all three (only one is
+// ever open at a time). `busy` disables submit while the mutation runs.
+export global MyQbzEditState {
+    // "" = closed; "rename" | "description" | "delete".
+    in-out property <string> mode: "";
+    in property <bool> open: false;
+    // The collection name (delete-confirm body interpolation + rename prefill).
+    in property <string> name;
+    // Rename: prefilled with the collection name; submit trims.
+    in-out property <string> draft-name;
+    // Description: prefilled with the current description ("" clears to null).
+    in-out property <string> draft-description;
+    // Disables submit while a mutation + reload is in flight.
+    in-out property <bool> busy: false;
+}
+
+export global MyQbzEditActions {
+    callback close();
+    callback submit-rename();        // trim; rename_collection -> reload -> close.
+    callback submit-description();   // empty -> null; set_description -> reload.
+    callback confirm-delete();       // delete_collection -> nav back + cleanup.
 }
 
 // Folder editor modal — create + edit (icon preset, solid color, custom

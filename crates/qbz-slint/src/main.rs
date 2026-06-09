@@ -36,7 +36,9 @@ mod location_view;
 mod mix;
 mod musician;
 mod myqbz;
+mod myqbz_cover;
 mod myqbz_detail;
+mod myqbz_edit;
 mod myqbz_play;
 mod nav;
 mod play_history;
@@ -2264,7 +2266,10 @@ fn wire_myqbz_detail(
         });
     }
 
-    // --- STILL-STUBBED hero/CTA actions (later slices) ------------------
+    // --- STILL-STUBBED hero CTAs (DJ-mix modal + discography sync) -------
+    // DJ-mix: the TrackMixModal is a later slice — keep the existing stub.
+    // Sync: artist_discography has NO sync impl (spec §8) — no-op stub (the
+    // hero button is shown only for artist_collection for Tauri parity).
     {
         let weak = window.as_weak();
         let log_stub = move |what: &str| {
@@ -2273,17 +2278,167 @@ fn wire_myqbz_detail(
                 .map(|w| w.global::<MyQbzDetailState>().get_id().to_string())
                 .unwrap_or_default();
             log::info!(
-                "[qbz-slint] myqbz_detail {what}({id}) — not yet wired (read-only slice)"
+                "[qbz-slint] myqbz_detail {what}({id}) — not yet wired (later slice / no impl)"
             );
         };
         let s = log_stub.clone();
         window.global::<Act>().on_dj_mix(move || s("dj-mix"));
         let s = log_stub.clone();
-        window.global::<Act>().on_edit(move || s("edit"));
-        let s = log_stub.clone();
-        window.global::<Act>().on_delete(move || s("delete"));
-        let s = log_stub.clone();
         window.global::<Act>().on_sync(move || s("sync"));
+    }
+
+    // --- Hero overflow (⋯) menu — open the edit modals (spec 12 §10/§11) ---
+    // Rename / Edit description / Delete-confirm open the shared MyQbzEditModal
+    // with the right mode + prefill; the mutations + reload run on submit.
+    {
+        let weak = window.as_weak();
+        window.global::<Act>().on_open_rename(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let ds = w.global::<MyQbzDetailState>();
+            let es = w.global::<MyQbzEditState>();
+            es.set_mode("rename".into());
+            es.set_name(ds.get_name());
+            es.set_draft_name(ds.get_name());
+            es.set_busy(false);
+            es.set_open(true);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<Act>().on_open_description(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let ds = w.global::<MyQbzDetailState>();
+            let es = w.global::<MyQbzEditState>();
+            es.set_mode("description".into());
+            es.set_name(ds.get_name());
+            es.set_draft_description(ds.get_description());
+            es.set_busy(false);
+            es.set_open(true);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<Act>().on_open_delete(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let ds = w.global::<MyQbzDetailState>();
+            let es = w.global::<MyQbzEditState>();
+            es.set_mode("delete".into());
+            es.set_name(ds.get_name());
+            es.set_busy(false);
+            es.set_open(true);
+        });
+    }
+
+    // --- Hero overflow — custom cover (set / remove) --------------------
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_upload_cover(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let id = w.global::<MyQbzDetailState>().get_id().to_string();
+            if id.is_empty() {
+                return;
+            }
+            myqbz_cover::upload(weak.clone(), handle.clone(), image_cache.clone(), id);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_remove_cover(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let id = w.global::<MyQbzDetailState>().get_id().to_string();
+            if id.is_empty() {
+                return;
+            }
+            myqbz_cover::remove(weak.clone(), handle.clone(), image_cache.clone(), id);
+        });
+    }
+
+    // --- Hero overflow — play-mode toggle / convert kind ---------------
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_toggle_play_mode(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let ds = w.global::<MyQbzDetailState>();
+            let id = ds.get_id().to_string();
+            let mode = ds.get_play_mode().to_string();
+            if id.is_empty() {
+                return;
+            }
+            myqbz_edit::toggle_play_mode(weak.clone(), handle.clone(), image_cache.clone(), id, mode);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_convert_kind(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let ds = w.global::<MyQbzDetailState>();
+            let id = ds.get_id().to_string();
+            let kind = ds.get_kind().to_string();
+            if id.is_empty() {
+                return;
+            }
+            myqbz_edit::convert_kind(weak.clone(), handle.clone(), image_cache.clone(), id, kind);
+        });
+    }
+
+    // --- Edit modals — submit (rename / description / delete) ----------
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.global::<MyQbzEditActions>().on_submit_rename(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let id = w.global::<MyQbzDetailState>().get_id().to_string();
+            let name = w.global::<MyQbzEditState>().get_draft_name().to_string();
+            myqbz_edit::rename(weak.clone(), handle.clone(), image_cache.clone(), id, name);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<MyQbzEditActions>()
+            .on_submit_description(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let id = w.global::<MyQbzDetailState>().get_id().to_string();
+                let desc = w.global::<MyQbzEditState>().get_draft_description().to_string();
+                myqbz_edit::set_description(
+                    weak.clone(),
+                    handle.clone(),
+                    image_cache.clone(),
+                    id,
+                    desc,
+                );
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<MyQbzEditActions>().on_confirm_delete(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let id = w.global::<MyQbzDetailState>().get_id().to_string();
+            myqbz_edit::delete(weak.clone(), handle.clone(), id);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<MyQbzEditActions>().on_close(move || {
+            if let Some(w) = weak.upgrade() {
+                let es = w.global::<MyQbzEditState>();
+                es.set_open(false);
+                es.set_mode("".into());
+                es.set_busy(false);
+            }
+        });
     }
 
     // --- Per-row PLAY (default) -----------------------------------------
