@@ -6,78 +6,54 @@
 // footer is a fixed-height flex sibling pinned at the bottom (NOT
 // sticky-inside-scroll) so last rows never peek past the footer.
 //
-// CSS variable values are resolved to the concrete dark-theme values from
-// spec §0 (this view hardcodes them rather than going through the Theme
-// global so the port stays pixel-exact to the quoted PSD).
+// HOMOLOGATED: all chrome colors go through the app's `Theme.*` tokens (so the
+// accent matches every sibling view); the only hardcoded palette left is the
+// per-release-type label tints (`DiscoTint`), which the spec intends as fixed
+// non-token colors. The old per-view back button was removed (the shell owns
+// the global < > nav; the footer Cancel covers exit).
 
+import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { DiscoBuilderState, DiscoBuilderActions, DiscoGroup, DiscoCandidate } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { QbzPrimaryButton } from "../primitives/QbzPrimaryButton.slint";
 import { SecondaryButton } from "../primitives/SecondaryButton.slint";
+import { SourceGlyph } from "../primitives/SourceGlyph.slint";
 
-// ── Concrete dark-theme values (spec §0) ──────────────────────────────────
-// Resolved here as global consts so the whole view shares one source.
-global D {
-    out property <color> bg-primary: #0f0f0f;     // footer bg
-    out property <color> bg-secondary: #1a1a1a;    // input/segment/menu/secondary-btn
-    out property <color> bg-tertiary: #2a2a2a;     // avatar placeholder, hairlines
-    out property <color> bg-hover: #1f1f1f;         // row/segment/menu-item hover
-    out property <color> text-primary: #ffffff;
-    out property <color> text-secondary: #cccccc;
-    out property <color> text-muted: #888888;
-    out property <color> accent: #4285F4;
-    out property <color> btn-primary-text: #ffffff;
-    out property <color> alpha-6: #ffffff0f;        // rgba(255,255,255,0.06)
-    out property <color> error: #e57373;
-    // Type-label tints (hardcoded non-var colors, spec §0).
-    out property <color> tint-compilation: #f59e0b;  // amber
-    out property <color> tint-live: #e91e63;          // pink
-    out property <color> tint-ep: #60a5fa;             // blue
-    out property <color> tint-single: #a78bfa;         // violet
+// ── Release-type label tints (spec §0) ────────────────────────────────────
+// The ONE legitimately-hardcoded palette in this view: the per-release-type
+// accent colors. Everything else now goes through the app's `Theme.*` tokens
+// (the old `global D` — which hardcoded the dark-theme literals AND a non-app
+// `#4285F4` accent — was deleted; that blue mismatched every sibling view).
+global DiscoTint {
+    out property <color> compilation: #f59e0b;  // amber
+    out property <color> live: #e91e63;          // pink
+    out property <color> ep: #60a5fa;             // blue
+    out property <color> single: #a78bfa;         // violet
 }
 
 // Resolve a release-type to its tint (plain "album" = muted, no tint).
 component TypeColor {
     in property <string> kind;
     out property <color> color:
-        root.kind == "compilation" ? D.tint-compilation
-        : root.kind == "live" ? D.tint-live
-        : root.kind == "ep" ? D.tint-ep
-        : root.kind == "single" ? D.tint-single
-        : D.text-muted;
+        root.kind == "compilation" ? DiscoTint.compilation
+        : root.kind == "live" ? DiscoTint.live
+        : root.kind == "ep" ? DiscoTint.ep
+        : root.kind == "single" ? DiscoTint.single
+        : Theme.text-muted;
 }
 
-// ── Source indicator (Qobuz / Plex / Local accent-tinted silhouette) ──────
+// ── Source indicator — the shared SourceGlyph (full-color logos untinted;
+// monochrome local hard-drive tinted muted), centered in a 28px cell. ───────
 component SourceIndicator inherits Rectangle {
     in property <string> source;
     width: 28px;
     height: 28px;
-    opacity: 0.9;
-    HorizontalLayout {
-        alignment: center;
-        VerticalLayout {
-            alignment: center;
-            if root.source == "plex": QbzIcon {
-                source: @image-url("../assets/icons/plex-logo.svg");
-                width: 14px;
-                height: 14px;
-                tint: D.accent;
-            }
-            if root.source == "qobuz": QbzIcon {
-                source: @image-url("../assets/icons/qobuz-logo-filled.svg");
-                width: 16px;
-                height: 16px;
-                tint: D.accent;
-            }
-            if root.source != "plex" && root.source != "qobuz": QbzIcon {
-                source: @image-url("../assets/icons/hard-drive.svg");
-                width: 14px;
-                height: 14px;
-                tint: D.accent;
-            }
-        }
+    SourceGlyph {
+        kind: root.source;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
     }
 }
 
@@ -97,7 +73,7 @@ component TypeOverride inherits Rectangle {
     type-btn := Rectangle {
         // .type-btn negative margin (0 -4px) is replicated by a -4px touch
         // bleed; the visual glyph stays put.
-        background: btn-ta.has-hover ? D.alpha-6 : transparent;
+        background: btn-ta.has-hover ? Theme.surface-hover : transparent;
         border-radius: 4px;
         HorizontalLayout {
             padding-left: 4px;
@@ -152,9 +128,9 @@ component TypeOverride inherits Rectangle {
             x: 0;
             y: parent.height + 4px;
             width: 160px;
-            background: D.bg-secondary;
+            background: Theme.surface-card;
             border-width: 1px;
-            border-color: D.bg-tertiary;
+            border-color: Theme.surface-elevated;
             border-radius: 6px;
             drop-shadow-blur: 12px;
             drop-shadow-color: #00000059;  // rgba(0,0,0,0.35)
@@ -171,7 +147,7 @@ component TypeOverride inherits Rectangle {
                 ]: Rectangle {
                     height: 28px;
                     border-radius: 4px;
-                    background: item-ta.has-hover ? D.bg-hover : transparent;
+                    background: item-ta.has-hover ? Theme.surface-hover : transparent;
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
@@ -185,7 +161,7 @@ component TypeOverride inherits Rectangle {
                                 source: @image-url("../assets/icons/check.svg");
                                 width: 12px;
                                 height: 12px;
-                                tint: D.accent;
+                                tint: Theme.accent;
                             }
                             if root.candidate.release-type != choice.id: Rectangle {
                                 width: 12px;
@@ -195,7 +171,7 @@ component TypeOverride inherits Rectangle {
                         Text {
                             text: choice.lbl;
                             color: root.candidate.release-type == choice.id
-                                ? D.accent : D.text-primary;
+                                ? Theme.accent : Theme.text-primary;
                             font-size: 12px;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
@@ -218,13 +194,13 @@ component TypeOverride inherits Rectangle {
                     Rectangle {
                         y: 4px;
                         height: 1px;
-                        background: D.bg-tertiary;
+                        background: Theme.surface-elevated;
                     }
                 }
                 if root.candidate.is-overridden: Rectangle {
                     height: 28px;
                     border-radius: 4px;
-                    background: reset-ta.has-hover ? D.bg-hover : transparent;
+                    background: reset-ta.has-hover ? Theme.surface-hover : transparent;
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
@@ -236,12 +212,12 @@ component TypeOverride inherits Rectangle {
                                 source: @image-url("../assets/icons/rotate-ccw.svg");
                                 width: 12px;
                                 height: 12px;
-                                tint: D.text-muted;
+                                tint: Theme.text-muted;
                             }
                         }
                         Text {
                             text: @tr("Use auto-detected");
-                            color: D.text-muted;
+                            color: Theme.text-muted;
                             font-size: 12px;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
@@ -280,12 +256,20 @@ component CandidateRow inherits Rectangle {
     // on hover. The parent passes the resting opacity.
     in property <float> rest-opacity: 1.0;
 
-    height: 36px;
+    height: 44px;
     border-radius: 6px;
-    background: row-ta.has-hover ? D.bg-hover : transparent;
+    background: row-ta.has-hover ? Theme.surface-hover : transparent;
     opacity: row-ta.has-hover ? 1.0 : root.rest-opacity;
 
     row-ta := TouchArea { mouse-cursor: default; }
+
+    // Subtle bottom hairline so adjacent rows (and their quality badges) read
+    // as separated instead of stuck together.
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border-subtle;
+    }
 
     HorizontalLayout {
         padding-left: 8px;
@@ -299,7 +283,7 @@ component CandidateRow inherits Rectangle {
                 spacing: 3px;
                 if root.alt: Text {
                     text: "↳";
-                    color: D.text-muted;
+                    color: Theme.text-muted;
                     font-size: 12px;
                     vertical-alignment: center;
                 }
@@ -309,16 +293,16 @@ component CandidateRow inherits Rectangle {
                         width: 15px;
                         height: 15px;
                         border-radius: 3px;
-                        background: root.candidate.checked ? D.accent : transparent;
+                        background: root.candidate.checked ? Theme.accent : transparent;
                         border-width: root.candidate.checked ? 0px : 1.5px;
-                        border-color: D.text-muted;
+                        border-color: Theme.text-muted;
                         if root.candidate.checked: QbzIcon {
                             source: @image-url("../assets/icons/check.svg");
                             width: 11px;
                             height: 11px;
                             x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                             y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                            tint: D.btn-primary-text;
+                            tint: Theme.accent-text;
                         }
                         TouchArea {
                             mouse-cursor: pointer;
@@ -336,7 +320,7 @@ component CandidateRow inherits Rectangle {
             width: 56px;
             Text {
                 text: root.candidate.year;
-                color: root.alt ? D.text-muted : D.text-secondary;
+                color: root.alt ? Theme.text-muted : Theme.text-secondary;
                 font-size: root.alt ? 12px : 13px;
                 vertical-alignment: center;
                 horizontal-alignment: left;
@@ -373,8 +357,8 @@ component CandidateRow inherits Rectangle {
                     title := Text {
                         text: root.candidate.title;
                         color: title-ta.has-hover
-                            ? D.accent
-                            : (root.alt ? D.text-muted : D.text-primary);
+                            ? Theme.accent
+                            : (root.alt ? Theme.text-muted : Theme.text-primary);
                         font-size: root.alt ? 13px : 14px;
                         overflow: elide;
                         vertical-alignment: center;
@@ -388,7 +372,7 @@ component CandidateRow inherits Rectangle {
                 // row kind + the candidate's own type.
                 if root.alt: Text {
                     text: @tr("alternate");
-                    color: D.text-muted;
+                    color: Theme.text-muted;
                     font-size: 10px;
                     font-weight: 500;
                     font-italic: true;
@@ -397,7 +381,7 @@ component CandidateRow inherits Rectangle {
                 }
                 if !root.alt && root.group-is-compilation: Text {
                     text: @tr("compilation");
-                    color: D.text-muted;
+                    color: Theme.text-muted;
                     font-size: 10px;
                     font-weight: 500;
                     font-italic: true;
@@ -411,7 +395,7 @@ component CandidateRow inherits Rectangle {
             width: 72px;
             Text {
                 text: root.candidate.tracks;
-                color: root.alt ? D.text-muted : D.text-secondary;
+                color: root.alt ? Theme.text-muted : Theme.text-secondary;
                 font-size: root.alt ? 12px : 13px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -466,38 +450,8 @@ export component DiscographyBuilderView inherits Rectangle {
                 spacing: 0px;
                 alignment: start;
 
-                // ── .back-btn ──
-                Rectangle {
-                    height: 20px;
-                    horizontal-stretch: 0;
-                    back-ta := TouchArea {
-                        width: back-row.preferred-width;
-                        mouse-cursor: pointer;
-                        clicked => {
-                            DiscoBuilderActions.back();
-                        }
-                        back-row := HorizontalLayout {
-                            spacing: 8px;
-                            alignment: start;
-                            VerticalLayout {
-                                alignment: center;
-                                QbzIcon {
-                                    source: @image-url("../assets/icons/arrow-left.svg");
-                                    width: 16px;
-                                    height: 16px;
-                                    tint: back-ta.has-hover ? D.text-secondary : D.text-muted;
-                                }
-                            }
-                            Text {
-                                text: @tr("Back");
-                                color: back-ta.has-hover ? D.text-secondary : D.text-muted;
-                                font-size: 14px;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
-                }
-                Rectangle { height: 24px; }
+                // NO per-view back button — the shell owns the global < > nav
+                // (the footer Cancel covers exit). Vertical space reclaimed.
 
                 // ── header.builder-header ──
                 HorizontalLayout {
@@ -508,7 +462,7 @@ export component DiscographyBuilderView inherits Rectangle {
                         width: 72px;
                         height: 72px;
                         border-radius: 36px;
-                        background: D.bg-tertiary;
+                        background: Theme.surface-elevated;
                         clip: true;
                         if DiscoBuilderState.artist-avatar-url != "": Image {
                             width: 100%;
@@ -530,7 +484,7 @@ export component DiscographyBuilderView inherits Rectangle {
                             // AddToMixtapeModal "ADD TO MIXTAPE/COLLECTION", the
                             // grid card label from Rust kind_label).
                             text: @tr("BUILD ARTIST COLLECTION");
-                            color: D.text-muted;
+                            color: Theme.text-muted;
                             font-size: 10px;
                             font-weight: 600;
                             letter-spacing: 1.5px;
@@ -538,7 +492,7 @@ export component DiscographyBuilderView inherits Rectangle {
                         Text {
                             text: DiscoBuilderState.artist-name == ""
                                 ? "—" : DiscoBuilderState.artist-name;
-                            color: D.text-primary;
+                            color: Theme.text-primary;
                             font-size: 28px;
                             font-weight: 700;
                             overflow: elide;
@@ -553,7 +507,7 @@ export component DiscographyBuilderView inherits Rectangle {
                     alignment: start;
                     Text {
                         text: @tr("NAME");
-                        color: D.text-muted;
+                        color: Theme.text-muted;
                         font-size: 10px;
                         font-weight: 600;
                         letter-spacing: 1.5px;
@@ -561,15 +515,15 @@ export component DiscographyBuilderView inherits Rectangle {
                     Rectangle {
                         width: 540px;
                         height: 40px;
-                        background: D.bg-secondary;
+                        background: Theme.surface-card;
                         border-radius: 8px;
                         border-width: 1px;
-                        border-color: name-input.has-focus ? D.accent : D.bg-tertiary;
+                        border-color: name-input.has-focus ? Theme.accent : Theme.surface-elevated;
                         HorizontalLayout {
                             padding-left: 12px;
                             padding-right: 12px;
                             name-input := TextInput {
-                                color: D.text-primary;
+                                color: Theme.text-primary;
                                 font-size: 14px;
                                 vertical-alignment: center;
                                 single-line: true;
@@ -593,7 +547,7 @@ export component DiscographyBuilderView inherits Rectangle {
                             // .field-label is uppercased (spec §2.6 — same
                             // text-transform:uppercase as the eyebrow / NAME label).
                             text: @tr("ORDER BY");
-                            color: D.text-muted;
+                            color: Theme.text-muted;
                             font-size: 10px;
                             font-weight: 600;
                             letter-spacing: 1.5px;
@@ -605,7 +559,7 @@ export component DiscographyBuilderView inherits Rectangle {
                         height: 32px;
                         border-radius: 8px;
                         border-width: 1px;
-                        border-color: D.bg-tertiary;
+                        border-color: Theme.surface-elevated;
                         clip: true;
                         seg := HorizontalLayout {
                             spacing: 0px;
@@ -615,15 +569,18 @@ export component DiscographyBuilderView inherits Rectangle {
                                 { id: "manual", lbl: "Manual" },
                             ]: seg-rect := Rectangle {
                                 property <bool> active: DiscoBuilderState.order-by == s.id;
+                                // Non-accent active (the app's ToggleButton idiom): a surface
+                                // highlight, not a blue fill. Active distinguished from hover by
+                                // tone + bolder text below.
                                 background: seg-rect.active
-                                    ? D.accent
-                                    : (seg-ta.has-hover ? D.bg-hover : D.bg-secondary);
+                                    ? Theme.surface-hover
+                                    : (seg-ta.has-hover ? Theme.surface-elevated : transparent);
                                 // Divider between segments.
                                 if i > 0: Rectangle {
                                     x: 0;
                                     width: 1px;
                                     height: 100%;
-                                    background: D.bg-tertiary;
+                                    background: Theme.surface-elevated;
                                 }
                                 HorizontalLayout {
                                     padding-left: 14px;
@@ -632,10 +589,10 @@ export component DiscographyBuilderView inherits Rectangle {
                                     padding-bottom: 7px;
                                     Text {
                                         text: s.lbl;
-                                        color: seg-rect.active ? D.btn-primary-text
-                                            : (seg-ta.has-hover ? D.text-primary : D.text-secondary);
+                                        color: seg-rect.active ? Theme.text-primary
+                                            : (seg-ta.has-hover ? Theme.text-primary : Theme.text-secondary);
                                         font-size: 12px;
-                                        font-weight: 500;
+                                        font-weight: seg-rect.active ? 600 : 500;
                                         vertical-alignment: center;
                                     }
                                 }
@@ -657,7 +614,7 @@ export component DiscographyBuilderView inherits Rectangle {
                     height: 96px;
                     Text {
                         text: @tr("Loading...");
-                        color: D.text-muted;
+                        color: Theme.text-muted;
                         font-size: 14px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -668,7 +625,7 @@ export component DiscographyBuilderView inherits Rectangle {
                     height: 96px;
                     Text {
                         text: DiscoBuilderState.load-error;
-                        color: D.error;
+                        color: Theme.favorite;
                         font-size: 14px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -681,7 +638,7 @@ export component DiscographyBuilderView inherits Rectangle {
                     height: 96px;
                     Text {
                         text: @tr("No results found");
-                        color: D.text-muted;
+                        color: Theme.text-muted;
                         font-size: 14px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -693,7 +650,7 @@ export component DiscographyBuilderView inherits Rectangle {
                     && DiscoBuilderState.groups.length > 0: VerticalLayout {
                     spacing: 0px;
                     // border-top + 4px pad-top.
-                    Rectangle { height: 1px; background: D.bg-tertiary; }
+                    Rectangle { height: 1px; background: Theme.surface-elevated; }
                     Rectangle { height: 4px; }
 
                     // ── header row (.row.header-row) ──
@@ -702,7 +659,7 @@ export component DiscographyBuilderView inherits Rectangle {
                         Rectangle {
                             y: parent.height - 1px;
                             height: 1px;
-                            background: D.bg-tertiary;
+                            background: Theme.surface-elevated;
                         }
                         HorizontalLayout {
                             padding-left: 8px;
@@ -720,23 +677,23 @@ export component DiscographyBuilderView inherits Rectangle {
                                             height: 15px;
                                             border-radius: 3px;
                                             background: DiscoBuilderState.all-checked
-                                                ? D.accent : transparent;
+                                                ? Theme.accent : transparent;
                                             border-width: DiscoBuilderState.all-checked ? 0px : 1.5px;
-                                            border-color: D.text-muted;
+                                            border-color: Theme.text-muted;
                                             if DiscoBuilderState.all-checked: QbzIcon {
                                                 source: @image-url("../assets/icons/check.svg");
                                                 width: 11px;
                                                 height: 11px;
                                                 x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                                                 y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                                                tint: D.btn-primary-text;
+                                                tint: Theme.accent-text;
                                             }
                                             // Indeterminate dash.
                                             if !DiscoBuilderState.all-checked
                                                 && DiscoBuilderState.some-checked: Rectangle {
                                                 width: 9px;
                                                 height: 2px;
-                                                background: D.accent;
+                                                background: Theme.accent;
                                                 x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                                                 y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                                             }
@@ -754,27 +711,27 @@ export component DiscographyBuilderView inherits Rectangle {
                             // header-row text-transform:uppercase; literal caps).
                             Rectangle {
                                 width: 56px;
-                                Text { text: @tr("YEAR"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: left; }
+                                Text { text: @tr("YEAR"); color: Theme.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: left; }
                             }
                             Rectangle {
                                 width: 72px;
-                                Text { text: @tr("TYPE"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: left; }
+                                Text { text: @tr("TYPE"); color: Theme.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: left; }
                             }
                             Rectangle {
                                 horizontal-stretch: 1;
-                                Text { text: @tr("ALBUM"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; horizontal-alignment: left; }
+                                Text { text: @tr("ALBUM"); color: Theme.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; horizontal-alignment: left; }
                             }
                             Rectangle {
                                 width: 72px;
-                                Text { text: @tr("TRACKS"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
+                                Text { text: @tr("TRACKS"); color: Theme.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
                             }
                             Rectangle {
                                 width: 60px;
-                                Text { text: @tr("SOURCE"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
+                                Text { text: @tr("SOURCE"); color: Theme.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
                             }
                             Rectangle {
                                 width: 156px;
-                                Text { text: @tr("QUALITY"); color: D.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
+                                Text { text: @tr("QUALITY"); color: Theme.text-muted; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; vertical-alignment: center; width: 100%; horizontal-alignment: center; }
                             }
                         }
                     }
@@ -806,11 +763,11 @@ export component DiscographyBuilderView inherits Rectangle {
         Rectangle {
             vertical-stretch: 0;
             height: 60px;
-            background: D.bg-primary;
+            background: Theme.surface-main;
             Rectangle {
                 y: 0;
                 height: 1px;
-                background: D.bg-tertiary;
+                background: Theme.surface-elevated;
             }
             HorizontalLayout {
                 padding-left: 32px;
@@ -825,7 +782,7 @@ export component DiscographyBuilderView inherits Rectangle {
                     Text {
                         text: DiscoBuilderState.selected-count + " of "
                             + DiscoBuilderState.group-count + " albums selected";
-                        color: D.text-secondary;
+                        color: Theme.text-secondary;
                         font-size: 13px;
                     }
                 }

@@ -1,81 +1,35 @@
 // My QBZ > Collections — the index grid of the user's Collections + Artist
 // Collections (Tauri's CollectionsView.svelte). Same vocabulary as Mixtapes
-// plus the kind-filter dropdown (.filter-count badge + 3-item menu). The 3x3
-// mosaic appears only for a `collection` with >= 9 items (handled inside
-// CollectionMosaic). READ-ONLY in this slice: create CTA + card click STUB.
+// plus the kind-filter (a second QbzSelect). The 3x3 mosaic appears only for a
+// `collection` with >= 9 items (handled inside CollectionMosaic).
 //
-// Every px / token verbatim from spec 11. Root padding 8 8 100 18.
+// HOMOLOGATED to the app's index views: NO per-view back button, 32px L/R
+// content padding, Typography tokens, ExpandableSearch + QbzSelect + the shared
+// ViewToggle, surface-elevated NewActionBtn (no blue pill).
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { MyQbzState, MyQbzActions, MixtapeCardItem, NavState } from "../state.slint";
-import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { CollectionMosaic } from "CollectionMosaic.slint";
-import {
-    PrimaryCta, MyQbzSearch, ControlBtn, ViewModeGroup, MyQbzCard, MyQbzListRow,
-} from "MyQbzShared.slint";
-
-// One dropdown row (sort or kind-filter). Sort rows show a trailing arrow;
-// filter rows show a trailing Check on the selected kind.
-component ColMenuItem inherits Rectangle {
-    in property <string> label;
-    in property <bool> selected: false;
-    in property <string> indicator: "";   // sort arrow
-    in property <bool> check: false;       // kind-filter check
-    callback activated();
-    height: 32px;
-    border-radius: 4px;
-    background: item-ta.has-hover ? Theme.surface-hover : transparent;
-    HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        spacing: 8px;
-        Text {
-            text: root.label;
-            color: root.selected ? Theme.accent : Theme.text-secondary;
-            font-size: 13px;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
-        }
-        if root.indicator != "": Text {
-            text: root.indicator;
-            color: Theme.text-muted;
-            font-size: 11px;
-            vertical-alignment: center;
-        }
-        if root.check: VerticalLayout {
-            alignment: center;
-            QbzIcon {
-                source: @image-url("../assets/icons/check.svg");
-                width: 12px;
-                height: 12px;
-                tint: Theme.accent;
-            }
-        }
-    }
-    item-ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.activated(); }
-    }
-}
-
+import { NewActionBtn, ViewToggle, MyQbzCard, MyQbzListRow } from "MyQbzShared.slint";
 
 export component CollectionsView inherits Rectangle {
     property <length> card-w: 208px;
     property <length> grid-gap: 20px;
-    property <length> card-h: 184px + 12px + 12px + 16px + 2 * 18px + 12px + 16px + 12px;
+    property <length> card-h: 184px + 12px + 12px + 18px + 2 * 20px + 18px + 12px;
 
-    property <string> active-sort-label:
-        MyQbzState.col-sort == "name" ? @tr("Name")
-        : MyQbzState.col-sort == "items" ? @tr("Items")
-        : MyQbzState.col-sort == "updated" ? @tr("Recently updated")
-        : @tr("Position");
-    property <string> sort-arrow: MyQbzState.col-sort-dir == "asc" ? "↑" : "↓";
-    property <bool> has-active-filters:
-        MyQbzState.col-kind-filter != "all"
-        || MyQbzState.col-sort != "position"
-        || MyQbzState.col-sort-dir != "asc";
+    property <int> sort-index:
+        MyQbzState.col-sort == "name" ? 1
+        : MyQbzState.col-sort == "items" ? 2
+        : MyQbzState.col-sort == "updated" ? 3
+        : 0;
+    property <int> kind-index:
+        MyQbzState.col-kind-filter == "collection" ? 1
+        : MyQbzState.col-kind-filter == "artist_collection" ? 2
+        : 0;
 
     background: Theme.surface-main;
 
@@ -96,65 +50,33 @@ export component CollectionsView inherits Rectangle {
 
         page := VerticalLayout {
             width: parent.width;
-            padding-top: 8px;
-            padding-right: 8px;
+            padding-top: 16px;
+            padding-right: 32px;
             padding-bottom: 100px;
-            padding-left: 18px;
+            padding-left: 32px;
             spacing: 0px;
             alignment: start;
 
-            // --- Back button -------------------------------------------
-            Rectangle {
-                height: 16px + 8px + 24px;
-                back-row := HorizontalLayout {
-                    y: 8px;
-                    height: 16px;
-                    width: self.preferred-width;
-                    spacing: 8px;
-                    VerticalLayout {
-                        alignment: center;
-                        QbzIcon {
-                            source: @image-url("../assets/icons/arrow-left.svg");
-                            width: 16px;
-                            height: 16px;
-                            tint: back-ta.has-hover ? Theme.text-secondary : Theme.text-muted;
-                        }
-                    }
-                    Text {
-                        text: @tr("Back");
-                        color: back-ta.has-hover ? Theme.text-secondary : Theme.text-muted;
-                        font-size: 14px;
-                        vertical-alignment: center;
-                    }
-                }
-                back-ta := TouchArea {
-                    width: back-row.preferred-width;
-                    height: 16px;
-                    y: 8px;
-                    mouse-cursor: pointer;
-                    clicked => { NavState.request-back(); }
-                }
-            }
-
-            // --- Header ------------------------------------------------
+            // --- Header — no per-view back button ----------------------
             HorizontalLayout {
-                height: 38px;
+                height: 40px;
+                spacing: 16px;
                 VerticalLayout {
                     alignment: center;
                     horizontal-stretch: 1;
                     Text {
                         text: @tr("Collections");
                         color: Theme.text-primary;
-                        font-size: 24px;
+                        font-size: Typography.section;
                         font-weight: Typography.bold;
                         vertical-alignment: center;
                     }
                 }
-                VerticalLayout {
+                // Header "+ New" shows only when populated; when empty the
+                // empty-state CTA is the single call-to-action (no duplicate).
+                if MyQbzState.collections.length > 0 || MyQbzState.col-search != "" || MyQbzState.col-kind-filter != "all": VerticalLayout {
                     alignment: center;
-                    PrimaryCta {
-                        label: @tr("+ New Collection");
-                        show-plus: true;
+                    NewActionBtn {
                         clicked => { MyQbzActions.create-collection(); }
                     }
                 }
@@ -179,15 +101,13 @@ export component CollectionsView inherits Rectangle {
                     Text {
                         text: @tr("No collections yet");
                         color: Theme.text-secondary;
-                        font-size: 18px;
+                        font-size: Typography.section;
                         font-weight: Typography.semibold;
                     }
                 }
                 HorizontalLayout {
                     alignment: center;
-                    PrimaryCta {
-                        label: @tr("+ New Collection");
-                        show-plus: false;
+                    NewActionBtn {
                         clicked => { MyQbzActions.create-collection(); }
                     }
                 }
@@ -200,132 +120,62 @@ export component CollectionsView inherits Rectangle {
 
                 // --- Toolbar -------------------------------------------
                 HorizontalLayout {
-                    height: 32px;
+                    height: 30px;
                     spacing: 8px;
-                    MyQbzSearch {
-                        placeholder: @tr("Search collections…");
-                        query <=> MyQbzState.col-search;
-                        edited(q) => { MyQbzActions.col-search-changed(q); }
-                    }
-                    // Sort dropdown.
-                    Rectangle {
-                        width: sort-btn.width;
-                        sort-btn := ControlBtn {
-                            icon: @image-url("../assets/icons/arrow-up-down.svg");
-                            label: root.active-sort-label;
-                            indicator: root.sort-arrow;
-                            clicked => { sort-menu.show(); }
-                        }
-                        sort-menu := PopupWindow {
-                            x: 0; y: 36px; width: 180px;
-                            Rectangle {
-                                background: Theme.surface-main;
-                                border-width: 1px;
-                                border-color: Theme.surface-elevated;
-                                border-radius: 8px;
-                                drop-shadow-blur: 24px;
-                                drop-shadow-color: #00000066;
-                                VerticalLayout {
-                                    padding: 4px;
-                                    spacing: 1px;
-                                    ColMenuItem {
-                                        label: @tr("Position");
-                                        selected: MyQbzState.col-sort == "position";
-                                        indicator: MyQbzState.col-sort == "position" ? root.sort-arrow : "";
-                                        activated => { MyQbzActions.col-set-sort("position"); }
-                                    }
-                                    ColMenuItem {
-                                        label: @tr("Name");
-                                        selected: MyQbzState.col-sort == "name";
-                                        indicator: MyQbzState.col-sort == "name" ? root.sort-arrow : "";
-                                        activated => { MyQbzActions.col-set-sort("name"); }
-                                    }
-                                    ColMenuItem {
-                                        label: @tr("Items");
-                                        selected: MyQbzState.col-sort == "items";
-                                        indicator: MyQbzState.col-sort == "items" ? root.sort-arrow : "";
-                                        activated => { MyQbzActions.col-set-sort("items"); }
-                                    }
-                                    ColMenuItem {
-                                        label: @tr("Recently updated");
-                                        selected: MyQbzState.col-sort == "updated";
-                                        indicator: MyQbzState.col-sort == "updated" ? root.sort-arrow : "";
-                                        activated => { MyQbzActions.col-set-sort("updated"); }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Kind-filter dropdown.
-                    Rectangle {
-                        width: filter-btn.width;
-                        filter-btn := ControlBtn {
-                            icon: @image-url("../assets/icons/list-filter.svg");
-                            label: @tr("Filter");
-                            active: MyQbzState.col-kind-filter != "all";
-                            clicked => { filter-menu.show(); }
-                        }
-                        // .filter-count badge (always "1" when a kind is set).
-                        if MyQbzState.col-kind-filter != "all": Rectangle {
-                            x: filter-btn.width - self.width - 6px;
-                            y: 4px;
-                            width: 16px;
-                            height: 16px;
-                            border-radius: 8px;
-                            background: Theme.accent;
-                            Text {
-                                text: "1";
-                                color: Theme.accent-text;
-                                font-size: 10px;
-                                font-weight: Typography.semibold;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
-                        filter-menu := PopupWindow {
-                            x: 0; y: 36px; width: 180px;
-                            Rectangle {
-                                background: Theme.surface-main;
-                                border-width: 1px;
-                                border-color: Theme.surface-elevated;
-                                border-radius: 8px;
-                                drop-shadow-blur: 24px;
-                                drop-shadow-color: #00000066;
-                                VerticalLayout {
-                                    padding: 4px;
-                                    spacing: 1px;
-                                    ColMenuItem {
-                                        label: @tr("All kinds");
-                                        selected: MyQbzState.col-kind-filter == "all";
-                                        check: MyQbzState.col-kind-filter == "all";
-                                        activated => { MyQbzActions.col-set-kind-filter("all"); }
-                                    }
-                                    ColMenuItem {
-                                        label: @tr("Collections");
-                                        selected: MyQbzState.col-kind-filter == "collection";
-                                        check: MyQbzState.col-kind-filter == "collection";
-                                        activated => { MyQbzActions.col-set-kind-filter("collection"); }
-                                    }
-                                    ColMenuItem {
-                                        label: @tr("Artist Collections");
-                                        selected: MyQbzState.col-kind-filter == "artist_collection";
-                                        check: MyQbzState.col-kind-filter == "artist_collection";
-                                        activated => { MyQbzActions.col-set-kind-filter("artist_collection"); }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Reset.
-                    if root.has-active-filters: ControlBtn {
-                        icon: @image-url("../assets/icons/rotate-ccw.svg");
-                        subtle: true;
-                        clicked => { MyQbzActions.col-reset(); }
-                    }
                     Rectangle { horizontal-stretch: 1; }
                     VerticalLayout {
                         alignment: center;
-                        ViewModeGroup {
+                        ExpandableSearch {
+                            placeholder: @tr("Search");
+                            sm: true;
+                            query <=> MyQbzState.col-search;
+                            edited(q) => { MyQbzActions.col-search-changed(q); }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        QbzSelect {
+                            menu-width: 180px;
+                            sm: true;
+                            options: [
+                                @tr("Position"),
+                                @tr("Name"),
+                                @tr("Items"),
+                                @tr("Recently updated"),
+                            ];
+                            current-index: root.sort-index;
+                            selected(i) => {
+                                MyQbzActions.col-set-sort(
+                                    i == 1 ? "name"
+                                    : i == 2 ? "items"
+                                    : i == 3 ? "updated"
+                                    : "position");
+                            }
+                        }
+                    }
+                    // Kind filter (group-by idiom, second QbzSelect).
+                    VerticalLayout {
+                        alignment: center;
+                        QbzSelect {
+                            menu-width: 200px;
+                            sm: true;
+                            options: [
+                                @tr("All kinds"),
+                                @tr("Collections"),
+                                @tr("Artist Collections"),
+                            ];
+                            current-index: root.kind-index;
+                            selected(i) => {
+                                MyQbzActions.col-set-kind-filter(
+                                    i == 1 ? "collection"
+                                    : i == 2 ? "artist_collection"
+                                    : "all");
+                            }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        ViewToggle {
                             view: MyQbzState.col-view;
                             set-view(v) => { MyQbzActions.col-set-view(v); }
                         }
@@ -339,7 +189,7 @@ export component CollectionsView inherits Rectangle {
                     Text {
                         text: @tr("No results found");
                         color: Theme.text-muted;
-                        font-size: 13px;
+                        font-size: Typography.legal;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;

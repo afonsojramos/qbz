@@ -1,0 +1,28 @@
+// Shared per-source glyph — the discreet source indicator used by the album
+// list row, the MyQBZ collection-detail rows and the Discography Builder rows.
+//
+// The load-bearing rule (homologated from AlbumListRow / TrackRow): the
+// full-color Qobuz / Plex logos render UNTINTED (`colorize: transparent`); only
+// the monochrome local hard-drive glyph is tinted — to MUTED TEXT color, never
+// accent. Using QbzIcon (which floods every pixel with its tint) would turn the
+// logos into a flat accent silhouette — the bug this primitive replaces.
+//
+// Inherits Image (so it IS the glyph). The caller sets `kind` — "source" is
+// already Image's own property, hence the distinct name.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+
+export component SourceGlyph inherits Image {
+    // "qobuz" | "qobuz_download" | "plex" | "local" (anything else = local).
+    in property <string> kind;
+    source: root.kind == "plex"
+        ? @image-url("../assets/icons/plex-logo.svg")
+        : (root.kind == "qobuz" || root.kind == "qobuz_download"
+            ? @image-url("../assets/icons/qobuz-logo-filled.svg")
+            : @image-url("../assets/icons/hard-drive.svg"));
+    colorize: (root.kind == "qobuz" || root.kind == "qobuz_download" || root.kind == "plex")
+        ? transparent : Theme.text-muted;
+    width: (root.kind == "qobuz" || root.kind == "qobuz_download") ? 16px : 15px;
+    height: self.width;
+    image-fit: contain;
+}

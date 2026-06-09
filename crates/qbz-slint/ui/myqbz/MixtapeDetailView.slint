@@ -26,18 +26,21 @@ import { Radius } from "../foundation/radius.slint";
 import { MyQbzDetailState, MyQbzDetailActions, MixtapeDetailItem, TrackItem, NavState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
+import { ToggleButton } from "../primitives/ToggleButton.slint";
+import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
+import { SourceGlyph } from "../primitives/SourceGlyph.slint";
 import { CollectionMosaic } from "CollectionMosaic.slint";
 
-// --- One sort / type-filter dropdown row --------------------------------
+// --- One type / source filter dropdown row ------------------------------
 component MenuOption inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
-    in property <string> indicator: "";   // sort arrow on the active sort
     in property <bool> check: false;       // trailing Check (filter selection)
     callback chosen();
     height: 30px;
@@ -50,15 +53,9 @@ component MenuOption inherits Rectangle {
         Text {
             text: root.label;
             color: root.selected ? Theme.accent : Theme.text-primary;
-            font-size: 12px;
+            font-size: Typography.legal;
             vertical-alignment: center;
             horizontal-stretch: 1;
-        }
-        if root.indicator != "": Text {
-            text: root.indicator;
-            color: Theme.text-muted;
-            font-size: 11px;
-            vertical-alignment: center;
         }
         if root.check && root.selected: VerticalLayout {
             alignment: center;
@@ -76,25 +73,26 @@ component MenuOption inherits Rectangle {
     }
 }
 
-// --- A generic toolbar control button (sort / filter / reset / select) --
-component ControlBtn inherits Rectangle {
+// --- A homologated toolbar trigger button (filter / select) -------------
+// Matches LocalLibrary's bordered filter button: 30px tall, 6px radius, a
+// surface-elevated resting fill; active borders accent (LocalLibrary's
+// count>0 quality-filter idiom) and an optional count badge. Used only for the
+// two controls QbzSelect can't express (the multi-section filter popup + the
+// select-mode toggle). NEVER an accent fill.
+component ToolBtn inherits Rectangle {
     in property <image> icon;
     in property <string> label;       // "" -> icon-only
-    in property <string> indicator;   // sort arrow "↑"/"↓" or ""
     in property <int> badge: 0;       // filter count badge (0 = hidden)
     in property <bool> active: false;
-    in property <bool> subtle: false;
-    in property <bool> enabled: true;
     callback clicked();
-    height: 32px;
+    height: 30px;
     border-radius: 6px;
-    width: row.preferred-width + (root.subtle ? 16px : 20px);
-    opacity: root.enabled ? 1.0 : 0.5;
-    background: cb-ta.has-hover ? Theme.surface-hover : Theme.surface-card;
+    width: row.preferred-width + (root.label == "" ? 16px : 20px);
+    background: cb-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
     border-width: 1px;
-    border-color: root.active ? Theme.accent : Theme.surface-elevated;
+    border-color: root.active ? Theme.accent : Theme.border-subtle;
     row := HorizontalLayout {
-        x: root.subtle ? 8px : 10px;
+        x: root.label == "" ? 8px : 10px;
         height: 100%;
         spacing: 6px;
         alignment: center;
@@ -102,23 +100,15 @@ component ControlBtn inherits Rectangle {
             alignment: center;
             QbzIcon {
                 source: root.icon;
-                width: 14px;
-                height: 14px;
-                tint: root.active
-                    ? Theme.accent
-                    : (root.subtle ? Theme.text-muted : Theme.text-primary);
+                width: 15px;
+                height: 15px;
+                tint: root.active ? Theme.text-primary : Theme.text-muted;
             }
         }
         if root.label != "": Text {
             text: root.label;
-            color: root.active ? Theme.accent : Theme.text-primary;
+            color: root.active ? Theme.text-primary : Theme.text-secondary;
             font-size: 12px;
-            vertical-alignment: center;
-        }
-        if root.indicator != "": Text {
-            text: root.indicator;
-            color: Theme.text-muted;
-            font-size: 11px;
             vertical-alignment: center;
         }
         if root.badge > 0: Rectangle {
@@ -137,56 +127,8 @@ component ControlBtn inherits Rectangle {
         }
     }
     cb-ta := TouchArea {
-        mouse-cursor: root.enabled ? pointer : default;
-        clicked => {
-            if (root.enabled) {
-                root.clicked();
-            }
-        }
-    }
-}
-
-// --- One segment of the view-mode group ---------------------------------
-component ViewSeg inherits Rectangle {
-    in property <image> icon;
-    in property <bool> active: false;
-    callback clicked();
-    height: 30px;
-    width: 31px;
-    background: root.active
-        ? Theme.accent
-        : (vs-ta.has-hover ? Theme.surface-hover : transparent);
-    QbzIcon {
-        source: root.icon;
-        width: 14px;
-        height: 14px;
-        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-        tint: root.active ? Theme.accent-text : Theme.text-primary;
-    }
-    vs-ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
-    }
-}
-
-// --- Source indicator (masked SVG tinted to accent) ---------------------
-component SourceIndicator inherits Rectangle {
-    in property <string> kind;   // "qobuz" | "plex" | "local"
-    width: 28px;
-    height: 28px;
-    QbzIcon {
-        source: root.kind == "plex"
-            ? @image-url("../assets/icons/plex-logo.svg")
-            : (root.kind == "local"
-                ? @image-url("../assets/icons/hard-drive.svg")
-                : @image-url("../assets/icons/qobuz-logo-filled.svg"));
-        width: root.kind == "qobuz" ? 16px : 14px;
-        height: root.kind == "qobuz" ? 16px : 14px;
-        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-        tint: Theme.accent;
-        opacity: 0.9;
     }
 }
 
@@ -210,12 +152,12 @@ component RowMenuItem inherits Rectangle {
                 source: root.icon;
                 width: 13px;
                 height: 13px;
-                tint: root.destructive ? #e57373 : Theme.text-secondary;
+                tint: root.destructive ? Theme.favorite : Theme.text-secondary;
             }
         }
         Text {
             text: root.label;
-            color: root.destructive ? #e57373 : Theme.text-primary;
+            color: root.destructive ? Theme.favorite : Theme.text-primary;
             font-size: 13px;
             vertical-alignment: center;
         }
@@ -402,17 +344,20 @@ component DetailRow inherits Rectangle {
             }
         }
 
-        // Col 4 — source (80px).
+        // Col 4 — source (80px). Plain-Image colorize (full-color Qobuz/Plex
+        // logos untinted; monochrome local hard-drive tinted muted) — the
+        // shared SourceGlyph, NOT an accent silhouette.
         Rectangle {
             width: 80px;
-            SourceIndicator {
+            if root.item.source-kind != "": SourceGlyph {
                 kind: root.item.source-kind;
                 x: 0;
                 y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             }
         }
 
-        // Col 5 — quality (160px). Deferred: hidden until resolveItems.
+        // Col 5 — quality (160px). Fed from the resolveItems pass (the row's
+        // album-level quality, derived from its first resolved track).
         Rectangle {
             width: 160px;
             if root.item.quality-tier != "": QualityBadgeFull {
@@ -428,7 +373,7 @@ component DetailRow inherits Rectangle {
             width: 72px;
             text: root.item.tracks-text;
             color: Theme.text-secondary;
-            font-size: 13px;
+            font-size: Typography.legal;
             horizontal-alignment: right;
             vertical-alignment: center;
         }
@@ -438,7 +383,7 @@ component DetailRow inherits Rectangle {
             width: 60px;
             text: root.item.year-text;
             color: Theme.text-secondary;
-            font-size: 13px;
+            font-size: Typography.legal;
             horizontal-alignment: right;
             vertical-alignment: center;
         }
@@ -630,13 +575,6 @@ component DetailCard inherits Rectangle {
 }
 
 export component MixtapeDetailView inherits Rectangle {
-    property <string> active-sort-label:
-        MyQbzDetailState.sort == "name" ? @tr("Name")
-        : MyQbzDetailState.sort == "year" ? @tr("Year")
-        : MyQbzDetailState.sort == "tracks" ? @tr("Tracks")
-        : @tr("Position");
-    property <string> sort-arrow: MyQbzDetailState.sort-dir == "asc" ? "↑" : "↓";
-
     // Grid geometry (spec 12 §7/§15): auto-fill minmax(150,1fr), gap 20.
     property <length> grid-min-w: 150px;
     property <length> grid-gap: 20px;
@@ -653,43 +591,17 @@ export component MixtapeDetailView inherits Rectangle {
     }
 
     // ===================== NOT-FOUND ===================================
+    // No per-view back button — the shell owns the global < > nav.
     if !MyQbzDetailState.loading && !MyQbzDetailState.found: VerticalLayout {
         padding: 40px;
         spacing: 16px;
-        alignment: start;
-        HorizontalLayout {
-            alignment: start;
-            nf-back := TouchArea {
-                width: nf-row.preferred-width;
-                height: 20px;
-                mouse-cursor: pointer;
-                clicked => { NavState.request-back(); }
-                nf-row := HorizontalLayout {
-                    spacing: 8px;
-                    VerticalLayout {
-                        alignment: center;
-                        QbzIcon {
-                            source: @image-url("../assets/icons/arrow-left.svg");
-                            width: 16px;
-                            height: 16px;
-                            tint: nf-back.has-hover ? Theme.text-secondary : Theme.text-muted;
-                        }
-                    }
-                    Text {
-                        text: @tr("Back");
-                        color: nf-back.has-hover ? Theme.text-secondary : Theme.text-muted;
-                        font-size: 14px;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-        }
+        alignment: center;
         HorizontalLayout {
             alignment: center;
             Text {
                 text: @tr("Not found");
                 color: Theme.text-muted;
-                font-size: 14px;
+                font-size: Typography.link;
             }
         }
     }
@@ -717,45 +629,16 @@ export component MixtapeDetailView inherits Rectangle {
         page := VerticalLayout {
             width: parent.width;
             // .detail-view padding: 8 8 100 18.
-            padding-top: 8px;
-            padding-right: 8px;
+            // Canonical content padding (Favorites / LocalLibrary): 32px L/R
+            // (the right pad is the scrollbar inset), 100px bottom clears the
+            // player bar. NO per-view back button — the shell owns the global
+            // < > nav.
+            padding-top: 16px;
+            padding-right: 32px;
             padding-bottom: 100px;
-            padding-left: 18px;
+            padding-left: 32px;
             spacing: 0px;
             alignment: start;
-
-            // --- Back button (.back-btn) -------------------------------
-            Rectangle {
-                height: 16px + 8px + 24px;
-                back-row := HorizontalLayout {
-                    y: 8px;
-                    height: 16px;
-                    width: self.preferred-width;
-                    spacing: 8px;
-                    VerticalLayout {
-                        alignment: center;
-                        QbzIcon {
-                            source: @image-url("../assets/icons/arrow-left.svg");
-                            width: 16px;
-                            height: 16px;
-                            tint: back-ta.has-hover ? Theme.text-secondary : Theme.text-muted;
-                        }
-                    }
-                    Text {
-                        text: @tr("Back");
-                        color: back-ta.has-hover ? Theme.text-secondary : Theme.text-muted;
-                        font-size: 14px;
-                        vertical-alignment: center;
-                    }
-                }
-                back-ta := TouchArea {
-                    width: back-row.preferred-width;
-                    height: 16px;
-                    y: 8px;
-                    mouse-cursor: pointer;
-                    clicked => { NavState.request-back(); }
-                }
-            }
 
             // --- Hero header (.header-content) -------------------------
             HorizontalLayout {
@@ -800,15 +683,15 @@ export component MixtapeDetailView inherits Rectangle {
                     Text {
                         text: MyQbzDetailState.kind-label;
                         color: Theme.text-muted;
-                        font-size: 12px;
+                        font-size: Typography.legal;
                         font-weight: Typography.semibold;
                         letter-spacing: 1.2px;
                     }
-                    // Title.
+                    // Title — canonical hero title size (Album/Playlist heroes).
                     Text {
                         text: MyQbzDetailState.name;
                         color: Theme.text-primary;
-                        font-size: 24px;
+                        font-size: Typography.title;
                         font-weight: Typography.bold;
                         wrap: word-wrap;
                     }
@@ -817,14 +700,14 @@ export component MixtapeDetailView inherits Rectangle {
                         width: Math.min(root.width - 280px, 720px);
                         text: MyQbzDetailState.description;
                         color: Theme.text-secondary;
-                        font-size: 14px;
+                        font-size: Typography.link;
                         wrap: word-wrap;
                     }
                     // Meta (item-count summary).
                     Text {
                         text: MyQbzDetailState.meta;
                         color: Theme.text-muted;
-                        font-size: 13px;
+                        font-size: Typography.legal;
                     }
                     Rectangle { height: 4px; }
                     // Hero action row (spec 12 §3.6): EXACTLY four controls from
@@ -971,135 +854,60 @@ export component MixtapeDetailView inherits Rectangle {
 
                 // --- Sticky toolbar (.list-controls) -------------------
                 HorizontalLayout {
-                    height: 32px;
+                    height: 30px;
                     spacing: 8px;
-                    // Search box.
-                    search-box := Rectangle {
-                        width: 260px;
-                        height: 32px;
-                        border-radius: 6px;
-                        property <bool> has-query: MyQbzDetailState.search != "";
-                        background: (sin.has-focus || search-box.has-query) ? Theme.surface-main : Theme.surface-card;
-                        border-width: 1px;
-                        border-color: (sin.has-focus || search-box.has-query) ? Theme.accent : Theme.surface-elevated;
-                        HorizontalLayout {
-                            padding-left: 10px;
-                            padding-right: 10px;
-                            spacing: 8px;
-                            VerticalLayout {
-                                alignment: center;
-                                QbzIcon {
-                                    source: @image-url("../assets/icons/search.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    tint: search-box.has-query ? Theme.accent : Theme.text-muted;
-                                }
-                            }
-                            Rectangle {
-                                horizontal-stretch: 1;
-                                clip: true;
-                                sin := TextInput {
-                                    width: 100%;
-                                    height: 100%;
-                                    vertical-alignment: center;
-                                    color: Theme.text-primary;
-                                    font-size: 12px;
-                                    text <=> MyQbzDetailState.search;
-                                    edited => { MyQbzDetailActions.search-changed(self.text); }
-                                }
-                                if MyQbzDetailState.search == "": Text {
-                                    text: @tr("Search albums & tracks…");
-                                    color: Theme.text-muted;
-                                    font-size: 12px;
-                                    vertical-alignment: center;
-                                }
-                            }
-                            if search-box.has-query: VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    width: 18px;
-                                    height: 18px;
-                                    border-radius: 9px;
-                                    background: sclr-ta.has-hover ? Theme.surface-elevated : transparent;
-                                    QbzIcon {
-                                        source: @image-url("../assets/icons/x.svg");
-                                        width: 12px;
-                                        height: 12px;
-                                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                                        tint: sclr-ta.has-hover ? Theme.text-primary : Theme.text-muted;
-                                    }
-                                    sclr-ta := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            MyQbzDetailState.search = "";
-                                            MyQbzDetailActions.search-changed("");
-                                        }
-                                    }
-                                }
+                    // Spacer floats the toolbar flush right.
+                    Rectangle { horizontal-stretch: 1; }
+
+                    // Search box (app ExpandableSearch).
+                    VerticalLayout {
+                        alignment: center;
+                        ExpandableSearch {
+                            placeholder: @tr("Search");
+                            sm: true;
+                            query <=> MyQbzDetailState.search;
+                            edited(q) => { MyQbzDetailActions.search-changed(q); }
+                        }
+                    }
+
+                    // Sort (app QbzSelect).
+                    VerticalLayout {
+                        alignment: center;
+                        QbzSelect {
+                            menu-width: 170px;
+                            sm: true;
+                            options: [
+                                @tr("Position"),
+                                @tr("Name"),
+                                @tr("Year"),
+                                @tr("Tracks"),
+                            ];
+                            current-index: MyQbzDetailState.sort == "name" ? 1
+                                : MyQbzDetailState.sort == "year" ? 2
+                                : MyQbzDetailState.sort == "tracks" ? 3
+                                : 0;
+                            selected(i) => {
+                                MyQbzDetailActions.set-sort(
+                                    i == 1 ? "name"
+                                    : i == 2 ? "year"
+                                    : i == 3 ? "tracks"
+                                    : "position");
                             }
                         }
                     }
 
-                    // Sort dropdown.
-                    Rectangle {
-                        width: sort-btn.width;
-                        sort-btn := ControlBtn {
-                            icon: @image-url("../assets/icons/arrow-up-down.svg");
-                            label: root.active-sort-label;
-                            indicator: root.sort-arrow;
-                            clicked => { sort-menu.show(); }
-                        }
-                        sort-menu := PopupWindow {
-                            x: 0; y: 36px; width: 170px;
-                            Rectangle {
-                                background: Theme.surface-main;
-                                border-width: 1px;
-                                border-color: Theme.surface-elevated;
-                                border-radius: 8px;
-                                drop-shadow-blur: 24px;
-                                drop-shadow-color: #00000066;
-                                VerticalLayout {
-                                    padding: 4px;
-                                    spacing: 1px;
-                                    MenuOption {
-                                        label: @tr("Position");
-                                        selected: MyQbzDetailState.sort == "position";
-                                        indicator: MyQbzDetailState.sort == "position" ? root.sort-arrow : "";
-                                        chosen => { MyQbzDetailActions.set-sort("position"); }
-                                    }
-                                    MenuOption {
-                                        label: @tr("Name");
-                                        selected: MyQbzDetailState.sort == "name";
-                                        indicator: MyQbzDetailState.sort == "name" ? root.sort-arrow : "";
-                                        chosen => { MyQbzDetailActions.set-sort("name"); }
-                                    }
-                                    MenuOption {
-                                        label: @tr("Year");
-                                        selected: MyQbzDetailState.sort == "year";
-                                        indicator: MyQbzDetailState.sort == "year" ? root.sort-arrow : "";
-                                        chosen => { MyQbzDetailActions.set-sort("year"); }
-                                    }
-                                    MenuOption {
-                                        label: @tr("Tracks");
-                                        selected: MyQbzDetailState.sort == "tracks";
-                                        indicator: MyQbzDetailState.sort == "tracks" ? root.sort-arrow : "";
-                                        chosen => { MyQbzDetailActions.set-sort("tracks"); }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Type + source filter dropdown.
+                    // Type + source filter (bordered icon button + badge, the
+                    // LocalLibrary quality-filter idiom; multi-section popup).
                     Rectangle {
                         width: filter-btn.width;
-                        filter-btn := ControlBtn {
-                            icon: @image-url("../assets/icons/list-filter.svg");
-                            label: @tr("Filter");
-                            badge: MyQbzDetailState.filter-count;
-                            active: MyQbzDetailState.filter-count > 0;
-                            clicked => { filter-menu.show(); }
+                        VerticalLayout {
+                            alignment: center;
+                            filter-btn := ToolBtn {
+                                icon: @image-url("../assets/icons/list-filter.svg");
+                                badge: MyQbzDetailState.filter-count;
+                                active: MyQbzDetailState.filter-count > 0;
+                                clicked => { filter-menu.show(); }
+                            }
                         }
                         filter-menu := PopupWindow {
                             x: 0; y: 36px; width: 200px;
@@ -1184,52 +992,55 @@ export component MixtapeDetailView inherits Rectangle {
                         }
                     }
 
-                    // Reset (when any filter/sort differs from defaults).
-                    if MyQbzDetailState.has-any-filter: ControlBtn {
-                        icon: @image-url("../assets/icons/rotate-ccw.svg");
-                        subtle: true;
-                        clicked => { MyQbzDetailActions.reset-filters(); }
+                    // Reset (when any filter/sort differs from defaults) —
+                    // icon-only ToolBtn (surface-elevated, never accent fill).
+                    if MyQbzDetailState.has-any-filter: VerticalLayout {
+                        alignment: center;
+                        ToolBtn {
+                            icon: @image-url("../assets/icons/rotate-ccw.svg");
+                            clicked => { MyQbzDetailActions.reset-filters(); }
+                        }
                     }
 
                     // Select / Cancel.
-                    ControlBtn {
-                        icon: @image-url("../assets/icons/square-check-big.svg");
-                        label: MyQbzDetailState.select-mode ? @tr("Cancel") : @tr("Select");
-                        active: MyQbzDetailState.select-mode;
-                        clicked => { MyQbzDetailActions.toggle-select-mode(); }
+                    VerticalLayout {
+                        alignment: center;
+                        ToolBtn {
+                            icon: @image-url("../assets/icons/square-check-big.svg");
+                            label: MyQbzDetailState.select-mode ? @tr("Cancel") : @tr("Select");
+                            active: MyQbzDetailState.select-mode;
+                            clicked => { MyQbzDetailActions.toggle-select-mode(); }
+                        }
                     }
 
-                    // Spacer pushes the view-mode group flush right.
-                    Rectangle { horizontal-stretch: 1; }
-
-                    // View-mode group (list / grid / expanded).
+                    // View-mode toggle (list / grid / expanded) — the app's
+                    // ToggleButton segments in a surface-elevated box (the
+                    // 3-segment ViewToggle idiom; ADR-008, never accent-filled).
                     VerticalLayout {
                         alignment: center;
                         Rectangle {
-                            height: 32px;
-                            width: 95px;
+                            height: 30px;
+                            width: 90px;
                             border-radius: 6px;
-                            border-width: 1px;
-                            border-color: Theme.surface-elevated;
-                            background: Theme.surface-card;
+                            background: Theme.surface-elevated;
                             clip: true;
                             HorizontalLayout {
-                                spacing: 0px;
-                                ViewSeg {
+                                ToggleButton {
                                     icon: @image-url("../assets/icons/list.svg");
                                     active: MyQbzDetailState.view-mode == "list";
+                                    sm: true;
                                     clicked => { MyQbzDetailActions.set-view-mode("list"); }
                                 }
-                                Rectangle { width: 1px; background: Theme.surface-elevated; }
-                                ViewSeg {
+                                ToggleButton {
                                     icon: @image-url("../assets/icons/layout-grid.svg");
                                     active: MyQbzDetailState.view-mode == "grid";
+                                    sm: true;
                                     clicked => { MyQbzDetailActions.set-view-mode("grid"); }
                                 }
-                                Rectangle { width: 1px; background: Theme.surface-elevated; }
-                                ViewSeg {
+                                ToggleButton {
                                     icon: @image-url("../assets/icons/rows-3.svg");
                                     active: MyQbzDetailState.view-mode == "expanded";
+                                    sm: true;
                                     clicked => { MyQbzDetailActions.set-view-mode("expanded"); }
                                 }
                             }

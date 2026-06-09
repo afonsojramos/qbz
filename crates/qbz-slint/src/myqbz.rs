@@ -166,7 +166,23 @@ fn cell_target(size: u32, cols: u32) -> u32 {
 /// 2x2-vs-3x3 rule, and pre-downscales the up-to-9 cover URLs per cell.
 fn card_item(c: &MixtapeCollection) -> MixtapeCardItem {
     let item_count = c.items.len();
-    let has_custom = c.custom_artwork_path.is_some();
+
+    // Decode the custom cover from disk so a custom-art mixtape/collection
+    // renders its real image in the grid (NOT a blank square). Same source-aware
+    // load as the detail view (the path is the on-disk artwork-cache file). A
+    // missing/undecodable path is treated as "no custom cover" so the mosaic
+    // shows instead of an empty full-bleed square — and so `has_custom` drives
+    // cover_count + the URL closure consistently below.
+    let decoded_custom = c
+        .custom_artwork_path
+        .as_ref()
+        .filter(|p| !p.is_empty())
+        .filter(|p| std::path::Path::new(p).exists())
+        .and_then(|p| slint::Image::load_from_path(std::path::Path::new(p)).ok());
+    let (custom_image, has_custom) = match decoded_custom {
+        Some(img) => (img, true),
+        None => (slint::Image::default(), false),
+    };
 
     // cols: 3x3 only for a Collection with >= 9 items; else 2x2.
     let cols: u32 = if c.kind == CollectionKind::Collection && item_count >= 9 {
@@ -196,8 +212,6 @@ fn card_item(c: &MixtapeCollection) -> MixtapeCardItem {
             _ => slint::SharedString::default(),
         }
     };
-
-    let custom_image = slint::Image::default();
 
     MixtapeCardItem {
         id: c.id.clone().into(),

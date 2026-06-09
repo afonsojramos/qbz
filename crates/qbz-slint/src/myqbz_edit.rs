@@ -54,10 +54,11 @@ fn reload(
     image_cache: &ImageCache,
     id: String,
 ) {
+    let Some(runtime) = crate::myqbz_detail::global_runtime() else { return };
     let handle = handle.clone();
     let image_cache = image_cache.clone();
     let _ = weak.upgrade_in_event_loop(move |w| {
-        crate::myqbz_detail::navigate(w.as_weak(), handle.clone(), image_cache.clone(), id);
+        crate::myqbz_detail::navigate(runtime, w.as_weak(), handle.clone(), image_cache.clone(), id);
     });
 }
 

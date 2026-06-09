@@ -224,8 +224,9 @@ fn reload(
     image_cache: ImageCache,
     id: String,
 ) {
+    let Some(runtime) = crate::myqbz_detail::global_runtime() else { return };
     let _ = weak.upgrade_in_event_loop(move |w| {
         let _ = &w; // keep the closure's capture explicit.
-        crate::myqbz_detail::navigate(w.as_weak(), handle.clone(), image_cache.clone(), id);
+        crate::myqbz_detail::navigate(runtime, w.as_weak(), handle.clone(), image_cache.clone(), id);
     });
 }

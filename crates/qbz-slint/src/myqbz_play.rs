@@ -302,7 +302,7 @@ pub fn shuffle(
         // collection wasn't already album_shuffle, and reload the open detail so
         // the overflow toggle label reflects the new mode.
         if collection.play_mode != CollectionPlayMode::AlbumShuffle {
-            persist_album_shuffle(&weak, &handle, &image_cache, &collection_id);
+            persist_album_shuffle(&runtime, &weak, &handle, &image_cache, &collection_id);
         }
     });
 }
@@ -314,6 +314,7 @@ pub fn shuffle(
 /// back to the event loop. Failures are logged, not surfaced — the shuffle
 /// already played, so a failed persist must not toast an error.
 fn persist_album_shuffle(
+    runtime: &Runtime,
     weak: &slint::Weak<AppWindow>,
     handle: &tokio::runtime::Handle,
     image_cache: &crate::artwork::ImageCache,
@@ -342,11 +343,12 @@ fn persist_album_shuffle(
     // no reload — their next open restores from the DB.
     let handle = handle.clone();
     let image_cache = image_cache.clone();
+    let runtime = runtime.clone();
     let id = collection_id.to_string();
     let _ = weak.upgrade_in_event_loop(move |w| {
         use slint::ComponentHandle;
         if w.global::<crate::MyQbzDetailState>().get_id().as_str() == id {
-            crate::myqbz_detail::navigate(w.as_weak(), handle, image_cache, id);
+            crate::myqbz_detail::navigate(runtime, w.as_weak(), handle, image_cache, id);
         }
     });
 }

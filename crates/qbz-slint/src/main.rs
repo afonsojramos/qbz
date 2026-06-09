@@ -1037,7 +1037,13 @@ fn apply_entry(
             );
         }
         nav::NavEntry::MixtapeDetail(id) => {
-            myqbz_detail::navigate(weak.clone(), handle.clone(), image_cache.clone(), id);
+            myqbz_detail::navigate(
+                runtime.clone(),
+                weak.clone(),
+                handle.clone(),
+                image_cache.clone(),
+                id,
+            );
         }
         nav::NavEntry::DiscographyBuilder(artist_id) => {
             navigate_discography_builder(
@@ -2031,6 +2037,7 @@ fn wire_playlist_manager(
 /// + re-issue mosaic artwork jobs. Mirrors `wire_playlist_manager`.
 fn wire_myqbz(
     window: &AppWindow,
+    app_runtime: &Arc<AppRuntime<SlintAdapter>>,
     tokio_rt: &tokio::runtime::Runtime,
     image_cache: &artwork::ImageCache,
 ) {
@@ -2050,9 +2057,11 @@ fn wire_myqbz(
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         let image_cache = image_cache.clone();
+        let runtime = app_runtime.clone();
         window.global::<MyQbzActions>().on_open_card(move |id| {
             nav::record(nav::NavEntry::MixtapeDetail(id.to_string()));
             myqbz_detail::navigate(
+                runtime.clone(),
                 weak.clone(),
                 handle.clone(),
                 image_cache.clone(),
@@ -2107,6 +2116,7 @@ fn wire_myqbz(
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         let image_cache = image_cache.clone();
+        let runtime = app_runtime.clone();
         window.global::<MyQbzCreateActions>().on_submit(move || {
             let Some(w) = weak.upgrade() else { return; };
             let st = w.global::<MyQbzCreateState>();
@@ -2120,6 +2130,7 @@ fn wire_myqbz(
             let weak = weak.clone();
             let handle = handle.clone();
             let image_cache = image_cache.clone();
+            let runtime = runtime.clone();
             handle.clone().spawn(async move {
                 let nm = name.trim().to_string();
                 let created =
@@ -2131,6 +2142,7 @@ fn wire_myqbz(
                 let weak2 = weak.clone();
                 let handle2 = handle.clone();
                 let image_cache2 = image_cache.clone();
+                let runtime2 = runtime.clone();
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     let st = w.global::<MyQbzCreateState>();
                     st.set_creating(false);
@@ -2141,6 +2153,7 @@ fn wire_myqbz(
                             // Drop into the new collection's detail view.
                             nav::record(nav::NavEntry::MixtapeDetail(c.id.clone()));
                             myqbz_detail::navigate(
+                                runtime2.clone(),
                                 weak2.clone(),
                                 handle2.clone(),
                                 image_cache2.clone(),
@@ -2398,11 +2411,17 @@ fn wire_myqbz_detail(
 ) {
     use MyQbzDetailActions as Act;
 
+    // Stash the runtime for the mutation-reload paths (cover/edit) that re-run
+    // `myqbz_detail::navigate` (whose resolveItems pass needs it) without
+    // threading it through every entry point.
+    myqbz_detail::set_runtime(app_runtime.clone());
+
     // After a toolbar re-derive the rendered model changed, so the visible
-    // rows need their thumbnails reloaded.
+    // rows need their thumbnails reloaded — through the SOURCE-SPLIT dispatch
+    // (Qobuz CDN urls via HTTP; local/Plex paths via the source-aware decoder).
     fn refresh_row_covers(window: &AppWindow, image_cache: &artwork::ImageCache) {
-        let jobs = myqbz_detail::artwork_jobs(window);
-        artwork::spawn_loads(jobs, window.as_weak(), image_cache.clone());
+        let split = myqbz_detail::artwork_jobs(window);
+        myqbz_detail::dispatch_artwork(split, window.as_weak(), image_cache.clone());
     }
 
     // A toolbar re-derive rebuilds the rendered model with fresh rows
@@ -3162,12 +3181,15 @@ fn wire_disco_builder(
                             myqbz_builder::toast_created(&w);
                             // Navigate to the new collection's detail.
                             nav::record(nav::NavEntry::MixtapeDetail(collection_id.clone()));
-                            myqbz_detail::navigate(
-                                w.as_weak(),
-                                handle.clone(),
-                                image_cache.clone(),
-                                collection_id,
-                            );
+                            if let Some(runtime) = myqbz_detail::global_runtime() {
+                                myqbz_detail::navigate(
+                                    runtime,
+                                    w.as_weak(),
+                                    handle.clone(),
+                                    image_cache.clone(),
+                                    collection_id,
+                                );
+                            }
                             update_nav_flags(&w);
                         }
                         None => {
@@ -7894,7 +7916,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // === Playlist Manager actions ======================================
     wire_playlist_manager(&window, &app_runtime, &tokio_rt, &image_cache);
-    wire_myqbz(&window, &tokio_rt, &image_cache);
+    wire_myqbz(&window, &app_runtime, &tokio_rt, &image_cache);
     wire_myqbz_detail(&window, &app_runtime, &tokio_rt, &image_cache);
     wire_disco_builder(&window, &tokio_rt, &image_cache);
     {
