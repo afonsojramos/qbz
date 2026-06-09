@@ -36,6 +36,7 @@ mod location_view;
 mod mix;
 mod musician;
 mod myqbz;
+mod myqbz_detail;
 mod nav;
 mod play_history;
 mod strip_html;
@@ -731,6 +732,7 @@ fn scope_for(entry: &nav::NavEntry) -> String {
         nav::NavEntry::OfflineManager => "offline-manager".into(),
         nav::NavEntry::Mixtapes => "mixtapes".into(),
         nav::NavEntry::Collections => "collections".into(),
+        nav::NavEntry::MixtapeDetail(_) => "mixtape-detail".into(),
         nav::NavEntry::Album(_) => "album".into(),
         nav::NavEntry::LocalAlbum(_) => "local-album".into(),
         nav::NavEntry::Artist(_) => "artist".into(),
@@ -891,6 +893,9 @@ fn apply_entry(
                 image_cache.clone(),
                 qbz_models::mixtape::CollectionKind::Collection,
             );
+        }
+        nav::NavEntry::MixtapeDetail(id) => {
+            myqbz_detail::navigate(weak.clone(), handle.clone(), image_cache.clone(), id);
         }
         nav::NavEntry::Location {
             mbid,
@@ -1849,7 +1854,11 @@ fn wire_playlist_manager(
 /// `open-card` / `create-*` are logging STUBS; the toolbar callbacks
 /// (search / sort / view / kind-filter / reset) drive `crate::myqbz` rebuilds
 /// + re-issue mosaic artwork jobs. Mirrors `wire_playlist_manager`.
-fn wire_myqbz(window: &AppWindow, image_cache: &artwork::ImageCache) {
+fn wire_myqbz(
+    window: &AppWindow,
+    tokio_rt: &tokio::runtime::Runtime,
+    image_cache: &artwork::ImageCache,
+) {
     use myqbz::Grid;
 
     // Re-issue mosaic artwork jobs for a grid after a toolbar rebuild (the
@@ -1859,12 +1868,25 @@ fn wire_myqbz(window: &AppWindow, image_cache: &artwork::ImageCache) {
         artwork::spawn_loads(jobs, window.as_weak(), image_cache.clone());
     }
 
-    // --- STUBS (read-only boundary) -------------------------------------
+    // --- Open a card -> the collection-detail view (Phase-2 Slice 3) -----
+    // NAV-IN: record history + navigate (loads via myqbz_detail::navigate),
+    // mirroring the grid's own nav and the album/playlist detail openers.
     {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
         window.global::<MyQbzActions>().on_open_card(move |id| {
-            log::info!("[qbz-slint] myqbz open-card({id}) — detail not yet wired (read-only slice)");
+            nav::record(nav::NavEntry::MixtapeDetail(id.to_string()));
+            myqbz_detail::navigate(
+                weak.clone(),
+                handle.clone(),
+                image_cache.clone(),
+                id.to_string(),
+            );
         });
     }
+
+    // --- Create CTAs: STUBS (read-only boundary) ------------------------
     {
         window.global::<MyQbzActions>().on_create_mixtape(move || {
             log::info!("[qbz-slint] myqbz create-mixtape — not yet wired (read-only slice)");
@@ -1973,6 +1995,200 @@ fn wire_myqbz(window: &AppWindow, image_cache: &artwork::ImageCache) {
                 refresh_covers(&w, Grid::Collections, &image_cache);
             }
         });
+    }
+}
+
+/// Wire the My QBZ collection-DETAIL view (Phase-2 Slice 3, read-only). The
+/// toolbar callbacks (search / sort / type-filter / source-filter / view-mode /
+/// select / reset) drive `crate::myqbz_detail` re-derives + re-issue row
+/// artwork; `open-item` / `open-artist` route to the existing
+/// album/playlist/artist navigators (reusing the top-level open-album /
+/// open-artist callbacks so local-vs-qobuz routing + history stay in one
+/// place). Every hero CTA + per-row context action is a logging STUB — the
+/// read-only boundary for this slice.
+fn wire_myqbz_detail(
+    window: &AppWindow,
+    app_runtime: &Arc<AppRuntime<SlintAdapter>>,
+    tokio_rt: &tokio::runtime::Runtime,
+    image_cache: &artwork::ImageCache,
+) {
+    use MyQbzDetailActions as Act;
+
+    // After a toolbar re-derive the rendered model changed, so the visible
+    // rows need their thumbnails reloaded.
+    fn refresh_row_covers(window: &AppWindow, image_cache: &artwork::ImageCache) {
+        let jobs = myqbz_detail::artwork_jobs(window);
+        artwork::spawn_loads(jobs, window.as_weak(), image_cache.clone());
+    }
+
+    // --- Toolbar (client-side re-derive) --------------------------------
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_search_changed(move |q| {
+            if let Some(w) = weak.upgrade() {
+                myqbz_detail::search(&w, q.as_str());
+                refresh_row_covers(&w, &image_cache);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_set_sort(move |field| {
+            if let Some(w) = weak.upgrade() {
+                myqbz_detail::set_sort(&w, field.as_str());
+                refresh_row_covers(&w, &image_cache);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_set_type_filter(move |value| {
+            if let Some(w) = weak.upgrade() {
+                myqbz_detail::set_type_filter(&w, value.as_str());
+                refresh_row_covers(&w, &image_cache);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_toggle_source_filter(move |kind| {
+            if let Some(w) = weak.upgrade() {
+                myqbz_detail::toggle_source_filter(&w, kind.as_str());
+                refresh_row_covers(&w, &image_cache);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<Act>().on_set_view_mode(move |mode| {
+            if let Some(w) = weak.upgrade() {
+                w.global::<MyQbzDetailState>().set_view_mode(mode);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<Act>().on_toggle_select_mode(move || {
+            if let Some(w) = weak.upgrade() {
+                myqbz_detail::toggle_select_mode(&w);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<Act>().on_toggle_item_select(move |position| {
+            if let Some(w) = weak.upgrade() {
+                myqbz_detail::toggle_item_select(&w, position);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window.global::<Act>().on_reset_filters(move || {
+            if let Some(w) = weak.upgrade() {
+                myqbz_detail::reset_filters(&w);
+                refresh_row_covers(&w, &image_cache);
+            }
+        });
+    }
+
+    // --- Open an item -> album / local-album / playlist -----------------
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<Act>()
+            .on_open_item(move |_source, item_type, source_item_id| {
+                let Some(w) = weak.upgrade() else { return };
+                let id = source_item_id.to_string();
+                match item_type.as_str() {
+                    // Album / track items both open an album view; the top-level
+                    // open-album callback handles Qobuz-vs-local routing + history.
+                    "album" | "track" => {
+                        w.invoke_open_album(id.into());
+                    }
+                    "playlist" => {
+                        nav::record(nav::NavEntry::Playlist(id.clone()));
+                        navigate_playlist(
+                            runtime.clone(),
+                            weak.clone(),
+                            &handle,
+                            image_cache.clone(),
+                            id,
+                        );
+                        update_nav_flags(&w);
+                    }
+                    other => {
+                        log::warn!("[qbz-slint] myqbz_detail open-item: unknown type {other}");
+                    }
+                }
+            });
+    }
+
+    // --- Open an item's artist (qobuz items only) -----------------------
+    {
+        let weak = window.as_weak();
+        window
+            .global::<Act>()
+            .on_open_artist(move |_source, artist_name| {
+                if let Some(w) = weak.upgrade() {
+                    // The top-level open-artist callback routes a name to the
+                    // Local Library Artists tab and a numeric id to the Qobuz
+                    // artist page. Collection items carry an artist NAME.
+                    if !artist_name.trim().is_empty() {
+                        w.invoke_open_artist(artist_name);
+                    }
+                }
+            });
+    }
+
+    // --- READ-ONLY STUBS (the slice boundary) ---------------------------
+    {
+        let weak = window.as_weak();
+        let log_stub = move |what: &str| {
+            let id = weak
+                .upgrade()
+                .map(|w| w.global::<MyQbzDetailState>().get_id().to_string())
+                .unwrap_or_default();
+            log::info!(
+                "[qbz-slint] myqbz_detail {what}({id}) — not yet wired (read-only slice)"
+            );
+        };
+        let s = log_stub.clone();
+        window.global::<Act>().on_play_all(move || s("play-all"));
+        let s = log_stub.clone();
+        window.global::<Act>().on_shuffle(move || s("shuffle"));
+        let s = log_stub.clone();
+        window.global::<Act>().on_dj_mix(move || s("dj-mix"));
+        let s = log_stub.clone();
+        window.global::<Act>().on_edit(move || s("edit"));
+        let s = log_stub.clone();
+        window.global::<Act>().on_delete(move || s("delete"));
+        let s = log_stub.clone();
+        window.global::<Act>().on_sync(move || s("sync"));
+    }
+    {
+        window.global::<Act>().on_play_item(move |source_item_id| {
+            log::info!(
+                "[qbz-slint] myqbz_detail play-item({source_item_id}) — not yet wired (read-only slice)"
+            );
+        });
+    }
+    {
+        window
+            .global::<Act>()
+            .on_item_action(move |source_item_id, action| {
+                log::info!(
+                    "[qbz-slint] myqbz_detail item-action({source_item_id}, {action}) — not yet wired (read-only slice)"
+                );
+            });
     }
 }
 
@@ -6457,7 +6673,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // === Playlist Manager actions ======================================
     wire_playlist_manager(&window, &app_runtime, &tokio_rt, &image_cache);
-    wire_myqbz(&window, &image_cache);
+    wire_myqbz(&window, &tokio_rt, &image_cache);
+    wire_myqbz_detail(&window, &app_runtime, &tokio_rt, &image_cache);
     {
         let weak = window.as_weak();
         window

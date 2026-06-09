@@ -345,7 +345,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings, search, musician, label, label-releases, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager, local-library, local-album, mixtapes, collections }
+export enum ContentView { home, album, artist, settings, search, musician, label, label-releases, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager, local-library, local-album, mixtapes, collections, mixtape-detail }
 
 // In-app toast (transient notification). Mirrors Tauri's toastStore:
 // a single toast at a time (a new one replaces the current), auto-hidden
@@ -1465,6 +1465,140 @@ export global MyQbzActions {
     callback col-set-view(string /* grid|list */);
     callback col-set-kind-filter(string /* all|collection|artist_collection */);
     callback col-reset();
+}
+
+// === My QBZ — Collection / Mixtape DETAIL view (read-only) ==============
+// Spec 12. One row per collection item (album / track / playlist), rendered
+// in the 8-col list / the grid. The Rust controller (crate::myqbz_detail)
+// precomputes every display string (type label, source kind, quality detail,
+// tracks/year columns, downscaled artwork URL) so the view does no lookups.
+// READ-ONLY SCOPE (Phase-2 Slice 3): the hero action buttons + per-row
+// context-menu items + grid/list view modes render 1:1, but every click is a
+// logging STUB. The "expanded" view-mode toggle + shell render; per-item
+// inline track expansion is DEFERRED (needs the enqueue resolver — a later
+// slice). Edit/rename/delete/cover/DJ-mix modals + the BulkActionBar are also
+// deferred.
+export struct MixtapeDetailItem {
+    // 0-based persisted position (the row's stable key; display is +1).
+    position: int,
+    // "album" | "track" | "playlist".
+    item-type: string,
+    // "qobuz" | "local".
+    source: string,
+    source-item-id: string,
+    title: string,
+    subtitle: string,
+    // True for qobuz items whose subtitle is a clickable artist link
+    // (spec 12 §6.3 col-2 — local subtitles are plain text).
+    subtitle-is-link: bool,
+    // Resolved source kind for the source indicator + source filter
+    // ("qobuz" | "plex" | "local"). Defaults from `source` until resolveItems
+    // lands (deferred — for now equals the raw source mapping).
+    source-kind: string,
+    // Type-cell label (already localized): "ALBUM" / "TRACK" / "PLAYLIST"
+    // (or an EP/Single/… release-type override — overrides are a later slice).
+    type-label: string,
+    // Quality badge inputs (resolved; empty/0 until resolveItems — deferred).
+    quality-tier: string,    // "hires" | "cd" | ""
+    quality-detail: string,  // "24-bit / 96 kHz" | ""
+    // TRACKS column: "1" for a track, else the count or "—".
+    tracks-text: string,
+    // YEAR column: the year or "".
+    year-text: string,
+    // Downscaled (_50) row artwork; decoded into `artwork` by the pipeline.
+    artwork-url: string,
+    artwork: image,
+    // UI-owned multi-select state (select-mode — deferred wiring; the column
+    // renders when select-mode is on so geometry matches the PSD).
+    selected: bool,
+}
+
+export global MyQbzDetailState {
+    in property <string> id;
+    // "mixtape" | "collection" | "artist_collection".
+    in property <string> kind;
+    // Eyebrow label, uppercase ("MIXTAPE" | "COLLECTION" | "ARTIST").
+    in property <string> kind-label;
+    in property <string> name;
+    in property <string> description;
+    // "5 albums" / "1 album" meta line (ICU plural, rendered in Rust).
+    in property <string> meta;
+    in property <int> item-count: 0;
+    // play_mode ("in_order" | "album_shuffle") — drives the overflow toggle
+    // label (deferred wiring; shown for parity).
+    in property <string> play-mode: "in_order";
+    // True when the user set a custom cover (full-bleeds the hero mosaic).
+    in property <bool> has-custom-cover: false;
+    in property <image> custom-cover;
+    in property <bool> loading: false;
+    // False once the load completes with no collection (not-found state).
+    in property <bool> found: true;
+
+    // --- Hero mosaic (CollectionMosaic inputs, same scheme as the card) ----
+    // cover-count 0 (empty -> kind glyph) / 4 / 9; up-to-9 downscaled URLs +
+    // decoded covers. Mirrors MixtapeCardItem so CollectionMosaic renders it.
+    in property <int> cover-count: 0;
+    in property <string> url1; in property <string> url2; in property <string> url3;
+    in property <string> url4; in property <string> url5; in property <string> url6;
+    in property <string> url7; in property <string> url8; in property <string> url9;
+    in property <image> cover1; in property <image> cover2; in property <image> cover3;
+    in property <image> cover4; in property <image> cover5; in property <image> cover6;
+    in property <image> cover7; in property <image> cover8; in property <image> cover9;
+
+    // --- Item list (the render model: filter -> search -> sort applied) ----
+    in property <[MixtapeDetailItem]> items: [];
+
+    // --- Toolbar (session-scoped) ------------------------------------------
+    in-out property <string> search;
+    // "position" | "name" | "year" | "tracks".
+    in-out property <string> sort: "position";
+    in-out property <string> sort-dir: "asc";
+    // "all" | "album" | "track" | "playlist" (single-select).
+    in-out property <string> type-filter: "all";
+    // Multi-select source filter membership (spec 12 §5.5). Three flags
+    // (Slint has no Set); Rust derives the badge count.
+    in-out property <bool> src-qobuz: false;
+    in-out property <bool> src-plex: false;
+    in-out property <bool> src-local: false;
+    // "list" | "grid" | "expanded".
+    in-out property <string> view-mode: "list";
+    // Multi-select edit mode (renders the per-row checkbox column; bulk-bar
+    // wiring is DEFERRED).
+    in-out property <bool> select-mode: false;
+    in property <int> selected-count: 0;
+    // Rust-computed filter badge count (sources + (type-filter != all)).
+    in property <int> filter-count: 0;
+    // Whether any filter/sort differs from the defaults (drives the reset btn).
+    in property <bool> has-any-filter: false;
+}
+
+export global MyQbzDetailActions {
+    // Client-side toolbar — re-derive the visible item list (UI thread).
+    callback search-changed(string /* query */);
+    callback set-sort(string /* field */);
+    callback set-type-filter(string /* all|album|track|playlist */);
+    callback toggle-source-filter(string /* qobuz|plex|local */);
+    callback set-view-mode(string /* list|grid|expanded */);
+    callback toggle-select-mode();
+    callback reset-filters();
+    // Open an item's detail (album / track-album / playlist). Routed to the
+    // existing open-album / open-playlist paths in main.rs.
+    callback open-item(string /* source */, string /* item-type */, string /* source-item-id */);
+    // Open an item's artist page by name (qobuz items only).
+    callback open-artist(string /* source */, string /* artist-name */);
+    // --- READ-ONLY STUBS (logged; not yet wired) --------------------------
+    // Hero CTAs.
+    callback play-all();
+    callback shuffle();
+    callback dj-mix();
+    callback edit();        // overflow: rename / description / cover / convert
+    callback delete();
+    callback sync();
+    // Per-row affordances.
+    callback play-item(string /* source-item-id */);
+    callback item-action(string /* source-item-id */, string /* action */);
+    // Toggle one row's selection (select-mode).
+    callback toggle-item-select(int /* position */);
 }
 
 // Folder editor modal — create + edit (icon preset, solid color, custom

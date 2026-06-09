@@ -87,7 +87,7 @@ fn album_count_label(count: usize) -> String {
 /// mosaic's `smallQobuzUrl` (regex-swap `_<old>.jpg` → `_<target>.jpg`). Used
 /// before handing URLs to the image loader so we never pull 600px covers for
 /// ~60-92px cells. Non-Qobuz URLs (local/plex) pass through unchanged.
-fn small_qobuz_url(url: &str, target: u32) -> String {
+pub fn small_qobuz_url(url: &str, target: u32) -> String {
     if url.is_empty() {
         return String::new();
     }

@@ -66,6 +66,12 @@ pub enum NavEntry {
     /// The My QBZ > Collections index grid (read-only in this slice). Same
     /// session-scoped toolbar; no payload.
     Collections,
+    /// A Mixtape / Collection / Artist-Collection DETAIL page (read-only in
+    /// this slice); the string is the collection id. Mirrors `Album` /
+    /// `Playlist` — the in-detail toolbar state (search / sort / type-filter /
+    /// view-mode) is session-scoped in the controller, so the entry carries
+    /// only the id.
+    MixtapeDetail(String),
     Album(String),
     /// A Local Library album detail page (dedicated view, separate from the
     /// Qobuz Album view); the string is the metadata group key.

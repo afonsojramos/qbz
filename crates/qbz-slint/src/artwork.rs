@@ -148,6 +148,13 @@ pub enum ArtworkTarget {
     /// One mosaic cover slot (0-8) of a My QBZ Collections-grid card
     /// (`MyQbzState.collections[index]`).
     MyQbzCollectionCover { index: usize, slot: usize },
+    /// A row thumbnail in the My QBZ collection-detail item list
+    /// (`MyQbzDetailState.items[index]`). Matched by item position on apply so
+    /// a later sort/filter keeps the cover (the rendered model is re-derived).
+    MyQbzDetailRow { position: i32 },
+    /// One hero-mosaic cover slot (0-8) of the My QBZ collection-detail view
+    /// (`MyQbzDetailState.cover{N}`).
+    MyQbzDetailCover { slot: usize },
 }
 
 impl ArtworkTarget {
@@ -168,7 +175,11 @@ impl ArtworkTarget {
             ArtworkTarget::PmPlaylistCover { .. } | ArtworkTarget::PmTreeCover { .. } => 160,
             // My QBZ mosaic tiles render at ~60-92px (184/2 or 184/3 grid).
             ArtworkTarget::MyQbzMixtapeCover { .. }
-            | ArtworkTarget::MyQbzCollectionCover { .. } => 160,
+            | ArtworkTarget::MyQbzCollectionCover { .. }
+            // Hero mosaic tiles render at ~62-93px (186/2 or 186/3 grid).
+            | ArtworkTarget::MyQbzDetailCover { .. } => 160,
+            // Detail list-row thumbnails render at 36px.
+            ArtworkTarget::MyQbzDetailRow { .. } => 96,
             _ => DECODE_SIZE,
         }
     }
@@ -917,6 +928,12 @@ fn apply_artwork(
                 crate::myqbz::set_mosaic_cover(&mut item, slot, image);
                 model.set_row_data(index, item);
             }
+        }
+        ArtworkTarget::MyQbzDetailRow { position } => {
+            crate::myqbz_detail::set_row_artwork(window, position, image);
+        }
+        ArtworkTarget::MyQbzDetailCover { slot } => {
+            crate::myqbz_detail::set_hero_cover(window, slot, image);
         }
     }
 }
