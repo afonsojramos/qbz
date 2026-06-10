@@ -128,39 +128,88 @@ pub fn add_qobuz_tracks_blocking(id: &str, track_ids: &[u64]) -> usize {
     .unwrap_or(0)
 }
 
-/// Append LocalLibrary rows (by `local_tracks` row id), source-aware:
+/// Resolve a `local_tracks` row to its playlist input, source-aware:
 /// offline copies (`qobuz_download`) become Qobuz refs (real catalog id),
 /// Plex rows become Plex refs (rating key in `file_path`), everything else
-/// a local file path. Returns inserted count.
-pub fn add_local_rows_blocking(id: &str, row_ids: &[i64]) -> usize {
-    let entries: Vec<repo::LocalPlaylistTrackInput> = crate::library_db::with_db(|db| {
-        let mut out = Vec::new();
-        for &rid in row_ids {
-            let Some(track) = db.get_track(rid)? else {
-                log::warn!("[qbz-slint] local playlist add: unknown local row {rid}");
-                continue;
-            };
-            let input = match track.source.as_deref() {
-                Some("qobuz_download") => match track.qobuz_track_id {
-                    Some(qid) => repo::LocalPlaylistTrackInput::Qobuz(qid as u64),
-                    None => repo::LocalPlaylistTrackInput::Local(track.file_path.clone()),
-                },
-                Some("plex") => repo::LocalPlaylistTrackInput::Plex(track.file_path.clone()),
-                _ => repo::LocalPlaylistTrackInput::Local(track.file_path.clone()),
-            };
-            out.push(input);
-        }
-        Ok(out)
-    })
-    .unwrap_or_default();
+/// a local file path.
+fn local_row_input(
+    db: &qbz_library::LibraryDatabase,
+    rid: i64,
+) -> Result<Option<repo::LocalPlaylistTrackInput>, qbz_library::LibraryError> {
+    let Some(track) = db.get_track(rid)? else {
+        log::warn!("[qbz-slint] local playlist add: unknown local row {rid}");
+        return Ok(None);
+    };
+    Ok(Some(match track.source.as_deref() {
+        Some("qobuz_download") => match track.qobuz_track_id {
+            Some(qid) => repo::LocalPlaylistTrackInput::Qobuz(qid as u64),
+            None => repo::LocalPlaylistTrackInput::Local(track.file_path.clone()),
+        },
+        Some("plex") => repo::LocalPlaylistTrackInput::Plex(track.file_path.clone()),
+        _ => repo::LocalPlaylistTrackInput::Local(track.file_path.clone()),
+    }))
+}
+
+fn add_inputs_blocking(id: &str, entries: &[repo::LocalPlaylistTrackInput]) -> usize {
     if entries.is_empty() {
         return 0;
     }
     crate::library_db::with_db(|db| {
-        Ok(db.with_connection(|conn| repo::add_tracks(conn, id, &entries)))
+        Ok(db.with_connection(|conn| repo::add_tracks(conn, id, entries)))
     })
     .and_then(|r| r.ok())
     .unwrap_or(0)
+}
+
+/// Append local-mode picker refs — `"<i64>"` LocalLibrary row ids (resolved
+/// source-aware via [`local_row_input`]) or `"plex:<rating key>"` Plex rows
+/// (synthetic Plex row ids never resolve through `get_track`, so the picker
+/// carries the key itself). Returns inserted count.
+pub fn add_local_refs_blocking(id: &str, refs: &[String]) -> usize {
+    let entries: Vec<repo::LocalPlaylistTrackInput> = crate::library_db::with_db(|db| {
+        let mut out = Vec::new();
+        for r in refs {
+            if let Some(key) = r.strip_prefix("plex:") {
+                out.push(repo::LocalPlaylistTrackInput::Plex(key.to_string()));
+            } else if let Ok(rid) = r.parse::<i64>() {
+                if let Some(input) = local_row_input(db, rid)? {
+                    out.push(input);
+                }
+            } else {
+                log::warn!("[qbz-slint] local playlist add: unrecognized ref {r}");
+            }
+        }
+        Ok(out)
+    })
+    .unwrap_or_default();
+    add_inputs_blocking(id, &entries)
+}
+
+/// Append a drag payload (sidebar drop), mapping every variant to its own
+/// playlist ref — local file rows store `local_path`, Plex rows `plex_key`,
+/// Qobuz/offline-cached rows `qobuz_track_id`. Returns inserted count.
+pub fn add_drag_tracks_blocking(id: &str, tracks: &[crate::drag::DragTrack]) -> usize {
+    let entries: Vec<repo::LocalPlaylistTrackInput> = crate::library_db::with_db(|db| {
+        let mut out = Vec::new();
+        for item in tracks {
+            match item {
+                crate::drag::DragTrack::Qobuz(tid) => {
+                    out.push(repo::LocalPlaylistTrackInput::Qobuz(*tid));
+                }
+                crate::drag::DragTrack::LocalRow(rid) => {
+                    if let Some(input) = local_row_input(db, *rid)? {
+                        out.push(input);
+                    }
+                }
+                crate::drag::DragTrack::Plex(key) => {
+                    out.push(repo::LocalPlaylistTrackInput::Plex(key.clone()));
+                }
+            }
+        }
+        Ok(out)
+    })
+    .unwrap_or_default();
+    add_inputs_blocking(id, &entries)
 }
 
 /// Copy `src` into the artwork cache and store it as this local playlist's
@@ -235,6 +284,11 @@ pub enum RowItem {
     },
     /// Local file resolved from library.db by path.
     Local(Box<qbz_library::LocalTrack>),
+    /// Local file row whose metadata resolve failed but whose file EXISTS
+    /// on disk — renders with a filename fallback (D11 hiding is for
+    /// unavailable-offline QOBUZ rows, not for a file that is right there).
+    /// Not playable until the row is back in the library index.
+    LocalFile { path: String },
     /// Plex ref — no detailed resolve in v1 (rendered basic, not playable).
     Plex { key: String },
 }
@@ -264,6 +318,7 @@ fn total_duration_label(rows: &[LoadedRow]) -> String {
             RowItem::Qobuz(t) => t.duration as u64,
             RowItem::Cached { duration_secs, .. } => *duration_secs,
             RowItem::Local(t) => t.duration_secs,
+            RowItem::LocalFile { .. } => 0,
             RowItem::Plex { .. } => 0,
         })
         .sum();
@@ -278,8 +333,10 @@ fn total_duration_label(rows: &[LoadedRow]) -> String {
 /// Load + resolve a local playlist off the UI thread. Qobuz rows resolve
 /// via `get_tracks_batch` when online, via the offline-cache index when
 /// offline (or when the batch fails); local rows via library.db by path;
-/// Plex rows stay basic. Unresolvable rows are filtered out (D11) and
-/// counted in `hidden_unavailable`.
+/// Plex rows stay basic. Unresolvable QOBUZ rows are filtered out (D11);
+/// a LOCAL row that misses the index still renders (filename fallback)
+/// while its file exists, and hides (logged distinctly) only when the
+/// file itself is gone.
 pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistData> {
     let id = playlist_id.to_string();
     let (header, tracks) = tokio::task::spawn_blocking({
@@ -343,13 +400,18 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistD
         }
     }
 
-    // Local rows: resolve library rows by file path (blocking).
+    // Local rows: resolve library rows by file path (blocking). Paths the
+    // index doesn't know are stat'ed on the same worker — an existing file
+    // renders as a filename-fallback row instead of hiding (D11 nuance).
     let local_paths: Vec<String> = tracks.iter().filter_map(|t| t.local_path.clone()).collect();
-    let locals: HashMap<String, qbz_library::LocalTrack> = if local_paths.is_empty() {
-        HashMap::new()
+    let (locals, on_disk): (
+        HashMap<String, qbz_library::LocalTrack>,
+        std::collections::HashSet<String>,
+    ) = if local_paths.is_empty() {
+        Default::default()
     } else {
         tokio::task::spawn_blocking(move || {
-            crate::library_db::with_db(|db| {
+            let resolved = crate::library_db::with_db(|db| {
                 let mut out = HashMap::new();
                 for path in &local_paths {
                     if let Some(track) = db.get_track_by_path(path)? {
@@ -358,7 +420,14 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistD
                 }
                 Ok(out)
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+            let on_disk: std::collections::HashSet<String> = local_paths
+                .iter()
+                .filter(|p| !resolved.contains_key(*p))
+                .filter(|p| std::path::Path::new(p.as_str()).exists())
+                .cloned()
+                .collect();
+            (resolved, on_disk)
         })
         .await
         .unwrap_or_default()
@@ -366,6 +435,7 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistD
 
     let mut rows: Vec<LoadedRow> = Vec::new();
     let mut hidden = 0usize;
+    let mut missing_files = 0usize;
     for t in tracks {
         let item = match t.source {
             repo::LocalPlaylistTrackSource::Qobuz => {
@@ -384,11 +454,25 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistD
                 }
             }
             repo::LocalPlaylistTrackSource::Local => {
-                let Some(track) = t.local_path.as_ref().and_then(|p| locals.get(p)) else {
-                    hidden += 1;
-                    continue;
-                };
-                RowItem::Local(Box::new(track.clone()))
+                match t.local_path.as_ref() {
+                    Some(p) => {
+                        if let Some(track) = locals.get(p) {
+                            RowItem::Local(Box::new(track.clone()))
+                        } else if on_disk.contains(p) {
+                            // Index miss but the file exists — render it
+                            // (filename fallback) instead of hiding.
+                            RowItem::LocalFile { path: p.clone() }
+                        } else {
+                            // The file itself is gone — hide, but say so.
+                            missing_files += 1;
+                            continue;
+                        }
+                    }
+                    None => {
+                        hidden += 1;
+                        continue;
+                    }
+                }
             }
             repo::LocalPlaylistTrackSource::Plex => RowItem::Plex {
                 key: t.plex_key.clone().unwrap_or_default(),
@@ -401,6 +485,11 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistD
     }
     if hidden > 0 {
         log::info!("[qbz-slint] local playlist {id}: {hidden} row(s) unavailable, hidden (D11)");
+    }
+    if missing_files > 0 {
+        log::info!(
+            "[qbz-slint] local playlist {id}: {missing_files} local file row(s) missing on disk, hidden (D11.local)"
+        );
     }
 
     Some(LocalPlaylistData {
@@ -471,6 +560,9 @@ fn row_queue_track(item: &RowItem) -> Option<QueueTrack> {
             source_item_id_hint: None,
         }),
         RowItem::Local(track) => Some(crate::playback::local_queue_track(track)),
+        // Filename-fallback rows have no library row to resolve playback
+        // through — render-only until the file is re-indexed.
+        RowItem::LocalFile { .. } => None,
         RowItem::Plex { .. } => None,
     }
 }
@@ -552,6 +644,34 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
                     _ => "local",
                 }
                 .into(),
+                unlocking: false,
+            }
+        }
+        RowItem::LocalFile { path } => {
+            let name = std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path.as_str());
+            TrackItem {
+                id: format!("file:{path}").into(),
+                number: "".into(),
+                title: name.into(),
+                artist: "".into(),
+                album: "".into(),
+                duration: "".into(),
+                quality_tier: "".into(),
+                quality_detail: "".into(),
+                explicit: false,
+                selected: false,
+                artwork_url: "".into(),
+                artwork: slint::Image::default(),
+                is_favorite: false,
+                artist_id: "".into(),
+                album_id: "".into(),
+                removing: false,
+                cache_status: 0,
+                cache_progress: 0.0,
+                source: "local".into(),
                 unlocking: false,
             }
         }

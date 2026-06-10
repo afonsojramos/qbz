@@ -12,9 +12,9 @@ export component TrackContextMenu inherits PopupWindow {
     // source). `qobuz-actions` = the Qobuz-backed block (favorite, radio,
     // mixtape, share, make-offline, go-to album/artist, track info) — on for
     // Qobuz + offline, off for local / Plex / ephemeral. `playlist-action` =
-    // Add to playlist — on for Qobuz + offline + local (local playlists), off
-    // for Plex + ephemeral. The transient actions (play / next / queue) always
-    // show.
+    // Add to playlist — on for Qobuz + offline + local + Plex (local playlists
+    // store each source's own ref), off for ephemeral. The transient actions
+    // (play / next / queue) always show.
     in property <bool> qobuz-actions: true;
     in property <bool> playlist-action: true;
     callback media-action(string, string, string);

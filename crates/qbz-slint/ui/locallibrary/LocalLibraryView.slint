@@ -2071,8 +2071,14 @@ export component LocalLibraryView inherits Rectangle {
                                                     LocalLibraryActions.open-album(id);
                                                 } else if (kind == "artist" && action == "open") {
                                                     LocalLibraryActions.open-artist(id);
-                                                } else {
+                                                } else if (action == "play") {
                                                     LocalLibraryActions.folders-play-track(id);
+                                                } else {
+                                                    // Context-menu actions (play-next /
+                                                    // queue / add-to-playlist) — the rows
+                                                    // are real library rows, so the shared
+                                                    // track-action arm resolves them.
+                                                    LocalLibraryActions.track-action(id, action);
                                                 }
                                             }
                                         }

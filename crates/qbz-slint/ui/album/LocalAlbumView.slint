@@ -483,10 +483,16 @@ export component LocalAlbumView inherits Rectangle {
                     // Show the per-row source glyph (local / qobuz-offline / Plex).
                     show-source: true;
                     media-action(kind, id, action) => {
-                        // Local-only: ignore album/artist link clicks; any other
-                        // row action plays the track.
+                        // Local-only: ignore album/artist link clicks. "play"
+                        // (row body / play cell) plays; the context-menu
+                        // actions (play-next / queue / add-to-playlist) route
+                        // to their own handler instead of collapsing to play.
                         if (kind != "album" && kind != "artist") {
-                            LocalAlbumActions.play-track(id);
+                            if (action == "play") {
+                                LocalAlbumActions.play-track(id);
+                            } else {
+                                LocalAlbumActions.track-menu-action(id, action);
+                            }
                         }
                     }
                 }

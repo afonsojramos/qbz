@@ -550,13 +550,13 @@ export component TrackRow inherits Rectangle {
         track-id: root.track.id;
         // Per-source menu logic: Qobuz-backed actions (favorite, radio, share,
         // mixtape, offline, go-to, track-info) only for Qobuz/offline rows;
-        // Add-to-playlist for Qobuz/offline/local (local playlists), not Plex/
-        // ephemeral; transient play/queue always.
+        // Add-to-playlist for Qobuz/offline/local/Plex (local playlists store
+        // each source's own ref), not ephemeral (no persistent row to
+        // reference); transient play/queue always.
         qobuz-actions: root.track.source != "local"
             && root.track.source != "plex"
             && root.track.source != "ephemeral";
-        playlist-action: root.track.source != "plex"
-            && root.track.source != "ephemeral";
+        playlist-action: root.track.source != "ephemeral";
         media-action(k, i, a) => {
             root.media-action(k, i, a);
         }

@@ -699,6 +699,9 @@ export global LocalAlbumActions {
     callback add-to-playlist();
     callback add-to-mixtape();
     callback play-track(string /* track id */);
+    // Per-row context-menu actions beyond "play" (play-next / queue /
+    // add-to-playlist) — resolved against the open version's track cache.
+    callback track-menu-action(string /* track id */, string /* action */);
     callback select-version(int);
     // Client-side track filter (mirrors AlbumActions.search), applied over the
     // current version's tracks.

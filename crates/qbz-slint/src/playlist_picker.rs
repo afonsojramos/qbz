@@ -28,9 +28,11 @@ pub fn open(window: &AppWindow, track_id: &str) {
     state.set_open(true);
 }
 
-/// Open the picker for a batch of track ids (bulk add). `local` routes the ids
-/// as LocalLibrary row ids (i64) to `add_local_track_to_playlist` instead of
-/// the Qobuz endpoint. UI thread.
+/// Open the picker for a batch of track refs (bulk add). `local` marks the
+/// refs as LocalLibrary local-mode refs — `"<i64>"` library row ids (resolved
+/// source-aware at insert: local path / offline-copy Qobuz id) or
+/// `"plex:<rating key>"` Plex rows — routed to the library.db add paths
+/// instead of the Qobuz endpoint. UI thread.
 pub fn open_multi(window: &AppWindow, ids: &[String], local: bool) {
     let state = window.global::<PlaylistPickerState>();
     state.set_track_id("".into());

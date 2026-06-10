@@ -1554,29 +1554,110 @@ fn navigate_playlist(
     });
 }
 
-/// Resolve the track ids for a drag started on `track_id`. If the
-/// current view has a multi-selection that includes the dragged row
-/// (and is >1), the whole selection is dragged; otherwise just the
-/// row. Mirrors Tauri's group-drag rule.
-fn gather_drag_ids(w: &AppWindow, track_id: &str) -> Vec<u64> {
+/// Type a LocalLibrary row for the drag payload: Plex rows carry their
+/// rating key (their row id is synthetic — never resolvable in
+/// `local_tracks`), everything else its real library row id.
+fn local_drag_track(track: &qbz_library::LocalTrack) -> drag::DragTrack {
+    if track.source.as_deref() == Some("plex") {
+        drag::DragTrack::Plex(track.file_path.clone())
+    } else {
+        drag::DragTrack::LocalRow(track.id)
+    }
+}
+
+/// Build a playlist-picker local-mode ref for a LocalLibrary row: Plex rows
+/// carry their rating key ("plex:<key>" — their synthetic row id never
+/// resolves through `get_track`), everything else its library row id.
+fn local_picker_ref(track: &qbz_library::LocalTrack) -> String {
+    if track.source.as_deref() == Some("plex") {
+        format!("plex:{}", track.file_path)
+    } else {
+        track.id.to_string()
+    }
+}
+
+/// Type a model row (Playlist / Artist surfaces) for the drag payload.
+/// The LOCAL playlist detail mixes namespaces: "plex:<key>" Plex rows,
+/// library row ids on `source == "local"` rows, Qobuz catalog ids on
+/// everything else (incl. offline-cached rows). Render-only rows
+/// ("file:<path>" fallbacks) type to None and drop out of the drag.
+fn row_drag_track(row: &TrackItem) -> Option<drag::DragTrack> {
+    let id = row.id.to_string();
+    if let Some(key) = id.strip_prefix("plex:") {
+        return Some(drag::DragTrack::Plex(key.to_string()));
+    }
+    if row.source.as_str() == "local" {
+        return id.parse::<i64>().ok().map(drag::DragTrack::LocalRow);
+    }
+    id.parse::<u64>().ok().map(drag::DragTrack::Qobuz)
+}
+
+/// Resolve the SOURCE-TYPED track refs for a drag started on `track_id`
+/// — the id namespace depends on the view the drag started in (Qobuz
+/// surfaces carry catalog ids; LocalLibrary surfaces carry library row
+/// ids, Plex rows rating keys). If the current view has a multi-selection
+/// that includes the dragged row (and is >1), the whole selection is
+/// dragged; otherwise just the row. Mirrors Tauri's group-drag rule.
+fn gather_drag_tracks(w: &AppWindow, track_id: &str) -> Vec<drag::DragTrack> {
     use slint::Model;
     let view = w.global::<NavState>().get_view();
-    let model = match view {
-        ContentView::Playlist => Some(w.global::<PlaylistState>().get_tracks()),
-        ContentView::Artist => Some(w.global::<ArtistState>().get_top_tracks()),
-        _ => None,
-    };
-    if let Some(model) = model {
-        let selected: Vec<u64> = (0..model.row_count())
-            .filter_map(|i| model.row_data(i))
-            .filter(|t| t.selected)
-            .filter_map(|t| t.id.parse::<u64>().ok())
-            .collect();
-        if selected.len() > 1 && selected.iter().any(|&id| id.to_string() == track_id) {
-            return selected;
+    match view {
+        ContentView::LocalAlbum => {
+            // Single-row surface; resolve through the open album's version
+            // cache (the only place a Plex row's rating key lives).
+            local_library::current_album_version_tracks(w)
+                .iter()
+                .find(|t| t.id.to_string() == track_id)
+                .map(|t| vec![local_drag_track(t)])
+                .unwrap_or_default()
         }
+        ContentView::LocalLibrary => {
+            // Tracks tab (group-drag over the multi-selection first).
+            let selected = local_library::selected_local_tracks(w);
+            if selected.len() > 1 && selected.iter().any(|t| t.id.to_string() == track_id) {
+                return selected.iter().map(local_drag_track).collect();
+            }
+            if let Some(track) = local_library::local_track_by_id(track_id) {
+                return vec![local_drag_track(&track)];
+            }
+            // Folder-detail rows aren't in the Tracks cache but are real
+            // library rows — type by row id (resolved at insert).
+            track_id
+                .parse::<i64>()
+                .map(|id| vec![drag::DragTrack::LocalRow(id)])
+                .unwrap_or_default()
+        }
+        ContentView::Playlist | ContentView::Artist => {
+            let model = match view {
+                ContentView::Playlist => w.global::<PlaylistState>().get_tracks(),
+                _ => w.global::<ArtistState>().get_top_tracks(),
+            };
+            let rows: Vec<TrackItem> = (0..model.row_count())
+                .filter_map(|i| model.row_data(i))
+                .collect();
+            let selected: Vec<drag::DragTrack> = rows
+                .iter()
+                .filter(|t| t.selected)
+                .filter_map(row_drag_track)
+                .collect();
+            if selected.len() > 1 && rows.iter().any(|t| t.selected && t.id == track_id) {
+                return selected;
+            }
+            if let Some(row) = rows.iter().find(|t| t.id == track_id) {
+                return row_drag_track(row).map(|d| vec![d]).unwrap_or_default();
+            }
+            track_id
+                .parse::<u64>()
+                .map(|id| vec![drag::DragTrack::Qobuz(id)])
+                .unwrap_or_default()
+        }
+        // Every other surface (album / search / favorites / mix / …) is
+        // Qobuz-backed: rows carry catalog ids.
+        _ => track_id
+            .parse::<u64>()
+            .map(|id| vec![drag::DragTrack::Qobuz(id)])
+            .unwrap_or_default(),
     }
-    track_id.parse::<u64>().map(|id| vec![id]).unwrap_or_default()
 }
 
 /// Load (or reload) the sidebar playlists list off-thread.
@@ -3868,14 +3949,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let image_cache = image_cache.clone();
             let settings_ctx = settings_ctx.clone();
             handle.spawn(async move {
-                // No pre-lift needed: the auth endpoints are EXEMPT from the
-                // offline gate (qbz-qobuz client), so the token login and the
-                // OAuth exchange pass the closed gate. Net effect: the
-                // offline_session flag ends up false only on SUCCESS paths —
-                // restore_saved_session clears it on success only, and the
-                // browser fallback's upfront clear is restored on failure
-                // below — so a failed attempt leaves the live offline session
-                // (and the recovery banner) intact.
+                // No pre-lift anywhere: the auth endpoints are EXEMPT from
+                // the offline gate (qbz-qobuz client), so the token login and
+                // the OAuth exchange pass the closed gate — and
+                // login_via_system_browser no longer clears offline_session
+                // up front either. The flag ends up false only on SUCCESS
+                // paths (restore_saved_session / login_via_system_browser
+                // clear it after the login completes), so the shell never
+                // sits unlocked-and-empty while an attempt is pending, and a
+                // failed attempt leaves the live offline session intact.
                 match auth::restore_saved_session(&runtime).await {
                     Ok(Some(session)) => {
                         log::info!(
@@ -3887,10 +3969,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(None) => {
                         // No saved token, or the token was explicitly
                         // rejected (and cleared). The user asked to sign in —
-                        // fall back to the full system-browser OAuth.
+                        // fall back to the full system-browser OAuth. Show
+                        // the LOGIN screen FIRST: its UX narrates the
+                        // browser flow (the user shouldn't have to notice
+                        // the opened browser on their own), and it replaces
+                        // the offline shell instead of leaving it on screen
+                        // while the attempt runs.
                         log::warn!(
                             "[qbz-slint] recovery login: saved session unusable — falling back to browser OAuth"
                         );
+                        let _ = weak.upgrade_in_event_loop(|w| {
+                            w.set_screen(AppScreen::Login);
+                        });
                         match auth::login_via_system_browser(&runtime).await {
                             Ok(session) => {
                                 log::info!(
@@ -3902,13 +3992,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             Err(e) => {
                                 log::error!("[qbz-slint] recovery browser sign-in failed: {e}");
-                                // login_via_system_browser ends the offline
-                                // session upfront (login-screen semantics);
-                                // here the user is still inside the
-                                // unauthenticated offline shell — restore the
-                                // session flag so the gate closes again and
-                                // the banner returns.
-                                offline_mode::engine().set_offline_session(true);
+                                // The offline session was never lifted, so
+                                // there is nothing to restore. Stay on the
+                                // Login screen: the error box explains the
+                                // failure, and the "Start offline" link
+                                // (has-previous-session) leads back into
+                                // the offline shell.
                                 let _ = weak.upgrade_in_event_loop(move |w| {
                                     toast::error(&w, format!("Sign-in failed: {e}"));
                                     w.global::<OfflineState>().set_login_error(e.into());
@@ -3917,9 +4006,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        // Network-class failure: the offline_session flag was
-                        // never lifted (no pre-lift), so the offline shell
-                        // state is already intact — just surface the error.
+                        // Init-class failure (gated/unreachable cold bundle
+                        // fetch): any transient flag lift was already undone
+                        // inside auth, so the offline shell state is intact —
+                        // just surface the error.
                         log::error!("[qbz-slint] recovery login failed: {e}");
                         let _ = weak.upgrade_in_event_loop(move |w| {
                             toast::error(&w, format!("Sign-in failed: {e}"));
@@ -7301,13 +7391,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.global::<LocalAlbumActions>().on_add_to_playlist(move || {
             if let Some(w) = weak.upgrade() {
                 let tracks = local_library::current_album_version_tracks(&w);
-                let ids: Vec<String> = tracks
-                    .iter()
-                    .filter(|t| t.source.as_deref() != Some("plex"))
-                    .map(|t| t.id.to_string())
-                    .collect();
-                if !ids.is_empty() {
-                    playlist_picker::open_multi(&w, &ids, true);
+                let refs: Vec<String> = tracks.iter().map(local_picker_ref).collect();
+                if !refs.is_empty() {
+                    playlist_picker::open_multi(&w, &refs, true);
                     let runtime = runtime.clone();
                     let weak2 = weak.clone();
                     handle.spawn(async move {
@@ -7319,6 +7405,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         });
+    }
+    {
+        // Per-row context-menu actions on the local album detail (play-next /
+        // queue / add-to-playlist) — resolved against the open version's
+        // track cache; "play" stays on LocalAlbumActions.play-track.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalAlbumActions>()
+            .on_track_menu_action(move |id, action| {
+                let Some(w) = weak.upgrade() else { return };
+                let tracks = local_library::current_album_version_tracks(&w);
+                let Some(row) = tracks.iter().find(|t| t.id.to_string() == id.as_str())
+                else {
+                    return;
+                };
+                match action.as_str() {
+                    "play-next" | "queue" => {
+                        playback::enqueue_local_tracks(
+                            runtime.clone(),
+                            handle.clone(),
+                            vec![row.clone()],
+                            action.as_str() == "play-next",
+                        );
+                    }
+                    "add-to-playlist" => {
+                        playlist_picker::open_multi(&w, &[local_picker_ref(row)], true);
+                        let runtime = runtime.clone();
+                        let weak2 = weak.clone();
+                        handle.spawn(async move {
+                            let pls = playlist_picker::load(&runtime).await;
+                            let _ = weak2.upgrade_in_event_loop(move |w| {
+                                playlist_picker::apply(&w, pls);
+                            });
+                        });
+                    }
+                    _ => {
+                        log::debug!(
+                            "[qbz-slint] unhandled local album track action: {id} {action}"
+                        );
+                    }
+                }
+            });
     }
     {
         // Add the whole local/Plex album to a Mixtape/Collection. Builds the
@@ -7558,15 +7688,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     "play-next" | "queue" => {
-                        // Resolve the row from the loaded cache (no DB) and enqueue.
+                        // Resolve the row from the loaded cache (no DB) and
+                        // enqueue; folder-detail rows aren't in the Tracks
+                        // cache, so fall back to a DB resolve off-thread.
+                        let play_next = action.as_str() == "play-next";
                         if let Some(row) = local_library::local_track_by_id(id.as_str()) {
                             playback::enqueue_local_tracks(
                                 runtime.clone(),
                                 handle.clone(),
                                 vec![row],
-                                action.as_str() == "play-next",
+                                play_next,
                             );
+                        } else if let Ok(rid) = id.parse::<i64>() {
+                            let runtime = runtime.clone();
+                            let handle2 = handle.clone();
+                            handle.spawn(async move {
+                                let row = tokio::task::spawn_blocking(move || {
+                                    crate::library_db::with_db(|db| db.get_track(rid))
+                                        .flatten()
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                                if let Some(row) = row {
+                                    playback::enqueue_local_tracks(
+                                        runtime,
+                                        handle2,
+                                        vec![row],
+                                        play_next,
+                                    );
+                                }
+                            });
                         }
+                    }
+                    "add-to-playlist" => {
+                        // Per-row picker (Tracks tab + folder-detail rows).
+                        // Plex rows ride as "plex:<key>"; plain row ids are
+                        // resolved source-aware at insert, so a folder row
+                        // missing from the Tracks cache still works.
+                        let Some(w) = weak.upgrade() else { return };
+                        let track_ref = match local_library::local_track_by_id(id.as_str()) {
+                            Some(row) => local_picker_ref(&row),
+                            None => id.to_string(),
+                        };
+                        playlist_picker::open_multi(&w, &[track_ref], true);
+                        let runtime = runtime.clone();
+                        let weak2 = weak.clone();
+                        handle.spawn(async move {
+                            let playlists = playlist_picker::load(&runtime).await;
+                            let _ = weak2.upgrade_in_event_loop(move |w| {
+                                playlist_picker::apply(&w, playlists);
+                            });
+                        });
                     }
                     _ => {
                         log::debug!("[qbz-slint] unhandled local track action: {id} {action}");
@@ -7621,18 +7794,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         local_library::clear_tracks_selection(&w);
                     }
                     "add-to-playlist" => {
-                        // Plex rows can't be added (no local add path); skip them,
-                        // deciding on the underlying LocalTrack.source.
+                        // Source-aware refs: Plex rows ride as "plex:<key>",
+                        // the rest as library row ids (resolved at insert).
                         let rows = local_library::selected_local_tracks(&w);
-                        let ids: Vec<String> = rows
-                            .iter()
-                            .filter(|t| t.source.as_deref() != Some("plex"))
-                            .map(|t| t.id.to_string())
-                            .collect();
-                        let skipped = rows.len() - ids.len();
-                        if skipped > 0 {
-                            log::info!("[qbz-slint] add-to-playlist skipped {skipped} Plex track(s)");
-                        }
+                        let ids: Vec<String> = rows.iter().map(local_picker_ref).collect();
                         if !ids.is_empty() {
                             playlist_picker::open_multi(&w, &ids, true);
                             let runtime = runtime.clone();
@@ -7735,12 +7900,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         local_library::tree_clear_selection(&w);
                     }
                     "add-to-playlist" => {
+                        // Source-aware refs (Plex rows as "plex:<key>").
                         let rows = local_library::tree_selected_snapshot();
-                        let ids: Vec<String> = rows
-                            .iter()
-                            .filter(|t| t.source.as_deref() != Some("plex"))
-                            .map(|t| t.id.to_string())
-                            .collect();
+                        let ids: Vec<String> = rows.iter().map(local_picker_ref).collect();
                         if !ids.is_empty() {
                             playlist_picker::open_multi(&w, &ids, true);
                             let runtime = runtime.clone();
@@ -8154,18 +8316,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if local_playlist::is_local_id(playlist_id.as_str()) {
                     let target = playlist_id.to_string();
                     if is_local {
-                        // LocalLibrary row ids (i64) — source-aware mapping
-                        // (local path / offline-copy Qobuz id / Plex key).
-                        let ids_i64: Vec<i64> = (0..ids_model.row_count())
+                        // Local-mode refs — LocalLibrary row ids ("<i64>",
+                        // source-aware mapping: local path / offline-copy
+                        // Qobuz id) or Plex rows ("plex:<rating key>").
+                        let refs: Vec<String> = (0..ids_model.row_count())
                             .filter_map(|i| ids_model.row_data(i))
-                            .filter_map(|s| s.parse::<i64>().ok())
+                            .map(|s| s.to_string())
                             .collect();
-                        if ids_i64.is_empty() {
+                        if refs.is_empty() {
                             return;
                         }
                         handle.spawn(async move {
                             let _ = tokio::task::spawn_blocking(move || {
-                                local_playlist::add_local_rows_blocking(&target, &ids_i64)
+                                local_playlist::add_local_refs_blocking(&target, &refs)
                             })
                             .await;
                         });
@@ -8197,19 +8360,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 if is_local {
-                    // Local row ids are i64 -> add_local_track_to_playlist.
-                    let ids_i64: Vec<i64> = (0..ids_model.row_count())
+                    // Local-mode refs onto a QOBUZ playlist: row ids attach
+                    // via the local sidecar, "plex:<key>" refs via the Plex
+                    // sidecar (same tables the offline detail renders).
+                    let refs: Vec<String> = (0..ids_model.row_count())
                         .filter_map(|i| ids_model.row_data(i))
-                        .filter_map(|s| s.parse::<i64>().ok())
+                        .map(|s| s.to_string())
                         .collect();
-                    if ids_i64.is_empty() {
+                    if refs.is_empty() {
                         return;
                     }
                     handle.spawn(async move {
                         let _ = tokio::task::spawn_blocking(move || {
                             crate::library_db::with_db(|db| {
-                                for (pos, lid) in ids_i64.iter().enumerate() {
-                                    db.add_local_track_to_playlist(pid, *lid, pos as i32)?;
+                                for (pos, r) in refs.iter().enumerate() {
+                                    if let Some(key) = r.strip_prefix("plex:") {
+                                        db.add_plex_track_to_playlist(pid, key, pos as i32)?;
+                                    } else if let Ok(lid) = r.parse::<i64>() {
+                                        db.add_local_track_to_playlist(pid, lid, pos as i32)?;
+                                    }
                                 }
                                 Ok(())
                             })
@@ -8258,10 +8427,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             move |track_id, title, subtitle, gx, gy| {
                 let Some(w) = weak.upgrade() else { return };
                 log::info!("[qbz-slint][drag] start gx={gx} gy={gy} (cursor should be here)");
-                let ids = gather_drag_ids(&w, track_id.as_str());
-                drag::set_dragged(ids.clone());
+                let tracks = gather_drag_tracks(&w, track_id.as_str());
+                let count = tracks.len();
+                drag::set_dragged(tracks);
                 let ds = w.global::<DragState>();
-                ds.set_count(ids.len() as i32);
+                ds.set_count(count as i32);
                 ds.set_ghost_title(title);
                 ds.set_ghost_subtitle(subtitle);
                 ds.set_pointer_x(gx);
@@ -8291,17 +8461,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let pid = ds.get_over_playlist_id().to_string();
             ds.set_active(false);
             ds.set_over_playlist_id("".into());
-            let ids = drag::dragged();
+            let tracks = drag::dragged();
             drag::clear();
-            if ids.is_empty() {
+            if tracks.is_empty() {
                 return;
             }
-            // Drop onto a LOCAL playlist row — write the repo (D7 routing;
-            // dragged ids are Qobuz track ids).
+            // Drop onto a LOCAL playlist row — write the repo source-aware
+            // (D7 routing): local file rows store local_path, Plex rows
+            // plex_key, Qobuz/offline-cached rows qobuz_track_id.
             if local_playlist::is_local_id(&pid) {
                 handle.spawn(async move {
                     let n = tokio::task::spawn_blocking(move || {
-                        local_playlist::add_qobuz_tracks_blocking(&pid, &ids)
+                        local_playlist::add_drag_tracks_blocking(&pid, &tracks)
                     })
                     .await
                     .unwrap_or(0);
@@ -8310,14 +8481,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
             if let Ok(pid) = pid.parse::<u64>() {
+                // Qobuz playlist target: catalog ids become real membership;
+                // local rows / Plex rows attach via the mixed-playlist
+                // sidecars (the same tables the picker's local mode writes).
+                let mut qobuz: Vec<u64> = Vec::new();
+                let mut local_rows: Vec<i64> = Vec::new();
+                let mut plex: Vec<String> = Vec::new();
+                for item in tracks {
+                    match item {
+                        drag::DragTrack::Qobuz(id) => qobuz.push(id),
+                        drag::DragTrack::LocalRow(id) => local_rows.push(id),
+                        drag::DragTrack::Plex(key) => plex.push(key),
+                    }
+                }
                 let runtime = runtime.clone();
                 handle.spawn(async move {
-                    match runtime.core().add_tracks_to_playlist(pid, &ids).await {
-                        Ok(()) => log::info!(
-                            "[qbz-slint] dropped {} track(s) onto playlist {pid}",
-                            ids.len()
-                        ),
-                        Err(e) => log::error!("[qbz-slint] drop add to playlist failed: {e}"),
+                    let mut added = 0usize;
+                    if !qobuz.is_empty() {
+                        match runtime.core().add_tracks_to_playlist(pid, &qobuz).await {
+                            Ok(()) => added += qobuz.len(),
+                            Err(e) => {
+                                log::error!("[qbz-slint] drop add to playlist failed: {e}")
+                            }
+                        }
+                    }
+                    if !local_rows.is_empty() || !plex.is_empty() {
+                        let n = tokio::task::spawn_blocking(move || {
+                            crate::library_db::with_db(|db| {
+                                for (pos, rid) in local_rows.iter().enumerate() {
+                                    db.add_local_track_to_playlist(pid, *rid, pos as i32)?;
+                                }
+                                for (pos, key) in plex.iter().enumerate() {
+                                    db.add_plex_track_to_playlist(
+                                        pid,
+                                        key,
+                                        (local_rows.len() + pos) as i32,
+                                    )?;
+                                }
+                                Ok(local_rows.len() + plex.len())
+                            })
+                            .unwrap_or(0)
+                        })
+                        .await
+                        .unwrap_or(0);
+                        added += n;
+                    }
+                    if added > 0 {
+                        log::info!(
+                            "[qbz-slint] dropped {added} track(s) onto playlist {pid}"
+                        );
                     }
                 });
             }
