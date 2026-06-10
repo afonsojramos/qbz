@@ -22,7 +22,7 @@ use qbz_app::offline_mode::{Connectivity, ConnectivityActor, OfflineMode, Offlin
 use qbz_app::settings::subscription::SubscriptionStateStore;
 use qbz_app::user_data::UserDataPaths;
 
-use crate::{AppWindow, OfflineState};
+use crate::{AppWindow, OfflineState, SettingsState};
 
 /// Process-global engine. Exists from first use; per-user state binds via
 /// [`init_for_user`], connectivity via [`start`].
@@ -57,13 +57,56 @@ pub fn start() {
     }
 }
 
-/// Force an immediate connectivity re-probe (Settings "Check now",
-/// consumed by the Settings slice).
-#[allow(dead_code)]
+/// Force an immediate connectivity re-probe (Settings "Check now").
 pub fn request_recheck() {
     if let Some(actor) = CONNECTIVITY.get() {
         actor.request_recheck();
     }
+}
+
+/// Settings > Offline "Check now": flag the in-flight state (the status
+/// row's button flips to "Checking..."), then force an actor re-probe.
+/// The flag clears on the next engine broadcast ([`apply_status`]) — or
+/// after a short timeout when the verdict comes back unchanged, since the
+/// actor only broadcasts state flips.
+pub fn check_now(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    let set_weak = weak.clone();
+    let _ = set_weak.upgrade_in_event_loop(|w| {
+        w.global::<SettingsState>().set_offline_checking(true);
+    });
+    request_recheck();
+    handle.spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        let _ = weak.upgrade_in_event_loop(|w| {
+            w.global::<SettingsState>().set_offline_checking(false);
+        });
+    });
+}
+
+/// Seed the Settings > Offline MODE toggle states from the persisted
+/// engine store. Fired by the panel's `init` (`OfflineModeActions.load`),
+/// so every mount of Settings > Offline re-reads them — the same lazy-load
+/// hook LocalLibrarySettings uses. Best-effort: pre-session reads (no
+/// store bound) keep the defaults.
+pub fn seed_settings(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
+    handle.spawn(async move {
+        let settings = match tokio::task::spawn_blocking(|| engine().settings()).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                log::warn!("[qbz-slint] offline mode settings read failed: {e}");
+                return;
+            }
+            Err(e) => {
+                log::error!("[qbz-slint] offline mode settings seed task failed: {e}");
+                return;
+            }
+        };
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            let st = w.global::<SettingsState>();
+            st.set_offline_mode_enabled(settings.manual_offline_mode);
+            st.set_offline_show_network_folders(settings.show_network_folders_in_manual_offline);
+        });
+    });
 }
 
 /// Mirror every engine status change into the `OfflineState` Slint global
@@ -107,6 +150,8 @@ fn apply_status(w: &AppWindow, status: OfflineStatus) {
     });
     state.set_captive_portal(status.captive_portal);
     state.set_show_recovery_banner(status.show_recovery_banner());
+    // A status broadcast resolves any in-flight Settings "Check now".
+    w.global::<SettingsState>().set_offline_checking(false);
 }
 
 /// `<data_dir>/qbz/users/<user_id>/` — the per-user directory both the

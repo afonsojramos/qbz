@@ -2040,6 +2040,20 @@ export global SettingsState {
     // Playback — "When quality retries fail" dropdown.
     in-out property <[string]> retry-behaviors: [];
     in-out property <int> retry-behavior-index: 0;
+
+    // --- OFFLINE MODE --------------------------------------------------------
+
+    // Settings > Offline, MODE group (the app operating without Qobuz — NOT
+    // the offline cache). Backed by the shared engine's per-user store, not
+    // the audio/playback stores: seeded by OfflineModeActions.load() on panel
+    // mount; persisted through settings-bool keys "offline-mode-enabled" /
+    // "offline-show-network-folders".
+    in-out property <bool> offline-mode-enabled: false;
+    in-out property <bool> offline-show-network-folders: false;
+    // "Check now" re-probe in flight — flips the status row's button label.
+    // Cleared by Rust on the next status broadcast, or after a short timeout
+    // when the verdict comes back unchanged (the actor only broadcasts flips).
+    in-out property <bool> offline-checking: false;
 }
 
 // Appearance settings — backs the Settings > Appearance panel. 1:1 with
@@ -3120,4 +3134,14 @@ export global OfflineState {
     // ("" = none). Set by the restore task's error arm; cleared on any
     // successful shell entry.
     in property <string> login-error: "";
+}
+
+// Settings > Offline, MODE group — Rust-wired actions (crate::offline_mode).
+export global OfflineModeActions {
+    // (Re)seed the MODE-group toggle states from the engine store. Fired by
+    // the panel's init, so every mount of Settings > Offline re-reads them.
+    callback load();
+    // Force an immediate connectivity re-probe (the status row's "Check
+    // now"). The status text updates by itself via the engine forwarder.
+    callback check-now();
 }

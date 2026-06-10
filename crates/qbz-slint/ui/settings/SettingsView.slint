@@ -219,7 +219,11 @@ export component SettingsView inherits Rectangle {
                     // AppearanceState and emit its own callbacks, so no
                     // SettingsView-level callback forwarding is needed here.
                     if !SettingsState.loading && SettingsState.section == 2: AppearanceSettings { }
-                    if !SettingsState.loading && SettingsState.section == 3: OfflineSettings { }
+                    if !SettingsState.loading && SettingsState.section == 3: OfflineSettings {
+                        settings-bool(k, v) => {
+                            root.settings-bool(k, v);
+                        }
+                    }
                     if !SettingsState.loading && SettingsState.section == 4: LocalLibrarySettings { }
                     if !SettingsState.loading && SettingsState.section == 5: DeveloperSettings { }
                 }

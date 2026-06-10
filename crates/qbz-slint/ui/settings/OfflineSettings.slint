@@ -1,13 +1,26 @@
-// Settings > Offline Playback (cache half). Same structure as the other
-// settings panels (GroupHeader + SettingRow + a secondary button control) so
-// the section stays consistent as more offline settings land. Launches the
-// Offline Cache Manager + offers open-folder / clear-all. The Local-Library
-// rows (show-in-library, repair) arrive with the Local Library port.
+// Settings > Offline — two explicitly-titled groups (the Tauri tab hid
+// this boundary; the owner endorsed the split):
+//
+//  - OFFLINE MODE — the app operating without Qobuz: tri-state status row
+//    (online / no connection / induced) with an honest "Check now"
+//    re-probe, the persisted Enable Offline Mode toggle (#279 stream-first
+//    snapshot handled by the shared engine), and the network-folders
+//    policy toggle (mounted only while induced is on, Tauri parity).
+//  - OFFLINE CACHE — downloads: manager launch + open-folder / clear-all.
+//    The Local-Library rows (show-in-library, repair) arrive with the
+//    Local Library port.
+//
+// Same structure as the other settings panels (GroupHeader + SettingRow +
+// SecondaryButton). Toggle changes bubble through settings-bool; the
+// status row reads the live OfflineState global; the panel's init
+// re-seeds the toggle states from the engine store (OfflineModeActions).
 
 import { Theme } from "../foundation/semantic-colors.slint";
+import { Palette } from "../foundation/palette.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { OfflineManagerActions } from "../state.slint";
+import { OfflineManagerActions, OfflineModeActions, OfflineState, SettingsState } from "../state.slint";
+import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { SettingRow } from "SettingRow.slint";
 
 component GroupHeader inherits Text {
@@ -15,6 +28,11 @@ component GroupHeader inherits Text {
     font-size: 11px;
     letter-spacing: 1.5px;
     font-weight: Typography.semibold;
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border-subtle;
 }
 
 // Matches AudioSettings/AppearanceSettings' SecondaryButton.
@@ -47,7 +65,77 @@ component SecondaryButton inherits Rectangle {
 }
 
 export component OfflineSettings inherits VerticalLayout {
+    callback settings-bool(string, bool);
+
     spacing: 4px;
+
+    // Re-seed the toggle states from the engine store on every mount of
+    // this section (same lazy-load hook LocalLibrarySettings uses).
+    init => {
+        OfflineModeActions.load();
+    }
+
+    GroupHeader { text: @tr("OFFLINE MODE"); }
+
+    SettingRow {
+        label: @tr("Status");
+        description: OfflineState.captive-portal
+            ? @tr("Captive portal detected — sign in to the network to get online.")
+            : "";
+        HorizontalLayout {
+            spacing: 16px;
+            VerticalLayout {
+                alignment: center;
+                // Tri-state: online green / real-offline amber / induced accent.
+                Text {
+                    text: OfflineState.mode == 2 ? @tr("Offline mode enabled")
+                        : OfflineState.mode == 1 ? @tr("No connection")
+                        : @tr("Online");
+                    color: OfflineState.mode == 2 ? Theme.accent
+                        : OfflineState.mode == 1 ? Palette.warning
+                        : #22c55e;
+                    font-size: Typography.body;
+                    font-weight: Typography.medium;
+                }
+            }
+            SecondaryButton {
+                label: SettingsState.offline-checking ? @tr("Checking...") : @tr("Check now");
+                clicked => {
+                    if (!SettingsState.offline-checking) {
+                        OfflineModeActions.check-now();
+                    }
+                }
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Enable Offline Mode");
+        description: @tr("Manually switch to offline mode even with internet.");
+        QbzToggle {
+            checked: SettingsState.offline-mode-enabled;
+            toggled(v) => {
+                SettingsState.offline-mode-enabled = v;
+                root.settings-bool("offline-mode-enabled", v);
+            }
+        }
+    }
+    // The network-folders policy only applies while induced offline is on,
+    // so the row only mounts then (Tauri parity; ADR-010 conditional mount).
+    if SettingsState.offline-mode-enabled: SettingRow {
+        label: @tr("Show Network Folder Content");
+        description: @tr("Display content from network-mounted folders (NAS, Samba, etc.) while in offline mode.");
+        QbzToggle {
+            checked: SettingsState.offline-show-network-folders;
+            toggled(v) => {
+                SettingsState.offline-show-network-folders = v;
+                root.settings-bool("offline-show-network-folders", v);
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
 
     GroupHeader { text: @tr("OFFLINE CACHE"); }
 

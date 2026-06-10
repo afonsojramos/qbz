@@ -3990,6 +3990,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Settings > Offline MODE — re-seed the toggle states on panel mount
+    // (the panel's init fires load), and the status row's "Check now"
+    // connectivity re-probe. The toggles themselves persist through the
+    // generic settings-bool path above.
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<OfflineModeActions>().on_load(move || {
+            offline_mode::seed_settings(weak.clone(), handle.clone());
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<OfflineModeActions>().on_check_now(move || {
+            offline_mode::check_now(weak.clone(), handle.clone());
+        });
+    }
+
     // Appearance settings persistence. The toggles/selects set their
     // AppearanceState property locally, then fire these generic callbacks so
     // the choice survives restart. Tray keys persist to the shared per-user
