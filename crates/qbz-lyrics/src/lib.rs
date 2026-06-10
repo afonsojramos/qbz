@@ -23,6 +23,9 @@
 //!   cache probe (plain-only = soft miss) -> Qobuz primary -> LRCLIB ->
 //!   lyrics.ovh, offline cache-only mode, in-flight dedupe (F6), stale-guard
 //!   echo (F2 support).
+//! - [`sync`] — sync-engine pure functions (spec §4.2): active-line binary
+//!   search, per-line progress with the 0.99 snap, the word-anchored karaoke
+//!   clip fraction (Q2).
 //!
 //! No frontend types anywhere below this line — the Slint/Tauri glue is a
 //! thin adapter over [`service::LyricsService`].
@@ -32,6 +35,7 @@ pub mod lrc;
 pub mod model;
 pub mod providers;
 pub mod service;
+pub mod sync;
 pub mod wsync;
 
 pub use cache::{CachedLyrics, LyricsCacheDb, LyricsCacheStats};
@@ -42,4 +46,5 @@ pub use service::{
     HttpLyricsProviders, LyricsOutcome, LyricsProviders, LyricsRequest, LyricsResponse,
     LyricsResult, LyricsService, LyricsSourceKind,
 };
+pub use sync::{find_active_line_index, line_fill_fraction, line_progress};
 pub use wsync::{QobuzWsync, QobuzWsyncLine, QobuzWsyncWord};

@@ -1177,6 +1177,43 @@ impl SharedState {
         (position_at_start + elapsed_secs).min(duration)
     }
 
+    /// Millisecond-precision companion to [`Self::current_position`] — the
+    /// exact same derivation WITHOUT the whole-second truncation. READ-ONLY
+    /// state derivation from the existing anchors (`playback_start_millis`
+    /// is already epoch-ms; `position_at_start`/`position`/`duration` are
+    /// seconds): no stream, seek, format or device path is touched.
+    ///
+    /// Added for the lyrics sync engine (karaoke needs sub-second
+    /// resolution); semantics mirror `current_position` line by line:
+    /// paused / no anchor → stored coarse position ×1000; playing →
+    /// `position_at_start*1000 + (now_ms - start_millis)`, clamped to
+    /// `duration*1000`.
+    pub fn current_position_ms(&self) -> u64 {
+        if !self.is_playing.load(Ordering::SeqCst) {
+            return self.position.load(Ordering::SeqCst).saturating_mul(1000);
+        }
+
+        let start_millis = self.playback_start_millis.load(Ordering::SeqCst);
+        if start_millis == 0 {
+            return self.position.load(Ordering::SeqCst).saturating_mul(1000);
+        }
+
+        let now_millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let elapsed_ms = now_millis.saturating_sub(start_millis);
+        let position_at_start_ms = self
+            .position_at_start
+            .load(Ordering::SeqCst)
+            .saturating_mul(1000);
+        let duration_ms = self.duration.load(Ordering::SeqCst).saturating_mul(1000);
+
+        // Clamp to duration (same rule as current_position)
+        position_at_start_ms.saturating_add(elapsed_ms).min(duration_ms)
+    }
+
     /// Mark playback as started/resumed at current position
     fn start_playback_timer(&self, position: u64) {
         let now_millis = std::time::SystemTime::now()
@@ -4277,5 +4314,43 @@ mod tests {
         assert!(compute_needs_new_stream(
             true, false, false, false, false, true
         ));
+    }
+
+    #[test]
+    fn current_position_ms_is_a_pure_anchor_derivation() {
+        use std::sync::atomic::Ordering;
+
+        let state = super::SharedState::new();
+        state.duration.store(300, Ordering::SeqCst);
+
+        // Paused: coarse stored position scaled to ms (current_position parity).
+        state.position.store(12, Ordering::SeqCst);
+        assert_eq!(state.current_position_ms(), 12_000);
+
+        // Playing without an anchor yet: same coarse fallback.
+        state.is_playing.store(true, Ordering::SeqCst);
+        assert_eq!(state.current_position_ms(), 12_000);
+
+        // Playing with anchors: position_at_start*1000 + wall-clock elapsed ms.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        state
+            .playback_start_millis
+            .store(now_ms - 1_500, Ordering::SeqCst);
+        state.position_at_start.store(10, Ordering::SeqCst);
+        let pos = state.current_position_ms();
+        assert!(
+            (11_450..=11_900).contains(&pos),
+            "expected ~11500ms, got {pos}"
+        );
+
+        // Clamped to duration*1000 (same rule current_position applies).
+        state
+            .playback_start_millis
+            .store(now_ms - 10_000, Ordering::SeqCst);
+        state.position_at_start.store(299, Ordering::SeqCst);
+        assert_eq!(state.current_position_ms(), 300_000);
     }
 }

@@ -2887,6 +2887,17 @@ export global LyricsState {
     in property <string> error;
     // Active line index; -1 = none. The S4 sync engine drives it.
     in property <int> active-index: -1;
+    // Karaoke clip fraction 0..1 of the ACTIVE line's rendered width — the
+    // S4 engine pushes it at ~30Hz while playing: word-anchored when the
+    // current doc has native Qobuz wsync words, line-proportional for LRC
+    // sources (Q2). Drives the clip-rect width in LyricsLinesView.
+    in property <float> line-progress: 0.0;
+    // Clip-width animation duration (ms). Slightly above the engine tick
+    // while progress is continuous so the fill sweeps smoothly between
+    // pushes; the engine sets 0 across discontinuities (line change /
+    // backward seek) so the fill first-paints exactly at the reported
+    // progress (Tauri parity, LyricsLines.svelte:114-138).
+    in property <int> fill-anim-ms: 0;
     // Fired by the sidebar's `init` (conditional mount, ADR-010): re-requests
     // lyrics for the current track (cache-served when already fetched).
     callback panel-opened();

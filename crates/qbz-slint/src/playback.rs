@@ -3064,6 +3064,14 @@ pub fn start_poll_loop(
                     refresh_sidebar(true);
                     last_peer_track_id = remote.track_id;
                 }
+                // Lyrics follow the peer (Q7): publish the RAW renderer
+                // anchor; the 30Hz sync engine extrapolates between poll
+                // ticks exactly like the position extrapolation below.
+                crate::lyrics_sync::publish_remote_anchor(
+                    remote.position_ms,
+                    remote.updated_at_ms,
+                    remote.playing,
+                );
                 // Duration from the core queue's current track (aligned to the
                 // peer's track by the sink). Zero when unknown — clamp is skipped.
                 let duration_secs = runtime
@@ -3137,6 +3145,8 @@ pub fn start_poll_loop(
             // Not in controller mode (no peer / returned to local): reset the
             // peer-track edge var so re-entering the peer state refreshes meta.
             last_peer_track_id = 0;
+            // Lyrics position source back to the local player (Q7 resolver).
+            crate::lyrics_sync::clear_remote_anchor();
 
             let event = runtime.core().player().get_playback_event();
 

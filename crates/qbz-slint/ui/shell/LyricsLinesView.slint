@@ -8,9 +8,26 @@
 // friendly 0.2px letter-spacing, minimal 6px side padding (never removed),
 // the text takes the full remaining width.
 //
-// Static rendering only (S3): the S4 sync engine drives
-// `LyricsState.active-index` and adds auto-center scroll + the karaoke fill;
-// until then scrolling is a plain Flickable and active-index stays -1.
+// S4 adds the sync visuals:
+// - Karaoke fill (Q2 / deviation D5): the active line is TWO stacked Texts —
+//   the dim base plus a bright overlay clipped by a Rectangle whose width is
+//   `base.width * LyricsState.line-progress` (the rect-clip approximation of
+//   Tauri's background-clip gradient). The overlay Text gets the SAME width
+//   as the base so word-wrap is identical and glyphs coincide; on wrapped
+//   lines the fill is proportional to the whole block (owner-blessed). The
+//   engine pushes word-anchored fractions for Qobuz wsync docs Rust-side.
+//   `animate width` bridges the ~30Hz engine ticks; the engine zeroes
+//   `fill-anim-ms` across discontinuities (line change / backward seek) so
+//   the fill first-paints exactly at the reported progress.
+// - Auto-center scroll (1:1 to LyricsLines.svelte:358-392): the ACTIVE row
+//   self-reports its LAYOUT-relative geometry (self.y within the body
+//   VerticalLayout — NEVER absolute-position, which double-counts inside a
+//   Flickable); the view centers it, smooth for moves of <= 2 lines and
+//   INSTANT for bigger jumps / initial sync. The smooth path animates a
+//   separate `scroll-target` property and copies it onto `flick.viewport-y`
+//   from its change handler — animating `viewport-y` itself would also
+//   animate user wheel input. Auto-follow only: no user-scroll pause, no
+//   click-to-seek (Tauri has neither — parity).
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
@@ -20,8 +37,8 @@ import { LyricsState } from "../state.slint";
 // the dimming ladder is applied to the INNER Text (opacity + color), NEVER as
 // an opacity binding on a row root — a root-opacity binding wraps the row in
 // an opacity item that corrupts absolute-position / self.y anchoring inside
-// the Flickable (one-row-pitch drift), exactly the geometry the S4 scroll
-// math will rely on.
+// the Flickable (one-row-pitch drift), exactly the geometry the scroll math
+// relies on.
 component LyricsLineRow inherits VerticalLayout {
     in property <int> index;
     in property <string> line-text;
@@ -29,6 +46,11 @@ component LyricsLineRow inherits VerticalLayout {
     in property <length> size-active;
     // 0 = off, 1 = soft, 2 = strong (Tauri default) — S5 wires the pref.
     in property <int> dimming-mode;
+
+    // Active-row geometry for the view's auto-center scroll. y/height are
+    // LAYOUT-relative (self.y within the body VerticalLayout) so the
+    // viewport math is scroll-safe.
+    callback report-active-geometry(int /* index */, length /* y */, length /* height */);
 
     property <bool> is-active:
         LyricsState.synced && root.index == LyricsState.active-index;
@@ -38,12 +60,23 @@ component LyricsLineRow inherits VerticalLayout {
         && root.index < LyricsState.active-index;
     property <int> distance: Math.abs(root.index - LyricsState.active-index);
 
+    // Re-report whenever the active row's geometry settles: on activation
+    // (y/height may still be pre-relayout — the y/height change handlers
+    // correct the target right after) and on wrap/resize-driven shifts.
+    function report-if-active() {
+        if (root.is-active) {
+            root.report-active-geometry(root.index, root.y, root.height);
+        }
+    }
+    changed is-active => { report-if-active(); }
+    changed y => { report-if-active(); }
+    changed height => { report-if-active(); }
+
     // Dimming ladder (Tauri getLineOpacity, LyricsLines.svelte:342-356):
-    // off -> 1.0 all; soft -> 0.6 inactive; strong -> distance 1: 0.5,
-    // 2: 0.35, 3: 0.25, far: 0.15. Unsynced lyrics render the whole list at
-    // 0.85 (LyricsLines.svelte:515-523). With NO active line (-1) the ladder
-    // has no reference point — render full brightness (the S4 engine drives
-    // the index whenever a synced track plays).
+    // off -> 1.0 all; soft -> 0.6 inactive; strong (default) -> distance 1:
+    // 0.5, 2: 0.35, 3: 0.25, far: 0.15. Unsynced lyrics render the whole
+    // list at 0.85 (LyricsLines.svelte:515-523). With NO active line (-1)
+    // the ladder has no reference point — render full brightness.
     pure function line-opacity() -> float {
         if (!LyricsState.synced) {
             return 0.85;
@@ -69,17 +102,46 @@ component LyricsLineRow inherits VerticalLayout {
         return 0.15;
     }
 
-    Text {
+    base := Text {
         text: root.line-text;
         wrap: word-wrap;
         opacity: root.line-opacity();
+        // Active base = the DIM (unsung) layer under the karaoke overlay
+        // (Tauri gradient parity: unsung stays dim, sung sweeps in accent).
         color: root.is-active
-            ? Theme.text-primary
+            ? Theme.text-secondary
             : (root.is-past ? Theme.text-muted : Theme.text-secondary);
         font-size: root.is-active ? root.size-active : root.size-inactive;
         font-weight: root.is-active ? Typography.bold : Typography.medium;
         // Friendly letter-spacing (Q3): slightly open, never cramped.
         letter-spacing: 0.2px;
+
+        // Karaoke fill overlay (active synced line only): bright copy of the
+        // SAME text, clipped to the sung fraction. Identical width/font so
+        // wrapping and glyph positions match the base exactly.
+        if root.is-active: Rectangle {
+            x: 0;
+            y: 0;
+            width: base.width * Math.clamp(LyricsState.line-progress, 0.0, 1.0);
+            height: base.height;
+            clip: true;
+            animate width {
+                duration: LyricsState.fill-anim-ms * 1ms;
+                easing: linear;
+            }
+            Text {
+                x: 0;
+                y: 0;
+                width: base.width;
+                height: base.height;
+                text: root.line-text;
+                wrap: word-wrap;
+                color: Theme.accent;
+                font-size: root.size-active;
+                font-weight: Typography.bold;
+                letter-spacing: 0.2px;
+            }
+        }
     }
 }
 
@@ -93,12 +155,68 @@ export component LyricsLinesView inherits Rectangle {
     in property <length> size-active: 15px;
     in property <int> dimming-mode: 2;          // strong (Tauri default)
     in property <bool> show-attribution: true;
+    // Auto-center the active line (S5 wires the persisted pref; Tauri
+    // default true, lyricsDisplayStore.ts:37-44).
+    in property <bool> auto-follow: true;
 
-    // Top/bottom spacers so the first/last SYNCED lines can center once the
-    // S4 auto-scroll lands (Tauri's 40vh spacers, LyricsLines.svelte:510-513).
-    // Fixed-height Rectangles derived from the Flickable's OWN height — Slint
-    // layouts ignore percentage tricks (landing review §7.4), and sibling
-    // geometry would be a binding loop.
+    // ---- Auto-center scroll state ----
+    // Last index the view centered on; -1 = nothing yet -> next center is
+    // INSTANT ("initial sync" rule). Reset whenever the engine drops the
+    // active index (track change / loading), via the mirrored property
+    // below (change callbacks can't attach to global properties directly).
+    property <int> last-centered-index: -1;
+    property <int> watched-active: LyricsState.active-index;
+    changed watched-active => {
+        if (root.watched-active < 0) {
+            root.last-centered-index = -1;
+        }
+    }
+
+    // Smooth scrolling animates `scroll-target`, NEVER flick.viewport-y
+    // (that would animate user wheel input too); the change handler — which
+    // fires per animation frame — copies the interpolated value across.
+    property <bool> smooth-scroll: false;
+    property <length> scroll-target: 0px;
+    animate scroll-target {
+        duration: root.smooth-scroll ? 260ms : 0ms;
+        easing: ease-in-out;
+    }
+    changed scroll-target => {
+        flick.viewport-y = root.scroll-target;
+    }
+
+    // viewport-y that puts the row's center at the Flickable's center,
+    // clamped to the scrollable range [min(0, height - content), 0].
+    pure function center-target(row-y: length, row-h: length) -> length {
+        return Math.clamp(
+            -(row-y + row-h / 2 - flick.height / 2),
+            Math.min(0px, flick.height - flick.viewport-height),
+            0px);
+    }
+
+    function center-active(idx: int, row-y: length, row-h: length) {
+        if (!root.auto-follow || !LyricsState.synced) {
+            return;
+        }
+        // Smooth for adjacent moves (<= 2 lines), INSTANT for bigger jumps
+        // and the initial sync (Tauri parity, LyricsLines.svelte:386-388).
+        root.smooth-scroll = root.last-centered-index >= 0
+            && Math.abs(idx - root.last-centered-index) <= 2;
+        root.last-centered-index = idx;
+        if (root.scroll-target == root.center-target(row-y, row-h)) {
+            // Equal target: the animated property emits no change event, but
+            // the user may have wheel-scrolled away — re-apply directly.
+            flick.viewport-y = root.center-target(row-y, row-h);
+        } else {
+            root.scroll-target = root.center-target(row-y, row-h);
+        }
+    }
+
+    // Top/bottom spacers so the first/last SYNCED lines can center
+    // (Tauri's 40vh spacers, LyricsLines.svelte:510-513). Fixed-height
+    // Rectangles derived from the Flickable's OWN height — Slint layouts
+    // ignore percentage tricks (landing review §7.4), and sibling geometry
+    // would be a binding loop.
     property <length> spacer-height:
         Math.max(0px, flick.height / 2 - root.size-active * 1.5);
 
@@ -125,6 +243,9 @@ export component LyricsLinesView inherits Rectangle {
                 size-inactive: root.size-inactive;
                 size-active: root.size-active;
                 dimming-mode: root.dimming-mode;
+                report-active-geometry(report-idx, row-y, row-h) => {
+                    root.center-active(report-idx, row-y, row-h);
+                }
             }
 
             if LyricsState.synced: Rectangle { height: root.spacer-height; }

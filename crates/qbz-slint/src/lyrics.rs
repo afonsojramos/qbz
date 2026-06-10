@@ -46,9 +46,10 @@ use qbz_qobuz::{QobuzClient, QobuzLyricsDocument};
 use crate::{AppWindow, LyricsLineItem, LyricsState};
 
 // `LyricsState.status` values (keep in sync with `ui/state.slint`).
+// `READY` is pub(crate): the sync engine (`lyrics_sync`) gates on it.
 const STATUS_IDLE: i32 = 0;
 const STATUS_LOADING: i32 = 1;
-const STATUS_READY: i32 = 2;
+pub(crate) const STATUS_READY: i32 = 2;
 const STATUS_NOT_FOUND: i32 = 3;
 const STATUS_ERROR: i32 = 4;
 const STATUS_OFFLINE: i32 = 5;
@@ -74,6 +75,16 @@ static CURRENT: Mutex<CurrentLyrics> = Mutex::new(CurrentLyrics {
 /// Qobuz word timestamps survive for the S4 sync engine (the UI model only
 /// carries text + line bounds + a has-words flag).
 static CURRENT_DOC: Mutex<Option<LyricsDoc>> = Mutex::new(None);
+
+/// Read access to the current parsed document for the sync engine: the
+/// closure runs under the lock (keep it short — it executes on the UI
+/// thread at the engine's tick rate). A poisoned lock degrades to `None`.
+pub(crate) fn with_current_doc<R>(f: impl FnOnce(Option<&LyricsDoc>) -> R) -> R {
+    match CURRENT_DOC.lock() {
+        Ok(guard) => f(guard.as_ref()),
+        Err(_) => f(None),
+    }
+}
 
 /// Production providers over the shared core client lock. The lock is read
 /// at CALL time (never cached), so re-inits of the Qobuz client are always
@@ -253,6 +264,8 @@ pub fn on_track_changed(weak: slint::Weak<AppWindow>, track: &QueueTrack) {
             state.set_lines(ModelRc::new(VecModel::default()));
             state.set_synced(false);
             state.set_active_index(-1);
+            state.set_line_progress(0.0);
+            state.set_fill_anim_ms(0);
             state.set_provider("".into());
             state.set_provider_label("".into());
             state.set_error("".into());
@@ -301,6 +314,8 @@ pub fn on_track_cleared(weak: slint::Weak<AppWindow>) {
         state.set_lines(ModelRc::new(VecModel::default()));
         state.set_synced(false);
         state.set_active_index(-1);
+        state.set_line_progress(0.0);
+        state.set_fill_anim_ms(0);
         state.set_track_title("".into());
         state.set_track_artist("".into());
         state.set_provider("".into());
@@ -370,6 +385,13 @@ fn apply_result(weak: slint::Weak<AppWindow>, result: Result<LyricsResponse, Str
         state.set_provider_label(label.into());
         state.set_error(error.into());
         state.set_active_index(-1);
+        state.set_line_progress(0.0);
+        state.set_fill_anim_ms(0);
         state.set_status(status);
+        // One immediate engine pass so a freshly committed doc lands on the
+        // correct line right away — even while PAUSED (Tauri computes once on
+        // load, lyricsStore.ts:386-389); continuous ticking stays gated on
+        // playing.
+        crate::lyrics_sync::kick();
     });
 }

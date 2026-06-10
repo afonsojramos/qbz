@@ -63,6 +63,7 @@ mod local_library;
 mod local_playlist;
 mod local_library_settings;
 mod lyrics;
+mod lyrics_sync;
 mod media_controls;
 mod locallibrary_prefs;
 mod tag_editor;
@@ -6410,6 +6411,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         window.global::<LyricsState>().on_panel_opened(move || {
+            // Immediate sync pass for an already-loaded doc, so opening
+            // mid-song lands on the correct line instantly (even paused) —
+            // the duplicate-fetch guard below skips the re-fetch then.
+            lyrics_sync::kick();
             let runtime = runtime.clone();
             let weak = weak.clone();
             handle.spawn(async move {
@@ -6421,6 +6426,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         });
     }
+
+    // S4 lyrics sync engine — a UI-thread `slint::Timer` driving
+    // `LyricsState.active-index` / `line-progress` at ~30Hz while the panel
+    // is open + the doc is synced + playback is live (idle gate polling
+    // otherwise). Position: local ms getter, or the published QConnect peer
+    // anchor while controlling a remote renderer (Q7).
+    lyrics_sync::start(app_runtime.clone(), window.as_weak());
 
     // Album track search — client-side filter, no backend round-trip.
     {
