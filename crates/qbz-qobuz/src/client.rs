@@ -12,6 +12,7 @@ use super::auth::{
 use super::bundle::{self, BundleTokens};
 use super::endpoints::{self, paths};
 use super::error::{ApiError, Result};
+use super::lyrics::{QobuzLyricsDocument, QobuzLyricsUrls};
 use qbz_models::*;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0";
@@ -1306,6 +1307,117 @@ impl QobuzClient {
 
         let response: Value = http_response.json().await?;
         Ok(serde_json::from_value(response)?)
+    }
+
+    // === Lyrics (v9.9.0.0-beta delta) ===
+
+    /// Raw step-1 lyrics call: signed `GET /track/lyricsUrl`, returning
+    /// `(HTTP status, raw body)`. The signed-GET helpers are private to the
+    /// client, so this is the only way diagnostic tooling (e.g.
+    /// `examples/lyrics_probe.rs`) can observe the exact wire shape; the
+    /// typed [`Self::get_lyrics_url`] builds on it.
+    pub async fn get_lyrics_url_raw(&self, track_id: u64) -> Result<(u16, String)> {
+        let url = endpoints::build_url(paths::TRACK_LYRICS_URL);
+        // Signing method name per the concatenation convention ("trackget" at
+        // get_track, "trackgetFileUrl" in auth.rs): path with slashes removed,
+        // case preserved -> "tracklyricsUrl". Verified against the live API
+        // 2026-06-10 (HTTP 200 with a valid envelope).
+        let response = self
+            .signed_get_auth(&url, "tracklyricsUrl", &[("track_id", track_id.to_string())])
+            .await?;
+        let status = response.status().as_u16();
+        let body = response.text().await?;
+        Ok((status, body))
+    }
+
+    /// Step 1: fetch the lyrics-URL envelope for a track.
+    ///
+    /// `Ok(None)` is the typed miss: no lyrics for this track (non-200, or a
+    /// 200 envelope without a usable `lyrics_url`, or an unparsable body).
+    /// `Err` is reserved for transport/auth/offline failures — the lyrics
+    /// orchestrator degrades those to a miss as well (spec §1.1); nothing in
+    /// this path is ever a user-facing error.
+    pub async fn get_lyrics_url(&self, track_id: u64) -> Result<Option<QobuzLyricsUrls>> {
+        let (status, body) = self.get_lyrics_url_raw(track_id).await?;
+        if status != 200 {
+            // Live-observed miss: HTTP 404 with body
+            // {"status":"error","code":404,"message":"No lyrics found"}
+            // (sample: qbz-nix-docs/qobuz-api/lyrics-miss-response.json).
+            log::debug!(
+                "[API] get_lyrics_url({}) status={} -> no lyrics",
+                track_id,
+                status
+            );
+            return Ok(None);
+        }
+        match serde_json::from_str::<QobuzLyricsUrls>(&body) {
+            Ok(urls) if urls.lyrics_url.is_some() => Ok(Some(urls)),
+            Ok(_) => {
+                log::debug!(
+                    "[API] get_lyrics_url({}) 200 without lyrics_url -> no lyrics",
+                    track_id
+                );
+                Ok(None)
+            }
+            Err(e) => {
+                log::warn!(
+                    "[API] get_lyrics_url({}) unparsable 200 body ({}) -> no lyrics",
+                    track_id,
+                    e
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Steps 1 + 2: fetch the full lyrics document for a track.
+    ///
+    /// The CDN GET goes through [`Self::http`] (the offline choke point) so
+    /// offline mode fails fast. The returned `lyrics_url` is self-authorizing
+    /// — a pre-signed CloudFront URL (`Expires`/`Signature`/`Key-Pair-Id`);
+    /// no `X-App-Id`/auth headers are sent (verified live 2026-06-10, HTTP
+    /// 200 on a bare GET). `Ok(None)` = typed miss, same contract as
+    /// [`Self::get_lyrics_url`]; a document without `original` content also
+    /// counts as a miss.
+    pub async fn get_lyrics(&self, track_id: u64) -> Result<Option<QobuzLyricsDocument>> {
+        let urls = match self.get_lyrics_url(track_id).await? {
+            Some(urls) => urls,
+            None => return Ok(None),
+        };
+        let lyrics_url = match urls.lyrics_url {
+            Some(url) => url,
+            None => return Ok(None),
+        };
+
+        let response = self.http()?.get(&lyrics_url).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            log::debug!(
+                "[API] get_lyrics({}) CDN doc status={} -> no lyrics",
+                track_id,
+                status
+            );
+            return Ok(None);
+        }
+        let body = response.text().await?;
+        match serde_json::from_str::<QobuzLyricsDocument>(&body) {
+            Ok(doc) if doc.original.is_some() => Ok(Some(doc)),
+            Ok(_) => {
+                log::debug!(
+                    "[API] get_lyrics({}) document without original content -> no lyrics",
+                    track_id
+                );
+                Ok(None)
+            }
+            Err(e) => {
+                log::warn!(
+                    "[API] get_lyrics({}) unparsable CDN doc ({}) -> no lyrics",
+                    track_id,
+                    e
+                );
+                Ok(None)
+            }
+        }
     }
 
     /// Get artist by ID (basic info only - no albums, faster response)

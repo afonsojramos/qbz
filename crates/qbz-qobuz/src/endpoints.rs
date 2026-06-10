@@ -15,6 +15,10 @@ pub mod paths {
     pub const TRACK_GET_LIST: &str = "/track/getList";
     pub const TRACK_SEARCH: &str = "/track/search";
     pub const TRACK_GET_FILE_URL: &str = "/track/getFileUrl";
+    // Lyrics (v9.9.0.0-beta delta — qobuz-api-inferred-openapi-v9.9.0.0-beta.yaml:759-806).
+    // Returns URL(s) to the lyrics document; the document itself is a second
+    // GET against the returned `lyrics_url` (Qobuz CDN host).
+    pub const TRACK_LYRICS_URL: &str = "/track/lyricsUrl";
 
     // Album
     pub const ALBUM_GET: &str = "/album/get";

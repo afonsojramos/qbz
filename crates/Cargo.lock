@@ -5426,6 +5426,7 @@ dependencies = [
  "log",
  "md-5",
  "qbz-cmaf",
+ "qbz-credentials",
  "qbz-models",
  "regex",
  "reqwest",

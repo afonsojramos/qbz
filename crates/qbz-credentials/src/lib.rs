@@ -733,6 +733,18 @@ pub fn load_oauth_token() -> Result<Option<String>, String> {
         }
     }
 
+    load_oauth_token_from_file()
+}
+
+/// Load the OAuth token from the encrypted file ONLY, skipping the keyring.
+///
+/// The file is the authoritative store (`save_oauth_token` writes it first);
+/// the keyring is a best-effort cache that can go stale — e.g. an entry
+/// encrypted under an older key shadows a perfectly fresh file because
+/// `load_oauth_token` prefers the keyring. Callers that just watched a
+/// keyring-sourced token fail authentication (and diagnostic tooling) can
+/// use this to read the authoritative copy directly.
+pub fn load_oauth_token_from_file() -> Result<Option<String>, String> {
     let path = match get_oauth_token_path() {
         Some(p) => p,
         None => return Ok(None),
