@@ -115,12 +115,29 @@ pub fn set_hidden_blocking(id: &str, hidden: bool) -> bool {
     .unwrap_or(false)
 }
 
-/// Append Qobuz track ids. Returns inserted count.
+/// Append Qobuz track ids. Returns inserted count. Ids in the Plex
+/// synthetic namespace (>= 2^40 — see `local_library::PLEX_TRACK_ID_FLOOR`)
+/// are NOT Qobuz catalog ids; storing one writes a forever-unresolvable
+/// row (the field garbage class), so they are refused and logged here,
+/// at the last gate before the repo write.
 pub fn add_qobuz_tracks_blocking(id: &str, track_ids: &[u64]) -> usize {
     let entries: Vec<repo::LocalPlaylistTrackInput> = track_ids
         .iter()
+        .filter(|&&tid| {
+            if tid >= crate::local_library::PLEX_TRACK_ID_FLOOR {
+                log::warn!(
+                    "[qbz-slint] local playlist add: refused non-catalog id {tid} as a Qobuz ref"
+                );
+                false
+            } else {
+                true
+            }
+        })
         .map(|&tid| repo::LocalPlaylistTrackInput::Qobuz(tid))
         .collect();
+    if entries.is_empty() {
+        return 0;
+    }
     crate::library_db::with_db(|db| {
         Ok(db.with_connection(|conn| repo::add_tracks(conn, id, &entries)))
     })
@@ -194,6 +211,15 @@ pub fn add_drag_tracks_blocking(id: &str, tracks: &[crate::drag::DragTrack]) -> 
         for item in tracks {
             match item {
                 crate::drag::DragTrack::Qobuz(tid) => {
+                    if *tid >= crate::local_library::PLEX_TRACK_ID_FLOOR {
+                        // Not a catalog id (Plex synthetic namespace) — a
+                        // mis-typed payload; refuse rather than store a
+                        // forever-unresolvable row.
+                        log::warn!(
+                            "[qbz-slint] local playlist drop: refused non-catalog id {tid} as a Qobuz ref"
+                        );
+                        continue;
+                    }
                     out.push(repo::LocalPlaylistTrackInput::Qobuz(*tid));
                 }
                 crate::drag::DragTrack::LocalRow(rid) => {
@@ -264,6 +290,37 @@ static CURRENT_META: LazyLock<Mutex<Option<(String, bool)>>> = LazyLock::new(|| 
 static ROW_POSITIONS: LazyLock<Mutex<HashMap<String, i32>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// The rating key of an open-detail row by its display id (`TrackItem.id`
+/// == queue id). Resolved Plex rows carry a NUMERIC synthetic id in the
+/// model; the string rating key only lives in the queue snapshot's
+/// `source_item_id_hint` — this is how drag/pick paths recover it instead
+/// of mis-typing the numeric id as a Qobuz catalog id.
+pub fn plex_key_for_row(id: &str) -> Option<String> {
+    let queue = CURRENT_QUEUE.lock().ok()?;
+    queue
+        .iter()
+        .find(|q| q.id.to_string() == id)
+        .filter(|q| q.source.as_deref() == Some("plex"))
+        .and_then(|q| q.source_item_id_hint.clone())
+}
+
+/// Local-mode picker ref for an open-detail row id: `"plex:<key>"` for
+/// resolved Plex rows, `"<library row id>"` for local file rows. `None`
+/// for Qobuz/offline-copy rows (those ride the catalog-id flow) and for
+/// ids not in the open snapshot.
+pub fn local_picker_ref_for_row(id: &str) -> Option<String> {
+    let queue = CURRENT_QUEUE.lock().ok()?;
+    let q = queue.iter().find(|q| q.id.to_string() == id)?;
+    match q.source.as_deref() {
+        Some("plex") => q
+            .source_item_id_hint
+            .as_ref()
+            .map(|key| format!("plex:{key}")),
+        Some("local") => Some(q.id.to_string()),
+        _ => None,
+    }
+}
+
 /// One resolved, renderable row (Send — built on the worker).
 pub enum RowItem {
     /// Full catalog track (online fetch).
@@ -289,8 +346,25 @@ pub enum RowItem {
     /// unavailable-offline QOBUZ rows, not for a file that is right there).
     /// Not playable until the row is back in the library index.
     LocalFile { path: String },
-    /// Plex ref — no detailed resolve in v1 (rendered basic, not playable).
-    Plex { key: String },
+    /// Plex ref resolved from the Plex cache DB into the same `LocalTrack`
+    /// shape the LocalLibrary Tracks tab merges (synthetic 2^40-namespaced
+    /// id, rating key in `file_path`, source `"plex"`) — renders full
+    /// metadata and plays through the existing Plex playback path.
+    Plex(Box<qbz_library::LocalTrack>),
+    /// A ref that cannot resolve right now: a `plex_key` missing from the
+    /// Plex cache (purged / never synced / a garbage key written by an old
+    /// mis-typed add), or a `qobuz_track_id` outside the catalog id range
+    /// (the legacy untyped-drag bug stored Plex synthetic 2^40 row ids as
+    /// Qobuz ids). Renders an HONEST, selectable (removable) row instead
+    /// of hiding — D11 hiding is for genuinely-offline Qobuz rows, not for
+    /// refs that can never heal on their own.
+    Unresolved {
+        /// "plex" (cache miss — may heal after a resync) or "qobuz"
+        /// (out-of-range id — permanent garbage).
+        kind: &'static str,
+        /// The raw stored ref, shown so the user knows WHAT is broken.
+        reference: String,
+    },
 }
 
 pub struct LoadedRow {
@@ -317,9 +391,9 @@ fn total_duration_label(rows: &[LoadedRow]) -> String {
         .map(|r| match &r.item {
             RowItem::Qobuz(t) => t.duration as u64,
             RowItem::Cached { duration_secs, .. } => *duration_secs,
-            RowItem::Local(t) => t.duration_secs,
+            RowItem::Local(t) | RowItem::Plex(t) => t.duration_secs,
             RowItem::LocalFile { .. } => 0,
-            RowItem::Plex { .. } => 0,
+            RowItem::Unresolved { .. } => 0,
         })
         .sum();
     let mins = secs / 60;
@@ -333,10 +407,13 @@ fn total_duration_label(rows: &[LoadedRow]) -> String {
 /// Load + resolve a local playlist off the UI thread. Qobuz rows resolve
 /// via `get_tracks_batch` when online, via the offline-cache index when
 /// offline (or when the batch fails); local rows via library.db by path;
-/// Plex rows stay basic. Unresolvable QOBUZ rows are filtered out (D11);
-/// a LOCAL row that misses the index still renders (filename fallback)
-/// while its file exists, and hides (logged distinctly) only when the
-/// file itself is gone.
+/// Plex rows via the Plex cache DB (bulk by rating key — full metadata,
+/// playable). Unresolvable QOBUZ rows are filtered out (D11); a LOCAL row
+/// that misses the index still renders (filename fallback) while its file
+/// exists, and hides (logged distinctly) only when the file itself is
+/// gone; a Plex key the cache doesn't know — and a `qobuz_track_id` in the
+/// Plex synthetic namespace (legacy mis-typed garbage) — render an honest
+/// "unavailable" row the user can still select and remove.
 pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistData> {
     let id = playlist_id.to_string();
     let (header, tracks) = tokio::task::spawn_blocking({
@@ -400,6 +477,34 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistD
         }
     }
 
+    // Plex rows: ONE bulk cache lookup by rating key, mapped to the same
+    // `LocalTrack` shape the LocalLibrary Tracks tab merges — so render,
+    // queue build, and artwork ride the existing source-aware paths.
+    let plex_keys: Vec<String> = tracks
+        .iter()
+        .filter_map(|t| t.plex_key.clone())
+        .filter(|k| !k.is_empty())
+        .collect();
+    let plex_resolved: HashMap<String, qbz_library::LocalTrack> = if plex_keys.is_empty() {
+        HashMap::new()
+    } else {
+        tokio::task::spawn_blocking(move || {
+            match qbz_plex::plex_cache_get_cached_tracks_by_keys(&plex_keys) {
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(crate::local_library::map_plex_cached_to_local_track)
+                    .map(|t| (t.file_path.clone(), t))
+                    .collect(),
+                Err(e) => {
+                    log::warn!("[qbz-slint] local playlist: plex cache resolve failed: {e}");
+                    HashMap::new()
+                }
+            }
+        })
+        .await
+        .unwrap_or_default()
+    };
+
     // Local rows: resolve library rows by file path (blocking). Paths the
     // index doesn't know are stat'ed on the same worker — an existing file
     // renders as a filename-fallback row instead of hiding (D11 nuance).
@@ -436,6 +541,7 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistD
     let mut rows: Vec<LoadedRow> = Vec::new();
     let mut hidden = 0usize;
     let mut missing_files = 0usize;
+    let mut unresolved = 0usize;
     for t in tracks {
         let item = match t.source {
             repo::LocalPlaylistTrackSource::Qobuz => {
@@ -443,7 +549,20 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistD
                     hidden += 1;
                     continue;
                 };
-                if let Some(track) = fetched.remove(&tid) {
+                if tid >= crate::local_library::PLEX_TRACK_ID_FLOOR {
+                    // NOT a Qobuz catalog id — a Plex row's synthetic
+                    // 2^40-namespaced id stored as qobuz_track_id by the
+                    // pre-typed-drag bug. It can never resolve; render it
+                    // honestly (removable) instead of D11-hiding it forever.
+                    unresolved += 1;
+                    log::warn!(
+                        "[qbz-slint] local playlist {id}: qobuz ref {tid} is outside the catalog range (legacy mis-typed row) — rendered as unavailable"
+                    );
+                    RowItem::Unresolved {
+                        kind: "qobuz",
+                        reference: tid.to_string(),
+                    }
+                } else if let Some(track) = fetched.remove(&tid) {
                     RowItem::Qobuz(Box::new(track))
                 } else if let Some(item) = cached.remove(&tid) {
                     item
@@ -474,9 +593,25 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistD
                     }
                 }
             }
-            repo::LocalPlaylistTrackSource::Plex => RowItem::Plex {
-                key: t.plex_key.clone().unwrap_or_default(),
-            },
+            repo::LocalPlaylistTrackSource::Plex => {
+                let key = t.plex_key.clone().unwrap_or_default();
+                match plex_resolved.get(&key) {
+                    Some(track) => RowItem::Plex(Box::new(track.clone())),
+                    None => {
+                        // Cache miss (purged / never synced) OR a garbage key
+                        // (e.g. a file path stored as a plex_key) — honest,
+                        // removable fallback; never the generic placeholder.
+                        unresolved += 1;
+                        log::warn!(
+                            "[qbz-slint] local playlist {id}: plex key {key:?} not in the Plex cache — rendered as unavailable"
+                        );
+                        RowItem::Unresolved {
+                            kind: "plex",
+                            reference: key,
+                        }
+                    }
+                }
+            }
         };
         rows.push(LoadedRow {
             position: t.position,
@@ -489,6 +624,11 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> Option<LocalPlaylistD
     if missing_files > 0 {
         log::info!(
             "[qbz-slint] local playlist {id}: {missing_files} local file row(s) missing on disk, hidden (D11.local)"
+        );
+    }
+    if unresolved > 0 {
+        log::info!(
+            "[qbz-slint] local playlist {id}: {unresolved} row(s) with unresolvable refs, rendered as unavailable"
         );
     }
 
@@ -559,11 +699,17 @@ fn row_queue_track(item: &RowItem) -> Option<QueueTrack> {
             parental_warning: false,
             source_item_id_hint: None,
         }),
-        RowItem::Local(track) => Some(crate::playback::local_queue_track(track)),
+        // `local_queue_track` is source-aware: Plex rows get `source =
+        // "plex"` + the rating key in `source_item_id_hint` + the raw
+        // `/library/...` thumb path — the existing Plex playback path
+        // (offline gating allows plex under induced offline).
+        RowItem::Local(track) | RowItem::Plex(track) => {
+            Some(crate::playback::local_queue_track(track))
+        }
         // Filename-fallback rows have no library row to resolve playback
         // through — render-only until the file is re-indexed.
         RowItem::LocalFile { .. } => None,
-        RowItem::Plex { .. } => None,
+        RowItem::Unresolved { .. } => None,
     }
 }
 
@@ -608,7 +754,7 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
             source: "qobuz".into(),
             unlocking: false,
         },
-        RowItem::Local(track) => {
+        RowItem::Local(track) | RowItem::Plex(track) => {
             let (tier, quality_detail, _) = crate::quality::badge(
                 &track.format.to_string(),
                 track.bit_depth,
@@ -616,7 +762,8 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
             );
             TrackItem {
                 // The queue id (library row id; the Qobuz id for offline
-                // copies) so visible-order playback resolves this row.
+                // copies; the synthetic 2^40-namespaced id for Plex rows)
+                // so visible-order playback resolves this row.
                 id: queue
                     .map(|q| q.id.to_string())
                     .unwrap_or_else(|| track.id.to_string())
@@ -675,12 +822,28 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
                 unlocking: false,
             }
         }
-        RowItem::Plex { key } => TrackItem {
-            id: format!("plex:{key}").into(),
+        // Honest unavailable row: distinct title + the raw stored ref in
+        // the album column, selectable so multi-select removal can clear
+        // it. Plex cache-misses keep the "plex:<key>" id (re-dragging one
+        // still carries the key — it may heal after a resync); mis-typed
+        // qobuz refs get an unparseable id so no drag/pick path can ever
+        // re-type them as a catalog id.
+        RowItem::Unresolved { kind, reference } => TrackItem {
+            id: if *kind == "plex" {
+                format!("plex:{reference}")
+            } else {
+                format!("broken:{kind}:{reference}")
+            }
+            .into(),
             number: "".into(),
-            title: "Plex track".into(),
-            artist: "Plex".into(),
-            album: "".into(),
+            title: if *kind == "plex" {
+                "Unavailable Plex track"
+            } else {
+                "Unavailable track"
+            }
+            .into(),
+            artist: if *kind == "plex" { "Plex" } else { "Unknown source" }.into(),
+            album: format!("ref {reference}").into(),
             duration: "".into(),
             quality_tier: "".into(),
             quality_detail: "".into(),
@@ -694,7 +857,7 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
             removing: false,
             cache_status: 0,
             cache_progress: 0.0,
-            source: "plex".into(),
+            source: if *kind == "plex" { "plex" } else { "" }.into(),
             unlocking: false,
         },
     }
@@ -770,12 +933,15 @@ pub fn apply(window: &AppWindow, data: LocalPlaylistData) {
     crate::playlist::apply_local_items(window, items);
 }
 
-/// Row artwork jobs — Qobuz rows have http URLs, local rows file paths.
-/// Returns (http jobs, local-file jobs) targeting `PlaylistTrack{index}`
-/// (the same target the Qobuz detail uses; indexes are FULL_ITEMS order).
-pub fn artwork_jobs(rows: &[LoadedRow]) -> (Vec<ArtworkJob>, Vec<ArtworkJob>) {
+/// Row artwork jobs — Qobuz rows have http URLs, local rows file paths,
+/// Plex rows raw `/library/...` thumb paths (tokenized by the PlexThumb
+/// loader — offline-tolerant). Returns (http, local-file, plex) job sets
+/// targeting `PlaylistTrack{index}` (the same target the Qobuz detail
+/// uses; indexes are FULL_ITEMS order).
+pub fn artwork_jobs(rows: &[LoadedRow]) -> (Vec<ArtworkJob>, Vec<ArtworkJob>, Vec<ArtworkJob>) {
     let mut http = Vec::new();
     let mut local = Vec::new();
+    let mut plex = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         match &row.item {
             RowItem::Qobuz(track) => {
@@ -794,6 +960,14 @@ pub fn artwork_jobs(rows: &[LoadedRow]) -> (Vec<ArtworkJob>, Vec<ArtworkJob>) {
                     });
                 }
             }
+            RowItem::Plex(track) => {
+                if let Some(path) = track.artwork_path.clone().filter(|p| !p.is_empty()) {
+                    plex.push(ArtworkJob {
+                        url: path,
+                        target: ArtworkTarget::PlaylistTrack { index },
+                    });
+                }
+            }
             // Offline-resolved Qobuz rows: the cached cover.jpg loads through
             // the same local-file path as Local rows (B5).
             RowItem::Cached { artwork_path, .. } => {
@@ -807,7 +981,7 @@ pub fn artwork_jobs(rows: &[LoadedRow]) -> (Vec<ArtworkJob>, Vec<ArtworkJob>) {
             _ => {}
         }
     }
-    (http, local)
+    (http, local, plex)
 }
 
 /// Open a local playlist detail (the `local:` branch of
@@ -837,7 +1011,7 @@ pub fn navigate(
             });
             return;
         };
-        let (http_jobs, local_jobs) = artwork_jobs(&data.rows);
+        let (http_jobs, local_jobs, plex_jobs) = artwork_jobs(&data.rows);
         let _ = weak.upgrade_in_event_loop(move |w| {
             apply(&w, data);
         });
@@ -846,6 +1020,16 @@ pub fn navigate(
         }
         if !local_jobs.is_empty() {
             artwork::spawn_local_loads(local_jobs, weak.clone(), image_cache.clone());
+        }
+        if !plex_jobs.is_empty() {
+            let plex = crate::plex_settings::get();
+            artwork::spawn_local_or_plex_loads(
+                plex_jobs,
+                plex.base_url,
+                plex.token,
+                weak.clone(),
+                image_cache.clone(),
+            );
         }
     });
 }
@@ -892,8 +1076,8 @@ pub fn navigate_qobuz_offline(
             == qbz_app::offline_mode::OfflineMode::InducedOffline;
         let (sidecar_rows, custom_artwork_path, playable_ids, snapshot_name) =
             tokio::task::spawn_blocking(move || {
-                let (rows, custom) = crate::library_db::with_db(|db| {
-                    let mut rows: Vec<LoadedRow> = db
+                let (mut rows, plex_refs, custom) = crate::library_db::with_db(|db| {
+                    let rows: Vec<LoadedRow> = db
                         .get_playlist_local_tracks_with_position(playlist_id)?
                         .into_iter()
                         .map(|r| LoadedRow {
@@ -901,24 +1085,55 @@ pub fn navigate_qobuz_offline(
                             item: RowItem::Local(Box::new(r.track)),
                         })
                         .collect();
-                    if plex_allowed {
-                        rows.extend(
-                            db.get_playlist_plex_tracks_with_position(playlist_id)?
-                                .into_iter()
-                                .map(|(key, position)| LoadedRow {
-                                    position,
-                                    item: RowItem::Plex { key },
-                                }),
-                        );
-                        rows.sort_by_key(|r| r.position);
-                    }
+                    let plex_refs: Vec<(String, i32)> = if plex_allowed {
+                        db.get_playlist_plex_tracks_with_position(playlist_id)?
+                    } else {
+                        Vec::new()
+                    };
                     let custom = db
                         .get_playlist_settings(playlist_id)?
                         .and_then(|s| s.custom_artwork_path)
                         .filter(|p| !p.is_empty());
-                    Ok((rows, custom))
+                    Ok((rows, plex_refs, custom))
                 })
                 .unwrap_or_default();
+                if !plex_refs.is_empty() {
+                    // Resolve the sidecar keys from the Plex cache DB (same
+                    // bulk getter the LOCAL detail uses) — full metadata,
+                    // playable; misses render the honest unavailable row.
+                    let keys: Vec<String> =
+                        plex_refs.iter().map(|(key, _)| key.clone()).collect();
+                    let resolved: HashMap<String, qbz_library::LocalTrack> =
+                        match qbz_plex::plex_cache_get_cached_tracks_by_keys(&keys) {
+                            Ok(list) => list
+                                .into_iter()
+                                .map(crate::local_library::map_plex_cached_to_local_track)
+                                .map(|t| (t.file_path.clone(), t))
+                                .collect(),
+                            Err(e) => {
+                                log::warn!(
+                                    "[qbz-slint] playlist {playlist_id}: plex cache resolve failed: {e}"
+                                );
+                                HashMap::new()
+                            }
+                        };
+                    rows.extend(plex_refs.into_iter().map(|(key, position)| LoadedRow {
+                        position,
+                        item: match resolved.get(&key) {
+                            Some(track) => RowItem::Plex(Box::new(track.clone())),
+                            None => {
+                                log::warn!(
+                                    "[qbz-slint] playlist {playlist_id}: plex key {key:?} not in the Plex cache — rendered as unavailable"
+                                );
+                                RowItem::Unresolved {
+                                    kind: "plex",
+                                    reference: key,
+                                }
+                            }
+                        },
+                    }));
+                    rows.sort_by_key(|r| r.position);
+                }
                 (
                     rows,
                     custom,
@@ -969,17 +1184,27 @@ pub fn navigate_qobuz_offline(
         let (name, description) = crate::sidebar::playlist_name_desc(playlist_id)
             .or_else(|| snapshot_name.map(|n| (n, String::new())))
             .unwrap_or_else(|| ("Playlist".to_string(), String::new()));
-        let (http_jobs, local_jobs) = artwork_jobs(&rows);
+        let (http_jobs, local_jobs, plex_jobs) = artwork_jobs(&rows);
         let _ = weak.upgrade_in_event_loop(move |w| {
             apply_qobuz_offline(&w, playlist_id, name, description, custom_artwork_path, rows);
         });
-        // Sidecar rows carry file paths (local) — the http set stays empty,
-        // kept for symmetry with the local detail's dispatch.
+        // Sidecar rows carry file paths (local) or Plex thumb paths — the
+        // http set stays empty, kept for symmetry with the local detail.
         if !http_jobs.is_empty() {
             artwork::spawn_loads(http_jobs, weak.clone(), image_cache.clone());
         }
         if !local_jobs.is_empty() {
             artwork::spawn_local_loads(local_jobs, weak.clone(), image_cache.clone());
+        }
+        if !plex_jobs.is_empty() {
+            let plex = crate::plex_settings::get();
+            artwork::spawn_local_or_plex_loads(
+                plex_jobs,
+                plex.base_url,
+                plex.token,
+                weak.clone(),
+                image_cache.clone(),
+            );
         }
     });
 }

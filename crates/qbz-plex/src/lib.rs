@@ -1561,6 +1561,98 @@ pub fn plex_cache_search_tracks(
     Ok(tracks)
 }
 
+/// Bulk by-rating-key lookup in the `PlexCachedTrack` shape (synthetic
+/// playback id + normalized album + content-hash album key — the same
+/// row mapping `plex_cache_search_tracks` produces, so a row resolved
+/// here is indistinguishable from a Local-Library-merged one). Used by
+/// the local-playlist detail to hydrate `plex_key` membership rows.
+/// Keys missing from the cache are silently omitted — the caller renders
+/// those rows as explicitly unavailable.
+pub fn plex_cache_get_cached_tracks_by_keys(
+    rating_keys: &[String],
+) -> Result<Vec<PlexCachedTrack>, String> {
+    if rating_keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = open_plex_cache_db()?;
+    let placeholders = std::iter::repeat("?")
+        .take(rating_keys.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT rating_key, title, artist, album, duration_ms, container, bit_depth,
+                sampling_rate_hz, artwork_path, track_number, disc_number, parent_rating_key
+         FROM plex_cache_tracks
+         WHERE rating_key IN ({})",
+        placeholders
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Failed to prepare Plex cache by-keys query: {}", e))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(rating_keys.iter()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<i64>>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<String>>(11)?,
+            ))
+        })
+        .map_err(|e| format!("Failed to query Plex cache tracks by keys: {}", e))?;
+    let mut tracks = Vec::new();
+    for row in rows {
+        let (
+            rating_key,
+            title,
+            artist_opt,
+            album_opt,
+            duration_ms_opt,
+            container_opt,
+            bit_depth_opt,
+            sampling_rate_opt,
+            artwork_path,
+            track_number_opt,
+            disc_number_opt,
+            parent_rating_key,
+        ) = row.map_err(|e| format!("Failed to read Plex cache by-keys row: {}", e))?;
+        let artist = artist_opt
+            .map(|v| decode_xml_entities(v.trim()))
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "Unknown Artist".to_string());
+        let album_raw = album_opt
+            .map(|v| decode_xml_entities(v.trim()))
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "Unknown Album".to_string());
+        let album = normalize_album_title(Some(&artist), &album_raw);
+        tracks.push(PlexCachedTrack {
+            id: playback_track_id(&rating_key),
+            rating_key,
+            title: decode_xml_entities(title.trim()),
+            artist: artist.clone(),
+            album: album.clone(),
+            duration_secs: duration_ms_opt.map(|v| (v as u64) / 1000).unwrap_or(0),
+            format: container_opt.unwrap_or_else(|| "flac".to_string()),
+            bit_depth: bit_depth_opt.map(|v| v as u32),
+            sample_rate: sampling_rate_opt.map(|v| v as u32).unwrap_or(44100),
+            artwork_path,
+            source: "plex".to_string(),
+            album_key: plex_album_key(&artist, &album),
+            track_number: track_number_opt.map(|v| v as u32),
+            disc_number: disc_number_opt.map(|v| v as u32),
+            parent_rating_key,
+        });
+    }
+    Ok(tracks)
+}
+
 pub fn plex_cache_save_tracks(
     server_id: Option<String>,
     section_key: String,

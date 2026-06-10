@@ -3197,7 +3197,7 @@ fn parse_audio_format(s: &str) -> qbz_library::AudioFormat {
 /// local ids (`< 2^40`) AND of ephemeral ids (`>= 2^48 = EPHEMERAL_ID_FLOOR`),
 /// so `is_ephemeral_id` still returns false. The string rating_key is preserved
 /// separately in `file_path`, so playback resolution is unaffected.
-const PLEX_TRACK_ID_FLOOR: u64 = 1 << 40;
+pub(crate) const PLEX_TRACK_ID_FLOOR: u64 = 1 << 40;
 
 /// Map a Plex-cache track row to the `LocalTrack` shape the album-detail view
 /// and the Tracks tab render. The `file_path` carries the Plex `rating_key` (the
@@ -3205,7 +3205,7 @@ const PLEX_TRACK_ID_FLOOR: u64 = 1 << 40;
 /// `/library/...` thumb path (tokenized at decode time by the PlexThumb artwork
 /// arm); `source` is `"plex"` so the UI classifies the row correctly. The `id`
 /// is namespaced (see `PLEX_TRACK_ID_FLOOR`) to avoid colliding with local rows.
-fn map_plex_cached_to_local_track(t: qbz_plex::PlexCachedTrack) -> qbz_library::LocalTrack {
+pub(crate) fn map_plex_cached_to_local_track(t: qbz_plex::PlexCachedTrack) -> qbz_library::LocalTrack {
     qbz_library::LocalTrack {
         id: (PLEX_TRACK_ID_FLOOR | (t.id & (PLEX_TRACK_ID_FLOOR - 1))) as i64,
         file_path: t.rating_key,

@@ -567,6 +567,56 @@ fn set_row_favorite(window: &AppWindow, track_id: &str, favorite: bool) {
     }
 }
 
+/// Toggle a track favorite by its REAL Qobuz id: offline guard (read-only
+/// hearts, spec 4.3), optimistic flip across the visible rows + the shared
+/// fav cache, then the network add/remove with rollback on failure. Shared
+/// by the Qobuz-surface `("track","favorite")` media-action arm and the
+/// library-surface favorite entry (qobuz_download rows resolve their
+/// `qobuz_track_id` first — never the local row id, which is Tauri's latent
+/// "Add to Library" bug; LocalLibrary track-menu spec §3.2). UI-thread only
+/// (upgrades `weak` directly).
+fn toggle_track_favorite(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    id: String,
+) {
+    if offline_mode::engine().is_offline() {
+        if let Some(w) = weak.upgrade() {
+            toast::info(&w, "Not available offline");
+        }
+        return;
+    }
+    // Toggle (not just add): read the cached state, flip it optimistically
+    // across every visible track model + the shared cache, then add/remove
+    // on the network.
+    let was_fav = fav_cache::is_favorite(&id);
+    let make_fav = !was_fav;
+    if let Ok(track_id) = id.parse::<u64>() {
+        fav_cache::set(track_id, make_fav);
+    }
+    if let Some(w) = weak.upgrade() {
+        set_row_favorite(&w, &id, make_fav);
+    }
+    handle.spawn(async move {
+        let res = if make_fav {
+            runtime.core().add_favorite("track", &id).await
+        } else {
+            runtime.core().remove_favorite("track", &id).await
+        };
+        if let Err(e) = res {
+            log::error!("[qbz-slint] toggle track favorite failed: {e}");
+            // Roll the optimistic change back on failure.
+            if let Ok(tid) = id.parse::<u64>() {
+                fav_cache::set(tid, was_fav);
+            }
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                set_row_favorite(&w, &id, was_fav);
+            });
+        }
+    });
+}
+
 /// Look up the display name of an "Add to Mixtape/Collection" picker row by id
 /// (for the post-add toast). Returns "" if not found.
 fn myqbz_add_row_name(window: &AppWindow, collection_id: &str) -> String {
@@ -1577,14 +1627,24 @@ fn local_picker_ref(track: &qbz_library::LocalTrack) -> String {
 }
 
 /// Type a model row (Playlist / Artist surfaces) for the drag payload.
-/// The LOCAL playlist detail mixes namespaces: "plex:<key>" Plex rows,
-/// library row ids on `source == "local"` rows, Qobuz catalog ids on
-/// everything else (incl. offline-cached rows). Render-only rows
-/// ("file:<path>" fallbacks) type to None and drop out of the drag.
+/// The LOCAL playlist detail mixes namespaces: "plex:<key>" unresolved
+/// Plex rows, NUMERIC synthetic ids on RESOLVED Plex rows (`source ==
+/// "plex"` — the rating key is recovered from the open detail's queue
+/// snapshot, NEVER typed as a Qobuz id), library row ids on `source ==
+/// "local"` rows, Qobuz catalog ids on everything else (incl.
+/// offline-cached rows). Render-only rows ("file:"/"broken:" fallbacks)
+/// type to None and drop out of the drag.
 fn row_drag_track(row: &TrackItem) -> Option<drag::DragTrack> {
     let id = row.id.to_string();
     if let Some(key) = id.strip_prefix("plex:") {
         return Some(drag::DragTrack::Plex(key.to_string()));
+    }
+    if row.source.as_str() == "plex" {
+        // Resolved Plex row: numeric display id; the rating key lives in
+        // the queue snapshot. No key recoverable -> drop from the drag;
+        // falling through to the Qobuz parse would store the synthetic id
+        // as a catalog id (the exact garbage class found in the field).
+        return local_playlist::plex_key_for_row(&id).map(drag::DragTrack::Plex);
     }
     if row.source.as_str() == "local" {
         return id.parse::<i64>().ok().map(drag::DragTrack::LocalRow);
@@ -4779,45 +4839,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 ("track", "favorite") => {
-                    // Offline = read-only hearts (spec 4.3): refuse the
-                    // toggle with a toast instead of letting the API fail.
-                    if offline_mode::engine().is_offline() {
-                        if let Some(w) = weak.upgrade() {
-                            toast::info(&w, "Not available offline");
-                        }
-                        return;
-                    }
-                    // Toggle (not just add): read the cached state, flip it
-                    // optimistically across every visible track model + the
-                    // shared cache, then add/remove on the network.
-                    let was_fav = fav_cache::is_favorite(&id);
-                    let make_fav = !was_fav;
-                    if let Ok(track_id) = id.parse::<u64>() {
-                        fav_cache::set(track_id, make_fav);
-                    }
-                    if let Some(w) = weak.upgrade() {
-                        set_row_favorite(&w, &id, make_fav);
-                    }
-                    let runtime = runtime.clone();
-                    let weak = weak.clone();
-                    let track_id = id.clone();
-                    handle.spawn(async move {
-                        let res = if make_fav {
-                            runtime.core().add_favorite("track", &track_id).await
-                        } else {
-                            runtime.core().remove_favorite("track", &track_id).await
-                        };
-                        if let Err(e) = res {
-                            log::error!("[qbz-slint] toggle track favorite failed: {e}");
-                            // Roll the optimistic change back on failure.
-                            if let Ok(tid) = track_id.parse::<u64>() {
-                                fav_cache::set(tid, was_fav);
-                            }
-                            let _ = weak.upgrade_in_event_loop(move |w| {
-                                set_row_favorite(&w, &track_id, was_fav);
-                            });
-                        }
-                    });
+                    // Offline guard + optimistic toggle + network flip with
+                    // rollback — shared with the library-surface favorite
+                    // (see toggle_track_favorite).
+                    toggle_track_favorite(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id.to_string(),
+                    );
                 }
                 // Offline cache: "download"/"cache" make a track available
                 // offline; "uncache" removes the local copy. The row affordance
@@ -4850,11 +4880,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
                 ("track", "add-to-playlist") => {
                     // Open the global picker for this track + load the
-                    // user's playlists.
+                    // user's playlists. SOURCE-TYPED routing first: this
+                    // shared arm also fires for local/Plex rows (local
+                    // playlist detail, now-playing), whose ids are NOT
+                    // Qobuz catalog ids — the untyped path stored a Plex
+                    // row's synthetic 2^40 id as qobuz_track_id (the field
+                    // garbage class). Type the ref, or refuse.
                     let Some(w) = weak.upgrade() else {
                         return;
                     };
-                    playlist_picker::open(&w, &id);
+                    // Only consult the local-playlist queue snapshot while
+                    // its detail is the OPEN view — a stale snapshot row id
+                    // could collide with a genuine catalog id from a Qobuz
+                    // surface (both are small integers).
+                    let in_local_detail = w.global::<NavState>().get_view()
+                        == ContentView::Playlist
+                        && (w.global::<PlaylistState>().get_is_local()
+                            || w.global::<PlaylistState>().get_offline_subset());
+                    let local_ref: Option<String> = if id.starts_with("plex:") {
+                        // Unresolved Plex row in a playlist detail — the id
+                        // already carries the rating key.
+                        Some(id.to_string())
+                    } else if in_local_detail {
+                        // Open local-playlist detail row: the queue snapshot
+                        // knows its source ("plex:<key>" / "<row id>"; None
+                        // for Qobuz rows = catalog flow below).
+                        local_playlist::local_picker_ref_for_row(id.as_str())
+                    } else {
+                        None
+                    };
+                    if let Some(track_ref) = local_ref {
+                        playlist_picker::open_multi(&w, &[track_ref], true);
+                    } else if id
+                        .parse::<u64>()
+                        .is_ok_and(|n| n >= local_library::PLEX_TRACK_ID_FLOOR)
+                    {
+                        // A synthetic (Plex/ephemeral) id with no resolvable
+                        // ref — refuse rather than store a fake Qobuz id.
+                        log::warn!(
+                            "[qbz-slint] add-to-playlist: unresolvable non-catalog id {id} — refused"
+                        );
+                        toast::error(&w, "Couldn't resolve this track");
+                        return;
+                    } else {
+                        playlist_picker::open(&w, &id);
+                    }
                     let runtime = runtime.clone();
                     let weak = weak.clone();
                     handle.spawn(async move {
@@ -7423,8 +7493,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         // Per-row context-menu actions on the local album detail (play-next /
-        // queue / add-to-playlist) — resolved against the open version's
-        // track cache; "play" stays on LocalAlbumActions.play-track.
+        // queue / add-to-playlist / add-to-mixtape / favorite) — resolved
+        // against the open version's track cache; "play" stays on
+        // LocalAlbumActions.play-track.
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
@@ -7456,6 +7527,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 playlist_picker::apply(&w, pls);
                             });
                         });
+                    }
+                    "add-to-mixtape" => {
+                        // Single-row Add to Mixtape/Collection on the local
+                        // album detail (spec §3.1) — the row is already
+                        // resolved from the open version's track cache.
+                        let items =
+                            myqbz_add::track_items_from_local(std::slice::from_ref(row));
+                        open_add_to_mixtape(weak.clone(), handle.clone(), items);
+                    }
+                    "favorite" => {
+                        // qobuz_download rows only (the menu gates the entry);
+                        // toggle by the REAL Qobuz id, never the local row id
+                        // (spec §3.2 — Tauri's latent bug, not ported).
+                        match row.qobuz_track_id {
+                            Some(qid) => toggle_track_favorite(
+                                runtime.clone(),
+                                weak.clone(),
+                                handle.clone(),
+                                qid.to_string(),
+                            ),
+                            None => log::debug!(
+                                "[qbz-slint] favorite: album row {id} has no qobuz_track_id"
+                            ),
+                        }
                     }
                     _ => {
                         log::debug!(
@@ -7755,6 +7850,85 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 playlist_picker::apply(&w, playlists);
                             });
                         });
+                    }
+                    "add-to-mixtape" => {
+                        // Single-row Add to Mixtape/Collection (Tracks tab +
+                        // folder-detail rows; spec §3.1). Same resolution as
+                        // play-next: loaded cache first (Plex rows included —
+                        // stored as source "local" in the mixtape contract),
+                        // DB fallback off-thread for folder rows.
+                        if let Some(row) = local_library::local_track_by_id(id.as_str()) {
+                            let items = myqbz_add::track_items_from_local(&[row]);
+                            open_add_to_mixtape(weak.clone(), handle.clone(), items);
+                        } else if let Ok(rid) = id.parse::<i64>() {
+                            let weak2 = weak.clone();
+                            let handle2 = handle.clone();
+                            handle.spawn(async move {
+                                let row = tokio::task::spawn_blocking(move || {
+                                    crate::library_db::with_db(|db| db.get_track(rid))
+                                        .flatten()
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                                if let Some(row) = row {
+                                    let items = myqbz_add::track_items_from_local(&[row]);
+                                    open_add_to_mixtape(weak2, handle2, items);
+                                }
+                            });
+                        }
+                    }
+                    "favorite" => {
+                        // Library-surface favorite: the menu only shows the
+                        // entry on qobuz_download rows (TrackRow gates on
+                        // source == "qobuz"), and the toggle uses the row's
+                        // REAL qobuz_track_id — never the local row id, which
+                        // is what Tauri sends (spec §3.2 latent bug; we port
+                        // the intent, not the bug).
+                        if let Some(row) = local_library::local_track_by_id(id.as_str()) {
+                            match row.qobuz_track_id {
+                                Some(qid) => toggle_track_favorite(
+                                    runtime.clone(),
+                                    weak.clone(),
+                                    handle.clone(),
+                                    qid.to_string(),
+                                ),
+                                None => log::debug!(
+                                    "[qbz-slint] favorite: local row {id} has no qobuz_track_id"
+                                ),
+                            }
+                        } else if let Ok(rid) = id.parse::<i64>() {
+                            // Folder rows aren't in the Tracks cache: resolve
+                            // off-thread, then hop back to the UI thread (the
+                            // toggle reads/writes UI models).
+                            let runtime = runtime.clone();
+                            let weak2 = weak.clone();
+                            let handle2 = handle.clone();
+                            handle.spawn(async move {
+                                let row = tokio::task::spawn_blocking(move || {
+                                    crate::library_db::with_db(|db| db.get_track(rid))
+                                        .flatten()
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                                let Some(qid) = row.and_then(|r| r.qobuz_track_id) else {
+                                    log::debug!(
+                                        "[qbz-slint] favorite: row {rid} has no qobuz_track_id"
+                                    );
+                                    return;
+                                };
+                                let weak3 = weak2.clone();
+                                let _ = weak2.upgrade_in_event_loop(move |_w| {
+                                    toggle_track_favorite(
+                                        runtime,
+                                        weak3,
+                                        handle2,
+                                        qid.to_string(),
+                                    );
+                                });
+                            });
+                        }
                     }
                     _ => {
                         log::debug!("[qbz-slint] unhandled local track action: {id} {action}");
