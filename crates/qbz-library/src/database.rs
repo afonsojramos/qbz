@@ -52,6 +52,10 @@ impl LibraryDatabase {
         // same database file. Idempotent CREATE IF NOT EXISTS.
         crate::local_playlists::init_schema(&db.conn)
             .map_err(|e| LibraryError::Database(format!("local_playlists schema: {}", e)))?;
+        // Qobuz playlist snapshot (offline-mode B7/B8) — names + membership
+        // captured opportunistically while online. Idempotent.
+        crate::qobuz_playlist_snapshot::init_schema(&db.conn)
+            .map_err(|e| LibraryError::Database(format!("qobuz_playlist_snapshot schema: {}", e)))?;
         Ok(db)
     }
 
@@ -4695,6 +4699,33 @@ impl LibraryDatabase {
     }
 
     // === Qobuz Downloads Integration ===
+
+    /// All offline-copy rows: `source = 'qobuz_download'` with a real Qobuz
+    /// id — the same set the Local Library "Offline" source filter shows.
+    /// Read-only; used by the offline favorites rail (B9) to find favorite
+    /// tracks that are playable without Qobuz.
+    pub fn get_qobuz_download_tracks(&self) -> Result<Vec<LocalTrack>, LibraryError> {
+        let sql = format!(
+            "SELECT {} FROM local_tracks \
+             WHERE source = 'qobuz_download' AND qobuz_track_id IS NOT NULL \
+             ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, track_number",
+            Self::TRACK_COLUMNS
+        );
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], |row| Self::row_to_track(row))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let mut tracks = Vec::new();
+        for track in rows {
+            tracks.push(track.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(tracks)
+    }
 
     /// Check if a track exists by Qobuz track ID
     pub fn track_exists_by_qobuz_id(&self, qobuz_track_id: u64) -> Result<bool, LibraryError> {

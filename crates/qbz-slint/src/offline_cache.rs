@@ -39,6 +39,12 @@ pub fn is_cached(track_id: &str) -> bool {
     cached_ids().lock().map(|s| s.contains(&id)).unwrap_or(false)
 }
 
+/// Clone of the ready-set (B8: playlist-snapshot ∩ cached availability
+/// checks). Safe from blocking threads — plain mutex, no DB hit.
+pub fn cached_ids_set() -> HashSet<u64> {
+    cached_ids().lock().map(|s| s.clone()).unwrap_or_default()
+}
+
 fn mark_cached(track_id: u64, cached: bool) {
     if let Ok(mut set) = cached_ids().lock() {
         if cached {

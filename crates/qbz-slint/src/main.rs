@@ -67,10 +67,12 @@ mod locallibrary_prefs;
 mod tag_editor;
 mod offline;
 mod offline_cache;
+mod offline_favorites;
 mod offline_manager;
 mod offline_mode;
 mod playlist;
 mod playlist_manager;
+mod playlist_snapshot;
 mod plex_auth;
 mod plex_settings;
 mod playlist_picker;
@@ -1824,6 +1826,21 @@ fn wire_playlist_manager(
             .global::<PlaylistManagerActions>()
             .on_toggle_favorite(move |id| {
                 let Some(w) = weak.upgrade() else { return };
+                // LOCAL playlist (B3): the flag lives on its own
+                // local_playlists row — the u64 settings table can't hold it.
+                if local_playlist::is_local_id(id.as_str()) {
+                    let value = playlist_manager::toggle_local_favorite(&w, id.as_str());
+                    refresh_pm_covers(&w);
+                    let lid = id.to_string();
+                    handle.spawn(async move {
+                        tokio::task::spawn_blocking(move || {
+                            local_playlist::set_favorite_blocking(&lid, value)
+                        })
+                        .await
+                        .ok();
+                    });
+                    return;
+                }
                 let Ok(pid) = id.parse::<u64>() else { return };
                 let value = playlist_manager::toggle_favorite_local(&w, pid);
                 refresh_pm_covers(&w);
@@ -1842,6 +1859,26 @@ fn wire_playlist_manager(
             .global::<PlaylistManagerActions>()
             .on_toggle_hidden(move |id| {
                 let Some(w) = weak.upgrade() else { return };
+                // LOCAL playlist (B3): the flag lives on its own
+                // local_playlists row; hidden locals drop from the sidebar.
+                if local_playlist::is_local_id(id.as_str()) {
+                    let value = playlist_manager::toggle_local_hidden(&w, id.as_str());
+                    refresh_pm_covers(&w);
+                    let lid = id.to_string();
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let handle = handle.clone();
+                    handle.clone().spawn(async move {
+                        tokio::task::spawn_blocking(move || {
+                            local_playlist::set_hidden_blocking(&lid, value)
+                        })
+                        .await
+                        .ok();
+                        // The sidebar reflects hidden playlists, so refresh it.
+                        load_sidebar_playlists(runtime, weak, &handle);
+                    });
+                    return;
+                }
                 let Ok(pid) = id.parse::<u64>() else { return };
                 let value = playlist_manager::toggle_hidden_local(&w, pid);
                 refresh_pm_covers(&w);
@@ -4313,6 +4350,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // B9 — offline Favorites "playable favorites" rail: rebuild on every
+    // mount of the Favorites offline placeholder (the rail's init fires
+    // load), play the rail from the clicked row.
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<OfflineFavoritesActions>().on_load(move || {
+            offline_favorites::load(weak.clone(), handle.clone());
+        });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<OfflineFavoritesActions>().on_play(move |id| {
+            offline_favorites::play(
+                runtime.clone(),
+                weak.clone(),
+                handle.clone(),
+                id.to_string(),
+            );
+        });
+    }
+
     // Appearance settings persistence. The toggles/selects set their
     // AppearanceState property locally, then fire these generic callbacks so
     // the choice survives restart. Tray keys persist to the shared per-user
@@ -5359,17 +5420,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // move, then persist the full order off-thread.
                     if let Some(w) = weak.upgrade() {
                         let up = action == "move-up";
-                        let orders = playlist::move_track(&w, id.as_str(), up);
                         let pid = w.global::<PlaylistState>().get_id().to_string();
-                        if !orders.is_empty() {
-                            if let Ok(pid) = pid.parse::<u64>() {
-                                handle.spawn(async move {
-                                    tokio::task::spawn_blocking(move || {
-                                        playlist::persist_custom(pid, orders);
-                                    })
-                                    .await
-                                    .ok();
-                                });
+                        // LOCAL playlist (B2): the move writes the repo's
+                        // position order directly (no custom-order sidecar).
+                        if local_playlist::is_local_id(&pid) {
+                            local_playlist::move_row(&w, &handle, id.as_str(), up);
+                        } else {
+                            let orders = playlist::move_track(&w, id.as_str(), up);
+                            if !orders.is_empty() {
+                                if let Ok(pid) = pid.parse::<u64>() {
+                                    handle.spawn(async move {
+                                        tokio::task::spawn_blocking(move || {
+                                            playlist::persist_custom(pid, orders);
+                                        })
+                                        .await
+                                        .ok();
+                                    });
+                                }
                             }
                         }
                     }

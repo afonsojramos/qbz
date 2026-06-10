@@ -44,6 +44,7 @@ import { LabelReleasesView } from "../label/LabelReleasesView.slint";
 import { LabelPageView } from "../label/LabelPageView.slint";
 import { ArtistsByLocationView } from "../location/ArtistsByLocationView.slint";
 import { FavoritesView } from "../favorites/FavoritesView.slint";
+import { FavoritesOfflineRail } from "../favorites/FavoritesOfflineRail.slint";
 import { MixView } from "../mix/MixView.slint";
 import { PlaylistView } from "../playlist/PlaylistView.slint";
 import { PlaylistManagerView } from "../playlist/PlaylistManagerView.slint";
@@ -183,8 +184,13 @@ export component AppShell inherits Rectangle {
 
                 // Offline: every Qobuz-only view below mounts only while
                 // online; the shared placeholder takes the pane otherwise
-                // (ADR-010 — the `if` lives here at the mount site).
-                if root.qobuz-view-blocked: OfflinePlaceholder { }
+                // (ADR-010 — the `if` lives here at the mount site). The
+                // Favorites mount alone injects the B9 "playable favorites"
+                // rail into the placeholder's children slot.
+                if root.qobuz-view-blocked && NavState.view != ContentView.favorites: OfflinePlaceholder { }
+                if root.qobuz-view-blocked && NavState.view == ContentView.favorites: OfflinePlaceholder {
+                    FavoritesOfflineRail { }
+                }
 
                 if NavState.view == ContentView.home && !OfflineState.offline: HomeView {
                     album-clicked(id) => {

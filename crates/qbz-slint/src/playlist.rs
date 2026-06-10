@@ -313,6 +313,16 @@ where
         .description
         .map(|d| crate::strip_html::strip_html(&d))
         .unwrap_or_default();
+    // B7 producer (membership): this fetch already returned the FULL track
+    // list — full-replace the playlist's snapshot membership, detached (the
+    // render never waits). No-ops for playlists outside the user's listed
+    // set (no snapshot header), so merely-viewed public playlists stay out.
+    crate::playlist_snapshot::record_detail_detached(
+        playlist_id,
+        pl.name.clone(),
+        pl.owner.name.clone(),
+        tracks.iter().map(|t| t.id).collect(),
+    );
     Some(PlaylistData {
         id: pl.id.to_string(),
         name: pl.name,

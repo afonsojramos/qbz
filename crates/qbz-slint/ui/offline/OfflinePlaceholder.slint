@@ -62,5 +62,10 @@ export component OfflinePlaceholder inherits Rectangle {
                 }
             }
         }
+
+        // Optional extra content under the placeholder copy. Empty on the
+        // generic mounts; the Favorites mount injects the B9 "playable
+        // favorites" rail here (see AppShell + FavoritesOfflineRail).
+        @children
     }
 }

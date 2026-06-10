@@ -3192,3 +3192,23 @@ export global OfflineModeActions {
     // persistence + #279 snapshot path as the Settings toggle.
     callback set-offline(bool);
 }
+
+// B9 — offline Favorites "playable favorites" rail. While OFFLINE the
+// Favorites view is replaced by the OfflinePlaceholder; this rail (mounted
+// as the placeholder's children on the Favorites mount only) lists the
+// favorite tracks that are still playable — offline-cache READY copies and
+// library qobuz_download rows — so the view isn't a dead end.
+export global OfflineFavoritesState {
+    // The playable favorite tracks, display order = play order (the Rust
+    // side keeps a matching queue; a row click plays the rail from there).
+    in property <[SlimItem]> tracks: [];
+}
+
+export global OfflineFavoritesActions {
+    // (Re)build the rail from the local stores — fired by the rail's init
+    // on every mount of the Favorites offline placeholder.
+    callback load();
+    // Play the rail starting at the clicked track id (offline-capable
+    // queue path; the cached copies play through the offline tier).
+    callback play(string);
+}

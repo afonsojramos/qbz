@@ -96,6 +96,13 @@ pub fn is_favorite(track_id: &str) -> bool {
     contains(id)
 }
 
+/// Snapshot of the full favorite-track id set. Powers the offline
+/// favorites rail (B9): the disk-first seeding makes this correct while
+/// offline, right after session activation.
+pub fn all() -> HashSet<u64> {
+    FAVORITES.read().map(|g| g.clone()).unwrap_or_default()
+}
+
 /// True when the given numeric track id is in the favorite set.
 pub fn contains(track_id: u64) -> bool {
     FAVORITES

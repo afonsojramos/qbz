@@ -732,14 +732,23 @@ pub fn navigate(
 
 // ──────────────── Mixed Qobuz playlist — offline detail (D11.a) ────────────────
 
-/// Open the OFFLINE rendering of a MIXED (Qobuz-id) playlist: its local
-/// sidecar rows (`playlist_local_tracks`) plus — under INDUCED offline only —
-/// its Plex sidecar rows (`playlist_plex_tracks`; availability rule). The
-/// Qobuz membership lives in the API and is not enumerable offline, so the
-/// detail structurally shows ZERO Qobuz rows (spec D11 honest limit). The
-/// name/description come from the sidebar's last-loaded cache (real names
-/// after a mid-session flip; the synthesized fallback on a cold offline
-/// start — the name is not stored locally anywhere).
+/// Open the OFFLINE rendering of a MIXED (Qobuz-id) playlist: the playlist's
+/// SNAPSHOT membership rows that are playable offline (B8: snapshot ∩
+/// cached, grace-gated, resolved from the offline-cache index like the
+/// LOCAL detail's Cached rows), then its local sidecar rows
+/// (`playlist_local_tracks`) plus — under INDUCED offline only — its Plex
+/// sidecar rows (`playlist_plex_tracks`; availability rule).
+///
+/// MERGE RULE: the Qobuz block renders FIRST in snapshot position order,
+/// then the sidecar block in sidecar position order — the sidecar positions
+/// are absolute slots assigned AFTER the Qobuz block by the online append
+/// convention, so block-then-block keeps each source's own order without
+/// trusting cross-source position arithmetic against a cached-only Qobuz
+/// subset. A track present both in the snapshot and as a sidecar local row
+/// renders twice, exactly like the online detail does.
+///
+/// The name/description come from the sidebar's last-loaded session cache,
+/// else the persisted snapshot name (B7 — survives a cold offline start).
 pub fn navigate_qobuz_offline(
     weak: slint::Weak<AppWindow>,
     handle: &tokio::runtime::Handle,
@@ -761,39 +770,84 @@ pub fn navigate_qobuz_offline(
 
         let plex_allowed = crate::offline_mode::engine().status().mode
             == qbz_app::offline_mode::OfflineMode::InducedOffline;
-        let (rows, custom_artwork_path) = tokio::task::spawn_blocking(move || {
-            crate::library_db::with_db(|db| {
-                let mut rows: Vec<LoadedRow> = db
-                    .get_playlist_local_tracks_with_position(playlist_id)?
-                    .into_iter()
-                    .map(|r| LoadedRow {
-                        position: r.playlist_position,
-                        item: RowItem::Local(Box::new(r.track)),
-                    })
-                    .collect();
-                if plex_allowed {
-                    rows.extend(
-                        db.get_playlist_plex_tracks_with_position(playlist_id)?
-                            .into_iter()
-                            .map(|(key, position)| LoadedRow {
-                                position,
-                                item: RowItem::Plex { key },
-                            }),
-                    );
-                    rows.sort_by_key(|r| r.position);
-                }
-                let custom = db
-                    .get_playlist_settings(playlist_id)?
-                    .and_then(|s| s.custom_artwork_path)
-                    .filter(|p| !p.is_empty());
-                Ok((rows, custom))
+        let (sidecar_rows, custom_artwork_path, playable_ids, snapshot_name) =
+            tokio::task::spawn_blocking(move || {
+                let (rows, custom) = crate::library_db::with_db(|db| {
+                    let mut rows: Vec<LoadedRow> = db
+                        .get_playlist_local_tracks_with_position(playlist_id)?
+                        .into_iter()
+                        .map(|r| LoadedRow {
+                            position: r.playlist_position,
+                            item: RowItem::Local(Box::new(r.track)),
+                        })
+                        .collect();
+                    if plex_allowed {
+                        rows.extend(
+                            db.get_playlist_plex_tracks_with_position(playlist_id)?
+                                .into_iter()
+                                .map(|(key, position)| LoadedRow {
+                                    position,
+                                    item: RowItem::Plex { key },
+                                }),
+                        );
+                        rows.sort_by_key(|r| r.position);
+                    }
+                    let custom = db
+                        .get_playlist_settings(playlist_id)?
+                        .and_then(|s| s.custom_artwork_path)
+                        .filter(|p| !p.is_empty());
+                    Ok((rows, custom))
+                })
+                .unwrap_or_default();
+                (
+                    rows,
+                    custom,
+                    crate::playlist_snapshot::playable_track_ids_blocking(playlist_id),
+                    crate::playlist_snapshot::name_blocking(playlist_id),
+                )
             })
-            .unwrap_or_default()
-        })
-        .await
-        .unwrap_or_default();
+            .await
+            .unwrap_or_default();
+
+        // B8: resolve the playable snapshot ids against the offline-cache
+        // index (metadata + B5 cover chain), keeping snapshot order. Ids
+        // whose copy vanished since the cached-set check resolve to nothing
+        // and drop, mirroring the LOCAL detail's D11 filter.
+        let mut rows: Vec<LoadedRow> = Vec::new();
+        if !playable_ids.is_empty() {
+            if let Some(off) = crate::offline::get().await {
+                let cache_path = off.get_cache_path();
+                let guard = off.db.lock().await;
+                if let Some(db) = guard.as_ref() {
+                    for (i, tid) in playable_ids.iter().enumerate() {
+                        if let Ok(Some(info)) = db.get_track(*tid) {
+                            if matches!(info.status, qbz_offline_cache::OfflineCacheStatus::Ready) {
+                                let artwork_path = info.resolve_cover_path(&cache_path);
+                                rows.push(LoadedRow {
+                                    position: i as i32,
+                                    item: RowItem::Cached {
+                                        track_id: info.track_id,
+                                        title: info.title,
+                                        artist: info.artist,
+                                        album: info.album.unwrap_or_default(),
+                                        duration_secs: info.duration_secs,
+                                        bit_depth: info.bit_depth,
+                                        sample_rate: info.sample_rate,
+                                        artwork_path,
+                                    },
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Merge rule (see the doc comment): Qobuz snapshot block first,
+        // sidecar block after, each in its own position order.
+        rows.extend(sidecar_rows);
 
         let (name, description) = crate::sidebar::playlist_name_desc(playlist_id)
+            .or_else(|| snapshot_name.map(|n| (n, String::new())))
             .unwrap_or_else(|| ("Playlist".to_string(), String::new()));
         let (http_jobs, local_jobs) = artwork_jobs(&rows);
         let _ = weak.upgrade_in_event_loop(move |w| {
@@ -810,10 +864,11 @@ pub fn navigate_qobuz_offline(
     });
 }
 
-/// Apply the offline sidecar rows of a mixed Qobuz playlist into
-/// `PlaylistState`. Read-only header (`is_owner` false — Qobuz edits can't
-/// run offline); playback flows through this module's queue snapshot, the
-/// same machinery the LOCAL detail uses. UI thread.
+/// Apply the offline rows of a mixed Qobuz playlist (the cached snapshot
+/// block + the sidecar block, see `navigate_qobuz_offline`'s merge rule)
+/// into `PlaylistState`. Read-only header (`is_owner` false — Qobuz edits
+/// can't run offline); playback flows through this module's queue snapshot,
+/// the same machinery the LOCAL detail uses. UI thread.
 fn apply_qobuz_offline(
     window: &AppWindow,
     playlist_id: u64,
@@ -839,7 +894,7 @@ fn apply_qobuz_offline(
     let state = window.global::<PlaylistState>();
     state.set_id(playlist_id.to_string().into());
     state.set_name(name.into());
-    state.set_owner("Local tracks only — offline".into());
+    state.set_owner("Available tracks only — offline".into());
     let description = crate::strip_html::strip_html(&description);
     state.set_description(description.clone().into());
     state.set_description_short(description.into());

@@ -33,6 +33,7 @@ mod cue_parser;
 mod database;
 pub mod ephemeral;
 pub mod local_playlists;
+pub mod qobuz_playlist_snapshot;
 mod errors;
 mod metadata;
 mod models;

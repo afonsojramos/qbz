@@ -47,6 +47,9 @@ struct PmPlaylist {
     position: i32,
     /// Up to four de-duplicated cover URLs (same scheme as the sidebar).
     cover_urls: Vec<String>,
+    /// B8: >= 1 snapshot track playable offline (snapshot ∩ cached,
+    /// grace-gated). Extends the D11.b offline filter; false while online.
+    offline_available: bool,
 }
 
 impl PmPlaylist {
@@ -116,8 +119,22 @@ where
         log::warn!("[qbz-slint] playlist-manager playlists load failed: {e}");
         Vec::new()
     });
+    // B7 producer (names): persist id+name(+owner, track_count) for ALL
+    // listed playlists — data this load already fetched, written detached.
+    // Offline the fetch is gate-refused (empty), so nothing is written.
+    crate::playlist_snapshot::record_names_detached(
+        remote
+            .iter()
+            .map(|p| crate::playlist_snapshot::SnapshotNameEntry {
+                qobuz_playlist_id: p.id,
+                name: p.name.clone(),
+                owner: Some(p.owner.name.clone()).filter(|o| !o.is_empty()),
+                track_count: Some(p.tracks_count),
+            })
+            .collect(),
+    );
 
-    let (folders, settings, play_counts, local_counts, locals) =
+    let (folders, settings, play_counts, local_counts, locals, snapshot_names, snapshot_available) =
         tokio::task::spawn_blocking(|| {
             let locals: Vec<PmLocalPlaylist> = crate::local_playlist::list_blocking()
                 .into_iter()
@@ -130,17 +147,38 @@ where
                     is_hidden: p.hidden,
                 })
                 .collect();
+            // B7/B8 (offline only): snapshot names for the synthesized
+            // entries + the snapshot-available visibility set.
+            let (snapshot_names, snapshot_available) =
+                if crate::offline_mode::engine().is_offline() {
+                    (
+                        crate::playlist_snapshot::headers_blocking(),
+                        crate::playlist_snapshot::available_offline_blocking(),
+                    )
+                } else {
+                    (HashMap::new(), std::collections::HashSet::new())
+                };
             (
                 crate::folders::load_folders_full(),
                 crate::folders::playlist_settings_map(),
                 crate::folders::playlist_play_counts(),
                 crate::folders::playlist_local_counts(),
                 locals,
+                snapshot_names,
+                snapshot_available,
             )
         })
         .await
         .unwrap_or_else(|_| {
-            (Vec::new(), HashMap::new(), HashMap::new(), HashMap::new(), Vec::new())
+            (
+                Vec::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                Vec::new(),
+                HashMap::new(),
+                std::collections::HashSet::new(),
+            )
         });
 
     let folder_ids: std::collections::HashSet<&String> = folders.iter().map(|f| &f.id).collect();
@@ -166,30 +204,46 @@ where
                 folder_id,
                 position: s.position,
                 cover_urls: cover_urls(p),
+                offline_available: snapshot_available.contains(&p.id),
             }
         })
         .collect();
 
-    // D11.b — OFFLINE: the Qobuz fetch is gate-refused (empty), so the MIXED
-    // playlists (>= 1 local sidecar row) are synthesized from the local
-    // counts to stay reachable. Their names are not stored locally anywhere
-    // (`playlist_settings` has no name column), so a cold offline start
-    // falls back to "Playlist (N local)"; a mid-session flip keeps the real
-    // name via the sidebar's name cache (loaded while online).
+    // D11.b — OFFLINE: the Qobuz fetch is gate-refused (empty), so the
+    // reachable playlists are synthesized locally: the MIXED ones (>= 1
+    // local sidecar row) plus — B8 — the snapshot-available ones (>= 1
+    // cached snapshot track). Names: the sidebar's session cache (loaded
+    // while online), else the persisted snapshot (B7 — survives a cold
+    // offline start), else the "Playlist (N local)" fallback.
     if crate::offline_mode::engine().is_offline() {
         let known: std::collections::HashSet<u64> = playlists.iter().map(|p| p.id).collect();
-        for (&id, &count) in &local_counts {
-            if count == 0 || known.contains(&id) {
+        let mut ids: Vec<u64> = local_counts
+            .iter()
+            .filter(|&(_, &count)| count > 0)
+            .map(|(&id, _)| id)
+            .collect();
+        for &id in &snapshot_available {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        for id in ids {
+            if known.contains(&id) {
                 continue;
             }
+            let count = local_counts.get(&id).copied().unwrap_or(0);
             let s = settings.get(&id).cloned().unwrap_or_default();
+            let snapshot = snapshot_names.get(&id);
             let name = crate::sidebar::playlist_name_desc(id)
                 .map(|(name, _)| name)
+                .or_else(|| snapshot.map(|(name, _)| name.clone()))
                 .unwrap_or_else(|| format!("Playlist ({count} local)"));
             playlists.push(PmPlaylist {
                 id,
                 name,
-                tracks_count: 0,
+                // The snapshot's point-in-time Qobuz total when known
+                // ("# of tracks" sort + the card count line).
+                tracks_count: snapshot.and_then(|(_, tc)| *tc).unwrap_or(0),
                 duration: 0,
                 local_count: count,
                 play_count: play_counts.get(&id).copied().unwrap_or(0),
@@ -198,6 +252,7 @@ where
                 folder_id: s.folder_id.filter(|fid| folder_ids.contains(fid)),
                 position: s.position,
                 cover_urls: Vec::new(),
+                offline_available: snapshot_available.contains(&id),
             });
         }
     }
@@ -507,12 +562,13 @@ pub fn rebuild(window: &AppWindow) {
         .collect();
 
     // Filtered + sorted playlists for the grid / list. While OFFLINE only
-    // the MIXED playlists (>= 1 local sidecar track) stay (D11.b).
+    // the MIXED (>= 1 local sidecar track) and snapshot-available (>= 1
+    // cached snapshot track, B8) playlists stay (D11.b).
     let offline = crate::offline_mode::engine().is_offline();
     let filtered: Vec<PmPlaylist> = data
         .playlists
         .iter()
-        .filter(|p| !offline || p.local_count > 0)
+        .filter(|p| !offline || p.local_count > 0 || p.offline_available)
         .filter(|p| passes(p, &query, &filter, folder_mode, &view_mode))
         .cloned()
         .collect();
@@ -597,8 +653,9 @@ fn build_tree(data: &PmData, query: &str, filter: &str, sort: &str) -> Vec<PmTre
     let offline = crate::offline_mode::engine().is_offline();
 
     let matches = |p: &PmPlaylist| -> bool {
-        // D11.b: offline only the MIXED playlists stay.
-        if offline && p.local_count == 0 {
+        // D11.b: offline only the MIXED and snapshot-available (B8)
+        // playlists stay.
+        if offline && p.local_count == 0 && !p.offline_available {
             return false;
         }
         if searching && !p.name.to_lowercase().contains(query) {
