@@ -33,23 +33,16 @@ where
 {
     let core = runtime.core();
 
-    // Belt-and-suspenders: signing in is an explicit intent to reach Qobuz.
-    // If a session-scoped offline session is still active (e.g. invoked from
-    // the login screen after a logout that raced the engine reset), end it so
-    // the still-gated parts of the pipeline (cold bundle init, post-login
-    // activation) work. The persisted `induced` preference is NOT touched —
-    // a successful login reloads it via init_for_user and the app correctly
-    // lands back in induced offline.
-    let offline_engine = crate::offline_mode::engine();
-    if offline_engine.status().offline_session {
-        log::info!("[qbz-slint] sign-in requested with an offline session active — ending it");
-        offline_engine.set_offline_session(false);
-    }
-
-    // Ensure the Qobuz client is initialized (bundle tokens).
-    if !core.is_api_initialized().await {
-        core.try_init_api().await.map_err(|e| e.to_string())?;
-    }
+    // NOTE: no offline_session pre-clear here. The sign-in endpoints are
+    // EXEMPT from the offline gate (qbz-qobuz raw-client auth methods since
+    // c207f232), so a live offline session never blocks the login itself —
+    // and session activation (`runtime.activate`) is purely local. The old
+    // upfront clear ended the offline session the moment the attempt
+    // STARTED, which unlocked the shell (empty Discover/Library) while the
+    // browser OAuth was still pending. The flag now drops on SUCCESS only
+    // (below); the one still-gated dependency — a cold bundle-token init —
+    // is scoped inside ensure_api_initialized.
+    ensure_api_initialized(core).await?;
 
     let app_id = {
         let client_lock = core.client();
@@ -134,6 +127,40 @@ where
     })
 }
 
+/// Make sure the Qobuz client holds bundle tokens before a sign-in call.
+///
+/// The sign-in POSTs are gate-exempt, but `try_init_api`'s cold bundle
+/// fetch is a network SERVICE request and stays gated on purpose. When an
+/// unauthenticated offline session holds the gate closed (sign-in from the
+/// offline shell's badge flyout / recovery path), lift the session flag
+/// ONLY around this init and put it back immediately after, success or
+/// failure — the offline session must end exclusively on a COMPLETED
+/// login (the callers' success paths), never as a side effect of merely
+/// starting an attempt. No-op in the normal case: an offline session boots
+/// from cached bundle tokens, so the client is already initialized and the
+/// flag is never touched.
+async fn ensure_api_initialized<A>(core: &qbz_core::QbzCore<A>) -> Result<(), String>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    if core.is_api_initialized().await {
+        return Ok(());
+    }
+    let offline_engine = crate::offline_mode::engine();
+    let lifted = offline_engine.status().offline_session;
+    if lifted {
+        log::info!(
+            "[qbz-slint] cold bundle init with an offline session active — lifting the flag for the init only"
+        );
+        offline_engine.set_offline_session(false);
+    }
+    let result = core.try_init_api().await.map_err(|e| e.to_string());
+    if lifted {
+        offline_engine.set_offline_session(true);
+    }
+    result
+}
+
 /// True only for an EXPLICIT auth rejection from Qobuz: a 401 on the token
 /// login (`AuthenticationError`) or an ineligible-account verdict. Network
 /// failures, the offline gate, 5xx, rate limiting, parse errors and unknown
@@ -172,9 +199,9 @@ where
     };
 
     let core = runtime.core();
-    if !core.is_api_initialized().await {
-        core.try_init_api().await.map_err(|e| e.to_string())?;
-    }
+    // Same scoped handling of the gated cold bundle init as the browser
+    // flow (no-op when the client already holds tokens).
+    ensure_api_initialized(core).await?;
 
     match core.login_with_token(&token).await {
         Ok(session) => {
