@@ -14,6 +14,7 @@ import { Typography } from "../foundation/typography.slint";
 import { QbzCheckbox } from "../primitives/QbzCheckbox.slint";
 import { QbzPrimaryButton } from "../primitives/QbzPrimaryButton.slint";
 import { QbzTextLink } from "../primitives/QbzTextLink.slint";
+import { OfflineState } from "../state.slint";
 
 export component LoginScreen inherits Rectangle {
     in-out property <bool> tos-accepted: true;
@@ -129,7 +130,79 @@ export component LoginScreen inherits Rectangle {
                         }
                     }
                     Rectangle { height: 10px; }
-                    HorizontalLayout {
+
+                    // --- Offline-boot callout (spec §4.1) --------------------
+                    // No connectivity: point the user at the Start-offline link
+                    // right below. Gated on has-previous-session too — the link
+                    // it points at is hidden without prior user data.
+                    if OfflineState.has-previous-session && OfflineState.connectivity == 2: VerticalLayout {
+                        spacing: 2px;
+                        Rectangle {
+                            background: Theme.surface-elevated;
+                            border-radius: Radius.sm;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 4px;
+                                Text {
+                                    text: @tr("No internet connection — you can start in offline mode with your local library and downloads");
+                                    color: Theme.text-secondary;
+                                    font-size: Typography.body;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                                if OfflineState.captive-portal: Text {
+                                    text: @tr("A network sign-in page may be blocking the connection");
+                                    color: Theme.text-muted;
+                                    font-size: Typography.legal;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                        // Caret pointing at the Start-offline link below.
+                        Text {
+                            text: "▼";
+                            color: Theme.text-muted;
+                            font-size: Typography.legal;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    // Init-error variant of the same box (session restore
+                    // failed for a non-connectivity reason). Hidden while the
+                    // connectivity box shows — never two boxes at once.
+                    if OfflineState.login-error != "" && OfflineState.connectivity != 2: VerticalLayout {
+                        spacing: 0px;
+                        Rectangle {
+                            background: Theme.surface-elevated;
+                            border-radius: Radius.sm;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 4px;
+                                Text {
+                                    text: @tr("Could not restore your session");
+                                    color: Theme.text-primary;
+                                    font-size: Typography.body;
+                                    font-weight: Typography.medium;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: OfflineState.login-error;
+                                    color: Theme.text-muted;
+                                    font-size: Typography.legal;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                        Rectangle { height: Spacing.sm; }
+                    }
+
+                    if OfflineState.has-previous-session: HorizontalLayout {
                         alignment: center;
                         QbzTextLink {
                             label: @tr("Start offline (no access to Qobuz™ services)");

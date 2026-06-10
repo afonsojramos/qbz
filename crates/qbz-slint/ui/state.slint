@@ -3093,3 +3093,31 @@ export global SearchActions {
     // Request the next page for the given tab.
     callback load-more(int);
 }
+
+// ============================ Offline MODE ================================
+// App-wide offline MODE status (the app operating without Qobuz — NOT the
+// offline CACHE/downloads). Mirrors `qbz_app::offline_mode::OfflineStatus`;
+// pushed by crate::offline_mode::start_ui_forwarder on every engine
+// broadcast. Read by the login screen (offline-boot affordances) and the
+// shell (D2 recovery banner); the gating slice adds more consumers.
+export global OfflineState {
+    // Any offline flavor active (mode != online).
+    in property <bool> offline: false;
+    // 0 = online, 1 = real offline, 2 = induced offline.
+    in property <int> mode: 0;
+    // Raw connectivity, independent of the mode: 0 unknown, 1 up, 2 down.
+    in property <int> connectivity: 0;
+    // A probe was answered by a redirect — typical captive portal.
+    in property <bool> captive-portal: false;
+    // D2: unauthenticated offline session while connectivity is back up —
+    // the shell shows the one-click "Sign in" banner.
+    in property <bool> show-recovery-banner: false;
+    // A previous login exists (last_user_id on disk). Gates the login
+    // screen's "Start offline" affordance: offline mode needs a prior
+    // user's data, never the empty user-0 profile.
+    in property <bool> has-previous-session: false;
+    // Startup session-restore failure detail, shown on the login screen
+    // ("" = none). Set by the restore task's error arm; cleared on any
+    // successful shell entry.
+    in property <string> login-error: "";
+}

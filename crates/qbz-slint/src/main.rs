@@ -217,6 +217,11 @@ async fn enter_shell(
         let state = w.global::<SessionState>();
         state.set_user_name(session.display_name.into());
         state.set_subscription(session.subscription.into());
+        // A successful login means a previous session now exists; clear any
+        // stale boot restore error from the login screen.
+        let offline_state = w.global::<OfflineState>();
+        offline_state.set_has_previous_session(true);
+        offline_state.set_login_error("".into());
         seed_tray_appearance(&w, &tray);
         // Seed the My QBZ branding (label + icon) from the per-user store so
         // the sidebar row + Settings row paint the custom values immediately.
@@ -3446,6 +3451,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // lifetime (login screen included — the restore flow and the D2 recovery
     // banner both depend on it). Per-user state binds later on activation.
     offline_mode::start();
+    // Mirror engine status into the OfflineState Slint global (login
+    // affordances + the D2 recovery banner) and seed has-previous-session.
+    offline_mode::start_ui_forwarder(window.as_weak());
 
     // Startup: initialize the core, then try to restore a saved session.
     // A valid saved token jumps straight to the shell; otherwise the
@@ -3473,7 +3481,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(e) => {
                     log::error!("[qbz-slint] session restore failed: {e}");
-                    let _ = weak.upgrade_in_event_loop(|w| w.set_screen(AppScreen::Login));
+                    // Surface the failure on the login screen (init-error box,
+                    // spec §4.1); cleared again on any successful shell entry.
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        w.global::<OfflineState>().set_login_error(e.into());
+                        w.set_screen(AppScreen::Login);
+                    });
                 }
             }
         });
@@ -3538,6 +3551,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             handle.spawn(async move {
                 if let Err(e) = enter_shell_offline(runtime, weak, settings_ctx).await {
                     log::error!("[qbz-slint] offline start failed: {e}");
+                }
+            });
+        });
+    }
+
+    // D2 recovery: one click on the shell banner re-logs-in with the saved
+    // token and runs the full online entry over the live offline session.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        let settings_ctx = settings_ctx.clone();
+        window.on_recovery_login(move || {
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let image_cache = image_cache.clone();
+            let settings_ctx = settings_ctx.clone();
+            handle.spawn(async move {
+                // The offline session keeps the Qobuz gate closed (D3), which
+                // would refuse the recovery login itself. Lift the session
+                // flag for the attempt; restore it on failure so the gate
+                // closes again and the banner returns (connectivity is up).
+                offline_mode::engine().set_offline_session(false);
+                match auth::restore_saved_session(&runtime).await {
+                    Ok(Some(session)) => {
+                        log::info!(
+                            "[qbz-slint] recovery login succeeded for user {}",
+                            session.user_id
+                        );
+                        enter_shell(runtime, weak, image_cache, settings_ctx, session).await;
+                    }
+                    Ok(None) => {
+                        log::warn!("[qbz-slint] recovery login: saved session no longer usable");
+                        offline_mode::engine().set_offline_session(true);
+                        let _ = weak.upgrade_in_event_loop(|w| {
+                            toast::error(&w, "Sign-in failed — the saved session is no longer valid");
+                            w.global::<OfflineState>()
+                                .set_login_error("Saved session is no longer valid".into());
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("[qbz-slint] recovery login failed: {e}");
+                        offline_mode::engine().set_offline_session(true);
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            toast::error(&w, format!("Sign-in failed: {e}"));
+                            w.global::<OfflineState>().set_login_error(e.into());
+                        });
+                    }
                 }
             });
         });

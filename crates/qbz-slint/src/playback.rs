@@ -2595,11 +2595,20 @@ mod tests {
 /// Start the playback poll loop. Runs for the app lifetime: every ~450ms
 /// it reads the player event and pushes position / progress onto
 /// `NowPlayingState`. When a track ends it auto-advances the queue.
+///
+/// Guarded against double-start: the shell can now be entered twice per
+/// process (offline session, then the D2 recovery login runs the full
+/// online entry over it) and a second loop would double the track-end
+/// auto-advance.
 pub fn start_poll_loop(
     runtime: Runtime,
     weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
 ) {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     let spawn_handle = handle.clone();
     spawn_handle.spawn(async move {
         // Track whether the last poll observed an active track, so the

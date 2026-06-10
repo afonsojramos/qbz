@@ -118,6 +118,15 @@ pub fn init(
     if TRAY.get().is_some() {
         return;
     }
+    // On Linux TRAY is set asynchronously (inside the init thread below), so
+    // the OnceLock check alone leaves a window where a second shell entry
+    // (offline session -> D2 recovery login) would spawn a duplicate ksni
+    // tray. This synchronous flag closes it; checked after `enabled` so a
+    // disabled first call does not burn the one-shot.
+    static INIT_STARTED: AtomicBool = AtomicBool::new(false);
+    if INIT_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
 
     #[cfg(target_os = "linux")]
     {

@@ -16,9 +16,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use qbz_app::offline_mode::{ConnectivityActor, OfflineModeEngine};
+use slint::ComponentHandle;
+
+use qbz_app::offline_mode::{Connectivity, ConnectivityActor, OfflineMode, OfflineModeEngine, OfflineStatus};
 use qbz_app::settings::subscription::SubscriptionStateStore;
 use qbz_app::user_data::UserDataPaths;
+
+use crate::{AppWindow, OfflineState};
 
 /// Process-global engine. Exists from first use; per-user state binds via
 /// [`init_for_user`], connectivity via [`start`].
@@ -60,6 +64,49 @@ pub fn request_recheck() {
     if let Some(actor) = CONNECTIVITY.get() {
         actor.request_recheck();
     }
+}
+
+/// Mirror every engine status change into the `OfflineState` Slint global
+/// (login affordances + the D2 recovery banner read it). Also seeds
+/// `has-previous-session` once; `enter_shell` refreshes it after a
+/// successful login. Spawned once from `main` right after [`start`]
+/// (needs the tokio runtime context and a created window).
+pub fn start_ui_forwarder(weak: slint::Weak<AppWindow>) {
+    let has_previous = UserDataPaths::load_last_user_id().is_some();
+    let seed_weak = weak.clone();
+    let _ = seed_weak.upgrade_in_event_loop(move |w| {
+        w.global::<OfflineState>()
+            .set_has_previous_session(has_previous);
+    });
+
+    tokio::spawn(async move {
+        let mut rx = engine().subscribe();
+        loop {
+            let status = *rx.borrow_and_update();
+            let _ = weak.upgrade_in_event_loop(move |w| apply_status(&w, status));
+            if rx.changed().await.is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// Push one engine status snapshot into the Slint global (UI thread).
+fn apply_status(w: &AppWindow, status: OfflineStatus) {
+    let state = w.global::<OfflineState>();
+    state.set_offline(status.is_offline());
+    state.set_mode(match status.mode {
+        OfflineMode::Online => 0,
+        OfflineMode::RealOffline => 1,
+        OfflineMode::InducedOffline => 2,
+    });
+    state.set_connectivity(match status.connectivity {
+        Connectivity::Unknown => 0,
+        Connectivity::Up => 1,
+        Connectivity::Down => 2,
+    });
+    state.set_captive_portal(status.captive_portal);
+    state.set_show_recovery_banner(status.show_recovery_banner());
 }
 
 /// `<data_dir>/qbz/users/<user_id>/` — the per-user directory both the

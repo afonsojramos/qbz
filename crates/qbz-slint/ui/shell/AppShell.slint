@@ -8,7 +8,9 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, ShellState } from "../state.slint";
+import { Typography } from "../foundation/typography.slint";
+import { NavState, ContentView, ShellState, OfflineState } from "../state.slint";
+import { SecondaryButton } from "../primitives/SecondaryButton.slint";
 import { Sidebar } from "Sidebar.slint";
 import { HeaderBar } from "HeaderBar.slint";
 import { HeaderMenuOverlay } from "HeaderMenuOverlay.slint";
@@ -69,6 +71,11 @@ export component AppShell inherits Rectangle {
     callback settings-release-device();
     callback logout();
     callback close-app();
+    // D2 recovery banner: sign back in with the saved token.
+    callback recovery-login();
+
+    // The recovery banner participates in the content-height arithmetic below.
+    property <length> recovery-banner-height: OfflineState.show-recovery-banner ? 40px : 0px;
 
     background: Theme.surface-main;
 
@@ -97,6 +104,35 @@ export component AppShell inherits Rectangle {
             }
             close-app => {
                 root.close-app();
+            }
+        }
+
+        // D2 recovery banner — an unauthenticated offline session while
+        // connectivity is back: one click signs back in with the saved token.
+        // In layout flow (below the header, above the content row), so the
+        // root-level modal overlays declared after the layout still cover it.
+        if OfflineState.show-recovery-banner: Rectangle {
+            height: root.recovery-banner-height;
+            background: Theme.accent.with-alpha(0.12);
+            HorizontalLayout {
+                alignment: center;
+                spacing: 12px;
+                padding-top: 3px;
+                padding-bottom: 3px;
+                Text {
+                    text: @tr("Connection available — sign back in to Qobuz");
+                    color: Theme.text-primary;
+                    font-size: Typography.body;
+                    vertical-alignment: center;
+                }
+                // SecondaryButton declares its TouchArea last internally, and
+                // the button is the last child here — nothing paints over it.
+                SecondaryButton {
+                    label: @tr("Sign in");
+                    clicked => {
+                        root.recovery-login();
+                    }
+                }
             }
         }
 
@@ -143,7 +179,7 @@ export component AppShell inherits Rectangle {
                         // truth for the bar height (New + Classic both use it).
                         // When the Small / Large bar layouts land with a DIFFERENT
                         // height, make that value mode-aware and this stays correct.
-                        height: root.height - Layout.header-height - Layout.player-bar-height - 8px;
+                        height: root.height - Layout.header-height - root.recovery-banner-height - Layout.player-bar-height - 8px;
                         vertical-stretch: 1;
                         background: Theme.surface-main;
                             border-radius: Radius.md;
