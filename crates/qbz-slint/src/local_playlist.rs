@@ -385,7 +385,7 @@ fn mmss(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-fn total_duration_label(rows: &[LoadedRow]) -> String {
+pub(crate) fn total_duration_label(rows: &[LoadedRow]) -> String {
     let secs: u64 = rows
         .iter()
         .map(|r| match &r.item {
@@ -401,6 +401,128 @@ fn total_duration_label(rows: &[LoadedRow]) -> String {
         format!("{} h {} min", mins / 60, mins % 60)
     } else {
         format!("{} min", mins)
+    }
+}
+
+/// Read + resolve a QOBUZ playlist's SIDECAR rows (`playlist_local_tracks`
+/// + `playlist_plex_tracks`) with their stored absolute positions —
+/// the shared reader behind the offline mixed detail
+/// ([`navigate_qobuz_offline`]) and the ONLINE mixed detail
+/// (`playlist::load`). Runs the one-shot position healing first (Seam C:
+/// collided slots — the legacy 0-based picker/drag writes, Tauri's
+/// create-and-add parallel 0-based local+plex rows — renumber stably into
+/// the append region; drift alone is never touched, E7). Plex refs resolve
+/// from the Plex cache in one bulk lookup; misses render the honest
+/// `Unresolved` row (E8, fix-forward from 47c31525) instead of vanishing.
+/// Returned rows are local-table-first then plex, each position ASC — the
+/// stable claim order the interleave's same-slot emit relies on (E1/E2).
+/// Blocking — run on a worker thread.
+pub fn read_sidecar_rows_blocking(
+    playlist_id: u64,
+    qobuz_track_count: u32,
+    include_plex: bool,
+) -> Vec<LoadedRow> {
+    let (mut rows, plex_refs) = crate::library_db::with_db(|db| {
+        match db.heal_playlist_sidecar_positions(playlist_id, qobuz_track_count) {
+            Ok(healed) => {
+                for entry in &healed {
+                    log::warn!(
+                        "[qbz-slint] playlist {playlist_id}: healed sidecar position collision — {entry}"
+                    );
+                }
+            }
+            Err(e) => {
+                // Healing is best-effort; the merge tolerates collisions
+                // (same-slot rows all emit) so reading still proceeds.
+                log::warn!("[qbz-slint] playlist {playlist_id}: sidecar healing failed: {e}");
+            }
+        }
+        let rows: Vec<LoadedRow> = db
+            .get_playlist_local_tracks_with_position(playlist_id)?
+            .into_iter()
+            .map(|r| LoadedRow {
+                position: r.playlist_position,
+                item: RowItem::Local(Box::new(r.track)),
+            })
+            .collect();
+        let plex_refs: Vec<(String, i32)> = if include_plex {
+            db.get_playlist_plex_tracks_with_position(playlist_id)?
+        } else {
+            Vec::new()
+        };
+        Ok((rows, plex_refs))
+    })
+    .unwrap_or_default();
+    if !plex_refs.is_empty() {
+        let keys: Vec<String> = plex_refs.iter().map(|(key, _)| key.clone()).collect();
+        let resolved: HashMap<String, qbz_library::LocalTrack> =
+            match qbz_plex::plex_cache_get_cached_tracks_by_keys(&keys) {
+                Ok(list) => list
+                    .into_iter()
+                    .map(crate::local_library::map_plex_cached_to_local_track)
+                    .map(|t| (t.file_path.clone(), t))
+                    .collect(),
+                Err(e) => {
+                    log::warn!(
+                        "[qbz-slint] playlist {playlist_id}: plex cache resolve failed: {e}"
+                    );
+                    HashMap::new()
+                }
+            };
+        rows.extend(plex_refs.into_iter().map(|(key, position)| LoadedRow {
+            position,
+            item: match resolved.get(&key) {
+                Some(track) => RowItem::Plex(Box::new(track.clone())),
+                None => {
+                    log::warn!(
+                        "[qbz-slint] playlist {playlist_id}: plex key {key:?} not in the Plex cache — rendered as unavailable"
+                    );
+                    RowItem::Unresolved {
+                        kind: "plex",
+                        reference: key,
+                    }
+                }
+            },
+        }));
+    }
+    rows
+}
+
+/// Adopt the ONLINE mixed Qobuz detail's merged queue snapshot into the
+/// open-detail statics this module owns (CURRENT_QUEUE / CURRENT_META /
+/// ROW_POSITIONS), so `play_from_visible` / `play_all` /
+/// `plex_key_for_row` / `local_picker_ref_for_row` / drag work over the
+/// merged rows exactly like the LOCAL and offline details (row identity
+/// E11). `offline_only` is always false here — a real Qobuz playlist never
+/// stamps the D8 guard; the QConnect queue-push exclusion of the local/plex
+/// rows happens per-track at admission (`QueueTrack.source`). UI thread.
+pub fn set_open_mixed_snapshot(
+    playlist_id: &str,
+    queue: Vec<QueueTrack>,
+    positions: HashMap<String, i32>,
+) {
+    if let Ok(mut cur) = CURRENT_QUEUE.lock() {
+        *cur = queue;
+    }
+    if let Ok(mut meta) = CURRENT_META.lock() {
+        *meta = Some((playlist_id.to_string(), false));
+    }
+    if let Ok(mut pos) = ROW_POSITIONS.lock() {
+        *pos = positions;
+    }
+}
+
+/// Clear the open-detail snapshot (pure-Qobuz detail / navigation reset) so
+/// stale local rows from a previously open detail can never resolve.
+pub fn clear_open_snapshot() {
+    if let Ok(mut cur) = CURRENT_QUEUE.lock() {
+        cur.clear();
+    }
+    if let Ok(mut meta) = CURRENT_META.lock() {
+        *meta = None;
+    }
+    if let Ok(mut pos) = ROW_POSITIONS.lock() {
+        pos.clear();
     }
 }
 
@@ -864,9 +986,10 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
 }
 
 /// Build the queue snapshot + display rows + id->position map for a resolved
-/// row list. Shared by the LOCAL detail [`apply`] and the offline MIXED
-/// detail ([`apply_qobuz_offline`]).
-fn build_row_models(
+/// row list. Shared by the LOCAL detail [`apply`], the offline MIXED detail
+/// ([`apply_qobuz_offline`]) and the ONLINE mixed detail
+/// (`playlist::apply`) — one row-identity contract for all three (E11).
+pub(crate) fn build_row_models(
     rows: &[LoadedRow],
 ) -> (Vec<QueueTrack>, Vec<TrackItem>, HashMap<String, i32>) {
     let mut queue: Vec<QueueTrack> = Vec::new();
@@ -1076,64 +1199,30 @@ pub fn navigate_qobuz_offline(
             == qbz_app::offline_mode::OfflineMode::InducedOffline;
         let (sidecar_rows, custom_artwork_path, playable_ids, snapshot_name) =
             tokio::task::spawn_blocking(move || {
-                let (mut rows, plex_refs, custom) = crate::library_db::with_db(|db| {
-                    let rows: Vec<LoadedRow> = db
-                        .get_playlist_local_tracks_with_position(playlist_id)?
-                        .into_iter()
-                        .map(|r| LoadedRow {
-                            position: r.playlist_position,
-                            item: RowItem::Local(Box::new(r.track)),
-                        })
-                        .collect();
-                    let plex_refs: Vec<(String, i32)> = if plex_allowed {
-                        db.get_playlist_plex_tracks_with_position(playlist_id)?
-                    } else {
-                        Vec::new()
-                    };
-                    let custom = db
+                // Healing base: the best offline guess at the Qobuz block
+                // size (sidebar session cache, else the B7 snapshot count).
+                let qobuz_count = crate::sidebar::playlist_track_count(playlist_id)
+                    .or_else(|| {
+                        crate::playlist_snapshot::headers_blocking()
+                            .get(&playlist_id)
+                            .and_then(|(_, count)| *count)
+                    })
+                    .unwrap_or(0);
+                // Shared sidecar reader (heals positions, resolves Plex from
+                // cache, honest Unresolved fallbacks). Plex rows only under
+                // INDUCED offline (availability rule, E13).
+                let mut rows =
+                    read_sidecar_rows_blocking(playlist_id, qobuz_count, plex_allowed);
+                // Sidecar block in one position order (stable: local rows
+                // stay before plex on a tie, the merge's claim order).
+                rows.sort_by_key(|r| r.position);
+                let custom = crate::library_db::with_db(|db| {
+                    Ok(db
                         .get_playlist_settings(playlist_id)?
                         .and_then(|s| s.custom_artwork_path)
-                        .filter(|p| !p.is_empty());
-                    Ok((rows, plex_refs, custom))
+                        .filter(|p| !p.is_empty()))
                 })
-                .unwrap_or_default();
-                if !plex_refs.is_empty() {
-                    // Resolve the sidecar keys from the Plex cache DB (same
-                    // bulk getter the LOCAL detail uses) — full metadata,
-                    // playable; misses render the honest unavailable row.
-                    let keys: Vec<String> =
-                        plex_refs.iter().map(|(key, _)| key.clone()).collect();
-                    let resolved: HashMap<String, qbz_library::LocalTrack> =
-                        match qbz_plex::plex_cache_get_cached_tracks_by_keys(&keys) {
-                            Ok(list) => list
-                                .into_iter()
-                                .map(crate::local_library::map_plex_cached_to_local_track)
-                                .map(|t| (t.file_path.clone(), t))
-                                .collect(),
-                            Err(e) => {
-                                log::warn!(
-                                    "[qbz-slint] playlist {playlist_id}: plex cache resolve failed: {e}"
-                                );
-                                HashMap::new()
-                            }
-                        };
-                    rows.extend(plex_refs.into_iter().map(|(key, position)| LoadedRow {
-                        position,
-                        item: match resolved.get(&key) {
-                            Some(track) => RowItem::Plex(Box::new(track.clone())),
-                            None => {
-                                log::warn!(
-                                    "[qbz-slint] playlist {playlist_id}: plex key {key:?} not in the Plex cache — rendered as unavailable"
-                                );
-                                RowItem::Unresolved {
-                                    kind: "plex",
-                                    reference: key,
-                                }
-                            }
-                        },
-                    }));
-                    rows.sort_by_key(|r| r.position);
-                }
+                .flatten();
                 (
                     rows,
                     custom,

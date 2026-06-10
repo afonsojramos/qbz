@@ -1592,15 +1592,98 @@ fn navigate_playlist(
             w.global::<NavState>().set_view(ContentView::Playlist);
         });
         if let Some(data) = playlist::load(&runtime, id).await {
-            let jobs = playlist::artwork_jobs(&data);
+            // Mixed rows split across loaders like the LOCAL detail:
+            // Qobuz rows = http covers, local sidecar rows = file paths,
+            // plex rows = tokenized Plex thumbs.
+            let (http_jobs, local_jobs, plex_jobs) = playlist::artwork_jobs(&data);
             let pid = data.id.clone();
             let _ = weak.upgrade_in_event_loop(move |w| {
                 playlist::apply(&w, data);
                 let owned = sidebar::contains(&w, &pid);
                 w.global::<PlaylistState>().set_is_owner(owned);
             });
-            artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+            if !http_jobs.is_empty() {
+                artwork::spawn_loads(http_jobs, weak.clone(), image_cache.clone());
+            }
+            if !local_jobs.is_empty() {
+                artwork::spawn_local_loads(local_jobs, weak.clone(), image_cache.clone());
+            }
+            if !plex_jobs.is_empty() {
+                let plex = plex_settings::get();
+                artwork::spawn_local_or_plex_loads(
+                    plex_jobs,
+                    plex.base_url,
+                    plex.token,
+                    weak.clone(),
+                    image_cache.clone(),
+                );
+            }
         }
+    });
+}
+
+/// Namespace-split removal from the ONLINE Qobuz playlist detail (Seam D):
+/// Qobuz rows go to the Qobuz API as `playlist_track_id`s (resolved through
+/// the loaded detail — fixing the old bulk path that shipped TRACK ids),
+/// local rows to `remove_local_track_from_playlist`, plex rows to
+/// `remove_plex_track_from_playlist`; then the detail reloads (re-merge).
+/// The bulk bar calls this with the selection; the per-row "Remove from
+/// playlist" menu entry (follow-up) calls it with a single row.
+fn playlist_remove_rows(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+    pid: u64,
+    rows: Vec<playlist::SelectedRow>,
+) {
+    // Resolve on the UI thread: ptids from the loaded Track cache, plex
+    // keys from the open queue snapshot.
+    let split = playlist::split_for_removal(&rows);
+    if split.playlist_track_ids.is_empty()
+        && split.local_track_ids.is_empty()
+        && split.plex_keys.is_empty()
+    {
+        log::warn!("[qbz-slint] playlist {pid}: nothing resolvable in the removal selection");
+        return;
+    }
+    handle.clone().spawn(async move {
+        let local_ids = split.local_track_ids;
+        let plex_keys = split.plex_keys;
+        if !local_ids.is_empty() || !plex_keys.is_empty() {
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::library_db::with_db(|db| {
+                    for rid in &local_ids {
+                        db.remove_local_track_from_playlist(pid, *rid)?;
+                    }
+                    for key in &plex_keys {
+                        db.remove_plex_track_from_playlist(pid, key)?;
+                    }
+                    Ok(())
+                })
+            })
+            .await;
+        }
+        if !split.playlist_track_ids.is_empty() {
+            if let Err(e) = runtime
+                .core()
+                .remove_tracks_from_playlist(pid, &split.playlist_track_ids)
+                .await
+            {
+                log::error!("[qbz-slint] remove tracks from playlist failed: {e}");
+            }
+        }
+        // Reload + leave edit mode (the reload re-merges the sidecar).
+        let _ = weak.upgrade_in_event_loop(|w| {
+            playlist::set_multi_select(&w, false);
+        });
+        navigate_playlist(
+            runtime.clone(),
+            weak.clone(),
+            &handle,
+            image_cache.clone(),
+            pid.to_string(),
+        );
     });
 }
 
@@ -4892,11 +4975,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Only consult the local-playlist queue snapshot while
                     // its detail is the OPEN view — a stale snapshot row id
                     // could collide with a genuine catalog id from a Qobuz
-                    // surface (both are small integers).
+                    // surface (both are small integers). The ONLINE mixed
+                    // Qobuz detail shares the snapshot (E11), so its
+                    // local/plex rows type their refs the same way.
                     let in_local_detail = w.global::<NavState>().get_view()
                         == ContentView::Playlist
                         && (w.global::<PlaylistState>().get_is_local()
-                            || w.global::<PlaylistState>().get_offline_subset());
+                            || w.global::<PlaylistState>().get_offline_subset()
+                            || playlist::is_mixed());
                     let local_ref: Option<String> = if id.starts_with("plex:") {
                         // Unresolved Plex row in a playlist detail — the id
                         // already carries the rating key.
@@ -5297,11 +5383,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("playlist", "play-all") => {
                     // LOCAL playlist detail — its own queue snapshot +
                     // offline-only stamp (D8); the offline sidecar view of
-                    // a MIXED playlist (D11.a) shares that snapshot; the
-                    // Qobuz path is unchanged below.
+                    // a MIXED playlist (D11.a) AND the ONLINE mixed detail
+                    // (Seam B: source-aware merged queue) share that
+                    // snapshot; the pure-Qobuz path is unchanged below.
                     if let Some(w) = weak.upgrade() {
                         let ps = w.global::<PlaylistState>();
-                        if ps.get_is_local() || ps.get_offline_subset() {
+                        if ps.get_is_local()
+                            || ps.get_offline_subset()
+                            || playlist::is_mixed()
+                        {
                             local_playlist::play_all(
                                 &w,
                                 runtime.clone(),
@@ -5321,9 +5411,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
                 ("playlist", "shuffle") => {
+                    // Mixed pool shuffles as ONE list, local/plex rows as
+                    // equals (E9); the context stays the playlist id.
                     if let Some(w) = weak.upgrade() {
                         let ps = w.global::<PlaylistState>();
-                        if ps.get_is_local() || ps.get_offline_subset() {
+                        if ps.get_is_local()
+                            || ps.get_offline_subset()
+                            || playlist::is_mixed()
+                        {
                             local_playlist::play_all(
                                 &w,
                                 runtime.clone(),
@@ -5445,37 +5540,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             );
                             return;
                         }
+                        // QOBUZ detail (pure or mixed): split by row
+                        // namespace — qobuz rows resolve to ptids, local
+                        // rows to the local sidecar delete, plex rows to
+                        // the plex sidecar delete (Seam D).
                         let pid = w.global::<PlaylistState>().get_id().to_string();
-                        let ids = playlist::selected_ids(&w);
-                        if let (Ok(pid), false) = (pid.parse::<u64>(), ids.is_empty()) {
-                            let runtime = runtime.clone();
-                            let weak = weak.clone();
-                            let handle = handle.clone();
-                            let image_cache = image_cache.clone();
-                            handle.clone().spawn(async move {
-                                match runtime
-                                    .core()
-                                    .remove_tracks_from_playlist(pid, &ids)
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        // Reload the playlist + leave edit mode.
-                                        let _ = weak.upgrade_in_event_loop(|w| {
-                                            playlist::set_multi_select(&w, false);
-                                        });
-                                        navigate_playlist(
-                                            runtime.clone(),
-                                            weak.clone(),
-                                            &handle,
-                                            image_cache.clone(),
-                                            pid.to_string(),
-                                        );
-                                    }
-                                    Err(e) => log::error!(
-                                        "[qbz-slint] remove tracks from playlist failed: {e}"
-                                    ),
-                                }
-                            });
+                        let rows = playlist::selected_rows(&w);
+                        if let (Ok(pid), false) = (pid.parse::<u64>(), rows.is_empty()) {
+                            playlist_remove_rows(
+                                runtime.clone(),
+                                weak.clone(),
+                                handle.clone(),
+                                image_cache.clone(),
+                                pid,
+                                rows,
+                            );
                         }
                     }
                 }
@@ -8487,6 +8566,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
         window
             .global::<PlaylistPickerActions>()
             .on_pick(move |playlist_id| {
@@ -8559,20 +8639,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if refs.is_empty() {
                         return;
                     }
+                    // Seam C: append after the whole merged list AND past
+                    // any stored position (the old 0-based `enumerate`
+                    // write collided slots -> silent row loss in the
+                    // interleave). Base = the Qobuz block size from the
+                    // sidebar's session cache; re-adding an existing ref
+                    // MOVES it to the append slot (INSERT OR REPLACE, E4).
+                    let qobuz_count = sidebar::playlist_track_count(pid).unwrap_or(0);
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let handle2 = handle.clone();
+                    let image_cache = image_cache.clone();
                     handle.spawn(async move {
                         let _ = tokio::task::spawn_blocking(move || {
                             crate::library_db::with_db(|db| {
-                                for (pos, r) in refs.iter().enumerate() {
+                                let mut next =
+                                    db.next_playlist_sidecar_position(pid, qobuz_count)?;
+                                for r in refs.iter() {
                                     if let Some(key) = r.strip_prefix("plex:") {
-                                        db.add_plex_track_to_playlist(pid, key, pos as i32)?;
+                                        db.add_plex_track_to_playlist(pid, key, next)?;
+                                        next += 1;
                                     } else if let Ok(lid) = r.parse::<i64>() {
-                                        db.add_local_track_to_playlist(pid, lid, pos as i32)?;
+                                        db.add_local_track_to_playlist(pid, lid, next)?;
+                                        next += 1;
                                     }
                                 }
                                 Ok(())
                             })
                         })
                         .await;
+                        // E12: the open detail re-merges so the rows show
+                        // up immediately.
+                        let _ = weak.clone().upgrade_in_event_loop(move |w| {
+                            if w.global::<NavState>().get_view() == ContentView::Playlist
+                                && w.global::<PlaylistState>().get_id().to_string()
+                                    == pid.to_string()
+                            {
+                                navigate_playlist(
+                                    runtime,
+                                    weak,
+                                    &handle2,
+                                    image_cache,
+                                    pid.to_string(),
+                                );
+                            }
+                        });
                     });
                     return;
                 }
@@ -8644,6 +8755,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
         window.global::<DragActions>().on_end(move || {
             let Some(w) = weak.upgrade() else { return };
             let ds = w.global::<DragState>();
@@ -8684,6 +8796,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle2 = handle.clone();
+                let image_cache = image_cache.clone();
                 handle.spawn(async move {
                     let mut added = 0usize;
                     if !qobuz.is_empty() {
@@ -8694,18 +8809,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    if !local_rows.is_empty() || !plex.is_empty() {
+                    let sidecar_added = !local_rows.is_empty() || !plex.is_empty();
+                    if sidecar_added {
+                        // Seam C: append after the merged list / past any
+                        // stored position — never 0-based. The Qobuz block
+                        // size includes the rows the SAME drop just added
+                        // (the sidebar cache hasn't seen them yet).
+                        let qobuz_count = sidebar::playlist_track_count(pid)
+                            .unwrap_or(0)
+                            + qobuz.len() as u32;
                         let n = tokio::task::spawn_blocking(move || {
                             crate::library_db::with_db(|db| {
-                                for (pos, rid) in local_rows.iter().enumerate() {
-                                    db.add_local_track_to_playlist(pid, *rid, pos as i32)?;
+                                let mut next =
+                                    db.next_playlist_sidecar_position(pid, qobuz_count)?;
+                                for rid in local_rows.iter() {
+                                    db.add_local_track_to_playlist(pid, *rid, next)?;
+                                    next += 1;
                                 }
-                                for (pos, key) in plex.iter().enumerate() {
-                                    db.add_plex_track_to_playlist(
-                                        pid,
-                                        key,
-                                        (local_rows.len() + pos) as i32,
-                                    )?;
+                                for key in plex.iter() {
+                                    db.add_plex_track_to_playlist(pid, key, next)?;
+                                    next += 1;
                                 }
                                 Ok(local_rows.len() + plex.len())
                             })
@@ -8719,6 +8842,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         log::info!(
                             "[qbz-slint] dropped {added} track(s) onto playlist {pid}"
                         );
+                    }
+                    if sidecar_added {
+                        // E12: re-merge the open detail after a sidecar
+                        // write to the same playlist.
+                        let _ = weak.clone().upgrade_in_event_loop(move |w| {
+                            if w.global::<NavState>().get_view() == ContentView::Playlist
+                                && w.global::<PlaylistState>().get_id().to_string()
+                                    == pid.to_string()
+                            {
+                                navigate_playlist(
+                                    runtime,
+                                    weak,
+                                    &handle2,
+                                    image_cache,
+                                    pid.to_string(),
+                                );
+                            }
+                        });
                     }
                 });
             }
@@ -8749,11 +8890,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if field.as_str() == "custom" {
                     let pid = w.global::<PlaylistState>().get_id().to_string();
                     if let Ok(pid) = pid.parse::<u64>() {
-                        let ids = playlist::current_track_ids();
+                        // Seed keys carry (id, is_local) — Qobuz rows then
+                        // local sidecar rows, plex excluded (Tauri parity).
+                        let seed = playlist::custom_seed_keys();
                         let weak = weak.clone();
                         handle.spawn(async move {
                             let orders = tokio::task::spawn_blocking(move || {
-                                playlist::load_or_init_custom(pid, ids)
+                                playlist::load_or_init_custom(pid, seed)
                             })
                             .await
                             .unwrap_or_default();

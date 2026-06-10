@@ -665,7 +665,20 @@ export component PlaylistView inherits Rectangle {
                             index: i;
                             show-artwork: true;
                             show-album: true;
-                            show-favorite: true;
+                            // Mixed "carrete" rows (Tauri parity): the heart
+                            // + offline-cloud columns are Qobuz-only
+                            // (hideFavorite/hideDownload — a local row's id
+                            // is a library row id, not a catalog id; wiring
+                            // those columns to it mis-types the call).
+                            // Local/plex rows show the per-source glyph in
+                            // the cloud column's place instead — incl. the
+                            // REAL Plex glyph (Tauri quirk T4 fixed
+                            // forward). The reserved heart slot keeps one
+                            // duration/quality grid across row types.
+                            show-favorite: track.source == "qobuz";
+                            reserve-favorite: track.source != "qobuz";
+                            show-download: track.source == "qobuz";
+                            show-source: track.source != "qobuz" && track.source != "";
                             // Custom sort (Qobuz sidecar order) — or, on a LOCAL
                             // playlist, the Default sort: its natural order IS the
                             // editable repo order (B2), written via repo::reorder.

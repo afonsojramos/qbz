@@ -2047,9 +2047,16 @@ pub fn play_track_in_context(
             // LOCAL playlist detail (id "local:<uuid>") — queue from its
             // own resolved snapshot + the D8 offline-only stamp. The
             // offline sidecar rendering of a MIXED playlist (D11.a) plays
-            // from the same snapshot (its rows resolve locally).
+            // from the same snapshot (its rows resolve locally), and so
+            // does the ONLINE mixed detail (Seam B: source-aware
+            // QueueTracks; QConnect admission rejects the non-Qobuz rows
+            // per-track at push time). The now-playing context stays
+            // ("playlist", id) — anything Qobuz-bound that reads it
+            // re-resolves Qobuz membership, so sidecar rows are excluded
+            // from the context by construction (Tauri :1825 parity).
             if window.global::<PlaylistState>().get_is_local()
                 || window.global::<PlaylistState>().get_offline_subset()
+                || crate::playlist::is_mixed()
             {
                 if crate::local_playlist::play_from_visible(
                     window,

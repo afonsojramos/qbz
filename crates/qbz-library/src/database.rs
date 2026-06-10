@@ -4368,6 +4368,159 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    // === Sidecar position lifecycle (mixed "carrete" playlists) ===
+
+    /// Next append position for a local/Plex sidecar add to a Qobuz playlist.
+    ///
+    /// Tauri's convention is `qobuz_count + sidecar_count` — append after the
+    /// whole merged list — but that formula re-issues positions after a
+    /// removal (stored positions keep their gaps while counts shrink; Tauri
+    /// bug T3), which collides in the absolute-slot interleave and silently
+    /// loses rows. The fix-forward rule is the MAX of both worlds:
+    ///
+    /// `max(qobuz_count + local_count + plex_count, MAX(position) + 1)`
+    ///
+    /// computed across BOTH sidecar tables, so an add always lands after the
+    /// merged end AND past every stored position. Batch adds take this once
+    /// and assign `next + i` per row.
+    pub fn next_playlist_sidecar_position(
+        &self,
+        qobuz_playlist_id: u64,
+        qobuz_track_count: u32,
+    ) -> Result<i32, LibraryError> {
+        let local_count = self.get_playlist_local_track_count(qobuz_playlist_id)?;
+        let plex_count = self.get_playlist_plex_track_count(qobuz_playlist_id)?;
+        let max_pos: Option<i32> = self
+            .conn
+            .query_row(
+                "SELECT MAX(p) FROM (
+                    SELECT MAX(position) AS p FROM playlist_local_tracks
+                     WHERE qobuz_playlist_id = ?1
+                    UNION ALL
+                    SELECT MAX(position) AS p FROM playlist_plex_tracks
+                     WHERE qobuz_playlist_id = ?1
+                )",
+                params![qobuz_playlist_id as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to read max sidecar position: {}", e))
+            })?;
+        let count_based = (qobuz_track_count + local_count + plex_count) as i32;
+        Ok(count_based.max(max_pos.map(|p| p + 1).unwrap_or(0)))
+    }
+
+    /// One-shot healing for sidecar position collisions (mixed playlists).
+    ///
+    /// Positions are absolute slots in the merged interleave and have no
+    /// UNIQUE constraint; the legacy Slint picker/drag wrote them 0-based per
+    /// batch, and Tauri's create-and-add writes local AND plex rows 0-based
+    /// in parallel — both produce duplicate positions, which a Map-based
+    /// merge collapses (silent row loss, edges E1/E2). This walks both
+    /// tables in stable order (local table first, then plex; within a table
+    /// position ASC, added_at ASC, rowid ASC — the first claimant of a
+    /// contested slot keeps it, matching the merge's local-first emit) and
+    /// renumbers every LATER claimant into the append region:
+    /// `max(qobuz_track_count + sidecar_count, MAX(position) + 1)` onward.
+    ///
+    /// Non-colliding rows are NEVER touched — drift is normal (edge E7);
+    /// this is collision repair, not renormalization. Returns one
+    /// "kind ref: old -> new" description per moved row for the caller to
+    /// log; empty = nothing healed. Idempotent.
+    pub fn heal_playlist_sidecar_positions(
+        &self,
+        qobuz_playlist_id: u64,
+        qobuz_track_count: u32,
+    ) -> Result<Vec<String>, LibraryError> {
+        // (kind, rowid, ref-description, position) in stable claim order.
+        let mut rows: Vec<(&'static str, i64, String, i32)> = Vec::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, local_track_id, position FROM playlist_local_tracks
+                     WHERE qobuz_playlist_id = ?1
+                     ORDER BY position ASC, added_at ASC, id ASC",
+                )
+                .map_err(|e| {
+                    LibraryError::Database(format!("Failed to prepare heal query: {}", e))
+                })?;
+            let mapped = stmt
+                .query_map(params![qobuz_playlist_id as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i32>(2)?,
+                    ))
+                })
+                .map_err(|e| LibraryError::Database(format!("Failed to query heal rows: {}", e)))?;
+            for r in mapped {
+                let (rowid, track, pos) = r.map_err(|e| {
+                    LibraryError::Database(format!("Failed to read heal row: {}", e))
+                })?;
+                rows.push(("local", rowid, track.to_string(), pos));
+            }
+        }
+        {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, plex_rating_key, position FROM playlist_plex_tracks
+                     WHERE qobuz_playlist_id = ?1
+                     ORDER BY position ASC, added_at ASC, id ASC",
+                )
+                .map_err(|e| {
+                    LibraryError::Database(format!("Failed to prepare heal query: {}", e))
+                })?;
+            let mapped = stmt
+                .query_map(params![qobuz_playlist_id as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i32>(2)?,
+                    ))
+                })
+                .map_err(|e| LibraryError::Database(format!("Failed to query heal rows: {}", e)))?;
+            for r in mapped {
+                let (rowid, key, pos) = r.map_err(|e| {
+                    LibraryError::Database(format!("Failed to read heal row: {}", e))
+                })?;
+                rows.push(("plex", rowid, key, pos));
+            }
+        }
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let max_pos = rows.iter().map(|r| r.3).max().unwrap_or(-1);
+        let sidecar_total = rows.len();
+        let mut seen = std::collections::HashSet::new();
+        let mut moves: Vec<(&'static str, i64, String, i32)> = Vec::new();
+        for row in rows {
+            if !seen.insert(row.3) {
+                moves.push(row);
+            }
+        }
+        if moves.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut next =
+            ((qobuz_track_count as i32) + sidecar_total as i32).max(max_pos + 1);
+        let mut healed = Vec::with_capacity(moves.len());
+        for (kind, rowid, reference, old) in moves {
+            let sql = if kind == "local" {
+                "UPDATE playlist_local_tracks SET position = ?1 WHERE id = ?2"
+            } else {
+                "UPDATE playlist_plex_tracks SET position = ?1 WHERE id = ?2"
+            };
+            self.conn.execute(sql, params![next, rowid]).map_err(|e| {
+                LibraryError::Database(format!("Failed to heal sidecar position: {}", e))
+            })?;
+            healed.push(format!("{kind} {reference}: {old} -> {next}"));
+            next += 1;
+        }
+        Ok(healed)
+    }
+
     // === Playlist Custom Track Order ===
 
     /// Get custom track order for a playlist
@@ -6132,5 +6285,167 @@ mod folder_tree_tests {
             db.count_folder_tracks_recursive("/m/local", true).unwrap(),
             2
         );
+    }
+}
+
+#[cfg(test)]
+mod sidecar_position_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fresh_db() -> (TempDir, LibraryDatabase) {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("library.db");
+        let db = LibraryDatabase::open(&path).unwrap();
+        (tmp, db)
+    }
+
+    /// Real `local_tracks` rows for the FK on `playlist_local_tracks`.
+    /// Returns the library row ids in insertion order.
+    fn seed_local_tracks(db: &LibraryDatabase, count: usize) -> Vec<i64> {
+        (0..count)
+            .map(|i| {
+                let mut t = LocalTrack::default();
+                t.file_path = format!("/t/track{i}.flac");
+                t.title = format!("T{i}");
+                t.artist = "A".into();
+                t.album = "B".into();
+                db.insert_track(&t).unwrap()
+            })
+            .collect()
+    }
+
+    fn local_positions(db: &LibraryDatabase, pid: u64) -> Vec<(i64, i32)> {
+        let mut stmt = db
+            .conn
+            .prepare(
+                "SELECT local_track_id, position FROM playlist_local_tracks
+                 WHERE qobuz_playlist_id = ?1 ORDER BY local_track_id ASC",
+            )
+            .unwrap();
+        stmt.query_map(params![pid as i64], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn plex_positions(db: &LibraryDatabase, pid: u64) -> Vec<(String, i32)> {
+        let mut stmt = db
+            .conn
+            .prepare(
+                "SELECT plex_rating_key, position FROM playlist_plex_tracks
+                 WHERE qobuz_playlist_id = ?1 ORDER BY plex_rating_key ASC",
+            )
+            .unwrap();
+        stmt.query_map(params![pid as i64], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn next_position_empty_sidecar_appends_after_qobuz_block() {
+        let (_tmp, db) = fresh_db();
+        assert_eq!(db.next_playlist_sidecar_position(7, 50).unwrap(), 50);
+        assert_eq!(db.next_playlist_sidecar_position(7, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn next_position_dense_positions_match_count_formula() {
+        let (_tmp, db) = fresh_db();
+        let ids = seed_local_tracks(&db, 1);
+        db.add_local_track_to_playlist(7, ids[0], 50).unwrap();
+        db.add_plex_track_to_playlist(7, "k1", 51).unwrap();
+        // count-based 50+1+1 == max+1 == 52.
+        assert_eq!(db.next_playlist_sidecar_position(7, 50).unwrap(), 52);
+    }
+
+    #[test]
+    fn next_position_gapped_positions_clear_the_stored_max() {
+        let (_tmp, db) = fresh_db();
+        // T3 regression: positions keep gaps after removals; the count
+        // formula alone would re-issue 52 while 80 is still stored.
+        let ids = seed_local_tracks(&db, 2);
+        db.add_local_track_to_playlist(7, ids[0], 50).unwrap();
+        db.add_local_track_to_playlist(7, ids[1], 80).unwrap();
+        assert_eq!(db.next_playlist_sidecar_position(7, 50).unwrap(), 81);
+    }
+
+    #[test]
+    fn next_position_legacy_low_positions_fall_back_to_counts() {
+        let (_tmp, db) = fresh_db();
+        // Legacy 0-based rows: max+1 == 2, but the merged list is 52 long.
+        let ids = seed_local_tracks(&db, 1);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        db.add_plex_track_to_playlist(7, "k1", 1).unwrap();
+        assert_eq!(db.next_playlist_sidecar_position(7, 50).unwrap(), 52);
+    }
+
+    #[test]
+    fn next_position_scoped_per_playlist() {
+        let (_tmp, db) = fresh_db();
+        let ids = seed_local_tracks(&db, 1);
+        db.add_local_track_to_playlist(7, ids[0], 99).unwrap();
+        assert_eq!(db.next_playlist_sidecar_position(8, 10).unwrap(), 10);
+    }
+
+    #[test]
+    fn heal_without_collisions_is_a_noop() {
+        let (_tmp, db) = fresh_db();
+        let ids = seed_local_tracks(&db, 2);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        db.add_local_track_to_playlist(7, ids[1], 5).unwrap();
+        db.add_plex_track_to_playlist(7, "k1", 9).unwrap();
+        let healed = db.heal_playlist_sidecar_positions(7, 50).unwrap();
+        assert!(healed.is_empty(), "drift is normal (E7): {healed:?}");
+        assert_eq!(local_positions(&db, 7), vec![(ids[0], 0), (ids[1], 5)]);
+        assert_eq!(plex_positions(&db, 7), vec![("k1".into(), 9)]);
+    }
+
+    #[test]
+    fn heal_within_table_collision_moves_the_later_claimant() {
+        let (_tmp, db) = fresh_db();
+        // Two legacy 0-based batches: 0,1 then 0 again (E1).
+        let ids = seed_local_tracks(&db, 3);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        db.add_local_track_to_playlist(7, ids[1], 1).unwrap();
+        db.add_local_track_to_playlist(7, ids[2], 0).unwrap();
+        let healed = db.heal_playlist_sidecar_positions(7, 10).unwrap();
+        assert_eq!(healed.len(), 1, "{healed:?}");
+        // First claimant (rowid order on the added_at tie) keeps slot 0;
+        // the later one moves to the append region: max(10+3, 1+1) = 13.
+        assert_eq!(
+            local_positions(&db, 7),
+            vec![(ids[0], 0), (ids[1], 1), (ids[2], 13)]
+        );
+    }
+
+    #[test]
+    fn heal_cross_table_collision_keeps_local_moves_plex() {
+        let (_tmp, db) = fresh_db();
+        // Tauri create-and-add writes local AND plex 0-based (E2).
+        let ids = seed_local_tracks(&db, 2);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        db.add_local_track_to_playlist(7, ids[1], 1).unwrap();
+        db.add_plex_track_to_playlist(7, "k1", 0).unwrap();
+        db.add_plex_track_to_playlist(7, "k2", 1).unwrap();
+        let healed = db.heal_playlist_sidecar_positions(7, 0).unwrap();
+        assert_eq!(healed.len(), 2, "{healed:?}");
+        assert_eq!(local_positions(&db, 7), vec![(ids[0], 0), (ids[1], 1)]);
+        // Plex rows append: max(0+4, 1+1) = 4 onward, stable order.
+        assert_eq!(
+            plex_positions(&db, 7),
+            vec![("k1".into(), 4), ("k2".into(), 5)]
+        );
+    }
+
+    #[test]
+    fn heal_is_idempotent() {
+        let (_tmp, db) = fresh_db();
+        let ids = seed_local_tracks(&db, 2);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        db.add_local_track_to_playlist(7, ids[1], 0).unwrap();
+        assert!(!db.heal_playlist_sidecar_positions(7, 5).unwrap().is_empty());
+        assert!(db.heal_playlist_sidecar_positions(7, 5).unwrap().is_empty());
     }
 }

@@ -33,6 +33,12 @@ export component TrackRow inherits Rectangle {
     in property <bool> show-artwork: true;
     in property <bool> show-album: false;
     in property <bool> show-favorite: false;
+    // Keep the favorite column's 28px slot when the heart is hidden, so a
+    // surface mixing heart rows WITH heart-less rows (the playlist detail:
+    // Qobuz rows have it, local/plex sidecar rows don't) keeps one
+    // duration/quality grid — Tauri renders a placeholder for the same
+    // reason (TrackRow.svelte favorite-placeholder).
+    in property <bool> reserve-favorite: false;
     // On by default: every Qobuz track row carries the offline cloud/check
     // button. A non-Qobuz surface (future Local Library / Plex rows, which are
     // already local) should set this false.
@@ -460,6 +466,11 @@ export component TrackRow inherits Rectangle {
                     }
                 }
             }
+        }
+        // Heart-slot placeholder (column-grid alignment, see the
+        // reserve-favorite doc above).
+        if !root.show-favorite && root.reserve-favorite: Rectangle {
+            width: 28px;
         }
         // Offline cache — a stateful affordance reflecting cache-status:
         //   0 none        cloud-download  (click -> cache)
