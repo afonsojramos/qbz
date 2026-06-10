@@ -2159,6 +2159,35 @@ impl SlintQconnectService {
     }
 }
 
+/// B12 (offline-MODE): park the calling session-loop seam while the offline
+/// engine reports offline, waking ONLY on the online edge — event-driven via
+/// the engine's watch channel, no polling/sleeping. Session teardown needs no
+/// extra signal: the D5 force-disconnect watcher's `disconnect()` aborts the
+/// session-loop task (`runtime.event_loop.abort()`), which cancels this future
+/// at the `.await`. Per D5 this never triggers a reconnect by itself — when the
+/// online edge arrives with the session still alive, the caller simply resumes
+/// its normal behavior. MUST be called WITHOUT holding any service lock (it
+/// parks indefinitely; `disconnect()` needs the `inner` lock to tear down).
+async fn park_session_loop_while_offline(context: &str) {
+    let mut rx = crate::offline_mode::engine().subscribe();
+    if !rx.borrow_and_update().is_offline() {
+        return;
+    }
+    log::info!(
+        "[QConnect] {context}: offline mode active; parking the session loop until the online edge or teardown (B12)"
+    );
+    loop {
+        if rx.changed().await.is_err() {
+            // Engine sender dropped (process teardown) — nothing left to gate.
+            return;
+        }
+        if !rx.borrow_and_update().is_offline() {
+            break;
+        }
+    }
+    log::info!("[QConnect] {context}: online edge observed; resuming the session loop (B12)");
+}
+
 /// Slint-side implementation of the shared session-loop seams (piece c). Holds
 /// the handles the loop reaches back into: the app (renderer join + state reads),
 /// the shared sync accumulator, the service inner (lifecycle gating + teardown),
@@ -2182,10 +2211,13 @@ impl SessionLoopHost for SlintSessionLoopHost {
         // force-disconnect watcher is tearing the session down on the offline
         // edge; a transport reconnect that sneaks in before that lands (induced
         // offline keeps the network up) must stay dormant, not re-join.
-        if crate::offline_mode::engine().is_offline() {
-            log::info!("[QConnect] Reconnect bootstrap suppressed: offline mode active (D5)");
-            return;
-        }
+        // B12: the suppression is event-driven — instead of skipping (which
+        // left a subscribed-but-never-bootstrapped session dormant forever if
+        // the watcher's teardown raced or failed), park on the offline
+        // engine's watch channel. Teardown aborts the loop task (cancelling
+        // this wait); if the session is still alive when the online edge
+        // arrives, the normal bootstrap below resumes.
+        park_session_loop_while_offline("Reconnect bootstrap").await;
         if let Err(err) = bootstrap_remote_presence(&self.app, None).await {
             log::error!("[QConnect] Re-bootstrap after reconnect failed: {err}");
         }
@@ -2223,6 +2255,24 @@ impl SessionLoopHost for SlintSessionLoopHost {
         }
         // TODO(slint-qconnect-ui): surface the Exhausted lifecycle on the badge.
         log::warn!("[QConnect] Reconnect exhausted ({attempts}): {last_reason}");
+        // B12 (offline-MODE): the reconnect backoff loop AND the 60s idle
+        // rearm both live INSIDE qconnect-transport-ws
+        // (`idle_retry_after_exhausted`) — the host owns no retry timer it
+        // could gate, so this hook (the host-controlled point the loop hits
+        // once per rearm cycle) is the correct seam. While offline, park on
+        // the offline engine's watch channel instead of returning into
+        // another consume-and-churn cycle: the host stops burning
+        // lifecycle/lock/log cycles per rearm until either the online edge
+        // (idle-retry behavior resumes — per D5 the park itself never
+        // reconnects) or the D5 watcher's `disconnect()` aborts the loop task
+        // (cancelling the park). The transport's internal timer keeps
+        // rearming independently until that teardown lands; its events queue
+        // in the broadcast channel and drain on resume (the loop's Lagged
+        // recovery covers a pathologically long park). Only parked on the
+        // keep-idling branch — the terminate branch breaks the loop anyway.
+        if idle_retry_active {
+            park_session_loop_while_offline("Idle-retry rearm").await;
+        }
         !idle_retry_active
     }
 
