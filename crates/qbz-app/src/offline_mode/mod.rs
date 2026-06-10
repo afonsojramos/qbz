@@ -118,12 +118,21 @@ impl OfflineModeEngine {
         Ok(())
     }
 
-    /// Drop the per-user store (logout). The induced flag cache is kept until
-    /// the next `init_for_user` — the gate state must survive the transition.
+    /// Drop the per-user store AND end the session-scoped offline state
+    /// (logout). Ending the session ends the session: `offline_session` is
+    /// reset (it must not survive into the next login attempt — a surviving
+    /// flag kept the Qobuz gate closed and refused the login itself), and the
+    /// cached `induced` flag is reset too (no user ⇒ no induced opt-in
+    /// active; the user's persisted preference reloads from disk on the next
+    /// `init_for_user`). The final `recompute()` reopens the Qobuz gate when
+    /// connectivity allows.
     pub fn teardown(&self) {
         if let Ok(mut guard) = self.store.lock() {
             *guard = None;
         }
+        self.offline_session.store(false, Ordering::Relaxed);
+        self.induced.store(false, Ordering::Relaxed);
+        self.recompute();
     }
 
     /// Subscribe to status changes (UI listeners, QConnect suppressor, ...).
@@ -151,6 +160,13 @@ impl OfflineModeEngine {
         store.get_settings()
     }
 
+    /// Persist the network-folders-in-manual-offline policy flag.
+    ///
+    /// NOTE (2026-06-10): no UI calls this anymore — the Slint "Show Network
+    /// Folder Content" toggle was removed when library visibility stopped
+    /// depending on offline mode (owner verdict; see qbz-slint's
+    /// NETWORK-FOLDER VISIBILITY note). Kept (pub, no dead-code warning in a
+    /// lib crate) because the store column must stay Tauri-DB-compatible.
     pub fn set_show_network_folders(&self, enabled: bool) -> Result<(), String> {
         let guard = self
             .store
@@ -443,6 +459,50 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(audio_dir);
+    }
+
+    #[test]
+    fn teardown_ends_offline_session_and_reopens_gate() {
+        let _gate = serialize();
+        let engine = OfflineModeEngine::new();
+        engine.on_connectivity(up());
+        engine.set_offline_session(true);
+        assert_eq!(engine.status().mode, OfflineMode::RealOffline);
+        assert!(qbz_qobuz::offline_gate::is_offline());
+
+        // Logout: the session-scoped flag must NOT survive — a stale flag
+        // kept the gate closed and refused the next login.
+        engine.teardown();
+        let status = engine.status();
+        assert_eq!(status.mode, OfflineMode::Online);
+        assert!(!status.offline_session);
+        assert!(!qbz_qobuz::offline_gate::is_offline());
+    }
+
+    #[test]
+    fn teardown_clears_induced_cache_but_disk_restores_it() {
+        let _gate = serialize();
+        let dir = unique_test_dir("engine-teardown-induced");
+        let engine = OfflineModeEngine::new();
+        engine.init_for_user(&dir).unwrap();
+        engine.on_connectivity(up());
+        engine.set_induced(true, None).unwrap();
+        assert!(qbz_qobuz::offline_gate::is_offline());
+
+        // Logout: no user ⇒ no induced opt-in active ⇒ gate open.
+        engine.teardown();
+        let status = engine.status();
+        assert_eq!(status.mode, OfflineMode::Online);
+        assert!(!status.induced);
+        assert!(!qbz_qobuz::offline_gate::is_offline());
+
+        // The persisted preference survives on disk: the next activation on
+        // the same dir restores induced offline.
+        engine.init_for_user(&dir).unwrap();
+        assert_eq!(engine.status().mode, OfflineMode::InducedOffline);
+        assert!(qbz_qobuz::offline_gate::is_offline());
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

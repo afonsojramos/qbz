@@ -33,6 +33,19 @@ where
 {
     let core = runtime.core();
 
+    // Belt-and-suspenders: signing in is an explicit intent to reach Qobuz.
+    // If a session-scoped offline session is still active (e.g. invoked from
+    // the login screen after a logout that raced the engine reset), end it so
+    // the still-gated parts of the pipeline (cold bundle init, post-login
+    // activation) work. The persisted `induced` preference is NOT touched —
+    // a successful login reloads it via init_for_user and the app correctly
+    // lands back in induced offline.
+    let offline_engine = crate::offline_mode::engine();
+    if offline_engine.status().offline_session {
+        log::info!("[qbz-slint] sign-in requested with an offline session active — ending it");
+        offline_engine.set_offline_session(false);
+    }
+
     // Ensure the Qobuz client is initialized (bundle tokens).
     if !core.is_api_initialized().await {
         core.try_init_api().await.map_err(|e| e.to_string())?;

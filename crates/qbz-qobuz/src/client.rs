@@ -149,9 +149,16 @@ impl QobuzClient {
         &self.http
     }
 
-    /// The single offline choke point (D3): every Qobuz HTTP request flows
+    /// The single offline choke point (D3): every Qobuz SERVICE request flows
     /// through here. While offline mode is active, fail fast with a typed,
     /// non-transient error instead of timing out against the network.
+    ///
+    /// Exemption: the sign-in methods (`login`, `login_with_oauth_code`,
+    /// `login_with_token`) use the raw `self.http` field instead —
+    /// user-initiated authentication is an explicit intent to reach Qobuz;
+    /// the offline gate governs services, not sign-in. Without the exemption
+    /// a closed gate (induced offline, or a stale offline session) refuses
+    /// the very login that would resolve it.
     fn http(&self) -> Result<&Client> {
         if crate::offline_gate::is_offline() {
             return Err(ApiError::OfflineMode);
@@ -209,8 +216,10 @@ impl QobuzClient {
     /// Login with email and password
     pub async fn login(&self, email: &str, password: &str) -> Result<UserSession> {
         let url = endpoints::build_url(paths::USER_LOGIN);
+        // Auth exemption: raw client, bypasses the offline gate (sign-in is
+        // explicit user intent to reach Qobuz; the gate governs services).
         let response = self
-            .http()?
+            .http
             .get(&url)
             .headers(self.api_headers().await?)
             .query(&[("email", email), ("password", password)])
@@ -278,8 +287,10 @@ impl QobuzClient {
         );
 
         log::info!("[OAuth] Exchanging code for token via /oauth/callback");
+        // Auth exemption: raw client, bypasses the offline gate (sign-in is
+        // explicit user intent to reach Qobuz; the gate governs services).
         let callback_response = self
-            .http()?
+            .http
             .get(&callback_url)
             .headers(headers)
             .query(&[
@@ -320,8 +331,9 @@ impl QobuzClient {
                 .map_err(|_| ApiError::AuthenticationError("Invalid OAuth token format".into()))?,
         );
 
+        // Auth exemption: raw client (see /oauth/callback step above).
         let login_response = self
-            .http()?
+            .http
             .post(&user_login_url)
             .headers(auth_headers)
             .header("Content-Type", "text/plain;charset=UTF-8")
@@ -376,8 +388,10 @@ impl QobuzClient {
         );
 
         log::info!("[OAuth] Restoring session from saved token");
+        // Auth exemption: raw client, bypasses the offline gate (sign-in is
+        // explicit user intent to reach Qobuz; the gate governs services).
         let resp = self
-            .http()?
+            .http
             .post(&user_login_url)
             .headers(headers)
             .header("Content-Type", "text/plain;charset=UTF-8")
@@ -2693,6 +2707,53 @@ mod tests {
         assert!(
             elapsed < std::time::Duration::from_secs(1),
             "offline gate took {elapsed:?} — it must not touch the network"
+        );
+    }
+
+    /// The sign-in methods are EXEMPT from the offline gate: user-initiated
+    /// authentication is an explicit intent to reach Qobuz. On an
+    /// uninitialized client each method gets PAST the closed gate and fails
+    /// on the missing bundle tokens instead — never `ApiError::OfflineMode`,
+    /// and without touching the network.
+    #[tokio::test]
+    async fn offline_gate_exempts_login_methods() {
+        let _lock = crate::offline_gate::test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _reset = crate::offline_gate::TestGateReset;
+
+        crate::offline_gate::set_offline(true);
+
+        let client = QobuzClient::new().expect("client construction is local-only");
+
+        let err = client
+            .login("user@example.com", "pw")
+            .await
+            .err()
+            .expect("uninitialized client must fail");
+        assert!(
+            !matches!(err, ApiError::OfflineMode),
+            "login must bypass the offline gate, got: {err}"
+        );
+
+        let err = client
+            .login_with_oauth_code("code")
+            .await
+            .err()
+            .expect("uninitialized client must fail");
+        assert!(
+            !matches!(err, ApiError::OfflineMode),
+            "login_with_oauth_code must bypass the offline gate, got: {err}"
+        );
+
+        let err = client
+            .login_with_token("token")
+            .await
+            .err()
+            .expect("uninitialized client must fail");
+        assert!(
+            !matches!(err, ApiError::OfflineMode),
+            "login_with_token must bypass the offline gate, got: {err}"
         );
     }
 }
