@@ -205,12 +205,25 @@ pub(crate) async fn fetch_item_tracks(
     match resolver.resolve(item).await {
         Ok(tracks) => tracks,
         Err(e) => {
-            log::warn!(
-                "[qbz-slint] myqbz_play: fetch_item_tracks {}/{} failed: {}",
-                item.source_item_id,
-                item.title,
-                e
-            );
+            // B10 — while OFFLINE the Qobuz arms are gate-refused by design
+            // (cached items derive their badges locally in myqbz_detail), so a
+            // per-item failure here is expected noise, not a fault — log it at
+            // debug. Online failures stay warn.
+            if crate::offline_mode::engine().is_offline() {
+                log::debug!(
+                    "[qbz-slint] myqbz_play: fetch_item_tracks {}/{} failed offline: {}",
+                    item.source_item_id,
+                    item.title,
+                    e
+                );
+            } else {
+                log::warn!(
+                    "[qbz-slint] myqbz_play: fetch_item_tracks {}/{} failed: {}",
+                    item.source_item_id,
+                    item.title,
+                    e
+                );
+            }
             Vec::new()
         }
     }
