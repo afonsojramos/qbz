@@ -380,7 +380,15 @@ pub fn spawn_local_or_plex_loads(
 
 /// Resolve a remote URL to raw bytes via the shared disk cache: a hit reads
 /// from disk, a miss downloads and stores. HTTP(S) only.
-async fn fetch_cached_http(url: &str, cache: &ImageCache) -> Option<Vec<u8>> {
+///
+/// `gate_offline` controls the miss policy while offline mode is active:
+/// `true` for genuinely-INTERNET fetches (Qobuz CDN covers — offline means
+/// zero internet traffic, so a miss fails soft to the placeholder), `false`
+/// for LAN Plex thumbnails (artwork of LOCAL-library Plex rows: induced
+/// offline keeps Plex available by design, and a logged-out/real-offline
+/// session does not imply the LAN is gone — a dead-LAN attempt fails fast
+/// within `HTTP_TIMEOUT`). Disk hits always serve regardless.
+async fn fetch_cached_http(url: &str, cache: &ImageCache, gate_offline: bool) -> Option<Vec<u8>> {
     let cached_path = {
         let guard = cache.lock().ok()?;
         guard.as_ref().and_then(|service| service.get(url))
@@ -388,10 +396,10 @@ async fn fetch_cached_http(url: &str, cache: &ImageCache) -> Option<Vec<u8>> {
 
     match cached_path {
         Some(path) => tokio::fs::read(&path).await.ok(),
-        // Offline: a miss must not burn a network attempt (or pin a semaphore
-        // permit) — fail soft to the placeholder; nothing negative is cached,
-        // so the cover retries naturally once back online.
-        None if crate::offline_mode::engine().is_offline() => None,
+        // Offline: an internet miss must not burn a network attempt (or pin a
+        // semaphore permit) — fail soft to the placeholder; nothing negative
+        // is cached, so the cover retries naturally once back online.
+        None if gate_offline && crate::offline_mode::engine().is_offline() => None,
         None => {
             let downloaded = HTTP.get(url).send().await.ok()?.bytes().await.ok()?.to_vec();
             if let Ok(guard) = cache.lock() {
@@ -432,7 +440,7 @@ pub async fn fetch_and_decode_ref(
         ArtworkRef::None => return None,
         ArtworkRef::Embedded(b) => b.clone(),
         ArtworkRef::LocalFile(path) => tokio::fs::read(path).await.ok()?,
-        ArtworkRef::Remote(url) => fetch_cached_http(url, cache).await?,
+        ArtworkRef::Remote(url) => fetch_cached_http(url, cache, true).await?,
         ArtworkRef::PlexThumb {
             base_url,
             token,
@@ -443,7 +451,10 @@ pub async fn fetch_and_decode_ref(
             // `None` → raw full-res. The cache key is this final URL, so each
             // surface's transcode size caches independently.
             let url = qbz_models::plex_thumb_url(base_url, token, path, *size);
-            fetch_cached_http(&url, cache).await?
+            // LAN Plex art for LOCAL-library rows: never offline-gated (see
+            // `fetch_cached_http` docs) — the queue/now-playing/album-view
+            // covers of Plex rows must keep loading in every offline flavor.
+            fetch_cached_http(&url, cache, false).await?
         }
     };
     decode_rgba(&bytes, decode_size)
