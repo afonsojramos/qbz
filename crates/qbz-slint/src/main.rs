@@ -1489,6 +1489,91 @@ fn open_local_artist(
     }
 }
 
+/// "Go to album" / "Go to artist" for a LOCAL-surface track row
+/// (LocalLibrary Tracks tab / folder detail / local album detail) — an
+/// owner improvement over Tauri, which omits both entries on local rows.
+/// Source-routed (same split as the MyQBZ artist links and the real-id
+/// favorite entry):
+///   - local rows -> the LOCAL album view by the row's `album_group_key`
+///     (the same navigation key the now-playing bar's "Go to album" uses)
+///     / the LocalLibrary Artists tab by NAME (local artists have no id).
+///   - plex rows  -> the LOCAL album view via the content-hash
+///     `plex_album_key(artist, album)` — the row's `album_group_key` is
+///     the per-edition split key the Plex album cache is NOT keyed by
+///     (`local_queue_track` parity) — / LocalLibrary artist by name.
+///   - qobuz_download rows -> the REAL Qobuz pages. The library index
+///     carries ONLY `qobuz_track_id` (no Qobuz album/artist id columns),
+///     so the target ids are recovered with the same `get_track` resolve
+///     the Qobuz surfaces' go-to arms use; when the resolve can't deliver
+///     (offline / API error / missing id) the row falls back to the LOCAL
+///     destinations above, so the click always lands.
+/// The window's open-album / open-artist callbacks do the final routing
+/// (and the history recording).
+fn local_row_goto(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    row: qbz_library::LocalTrack,
+    to_artist: bool,
+) {
+    let album_key = if row.source.as_deref() == Some("plex") {
+        qbz_plex::plex_album_key(&row.artist, &row.album)
+    } else {
+        row.album_group_key.clone()
+    };
+    let artist_name = row.artist.clone();
+    // Local destination (the primary route for local/plex rows, the
+    // fallback for qobuz_download ones). FnOnce — each path calls it at
+    // most once, on the UI thread.
+    let open_local = move |w: &AppWindow| {
+        if to_artist {
+            if artist_name.trim().is_empty() {
+                log::debug!("[qbz-slint] go-to-artist: local row has no artist name");
+                return;
+            }
+            w.invoke_open_artist(artist_name.into());
+        } else {
+            if album_key.is_empty() {
+                log::debug!("[qbz-slint] go-to-album: local row has no album group key");
+                return;
+            }
+            w.invoke_open_album(album_key.into());
+        }
+    };
+    let qobuz_id = (row.source.as_deref() == Some("qobuz_download"))
+        .then_some(row.qobuz_track_id)
+        .flatten();
+    match qobuz_id {
+        Some(qid) if qid > 0 => {
+            handle.spawn(async move {
+                let resolved: Option<String> = match runtime.core().get_track(qid as u64).await {
+                    Ok(track) => {
+                        if to_artist {
+                            track.performer.as_ref().map(|p| p.id.to_string())
+                        } else {
+                            track.album.as_ref().map(|a| a.id.clone())
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[qbz-slint] go-to: get_track {qid} failed ({e}) — using the local destination"
+                        );
+                        None
+                    }
+                };
+                let _ = weak.upgrade_in_event_loop(move |w| match resolved {
+                    Some(qobuz_ref) if to_artist => w.invoke_open_artist(qobuz_ref.into()),
+                    Some(qobuz_ref) => w.invoke_open_album(qobuz_ref.into()),
+                    None => open_local(&w),
+                });
+            });
+        }
+        _ => {
+            let _ = weak.upgrade_in_event_loop(move |w| open_local(&w));
+        }
+    }
+}
+
 /// Open a Local Library browse tab (Albums / Artists / Folders / Tracks).
 ///
 /// Sets the active tab + switches the view, then lazily loads the tab's data
@@ -5200,6 +5285,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
                 ("track", "go-to-album") => {
+                    // Playlist-detail local/plex sidecar rows first (owner
+                    // improvement — Tauri omits the entries there): their
+                    // snapshot ids are library row ids / synthetic Plex ids,
+                    // NOT catalog ids, and the snapshot QueueTrack's album_id
+                    // already carries the LOCAL navigation key (the same one
+                    // the now-playing bar navigates by — group key / Plex
+                    // content-hash key). Qobuz + offline-copy rows fall
+                    // through to the catalog resolve below (an offline copy's
+                    // row id IS its Qobuz id).
+                    if let Some(w) = weak.upgrade() {
+                        if snapshot_detail_open(&w) {
+                            if let Some(qt) = local_playlist::queue_track_for_row(&id) {
+                                if matches!(qt.source.as_deref(), Some("local") | Some("plex")) {
+                                    match qt.album_id.filter(|k| !k.is_empty()) {
+                                        Some(key) => w.invoke_open_album(key.into()),
+                                        None => log::debug!(
+                                            "[qbz-slint] go-to-album: playlist row {id} has no album key"
+                                        ),
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    }
                     // The menu only carries the track id — resolve the
                     // track to find its album, then open it.
                     if let Ok(track_id) = id.parse::<u64>() {
@@ -5219,6 +5328,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 ("track", "go-to-artist") => {
+                    // Same local/plex diversion as go-to-album: local/plex
+                    // artists have no id, so route by NAME to the LocalLibrary
+                    // Artists tab (the open-artist callback's split).
+                    if let Some(w) = weak.upgrade() {
+                        if snapshot_detail_open(&w) {
+                            if let Some(qt) = local_playlist::queue_track_for_row(&id) {
+                                if matches!(qt.source.as_deref(), Some("local") | Some("plex")) {
+                                    if qt.artist.trim().is_empty() {
+                                        log::debug!(
+                                            "[qbz-slint] go-to-artist: playlist row {id} has no artist name"
+                                        );
+                                    } else {
+                                        w.invoke_open_artist(qt.artist.into());
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    }
                     if let Ok(track_id) = id.parse::<u64>() {
                         let runtime = runtime.clone();
                         let weak = weak.clone();
@@ -7824,6 +7952,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ),
                         }
                     }
+                    "go-to-album" | "go-to-artist" => {
+                        // Owner improvement over Tauri — source-routed in
+                        // local_row_goto. On this surface "Go to album"
+                        // reopens the open album for local rows (Qobuz
+                        // album-view parity, where the entry also exists);
+                        // qobuz_download rows reach their REAL Qobuz pages.
+                        local_row_goto(
+                            runtime.clone(),
+                            weak.clone(),
+                            &handle,
+                            row.clone(),
+                            action.as_str() == "go-to-artist",
+                        );
+                    }
                     _ => {
                         log::debug!(
                             "[qbz-slint] unhandled local album track action: {id} {action}"
@@ -8199,6 +8341,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         qid.to_string(),
                                     );
                                 });
+                            });
+                        }
+                    }
+                    "go-to-album" | "go-to-artist" => {
+                        // Owner improvement over Tauri (which omits both on
+                        // local rows): resolve the row (Tracks cache first,
+                        // DB fallback for folder-detail rows — same seam as
+                        // favorite) and source-route in local_row_goto
+                        // (local/plex -> local album view / LocalLibrary
+                        // artist by name; qobuz_download -> the REAL Qobuz
+                        // pages via its qobuz_track_id).
+                        let to_artist = action.as_str() == "go-to-artist";
+                        if let Some(row) = local_library::local_track_by_id(id.as_str()) {
+                            local_row_goto(runtime.clone(), weak.clone(), &handle, row, to_artist);
+                        } else if let Ok(rid) = id.parse::<i64>() {
+                            let runtime = runtime.clone();
+                            let weak2 = weak.clone();
+                            let handle2 = handle.clone();
+                            handle.spawn(async move {
+                                let row = tokio::task::spawn_blocking(move || {
+                                    crate::library_db::with_db(|db| db.get_track(rid))
+                                        .flatten()
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                                match row {
+                                    Some(row) => local_row_goto(
+                                        runtime, weak2, &handle2, row, to_artist,
+                                    ),
+                                    None => log::debug!(
+                                        "[qbz-slint] go-to: local row {rid} not found"
+                                    ),
+                                }
                             });
                         }
                     }

@@ -63,6 +63,16 @@ export component TrackRow inherits Rectangle {
     // Track Info menu entry visibility — a surface whose Track Info is
     // dead hides it (spec §3.3); default on keeps other surfaces unchanged.
     in property <bool> track-info-action: true;
+    // Go to Album / Go to Artist on LOCAL rows (owner improvement over
+    // Tauri, which omits both there): defaults ON for every persistent
+    // row of a force-local-menu surface (LocalLibrary Tracks/folder
+    // detail, local album detail — their Rust arms route by row source);
+    // mixed surfaces (playlist detail) opt rows in explicitly, because
+    // only RESOLVED local/plex sidecar rows have navigable keys (the
+    // "file:"/"broken:"/unresolved fallbacks must keep the entries
+    // hidden — no dead clicks).
+    in property <bool> local-goto-actions: root.force-local-menu
+        && root.track.source != "ephemeral";
     // Custom-order reorder controls (up/down chevrons) at the leading
     // edge — used by the playlist custom sort.
     in property <bool> show-reorder: false;
@@ -631,6 +641,12 @@ export component TrackRow inherits Rectangle {
         playlist-action: root.track.source != "ephemeral";
         remove-from-playlist-action: root.remove-from-playlist-action;
         track-info-action: root.track-info-action;
+        // Go to album / artist: the Qobuz block's pair, ALSO enabled on
+        // local-surface rows (local-goto-actions doc above) — the Rust
+        // arms route by source (local album view / LocalLibrary artist
+        // for local+plex, the real Qobuz pages for qobuz_download).
+        go-album-action: self.qobuz-actions || root.local-goto-actions;
+        go-artist-action: self.qobuz-actions || root.local-goto-actions;
         // Cached-state-aware offline entry (Refresh/Remove when cached) —
         // straight from the row model.
         cache-status: root.track.cache-status;

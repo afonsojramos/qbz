@@ -8,6 +8,7 @@ import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { PlaylistState, PlaylistActions, DragState, NavState, OfflineState, BulkAction } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { CircleAction } from "../primitives/CircleAction.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
@@ -15,50 +16,6 @@ import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { ListView } from "std-widgets.slint";
-
-// Header action button — homologated 1:1 with AlbumPageView's
-// CircleAction: a ghost circle (translucent fill + faint ring, never a
-// solid accent fill) so the playlist transport row matches the album
-// one. Adds `active` (accent-tinted glyph for toggled state, e.g.
-// favorite / select mode) and `enabled` (dimmed + non-interactive),
-// which the album header doesn't need but the playlist one does.
-component CircleAction inherits Rectangle {
-    in property <image> icon;
-    in property <bool> primary: false;
-    in property <bool> active: false;
-    in property <length> diameter: 40px;
-    in property <bool> enabled: true;
-    callback clicked();
-
-    width: root.diameter;
-    height: root.diameter;
-    border-radius: root.diameter / 2;
-    opacity: root.enabled ? 1.0 : 0.4;
-    // Ghost circle — translucent fill with a faint ring (matches the
-    // Tauri transport controls + AlbumPageView).
-    background: ta.has-hover ? Theme.surface-hover : transparent;
-    border-width: 1px;
-    border-color: ta.has-hover ? Theme.text-disabled : Theme.border-subtle;
-
-    QbzIcon {
-        source: root.icon;
-        width: root.primary ? 19px : 17px;
-        height: root.primary ? 19px : 17px;
-        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-        tint: root.active
-            ? Theme.accent
-            : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
-    }
-    ta := TouchArea {
-        mouse-cursor: root.enabled ? pointer : default;
-        clicked => {
-            if (root.enabled) {
-                root.clicked();
-            }
-        }
-    }
-}
 
 // One row in the Sort menu. The active field shows its direction arrow
 // (asc/desc); re-selecting it toggles direction.
@@ -718,6 +675,16 @@ export component PlaylistView inherits Rectangle {
                             // of rendering a no-op entry. Other surfaces keep
                             // the default until their own audit.
                             track-info-action: false;
+                            // Go to Album / Go to Artist on the local/plex
+                            // sidecar rows too (Qobuz rows already carry the
+                            // pair via the Qobuz block) — owner improvement
+                            // over Tauri. Only RESOLVED rows (numeric snapshot
+                            // ids) qualify: the "file:"/"broken:"/unresolved-
+                            // "plex:" fallbacks have no navigable album/artist
+                            // keys, so their entries stay hidden (no dead
+                            // clicks).
+                            local-goto-actions: (track.source == "local" || track.source == "plex")
+                                && track.id.is-float();
                             multi-select-mode: PlaylistState.multi-select-mode;
                             media-action(kind, id, action) => {
                                 if (action == "play") {

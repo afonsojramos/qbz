@@ -23,6 +23,12 @@ export component TrackContextMenu inherits PopupWindow {
     // `track-info-action` lets a surface HIDE the Track Info entry while
     // its target feature is missing there (spec §3.3) — defaults on so
     // other surfaces are untouched.
+    // `go-album-action` / `go-artist-action` — the Go to album / Go to
+    // artist pair, gated independently of the block so library surfaces
+    // can show them on local/plex/qobuz_download rows too (owner
+    // improvement over Tauri, which omits both on local rows; the Rust
+    // arms route by row source). Default to the block so Qobuz surfaces
+    // are unchanged.
     // The transient actions (play / next / queue) always show.
     in property <bool> qobuz-actions: true;
     in property <bool> favorite-action: root.qobuz-actions;
@@ -30,6 +36,8 @@ export component TrackContextMenu inherits PopupWindow {
     in property <bool> playlist-action: true;
     in property <bool> remove-from-playlist-action: false;
     in property <bool> track-info-action: true;
+    in property <bool> go-album-action: root.qobuz-actions;
+    in property <bool> go-artist-action: root.qobuz-actions;
     // The row's offline-cache status (TrackItem.cache-status): when cached
     // (3) the single "Make available offline" entry swaps for the
     // Refresh / Remove pair — Tauri's ready-state submenu, rendered flat
@@ -38,15 +46,18 @@ export component TrackContextMenu inherits PopupWindow {
     callback media-action(string, string, string);
 
     width: 224px;
-    // 3 transient + optional favorite/mixtape/add-to-playlist/remove + the
-    // Qobuz block (5 fixed + 1-or-2 offline entries + optional track info).
+    // 3 transient + optional favorite/mixtape/add-to-playlist/remove +
+    // optional go-to pair + the Qobuz block (3 fixed + 1-or-2 offline
+    // entries + optional track info).
     height: (3
         + (root.favorite-action ? 1 : 0)
         + (root.mixtape-action ? 1 : 0)
         + (root.playlist-action ? 1 : 0)
         + (root.remove-from-playlist-action ? 1 : 0)
+        + (root.go-album-action ? 1 : 0)
+        + (root.go-artist-action ? 1 : 0)
         + (root.qobuz-actions
-            ? 5 + (root.cache-status == 3 ? 2 : 1) + (root.track-info-action ? 1 : 0)
+            ? 3 + (root.cache-status == 3 ? 2 : 1) + (root.track-info-action ? 1 : 0)
             : 0)) * 30px;
 
     ContextMenu {
@@ -149,14 +160,14 @@ export component TrackContextMenu inherits PopupWindow {
                 root.media-action("track", root.track-id, "uncache");
             }
         }
-        if root.qobuz-actions: ContextMenuItem {
+        if root.go-album-action: ContextMenuItem {
             icon: @image-url("../assets/icons/disc-3.svg");
             label: @tr("Go to album");
             clicked => {
                 root.media-action("track", root.track-id, "go-to-album");
             }
         }
-        if root.qobuz-actions: ContextMenuItem {
+        if root.go-artist-action: ContextMenuItem {
             icon: @image-url("../assets/icons/user.svg");
             label: @tr("Go to artist");
             clicked => {
