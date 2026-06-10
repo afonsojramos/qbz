@@ -102,7 +102,14 @@ fn artwork_cache_dir() -> Result<PathBuf, String> {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn resolve_local_artwork(url: &str) -> Option<PathBuf> {
     if let Some(path) = url.strip_prefix("file://") {
-        return Some(PathBuf::from(path));
+        // file:// URLs built with url::Url::from_file_path (e.g. the shared
+        // disk-image cache hits handed over by playback) are percent-encoded;
+        // decode so paths with spaces/non-ASCII resolve. Fall back to the raw
+        // string on invalid UTF-8 escapes (a plain unencoded path).
+        let decoded = urlencoding::decode(path)
+            .map(|c| c.into_owned())
+            .unwrap_or_else(|_| path.to_string());
+        return Some(PathBuf::from(decoded));
     }
     if let Some(path) = url.strip_prefix("asset://localhost/") {
         let decoded = urlencoding::decode(path).ok()?;
@@ -184,11 +191,19 @@ const PORTAL_ICON_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 /// Center-crop to a square, downscale to <=512px, re-encode PNG. Mirrors the
 /// Tauri `v2_prepare_notification_icon_bytes`.
+///
+/// Decodes by CONTENT, never by extension: the shared disk-image cache names
+/// files `{md5}.img` (no real image extension), and `image::open` resolves the
+/// format from the path extension only — it returned `Unsupported` for every
+/// cache hit, which is exactly the common online case.
 #[cfg(target_os = "linux")]
 fn prepare_icon_bytes(path: &std::path::Path) -> Result<Vec<u8>, String> {
     use std::io::Cursor;
 
-    let source = image::open(path).map_err(|e| format!("Failed to decode artwork {path:?}: {e}"))?;
+    let bytes =
+        std::fs::read(path).map_err(|e| format!("Failed to read artwork {path:?}: {e}"))?;
+    let source = image::load_from_memory(&bytes)
+        .map_err(|e| format!("Failed to decode artwork {path:?}: {e}"))?;
     let (w, h) = (source.width(), source.height());
     let square = if w == h {
         source
