@@ -154,6 +154,27 @@ pub fn current_track_ids() -> Vec<u64> {
     })
 }
 
+/// The FULL (unfiltered, natural-order) row ids as strings. The LOCAL
+/// detail's reorder works over these — its Plex rows (`plex:<key>`) don't
+/// parse as u64, so `current_track_ids` can't serve it. UI thread.
+pub fn full_item_ids() -> Vec<String> {
+    FULL_ITEMS.with(|cell| cell.borrow().iter().map(|t| t.id.to_string()).collect())
+}
+
+/// Swap the FULL_ITEMS entries at natural-order indexes `a` and `b`, then
+/// re-render through the active search/sort. The LOCAL detail's optimistic
+/// reorder move (B2) — under its "default" sort the visible order IS the
+/// FULL order, so the swap shows immediately. UI thread.
+pub fn swap_full_items(window: &AppWindow, a: usize, b: usize) {
+    FULL_ITEMS.with(|cell| {
+        let mut items = cell.borrow_mut();
+        if a < items.len() && b < items.len() {
+            items.swap(a, b);
+        }
+    });
+    refresh_view(window);
+}
+
 /// Load the playlist's custom order from library.db, seeding it from
 /// `current_ids` if none exists. Blocking — run on a worker thread.
 pub fn load_or_init_custom(playlist_id: u64, current_ids: Vec<u64>) -> Vec<(u64, i32)> {

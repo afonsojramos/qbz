@@ -182,9 +182,13 @@ where
                 .filter(|(_, s)| s.hidden)
                 .map(|(id, _)| id)
                 .collect();
+            // Hidden locals drop from the sidebar (B3) the way hidden Qobuz
+            // playlists do — they stay reachable via the manager's "hidden"
+            // filter, which reads the repo list directly.
             let local_playlists: Vec<LocalSidebarPlaylist> =
                 crate::local_playlist::list_blocking()
                     .into_iter()
+                    .filter(|p| !p.hidden)
                     .map(|p| LocalSidebarPlaylist {
                         id: p.id,
                         name: p.name,

@@ -56,14 +56,18 @@ impl PmPlaylist {
 }
 
 /// Send view of one LOCAL playlist (library.db entity, id `local:<uuid>`).
-/// Listed alongside the Qobuz set with a hard-drive marker; folder
-/// membership / favorite / hidden are Qobuz-side concepts and don't apply.
+/// Listed alongside the Qobuz set with a hard-drive marker. Favorite /
+/// hidden live on the `local_playlists` row itself (B3) and participate in
+/// the manager's filter + card actions; folder membership stays a
+/// Qobuz-side concept (the folder tables are u64-keyed) and doesn't apply.
 #[derive(Clone)]
 struct PmLocalPlaylist {
     id: String,
     name: String,
     offline_only: bool,
     track_count: u32,
+    is_favorite: bool,
+    is_hidden: bool,
 }
 
 #[derive(Clone, Default)]
@@ -122,6 +126,8 @@ where
                     name: p.name,
                     offline_only: p.offline_only,
                     track_count: p.track_count,
+                    is_favorite: p.favorite,
+                    is_hidden: p.hidden,
                 })
                 .collect();
             (
@@ -241,9 +247,10 @@ fn sort_playlists(list: &mut Vec<PmPlaylist>, sort: &str) {
 
 /// Display-stage union of a Qobuz playlist and a LOCAL (library.db)
 /// playlist, so locals INTERLEAVE into the active sort instead of being
-/// appended after the Qobuz set (B4). Display-only by design: PmPlaylist's
-/// u64-keyed mutators (reorder/settings) are untouched — they parse the
-/// model ids and skip `local:` ones.
+/// appended after the Qobuz set (B4). The u64-keyed mutators (custom-order
+/// reorder, move-to-folder) still parse the model ids and skip `local:`
+/// ones — the folder tables are Qobuz-keyed; favorite / hide route to the
+/// local repo instead (B3, `toggle_local_favorite` / `toggle_local_hidden`).
 ///
 /// Sort keys locals don't have:
 /// - playcount: no local play stat — locals sort as ZERO, which under the
@@ -309,17 +316,19 @@ fn sort_entries(list: &mut [PmEntry], sort: &str) {
 }
 
 /// The LOCAL playlists that pass the toolbar filters, name-sorted (their
-/// tie/no-stat order inside `sort_entries`). They have no hidden flag, so
-/// the "hidden" filter excludes them; folder filtering N/A (root-only).
-/// `query` must already be lowercased.
+/// tie/no-stat order inside `sort_entries`). The visibility filter applies
+/// to their own hidden flag (B3, `local_playlists.hidden`); folder
+/// filtering N/A (root-only). `query` must already be lowercased.
 fn local_entries<'a>(data: &'a PmData, query: &str, filter: &str) -> Vec<&'a PmLocalPlaylist> {
-    if filter == "hidden" {
-        return Vec::new();
-    }
     let mut locals: Vec<&PmLocalPlaylist> = data
         .locals
         .iter()
         .filter(|p| query.is_empty() || p.name.to_lowercase().contains(query))
+        .filter(|p| match filter {
+            "visible" => !p.is_hidden,
+            "hidden" => p.is_hidden,
+            _ => true,
+        })
         .collect();
     locals.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     locals
@@ -455,8 +464,8 @@ fn local_playlist_item(p: &PmLocalPlaylist) -> PmPlaylistItem {
         total_count: p.track_count as i32,
         play_count: 0,
         local_status: "".into(),
-        is_favorite: false,
-        is_hidden: false,
+        is_favorite: p.is_favorite,
+        is_hidden: p.is_hidden,
         is_local_playlist: true,
         offline_only: p.offline_only,
         folder_id: "".into(),
@@ -822,6 +831,34 @@ pub fn toggle_hidden_local(window: &AppWindow, playlist_id: u64) -> bool {
     let mut new_val = false;
     if let Ok(mut c) = CACHE.lock() {
         if let Some(p) = c.playlists.iter_mut().find(|p| p.id == playlist_id) {
+            p.is_hidden = !p.is_hidden;
+            new_val = p.is_hidden;
+        }
+    }
+    rebuild(window);
+    new_val
+}
+
+/// Flip a LOCAL playlist's favorite flag in the cache + rebuild (B3).
+/// Returns the new value for the repo write.
+pub fn toggle_local_favorite(window: &AppWindow, id: &str) -> bool {
+    let mut new_val = false;
+    if let Ok(mut c) = CACHE.lock() {
+        if let Some(p) = c.locals.iter_mut().find(|p| p.id == id) {
+            p.is_favorite = !p.is_favorite;
+            new_val = p.is_favorite;
+        }
+    }
+    rebuild(window);
+    new_val
+}
+
+/// Flip a LOCAL playlist's hidden flag in the cache + rebuild (B3).
+/// Returns the new value for the repo write.
+pub fn toggle_local_hidden(window: &AppWindow, id: &str) -> bool {
+    let mut new_val = false;
+    if let Ok(mut c) = CACHE.lock() {
+        if let Some(p) = c.locals.iter_mut().find(|p| p.id == id) {
             p.is_hidden = !p.is_hidden;
             new_val = p.is_hidden;
         }

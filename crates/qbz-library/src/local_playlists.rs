@@ -56,6 +56,13 @@ pub struct LocalPlaylist {
     /// D8: never offered for upload, never reaches any Qobuz call or
     /// QConnect queue push.
     pub offline_only: bool,
+    /// B3: manager organization flags — the local twin of
+    /// `playlist_settings.is_favorite` / `.hidden` (those tables are
+    /// keyed by the Qobuz u64 id, unrepresentable for `local:` ids).
+    pub favorite: bool,
+    /// B3: hidden playlists drop from the sidebar and group under the
+    /// manager's "hidden" filter.
+    pub hidden: bool,
     pub custom_artwork_path: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -103,6 +110,8 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             name TEXT NOT NULL,
             description TEXT,
             offline_only INTEGER NOT NULL DEFAULT 0,
+            favorite INTEGER NOT NULL DEFAULT 0,
+            hidden INTEGER NOT NULL DEFAULT 0,
             custom_artwork_path TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
@@ -121,7 +130,24 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_local_playlist_tracks_playlist
             ON local_playlist_tracks(playlist_id, position);
         "#,
-    )
+    )?;
+    // Additive migration (B3): DBs created before the favorite/hidden
+    // columns existed. Pragma-guarded ALTER, the database.rs idiom.
+    let has_favorite: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('local_playlists') WHERE name = 'favorite'",
+            [],
+            |r| r.get::<_, i32>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false);
+    if !has_favorite {
+        conn.execute_batch(
+            "ALTER TABLE local_playlists ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE local_playlists ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    Ok(())
 }
 
 // ──────────────────────────── Playlist CRUD ────────────────────────────
@@ -167,6 +193,26 @@ pub fn set_offline_only(conn: &Connection, id: &str, offline_only: bool) -> Resu
     Ok(())
 }
 
+/// B3: flip the manager's favorite flag (local twin of
+/// `playlist_settings.is_favorite`).
+pub fn set_favorite(conn: &Connection, id: &str, favorite: bool) -> Result<()> {
+    conn.execute(
+        "UPDATE local_playlists SET favorite = ?1, updated_at = ?2 WHERE id = ?3",
+        params![favorite as i64, now_ms(), id],
+    )?;
+    Ok(())
+}
+
+/// B3: flip the manager's hidden flag (local twin of
+/// `playlist_settings.hidden`). Hidden playlists drop from the sidebar.
+pub fn set_hidden(conn: &Connection, id: &str, hidden: bool) -> Result<()> {
+    conn.execute(
+        "UPDATE local_playlists SET hidden = ?1, updated_at = ?2 WHERE id = ?3",
+        params![hidden as i64, now_ms(), id],
+    )?;
+    Ok(())
+}
+
 pub fn set_custom_artwork(conn: &Connection, id: &str, path: Option<&str>) -> Result<()> {
     conn.execute(
         "UPDATE local_playlists SET custom_artwork_path = ?1, updated_at = ?2 WHERE id = ?3",
@@ -193,6 +239,8 @@ fn row_to_playlist(r: &rusqlite::Row) -> Result<LocalPlaylist> {
         name: r.get("name")?,
         description: r.get("description")?,
         offline_only: r.get::<_, i64>("offline_only")? != 0,
+        favorite: r.get::<_, i64>("favorite")? != 0,
+        hidden: r.get::<_, i64>("hidden")? != 0,
         custom_artwork_path: r.get("custom_artwork_path")?,
         created_at: r.get("created_at")?,
         updated_at: r.get("updated_at")?,
@@ -227,8 +275,8 @@ fn hydrate_counts(conn: &Connection, p: &mut LocalPlaylist) -> Result<()> {
 /// All local playlists (counts hydrated), newest first.
 pub fn list(conn: &Connection) -> Result<Vec<LocalPlaylist>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, description, offline_only, custom_artwork_path,
-                created_at, updated_at
+        "SELECT id, name, description, offline_only, favorite, hidden,
+                custom_artwork_path, created_at, updated_at
            FROM local_playlists
           ORDER BY created_at DESC",
     )?;
@@ -246,8 +294,8 @@ pub fn list(conn: &Connection) -> Result<Vec<LocalPlaylist>> {
 pub fn get(conn: &Connection, id: &str) -> Result<Option<LocalPlaylist>> {
     let maybe = conn
         .query_row(
-            "SELECT id, name, description, offline_only, custom_artwork_path,
-                    created_at, updated_at
+            "SELECT id, name, description, offline_only, favorite, hidden,
+                    custom_artwork_path, created_at, updated_at
                FROM local_playlists WHERE id = ?1",
             params![id],
             row_to_playlist,
@@ -347,6 +395,55 @@ pub fn add_tracks(
         )?;
     }
     Ok(inserted)
+}
+
+/// Move the row at `from` to `to` (both repo positions), shifting the rows
+/// in between by one — remove-then-insert list semantics, so the moved row
+/// lands at exactly position `to` (B2: the local detail's custom reorder).
+/// `from == to`, or either position not naming an existing row, is a no-op.
+pub fn reorder(conn: &Connection, playlist_id: &str, from: i32, to: i32) -> Result<()> {
+    if from == to {
+        return Ok(());
+    }
+    // Both endpoints must name existing rows, or the shift below would
+    // corrupt the order (and -1 is the in-flight parking slot).
+    let mut exists_stmt = conn.prepare(
+        "SELECT 1 FROM local_playlist_tracks
+          WHERE playlist_id = ?1 AND position = ?2 LIMIT 1",
+    )?;
+    if !exists_stmt.exists(params![playlist_id, from])?
+        || !exists_stmt.exists(params![playlist_id, to])?
+    {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE local_playlist_tracks SET position = -1
+          WHERE playlist_id = ?1 AND position = ?2",
+        params![playlist_id, from],
+    )?;
+    if from < to {
+        conn.execute(
+            "UPDATE local_playlist_tracks SET position = position - 1
+              WHERE playlist_id = ?1 AND position > ?2 AND position <= ?3",
+            params![playlist_id, from, to],
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE local_playlist_tracks SET position = position + 1
+              WHERE playlist_id = ?1 AND position >= ?2 AND position < ?3",
+            params![playlist_id, to, from],
+        )?;
+    }
+    conn.execute(
+        "UPDATE local_playlist_tracks SET position = ?2
+          WHERE playlist_id = ?1 AND position = -1",
+        params![playlist_id, to],
+    )?;
+    conn.execute(
+        "UPDATE local_playlists SET updated_at = ?1 WHERE id = ?2",
+        params![now_ms(), playlist_id],
+    )?;
+    Ok(())
 }
 
 /// Remove the row at `position` and compact the positions above it.
@@ -488,6 +585,141 @@ mod tests {
         assert_eq!(rows[0].position, 0);
         assert_eq!(rows[1].qobuz_track_id, Some(3));
         assert_eq!(rows[1].position, 1);
+    }
+
+    /// The repo positions, in row order, with the qobuz id per row — the
+    /// shape every reorder assertion checks.
+    fn qobuz_order(conn: &Connection, id: &str) -> Vec<(i32, u64)> {
+        get_tracks(conn, id)
+            .unwrap()
+            .iter()
+            .map(|r| (r.position, r.qobuz_track_id.unwrap()))
+            .collect()
+    }
+
+    fn seeded_playlist(conn: &Connection, ids: &[u64]) -> String {
+        let id = create(conn, "Reorder", None, false).unwrap();
+        let entries: Vec<LocalPlaylistTrackInput> = ids
+            .iter()
+            .map(|&tid| LocalPlaylistTrackInput::Qobuz(tid))
+            .collect();
+        add_tracks(conn, &id, &entries).unwrap();
+        id
+    }
+
+    #[test]
+    fn reorder_moves_down_with_compaction() {
+        let conn = fresh_db();
+        let id = seeded_playlist(&conn, &[1, 2, 3, 4]);
+        // Move the first row to slot 2: [1,2,3,4] -> [2,3,1,4].
+        reorder(&conn, &id, 0, 2).unwrap();
+        assert_eq!(
+            qobuz_order(&conn, &id),
+            vec![(0, 2), (1, 3), (2, 1), (3, 4)]
+        );
+    }
+
+    #[test]
+    fn reorder_moves_up_with_compaction() {
+        let conn = fresh_db();
+        let id = seeded_playlist(&conn, &[1, 2, 3, 4]);
+        // Move the last row to slot 1: [1,2,3,4] -> [1,4,2,3].
+        reorder(&conn, &id, 3, 1).unwrap();
+        assert_eq!(
+            qobuz_order(&conn, &id),
+            vec![(0, 1), (1, 4), (2, 2), (3, 3)]
+        );
+    }
+
+    #[test]
+    fn reorder_adjacent_swap() {
+        let conn = fresh_db();
+        let id = seeded_playlist(&conn, &[1, 2, 3]);
+        reorder(&conn, &id, 1, 2).unwrap();
+        assert_eq!(qobuz_order(&conn, &id), vec![(0, 1), (1, 3), (2, 2)]);
+        reorder(&conn, &id, 2, 1).unwrap();
+        assert_eq!(qobuz_order(&conn, &id), vec![(0, 1), (1, 2), (2, 3)]);
+    }
+
+    #[test]
+    fn reorder_noop_on_same_or_missing_positions() {
+        let conn = fresh_db();
+        let id = seeded_playlist(&conn, &[1, 2, 3]);
+        let before = qobuz_order(&conn, &id);
+        reorder(&conn, &id, 1, 1).unwrap(); // same slot
+        reorder(&conn, &id, 7, 0).unwrap(); // from doesn't exist
+        reorder(&conn, &id, 0, 7).unwrap(); // to doesn't exist
+        reorder(&conn, &id, 0, -1).unwrap(); // negative target
+        assert_eq!(qobuz_order(&conn, &id), before);
+    }
+
+    #[test]
+    fn reorder_scoped_to_its_playlist() {
+        let conn = fresh_db();
+        let a = seeded_playlist(&conn, &[1, 2, 3]);
+        let b = seeded_playlist(&conn, &[10, 20, 30]);
+        reorder(&conn, &a, 0, 2).unwrap();
+        assert_eq!(qobuz_order(&conn, &a), vec![(0, 2), (1, 3), (2, 1)]);
+        // The sibling playlist's rows are untouched.
+        assert_eq!(
+            qobuz_order(&conn, &b),
+            vec![(0, 10), (1, 20), (2, 30)]
+        );
+    }
+
+    #[test]
+    fn favorite_and_hidden_default_false_and_flip() {
+        let conn = fresh_db();
+        let id = create(&conn, "Flags", None, false).unwrap();
+        let p = get(&conn, &id).unwrap().unwrap();
+        assert!(!p.favorite);
+        assert!(!p.hidden);
+        set_favorite(&conn, &id, true).unwrap();
+        set_hidden(&conn, &id, true).unwrap();
+        let p = get(&conn, &id).unwrap().unwrap();
+        assert!(p.favorite);
+        assert!(p.hidden);
+        set_favorite(&conn, &id, false).unwrap();
+        let p = get(&conn, &id).unwrap().unwrap();
+        assert!(!p.favorite);
+        assert!(p.hidden, "flags flip independently");
+        // `list` carries the flags too.
+        let all = list(&conn).unwrap();
+        assert!(all.iter().any(|p| p.id == id && p.hidden && !p.favorite));
+    }
+
+    #[test]
+    fn init_schema_migrates_pre_b3_table() {
+        // A DB created with the pre-B3 shape (no favorite/hidden columns)
+        // plus an existing row: init_schema adds the columns with their
+        // defaults and leaves the row readable.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE local_playlists (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                offline_only INTEGER NOT NULL DEFAULT 0,
+                custom_artwork_path TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO local_playlists (id, name, offline_only, created_at, updated_at)
+            VALUES ('local:pre-b3', 'Old Row', 0, 1, 1);
+            "#,
+        )
+        .unwrap();
+        init_schema(&conn).unwrap();
+        let p = get(&conn, "local:pre-b3").unwrap().unwrap();
+        assert_eq!(p.name, "Old Row");
+        assert!(!p.favorite);
+        assert!(!p.hidden);
+        // The migrated columns are writable.
+        set_hidden(&conn, "local:pre-b3", true).unwrap();
+        assert!(get(&conn, "local:pre-b3").unwrap().unwrap().hidden);
+        // Idempotent: a second init_schema doesn't re-ALTER.
+        init_schema(&conn).unwrap();
     }
 
     #[test]

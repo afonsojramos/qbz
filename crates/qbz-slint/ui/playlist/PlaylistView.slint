@@ -532,8 +532,11 @@ export component PlaylistView inherits Rectangle {
                                                 chosen => { PlaylistActions.set-sort("duration"); }
                                             }
                                             // Manual order — enables the per-row
-                                            // up/down reorder controls.
-                                            SortOption {
+                                            // up/down reorder controls. Hidden on
+                                            // LOCAL playlists (B2): their Default
+                                            // order IS the editable repo order, so
+                                            // a separate custom sidecar is moot.
+                                            if !PlaylistState.is-local: SortOption {
                                                 label: @tr("Custom");
                                                 active: PlaylistState.sort-field == "custom";
                                                 chosen => { PlaylistActions.set-sort("custom"); }
@@ -663,7 +666,11 @@ export component PlaylistView inherits Rectangle {
                             show-artwork: true;
                             show-album: true;
                             show-favorite: true;
-                            show-reorder: PlaylistState.sort-field == "custom";
+                            // Custom sort (Qobuz sidecar order) — or, on a LOCAL
+                            // playlist, the Default sort: its natural order IS the
+                            // editable repo order (B2), written via repo::reorder.
+                            show-reorder: PlaylistState.sort-field == "custom"
+                                || (PlaylistState.is-local && PlaylistState.sort-field == "default");
                             multi-select-mode: PlaylistState.multi-select-mode;
                             media-action(kind, id, action) => {
                                 if (action == "play") {
