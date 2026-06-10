@@ -1,0 +1,144 @@
+// Shared lyrics lines renderer — consumed by the sidebar now, the miniplayer
+// surface later (spec §3.6: everything arrives via LyricsState + properties;
+// nothing here references the sidebar, ShellState, or window geometry).
+//
+// 1:1 to Tauri's `LyricsLines.svelte` compact mode, ADAPTED to the OWNER's
+// 280px typography spec (Q3): reduced sizes vs the 340px Tauri column
+// (13/15px = Tauri's compact "small" tier instead of the 15/17 medium),
+// friendly 0.2px letter-spacing, minimal 6px side padding (never removed),
+// the text takes the full remaining width.
+//
+// Static rendering only (S3): the S4 sync engine drives
+// `LyricsState.active-index` and adds auto-center scroll + the karaoke fill;
+// until then scrolling is a plain Flickable and active-index stays -1.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { LyricsState } from "../state.slint";
+
+// One lyric line. FOOTGUN (memory `reference_slint_root_opacity_absolute_position`):
+// the dimming ladder is applied to the INNER Text (opacity + color), NEVER as
+// an opacity binding on a row root — a root-opacity binding wraps the row in
+// an opacity item that corrupts absolute-position / self.y anchoring inside
+// the Flickable (one-row-pitch drift), exactly the geometry the S4 scroll
+// math will rely on.
+component LyricsLineRow inherits VerticalLayout {
+    in property <int> index;
+    in property <string> line-text;
+    in property <length> size-inactive;
+    in property <length> size-active;
+    // 0 = off, 1 = soft, 2 = strong (Tauri default) — S5 wires the pref.
+    in property <int> dimming-mode;
+
+    property <bool> is-active:
+        LyricsState.synced && root.index == LyricsState.active-index;
+    property <bool> is-past:
+        LyricsState.synced
+        && LyricsState.active-index >= 0
+        && root.index < LyricsState.active-index;
+    property <int> distance: Math.abs(root.index - LyricsState.active-index);
+
+    // Dimming ladder (Tauri getLineOpacity, LyricsLines.svelte:342-356):
+    // off -> 1.0 all; soft -> 0.6 inactive; strong -> distance 1: 0.5,
+    // 2: 0.35, 3: 0.25, far: 0.15. Unsynced lyrics render the whole list at
+    // 0.85 (LyricsLines.svelte:515-523). With NO active line (-1) the ladder
+    // has no reference point — render full brightness (the S4 engine drives
+    // the index whenever a synced track plays).
+    pure function line-opacity() -> float {
+        if (!LyricsState.synced) {
+            return 0.85;
+        }
+        if (root.is-active) {
+            return 1.0;
+        }
+        if (root.dimming-mode == 0 || LyricsState.active-index < 0) {
+            return 1.0;
+        }
+        if (root.dimming-mode == 1) {
+            return 0.6;
+        }
+        if (root.distance == 1) {
+            return 0.5;
+        }
+        if (root.distance == 2) {
+            return 0.35;
+        }
+        if (root.distance == 3) {
+            return 0.25;
+        }
+        return 0.15;
+    }
+
+    Text {
+        text: root.line-text;
+        wrap: word-wrap;
+        opacity: root.line-opacity();
+        color: root.is-active
+            ? Theme.text-primary
+            : (root.is-past ? Theme.text-muted : Theme.text-secondary);
+        font-size: root.is-active ? root.size-active : root.size-inactive;
+        font-weight: root.is-active ? Typography.bold : Typography.medium;
+        // Friendly letter-spacing (Q3): slightly open, never cramped.
+        letter-spacing: 0.2px;
+    }
+}
+
+export component LyricsLinesView inherits Rectangle {
+    // Owner Q3 layout knobs — 4-6px per side, NEVER removed; the miniplayer
+    // surface later overrides padding/gap without touching display prefs.
+    in property <length> side-padding: 6px;
+    in property <length> line-gap: 12px;       // Tauri compact gap parity
+    // 280px-adapted type scale (Q3).
+    in property <length> size-inactive: 13px;
+    in property <length> size-active: 15px;
+    in property <int> dimming-mode: 2;          // strong (Tauri default)
+    in property <bool> show-attribution: true;
+
+    // Top/bottom spacers so the first/last SYNCED lines can center once the
+    // S4 auto-scroll lands (Tauri's 40vh spacers, LyricsLines.svelte:510-513).
+    // Fixed-height Rectangles derived from the Flickable's OWN height — Slint
+    // layouts ignore percentage tricks (landing review §7.4), and sibling
+    // geometry would be a binding loop.
+    property <length> spacer-height:
+        Math.max(0px, flick.height / 2 - root.size-active * 1.5);
+
+    flick := Flickable {
+        width: 100%;
+        height: 100%;
+        viewport-width: self.width;
+        viewport-height: body.preferred-height;
+
+        body := VerticalLayout {
+            padding-left: root.side-padding;
+            padding-right: root.side-padding;
+            // Unsynced/plain mode is a static top-aligned list (no spacers,
+            // no active line, no scroll-follow — LyricsLines.svelte:515-523).
+            padding-top: LyricsState.synced ? 0px : 10px;
+            padding-bottom: LyricsState.synced ? 0px : 10px;
+            spacing: root.line-gap;
+
+            if LyricsState.synced: Rectangle { height: root.spacer-height; }
+
+            for line[idx] in LyricsState.lines: LyricsLineRow {
+                index: idx;
+                line-text: line.text;
+                size-inactive: root.size-inactive;
+                size-active: root.size-active;
+                dimming-mode: root.dimming-mode;
+            }
+
+            if LyricsState.synced: Rectangle { height: root.spacer-height; }
+
+            // Fallback-provider attribution (LRCLIB / lyrics.ovh). Tauri keeps
+            // these in the About modal (AboutModal.svelte:141,144); Slint has
+            // no About surface yet, so the line lives at the end of the scroll.
+            // Qobuz is first-party: provider-label is empty, nothing renders.
+            if root.show-attribution && LyricsState.provider-label != "": Text {
+                text: @tr("Lyrics provided by {}", LyricsState.provider-label);
+                color: Theme.text-muted;
+                font-size: 10px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

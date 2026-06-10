@@ -2855,6 +2855,43 @@ export global NowPlayingState {
     callback qconnect-toggle();
 }
 
+// One rendered lyrics line. `time-ms`/`end-ms` are milliseconds from track
+// start (-1 = unknown / plain line). `has-words` flags native Qobuz word
+// timing held Rust-side (`crate::lyrics::CURRENT_DOC`) — the S4 sync engine
+// reads it for the word-anchored karaoke fill; word data itself never
+// crosses into the UI model.
+export struct LyricsLineItem {
+    text: string,
+    time-ms: int,
+    end-ms: int,
+    has-words: bool,
+}
+
+// Lyrics panel state. The Rust glue (`crate::lyrics`) pushes fetch results
+// here on the de-duped track-change edge; the sidebar binds directly. The
+// S4 sync engine drives `active-index` (placeholder -1 until then).
+export global LyricsState {
+    // 0 idle · 1 loading · 2 ready · 3 no lyrics · 4 error · 5 offline-unavailable
+    in property <int> status: 0;
+    in property <[LyricsLineItem]> lines: [];
+    in property <bool> synced: false;
+    // Provider id ("qobuz" | "lrclib" | "ovh"); `provider-label` is the
+    // attribution display name — empty for first-party Qobuz (no attribution
+    // needed, spec §3.5).
+    in property <string> provider;
+    in property <string> provider-label;
+    // Playing-track meta for the header ("{title} - {artist}").
+    in property <string> track-title;
+    in property <string> track-artist;
+    // Surfaced backend error text (status == 4) — dynamic content, not chrome.
+    in property <string> error;
+    // Active line index; -1 = none. The S4 sync engine drives it.
+    in property <int> active-index: -1;
+    // Fired by the sidebar's `init` (conditional mount, ADR-010): re-requests
+    // lyrics for the current track (cache-served when already fetched).
+    callback panel-opened();
+}
+
 // One row in the QConnect device picker (a session renderer). Populated by the
 // event sink from `session.renderers`.
 export struct QconnectDevice {

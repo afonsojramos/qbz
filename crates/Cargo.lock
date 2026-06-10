@@ -5507,6 +5507,7 @@ dependencies = [
  "qbz-credentials",
  "qbz-integrations",
  "qbz-library",
+ "qbz-lyrics",
  "qbz-media-controls",
  "qbz-mixtape",
  "qbz-models",

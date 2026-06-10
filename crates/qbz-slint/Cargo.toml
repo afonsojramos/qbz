@@ -57,6 +57,7 @@ qbz-offline-cache = { path = "../qbz-offline-cache" }
 qbz-models = { path = "../qbz-models" }
 qbz-mixtape = { path = "../qbz-mixtape" }
 qbz-qobuz = { path = "../qbz-qobuz" }
+qbz-lyrics = { path = "../qbz-lyrics" }
 qbz-integrations = { path = "../qbz-integrations" }
 rusqlite = { version = "0.31", features = ["bundled"] }
 # DJ-mix sampler thread RNG (rand::rng()), confined to a sync scope — the

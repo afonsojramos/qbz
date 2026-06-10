@@ -1,16 +1,25 @@
 // Right-side Lyrics panel.
 //
 // Rendered as a layout sibling of the content area (see AppShell), so it
-// shrinks the content rather than overlaying it. Closing sets
-// ShellState.right-panel = 0. The body is a structural placeholder;
-// lyric contents are wired in a later milestone.
+// shrinks the content rather than overlaying it. The 280px column width is
+// owned by AppShell (owner Q3: stays 280px; the typography adapts in
+// LyricsLinesView instead). Closing sets ShellState.lyrics-open = false.
+//
+// 1:1 to the Tauri `LyricsSidebar.svelte` header/states (spec §3.1): 36px
+// mic icon tile + LYRICS overline + "{title} - {artist}" meta + the
+// display-settings trigger (S5 wires the LyricsControlsFlyout), plus the
+// Slint-convention close button (deviation D4, homologated with Queue).
+// Body renders by LyricsState.status: loading / no-lyrics / offline-miss
+// (typed NotAvailableOffline, F3) / error / the shared lines view.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { ShellState } from "../state.slint";
+import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
+import { LyricsLinesView } from "LyricsLinesView.slint";
+import { ShellState, LyricsState } from "../state.slint";
 
 component CloseButton inherits Rectangle {
     callback clicked();
@@ -36,30 +45,109 @@ component CloseButton inherits Rectangle {
     }
 }
 
+// 32px icon button — the display-settings trigger (Tauri SlidersHorizontal,
+// LyricsSidebar.svelte:38-66).
+component HeaderIconButton inherits Rectangle {
+    in property <image> icon;
+    callback clicked();
+    width: 32px;
+    height: 32px;
+    border-radius: Radius.sm;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+
+    QbzIcon {
+        source: root.icon;
+        width: 16px;
+        height: 16px;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 export component LyricsSidebar inherits Rectangle {
     // Width is owned by the right-panel column in AppShell; this fills it and
     // vertical-stretches to its share of the height (stacked under the queue).
     clip: true;
     background: Theme.surface-card;
 
+    // Conditionally mounted (`if lyrics-open` at the AppShell mount site,
+    // ADR-010) — re-request lyrics for the current track on every open.
+    // Cache-served / no-op while already loaded (Tauri parity: load lands
+    // immediately when opening mid-song, lyricsStore.ts:386-389).
+    init => {
+        LyricsState.panel-opened();
+    }
+
     VerticalLayout {
         spacing: 0px;
 
-        // Header row — title + close button.
+        // Header: icon tile + overline/meta block + controls trigger + close.
+        // Taller than the Queue header (56px vs 44px) to fit the Tauri
+        // two-row title block + 36px tile (spec §3.1 rows 3-5).
         HorizontalLayout {
-            padding-left: Spacing.md;
+            padding-left: Spacing.sm;
             padding-right: Spacing.sm;
             padding-top: Spacing.sm;
             padding-bottom: Spacing.sm;
-            height: 44px;
-            Text {
-                text: @tr("Lyrics");
-                color: Theme.text-primary;
-                // Homologated with the Queue / History tab size.
-                font-size: Typography.body;
-                font-weight: Typography.semibold;
-                vertical-alignment: center;
+            height: 56px;
+            spacing: Spacing.sm;
+
+            // Icon tile — 36px, mic-vocal 18, accent tint.
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: Radius.sm;
+                    background: Theme.surface-elevated;
+                    QbzIcon {
+                        source: @image-url("../assets/icons/mic-vocal.svg");
+                        width: 18px;
+                        height: 18px;
+                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                        tint: Theme.accent;
+                    }
+                }
+            }
+
+            // Title block: overline + playing-track meta.
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
                 horizontal-stretch: 1;
+                Text {
+                    // GroupHeader overline per the alignment standard (ALL-CAPS
+                    // 11px / 1.5px letter-spacing — deviation D8 vs Tauri's
+                    // 12px/0.1em, forced by the binding standard).
+                    text: @tr("LYRICS");
+                    color: Theme.text-muted;
+                    font-size: 11px;
+                    font-weight: Typography.semibold;
+                    letter-spacing: 1.5px;
+                }
+                if LyricsState.track-title != "": Text {
+                    text: LyricsState.track-title + " - " + LyricsState.track-artist;
+                    color: Theme.text-secondary;
+                    font-size: 12px;
+                    overflow: elide;
+                }
+            }
+
+            // Display-settings trigger — the LyricsControlsFlyout lands in S5.
+            VerticalLayout {
+                alignment: center;
+                HeaderIconButton {
+                    icon: @image-url("../assets/icons/sliders-horizontal.svg");
+                }
             }
             VerticalLayout {
                 alignment: center;
@@ -75,13 +163,77 @@ export component LyricsSidebar inherits Rectangle {
             background: Theme.border-subtle;
         }
 
-        // Body — placeholder until lyric contents are wired.
+        // Body — by LyricsState.status.
         Rectangle {
             vertical-stretch: 1;
-            Text {
-                text: @tr("No lyrics");
-                color: Theme.text-muted;
-                font-size: Typography.body;
+            clip: true;
+
+            // Loading: 24px spinner + label (Tauri LyricsSidebar.svelte:68-92).
+            if LyricsState.status == 1: VerticalLayout {
+                alignment: center;
+                spacing: 10px;
+                padding: Spacing.md;
+                HorizontalLayout {
+                    alignment: center;
+                    LoadingSpinner {
+                        size: 24px;
+                    }
+                }
+                Text {
+                    text: @tr("Fetching lyrics...");
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    horizontal-alignment: center;
+                }
+            }
+
+            // No lyrics — idle, not-found, or a ready result that parsed to
+            // zero lines.
+            if LyricsState.status == 0
+                || LyricsState.status == 3
+                || (LyricsState.status == 2 && LyricsState.lines.length == 0): VerticalLayout {
+                alignment: center;
+                padding: Spacing.md;
+                Text {
+                    text: @tr("No lyrics available");
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Offline with nothing cached — the typed NotAvailableOffline
+            // outcome (F3: a translated string, never hardcoded EN).
+            if LyricsState.status == 5: VerticalLayout {
+                alignment: center;
+                padding: Spacing.md;
+                Text {
+                    text: @tr("Lyrics unavailable offline");
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Error — surfaced backend text, standard error tone.
+            if LyricsState.status == 4: VerticalLayout {
+                alignment: center;
+                padding: Spacing.md;
+                Text {
+                    text: LyricsState.error;
+                    color: #e0564f;
+                    font-size: Typography.legal;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Lyrics body — the shared lines renderer.
+            if LyricsState.status == 2 && LyricsState.lines.length > 0: LyricsLinesView {
+                width: 100%;
+                height: 100%;
             }
         }
     }

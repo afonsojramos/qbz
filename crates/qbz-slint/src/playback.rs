@@ -1244,6 +1244,9 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         if let Some(mc) = crate::media_controls::handle() {
             mc.set_playback(qbz_media_controls::PlaybackStatus::Stopped, None);
         }
+        // Track -> null resets the lyrics state (Tauri parity,
+        // lyricsStore.ts:560-562).
+        crate::lyrics::on_track_cleared(weak.clone());
         let _ = weak.upgrade_in_event_loop(|w| {
             w.global::<NowPlayingState>().set_has_track(false);
         });
@@ -1361,6 +1364,13 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     // only an actual track change fires; skip while a remote QConnect renderer
     // drives playback (matches the Svelte `skipIfRemote`). Fire-and-forget.
     if NOTIFY_LAST_TRACK.swap(track.id, std::sync::atomic::Ordering::Relaxed) != track.id {
+        // Lyrics prefetch — third rider on the same de-duped track-change
+        // edge. Tauri prefetches on EVERY track change regardless of panel
+        // visibility (lyricsStore.ts:545-565); same here. Deliberately NOT
+        // inside the skip-if-remote spawn below: lyrics follow the QConnect
+        // peer's track (Q7). Fire-and-forget; the stale-response guard (F2)
+        // lives in `lyrics::on_track_changed`.
+        crate::lyrics::on_track_changed(weak.clone(), &track);
         let notify_meta = qbz_media_controls::NotificationMeta {
             title: title.clone(),
             artist: artist.clone(),

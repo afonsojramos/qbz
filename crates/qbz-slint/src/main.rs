@@ -62,6 +62,7 @@ mod library_db;
 mod local_library;
 mod local_playlist;
 mod local_library_settings;
+mod lyrics;
 mod media_controls;
 mod locallibrary_prefs;
 mod tag_editor;
@@ -337,6 +338,9 @@ async fn enter_shell_offline(
         crate::offline_mode::init_for_user(&dir);
         crate::fav_cache::init_for_user(&dir);
     }
+    // Lyrics cache (per-user, shared file with Tauri) — offline sessions
+    // serve cached lyrics (deviation D3, cache-first offline contract).
+    crate::lyrics::init_for_user(runtime.core().client(), user_id);
     crate::offline_mode::engine().set_offline_session(true);
 
     {
@@ -6395,6 +6399,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // On open, also re-pull favorites so the heart is accurate.
             qs.on_panel_opened(move || c.refresh_with_favorites());
         }
+    }
+
+    // Lyrics panel open (conditional mount, ADR-010): re-request lyrics for
+    // the current track — a no-op while still loaded (duplicate-fetch guard),
+    // a cache-served fetch otherwise (Tauri parity: load-while-open lands
+    // immediately, lyricsStore.ts:386-389).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<LyricsState>().on_panel_opened(move || {
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            handle.spawn(async move {
+                let state = runtime.core().get_queue_state().await;
+                match state.current_track {
+                    Some(track) => lyrics::on_track_changed(weak, &track),
+                    None => lyrics::on_track_cleared(weak),
+                }
+            });
+        });
     }
 
     // Album track search — client-side filter, no backend round-trip.
