@@ -3,8 +3,9 @@
 //! Ported from the Tauri `QueuePanel.svelte`. The core's `QueueManager`
 //! owns the authoritative track list; this controller owns the
 //! *sidebar-local* view state — which tab is shown, the search query, the
-//! current paginator page — and the cached favorite-track IDs used to
-//! light the NOW PLAYING heart.
+//! current paginator page. The NOW PLAYING heart reads the shared
+//! `fav_cache` set (disk-seeded, network-refreshed) like every other
+//! track surface, so it stays correct offline.
 //!
 //! `refresh` pulls a fresh `get_queue_state_full()` snapshot, applies the
 //! active search filter, slices out the current 40-track page, and pushes
@@ -36,10 +37,6 @@ struct ViewState {
     search: String,
     /// Zero-based paginator page within the (filtered) upcoming list.
     page: usize,
-    /// Cached set of the user's favorite track IDs.
-    favorites: std::collections::HashSet<u64>,
-    /// Whether the favorites cache has been populated at least once.
-    favorites_loaded: bool,
 }
 
 /// The Queue sidebar controller — see the module docs.
@@ -177,55 +174,42 @@ impl QueueController {
         });
     }
 
-    /// Refresh the favorites cache, then refresh the queue view.
+    /// Refresh the queue view; when online, first re-pull the SHARED
+    /// favorite cache from the network (used after a fresh play starts, so
+    /// hearts reflect cross-device changes — same cadence as before, but
+    /// now feeding `fav_cache` + its disk mirror instead of a queue-local
+    /// set). Offline, the disk-seeded cache is used as-is.
     pub fn refresh_with_favorites(&self) {
         let this = self.clone();
         self.handle.spawn(async move {
-            this.reload_favorites().await;
+            if !crate::offline_mode::engine().is_offline() {
+                match this.runtime.core().favorite_track_ids().await {
+                    Ok(ids) => {
+                        // set_all mirrors to disk (blocking rusqlite).
+                        let _ =
+                            tokio::task::spawn_blocking(move || crate::fav_cache::set_all(ids))
+                                .await;
+                    }
+                    Err(e) => {
+                        log::warn!("[qbz-slint] queue: favorite_track_ids failed: {e}");
+                    }
+                }
+            }
             this.refresh_async().await;
         });
     }
 
-    /// Fetch the user's favorite-track IDs from Qobuz into the cache.
-    async fn reload_favorites(&self) {
-        match self.runtime.core().favorite_track_ids().await {
-            Ok(ids) => {
-                if let Ok(mut view) = self.view.lock() {
-                    view.favorites = ids;
-                    view.favorites_loaded = true;
-                }
-            }
-            Err(e) => {
-                log::warn!("[qbz-slint] queue: favorite_track_ids failed: {e}");
-            }
-        }
-    }
-
     async fn refresh_async(&self) {
-        // Lazily populate the favorites cache the first time the queue is
-        // shown so the NOW PLAYING heart is correct without a manual sync.
-        let need_favorites = self
-            .view
-            .lock()
-            .map(|v| !v.favorites_loaded)
-            .unwrap_or(false);
-        if need_favorites {
-            self.reload_favorites().await;
-        }
-
         let state = self.runtime.core().get_queue_state_full().await;
 
         // --- NOW PLAYING --------------------------------------------------
+        // Heart state comes from the shared fav_cache (disk-seeded at
+        // session activation), so it is correct offline too.
         let now_playing = state.current_track.as_ref().map(|t| row_from(t, true));
         let now_playing_favorite = state
             .current_track
             .as_ref()
-            .map(|t| {
-                self.view
-                    .lock()
-                    .map(|v| v.favorites.contains(&t.id))
-                    .unwrap_or(false)
-            })
+            .map(|t| crate::fav_cache::contains(t.id))
             .unwrap_or(false);
 
         // --- UP NEXT (search-filtered) -----------------------------------
@@ -528,16 +512,16 @@ impl QueueController {
     pub fn toggle_favorite(&self) {
         let this = self.clone();
         self.handle.spawn(async move {
+            // Offline = read-only hearts (spec 4.3).
+            if crate::offline_mode::engine().is_offline() {
+                crate::toast::info_weak(&this.weak, "Not available offline");
+                return;
+            }
             let state = this.runtime.core().get_queue_state_full().await;
             let Some(track) = state.current_track else {
                 return;
             };
-            let currently = this
-                .view
-                .lock()
-                .map(|v| v.favorites.contains(&track.id))
-                .unwrap_or(false);
-            let make_favorite = !currently;
+            let make_favorite = !crate::fav_cache::contains(track.id);
             match this
                 .runtime
                 .core()
@@ -545,13 +529,9 @@ impl QueueController {
                 .await
             {
                 Ok(()) => {
-                    if let Ok(mut view) = this.view.lock() {
-                        if make_favorite {
-                            view.favorites.insert(track.id);
-                        } else {
-                            view.favorites.remove(&track.id);
-                        }
-                    }
+                    // Keep the shared cache (memory + disk) in sync so every
+                    // other heart surface reflects the change immediately.
+                    crate::fav_cache::set(track.id, make_favorite);
                 }
                 Err(e) => {
                     log::error!("[qbz-slint] queue: toggle favorite failed: {e}");

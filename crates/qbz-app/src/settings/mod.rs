@@ -1,6 +1,7 @@
 pub mod developer;
 pub mod download;
 pub mod favorites;
+pub mod favorites_cache;
 pub mod graphics;
 pub mod image_cache;
 pub mod legal;

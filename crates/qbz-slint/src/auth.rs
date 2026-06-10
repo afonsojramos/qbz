@@ -103,6 +103,7 @@ where
     // recovery: a successful login ends any unauthenticated offline session.
     if let Some(dir) = crate::offline_mode::user_data_dir(user_id) {
         crate::offline_mode::init_for_user(&dir);
+        crate::fav_cache::init_for_user(&dir);
     }
     crate::offline_mode::subscription_mark_valid();
     crate::offline_mode::engine().set_offline_session(false);
@@ -175,6 +176,7 @@ where
             // (same ordering as login_via_system_browser).
             if let Some(dir) = crate::offline_mode::user_data_dir(user_id) {
                 crate::offline_mode::init_for_user(&dir);
+                crate::fav_cache::init_for_user(&dir);
             }
             crate::offline_mode::subscription_mark_valid();
             crate::offline_mode::engine().set_offline_session(false);
@@ -218,6 +220,7 @@ where
     let _ = runtime.core().logout().await;
     crate::offline::deactivate().await;
     crate::offline_mode::teardown();
+    crate::fav_cache::teardown();
     runtime.deactivate().await?;
     log::info!("[qbz-slint] logged out");
     Ok(())
