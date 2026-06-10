@@ -1,4 +1,5 @@
 pub mod boot_watchdog;
+pub mod offline_mode;
 pub mod graphics_autoconfig;
 pub mod graphics_detection;
 pub mod playback_context;

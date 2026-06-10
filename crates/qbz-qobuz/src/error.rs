@@ -31,6 +31,9 @@ pub enum ApiError {
     #[error("Track {0} is no longer available on Qobuz")]
     TrackUnavailable(u64),
 
+    #[error("Offline mode is active - Qobuz services are disabled")]
+    OfflineMode,
+
     #[error("Network error: {0}")]
     NetworkError(#[from] reqwest::Error),
 

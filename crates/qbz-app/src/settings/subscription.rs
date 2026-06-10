@@ -162,6 +162,24 @@ impl SubscriptionStateStore {
         }
         Ok(true)
     }
+
+    /// D4 playback gate: may the offline cache serve FULL tracks right now?
+    ///
+    /// Binary by design — within the grace window the cache plays complete
+    /// tracks; past it, playback is refused outright. There is NO degraded
+    /// 30-second-preview path (the owner's explicit requirement: Qobuz's
+    /// preview behavior must never appear here).
+    ///
+    /// `invalid_since == None` (never observed invalid, including the
+    /// never-checked default) ⇒ allowed: the grace clock only starts when a
+    /// login verdict explicitly reports the account ineligible.
+    pub fn offline_playback_allowed(&self, now: i64) -> Result<bool, String> {
+        let state = self.get_state()?;
+        let Some(invalid_since) = state.invalid_since else {
+            return Ok(true);
+        };
+        Ok(now - invalid_since < GRACE_PERIOD_SECS)
+    }
 }
 
 pub type SubscriptionStateState = Arc<Mutex<Option<SubscriptionStateStore>>>;
@@ -235,6 +253,31 @@ mod tests {
         assert!(!store
             .should_purge_offline_cache(100 + GRACE_PERIOD_SECS + 1)
             .unwrap());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn offline_playback_allowed_within_grace_refused_after() {
+        let dir = unique_test_dir("subscription-playback-gate");
+        let store = SubscriptionStateStore::new_at(&dir).unwrap();
+
+        // Never observed invalid (default): allowed.
+        assert!(store.offline_playback_allowed(0).unwrap());
+
+        store.mark_invalid(100).unwrap();
+        assert!(store
+            .offline_playback_allowed(100 + GRACE_PERIOD_SECS - 1)
+            .unwrap());
+        assert!(!store
+            .offline_playback_allowed(100 + GRACE_PERIOD_SECS)
+            .unwrap());
+
+        // A valid login verdict re-opens playback.
+        store.mark_valid(100 + GRACE_PERIOD_SECS + 10).unwrap();
+        assert!(store
+            .offline_playback_allowed(100 + GRACE_PERIOD_SECS + 20)
+            .unwrap());
+
         let _ = std::fs::remove_dir_all(dir);
     }
 

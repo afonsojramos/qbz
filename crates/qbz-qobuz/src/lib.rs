@@ -37,6 +37,7 @@ pub mod cmaf;
 pub mod endpoints;
 pub mod error;
 pub mod link_resolver;
+pub mod offline_gate;
 pub mod performers;
 pub mod retry;
 
