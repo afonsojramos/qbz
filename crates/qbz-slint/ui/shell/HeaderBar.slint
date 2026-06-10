@@ -9,19 +9,24 @@
 // below the second the search field narrows.
 
 import { Theme } from "../foundation/semantic-colors.slint";
+import { Palette } from "../foundation/palette.slint";
 import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions, SidebarPlaylistsPopupState, OfflineState } from "../state.slint";
+import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions, SidebarPlaylistsPopupState, OfflineState, SettingsState, OfflineModeActions } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { SecondaryButton } from "../primitives/SecondaryButton.slint";
+import { QbzToggle } from "../primitives/QbzToggle.slint";
 
 component NavTab inherits Rectangle {
     in property <image> icon;
     in property <string> label;
     in property <bool> active: false;
     in property <bool> show-icon: true;
-    // Offline gating: dimmed + pointer-inert (no click, no hover-to-open).
+    // Dimmed + pointer-inert (no click, no hover-to-open). NOTE: no longer
+    // used for offline gating — offline tabs are HIDDEN at the mount site
+    // (`if` per ADR-010). Kept for future use.
     in property <bool> disabled: false;
     callback clicked();
     // Fires when the pointer first enters the tab — drives hover-to-open.
@@ -133,7 +138,8 @@ component NavTabWithMenu inherits Rectangle {
     in property <string> label;
     in property <bool> active: false;
     in property <bool> show-icon: true;
-    // Offline gating — forwarded to the inner NavTab.
+    // Forwarded to the inner NavTab. NOTE: no longer used for offline
+    // gating (offline tabs are hidden at the mount site). Kept for future use.
     in property <bool> disabled: false;
     in property <[NavMenuEntry]> items;
     // This tab's index (0..3) — written into HeaderMenuState.open-index.
@@ -197,7 +203,8 @@ component CompactNavBtn inherits Rectangle {
     in property <[NavMenuEntry]> items;
     in property <int> tab-index;
     in property <int> home-item: -1;
-    // Offline gating: dimmed + pointer-inert.
+    // Dimmed + pointer-inert. NOTE: no longer used for offline gating
+    // (offline buttons are hidden at the mount site). Kept for future use.
     in property <bool> disabled: false;
 
     width: 30px;
@@ -340,9 +347,175 @@ component HeaderIconButton inherits Rectangle {
     }
 }
 
+// Offline status badge — sits immediately LEFT of the app-menu button.
+// Tri-state (OfflineState.badge-state): 1 = hard offline (amber cloud-off),
+// 2 = manual/induced offline (accent cloud-off), 3 = logged out (muted user
+// glyph; wins over the other two — it's the actionable fact). Not mounted
+// at all when online + authenticated. NOT a pill (ADR-008): ghost chrome
+// styling like NavTab — transparent, hover -> surface-hover, Radius.sm.
+// Clicking opens a small flyout with the full status line plus the state's
+// action (Sign in / Open Settings).
+component OfflineStatusBadge inherits Rectangle {
+    // Fires the AppShell recovery-login() chain (the same saved-token
+    // sign-in the old recovery banner used).
+    callback recovery-login();
+
+    property <int> badge-state: OfflineState.badge-state;
+    property <bool> connectivity-up: OfflineState.connectivity == 1;
+    // Only a CONFIRMED-down link disables sign-in. Unknown (0, pre-first-
+    // probe — e.g. right after app start) must NOT gate the button: the
+    // attempt is harmless and fails into a visible toast if the network is
+    // really absent, while a dead button reads as "does nothing".
+    property <bool> connectivity-down: OfflineState.connectivity == 2;
+    // Icon tint per state: warning/amber = hard, accent = manual,
+    // muted = logged out. Same mapping Settings > Offline's status row uses.
+    property <color> state-tint: root.badge-state == 1 ? Palette.warning
+        : root.badge-state == 2 ? Theme.accent
+        : Theme.text-muted;
+
+    height: 30px;
+    width: badge-row.preferred-width;
+    border-radius: Radius.sm;
+    background: badge-ta.has-hover ? Theme.surface-hover : transparent;
+
+    badge-row := HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 11px;
+        spacing: 6px;
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.badge-state == 3
+                    ? @image-url("../assets/icons/user.svg")
+                    : @image-url("../assets/icons/cloud-off.svg");
+                width: 14px;
+                height: 14px;
+                tint: root.state-tint;
+            }
+        }
+        Text {
+            text: root.badge-state == 3 ? @tr("Logged out")
+                : root.badge-state == 2 ? @tr("Offline (manual)")
+                : @tr("Offline (hard)");
+            height: root.height;
+            vertical-alignment: center;
+            color: Theme.text-secondary;
+            font-size: 11px;
+        }
+    }
+
+    badge-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            status-flyout.show();
+        }
+    }
+
+    // Status flyout — the former banner texts + actions, right edge aligned
+    // with the badge. PopupWindow footgun: explicit height + close-policy.
+    // Buttons close it explicitly before acting.
+    status-flyout := PopupWindow {
+        x: root.width - 320px;
+        y: root.height + 6px;
+        width: 320px;
+        height: root.badge-state == 1 ? 74px
+            : root.badge-state == 2 ? 108px
+            : 116px;
+        close-policy: PopupClosePolicy.close-on-click-outside;
+
+        Rectangle {
+            background: Theme.surface-main;
+            border-radius: Radius.sm;
+            border-width: 1px;
+            border-color: Theme.border-muted;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: Theme.card-shadow;
+            drop-shadow-offset-y: 6px;
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: start;
+                        QbzIcon {
+                            source: root.badge-state == 3
+                                ? @image-url("../assets/icons/user.svg")
+                                : @image-url("../assets/icons/cloud-off.svg");
+                            width: 15px;
+                            height: 15px;
+                            tint: root.state-tint;
+                        }
+                    }
+                    Text {
+                        // Full status line per state; logged-out also keys
+                        // on raw connectivity (1 up / 2 down / 0 unknown).
+                        text: root.badge-state == 3
+                            ? (root.connectivity-down
+                                ? @tr("You're signed out. Sign-in needs a connection.")
+                                : root.connectivity-up
+                                    ? @tr("Connection available — sign back in to Qobuz.")
+                                    : @tr("You're signed out — sign back in to Qobuz."))
+                            : root.badge-state == 2
+                                ? @tr("Offline mode is enabled. Disable it in Settings to use Qobuz.")
+                                : @tr("No internet connection — your local library and downloads keep working.");
+                        color: Theme.text-primary;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                        horizontal-stretch: 1;
+                    }
+                }
+                // Sign in — logged-out state only; disabled only when the
+                // link is CONFIRMED down (Unknown still allows the attempt).
+                // Fires the existing recovery-login() chain.
+                if root.badge-state == 3: HorizontalLayout {
+                    alignment: end;
+                    SecondaryButton {
+                        label: @tr("Sign in");
+                        enabled: !root.connectivity-down;
+                        clicked => {
+                            // Fire the chain BEFORE close(): the popup
+                            // teardown must never be able to swallow it
+                            // (same action-then-close ordering as the
+                            // PlayerBar's qconnect menu items).
+                            root.recovery-login();
+                            status-flyout.close();
+                        }
+                    }
+                }
+                // Manual/induced state: quick toggle straight back to online
+                // (same persistence + #279 path as the Settings toggle). The
+                // toggle is the whole control set here — owner dropped the
+                // Settings shortcut (2026-06-10).
+                if root.badge-state == 2: HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: @tr("Offline mode");
+                        color: Theme.text-secondary;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    QbzToggle {
+                        checked: true;
+                        toggled(value) => {
+                            OfflineModeActions.set-offline(value);
+                            status-flyout.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component HeaderBar inherits Rectangle {
     callback logout();
     callback close-app();
+    // Forwarded up to AppShell — the badge flyout's "Sign in" (saved-token
+    // re-login during an unauthenticated offline session).
+    callback recovery-login();
 
     height: Layout.header-height;
     background: Theme.surface-card;
@@ -448,7 +621,9 @@ export component HeaderBar inherits Rectangle {
         if !ShellState.nav-in-sidebar && ShellState.sidebar-state != 2: HorizontalLayout {
             spacing: 2px;
             Rectangle { width: 6px; }
-            VerticalLayout {
+            // Qobuz-only — HIDDEN entirely while offline (ADR-010 `if` at
+            // the mount site, not rendered-disabled).
+            if !OfflineState.offline: VerticalLayout {
                 alignment: center;
                 NavTabWithMenu {
                     tab-index: 0;
@@ -456,8 +631,6 @@ export component HeaderBar inherits Rectangle {
                     label: @tr("Discover");
                     active: true;
                     show-icon: root.show-tab-icons;
-                    // Qobuz-only — inert while offline.
-                    disabled: OfflineState.offline;
                     home-item: 0;
                     items: [
                         { label: @tr("Home"), has-glyph: false, route: "discover-home" },
@@ -466,15 +639,14 @@ export component HeaderBar inherits Rectangle {
                     ];
                 }
             }
-            VerticalLayout {
+            // Qobuz favorites — HIDDEN entirely while offline.
+            if !OfflineState.offline: VerticalLayout {
                 alignment: center;
                 NavTabWithMenu {
                     tab-index: 1;
                     icon: @image-url("../assets/icons/music-library-2.svg");
                     label: @tr("Library");
                     show-icon: root.show-tab-icons;
-                    // Qobuz favorites — inert while offline.
-                    disabled: OfflineState.offline;
                     items: [
                         { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true, route: "favorites-tracks" },
                         { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true, route: "favorites-albums" },
@@ -507,8 +679,8 @@ export component HeaderBar inherits Rectangle {
                     label: @tr("My QBZ");
                     show-icon: root.show-tab-icons;
                     items: [
-                        { label: @tr("Collections"), icon: @image-url("../assets/icons/library-big.svg"), has-glyph: true },
-                        { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true },
+                        { label: @tr("Collections"), icon: @image-url("../assets/icons/library-big.svg"), has-glyph: true, route: "myqbz-collections" },
+                        { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true, route: "myqbz-mixtapes" },
                     ];
                 }
             }
@@ -520,14 +692,14 @@ export component HeaderBar inherits Rectangle {
             spacing: 2px;
             // A small gap from the history buttons.
             Rectangle { width: 6px; }
-            VerticalLayout {
+            // Qobuz-only — HIDDEN entirely while offline (ADR-010 `if` at
+            // the mount site, not rendered-disabled).
+            if !OfflineState.offline: VerticalLayout {
                 alignment: center;
                 CompactNavBtn {
                     tab-index: 0;
                     title: @tr("Discover");
                     icon: @image-url("../assets/icons/compass.svg");
-                    // Qobuz-only — inert while offline.
-                    disabled: OfflineState.offline;
                     home-item: 0;
                     items: [
                         { label: @tr("Home"), has-glyph: false, route: "discover-home" },
@@ -536,14 +708,13 @@ export component HeaderBar inherits Rectangle {
                     ];
                 }
             }
-            VerticalLayout {
+            // Qobuz favorites — HIDDEN entirely while offline.
+            if !OfflineState.offline: VerticalLayout {
                 alignment: center;
                 CompactNavBtn {
                     tab-index: 1;
                     title: @tr("Library");
                     icon: @image-url("../assets/icons/music-library-2.svg");
-                    // Qobuz favorites — inert while offline.
-                    disabled: OfflineState.offline;
                     items: [
                         { label: @tr("Tracks"), icon: @image-url("../assets/icons/music.svg"), has-glyph: true, route: "favorites-tracks" },
                         { label: @tr("Albums"), icon: @image-url("../assets/icons/disc.svg"), has-glyph: true, route: "favorites-albums" },
@@ -574,8 +745,8 @@ export component HeaderBar inherits Rectangle {
                     title: @tr("My QBZ");
                     icon: @image-url("../assets/icons/cassette-tape.svg");
                     items: [
-                        { label: @tr("Collections"), icon: @image-url("../assets/icons/library-big.svg"), has-glyph: true },
-                        { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true },
+                        { label: @tr("Collections"), icon: @image-url("../assets/icons/library-big.svg"), has-glyph: true, route: "myqbz-collections" },
+                        { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true, route: "myqbz-mixtapes" },
                     ];
                 }
             }
@@ -594,12 +765,24 @@ export component HeaderBar inherits Rectangle {
         }
     }
 
-    // --- Right controls: app menu (anchored right) -------------------------
+    // --- Right controls: status badge + app menu (anchored right) ----------
     right-controls := HorizontalLayout {
         x: root.width - self.width - Spacing.md + 2px;
         y: (root.height - self.height) / 2;
-        width: 36px;
+        width: self.preferred-width;
         height: 36px;
+        spacing: 4px;
+        // Offline status badge — mounted only when there is something to
+        // say (ADR-010). Lives INSIDE this fixed-height header row, so it
+        // can never affect the shell's vertical layout.
+        if OfflineState.badge-state != 0: VerticalLayout {
+            alignment: center;
+            OfflineStatusBadge {
+                recovery-login => {
+                    root.recovery-login();
+                }
+            }
+        }
         VerticalLayout {
             alignment: center;
             HeaderIconButton {

@@ -2075,10 +2075,8 @@ export global SettingsState {
     // Settings > Offline, MODE group (the app operating without Qobuz — NOT
     // the offline cache). Backed by the shared engine's per-user store, not
     // the audio/playback stores: seeded by OfflineModeActions.load() on panel
-    // mount; persisted through settings-bool keys "offline-mode-enabled" /
-    // "offline-show-network-folders".
+    // mount; persisted through the settings-bool key "offline-mode-enabled".
     in-out property <bool> offline-mode-enabled: false;
-    in-out property <bool> offline-show-network-folders: false;
     // "Check now" re-probe in flight — flips the status row's button label.
     // Cleared by Rust on the next status broadcast, or after a short timeout
     // when the verdict comes back unchanged (the actor only broadcasts flips).
@@ -3156,8 +3154,13 @@ export global OfflineState {
     // A probe was answered by a redirect — typical captive portal.
     in property <bool> captive-portal: false;
     // D2: unauthenticated offline session while connectivity is back up —
-    // the shell shows the one-click "Sign in" banner.
+    // drives the header badge's "Sign in" affordance (formerly a banner).
     in property <bool> show-recovery-banner: false;
+    // Session started without Qobuz auth ("Start offline" on the login
+    // screen). Unlike show-recovery-banner this is true regardless of
+    // connectivity — the badge's "Logged out" state needs it even while
+    // the link is down.
+    in property <bool> offline-session: false;
     // A previous login exists (last_user_id on disk). Gates the login
     // screen's "Start offline" affordance: offline mode needs a prior
     // user's data, never the empty user-0 profile.
@@ -3166,6 +3169,14 @@ export global OfflineState {
     // ("" = none). Set by the restore task's error arm; cleared on any
     // successful shell entry.
     in property <string> login-error: "";
+    // Header status-badge state, derived: 0 = hidden (online + authenticated),
+    // 1 = hard offline (no connectivity), 2 = manual offline (induced),
+    // 3 = logged out (offline session — the actionable fact, so it takes
+    // precedence over the other two).
+    out property <int> badge-state: self.offline-session ? 3
+        : self.mode == 2 ? 2
+        : self.mode == 1 ? 1
+        : 0;
 }
 
 // Settings > Offline, MODE group — Rust-wired actions (crate::offline_mode).
@@ -3176,4 +3187,8 @@ export global OfflineModeActions {
     // Force an immediate connectivity re-probe (the status row's "Check
     // now"). The status text updates by itself via the engine forwarder.
     callback check-now();
+    // Flip induced offline from anywhere outside the Settings panel (the
+    // header badge flyout's quick toggle). Routes through the same
+    // persistence + #279 snapshot path as the Settings toggle.
+    callback set-offline(bool);
 }

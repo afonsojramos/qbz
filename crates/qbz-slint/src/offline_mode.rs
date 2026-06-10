@@ -83,9 +83,9 @@ pub fn check_now(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
     });
 }
 
-/// Seed the Settings > Offline MODE toggle states from the persisted
+/// Seed the Settings > Offline MODE toggle state from the persisted
 /// engine store. Fired by the panel's `init` (`OfflineModeActions.load`),
-/// so every mount of Settings > Offline re-reads them — the same lazy-load
+/// so every mount of Settings > Offline re-reads it — the same lazy-load
 /// hook LocalLibrarySettings uses. Best-effort: pre-session reads (no
 /// store bound) keep the defaults.
 pub fn seed_settings(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
@@ -102,9 +102,8 @@ pub fn seed_settings(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handl
             }
         };
         let _ = weak.upgrade_in_event_loop(move |w| {
-            let st = w.global::<SettingsState>();
-            st.set_offline_mode_enabled(settings.manual_offline_mode);
-            st.set_offline_show_network_folders(settings.show_network_folders_in_manual_offline);
+            w.global::<SettingsState>()
+                .set_offline_mode_enabled(settings.manual_offline_mode);
         });
     });
 }
@@ -150,6 +149,10 @@ fn apply_status(w: &AppWindow, status: OfflineStatus) {
     });
     state.set_captive_portal(status.captive_portal);
     state.set_show_recovery_banner(status.show_recovery_banner());
+    // The header badge's "Logged out" state needs the raw session flag —
+    // show_recovery_banner() is false while connectivity is down, but the
+    // badge must still read "Logged out" then.
+    state.set_offline_session(status.offline_session);
     // A status broadcast resolves any in-flight Settings "Check now".
     w.global::<SettingsState>().set_offline_checking(false);
 }
@@ -188,8 +191,11 @@ pub fn init_for_user(base_dir: &Path) {
     spawn_subscription_purge_check();
 }
 
-/// Drop the per-user state on logout. The engine keeps its in-memory mode
-/// (the Qobuz gate must survive the transition); only the stores close.
+/// Drop the per-user state on logout. The engine also ends the
+/// session-scoped offline state (offline_session + cached induced flag) and
+/// reopens the Qobuz gate when connectivity allows — a logged-out user must
+/// always be able to sign back in. The persisted induced preference reloads
+/// from disk on the next session activation.
 pub fn teardown() {
     engine().teardown();
     if let Ok(mut guard) = SUBSCRIPTION.lock() {

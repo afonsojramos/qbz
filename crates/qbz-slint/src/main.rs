@@ -3549,10 +3549,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let image_cache = image_cache.clone();
         tokio_rt.spawn(async move {
             let mut rx = offline_mode::engine().subscribe();
-            let mut was_offline = rx.borrow_and_update().is_offline();
+            let initial = *rx.borrow_and_update();
+            let mut was_offline = initial.is_offline();
+            let mut was_conn_down =
+                initial.connectivity == qbz_app::offline_mode::Connectivity::Down;
             while rx.changed().await.is_ok() {
-                let now_offline = rx.borrow_and_update().is_offline();
+                let status = *rx.borrow_and_update();
+                let now_offline = status.is_offline();
+                let now_conn_down =
+                    status.connectivity == qbz_app::offline_mode::Connectivity::Down;
+                let conn_changed = now_conn_down != was_conn_down;
+                was_conn_down = now_conn_down;
                 if now_offline == was_offline {
+                    // Connectivity flipped WITHOUT a mode change (e.g. the
+                    // link dying or returning during a logged-out session):
+                    // the connectivity-keyed network-folder gate changes the
+                    // browse SET, so refresh LocalLibrary in place.
+                    if conn_changed {
+                        let runtime2 = runtime.clone();
+                        let nav_weak = weak.clone();
+                        let handle2 = handle.clone();
+                        let image_cache2 = image_cache.clone();
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            local_library::reset_browse_models(&w);
+                            if w.global::<NavState>().get_view() == ContentView::LocalLibrary {
+                                let tab = local_library::LibTab::from_tab_id(
+                                    &w.global::<LocalLibraryState>().get_active_tab(),
+                                )
+                                .unwrap_or(local_library::LibTab::Albums);
+                                navigate_local_library(
+                                    runtime2, nav_weak, &handle2, image_cache2, tab,
+                                );
+                            }
+                        });
+                    }
                     continue;
                 }
                 was_offline = now_offline;
@@ -3560,6 +3590,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Back online: refresh the sidebar with the real Qobuz set
                     // (the offline cache may hold synthesized names).
                     load_sidebar_playlists(runtime.clone(), weak.clone(), &handle);
+                    // Drop the LocalLibrary browse sets so the next visit
+                    // re-fetches under the new state (the connectivity-keyed
+                    // network-folder gate may change the SET), and reload in
+                    // place when the user is standing there.
+                    let runtime2 = runtime.clone();
+                    let nav_weak = weak.clone();
+                    let handle2 = handle.clone();
+                    let image_cache2 = image_cache.clone();
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        local_library::reset_browse_models(&w);
+                        if w.global::<NavState>().get_view() == ContentView::LocalLibrary {
+                            let tab = local_library::LibTab::from_tab_id(
+                                &w.global::<LocalLibraryState>().get_active_tab(),
+                            )
+                            .unwrap_or(local_library::LibTab::Albums);
+                            navigate_local_library(
+                                runtime2,
+                                nav_weak,
+                                &handle2,
+                                image_cache2,
+                                tab,
+                            );
+                        }
+                    });
                     continue;
                 }
                 let runtime = runtime.clone();
@@ -3571,6 +3625,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // (the D11.b filter lives in sidebar::rebuild).
                     sidebar::rebuild(&w);
                     refresh_sidebar_covers(&w);
+                    // Drop the browse sets so the next fetch (incl. the D12b
+                    // navigation below) re-derives under offline. The SET is
+                    // identical (network content is never hidden); the reset
+                    // only refreshes per-row availability chrome.
+                    local_library::reset_browse_models(&w);
                     match w.global::<NavState>().get_view() {
                         // D11.c: refresh the open grid/detail so unavailable
                         // items (and all-unavailable collections) drop.
@@ -3601,6 +3660,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     id,
                                 );
                             }
+                        }
+                        ContentView::LocalLibrary => {
+                            // Standing on a browse tab: the models were just
+                            // reset — reload the active tab in place so the
+                            // grid re-fetches under the offline gate instead
+                            // of sitting empty until re-entry.
+                            let tab = local_library::LibTab::from_tab_id(
+                                &w.global::<LocalLibraryState>().get_active_tab(),
+                            )
+                            .unwrap_or(local_library::LibTab::Albums);
+                            navigate_local_library(
+                                runtime.clone(),
+                                nav_weak.clone(),
+                                &handle2,
+                                image_cache.clone(),
+                                tab,
+                            );
                         }
                         _ => {
                             // D12b: blocked Qobuz view → LocalLibrary.
@@ -3737,16 +3813,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let image_cache = image_cache.clone();
         let settings_ctx = settings_ctx.clone();
         window.on_recovery_login(move || {
+            // Logged BEFORE the spawn: records the click arriving from the
+            // UI chain even if the async attempt below stalls or fails.
+            log::info!("[qbz-slint] recovery sign-in requested");
             let runtime = runtime.clone();
             let weak = weak.clone();
             let image_cache = image_cache.clone();
             let settings_ctx = settings_ctx.clone();
             handle.spawn(async move {
-                // The offline session keeps the Qobuz gate closed (D3), which
-                // would refuse the recovery login itself. Lift the session
-                // flag for the attempt; restore it on failure so the gate
-                // closes again and the banner returns (connectivity is up).
-                offline_mode::engine().set_offline_session(false);
+                // No pre-lift needed: the auth endpoints are EXEMPT from the
+                // offline gate (qbz-qobuz client), so the token login and the
+                // OAuth exchange pass the closed gate. Net effect: the
+                // offline_session flag ends up false only on SUCCESS paths —
+                // restore_saved_session clears it on success only, and the
+                // browser fallback's upfront clear is restored on failure
+                // below — so a failed attempt leaves the live offline session
+                // (and the recovery banner) intact.
                 match auth::restore_saved_session(&runtime).await {
                     Ok(Some(session)) => {
                         log::info!(
@@ -3756,17 +3838,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         enter_shell(runtime, weak, image_cache, settings_ctx, session).await;
                     }
                     Ok(None) => {
-                        log::warn!("[qbz-slint] recovery login: saved session no longer usable");
-                        offline_mode::engine().set_offline_session(true);
-                        let _ = weak.upgrade_in_event_loop(|w| {
-                            toast::error(&w, "Sign-in failed — the saved session is no longer valid");
-                            w.global::<OfflineState>()
-                                .set_login_error("Saved session is no longer valid".into());
-                        });
+                        // No saved token, or the token was explicitly
+                        // rejected (and cleared). The user asked to sign in —
+                        // fall back to the full system-browser OAuth.
+                        log::warn!(
+                            "[qbz-slint] recovery login: saved session unusable — falling back to browser OAuth"
+                        );
+                        match auth::login_via_system_browser(&runtime).await {
+                            Ok(session) => {
+                                log::info!(
+                                    "[qbz-slint] recovery browser sign-in succeeded for user {}",
+                                    session.user_id
+                                );
+                                enter_shell(runtime, weak, image_cache, settings_ctx, session)
+                                    .await;
+                            }
+                            Err(e) => {
+                                log::error!("[qbz-slint] recovery browser sign-in failed: {e}");
+                                // login_via_system_browser ends the offline
+                                // session upfront (login-screen semantics);
+                                // here the user is still inside the
+                                // unauthenticated offline shell — restore the
+                                // session flag so the gate closes again and
+                                // the banner returns.
+                                offline_mode::engine().set_offline_session(true);
+                                let _ = weak.upgrade_in_event_loop(move |w| {
+                                    toast::error(&w, format!("Sign-in failed: {e}"));
+                                    w.global::<OfflineState>().set_login_error(e.into());
+                                });
+                            }
+                        }
                     }
                     Err(e) => {
+                        // Network-class failure: the offline_session flag was
+                        // never lifted (no pre-lift), so the offline shell
+                        // state is already intact — just surface the error.
                         log::error!("[qbz-slint] recovery login failed: {e}");
-                        offline_mode::engine().set_offline_session(true);
                         let _ = weak.upgrade_in_event_loop(move |w| {
                             toast::error(&w, format!("Sign-in failed: {e}"));
                             w.global::<OfflineState>().set_login_error(e.into());
@@ -4179,6 +4286,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.global::<OfflineModeActions>().on_check_now(move || {
             offline_mode::check_now(weak.clone(), handle.clone());
         });
+    }
+    // The header badge flyout's quick offline toggle — same persistence +
+    // #279 snapshot path as the Settings "Enable Offline Mode" toggle.
+    {
+        let runtime = app_runtime.clone();
+        let settings_ctx = settings_ctx.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<OfflineModeActions>()
+            .on_set_offline(move |value| {
+                let runtime = runtime.clone();
+                let settings_ctx = settings_ctx.clone();
+                let weak = weak.clone();
+                handle.spawn(async move {
+                    settings::handle_bool(
+                        settings_ctx,
+                        runtime,
+                        weak,
+                        "offline-mode-enabled".to_string(),
+                        value,
+                    )
+                    .await;
+                });
+            });
     }
 
     // Appearance settings persistence. The toggles/selects set their
