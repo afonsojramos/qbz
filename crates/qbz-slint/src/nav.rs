@@ -217,6 +217,22 @@ pub fn record(entry: NavEntry) {
     }
 }
 
+/// Replace the whole history with a single root entry. Used by the OFFLINE
+/// session entry (D12): the post-entry view IS the root, so back/forward
+/// never lead to a phantom blocked Home.
+pub fn reset_root(entry: NavEntry) {
+    HISTORY.with(|h| {
+        *h.borrow_mut() = History {
+            entries: vec![Entry {
+                nav: entry,
+                scroll: 0.0,
+            }],
+            cursor: 0,
+        };
+    });
+    set_live_scroll(0.0);
+}
+
 /// Step back; returns the entry that is now current plus its saved scroll
 /// position, or `None` at the start of the stack.
 pub fn go_back() -> Option<(NavEntry, f32)> {

@@ -407,9 +407,11 @@ pub fn reset(window: &AppWindow) {
     state.set_sort_field("default".into());
     state.set_sort_asc(true);
     // Local-playlist flags reset on every navigation; the local detail
-    // path re-sets them after this shared reset.
+    // path re-sets them after this shared reset. The offline-subset flag
+    // (D11.a mixed-playlist offline rendering) resets the same way.
     state.set_is_local(false);
     state.set_offline_only(false);
+    state.set_offline_subset(false);
     state.set_loading(true);
 }
 

@@ -94,7 +94,10 @@ export component AppShell inherits Rectangle {
         || NavState.view == ContentView.label-releases
         || NavState.view == ContentView.location
         || NavState.view == ContentView.mix
-        || NavState.view == ContentView.playlist);
+        // Playlist: LOCAL playlists and the offline sidecar rendering of a
+        // MIXED one (D11.a) mount below; only a plain Qobuz detail blocks.
+        || (NavState.view == ContentView.playlist
+            && !PlaylistState.is-local && !PlaylistState.offline-subset));
 
     background: Theme.surface-main;
 
@@ -321,9 +324,13 @@ export component AppShell inherits Rectangle {
                     }
                 }
                 // LOCAL playlists (PlaylistState.is-local) render OFFLINE
-                // too — they live in library.db, not on Qobuz (D7/D11).
+                // too — they live in library.db, not on Qobuz (D7/D11) —
+                // and so does the local-sidecar rendering of a MIXED
+                // Qobuz playlist (PlaylistState.offline-subset, D11.a).
                 if NavState.view == ContentView.playlist
-                    && (!OfflineState.offline || PlaylistState.is-local): PlaylistView {
+                    && (!OfflineState.offline
+                        || PlaylistState.is-local
+                        || PlaylistState.offline-subset): PlaylistView {
                     play-track(id) => {
                         root.media-action("track", id, "play");
                     }

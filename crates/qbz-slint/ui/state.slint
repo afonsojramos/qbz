@@ -1255,6 +1255,10 @@ export global PlaylistState {
     in property <bool> is-local: false;
     // D8: never offered for upload, never reaches Qobuz/QConnect.
     in property <bool> offline-only: false;
+    // D11.a: a MIXED (Qobuz-id) playlist rendered OFFLINE from its local
+    // sidecar rows only (the Qobuz membership is not enumerable offline).
+    // Lets the AppShell mount the detail instead of the OfflinePlaceholder.
+    in property <bool> offline-subset: false;
     // Track edit mode — rows show a selection checkbox and a bulk bar
     // appears (remove selected). Only available to the owner.
     in-out property <bool> multi-select-mode: false;

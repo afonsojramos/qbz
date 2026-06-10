@@ -553,13 +553,16 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
     }
 }
 
-/// Apply loaded data into `PlaylistState` (header + rows through the shared
-/// `playlist.rs` row machinery) and snapshot the playable queue. UI thread.
-pub fn apply(window: &AppWindow, data: LocalPlaylistData) {
+/// Build the queue snapshot + display rows + id->position map for a resolved
+/// row list. Shared by the LOCAL detail [`apply`] and the offline MIXED
+/// detail ([`apply_qobuz_offline`]).
+fn build_row_models(
+    rows: &[LoadedRow],
+) -> (Vec<QueueTrack>, Vec<TrackItem>, HashMap<String, i32>) {
     let mut queue: Vec<QueueTrack> = Vec::new();
-    let mut items: Vec<TrackItem> = Vec::with_capacity(data.rows.len());
+    let mut items: Vec<TrackItem> = Vec::with_capacity(rows.len());
     let mut positions: HashMap<String, i32> = HashMap::new();
-    for row in &data.rows {
+    for row in rows {
         let qt = row_queue_track(&row.item);
         let item = row_item(&row.item, qt.as_ref());
         positions.insert(item.id.to_string(), row.position);
@@ -568,6 +571,13 @@ pub fn apply(window: &AppWindow, data: LocalPlaylistData) {
         }
         items.push(item);
     }
+    (queue, items, positions)
+}
+
+/// Apply loaded data into `PlaylistState` (header + rows through the shared
+/// `playlist.rs` row machinery) and snapshot the playable queue. UI thread.
+pub fn apply(window: &AppWindow, data: LocalPlaylistData) {
+    let (queue, items, positions) = build_row_models(&data.rows);
 
     if let Ok(mut cur) = CURRENT_QUEUE.lock() {
         *cur = queue;
@@ -616,10 +626,10 @@ pub fn apply(window: &AppWindow, data: LocalPlaylistData) {
 /// Row artwork jobs — Qobuz rows have http URLs, local rows file paths.
 /// Returns (http jobs, local-file jobs) targeting `PlaylistTrack{index}`
 /// (the same target the Qobuz detail uses; indexes are FULL_ITEMS order).
-pub fn artwork_jobs(data: &LocalPlaylistData) -> (Vec<ArtworkJob>, Vec<ArtworkJob>) {
+pub fn artwork_jobs(rows: &[LoadedRow]) -> (Vec<ArtworkJob>, Vec<ArtworkJob>) {
     let mut http = Vec::new();
     let mut local = Vec::new();
-    for (index, row) in data.rows.iter().enumerate() {
+    for (index, row) in rows.iter().enumerate() {
         match &row.item {
             RowItem::Qobuz(track) => {
                 if let Some(url) = track.album.as_ref().and_then(|a| a.image.smallest().cloned()) {
@@ -670,7 +680,7 @@ pub fn navigate(
             });
             return;
         };
-        let (http_jobs, local_jobs) = artwork_jobs(&data);
+        let (http_jobs, local_jobs) = artwork_jobs(&data.rows);
         let _ = weak.upgrade_in_event_loop(move |w| {
             apply(&w, data);
         });
@@ -681,6 +691,141 @@ pub fn navigate(
             artwork::spawn_local_loads(local_jobs, weak.clone(), image_cache.clone());
         }
     });
+}
+
+// ──────────────── Mixed Qobuz playlist — offline detail (D11.a) ────────────────
+
+/// Open the OFFLINE rendering of a MIXED (Qobuz-id) playlist: its local
+/// sidecar rows (`playlist_local_tracks`) plus — under INDUCED offline only —
+/// its Plex sidecar rows (`playlist_plex_tracks`; availability rule). The
+/// Qobuz membership lives in the API and is not enumerable offline, so the
+/// detail structurally shows ZERO Qobuz rows (spec D11 honest limit). The
+/// name/description come from the sidebar's last-loaded cache (real names
+/// after a mid-session flip; the synthesized fallback on a cold offline
+/// start — the name is not stored locally anywhere).
+pub fn navigate_qobuz_offline(
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: ImageCache,
+    playlist_id: u64,
+) {
+    handle.spawn(async move {
+        {
+            let weak = weak.clone();
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                crate::playlist::reset(&w);
+                // Set BEFORE the view switch so the AppShell mounts the
+                // detail (not the OfflinePlaceholder) with no flash.
+                w.global::<PlaylistState>().set_offline_subset(true);
+                crate::sidebar::set_active(&w, &playlist_id.to_string());
+                w.global::<NavState>().set_view(ContentView::Playlist);
+            });
+        }
+
+        let plex_allowed = crate::offline_mode::engine().status().mode
+            == qbz_app::offline_mode::OfflineMode::InducedOffline;
+        let (rows, custom_artwork_path) = tokio::task::spawn_blocking(move || {
+            crate::library_db::with_db(|db| {
+                let mut rows: Vec<LoadedRow> = db
+                    .get_playlist_local_tracks_with_position(playlist_id)?
+                    .into_iter()
+                    .map(|r| LoadedRow {
+                        position: r.playlist_position,
+                        item: RowItem::Local(Box::new(r.track)),
+                    })
+                    .collect();
+                if plex_allowed {
+                    rows.extend(
+                        db.get_playlist_plex_tracks_with_position(playlist_id)?
+                            .into_iter()
+                            .map(|(key, position)| LoadedRow {
+                                position,
+                                item: RowItem::Plex { key },
+                            }),
+                    );
+                    rows.sort_by_key(|r| r.position);
+                }
+                let custom = db
+                    .get_playlist_settings(playlist_id)?
+                    .and_then(|s| s.custom_artwork_path)
+                    .filter(|p| !p.is_empty());
+                Ok((rows, custom))
+            })
+            .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
+
+        let (name, description) = crate::sidebar::playlist_name_desc(playlist_id)
+            .unwrap_or_else(|| ("Playlist".to_string(), String::new()));
+        let (http_jobs, local_jobs) = artwork_jobs(&rows);
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            apply_qobuz_offline(&w, playlist_id, name, description, custom_artwork_path, rows);
+        });
+        // Sidecar rows carry file paths (local) — the http set stays empty,
+        // kept for symmetry with the local detail's dispatch.
+        if !http_jobs.is_empty() {
+            artwork::spawn_loads(http_jobs, weak.clone(), image_cache.clone());
+        }
+        if !local_jobs.is_empty() {
+            artwork::spawn_local_loads(local_jobs, weak.clone(), image_cache.clone());
+        }
+    });
+}
+
+/// Apply the offline sidecar rows of a mixed Qobuz playlist into
+/// `PlaylistState`. Read-only header (`is_owner` false — Qobuz edits can't
+/// run offline); playback flows through this module's queue snapshot, the
+/// same machinery the LOCAL detail uses. UI thread.
+fn apply_qobuz_offline(
+    window: &AppWindow,
+    playlist_id: u64,
+    name: String,
+    description: String,
+    custom_artwork_path: Option<String>,
+    rows: Vec<LoadedRow>,
+) {
+    let (queue, items, positions) = build_row_models(&rows);
+    if let Ok(mut cur) = CURRENT_QUEUE.lock() {
+        *cur = queue;
+    }
+    // NOT offline-only (D8 stamp stays off): this is a real Qobuz playlist
+    // rendered partially.
+    if let Ok(mut meta) = CURRENT_META.lock() {
+        *meta = Some((playlist_id.to_string(), false));
+    }
+    if let Ok(mut pos) = ROW_POSITIONS.lock() {
+        *pos = positions;
+    }
+
+    let duration = total_duration_label(&rows);
+    let state = window.global::<PlaylistState>();
+    state.set_id(playlist_id.to_string().into());
+    state.set_name(name.into());
+    state.set_owner("Local tracks only — offline".into());
+    let description = crate::strip_html::strip_html(&description);
+    state.set_description(description.clone().into());
+    state.set_description_short(description.into());
+    state.set_is_local(false);
+    state.set_offline_only(false);
+    state.set_offline_subset(true);
+    // Read-only offline: Qobuz-side edits (rename / remove tracks / custom
+    // order writes) can't reach the API, so the owner affordances hide.
+    state.set_is_owner(false);
+    let custom = custom_artwork_path
+        .as_ref()
+        .filter(|p| std::path::Path::new(p).exists())
+        .and_then(|p| slint::Image::load_from_path(std::path::Path::new(p)).ok());
+    if let Some(img) = custom {
+        state.set_cover(img);
+        state.set_cover_url(custom_artwork_path.unwrap_or_default().into());
+        state.set_has_custom(true);
+    } else {
+        state.set_cover_url("".into());
+        state.set_has_custom(false);
+    }
+    state.set_total_duration(duration.into());
+    crate::playlist::apply_local_items(window, items);
 }
 
 // ──────────────────────── playback ────────────────────────

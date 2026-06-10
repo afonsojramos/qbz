@@ -295,6 +295,7 @@ async fn enter_shell(
 async fn enter_shell_offline(
     runtime: Arc<AppRuntime<SlintAdapter>>,
     weak: slint::Weak<AppWindow>,
+    image_cache: artwork::ImageCache,
     settings_ctx: Arc<settings::SettingsCtx>,
 ) -> Result<(), String> {
     // Never open the empty user-0 profile: offline mode needs a previous
@@ -326,13 +327,35 @@ async fn enter_shell_offline(
     }
     crate::offline_mode::engine().set_offline_session(true);
 
-    let _ = weak.upgrade_in_event_loop(move |w| {
-        seed_tray_appearance(&w, &tray);
-        myqbz_prefs::seed(&w);
-        // No HomeState loading spinner: the discover load is skipped offline
-        // (the gating slice adds the placeholder views).
-        w.set_screen(AppScreen::Shell);
-    });
+    {
+        let weak = weak.clone();
+        let _ = weak.clone().upgrade_in_event_loop(move |w| {
+            seed_tray_appearance(&w, &tray);
+            myqbz_prefs::seed(&w);
+            // No HomeState loading spinner: the discover load is skipped offline
+            // (the gating slice adds the placeholder views).
+            w.set_screen(AppScreen::Shell);
+            // D12: an offline session lands on LocalLibrary (Home is a blocked
+            // placeholder offline). Root the nav history at it so back/forward
+            // never lead to a phantom blocked Home.
+            nav::reset_root(nav::NavEntry::LocalLibrary {
+                tab: local_library::LibTab::Albums.tab_id().to_string(),
+            });
+            update_nav_flags(&w);
+        });
+    }
+    navigate_local_library(
+        runtime.clone(),
+        weak.clone(),
+        &tokio::runtime::Handle::current(),
+        image_cache,
+        local_library::LibTab::Albums,
+    );
+
+    // Sidebar playlists: offline the load lists the LOCAL playlists plus the
+    // MIXED Qobuz playlists with local sidecar content (D11.b) — the Qobuz
+    // fetch itself fast-fails at the gate.
+    load_sidebar_playlists(runtime.clone(), weak.clone(), &tokio::runtime::Handle::current());
 
     // Playback poll loop — local/cached playback and queue advance work
     // offline. Same lifetime semantics as the online entry.
@@ -468,6 +491,32 @@ fn update_nav_flags(window: &AppWindow) {
     let state = window.global::<NavState>();
     state.set_can_back(nav::can_back());
     state.set_can_forward(nav::can_forward());
+}
+
+/// Whether the CURRENT content view is one the AppShell swaps for the
+/// OfflinePlaceholder while offline. KEEP IN SYNC with `qobuz-view-blocked`
+/// in `AppShell.slint`. The playlist view blocks only when it is neither a
+/// LOCAL playlist nor the offline sidecar rendering of a mixed one (D11.a).
+/// UI thread only (reads the globals).
+fn is_offline_blocked_view(window: &AppWindow) -> bool {
+    match window.global::<NavState>().get_view() {
+        ContentView::Home
+        | ContentView::DiscoverBrowse
+        | ContentView::Search
+        | ContentView::Favorites
+        | ContentView::Album
+        | ContentView::Artist
+        | ContentView::Musician
+        | ContentView::Label
+        | ContentView::LabelReleases
+        | ContentView::Location
+        | ContentView::Mix => true,
+        ContentView::Playlist => {
+            let ps = window.global::<PlaylistState>();
+            !ps.get_is_local() && !ps.get_offline_subset()
+        }
+        _ => false,
+    }
 }
 
 /// Flip the `is-favorite` flag on every visible row matching `track_id`,
@@ -1458,7 +1507,16 @@ fn navigate_playlist(
             local_playlist::navigate(runtime, weak, handle, image_cache, id);
             return;
         }
-        Some(local_playlist::PlaylistRef::Qobuz(id)) => id,
+        Some(local_playlist::PlaylistRef::Qobuz(id)) => {
+            // D11.a: offline, a mixed playlist's detail renders ONLY its
+            // local sidecar rows — the Qobuz membership is not enumerable
+            // offline, so the API fetch below never runs.
+            if offline_mode::engine().is_offline() {
+                local_playlist::navigate_qobuz_offline(weak, handle, image_cache, id);
+                return;
+            }
+            id
+        }
         None => {
             log::warn!("[qbz-slint] navigate_playlist: bad id {playlist_id}");
             return;
@@ -3477,6 +3535,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // affordances + the D2 recovery banner) and seed has-previous-session.
     offline_mode::start_ui_forwarder(window.as_weak());
 
+    // Offline EDGE reactions (D11/D12b). On online→offline: a user standing
+    // on a placeholder-blocked Qobuz view auto-navigates to LocalLibrary (the
+    // offline default view), the sidebar re-renders from cache (the offline
+    // filter keeps locals + mixed-with-local-content, real names intact), and
+    // an open My QBZ grid/detail reloads so unavailable items drop (D11.c).
+    // On offline→online: NO navigation (blocked views unblock naturally);
+    // the sidebar reloads the full Qobuz set.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        tokio_rt.spawn(async move {
+            let mut rx = offline_mode::engine().subscribe();
+            let mut was_offline = rx.borrow_and_update().is_offline();
+            while rx.changed().await.is_ok() {
+                let now_offline = rx.borrow_and_update().is_offline();
+                if now_offline == was_offline {
+                    continue;
+                }
+                was_offline = now_offline;
+                if !now_offline {
+                    // Back online: refresh the sidebar with the real Qobuz set
+                    // (the offline cache may hold synthesized names).
+                    load_sidebar_playlists(runtime.clone(), weak.clone(), &handle);
+                    continue;
+                }
+                let runtime = runtime.clone();
+                let nav_weak = weak.clone();
+                let handle2 = handle.clone();
+                let image_cache = image_cache.clone();
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    // Sidebar: re-render from cache under the new offline state
+                    // (the D11.b filter lives in sidebar::rebuild).
+                    sidebar::rebuild(&w);
+                    refresh_sidebar_covers(&w);
+                    match w.global::<NavState>().get_view() {
+                        // D11.c: refresh the open grid/detail so unavailable
+                        // items (and all-unavailable collections) drop.
+                        ContentView::Mixtapes => {
+                            myqbz::navigate(
+                                nav_weak.clone(),
+                                handle2.clone(),
+                                image_cache.clone(),
+                                qbz_models::mixtape::CollectionKind::Mixtape,
+                            );
+                        }
+                        ContentView::Collections => {
+                            myqbz::navigate(
+                                nav_weak.clone(),
+                                handle2.clone(),
+                                image_cache.clone(),
+                                qbz_models::mixtape::CollectionKind::Collection,
+                            );
+                        }
+                        ContentView::MixtapeDetail => {
+                            let id = w.global::<MyQbzDetailState>().get_id().to_string();
+                            if !id.is_empty() {
+                                myqbz_detail::navigate(
+                                    runtime.clone(),
+                                    nav_weak.clone(),
+                                    handle2.clone(),
+                                    image_cache.clone(),
+                                    id,
+                                );
+                            }
+                        }
+                        _ => {
+                            // D12b: blocked Qobuz view → LocalLibrary.
+                            if is_offline_blocked_view(&w) {
+                                nav::record(nav::NavEntry::LocalLibrary {
+                                    tab: local_library::LibTab::Albums.tab_id().to_string(),
+                                });
+                                update_nav_flags(&w);
+                                navigate_local_library(
+                                    runtime.clone(),
+                                    nav_weak.clone(),
+                                    &handle2,
+                                    image_cache.clone(),
+                                    local_library::LibTab::Albums,
+                                );
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    }
+
     // Startup: initialize the core, then try to restore a saved session.
     // A valid saved token jumps straight to the shell; otherwise the
     // login screen stays.
@@ -3564,14 +3711,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
         let settings_ctx = settings_ctx.clone();
         window.on_start_offline(move || {
             dispatch(AppCommand::StartOffline);
             let runtime = runtime.clone();
             let weak = weak.clone();
+            let image_cache = image_cache.clone();
             let settings_ctx = settings_ctx.clone();
             handle.spawn(async move {
-                if let Err(e) = enter_shell_offline(runtime, weak, settings_ctx).await {
+                if let Err(e) = enter_shell_offline(runtime, weak, image_cache, settings_ctx).await
+                {
                     log::error!("[qbz-slint] offline start failed: {e}");
                 }
             });
@@ -4768,9 +4918,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ("playlist", "play-all") => {
                     // LOCAL playlist detail — its own queue snapshot +
-                    // offline-only stamp (D8); Qobuz path unchanged below.
+                    // offline-only stamp (D8); the offline sidecar view of
+                    // a MIXED playlist (D11.a) shares that snapshot; the
+                    // Qobuz path is unchanged below.
                     if let Some(w) = weak.upgrade() {
-                        if w.global::<PlaylistState>().get_is_local() {
+                        let ps = w.global::<PlaylistState>();
+                        if ps.get_is_local() || ps.get_offline_subset() {
                             local_playlist::play_all(
                                 &w,
                                 runtime.clone(),
@@ -4791,7 +4944,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ("playlist", "shuffle") => {
                     if let Some(w) = weak.upgrade() {
-                        if w.global::<PlaylistState>().get_is_local() {
+                        let ps = w.global::<PlaylistState>();
+                        if ps.get_is_local() || ps.get_offline_subset() {
                             local_playlist::play_all(
                                 &w,
                                 runtime.clone(),

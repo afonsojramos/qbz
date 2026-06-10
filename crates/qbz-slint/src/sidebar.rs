@@ -73,6 +73,10 @@ pub struct SidebarData {
     pub hidden_playlists: HashSet<u64>,
     /// First-class local playlists (offline-mode D7), appended as root rows.
     pub local_playlists: Vec<LocalSidebarPlaylist>,
+    /// Qobuz playlist id -> local sidecar track count (library.db
+    /// `playlist_local_tracks`). The D11.b offline filter keeps only the
+    /// MIXED playlists (count > 0); unused while online.
+    pub local_counts: HashMap<u64, u32>,
 }
 
 /// Session-only folder expand state (matches Tauri — not persisted).
@@ -161,8 +165,9 @@ where
     };
     // Folders (hidden folders excluded) + folder membership +
     // per-playlist custom-sort positions + hidden-playlist set + the
-    // first-class LOCAL playlists (all local, library.db).
-    let (folders, folder_map, positions, hidden_playlists, local_playlists) =
+    // first-class LOCAL playlists + the per-playlist local sidecar counts
+    // (all local, library.db).
+    let (folders, folder_map, positions, hidden_playlists, local_playlists, local_counts) =
         tokio::task::spawn_blocking(|| {
             let folders: Vec<FolderInfo> = crate::folders::load_folders_full()
                 .into_iter()
@@ -193,11 +198,40 @@ where
                 crate::folders::playlist_positions(),
                 hidden_playlists,
                 local_playlists,
+                crate::folders::playlist_local_counts(),
             )
         })
         .await
         .unwrap_or_default();
     let mut playlists = playlists;
+    // D11.b — OFFLINE: the Qobuz fetch above is gate-refused (empty), so the
+    // MIXED playlists (>= 1 local sidecar row) are synthesized from the local
+    // counts to stay reachable. Their NAMES are not stored locally anywhere
+    // (`playlist_settings` has no name column), so a cold offline start falls
+    // back to "Playlist (N local)"; a mid-session flip keeps the real name
+    // from the previous load's cache.
+    if crate::offline_mode::engine().is_offline() {
+        let known: HashSet<u64> = playlists.iter().map(|p| p.id).collect();
+        let prior: HashMap<u64, (String, String)> =
+            NAME_DESC.lock().map(|nd| nd.clone()).unwrap_or_default();
+        for (&id, &count) in &local_counts {
+            if count == 0 || known.contains(&id) {
+                continue;
+            }
+            let (name, description) = prior
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| (format!("Playlist ({count} local)"), String::new()));
+            playlists.push(SidebarPlaylist {
+                id,
+                name,
+                description,
+                tracks_count: count,
+                cover_urls: Vec::new(),
+                position: 0,
+            });
+        }
+    }
     for p in &mut playlists {
         if let Some(pos) = positions.get(&p.id) {
             p.position = *pos;
@@ -217,6 +251,7 @@ where
         folder_map,
         hidden_playlists,
         local_playlists,
+        local_counts,
     }
 }
 
@@ -313,6 +348,7 @@ fn local_playlist_entry(p: &LocalSidebarPlaylist) -> SidebarEntry {
 /// children are absent from the flattened `entries`).
 pub fn load_folder_popup(window: &AppWindow, folder_id: &str) {
     let data = CACHE.lock().map(|c| c.clone()).unwrap_or_default();
+    let offline = crate::offline_mode::engine().is_offline();
     let sorted = sort_playlists(&data.playlists);
     let entries: Vec<SidebarEntry> = sorted
         .iter()
@@ -323,11 +359,18 @@ pub fn load_folder_popup(window: &AppWindow, folder_id: &str) {
                 .unwrap_or(false)
         })
         .filter(|p| !data.hidden_playlists.contains(&p.id))
+        .filter(|p| offline_visible(&data, offline, p))
         .map(|p| playlist_entry(p, true, folder_id))
         .collect();
     window
         .global::<SidebarFolderPopupState>()
         .set_playlists(ModelRc::new(VecModel::from(entries)));
+}
+
+/// D11.b visibility: ONLINE every playlist shows; OFFLINE only the MIXED
+/// ones (>= 1 local sidecar track) stay — 100% Qobuz playlists hide.
+fn offline_visible(data: &SidebarData, offline: bool, p: &SidebarPlaylist) -> bool {
+    !offline || data.local_counts.get(&p.id).copied().unwrap_or(0) > 0
 }
 
 /// Rebuild the flattened entries (+ the folders list for the
@@ -338,6 +381,7 @@ pub fn rebuild(window: &AppWindow) {
     let expanded = EXPANDED.lock().map(|e| e.clone()).unwrap_or_default();
     let query = SEARCH.lock().map(|q| q.clone()).unwrap_or_default();
     let searching = !query.is_empty();
+    let offline = crate::offline_mode::engine().is_offline();
     let folder_ids: HashSet<&String> = data.folders.iter().map(|f| &f.id).collect();
 
     // Sort then filter by the playlist-name query (recursive — the same
@@ -352,10 +396,13 @@ pub fn rebuild(window: &AppWindow) {
             .filter(|p| data.folder_map.get(&p.id).map(|f| f == &folder.id).unwrap_or(false))
             .filter(|p| matches(p))
             .filter(|p| !data.hidden_playlists.contains(&p.id))
+            .filter(|p| offline_visible(&data, offline, p))
             .collect();
         // While searching, skip folders with no matching playlists
         // (mirrors Tauri's `if (isSearching && folderPlaylists.length === 0) continue`).
-        if searching && members.is_empty() {
+        // Offline the same rule hides folders whose members are all filtered
+        // out (D11.b) — an empty folder header carries no information there.
+        if (searching || offline) && members.is_empty() {
             continue;
         }
         // When searching, force-expand so matches inside are visible.
@@ -392,7 +439,11 @@ pub fn rebuild(window: &AppWindow) {
             .get(&p.id)
             .map(|f| folder_ids.contains(f))
             .unwrap_or(false);
-        if !in_folder && matches(p) && !data.hidden_playlists.contains(&p.id) {
+        if !in_folder
+            && matches(p)
+            && !data.hidden_playlists.contains(&p.id)
+            && offline_visible(&data, offline, p)
+        {
             entries.push(playlist_entry(p, false, ""));
         }
     }

@@ -139,7 +139,7 @@ where
 
     let folder_ids: std::collections::HashSet<&String> = folders.iter().map(|f| &f.id).collect();
 
-    let playlists: Vec<PmPlaylist> = remote
+    let mut playlists: Vec<PmPlaylist> = remote
         .iter()
         .map(|p| {
             let s = settings.get(&p.id).cloned().unwrap_or_default();
@@ -163,6 +163,38 @@ where
             }
         })
         .collect();
+
+    // D11.b — OFFLINE: the Qobuz fetch is gate-refused (empty), so the MIXED
+    // playlists (>= 1 local sidecar row) are synthesized from the local
+    // counts to stay reachable. Their names are not stored locally anywhere
+    // (`playlist_settings` has no name column), so a cold offline start
+    // falls back to "Playlist (N local)"; a mid-session flip keeps the real
+    // name via the sidebar's name cache (loaded while online).
+    if crate::offline_mode::engine().is_offline() {
+        let known: std::collections::HashSet<u64> = playlists.iter().map(|p| p.id).collect();
+        for (&id, &count) in &local_counts {
+            if count == 0 || known.contains(&id) {
+                continue;
+            }
+            let s = settings.get(&id).cloned().unwrap_or_default();
+            let name = crate::sidebar::playlist_name_desc(id)
+                .map(|(name, _)| name)
+                .unwrap_or_else(|| format!("Playlist ({count} local)"));
+            playlists.push(PmPlaylist {
+                id,
+                name,
+                tracks_count: 0,
+                duration: 0,
+                local_count: count,
+                play_count: play_counts.get(&id).copied().unwrap_or(0),
+                is_favorite: s.is_favorite,
+                is_hidden: s.hidden,
+                folder_id: s.folder_id.filter(|fid| folder_ids.contains(fid)),
+                position: s.position,
+                cover_urls: Vec::new(),
+            });
+        }
+    }
 
     PmData {
         playlists,
@@ -379,10 +411,13 @@ pub fn rebuild(window: &AppWindow) {
         .map(|f| folder_item(f, folder_counts.get(&f.id).copied().unwrap_or(0)))
         .collect();
 
-    // Filtered + sorted playlists for the grid / list.
+    // Filtered + sorted playlists for the grid / list. While OFFLINE only
+    // the MIXED playlists (>= 1 local sidecar track) stay (D11.b).
+    let offline = crate::offline_mode::engine().is_offline();
     let mut filtered: Vec<PmPlaylist> = data
         .playlists
         .iter()
+        .filter(|p| !offline || p.local_count > 0)
         .filter(|p| passes(p, &query, &filter, folder_mode, &view_mode))
         .cloned()
         .collect();
@@ -472,8 +507,13 @@ fn build_tree(data: &PmData, query: &str, filter: &str, sort: &str) -> Vec<PmTre
     }
     let expanded = EXPANDED.lock().map(|e| e.clone()).unwrap_or_default();
     let searching = !query.is_empty();
+    let offline = crate::offline_mode::engine().is_offline();
 
     let matches = |p: &PmPlaylist| -> bool {
+        // D11.b: offline only the MIXED playlists stay.
+        if offline && p.local_count == 0 {
+            return false;
+        }
         if searching && !p.name.to_lowercase().contains(query) {
             return false;
         }
@@ -493,7 +533,9 @@ fn build_tree(data: &PmData, query: &str, filter: &str, sort: &str) -> Vec<PmTre
             .filter(|p| matches(p))
             .cloned()
             .collect();
-        if searching && members.is_empty() {
+        // While searching — and offline, where the D11.b filter may empty a
+        // folder — skip folders with no visible members.
+        if (searching || offline) && members.is_empty() {
             continue;
         }
         sort_playlists(&mut members, sort);

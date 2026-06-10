@@ -1891,8 +1891,12 @@ pub fn play_track_in_context(
         // visible model so sort/filter are respected.
         ContentView::Playlist => {
             // LOCAL playlist detail (id "local:<uuid>") — queue from its
-            // own resolved snapshot + the D8 offline-only stamp.
-            if window.global::<PlaylistState>().get_is_local() {
+            // own resolved snapshot + the D8 offline-only stamp. The
+            // offline sidecar rendering of a MIXED playlist (D11.a) plays
+            // from the same snapshot (its rows resolve locally).
+            if window.global::<PlaylistState>().get_is_local()
+                || window.global::<PlaylistState>().get_offline_subset()
+            {
                 if crate::local_playlist::play_from_visible(
                     window,
                     runtime.clone(),

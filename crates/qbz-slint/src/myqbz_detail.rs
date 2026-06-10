@@ -1232,6 +1232,29 @@ pub fn navigate(
         let collection =
             tokio::task::spawn_blocking(move || get_collection(&fetch_id)).await.ok().flatten();
 
+        // D11.c — OFFLINE: drop the items failing the availability rule
+        // (qobuz not-cached / grace-expired; plex under real offline) before
+        // the rows render. Online: untouched.
+        let collection = match collection {
+            Some(mut c) if crate::offline_mode::engine().is_offline() => {
+                let items: Vec<&qbz_models::mixtape::MixtapeCollectionItem> =
+                    c.items.iter().collect();
+                let avail = crate::myqbz::offline_availability(&items).await;
+                drop(items);
+                let before = c.items.len();
+                c.items.retain(|it| avail.item_available(it));
+                if c.items.len() < before {
+                    log::info!(
+                        "[qbz-slint] myqbz_detail {}: {} item(s) unavailable offline, hidden (D11)",
+                        c.id,
+                        before - c.items.len()
+                    );
+                }
+                Some(c)
+            }
+            other => other,
+        };
+
         let resolve_handle = handle.clone();
         let _ = weak.upgrade_in_event_loop(move |w| match collection {
             Some(c) => {
