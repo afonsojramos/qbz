@@ -1661,6 +1661,11 @@ export struct MixtapeDetailItem {
     // True for qobuz items whose subtitle is a clickable artist link
     // (spec 12 §6.3 col-2 — local subtitles are plain text).
     subtitle-is-link: bool,
+    // Numeric Qobuz artist id resolved by the resolveItems pass ("" until it
+    // lands / for local-Plex items). Routes the artist link to the QOBUZ
+    // artist page; without it the link can only fall back to the
+    // LocalLibrary Artists tab (name-based).
+    artist-id: string,
     // Resolved source kind for the source indicator + source filter
     // ("qobuz" | "plex" | "local"). Defaults from `source` until resolveItems
     // lands (deferred — for now equals the raw source mapping).
@@ -1774,8 +1779,10 @@ export global MyQbzDetailActions {
     // Open an item's detail (album / track-album / playlist). Routed to the
     // existing open-album / open-playlist paths in main.rs.
     callback open-item(string /* source */, string /* item-type */, string /* source-item-id */);
-    // Open an item's artist page by name (qobuz items only).
-    callback open-artist(string /* source */, string /* artist-name */);
+    // Open an item's artist. Qobuz items route by the resolved numeric
+    // artist-id to the Qobuz artist page; local/Plex items (empty id) route
+    // by NAME to the LocalLibrary Artists tab.
+    callback open-artist(string /* source */, string /* artist-name */, string /* artist-id */);
     // --- Hero CTAs --------------------------------------------------------
     callback play-all();
     callback shuffle();

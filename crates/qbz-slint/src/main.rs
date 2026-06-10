@@ -2868,19 +2868,34 @@ fn wire_myqbz_detail(
             });
     }
 
-    // --- Open an item's artist (qobuz items only) -----------------------
+    // --- Open an item's artist (route by SOURCE) -------------------------
     {
         let weak = window.as_weak();
         window
             .global::<Act>()
-            .on_open_artist(move |_source, artist_name| {
-                if let Some(w) = weak.upgrade() {
-                    // The top-level open-artist callback routes a name to the
-                    // Local Library Artists tab and a numeric id to the Qobuz
-                    // artist page. Collection items carry an artist NAME.
-                    if !artist_name.trim().is_empty() {
-                        w.invoke_open_artist(artist_name);
+            .on_open_artist(move |source, artist_name, artist_id| {
+                let Some(w) = weak.upgrade() else { return };
+                // The top-level open-artist callback routes a numeric id to
+                // the Qobuz artist page (with nav history — the same path
+                // AlbumView's artist button uses) and a name to the
+                // LocalLibrary Artists tab. Stored items only carry the
+                // artist NAME, so Qobuz rows route by the numeric artist id
+                // the resolveItems pass derived from their first track.
+                if source == "qobuz" {
+                    if !artist_id.trim().is_empty() {
+                        w.invoke_open_artist(artist_id);
+                    } else {
+                        // Resolve still pending (or failed) — do NOT fall
+                        // back to the name: that opens the WRONG page (the
+                        // LocalLibrary artist) for a Qobuz item.
+                        log::warn!(
+                            "[qbz-slint] myqbz_detail open-artist: qobuz item '{artist_name}' \
+                             has no resolved artist id yet — ignoring click"
+                        );
                     }
+                } else if !artist_name.trim().is_empty() {
+                    // local / plex -> the LocalLibrary Artists tab by NAME.
+                    w.invoke_open_artist(artist_name);
                 }
             });
     }

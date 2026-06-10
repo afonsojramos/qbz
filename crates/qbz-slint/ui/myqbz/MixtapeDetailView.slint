@@ -316,7 +316,7 @@ component DetailRow inherits Rectangle {
                     mouse-cursor: root.item.subtitle-is-link ? pointer : default;
                     clicked => {
                         if (root.item.subtitle-is-link) {
-                            MyQbzDetailActions.open-artist(root.item.source, root.item.subtitle);
+                            MyQbzDetailActions.open-artist(root.item.source, root.item.subtitle, root.item.artist-id);
                         }
                     }
                     Text {
@@ -1189,7 +1189,9 @@ export component MixtapeDetailView inherits Rectangle {
                                         // context menu emits ("track", id, "go-to-artist").
                                         // Both -> the parent item's artist navigation.
                                         if ((kind == "artist" && action == "open") || action == "go-to-artist") {
-                                            MyQbzDetailActions.open-artist(item.source, et.artist);
+                                            // et.artist-id is the track's Qobuz artist id ("" for
+                                            // local/Plex tracks -> name-based LocalLibrary routing).
+                                            MyQbzDetailActions.open-artist(item.source, et.artist, et.artist-id);
                                         } else {
                                             // play / play-next / queue / go-to-album (album-link
                                             // "open" too) all route through inline-track-action;

@@ -115,6 +115,12 @@ struct ResolvedItem {
     /// Backfills rows whose stored `artwork_url` was empty (e.g. disco-builder
     /// local items saved with NULL art before the builder carried the cover).
     artwork_url: String,
+    /// First resolved track's numeric Qobuz artist id ("" when the track
+    /// carries none — local/Plex items). The stored `MixtapeCollectionItem`
+    /// only has the artist NAME (subtitle), so this is what lets a Qobuz
+    /// item's artist link open the QOBUZ artist page instead of falling back
+    /// to the LocalLibrary Artists tab.
+    artist_id: String,
 }
 
 /// Persist the open collection's current toolbar prefs (spec 12 §18), gated on
@@ -280,24 +286,25 @@ fn to_item(item: &MixtapeCollectionItem) -> MixtapeDetailItem {
     // until the async pass lands.
     let cache_key = inline_cache_key(source, &item.source_item_id);
     let resolved = RESOLVE_CACHE.with(|cell| cell.borrow().get(&cache_key).cloned());
-    let (source_kind, quality_tier, quality_detail, type_label, quality_resolving) = match resolved
-    {
-        Some(r) => {
-            // Backfill the row cover from the resolved track when the stored
-            // `artwork_url` was empty (disco-builder local items, older saves).
-            if artwork_url.is_empty() && !r.artwork_url.is_empty() {
-                artwork_url = r.artwork_url.clone();
+    let (source_kind, quality_tier, quality_detail, type_label, artist_id, quality_resolving) =
+        match resolved {
+            Some(r) => {
+                // Backfill the row cover from the resolved track when the stored
+                // `artwork_url` was empty (disco-builder local items, older saves).
+                if artwork_url.is_empty() && !r.artwork_url.is_empty() {
+                    artwork_url = r.artwork_url.clone();
+                }
+                (r.source_kind, r.quality_tier, r.quality_detail, r.type_label, r.artist_id, false)
             }
-            (r.source_kind, r.quality_tier, r.quality_detail, r.type_label, false)
-        }
-        None => (
-            source.to_string(),
-            String::new(),
-            String::new(),
-            type_label(item.item_type).to_string(),
-            true,
-        ),
-    };
+            None => (
+                source.to_string(),
+                String::new(),
+                String::new(),
+                type_label(item.item_type).to_string(),
+                String::new(),
+                true,
+            ),
+        };
 
     // Re-hydrate inline tracks from the controller-level cache (keyed
     // `source|source_item_id`) so a filter/sort/search re-derive does NOT lose
@@ -321,6 +328,9 @@ fn to_item(item: &MixtapeCollectionItem) -> MixtapeDetailItem {
         // Only qobuz items get a clickable artist subtitle (spec 12 §6.3).
         subtitle_is_link: item.source == AlbumSource::Qobuz
             && item.subtitle.as_deref().map(|s| !s.is_empty()).unwrap_or(false),
+        // Resolved Qobuz artist id ("" until resolveItems lands / for
+        // local-Plex items) — routes the artist link to the Qobuz artist page.
+        artist_id: artist_id.into(),
         // Resolved source kind / quality / type label — from the resolveItems
         // cache (above) when resolved; else the stored-source defaults.
         source_kind: source_kind.into(),
@@ -847,12 +857,20 @@ fn resolve_from_tracks(
         .map(|u| u.strip_prefix("file://").map(str::to_string).unwrap_or(u))
         .unwrap_or_default();
 
+    // First resolved track's Qobuz artist id — empty for local/Plex tracks
+    // (QueueTrack.artist_id is None there). Feeds the row's artist link.
+    let artist_id = first
+        .and_then(|t| t.artist_id)
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+
     ResolvedItem {
         source_kind,
         quality_tier: quality_tier.to_string(),
         quality_detail,
         type_label,
         artwork_url,
+        artist_id,
     }
 }
 
@@ -939,6 +957,9 @@ async fn resolve_offline_cached(item: &MixtapeCollectionItem) -> Option<Resolved
         // local-item concern (those still resolve through the normal path),
         // and a Qobuz CDN url could not be fetched offline anyway.
         artwork_url: String::new(),
+        // The offline index carries no artist id — and the Qobuz artist page
+        // is gate-blocked offline anyway, so the link stays a no-op here.
+        artist_id: String::new(),
     })
 }
 
@@ -1024,6 +1045,7 @@ pub fn resolve_items(
                     it.quality_tier = resolved.quality_tier.clone().into();
                     it.quality_detail = resolved.quality_detail.clone().into();
                     it.type_label = resolved.type_label.clone().into();
+                    it.artist_id = resolved.artist_id.clone().into();
                     it.quality_resolving = false;
                     if it.artwork_url.is_empty() && !resolved.artwork_url.is_empty() {
                         it.artwork_url = resolved.artwork_url.clone().into();
