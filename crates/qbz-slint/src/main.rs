@@ -67,6 +67,7 @@ mod tag_editor;
 mod offline;
 mod offline_cache;
 mod offline_manager;
+mod offline_mode;
 mod playlist;
 mod playlist_manager;
 mod plex_auth;
@@ -98,18 +99,18 @@ fn dispatch(command: AppCommand) {
     log::info!("[qbz-slint] AppCommand::{} dispatched", command.id());
 }
 
-/// Reveal the shell and load the Discover / Home view with real data,
-/// then kick off cached artwork downloads.
-async fn enter_shell(
-    runtime: Arc<AppRuntime<SlintAdapter>>,
-    weak: slint::Weak<AppWindow>,
-    image_cache: artwork::ImageCache,
-    settings_ctx: Arc<settings::SettingsCtx>,
-    session: auth::SessionInfo,
-) {
+/// Per-user shell wiring shared by the online and offline session entries.
+/// None of it requires a Qobuz session: local library DB binding (+ mixtape
+/// migrations), per-user pref stores, system tray and media controls.
+/// Returns the tray settings snapshot for the UI seeding.
+fn init_shell_for_user(
+    runtime: &Arc<AppRuntime<SlintAdapter>>,
+    weak: &slint::Weak<AppWindow>,
+    user_id: u64,
+) -> tray_settings::TraySettings {
     // Bind the local library DB to this user (folders / playlist
     // settings live in the per-user library.db).
-    library_db::set_user(session.user_id);
+    library_db::set_user(user_id);
 
     // Run the Mixtapes & Collections schema migrations against the same
     // per-user library.db (the mixtape tables live in that file). Mirrors
@@ -125,22 +126,22 @@ async fn enter_shell(
 
     // Bind tray settings to this user (per-user tray_settings.db, shared with
     // the Tauri build) and snapshot them to seed the settings UI.
-    tray_settings::init_for_user(session.user_id);
+    tray_settings::init_for_user(user_id);
     let tray = tray_settings::get();
 
     // Bind Plex connection settings to this user (per-user plex_settings.db,
     // Slint-only). Seeded into PlexSettingsState lazily on panel open.
-    plex_settings::init_for_user(session.user_id);
+    plex_settings::init_for_user(user_id);
 
     // Bind "My QBZ" nav branding (custom label + icon) to this user
-    // (per-user myqbz_branding.json). Seeded into MyQbzBrandingState below so
-    // the sidebar row + Settings row reflect the persisted values on entry.
-    myqbz_prefs::init_for_user(session.user_id);
+    // (per-user myqbz_branding.json). Seeded into MyQbzBrandingState by the
+    // caller so the sidebar row + Settings row reflect the persisted values.
+    myqbz_prefs::init_for_user(user_id);
 
     // Bind per-collection DETAIL view-prefs (toolbar viewMode/sort/filter) to
     // this user (per-user collection_view_prefs.json). Restored on collection
     // open, cleared on delete (spec 12 §18).
-    myqbz_view_prefs::init_for_user(session.user_id);
+    myqbz_view_prefs::init_for_user(user_id);
 
     // Create the system tray from this user's persisted settings (gated by
     // enable_tray). Reflects the chosen icon variant. On Linux the ksni
@@ -163,17 +164,60 @@ async fn enter_shell(
         tokio::runtime::Handle::current(),
     );
 
+    tray
+}
+
+/// Background-load the Audio + Playback settings into the Settings page —
+/// store reads and device enumeration are blocking and fully local. Shared
+/// by the online and offline session entries.
+fn spawn_settings_snapshot_load(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    settings_ctx: Arc<settings::SettingsCtx>,
+) {
+    tokio::spawn(async move {
+        let ctx_for_load = settings_ctx.clone();
+        match tokio::task::spawn_blocking(move || settings::load_snapshot(&ctx_for_load)).await {
+            Ok(snap) => {
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    settings::apply_snapshot(&w, snap);
+                });
+            }
+            Err(e) => log::error!("[qbz-slint] settings load task failed: {e}"),
+        }
+        // Bit-perfect (ALSA + hw) forces local volume to 100% at startup so
+        // the bar reflects unity gain before Settings is ever opened. No-op
+        // otherwise (and while controlling a peer). Mirrors Tauri.
+        settings::apply_startup_bitperfect_volume(&settings_ctx, &runtime, &weak).await;
+    });
+}
+
+/// Seed the tray settings UI from the persisted per-user store.
+fn seed_tray_appearance(w: &AppWindow, tray: &tray_settings::TraySettings) {
+    let appearance = w.global::<AppearanceState>();
+    appearance.set_tray_enable(tray.enable_tray);
+    appearance.set_tray_minimize_to_tray(tray.minimize_to_tray);
+    appearance.set_tray_close_to_tray(tray.close_to_tray);
+    appearance.set_tray_mac_hide_dock(tray.mac_hide_dock);
+    appearance.set_tray_icon_theme_index(tray_settings::icon_theme_index(&tray.tray_icon_theme));
+}
+
+/// Reveal the shell and load the Discover / Home view with real data,
+/// then kick off cached artwork downloads.
+async fn enter_shell(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    image_cache: artwork::ImageCache,
+    settings_ctx: Arc<settings::SettingsCtx>,
+    session: auth::SessionInfo,
+) {
+    let tray = init_shell_for_user(&runtime, &weak, session.user_id);
+
     let _ = weak.upgrade_in_event_loop(move |w| {
         let state = w.global::<SessionState>();
         state.set_user_name(session.display_name.into());
         state.set_subscription(session.subscription.into());
-        // Seed the tray settings UI from the persisted per-user store.
-        let appearance = w.global::<AppearanceState>();
-        appearance.set_tray_enable(tray.enable_tray);
-        appearance.set_tray_minimize_to_tray(tray.minimize_to_tray);
-        appearance.set_tray_close_to_tray(tray.close_to_tray);
-        appearance.set_tray_mac_hide_dock(tray.mac_hide_dock);
-        appearance.set_tray_icon_theme_index(tray_settings::icon_theme_index(&tray.tray_icon_theme));
+        seed_tray_appearance(&w, &tray);
         // Seed the My QBZ branding (label + icon) from the per-user store so
         // the sidebar row + Settings row paint the custom values immediately.
         myqbz_prefs::seed(&w);
@@ -204,27 +248,7 @@ async fn enter_shell(
 
     // Load Audio + Playback settings into the Settings page in the
     // background — store reads and device enumeration are blocking.
-    {
-        let settings_ctx = settings_ctx.clone();
-        let weak = weak.clone();
-        let runtime = runtime.clone();
-        tokio::spawn(async move {
-            let ctx_for_load = settings_ctx.clone();
-            match tokio::task::spawn_blocking(move || settings::load_snapshot(&ctx_for_load)).await
-            {
-                Ok(snap) => {
-                    let _ = weak.upgrade_in_event_loop(move |w| {
-                        settings::apply_snapshot(&w, snap);
-                    });
-                }
-                Err(e) => log::error!("[qbz-slint] settings load task failed: {e}"),
-            }
-            // Bit-perfect (ALSA + hw) forces local volume to 100% at startup so
-            // the bar reflects unity gain before Settings is ever opened. No-op
-            // otherwise (and while controlling a peer). Mirrors Tauri.
-            settings::apply_startup_bitperfect_volume(&settings_ctx, &runtime, &weak).await;
-        });
-    }
+    spawn_settings_snapshot_load(runtime.clone(), weak.clone(), settings_ctx.clone());
 
     // Load the genre-filter parents + persisted selection, then seed
     // the popup state. Done before the discover load so the first
@@ -242,6 +266,66 @@ async fn enter_shell(
     let _ = weak.upgrade_in_event_loop(move |w| {
         favorites::apply_counts(&w, counts);
     });
+}
+
+/// Offline session entry — "Start offline" on the login screen (spec §4.1).
+///
+/// Mirrors the subset of `enter_shell` + Tauri's `activate_offline_session`
+/// that works without a Qobuz session: session scaffolding, local library,
+/// offline cache, per-user pref stores, tray/media controls, the playback
+/// poll loop and the settings snapshot. Everything Qobuz-bound is skipped
+/// (sidebar playlists, favorites warm, genre filter, home/discover load) —
+/// the engine's gate refuses those calls anyway (D3).
+async fn enter_shell_offline(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    settings_ctx: Arc<settings::SettingsCtx>,
+) -> Result<(), String> {
+    // Never open the empty user-0 profile: offline mode needs a previous
+    // session's data (Tauri falls back to user 0; the port refuses — the
+    // login UI hides the link in that case, this is the backstop).
+    let Some(user_id) = qbz_app::user_data::UserDataPaths::load_last_user_id() else {
+        return Err("no previous session — offline mode requires a prior login".to_string());
+    };
+
+    // Session scaffolding at the last user (session store, runtime state).
+    runtime.activate_offline().await?;
+
+    // Offline cache (shared index.db + library.db) + the in-memory cached-ids
+    // set the track rows read. Must precede offline_mode::init_for_user so
+    // the subscription purge consumer can reach the cache.
+    crate::offline::activate(user_id).await;
+    crate::offline_cache::load_cached_ids().await;
+
+    // Local library, per-user pref stores, tray, media controls.
+    let tray = init_shell_for_user(&runtime, &weak, user_id);
+
+    // Offline-MODE engine: bind the per-user stores and flag the
+    // unauthenticated offline session (D1 — session-scoped, never persisted;
+    // a later successful login clears it).
+    if let Some(dir) = crate::offline_mode::user_data_dir(user_id) {
+        crate::offline_mode::init_for_user(&dir);
+    }
+    crate::offline_mode::engine().set_offline_session(true);
+
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        seed_tray_appearance(&w, &tray);
+        myqbz_prefs::seed(&w);
+        // No HomeState loading spinner: the discover load is skipped offline
+        // (the gating slice adds the placeholder views).
+        w.set_screen(AppScreen::Shell);
+    });
+
+    // Playback poll loop — local/cached playback and queue advance work
+    // offline. Same lifetime semantics as the online entry.
+    playback::start_poll_loop(runtime.clone(), weak.clone(), tokio::runtime::Handle::current());
+
+    // Load Audio + Playback settings into the Settings page in the
+    // background — fully local, same path as the online entry.
+    spawn_settings_snapshot_load(runtime.clone(), weak.clone(), settings_ctx.clone());
+
+    log::info!("[qbz-slint] offline session entered for user {user_id}");
+    Ok(())
 }
 
 /// The shared genre-filter selection expanded to descendant ids, as the
@@ -3358,6 +3442,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Audio + Playback settings stores, opened once for the app lifetime.
     let settings_ctx = settings::SettingsCtx::open();
 
+    // Offline-MODE engine: connectivity monitoring runs for the whole app
+    // lifetime (login screen included — the restore flow and the D2 recovery
+    // banner both depend on it). Per-user state binds later on activation.
+    offline_mode::start();
+
     // Startup: initialize the core, then try to restore a saved session.
     // A valid saved token jumps straight to the shell; otherwise the
     // login screen stays.
@@ -3434,21 +3523,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Offline: activate an offline-only session, then show the shell.
+    // Offline: enter a full offline session at the last user (local library,
+    // offline cache, settings — no Qobuz auth), then show the shell.
     {
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
+        let settings_ctx = settings_ctx.clone();
         window.on_start_offline(move || {
             dispatch(AppCommand::StartOffline);
             let runtime = runtime.clone();
             let weak = weak.clone();
+            let settings_ctx = settings_ctx.clone();
             handle.spawn(async move {
-                match runtime.activate_offline().await {
-                    Ok(()) => {
-                        let _ = weak.upgrade_in_event_loop(|w| w.set_screen(AppScreen::Shell));
-                    }
-                    Err(e) => log::error!("[qbz-slint] offline start failed: {e}"),
+                if let Err(e) = enter_shell_offline(runtime, weak, settings_ctx).await {
+                    log::error!("[qbz-slint] offline start failed: {e}");
                 }
             });
         });

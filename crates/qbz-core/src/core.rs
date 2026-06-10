@@ -297,7 +297,11 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
                     recoverable: true,
                 })
                 .await;
-                Err(CoreError::AuthFailed(e.to_string()))
+                // Preserve the typed ApiError: callers must distinguish an
+                // explicit auth rejection (clear the saved token) from a
+                // network-class failure (keep it) — stringifying here made
+                // that impossible and caused the token-clearing-on-boot bug.
+                Err(CoreError::Api(e))
             }
         }
     }
