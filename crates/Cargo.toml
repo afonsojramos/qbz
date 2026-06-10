@@ -25,6 +25,7 @@ members = [
     "qbz-credentials",
     "qbz-media-controls",
     "qbz-mixtape",
+    "qbz-lyrics",
 ]
 
 [workspace.package]

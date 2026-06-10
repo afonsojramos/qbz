@@ -5311,6 +5311,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-lyrics"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "log",
+ "qbz-qobuz",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "urlencoding",
+]
+
+[[package]]
 name = "qbz-media-controls"
 version = "0.1.0"
 dependencies = [
