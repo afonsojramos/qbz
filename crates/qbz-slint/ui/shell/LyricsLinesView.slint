@@ -33,6 +33,21 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { LyricsState } from "../state.slint";
 
+// Q6 (SHIPPED): Tauri's four non-system lyric font families, embedded into
+// the binary at compile time (slint-build default EmbedAllResources for Rust
+// output -> RegisterCustomFontByMemory at window setup — the same mechanism
+// as the app-wide Inter imports in app.slint). Family names inside the TTFs
+// match Tauri's CSS stacks exactly: "LINE Seed JP" / "Montserrat" /
+// "Noto Sans" / "Source Sans 3" (verified via fc-scan). The variable-font
+// weight axis IS applied at raster time (femtovg's swash scaler receives the
+// fontique normalized coords), so Montserrat's Thin-default fvar is harmless.
+// "System" = empty font-family -> the window default (Inter), 1:1 with
+// Tauri's 'system' stack.
+import "../../../../static/fonts/LINESeedJP-Regular.ttf";
+import "../../../../static/fonts/Montserrat-VariableFont_wght.ttf";
+import "../../../../static/fonts/NotoSans-VariableFont_wdth,wght.ttf";
+import "../../../../static/fonts/SourceSans3-VariableFont_wght.ttf";
+
 // One lyric line. FOOTGUN (memory `reference_slint_root_opacity_absolute_position`):
 // the dimming ladder is applied to the INNER Text (opacity + color), NEVER as
 // an opacity binding on a row root — a root-opacity binding wraps the row in
@@ -44,8 +59,18 @@ component LyricsLineRow inherits VerticalLayout {
     in property <string> line-text;
     in property <length> size-inactive;
     in property <length> size-active;
-    // 0 = off, 1 = soft, 2 = strong (Tauri default) — S5 wires the pref.
+    // 0 = off, 1 = soft, 2 = strong (Tauri default) — pref-driven (S5).
     in property <int> dimming-mode;
+    // S5 display prefs: uppercase transform, font family ("" = window
+    // default), karaoke fill / active color (theme accent or D6 swatch).
+    in property <bool> uppercase;
+    in property <string> font-name;
+    in property <color> active-color;
+
+    // Tauri renders uppercase via CSS text-transform; Slint transforms the
+    // string (display only — the engine still matches on the raw text).
+    property <string> display-text:
+        root.uppercase ? root.line-text.to-uppercase() : root.line-text;
 
     // Active-row geometry for the view's auto-center scroll. y/height are
     // LAYOUT-relative (self.y within the body VerticalLayout) so the
@@ -103,7 +128,7 @@ component LyricsLineRow inherits VerticalLayout {
     }
 
     base := Text {
-        text: root.line-text;
+        text: root.display-text;
         wrap: word-wrap;
         opacity: root.line-opacity();
         // Active base = the DIM (unsung) layer under the karaoke overlay
@@ -111,6 +136,7 @@ component LyricsLineRow inherits VerticalLayout {
         color: root.is-active
             ? Theme.text-secondary
             : (root.is-past ? Theme.text-muted : Theme.text-secondary);
+        font-family: root.font-name;
         font-size: root.is-active ? root.size-active : root.size-inactive;
         font-weight: root.is-active ? Typography.bold : Typography.medium;
         // Friendly letter-spacing (Q3): slightly open, never cramped.
@@ -134,9 +160,10 @@ component LyricsLineRow inherits VerticalLayout {
                 y: 0;
                 width: base.width;
                 height: base.height;
-                text: root.line-text;
+                text: root.display-text;
                 wrap: word-wrap;
-                color: Theme.accent;
+                color: root.active-color;
+                font-family: root.font-name;
                 font-size: root.size-active;
                 font-weight: Typography.bold;
                 letter-spacing: 0.2px;
@@ -150,14 +177,20 @@ export component LyricsLinesView inherits Rectangle {
     // surface later overrides padding/gap without touching display prefs.
     in property <length> side-padding: 6px;
     in property <length> line-gap: 12px;       // Tauri compact gap parity
-    // 280px-adapted type scale (Q3).
+    // 280px-adapted type scale (Q3). The sidebar maps the persisted S/M/L/XL
+    // pref onto these; the miniplayer surface later keeps the defaults
+    // (Tauri plumbs NO display prefs there, spec §3.6).
     in property <length> size-inactive: 13px;
     in property <length> size-active: 15px;
     in property <int> dimming-mode: 2;          // strong (Tauri default)
     in property <bool> show-attribution: true;
-    // Auto-center the active line (S5 wires the persisted pref; Tauri
-    // default true, lyricsDisplayStore.ts:37-44).
+    // Auto-center the active line (persisted pref; Tauri default true,
+    // lyricsDisplayStore.ts:37-44).
     in property <bool> auto-follow: true;
+    // S5 display prefs (defaults = Tauri's).
+    in property <bool> uppercase: false;
+    in property <string> font-name: "";         // "" = window default font
+    in property <color> active-color: Theme.accent;
 
     // ---- Auto-center scroll state ----
     // Last index the view centered on; -1 = nothing yet -> next center is
@@ -243,6 +276,9 @@ export component LyricsLinesView inherits Rectangle {
                 size-inactive: root.size-inactive;
                 size-active: root.size-active;
                 dimming-mode: root.dimming-mode;
+                uppercase: root.uppercase;
+                font-name: root.font-name;
+                active-color: root.active-color;
                 report-active-geometry(report-idx, row-y, row-h) => {
                     root.center-active(report-idx, row-y, row-h);
                 }

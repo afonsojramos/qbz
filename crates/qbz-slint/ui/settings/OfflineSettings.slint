@@ -19,7 +19,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Palette } from "../foundation/palette.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { OfflineManagerActions, OfflineModeActions, OfflineState, SettingsState } from "../state.slint";
+import { LyricsState, OfflineManagerActions, OfflineModeActions, OfflineState, SettingsState } from "../state.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { SettingRow } from "SettingRow.slint";
 
@@ -74,9 +74,11 @@ export component OfflineSettings inherits VerticalLayout {
     spacing: 4px;
 
     // Re-seed the toggle states from the engine store on every mount of
-    // this section (same lazy-load hook LocalLibrarySettings uses).
+    // this section (same lazy-load hook LocalLibrarySettings uses); also
+    // refresh the lyrics-cache stats for the LYRICS group below.
     init => {
         OfflineModeActions.load();
+        LyricsState.cache-refresh();
     }
 
     GroupHeader { text: @tr("OFFLINE MODE"); }
@@ -159,6 +161,29 @@ export component OfflineSettings inherits VerticalLayout {
             danger: true;
             clicked => {
                 OfflineManagerActions.clear-all();
+            }
+        }
+    }
+
+    Rectangle { height: 12px; }
+    Divider { }
+    Rectangle { height: 12px; }
+
+    // Lyrics cache (Tauri Settings > Storage row, SettingsView.svelte:6539-
+    // 6562). Stats come from the REAL per-user lyrics.db via qbz_lyrics
+    // cache_stats — fix-forward F1 (Tauri measured a stale global path).
+    GroupHeader { text: @tr("LYRICS"); }
+
+    SettingRow {
+        label: @tr("Clear lyrics cache");
+        description: LyricsState.cache-loaded
+            ? @tr("{} entries using {}", LyricsState.cache-entries-text, LyricsState.cache-size)
+            : "";
+        SecondaryButton {
+            label: @tr("Clear");
+            danger: true;
+            clicked => {
+                LyricsState.cache-clear();
             }
         }
     }

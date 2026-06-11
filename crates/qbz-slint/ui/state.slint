@@ -2901,6 +2901,44 @@ export global LyricsState {
     // Fired by the sidebar's `init` (conditional mount, ADR-010): re-requests
     // lyrics for the current track (cache-served when already fetched).
     callback panel-opened();
+
+    // ---- Display prefs (S5) -------------------------------------------------
+    // 1:1 to Tauri's lyricsDisplayStore (defaults lyricsDisplayStore.ts:37-44),
+    // persisted per-user as JSON by `crate::lyrics_prefs` and seeded on every
+    // session activation. The flyout mutates these in-out props directly and
+    // fires `prefs-changed()`; Rust reads them back and persists.
+    in-out property <bool> auto-follow: true;
+    // 0 System · 1 LINE Seed JP · 2 Montserrat · 3 Noto Sans · 4 Source Sans 3
+    // (Q6 SHIPPED: the four families are bundled TTFs embedded at compile time
+    // in LyricsLinesView.slint; "System" = empty font-family -> window default).
+    in-out property <int> font-index: 0;
+    // 0 S · 1 M · 2 L · 3 XL — Tauri default 'medium'. Px mapping (the
+    // 280px-adapted scale, Q3) lives in LyricsSidebar.
+    in-out property <int> size-index: 1;
+    // 0 off · 1 soft · 2 strong (Tauri default 'strong').
+    in-out property <int> dimming-mode: 2;
+    in-out property <bool> uppercase: false;
+    // Active (karaoke fill) color. `use-custom-color: false` = follow the theme
+    // accent (Tauri activeColor: ''). The palette swatches set both (deviation
+    // D6: swatches instead of a native color input — Slint has none).
+    in-out property <bool> use-custom-color: false;
+    in-out property <color> custom-color: #8b5cf6;
+    // Fired by the flyout after ANY pref mutation -> Rust persists the set.
+    callback prefs-changed();
+    // Footer actions: join current lines -> clipboard (+ toast) / restore the
+    // Tauri defaults (+ persist + re-seed).
+    callback copy-lyrics();
+    callback reset-prefs();
+
+    // ---- Lyrics cache row (Settings > Offline, S5) --------------------------
+    // Stats read from the REAL per-user lyrics.db via qbz_lyrics cache_stats
+    // (fix-forward F1 — Tauri measured a stale global path). Pre-formatted in
+    // Rust; `cache-loaded` gates the description line.
+    in property <bool> cache-loaded: false;
+    in property <string> cache-entries-text;
+    in property <string> cache-size;
+    callback cache-refresh();
+    callback cache-clear();
 }
 
 // One row in the QConnect device picker (a session renderer). Populated by the

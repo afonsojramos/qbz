@@ -168,6 +168,80 @@ pub fn teardown() {
     }
 }
 
+/// Join the current doc's lines with `\n` and copy them to the clipboard —
+/// the flyout's "Copy lyrics" action (Tauri `copyLyrics`,
+/// `LyricsControlsPopover.svelte:39-55`). The button is gated UI-side on
+/// ready + lines>0; an empty doc is a silent no-op. The clipboard write is
+/// fire-and-forget on a blocking thread (arboard), so the toast reports the
+/// dispatch like Tauri reports its `writeText` success.
+pub fn copy_current_lyrics(weak: &slint::Weak<AppWindow>) {
+    let text = with_current_doc(|doc| {
+        doc.map(|d| {
+            d.lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    })
+    .unwrap_or_default();
+    if text.is_empty() {
+        return;
+    }
+    crate::share::copy_to_clipboard(text);
+    crate::toast::success_weak(weak, "Lyrics copied");
+}
+
+/// Refresh the Settings cache row from the REAL per-user lyrics.db (F1
+/// fix-forward: entries AND size from the bound per-user path, via
+/// `qbz_lyrics` cache_stats). Pushes `cache-loaded=false` when the service
+/// or cache is unavailable (the row then shows no stats line).
+pub fn refresh_cache_stats(handle: &tokio::runtime::Handle, weak: slint::Weak<AppWindow>) {
+    let Some(service) = SERVICE.get().cloned() else {
+        return;
+    };
+    handle.spawn(async move {
+        let stats = service.cache_stats().await;
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            let state = w.global::<LyricsState>();
+            match stats {
+                Ok(stats) => {
+                    state.set_cache_entries_text(stats.entries.to_string().into());
+                    state.set_cache_size(
+                        crate::offline_manager::human_size(stats.size_bytes).into(),
+                    );
+                    state.set_cache_loaded(true);
+                }
+                Err(e) => {
+                    log::warn!("[qbz-slint] lyrics cache stats failed: {e}");
+                    state.set_cache_loaded(false);
+                }
+            }
+        });
+    });
+}
+
+/// Clear the per-user lyrics cache (Settings row action), then re-push the
+/// stats. Mirrors Tauri's `v2_lyrics_clear_cache` flow with a result toast.
+pub fn clear_cache(handle: &tokio::runtime::Handle, weak: slint::Weak<AppWindow>) {
+    let Some(service) = SERVICE.get().cloned() else {
+        return;
+    };
+    let handle_for_refresh = handle.clone();
+    handle.spawn(async move {
+        match service.clear_cache().await {
+            Ok(()) => {
+                crate::toast::success_weak(&weak, "Lyrics cache cleared");
+                refresh_cache_stats(&handle_for_refresh, weak);
+            }
+            Err(e) => {
+                log::error!("[qbz-slint] lyrics cache clear failed: {e}");
+                crate::toast::error_weak(&weak, "Failed to clear lyrics cache");
+            }
+        }
+    });
+}
+
 /// Qobuz vs non-Qobuz from the queue track's source tag. `qobuz_download`
 /// rows carry the REAL Qobuz catalog id (`local_queue_track`), so the Qobuz
 /// primary applies to them too; local user files / ephemeral folders / Plex

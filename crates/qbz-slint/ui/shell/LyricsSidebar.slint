@@ -7,18 +7,22 @@
 //
 // 1:1 to the Tauri `LyricsSidebar.svelte` header/states (spec §3.1): 36px
 // mic icon tile + LYRICS overline + "{title} - {artist}" meta + the
-// display-settings trigger (S5 wires the LyricsControlsFlyout), plus the
+// display-settings trigger opening the LyricsControlsFlyout (S5), plus the
 // Slint-convention close button (deviation D4, homologated with Queue).
 // Body renders by LyricsState.status: loading / no-lyrics / offline-miss
-// (typed NotAvailableOffline, F3) / error / the shared lines view.
+// (typed NotAvailableOffline, F3) / error / the shared lines view, which
+// receives the persisted display prefs (size scale / dimming / uppercase /
+// font / active color / auto-follow) from LyricsState.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { IconButton } from "../primitives/BarControls.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { LyricsLinesView } from "LyricsLinesView.slint";
+import { LyricsControlsPanel } from "LyricsControlsFlyout.slint";
 import { ShellState, LyricsState } from "../state.slint";
 
 component CloseButton inherits Rectangle {
@@ -32,33 +36,6 @@ component CloseButton inherits Rectangle {
         source: @image-url("../assets/icons/x.svg");
         width: 15px;
         height: 15px;
-        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-        tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
-
-// 32px icon button — the display-settings trigger (Tauri SlidersHorizontal,
-// LyricsSidebar.svelte:38-66).
-component HeaderIconButton inherits Rectangle {
-    in property <image> icon;
-    callback clicked();
-    width: 32px;
-    height: 32px;
-    border-radius: Radius.sm;
-    background: ta.has-hover ? Theme.surface-hover : transparent;
-
-    QbzIcon {
-        source: root.icon;
-        width: 16px;
-        height: 16px;
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
@@ -142,11 +119,38 @@ export component LyricsSidebar inherits Rectangle {
                 }
             }
 
-            // Display-settings trigger — the LyricsControlsFlyout lands in S5.
+            // Display-settings trigger + the controls flyout. IconButton
+            // (PlayerBar primitive) for the shared tooltip channel — Tauri's
+            // aria/tooltip 'Display settings'. PopupWindow footgun handled:
+            // explicit width/height + close-policy; right edge aligned with
+            // the close button's right edge (Tauri: right: 8px), 8px below
+            // the trigger (Tauri: top calc(100% + 8px)).
             VerticalLayout {
                 alignment: center;
-                HeaderIconButton {
-                    icon: @image-url("../assets/icons/sliders-horizontal.svg");
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    IconButton {
+                        icon: @image-url("../assets/icons/sliders-horizontal.svg");
+                        icon-size: 16px;
+                        btn-width: 32px;
+                        tooltip: @tr("Display settings");
+                        clicked => {
+                            controls-flyout.show();
+                        }
+                    }
+                    controls-flyout := PopupWindow {
+                        // Right-align with the close button right edge:
+                        // trigger 32px + spacing 8px + close 28px - width.
+                        x: 32px + 8px + 28px - 260px;
+                        y: 32px + 8px;
+                        width: 260px;
+                        // padding 28 + rows (22+30+30+44+22+30+34 = 212) +
+                        // spacing 12 x 6 = 72.
+                        height: 312px;
+                        close-policy: PopupClosePolicy.close-on-click-outside;
+                        LyricsControlsPanel { }
+                    }
                 }
             }
             VerticalLayout {
@@ -230,10 +234,35 @@ export component LyricsSidebar inherits Rectangle {
                 }
             }
 
-            // Lyrics body — the shared lines renderer.
+            // Lyrics body — the shared lines renderer, fed the persisted
+            // display prefs. Size matrix = the 280px-adapted scale (Q3):
+            // the S3 13/15px values are the 'medium' tier, with Tauri's
+            // relative steps (compact matrix, LyricsLines.svelte:769-792)
+            // applied around it: S 11/13 · M 13/15 · L 16/19 · XL 20/24.
             if LyricsState.status == 2 && LyricsState.lines.length > 0: LyricsLinesView {
                 width: 100%;
                 height: 100%;
+                size-inactive: LyricsState.size-index == 0 ? 11px
+                    : LyricsState.size-index == 2 ? 16px
+                    : LyricsState.size-index == 3 ? 20px
+                    : 13px;
+                size-active: LyricsState.size-index == 0 ? 13px
+                    : LyricsState.size-index == 2 ? 19px
+                    : LyricsState.size-index == 3 ? 24px
+                    : 15px;
+                dimming-mode: LyricsState.dimming-mode;
+                auto-follow: LyricsState.auto-follow;
+                uppercase: LyricsState.uppercase;
+                // Family names as registered by the embedded TTFs; "" =
+                // window default = Tauri's 'system' option.
+                font-name: LyricsState.font-index == 1 ? "LINE Seed JP"
+                    : LyricsState.font-index == 2 ? "Montserrat"
+                    : LyricsState.font-index == 3 ? "Noto Sans"
+                    : LyricsState.font-index == 4 ? "Source Sans 3"
+                    : "";
+                active-color: LyricsState.use-custom-color
+                    ? LyricsState.custom-color
+                    : Theme.accent;
             }
         }
     }

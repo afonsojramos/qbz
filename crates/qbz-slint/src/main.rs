@@ -63,6 +63,7 @@ mod local_library;
 mod local_playlist;
 mod local_library_settings;
 mod lyrics;
+mod lyrics_prefs;
 mod lyrics_sync;
 mod media_controls;
 mod locallibrary_prefs;
@@ -157,6 +158,18 @@ fn init_shell_for_user(
     // this user (per-user collection_view_prefs.json). Restored on collection
     // open, cleared on delete (spec 12 §18).
     myqbz_view_prefs::init_for_user(user_id);
+
+    // Bind the lyrics display prefs (auto-follow / font / size / dimming /
+    // active color / uppercase — per-user lyrics_prefs.json) and seed them
+    // into LyricsState so the sidebar + controls flyout reflect the
+    // persisted values from the first open (defaults = Tauri's).
+    lyrics_prefs::init_for_user(user_id);
+    {
+        let prefs = lyrics_prefs::load();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            lyrics_prefs::apply_to_ui(&w, &prefs);
+        });
+    }
 
     // Create the system tray from this user's persisted settings (gated by
     // enable_tray). Reflects the chosen icon variant. On Linux the ksni
@@ -6424,6 +6437,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None => lyrics::on_track_cleared(weak),
                 }
             });
+        });
+    }
+
+    // S5 lyrics controls flyout + prefs + settings cache row.
+    {
+        // Persist any flyout mutation (the flyout writes the in-out props
+        // directly for live preview, then fires prefs-changed).
+        let weak = window.as_weak();
+        window.global::<LyricsState>().on_prefs_changed(move || {
+            if let Some(w) = weak.upgrade() {
+                lyrics_prefs::persist_from_ui(&w);
+            }
+        });
+    }
+    {
+        // Reset to the Tauri defaults + persist (flyout footer).
+        let weak = window.as_weak();
+        window.global::<LyricsState>().on_reset_prefs(move || {
+            if let Some(w) = weak.upgrade() {
+                lyrics_prefs::reset(&w);
+            }
+        });
+    }
+    {
+        // Copy the current lyrics to the clipboard (flyout footer).
+        let weak = window.as_weak();
+        window.global::<LyricsState>().on_copy_lyrics(move || {
+            lyrics::copy_current_lyrics(&weak);
+        });
+    }
+    {
+        // Settings > Offline lyrics-cache row: stats refresh on section
+        // mount + clear action (F1: stats from the real per-user DB).
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<LyricsState>().on_cache_refresh(move || {
+            lyrics::refresh_cache_stats(&handle, weak.clone());
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<LyricsState>().on_cache_clear(move || {
+            lyrics::clear_cache(&handle, weak.clone());
         });
     }
 

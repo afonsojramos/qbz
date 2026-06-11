@@ -48,7 +48,9 @@ fn current_filters() -> Filters {
 
 // --- Formatting ---------------------------------------------------------
 
-fn human_size(bytes: u64) -> String {
+// pub(crate): also formats the lyrics-cache size in the Settings row
+// (crate::lyrics::refresh_cache_stats).
+pub(crate) fn human_size(bytes: u64) -> String {
     let b = bytes as f64;
     if bytes >= GB {
         format!("{:.1} GB", b / GB as f64)
