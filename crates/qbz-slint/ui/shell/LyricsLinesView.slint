@@ -28,6 +28,19 @@
 //   from its change handler — animating `viewport-y` itself would also
 //   animate user wheel input. Auto-follow only: no user-scroll pause, no
 //   click-to-seek (Tauri has neither — parity).
+//
+// FOOTGUN (crash fix, "Recursion detected" properties.rs:583): a `changed`
+// callback's WATCHED expression must NEVER read layout-managed geometry
+// (self.y / self.height / flick.height / viewport-*). Slint eagerly
+// evaluates the watched expression at instance creation (ChangeTracker::init,
+// not init_delayed), and repeated rows are created from INSIDE the parent
+// layout's `layout-cache` binding evaluation (ensure_updated -> user_init
+// runs while layout-cache is locked). A `changed y` handler then evaluates
+// `self.y` -> reads the locked `layout-cache` -> re-entry panic on the main
+// thread. Geometry may only be read inside notify BODIES of non-geometry
+// watches (globals / plain properties) or Timer callbacks — those run from
+// run_change_handlers / timer dispatch, outside any binding lock, and the
+// pull-based re-evaluation there always yields settled post-relayout values.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
@@ -66,6 +79,12 @@ component LyricsLineRow inherits VerticalLayout {
     in property <bool> uppercase;
     in property <string> font-name;
     in property <color> active-color;
+    // Re-center generation counter (plain int — safe to watch). The view
+    // bumps it once shortly after mount so a row that is born already-active
+    // (doc READY + sync kick BEFORE the rows exist — the panel-open-mid-song
+    // case) still reports: `changed is-active` never fires for it because the
+    // eager init already saw it active.
+    in property <int> recenter-epoch;
 
     // Tauri renders uppercase via CSS text-transform; Slint transforms the
     // string (display only — the engine still matches on the raw text).
@@ -85,17 +104,21 @@ component LyricsLineRow inherits VerticalLayout {
         && root.index < LyricsState.active-index;
     property <int> distance: Math.abs(root.index - LyricsState.active-index);
 
-    // Re-report whenever the active row's geometry settles: on activation
-    // (y/height may still be pre-relayout — the y/height change handlers
-    // correct the target right after) and on wrap/resize-driven shifts.
+    // Report on activation and on the view's recenter bump. Reading y/height
+    // HERE (notify body) is safe and yields settled values: by notify time
+    // the is-active flip has already dirtied font-size -> layout-info ->
+    // layout-cache transitively, so the lazy pull re-computes the NEW layout.
+    // NO `changed y` / `changed height` handlers — watching geometry panics
+    // at row creation (see header FOOTGUN). Wrap/resize drift re-centers on
+    // the next line change, same as Tauri (which only scrolls on
+    // activeLineIndex changes, LyricsLines.svelte:358-392).
     function report-if-active() {
         if (root.is-active) {
             root.report-active-geometry(root.index, root.y, root.height);
         }
     }
     changed is-active => { report-if-active(); }
-    changed y => { report-if-active(); }
-    changed height => { report-if-active(); }
+    changed recenter-epoch => { report-if-active(); }
 
     // Dimming ladder (Tauri getLineOpacity, LyricsLines.svelte:342-356):
     // off -> 1.0 all; soft -> 0.6 inactive; strong (default) -> distance 1:
@@ -205,6 +228,21 @@ export component LyricsLinesView inherits Rectangle {
         }
     }
 
+    // Initial-centering bump (see row comment): one shot after the first
+    // frame, when the rows exist and the layout is settled. The view is
+    // recreated on every doc commit (status passes through loading ->
+    // remount, lyrics.rs), so each doc gets its bump. A plain int the rows
+    // watch — geometry stays OUT of watched expressions (header FOOTGUN).
+    property <int> recenter-epoch: 0;
+    recenter-once := Timer {
+        interval: 16ms;
+        running: true;
+        triggered => {
+            root.recenter-epoch += 1;
+            self.running = false;
+        }
+    }
+
     // Smooth scrolling animates `scroll-target`, NEVER flick.viewport-y
     // (that would animate user wheel input too); the change handler — which
     // fires per animation frame — copies the interpolated value across.
@@ -279,6 +317,7 @@ export component LyricsLinesView inherits Rectangle {
                 uppercase: root.uppercase;
                 font-name: root.font-name;
                 active-color: root.active-color;
+                recenter-epoch: root.recenter-epoch;
                 report-active-geometry(report-idx, row-y, row-h) => {
                     root.center-active(report-idx, row-y, row-h);
                 }
