@@ -16,6 +16,7 @@ import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { IconButton, PlayButton } from "../primitives/BarControls.slint";
+import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { SeekBar } from "SeekBar.slint";
 import { SongCard } from "SongCard.slint";
 import { TransportControls } from "TransportControls.slint";
@@ -152,6 +153,12 @@ export component PlayerBar inherits Rectangle {
     // peer half is the sink-pushed NowPlayingState.volume-locked.
     property <bool> vol-locked: (SettingsState.backend-is-alsa && SettingsState.alsa-plugin-is-hw && !NowPlayingState.is-remote)
         || NowPlayingState.volume-locked;
+
+    // Qobuz Connect: true while a Connect click is discovering renderers (the
+    // flyout stays open and shows a spinner until devices arrive or the
+    // discovery timer bounds it). UI-only — there is no `discovering` flag in
+    // QconnectDevState, so the spinner is gated on this + an 8s Slint timeout.
+    property <bool> qc-connecting: false;
 
     VerticalLayout {
         Rectangle { height: 6px; }
@@ -411,14 +418,47 @@ export component PlayerBar inherits Rectangle {
                                         font-size: 11px;
                                         overflow: elide;
                                     }
+                                    // Discovery timer — bounds the spinner so the
+                                    // "no devices" empty state shows if none
+                                    // appear within ~8s. Started on a Connect
+                                    // click; reset on disconnect (see the toggle
+                                    // button below). UI-only — no Rust flag.
+                                    qc-discover-timer := Timer {
+                                        interval: 8s;
+                                        running: false;
+                                        triggered => {
+                                            root.qc-connecting = false;
+                                            self.running = false;
+                                        }
+                                    }
                                     // Device list / empty state.
                                     Rectangle {
                                         vertical-stretch: 1;
                                         background: Theme.surface-elevated;
                                         border-radius: Radius.sm;
                                         clip: true;
+                                        // Discovering — Connect was clicked and no
+                                        // renderers have arrived yet. Spinner +
+                                        // caption; hides once devices appear (gated
+                                        // on length == 0) or the timer expires.
+                                        if root.qc-connecting && QconnectDevState.devices.length == 0: VerticalLayout {
+                                            alignment: center;
+                                            spacing: 6px;
+                                            HorizontalLayout {
+                                                alignment: center;
+                                                LoadingSpinner {
+                                                    size: 22px;
+                                                }
+                                            }
+                                            Text {
+                                                text: @tr("Looking for devices…");
+                                                color: Theme.text-secondary;
+                                                font-size: 12px;
+                                                horizontal-alignment: center;
+                                            }
+                                        }
                                         // Empty state (no session renderers yet).
-                                        if QconnectDevState.devices.length == 0: VerticalLayout {
+                                        if !root.qc-connecting && QconnectDevState.devices.length == 0: VerticalLayout {
                                             alignment: center;
                                             spacing: 4px;
                                             Text {
@@ -509,8 +549,21 @@ export component PlayerBar inherits Rectangle {
                                             : connect-ta.has-hover ? Theme.accent-hover : Theme.accent;
                                         connect-ta := TouchArea {
                                             clicked => {
-                                                NowPlayingState.qconnect-toggle();
-                                                qconnect-menu.close();
+                                                if (NowPlayingState.qconnect-connected) {
+                                                    // Currently connected -> this click DISCONNECTS
+                                                    // -> close the flyout (keep current behavior).
+                                                    NowPlayingState.qconnect-toggle();
+                                                    root.qc-connecting = false;
+                                                    qc-discover-timer.running = false;
+                                                    qconnect-menu.close();
+                                                } else {
+                                                    // Currently disconnected -> this click CONNECTS
+                                                    // -> keep the flyout open + show the spinner
+                                                    // while renderers are discovered.
+                                                    NowPlayingState.qconnect-toggle();
+                                                    root.qc-connecting = true;
+                                                    qc-discover-timer.running = true;
+                                                }
                                             }
                                         }
                                         Text {
