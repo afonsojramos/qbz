@@ -119,7 +119,12 @@ export component PlayerBar inherits Rectangle {
     callback media-action(string, string, string);
     callback settings-bool(string, bool);
 
-    height: Layout.player-bar-height;
+    // Mode-aware bar height: Small (npb-mode 2) collapses to one header-tall
+    // row (42px); New/Classic keep the full 112px. Computed inline (not on the
+    // Layout global) so `Layout` stays a pure leaf with no dependency on the
+    // stateful ShellState — avoiding an import direction that would couple
+    // foundation to state.
+    height: ShellState.npb-mode == 2 ? Layout.header-height : Layout.player-bar-height;
     background: Theme.surface-card;
 
     // Responsive column zones. The song-card (left) and the buttons (right)
@@ -717,7 +722,7 @@ export component PlayerBar inherits Rectangle {
                                 ContextMenuItem {
                                     icon: @image-url("../assets/icons/rows-3.svg");
                                     label: @tr("Small");
-                                    enabled: false;
+                                    selected: ShellState.npb-mode == 2;
                                     clicked => {
                                         root.media-action("npb-view", "", "small");
                                     }

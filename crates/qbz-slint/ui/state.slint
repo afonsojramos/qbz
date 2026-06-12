@@ -2845,6 +2845,11 @@ export global NowPlayingState {
     in property <string> album-id;
     in property <string> artist-id;
     in property <image> artwork;
+    // Higher-res cover (~300px) for the hover preview that floats above the
+    // now-playing bar's small art, so the ~220px popup is crisp instead of an
+    // upscale of the 160px bar art. Loaded alongside `artwork`; cleared on
+    // track change. Falls back to `artwork` in the UI until it resolves.
+    in property <image> artwork-large;
     in property <string> track-id;
     // True when the playing track is from an ephemeral folder (synthetic id):
     // it has no DB row, so favorite / add-to-playlist / track-info are gated off.
@@ -2874,6 +2879,15 @@ export global NowPlayingState {
     // Quality of the playing track, for the song-card badge.
     in property <string> quality-tier;    // "hires" | "cd" | "mp3" | ""
     in property <string> quality-detail;  // "24-bit / 96 kHz"
+
+    // Output backend + mode LEDs (Mode C "Small" bar reads these). Mirror of
+    // the same four on SettingsState (:2154-2157) — surfaced here so the
+    // Small now-playing bar has ONE source for the song card + DAC/EXC
+    // cluster. Pushed on every audio snapshot-apply (src/settings.rs).
+    in property <string> output-backend-label: "SYST";   // PIPE|ALSA|JACK|PULS|SYST
+    in property <string> output-mode-label: "DEFAULT";    // DACPASS|BITPERF|EXCL|DIRECT|LOCKED|ROUTED|SHARED|DEFAULT
+    in property <bool> output-backend-active: false;
+    in property <bool> output-mode-active: false;
 
     // Cast / render-aware state (Qobuz Connect). `is-remote` = a peer
     // renderer owns playback (controls route to it); `volume-locked` =
@@ -3043,6 +3057,17 @@ export global TooltipState {
     in-out property <string> text;
     in-out property <length> anchor-x;  // control centre, window coords
     in-out property <length> anchor-y;  // control top, window coords
+    in-out property <bool> show: false;
+}
+
+// Floating album-art preview (now-playing cover hover). Overlay-rendered like
+// the tooltip so it NEVER steals hover from the trigger — a PopupWindow DID,
+// which flipped the trigger's has-hover and made the preview flicker. The
+// overlay reads the cover straight from NowPlayingState; this only carries the
+// anchor + visibility.
+export global ArtPreviewState {
+    in-out property <length> anchor-x;  // art centre, window coords
+    in-out property <length> anchor-y;  // art top, window coords
     in-out property <bool> show: false;
 }
 

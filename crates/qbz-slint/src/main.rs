@@ -4916,10 +4916,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             match (kind.as_str(), action.as_str()) {
-                // Now-playing bar layout switch (New / Classic). Persisted to
-                // ui_prefs so the choice survives restarts. Small/Large/window
-                // modes are disabled in the menu until those layouts land.
-                ("npb-view", mode @ ("new" | "classic")) => {
+                // Now-playing bar layout switch (New / Classic / Small).
+                // Persisted to ui_prefs so the choice survives restarts.
+                // Large/window modes are disabled in the menu until those
+                // layouts land.
+                ("npb-view", mode @ ("new" | "classic" | "small")) => {
                     if let Some(w) = weak.upgrade() {
                         w.global::<ShellState>()
                             .set_npb_mode(crate::ui_prefs::npb_mode_index(mode));

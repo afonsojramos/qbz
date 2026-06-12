@@ -1171,6 +1171,32 @@ fn load_now_playing_artwork(weak: slint::Weak<AppWindow>, art: qbz_models::Artwo
     });
 }
 
+/// Resolve a HIGHER-res now-playing cover (~300px) and apply it to
+/// `NowPlayingState.artwork-large`. Feeds the hover preview that floats above
+/// the bar's small art, so the ~220px popup is crisp instead of an upscale of
+/// the 160px bar art. Mirrors [`load_now_playing_artwork`] but decodes larger
+/// and writes the separate `artwork-large` slot. Source-aware via the SAME
+/// `ArtworkRef` funnel (the caller passes a `Some(300)` ref).
+fn load_now_playing_artwork_large(weak: slint::Weak<AppWindow>, art: qbz_models::ArtworkRef) {
+    if art.is_empty() {
+        return;
+    }
+    let Some(cache) = crate::artwork::shared_cache() else {
+        return;
+    };
+    tokio::spawn(async move {
+        let Some((pixels, w, h)) =
+            crate::artwork::fetch_and_decode_ref(&art, &cache, 300).await
+        else {
+            return;
+        };
+        let _ = weak.upgrade_in_event_loop(move |win| {
+            let img = crate::artwork::pixels_to_image(&pixels, w, h);
+            win.global::<NowPlayingState>().set_artwork_large(img);
+        });
+    });
+}
+
 /// Wall-clock now in milliseconds. Used by the poll loop to extrapolate the
 /// peer renderer's position (`position_ms + (now - updated_at_ms)`) while
 /// QBZ is CONTROLLING a peer (the local player is stopped, so the seek bar
@@ -1280,6 +1306,10 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     // For non-Plex tracks both collapse to the same `artwork_ref()`.
     let artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, None);
     let bar_artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, Some(160));
+    // Higher-res cover for the hover preview that floats above the bar art. Same
+    // source-aware funnel; a ~300px server-side transcode so the ~220px popup is
+    // crisp without paying for the full original. One extra fetch per track.
+    let preview_artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, Some(300));
     // Quality badge: tier from bit depth (24-bit+ = Hi-Res), exact detail line
     // reused from the shared formatter so it matches the track-row badges.
     let quality_tier = match track.bit_depth {
@@ -1430,9 +1460,14 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         // Clear the previous cover so it does not linger while the new
         // one resolves.
         np.set_artwork(slint::Image::default());
+        // Clear the hover-preview cover too, exactly like the bar art, so the
+        // floating preview never shows the previous track while the new high-res
+        // cover resolves.
+        np.set_artwork_large(slint::Image::default());
     });
 
     load_now_playing_artwork(weak.clone(), bar_artwork);
+    load_now_playing_artwork_large(weak.clone(), preview_artwork);
 }
 
 /// Record the playback CONTEXT — the source the queue was launched from — on

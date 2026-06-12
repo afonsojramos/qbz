@@ -12,7 +12,7 @@ import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
-import { NowPlayingState, SettingsState, TooltipState } from "../state.slint";
+import { NowPlayingState, SettingsState, TooltipState, ArtPreviewState } from "../state.slint";
 
 // Clickable artist/album link. Elides and shares the row width through a
 // stretch factor (the artist gets the larger share) so neither can be pushed
@@ -43,7 +43,7 @@ component MetaLink inherits TouchArea {
         height: 100%;
         text: root.label;
         color: root.has-hover ? Theme.text-primary : Theme.text-muted;
-        font-size: 12px;
+        font-size: 11px;
         overflow: elide;
         vertical-alignment: center;
     }
@@ -102,6 +102,26 @@ export component SongCard inherits Rectangle {
     in property <length> art-size: 60px;
     in property <bool> show-art: true;
     in property <bool> show-badges: true;
+    // Optional border around the cover art. Defaults OFF (0px / transparent) so
+    // every existing call site (New/Classic SongCard) is UNAFFECTED; the Small
+    // bar passes a 2px subtle border so the flush-left art reads as defined.
+    in property <length> art-border-width: 0px;
+    in property <color> art-border-color: transparent;
+    // Title font size. Defaults to Typography.body (15px) so every existing
+    // call site is unchanged; the Small bar passes a smaller value (12px) so
+    // the compact card's title drops ~1-2pt under the New/Classic card.
+    in property <length> title-font-size: Typography.body;
+    // Gap between the album art and the title/meta column. The Small bar
+    // tightens it by 2px; default keeps New/Classic unchanged.
+    in property <length> art-text-gap: 11px;
+    // When true, the title+artist text block is constrained to the art image's
+    // inner height (art-size minus the border) and vertically CENTRED as a
+    // tight group, so the title's top lines up with the art image top and the
+    // artist's bottom with the art image bottom — instead of the title sticking
+    // to the row top and the artist to the row bottom. Defaults OFF so New/
+    // Classic SongCards keep their current full-height, space-distributed
+    // layout. The Small bar sets this true.
+    in property <bool> text-center: false;
     // Below the responsive break the stamp shrinks 10% (proportional) so it
     // keeps clear of the controls column; above the break it is full size.
     in property <bool> narrow: false;
@@ -175,6 +195,8 @@ export component SongCard inherits Rectangle {
             width: root.art-size;
             height: root.art-size;
             border-radius: 6px;
+            border-width: root.art-border-width;
+            border-color: root.art-border-color;
             background: Theme.surface-elevated;
             clip: true;
 
@@ -229,11 +251,32 @@ export component SongCard inherits Rectangle {
                     y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 }
             }
+
+            // Hover preview: while the pointer is over the cover, a 220x220
+            // high-res preview floats ABOVE it (1:1 Tauri). Rendered by the
+            // global ArtPreviewOverlay (mounted last in AppShell) — NOT a
+            // PopupWindow: that stole the hover (the trigger's has-hover flipped
+            // when the popup showed), causing show/close flicker. This top-most
+            // TouchArea only reports the anchor + visibility (the overlay reads
+            // the cover from NowPlayingState). Coexists with the cover Image /
+            // idle cat / spinner above (none have a TouchArea), consumes no
+            // clicks elsewhere; gated on has-track so it never opens when idle.
+            art-hover-ta := TouchArea {
+                changed has-hover => {
+                    if (self.has-hover && NowPlayingState.has-track) {
+                        ArtPreviewState.anchor-x = self.absolute-position.x + self.width / 2;
+                        ArtPreviewState.anchor-y = self.absolute-position.y;
+                        ArtPreviewState.show = true;
+                    } else if (!self.has-hover) {
+                        ArtPreviewState.show = false;
+                    }
+                }
+            }
         }
     }
 
     // Fixed gap: cover -> song info.
-    if root.show-art: Rectangle { width: 11px; }
+    if root.show-art: Rectangle { width: root.art-text-gap; }
 
     // --- Title + context/artist/album + renderer badge -------------------
     VerticalLayout {
@@ -243,19 +286,138 @@ export component SongCard inherits Rectangle {
         min-width: 0px;
         alignment: center;
         spacing: 4px;
+        // When text-center is on (Small bar), an inner fixed-height wrapper
+        // (= art image inner height) holds the title+meta as a TIGHT centred
+        // group, so the title top aligns with the art image top and the artist
+        // bottom with the art image bottom. The outer column keeps its existing
+        // full-row stretch + alignment:center, so New/Classic are untouched and
+        // this just centres a shorter inner block. The wrapper is transparent
+        // (pure layout) when on; off, this child is zero and the title/meta
+        // below render directly in the column (current behaviour).
+        if root.text-center: VerticalLayout {
+            height: root.art-size - 2 * root.art-border-width;
+            // Tight line-height: the box is only ~31px (art inner height), so the
+            // title (13px) + meta line need a small inter-line gap or the 2nd line
+            // (artist·album) clips at the bottom. 1px keeps both lines comfortably
+            // inside without shrinking the fonts.
+            spacing: 1px;
+            alignment: center;
+            Rectangle {
+                tc-title := Text {
+                    width: 100%;
+                    text: NowPlayingState.has-track
+                        ? NowPlayingState.title
+                        : @tr("Nothing playing");
+                    color: Theme.text-primary;
+                    font-size: root.title-font-size;
+                    font-weight: Typography.medium;
+                    overflow: elide;
+                }
+                tc-ta := TouchArea {
+                    mouse-cursor: (NowPlayingState.has-track && !NowPlayingState.is-ephemeral)
+                        ? pointer : default;
+                    clicked => {
+                        if (NowPlayingState.has-track && !NowPlayingState.is-ephemeral) {
+                            root.track-info();
+                        }
+                    }
+                    changed has-hover => {
+                        if (self.has-hover && NowPlayingState.has-track
+                            && tc-title.preferred-width > self.width) {
+                            TooltipState.text = NowPlayingState.title;
+                            TooltipState.anchor-x = tc-ta.absolute-position.x + tc-ta.width / 2;
+                            TooltipState.anchor-y = tc-ta.absolute-position.y;
+                            TooltipState.show = true;
+                        } else if (!self.has-hover) {
+                            TooltipState.show = false;
+                        }
+                    }
+                }
+            }
+            if NowPlayingState.has-track: HorizontalLayout {
+                spacing: 7px;
+                if SettingsState.show-context-icon: Rectangle {
+                    width: 16px;
+                    height: 18px;
+                    border-radius: 3px;
+                    background: tcctx-ta.has-hover ? Theme.surface-hover : transparent;
+                    QbzIcon {
+                        source: @image-url("../assets/icons/layers.svg");
+                        width: 13px;
+                        height: 13px;
+                        x: 0;
+                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                        tint: tcctx-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                    }
+                    tcctx-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (root.ctx-id != "") {
+                                root.open-context(root.ctx-kind, root.ctx-id);
+                            }
+                        }
+                        changed has-hover => {
+                            if (self.has-hover) {
+                                TooltipState.text = @tr("Go to where this is playing from");
+                                TooltipState.anchor-x = parent.absolute-position.x + parent.width / 2;
+                                TooltipState.anchor-y = parent.absolute-position.y;
+                                TooltipState.show = true;
+                            } else {
+                                TooltipState.show = false;
+                            }
+                        }
+                    }
+                }
+                MetaLink {
+                    label: NowPlayingState.artist;
+                    stretch: 2.0;
+                    activated => {
+                        if (!NowPlayingState.is-ephemeral) {
+                            if (NowPlayingState.artist-id != "") {
+                                root.open-artist(NowPlayingState.artist-id);
+                            } else if (NowPlayingState.artist != "") {
+                                root.open-artist(NowPlayingState.artist);
+                            }
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 3px;
+                        height: 3px;
+                        border-radius: 1.5px;
+                        background: Theme.text-muted;
+                    }
+                }
+                MetaLink {
+                    label: NowPlayingState.album;
+                    stretch: 1.0;
+                    activated => {
+                        if (NowPlayingState.album-id != "" && !NowPlayingState.is-ephemeral) {
+                            root.open-album(NowPlayingState.album-id);
+                        }
+                    }
+                }
+            }
+        }
         // Title — elides, and on hover shows the full text in a tooltip ONLY
         // when it is actually truncated (the audio stamp ate into it).
         // Title — elides. Clicking it opens track info (the transport's (i)
         // is the second trigger, 1:1 with Tauri's title-click). Hovering a
         // truncated title shows the full text in a tooltip.
-        Rectangle {
+        // DEFAULT layout (text-center OFF): the title + meta render directly in
+        // the column (full-row stretch + alignment:center). New/Classic use
+        // this path unchanged. The text-center path above (Small bar) is the
+        // tight inner-block alternative.
+        if !root.text-center: Rectangle {
             title-txt := Text {
                 width: 100%;
                 text: NowPlayingState.has-track
                     ? NowPlayingState.title
                     : @tr("Nothing playing");
                 color: Theme.text-primary;
-                font-size: Typography.body;
+                font-size: root.title-font-size;
                 font-weight: Typography.medium;
                 overflow: elide;
             }
@@ -281,7 +443,7 @@ export component SongCard inherits Rectangle {
                 }
             }
         }
-        if NowPlayingState.has-track: HorizontalLayout {
+        if !root.text-center && NowPlayingState.has-track: HorizontalLayout {
             spacing: 7px;
 
             // Context (layers) button — opens the page playback came from.
@@ -291,11 +453,10 @@ export component SongCard inherits Rectangle {
                 border-radius: 3px;
                 background: ctxta.has-hover ? Theme.surface-hover : transparent;
                 QbzIcon {
-                    // turntable (the "playing from" context), pinned flush-LEFT
-                    // (x:0): centering the glyph in its box left a ~2px indent so
-                    // the artist·album line read as misaligned vs the title.
-                    // (disc-album now means "flat folders" in the Folders toggle.)
-                    source: @image-url("../assets/icons/turntable.svg");
+                    // layers (the "playing from" context, 1:1 with Tauri), pinned
+                    // flush-LEFT (x:0): centering the glyph in its box left a ~2px
+                    // indent so the artist·album line read as misaligned vs the title.
+                    source: @image-url("../assets/icons/layers.svg");
                     width: 13px;
                     height: 13px;
                     x: 0;

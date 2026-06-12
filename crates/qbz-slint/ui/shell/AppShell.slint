@@ -13,6 +13,7 @@ import { Sidebar } from "Sidebar.slint";
 import { HeaderBar } from "HeaderBar.slint";
 import { HeaderMenuOverlay } from "HeaderMenuOverlay.slint";
 import { TooltipOverlay } from "TooltipOverlay.slint";
+import { ArtPreviewOverlay } from "ArtPreviewOverlay.slint";
 import { SidebarFolderPopup } from "SidebarFolderPopup.slint";
 import { SidebarTooltip } from "SidebarTooltip.slint";
 import { SidebarPlaylistsPopup } from "SidebarPlaylistsPopup.slint";
@@ -33,7 +34,7 @@ import { PlaylistImportModal } from "../primitives/PlaylistImportModal.slint";
 import { QconnectDevModal } from "QconnectDevModal.slint";
 import { DragGhost } from "../primitives/DragGhost.slint";
 import { Toast } from "../primitives/Toast.slint";
-import { PlayerBar } from "PlayerBar.slint";
+import { NowPlayingBar } from "NowPlayingBar.slint";
 import { QueueSidebar } from "QueueSidebar.slint";
 import { LyricsSidebar } from "LyricsSidebar.slint";
 import { HomeView } from "../discover/HomeView.slint";
@@ -174,11 +175,16 @@ export component AppShell inherits Rectangle {
                         // shell). `root.height` is the AppShell height (pinned to
                         // the window in app.slint).
                         //
-                        // NOTE: `Layout.player-bar-height` is the single source of
-                        // truth for the bar height (New + Classic both use it).
-                        // When the Small / Large bar layouts land with a DIFFERENT
-                        // height, make that value mode-aware and this stays correct.
-                        height: root.height - Layout.header-height - Layout.player-bar-height - 8px;
+                        // NOTE: the bar height is mode-aware. New + Classic use the
+                        // full `Layout.player-bar-height` (112px); Small (npb-mode 2)
+                        // collapses the bar to one header-tall row (42px), so the
+                        // content area gains ~70px. Computed inline (mirrors the same
+                        // expression in PlayerBar.slint `height:`) to keep `Layout`
+                        // a pure leaf independent of ShellState. Large (mode 3) will
+                        // add its own branch here when it lands.
+                        height: root.height - Layout.header-height
+                            - (ShellState.npb-mode == 2 ? Layout.header-height : Layout.player-bar-height)
+                            - 8px;
                         vertical-stretch: 1;
                         background: Theme.surface-main;
                             border-radius: Radius.md;
@@ -395,7 +401,9 @@ export component AppShell inherits Rectangle {
             }
         }
 
-        PlayerBar {
+        // Mode-aware bottom bar shell: New/Classic -> PlayerBar, Small ->
+        // PlayerBarSmall. Forwards the same bindings the bar always took.
+        NowPlayingBar {
             open-album(id) => {
                 root.open-album(id);
             }
@@ -492,6 +500,13 @@ export component AppShell inherits Rectangle {
 
     // Global hover-tooltip overlay — drawn LAST so no control can cover it.
     TooltipOverlay {
+        width: 100%;
+        height: 100%;
+    }
+
+    // Floating album-art hover preview — overlay-rendered (not a PopupWindow) so
+    // it never steals hover from the trigger. On top of everything.
+    ArtPreviewOverlay {
         width: 100%;
         height: 100%;
     }

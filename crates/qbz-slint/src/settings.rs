@@ -599,6 +599,15 @@ pub fn apply_snapshot(window: &AppWindow, snap: SettingsSnapshot) {
     st.set_stream_uncached(snap.stream_uncached);
     st.set_streaming_only(snap.streaming_only);
     st.set_normalization(snap.normalization);
+    // Mirror the four output LEDs onto NowPlayingState too, so the Mode C
+    // "Small" now-playing bar has a single source for the song card + the
+    // DAC/EXC cluster. Cloned because the SettingsState setters below consume
+    // the snapshot's String fields via `.into()`.
+    let np = window.global::<NowPlayingState>();
+    np.set_output_backend_label(snap.output_backend_label.clone().into());
+    np.set_output_mode_label(snap.output_mode_label.clone().into());
+    np.set_output_backend_active(snap.output_backend_active);
+    np.set_output_mode_active(snap.output_mode_active);
     st.set_output_backend_label(snap.output_backend_label.into());
     st.set_output_mode_label(snap.output_mode_label.into());
     st.set_output_backend_active(snap.output_backend_active);
@@ -870,6 +879,24 @@ pub async fn handle_bool(
             // triggering toggle alone required.
             let apply = if cascaded { Apply::Reinit } else { apply };
             apply_audio(&ctx, &runtime, apply);
+            // Reflect the persisted value back onto SettingsState so toggles
+            // that are purely driven by `checked: SettingsState.x` (e.g. the
+            // now-playing bar audio-menu QbzToggles for Normalization/Gapless)
+            // actually flip. The Settings panel's own toggles already reflect
+            // their click optimistically, but the bar flyout's do NOT self-flip
+            // — they need this push. Skipped when cascaded, since the full
+            // snapshot re-push below already carries the new value.
+            if !cascaded {
+                let key = key.to_string();
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    let st = w.global::<SettingsState>();
+                    match key.as_str() {
+                        "normalization" => st.set_normalization(value),
+                        "gapless" => st.set_gapless(value),
+                        _ => {}
+                    }
+                });
+            }
         }
         Err(e) => log::error!("[qbz-slint] failed to persist '{key}': {e}"),
     }

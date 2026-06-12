@@ -1,0 +1,80 @@
+// Vertical integer slider primitive — dark-themed, draggable. The Y-axis
+// mirror of QbzSlider, inverted so the TOP of the track is `maximum` and the
+// BOTTOM is `minimum` (the natural orientation for a volume column popping up
+// over a button). Like the other primitives it does not own its value: it
+// emits `changed(new-value)` and the caller updates the bound state.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+
+export component QbzVerticalSlider inherits Rectangle {
+    in property <int> minimum: 0;
+    in property <int> maximum: 100;
+    in property <int> value: 0;
+    callback changed(int);
+
+    width: 22px;
+    height: 120px;
+
+    // Fraction of the track the current value sits at, clamped to [0, 1].
+    property <float> fraction: root.maximum > root.minimum
+        ? max(0.0, min(1.0, (root.value - root.minimum) / (root.maximum - root.minimum)))
+        : 0.0;
+    property <length> thumb-size: 16px;
+    // Travel range for the thumb centre (top..bottom of the column).
+    property <length> travel: root.height - root.thumb-size;
+
+    // Track (the full vertical rail).
+    Rectangle {
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        width: 4px;
+        border-radius: 2px;
+        background: Theme.surface-elevated;
+    }
+
+    // Accent fill — grows UP from the bottom (inverted: more value = taller).
+    Rectangle {
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        width: 4px;
+        height: root.thumb-size / 2 + root.fraction * root.travel;
+        // Pin to the bottom so the fill rises from the floor.
+        y: root.height - self.height;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+
+    // Thumb. fraction 1.0 (max) → top (y == 0); fraction 0.0 (min) → bottom.
+    Rectangle {
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: (1.0 - root.fraction) * root.travel;
+        width: root.thumb-size;
+        height: root.thumb-size;
+        border-radius: root.thumb-size / 2;
+        background: Theme.text-primary;
+    }
+
+    // Map a pointer y to a clamped, rounded integer value (inverted axis).
+    function value-from-y(py: length) -> int {
+        root.minimum + round(
+            max(0.0, min(1.0, 1.0 - (py - root.thumb-size / 2) / max(1px, root.travel)))
+            * (root.maximum - root.minimum)
+        )
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+
+        // Jump to the click point on press-down.
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down
+                && root.value-from-y(self.mouse-y) != root.value) {
+                root.changed(root.value-from-y(self.mouse-y));
+            }
+        }
+        // Continuous drag while held.
+        moved => {
+            if (root.value-from-y(self.mouse-y) != root.value) {
+                root.changed(root.value-from-y(self.mouse-y));
+            }
+        }
+    }
+}

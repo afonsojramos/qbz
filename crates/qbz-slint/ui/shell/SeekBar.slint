@@ -13,9 +13,13 @@ export component SeekBar inherits HorizontalLayout {
     in property <string> elapsed: "0:00";
     in property <string> remaining: "0:00";
     in property <int> duration-secs: 0;
+    // Whether to render the leading/trailing time labels. Default true so the
+    // New/Classic bars are unchanged; the Small bar mounts the top full-width
+    // seekbar with show-times:false (it carries its own time column instead).
+    in property <bool> show-times: true;
     callback seek(float);                // 0..1
 
-    spacing: 12px;
+    spacing: root.show-times ? 12px : 0px;
 
     function clamp01(v: float) -> float {
         return Math.min(Math.max(v, 0.0), 1.0);
@@ -24,7 +28,7 @@ export component SeekBar inherits HorizontalLayout {
         return "\{Math.floor(secs / 60)}:\{Math.mod(secs, 60) < 10 ? "0" : ""}\{Math.mod(secs, 60)}";
     }
 
-    VerticalLayout {
+    if root.show-times: VerticalLayout {
         alignment: center;
         Text {
             text: root.elapsed;
@@ -132,7 +136,7 @@ export component SeekBar inherits HorizontalLayout {
         }
     }
 
-    VerticalLayout {
+    if root.show-times: VerticalLayout {
         alignment: center;
         Text {
             text: root.remaining;

@@ -44,8 +44,8 @@ pub struct UiPrefs {
     /// Streaming-quality key — one of `STREAMING_QUALITIES[*].key`.
     #[serde(default = "default_streaming_quality")]
     pub streaming_quality: String,
-    /// Now-playing bar layout: `"new"` | `"classic"`. Maps to
-    /// `ShellState.npb-mode` (0 / 1).
+    /// Now-playing bar layout: `"new"` | `"classic"` | `"small"`. Maps to
+    /// `ShellState.npb-mode` (0 / 1 / 2).
     #[serde(default = "default_npb_mode")]
     pub npb_mode: String,
 }
@@ -68,10 +68,11 @@ impl Default for UiPrefs {
 }
 
 /// Map a persisted npb-mode key to the `ShellState.npb-mode` int
-/// (New = 0, Classic = 1). Unknown keys fall back to New.
+/// (New = 0, Classic = 1, Small = 2). Unknown keys fall back to New.
 pub fn npb_mode_index(key: &str) -> i32 {
     match key {
         "classic" => 1,
+        "small" => 2,
         _ => 0,
     }
 }
