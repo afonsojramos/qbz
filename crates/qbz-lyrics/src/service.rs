@@ -349,81 +349,84 @@ async fn run_chain(
         cached: false,
     };
 
-    // 2. QOBUZ primary — Qobuz-source tracks with a real track_id only.
-    //    wsync = authoritative synced (ends the chain); plain = HELD while
-    //    LRCLIB is probed for synced; every failure degrades silently.
-    let mut qobuz_plain_candidate: Option<LyricsResult> = None;
-    if request.source == LyricsSourceKind::Qobuz {
-        if let Some(track_id) = request.track_id {
-            match inner.providers.qobuz(track_id).await {
-                Ok(Some(document)) => {
-                    if let Some(wsync) = QobuzWsync::from_document(&document) {
-                        let doc = wsync.to_doc();
-                        if !doc.lines.is_empty() {
-                            let mut payload = base_payload(LyricsProvider::Qobuz);
-                            payload.plain = Some(doc.plain_text());
-                            payload.synced_lrc = Some(wsync.to_lrc());
-                            let wsync_json = serde_json::to_string(&wsync)
-                                .map_err(|e| format!("Failed to serialize wsync: {}", e))?;
-
-                            let guard = inner.db.lock().await;
-                            let db = guard.as_ref().ok_or(NO_SESSION)?;
-                            db.upsert(&cache_key, &payload, Some(&wsync_json))?;
-
-                            return Ok(respond(LyricsOutcome::Found(LyricsResult {
-                                payload,
-                                doc,
-                            })));
-                        }
-                    } else if let Some(QobuzLyricsContent::Plain { lines, .. }) =
-                        document.original.as_ref()
-                    {
-                        let blob = lines
-                            .iter()
-                            .map(|line| line.line.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        if !blob.trim().is_empty() {
-                            let mut doc =
-                                LyricsDoc::from_plain_text(&blob, LyricsProvider::Qobuz);
-                            doc.translation_langs = document.translation_langs.clone();
-                            doc.writers = document.writers.clone();
-                            let mut payload = base_payload(LyricsProvider::Qobuz);
-                            payload.plain = Some(blob.trim().to_string());
-                            qobuz_plain_candidate = Some(LyricsResult { payload, doc });
-                        }
+    // 2+3. QOBUZ primary + LRCLIB run CONCURRENTLY. Running them in parallel
+    //       means a Qobuz MISS adds NO latency before LRCLIB (matching Tauri's
+    //       speed, which has no Qobuz step) while still preferring Qobuz wsync
+    //       when present. The SELECTION below is unchanged from the sequential
+    //       version: Qobuz wsync wins outright; otherwise an LRCLIB *synced*
+    //       result beats a held Qobuz-plain (no-sync-regression), which beats
+    //       an LRCLIB plain-only / miss; lyrics.ovh is the last resort. Qobuz
+    //       only runs for Qobuz-source tracks with a real track_id.
+    let qobuz_fut = async {
+        if request.source == LyricsSourceKind::Qobuz {
+            if let Some(track_id) = request.track_id {
+                match inner.providers.qobuz(track_id).await {
+                    Ok(Some(document)) => return Some(document),
+                    Ok(None) => log::debug!("[Lyrics] Qobuz miss for track {}", track_id),
+                    Err(e) => {
+                        // Offline gate / transport / auth — degrade like a
+                        // miss; never a user-facing error (spec §1.2).
+                        log::debug!("[Lyrics] Qobuz degraded for track {}: {}", track_id, e)
                     }
-                }
-                Ok(None) => {
-                    log::debug!("[Lyrics] Qobuz miss for track {}", track_id);
-                }
-                Err(e) => {
-                    // Offline gate / transport / auth — same degradation path
-                    // as a miss; never a user-facing error (spec §1.2).
-                    log::debug!("[Lyrics] Qobuz degraded for track {}: {}", track_id, e);
                 }
             }
         }
-    }
-
-    // 3. LRCLIB with exactly 1 retry on transport error (parity:
-    //    legacy_compat.rs:519-536 — Ok(None) is a miss, NOT a retry).
-    let lrclib_data = match inner.providers.lrclib(&title, &artist, request.duration_secs).await {
-        Ok(data) => data,
-        Err(e) => {
-            log::warn!("[Lyrics] LRCLIB attempt 1 failed: {}, retrying…", e);
-            match inner.providers.lrclib(&title, &artist, request.duration_secs).await {
-                Ok(data) => data,
-                Err(e2) => {
-                    log::warn!(
-                        "[Lyrics] LRCLIB attempt 2 failed: {}, falling back",
-                        e2
-                    );
-                    None
+        None
+    };
+    // LRCLIB with exactly 1 retry on transport error (parity:
+    // legacy_compat.rs:519-536 — Ok(None) is a miss, NOT a retry).
+    let lrclib_fut = async {
+        match inner.providers.lrclib(&title, &artist, request.duration_secs).await {
+            Ok(data) => data,
+            Err(e) => {
+                log::warn!("[Lyrics] LRCLIB attempt 1 failed: {}, retrying…", e);
+                match inner.providers.lrclib(&title, &artist, request.duration_secs).await {
+                    Ok(data) => data,
+                    Err(e2) => {
+                        log::warn!("[Lyrics] LRCLIB attempt 2 failed: {}, falling back", e2);
+                        None
+                    }
                 }
             }
         }
     };
+    let (qobuz_doc, lrclib_data) = tokio::join!(qobuz_fut, lrclib_fut);
+
+    // Apply the Qobuz result: wsync ends the chain; plain is HELD as a
+    // candidate while we consider an LRCLIB synced result below.
+    let mut qobuz_plain_candidate: Option<LyricsResult> = None;
+    if let Some(document) = qobuz_doc {
+        if let Some(wsync) = QobuzWsync::from_document(&document) {
+            let doc = wsync.to_doc();
+            if !doc.lines.is_empty() {
+                let mut payload = base_payload(LyricsProvider::Qobuz);
+                payload.plain = Some(doc.plain_text());
+                payload.synced_lrc = Some(wsync.to_lrc());
+                let wsync_json = serde_json::to_string(&wsync)
+                    .map_err(|e| format!("Failed to serialize wsync: {}", e))?;
+
+                let guard = inner.db.lock().await;
+                let db = guard.as_ref().ok_or(NO_SESSION)?;
+                db.upsert(&cache_key, &payload, Some(&wsync_json))?;
+
+                return Ok(respond(LyricsOutcome::Found(LyricsResult { payload, doc })));
+            }
+        } else if let Some(QobuzLyricsContent::Plain { lines, .. }) = document.original.as_ref() {
+            let blob = lines
+                .iter()
+                .map(|line| line.line.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !blob.trim().is_empty() {
+                let mut doc = LyricsDoc::from_plain_text(&blob, LyricsProvider::Qobuz);
+                doc.translation_langs = document.translation_langs.clone();
+                doc.writers = document.writers.clone();
+                let mut payload = base_payload(LyricsProvider::Qobuz);
+                payload.plain = Some(blob.trim().to_string());
+                qobuz_plain_candidate = Some(LyricsResult { payload, doc });
+            }
+        }
+    }
 
     if let Some(data) = lrclib_data {
         let has_synced = data
@@ -629,8 +632,10 @@ mod tests {
         // LRC emitted for cross-frontend compat; plain joined.
         assert!(result.payload.synced_lrc.as_deref().unwrap().contains("[00:01.000] first line"));
         assert_eq!(result.payload.plain.as_deref(), Some("first line\nsecond line"));
-        // Chain ended at Qobuz: no external calls.
-        assert_eq!(providers.lrclib_calls.load(Ordering::SeqCst), 0);
+        // LRCLIB now runs CONCURRENTLY with Qobuz (parallel resolution), so it
+        // is called once — but Qobuz wsync still wins the selection and its
+        // result is discarded; ovh never runs once something is found.
+        assert_eq!(providers.lrclib_calls.load(Ordering::SeqCst), 1);
         assert_eq!(providers.ovh_calls.load(Ordering::SeqCst), 0);
         // Stale-guard echo.
         assert_eq!(response.request_track_id, Some(100));
@@ -657,7 +662,9 @@ mod tests {
         // Reader preferred the native wsync column: words survive the cache.
         assert!(result.doc.lines[0].words.is_some());
         assert_eq!(providers.qobuz_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(providers.lrclib_calls.load(Ordering::SeqCst), 0);
+        // LRCLIB ran once on the FIRST call (parallel with Qobuz); the second
+        // call was a synced cache hit, so it added no provider traffic.
+        assert_eq!(providers.lrclib_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

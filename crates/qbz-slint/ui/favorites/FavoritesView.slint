@@ -935,13 +935,13 @@ export component FavoritesView inherits Rectangle {
                 if FavoritesState.tracks-multi-select: MultiSelectBar {
                     selected-count: FavoritesState.tracks-selected-count;
                     actions: [
-                        { id: "select-all", label: @tr("Select all"), danger: false, needs-selection: false },
-                        { id: "play-next", label: @tr("Play next"), danger: false, needs-selection: true },
-                        { id: "queue", label: @tr("Add to queue"), danger: false, needs-selection: true },
-                        { id: "add-to-playlist", label: @tr("Add to playlist"), danger: false, needs-selection: true },
-                        { id: "make-offline", label: @tr("Make available offline"), danger: false, needs-selection: true },
-                        { id: "remove-selected", label: @tr("Remove from favorites"), danger: true, needs-selection: true },
-                        { id: "clear", label: @tr("Clear"), danger: false, needs-selection: true },
+                        { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
+                        { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+                        { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
+                        { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
+                        { id: "make-offline", label: @tr("Make available offline"), icon: @image-url("../assets/icons/cloud-download.svg"), danger: false, needs-selection: true },
+                        { id: "remove-selected", label: @tr("Remove from favorites"), icon: @image-url("../assets/icons/trash-2.svg"), danger: true, needs-selection: true },
+                        { id: "clear", label: @tr("Clear"), icon: @image-url("../assets/icons/x.svg"), danger: false, needs-selection: true },
                     ];
                     action(id) => {
                         FavoritesActions.bulk-action(id);

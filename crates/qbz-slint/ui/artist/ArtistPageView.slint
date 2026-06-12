@@ -18,6 +18,7 @@ import {
     NetworkSidebarState,
     NetworkSidebarActions,
     DragState,
+    ShellState,
 } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
@@ -27,6 +28,7 @@ import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
 import { TrackContextMenu } from "../primitives/TrackContextMenu.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
+import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { ReleaseGrid } from "ReleaseGrid.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { JumpNavBar, JumpNavTab } from "../primitives/JumpNavBar.slint";
@@ -109,10 +111,32 @@ export component ArtistPageView inherits Rectangle {
     // Popular Tracks shows the first 5; Load more expands to all.
     property <bool> top-tracks-expanded: false;
     property <int> top-tracks-preview: 5;
-    // Popular Tracks multi-select mode — toggled by the section header's
-    // Select button. When true, each row reveals a leading checkbox column
-    // (TrackRow's `multi-select-mode` prop). Mirrors Tauri's flow.
-    property <bool> multi-select-mode: false;
+    // Popular Tracks multi-select now lives in ArtistState
+    // (top-tracks-multi-select / top-tracks-selected-count), so it resets on
+    // artist change and drives the shared MultiSelectBar.
+
+    // Responsiveness: the 300px Artist Network sidebar AUTO-collapses when the
+    // content area is space-constrained — a right panel (Queue / Lyrics) is
+    // open on a non-wide window — so the Popular Tracks list keeps priority
+    // (tracks win — it's a music app), and AUTO-opens when there's room again.
+    // The user can still toggle it manually (the button below); that override
+    // sticks until the next constrain-edge or artist change.
+    //
+    // Uses ShellState.content-constrained (the SAME signal AlbumView uses),
+    // NOT a raw `root.width < N`. The old `root.width < 1080px` trigger WAS
+    // the regression: at a normal window the content area is already < 1080px
+    // WITHOUT any panel, so `net-cramped` was permanently true — opening the
+    // Queue produced no transition, the sidebar never auto-closed, and (being
+    // a 300px overlay) it covered the Popular Tracks action cluster instead of
+    // yielding to it.
+    property <bool> net-cramped: ShellState.content-constrained;
+    property <string> net-nav-watch: ArtistState.id;
+    changed net-cramped => {
+        NetworkSidebarState.open = !root.net-cramped;
+    }
+    changed net-nav-watch => {
+        NetworkSidebarState.open = !root.net-cramped;
+    }
 
     background: Theme.surface-main;
 
@@ -337,8 +361,8 @@ export component ArtistPageView inherits Rectangle {
                         // vs Qobuz radio (qobuz-curated). Both call
                         // distinct media-actions; main.rs wires them.
                         Rectangle {
-                            width: 40px;
-                            height: 40px;
+                            width: 32px;
+                            height: 32px;
                             CircleAction {
                                 icon: @image-url("../assets/icons/radio.svg");
                                 clicked => {
@@ -347,7 +371,7 @@ export component ArtistPageView inherits Rectangle {
                             }
                             radio-popup := PopupWindow {
                                 x: 0px;
-                                y: 50px;
+                                y: 38px;
                                 width: 180px;
                                 close-policy: close-on-click;
                                 ContextMenu {
@@ -443,79 +467,105 @@ export component ArtistPageView inherits Rectangle {
                 HorizontalLayout {
                     horizontal-stretch: 0;
                     spacing: 12px;
-                    CircleAction {
-                        icon: @image-url("../assets/icons/play-fill.svg");
-                        primary: true;
-                        diameter: 40px;
-                        clicked => {
-                            root.media-action(
-                                "artist", ArtistState.id, "play-top");
+                    // Wrapped in VerticalLayout (alignment:center) so the round
+                    // buttons keep their 40px size — an unwrapped CircleAction
+                    // in this row was stretching tall ("giant button").
+                    VerticalLayout {
+                        alignment: center;
+                        CircleAction {
+                            icon: @image-url("../assets/icons/play-fill.svg");
+                            primary: true;
+                            clicked => {
+                                root.media-action(
+                                    "artist", ArtistState.id, "play-top");
+                            }
                         }
                     }
-                    CircleAction {
-                        icon: @image-url("../assets/icons/square-check-big.svg");
-                        clicked => {
-                            root.multi-select-mode = !root.multi-select-mode;
+                    VerticalLayout {
+                        alignment: center;
+                        CircleAction {
+                            icon: @image-url("../assets/icons/square-check-big.svg");
+                            active: ArtistState.top-tracks-multi-select;
+                            clicked => {
+                                ArtistActions.toggle-top-tracks-select();
+                            }
                         }
                     }
-                    CircleAction {
-                        icon: @image-url("../assets/icons/ellipsis.svg");
-                        clicked => {
-                            root.media-action("artist", "", "top-tracks-menu");
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/ellipsis.svg");
+                                clicked => {
+                                    top-tracks-menu.show();
+                                }
+                            }
+                            // Popular Tracks section menu (all-tracks actions),
+                            // opens below the ⋯ with right edges aligned.
+                            top-tracks-menu := PopupWindow {
+                                x: 32px - self.width;
+                                y: 38px;
+                                width: 224px;
+                                height: 4 * 33px + 10px;
+                                close-policy: close-on-click;
+                                ContextMenu {
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/list-plus.svg");
+                                        label: @tr("Play all next");
+                                        clicked => {
+                                            ArtistActions.top-tracks-menu-action("next-all");
+                                        }
+                                    }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/list-end.svg");
+                                        label: @tr("Add all to queue");
+                                        clicked => {
+                                            ArtistActions.top-tracks-menu-action("queue-all");
+                                        }
+                                    }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/shuffle.svg");
+                                        label: @tr("Shuffle all");
+                                        clicked => {
+                                            ArtistActions.top-tracks-menu-action("shuffle-all");
+                                        }
+                                    }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/list-music.svg");
+                                        label: @tr("Add all to playlist");
+                                        clicked => {
+                                            ArtistActions.top-tracks-menu-action("playlist-all");
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
             if ArtistState.top-tracks.length > 0: Rectangle { height: 10px; }
 
-            // Check-all row — shown above the list whenever the
-            // section is in multi-select mode. Matches the QBZ
-            // pattern: leading checkbox on the left of the row, just
-            // like the per-row selectors below.
-            if root.multi-select-mode
-                && ArtistState.top-tracks.length > 0:
-            HorizontalLayout {
-                height: 36px;
-                padding-left: 12px;
-                padding-right: 12px;
-                spacing: 16px;
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        check-all-box := Rectangle {
-                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                            width: 22px;
-                            height: 22px;
-                            border-radius: 11px;
-                            background: transparent;
-                            border-width: 1.5px;
-                            border-color: check-all-ta.has-hover
-                                ? Theme.text-primary
-                                : Theme.text-muted;
-                            check-all-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.media-action(
-                                        "artist", "", "select-all-top-tracks");
-                                }
-                            }
-                        }
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 1;
-                    Text {
-                        text: @tr("Select all");
-                        color: Theme.text-secondary;
-                        font-size: Typography.body;
-                        font-weight: Typography.medium;
-                    }
+            // Bulk action bar — homologated icon bar, shown in multi-select
+            // mode over the selected Popular Tracks.
+            if ArtistState.top-tracks-multi-select
+                && ArtistState.top-tracks.length > 0: MultiSelectBar {
+                selected-count: ArtistState.top-tracks-selected-count;
+                actions: [
+                    { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
+                    { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+                    { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
+                    { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
+                    { id: "add-to-favorites", label: @tr("Add to favorites"), icon: @image-url("../assets/icons/heart.svg"), danger: false, needs-selection: true },
+                    { id: "clear", label: @tr("Clear"), icon: @image-url("../assets/icons/x.svg"), danger: false, needs-selection: true },
+                ];
+                action(id) => {
+                    ArtistActions.top-tracks-bulk-action(id);
                 }
             }
+            if ArtistState.top-tracks-multi-select
+                && ArtistState.top-tracks.length > 0: Rectangle { height: 10px; }
 
             for track[index] in ArtistState.top-tracks: TrackRow {
                 visible: root.top-tracks-expanded || index < root.top-tracks-preview;
@@ -525,7 +575,7 @@ export component ArtistPageView inherits Rectangle {
                 // Artist Popular Tracks: number cell (no cover), with
                 // the multi-select checkbox.
                 show-artwork: false;
-                multi-select-mode: root.multi-select-mode;
+                multi-select-mode: ArtistState.top-tracks-multi-select;
                 media-action(kind, id, action) => {
                     root.media-action(kind, id, action);
                 }
@@ -587,19 +637,6 @@ export component ArtistPageView inherits Rectangle {
         }   // close page VerticalLayout
     }   // close Flickable
 
-    // Shared scrollbar in the right gutter (homologated cross-view).
-    // Hidden while the network sidebar is open — that panel pins to the
-    // same right edge and carries its own scroll, so the page scrollbar
-    // there would overlap it.
-    if !NetworkSidebarState.open: ListScrollbar {
-        x: parent.width - self.width - 4px;
-        width: 14px;
-        height: 100%;
-        viewport-height: page-flickable.viewport-height;
-        visible-height: page-flickable.height;
-        viewport-y <=> page-flickable.viewport-y;
-    }
-
     // --- Sticky JUMP TO bar -------------------------------------------------
     // Overlay anchored to the top of ArtistPageView with the same
     // sticky math as the sidebar: tracks the page scroll until the
@@ -645,6 +682,21 @@ export component ArtistPageView inherits Rectangle {
         search-text-edited(query) => {
             ArtistActions.search(query);
         }
+    }
+
+    // Shared scrollbar in the right gutter (homologated cross-view).
+    // Declared AFTER the sticky JUMP TO bar so it paints ON TOP of it —
+    // the full-width jump bar was overlapping the scrollbar. Still BELOW
+    // the modals/dialogs below (those must stay on top). Hidden while the
+    // network sidebar is open — that panel pins to the same right edge and
+    // carries its own scroll.
+    if !NetworkSidebarState.open: ListScrollbar {
+        x: parent.width - self.width - 4px;
+        width: 14px;
+        height: 100%;
+        viewport-height: page-flickable.viewport-height;
+        visible-height: page-flickable.height;
+        viewport-y <=> page-flickable.viewport-y;
     }
 
         // Network sidebar — overlay anchored to the right edge of the

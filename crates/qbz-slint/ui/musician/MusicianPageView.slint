@@ -147,7 +147,9 @@ export component MusicianPageView inherits Rectangle {
                     Text {
                         text: MusicianState.name;
                         color: Theme.text-primary;
-                        font-size: Typography.title;
+                        // Hero homologated to the canonical 18px (section), like
+                        // the Album / Artist / Playlist / MyQBZ detail heroes.
+                        font-size: Typography.section;
                         font-weight: Typography.bold;
                     }
                     Text {

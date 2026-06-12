@@ -16,7 +16,12 @@ export component CircleAction inherits Rectangle {
     in property <bool> active: false;
     // While the album's first track is fetching, the icon swaps for a spinner.
     in property <bool> loading: false;
-    in property <length> diameter: 40px;
+    // Homologated header sizing — the size hierarchy lives HERE, not in each
+    // caller: the primary (Play) button is prominent (44px), every secondary
+    // action is 80% of the old 40px default (32px). Callers no longer set
+    // `diameter` for header buttons; an explicit override is only for special
+    // contexts (e.g. a small card-overlay play).
+    in property <length> diameter: root.primary ? 44px : 32px;
     // When false the button dims and the click is gated (e.g. an empty
     // collection's hero CTAs). Additive — existing callers default to enabled.
     in property <bool> enabled: true;
@@ -38,8 +43,10 @@ export component CircleAction inherits Rectangle {
 
     if !root.loading: QbzIcon {
         source: root.icon;
-        width: root.primary ? 19px : 17px;
-        height: root.primary ? 19px : 17px;
+        // Glyph scales with the tier so the smaller secondary buttons don't
+        // look icon-heavy (primary keeps the larger 19px glyph).
+        width: root.primary ? 19px : 15px;
+        height: root.primary ? 19px : 15px;
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.active

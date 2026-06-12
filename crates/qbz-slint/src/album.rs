@@ -10,7 +10,7 @@ use std::sync::Arc;
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
 use qbz_models::{Album, Track};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::{AlbumState, TrackItem, AppWindow};
 
@@ -19,6 +19,11 @@ thread_local! {
     /// track search can filter against it without a re-fetch. UI thread
     /// only, hence `thread_local`.
     static FULL_TRACKS: RefCell<Vec<TrackItem>> = RefCell::new(Vec::new());
+    /// The current album's RAW catalog tracks (qbz_models::Track), kept so
+    /// the multi-select bulk actions (enqueue / cache) can resolve the
+    /// selected rows to full Track objects without a re-fetch — mirrors the
+    /// `play` Vec the favorites tab keeps. UI thread only.
+    static PLAY_TRACKS: RefCell<Vec<Track>> = RefCell::new(Vec::new());
 }
 
 /// Plain, `Send` album data produced on the worker thread.
@@ -29,6 +34,11 @@ pub struct AlbumData {
     pub artist_id: String,
     /// Pre-formatted "year • label • genre • N tracks • duration".
     pub info_line: String,
+    /// Meta-line segment BEFORE the label (the year) — rendered with the
+    /// label as a clickable link in the header.
+    pub meta_pre: String,
+    /// Meta-line segment AFTER the label (genre • N tracks • duration).
+    pub meta_post: String,
     pub quality_tier: String,
     /// "24-bit / 96 kHz" — the quality-badge detail line.
     pub quality_detail: String,
@@ -36,6 +46,8 @@ pub struct AlbumData {
     pub description: String,
     /// Short, truncated description for the header (full text in a modal).
     pub description_short: String,
+    /// Half-length truncation used when the content area is space-constrained.
+    pub description_shorter: String,
     pub artwork_url: String,
     /// Record label name, for the sidebar (empty when unknown).
     pub label: String,
@@ -44,7 +56,12 @@ pub struct AlbumData {
     pub label_id: String,
     /// Editorial award names, for the sidebar.
     pub awards: Vec<String>,
+    /// True when the album bundles a downloadable booklet/liner-notes PDF
+    /// (Qobuz goodies) — gates the header booklet button.
+    pub has_booklet: bool,
     pub tracks: Vec<TrackData>,
+    /// Raw catalog tracks, kept for the multi-select bulk actions.
+    pub raw_tracks: Vec<Track>,
 }
 
 pub struct TrackData {
@@ -89,23 +106,49 @@ fn map_album(album: Album) -> AlbumData {
         .unwrap_or("")
         .to_string();
 
-    let mut parts: Vec<String> = Vec::new();
+    // Meta line, split around the label so the header can render the label
+    // as a clickable link (Tauri's `date • [label] • genre • N tracks •
+    // duration`). `meta_pre` = the segment before the label (the year);
+    // `meta_post` = everything after (genre / tracks / duration). The full
+    // `info_line` (label inlined as plain text) stays the fallback for when
+    // there is no label id to navigate to.
+    let label_name = album
+        .label
+        .as_ref()
+        .filter(|l| !l.name.is_empty())
+        .map(|l| l.name.clone());
+    let genre_str = album
+        .genre
+        .as_ref()
+        .filter(|g| !g.name.is_empty())
+        .map(|g| g.name.clone());
+    let tracks_str = album.tracks_count.map(|count| format!("{count} tracks"));
+    let duration_str = album.duration.map(format_duration);
+
+    let mut pre_parts: Vec<String> = Vec::new();
     if !year.is_empty() {
-        parts.push(year);
+        pre_parts.push(year.clone());
     }
-    if let Some(label) = album.label.as_ref().filter(|l| !l.name.is_empty()) {
-        parts.push(label.name.clone());
+    let mut post_parts: Vec<String> = Vec::new();
+    if let Some(g) = &genre_str {
+        post_parts.push(g.clone());
     }
-    if let Some(genre) = album.genre.as_ref().filter(|g| !g.name.is_empty()) {
-        parts.push(genre.name.clone());
+    if let Some(tc) = &tracks_str {
+        post_parts.push(tc.clone());
     }
-    if let Some(count) = album.tracks_count {
-        parts.push(format!("{count} tracks"));
+    if let Some(d) = &duration_str {
+        post_parts.push(d.clone());
     }
-    if let Some(duration) = album.duration {
-        parts.push(format_duration(duration));
+
+    let meta_pre = pre_parts.join("   •   ");
+    let meta_post = post_parts.join("   •   ");
+
+    let mut all_parts = pre_parts.clone();
+    if let Some(l) = &label_name {
+        all_parts.push(l.clone());
     }
-    let info_line = parts.join("   •   ");
+    all_parts.extend(post_parts.clone());
+    let info_line = all_parts.join("   •   ");
 
     let quality_tier = tier(album.maximum_bit_depth).to_string();
     let quality_detail = crate::quality::detail(album.maximum_bit_depth, album.maximum_sampling_rate);
@@ -118,6 +161,8 @@ fn map_album(album: Album) -> AlbumData {
     // artwork, so a longer truncation keeps it from looking like a thin
     // strip; the Read more modal still holds the complete text.
     let description_short = truncate_words(&description, 360);
+    // Half the cutoff for the space-constrained layout (tracks get priority).
+    let description_shorter = truncate_words(&description, 180);
     let artwork_url = album.image.best().cloned().unwrap_or_default();
     let label = album
         .label
@@ -137,13 +182,17 @@ fn map_album(album: Album) -> AlbumData {
         .map(|a| a.name.clone())
         .filter(|n| !n.is_empty())
         .collect();
-    let tracks = album
+    // Booklet present when the album carries any goody with a usable URL.
+    let has_booklet = album
+        .goodies
+        .as_deref()
+        .map(|goodies| goodies.iter().any(|g| !g.url.is_empty()))
+        .unwrap_or(false);
+    let raw_tracks: Vec<Track> = album
         .tracks
         .map(|container| container.items)
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_track)
-        .collect();
+        .unwrap_or_default();
+    let tracks = raw_tracks.iter().cloned().map(map_track).collect();
 
     AlbumData {
         id: album.id,
@@ -151,15 +200,20 @@ fn map_album(album: Album) -> AlbumData {
         artist,
         artist_id,
         info_line,
+        meta_pre,
+        meta_post,
         quality_tier,
         quality_detail,
         description,
         description_short,
+        description_shorter,
         artwork_url,
         label,
         label_id,
         awards,
+        has_booklet,
         tracks,
+        raw_tracks,
     }
 }
 
@@ -282,16 +336,34 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
     state.set_artist(data.artist.into());
     state.set_artist_id(data.artist_id.into());
     state.set_info_line(data.info_line.into());
+    state.set_meta_pre(data.meta_pre.into());
+    state.set_meta_post(data.meta_post.into());
     state.set_quality_tier(data.quality_tier.into());
     state.set_quality_detail(data.quality_detail.into());
     state.set_description(data.description.into());
     state.set_description_short(data.description_short.into());
+    state.set_description_shorter(data.description_shorter.into());
     state.set_label(data.label.into());
     state.set_label_id(data.label_id.into());
     state.set_awards(ModelRc::new(VecModel::from(awards)));
+    state.set_has_booklet(data.has_booklet);
+    // Fully cached = every track already has a ready (3) offline copy. Kept
+    // live afterwards by set_row_cache_status as downloads complete.
+    let album_fully_cached =
+        !tracks.is_empty() && tracks.iter().all(|t| t.cache_status == 3);
+    state.set_album_fully_cached(album_fully_cached);
+    // Seed the header heart from the favorite-album cache (kept in sync with
+    // the server at login + on every toggle).
+    state.set_is_favorite(crate::fav_cache::is_album_favorite(album_id.as_str()));
+    state.set_favorite_loading(false);
 
-    // Keep the unfiltered list for the track search, then show it all.
+    // Keep the unfiltered list for the track search + the raw tracks for the
+    // multi-select bulk actions, then show them all.
     FULL_TRACKS.with(|cell| *cell.borrow_mut() = tracks.clone());
+    PLAY_TRACKS.with(|cell| *cell.borrow_mut() = data.raw_tracks);
+    // A freshly loaded album starts out of select mode with nothing selected.
+    state.set_multi_select(false);
+    state.set_selected_count(0);
     state.set_tracks(ModelRc::new(VecModel::from(tracks)));
 }
 
@@ -320,12 +392,101 @@ pub fn filter_tracks(window: &AppWindow, query: &str) {
 /// album so the previous one does not flash).
 pub fn reset_album(window: &AppWindow) {
     FULL_TRACKS.with(|cell| cell.borrow_mut().clear());
+    PLAY_TRACKS.with(|cell| cell.borrow_mut().clear());
     let state = window.global::<AlbumState>();
+    state.set_multi_select(false);
+    state.set_selected_count(0);
     state.set_tracks(ModelRc::new(VecModel::from(Vec::<TrackItem>::new())));
     state.set_artwork(slint::Image::default());
+    // Clear the booklet gate so the previous album's value doesn't linger.
+    state.set_has_booklet(false);
+    state.set_album_fully_cached(false);
+    state.set_is_favorite(false);
+    state.set_favorite_loading(false);
     // Default to a Qobuz album; the local-album loader opts in.
     state.set_is_local(false);
     state.set_loading(true);
+}
+
+// ==================== Multi-select (track selection) ====================
+
+/// Toggle multi-select mode on the album track list. Leaving the mode
+/// clears any current selection.
+pub fn set_multi_select(window: &AppWindow, on: bool) {
+    let state = window.global::<AlbumState>();
+    state.set_multi_select(on);
+    if !on {
+        clear_selection(window);
+    }
+}
+
+/// Recompute the "N selected" count from the track rows.
+pub fn recount_selected(window: &AppWindow) {
+    let state = window.global::<AlbumState>();
+    let model = state.get_tracks();
+    let count = (0..model.row_count())
+        .filter(|&i| model.row_data(i).map(|t| t.selected).unwrap_or(false))
+        .count();
+    state.set_selected_count(count as i32);
+}
+
+/// Select every row, or clear if all are already selected (the toggle the
+/// "Select all" bulk button drives — same semantics as the favorites bar).
+pub fn select_all(window: &AppWindow) {
+    let model = window.global::<AlbumState>().get_tracks();
+    let total = model.row_count();
+    let selected = (0..total)
+        .filter(|&i| model.row_data(i).map(|t| t.selected).unwrap_or(false))
+        .count();
+    let target = selected != total;
+    for i in 0..total {
+        if let Some(mut item) = model.row_data(i) {
+            if item.selected != target {
+                item.selected = target;
+                model.set_row_data(i, item);
+            }
+        }
+    }
+    recount_selected(window);
+}
+
+/// Clear the selection (uncheck all), keeping multi-select mode on.
+pub fn clear_selection(window: &AppWindow) {
+    let model = window.global::<AlbumState>().get_tracks();
+    for i in 0..model.row_count() {
+        if let Some(mut item) = model.row_data(i) {
+            if item.selected {
+                item.selected = false;
+                model.set_row_data(i, item);
+            }
+        }
+    }
+    window.global::<AlbumState>().set_selected_count(0);
+}
+
+/// The catalog ids of the currently selected rows (for add-to-playlist /
+/// add-to-favorites — Qobuz catalog ids only).
+pub fn selected_ids(window: &AppWindow) -> Vec<String> {
+    let model = window.global::<AlbumState>().get_tracks();
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .filter(|t| t.selected)
+        .map(|t| t.id.to_string())
+        .filter(|s| s.parse::<u64>().is_ok())
+        .collect()
+}
+
+/// The full catalog Track objects for the selected rows (for enqueue /
+/// cache), resolved from the stashed raw album tracks by id.
+pub fn selected_play_tracks(window: &AppWindow) -> Vec<Track> {
+    let ids: std::collections::HashSet<String> = selected_ids(window).into_iter().collect();
+    PLAY_TRACKS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .filter(|t| ids.contains(&t.id.to_string()))
+            .cloned()
+            .collect()
+    })
 }
 
 /// Apply decoded header artwork pixels. Runs on the Slint event loop.

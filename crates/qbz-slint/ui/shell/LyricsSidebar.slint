@@ -23,7 +23,7 @@ import { IconButton } from "../primitives/BarControls.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { LyricsLinesView } from "LyricsLinesView.slint";
 import { LyricsControlsPanel } from "LyricsControlsFlyout.slint";
-import { ShellState, LyricsState } from "../state.slint";
+import { ShellState, LyricsState, ArtworkActions } from "../state.slint";
 
 component CloseButton inherits Rectangle {
     callback clicked();
@@ -198,12 +198,43 @@ export component LyricsSidebar inherits Rectangle {
                 || (LyricsState.status == 2 && LyricsState.lines.length == 0): VerticalLayout {
                 alignment: center;
                 padding: Spacing.md;
+                spacing: 12px;
                 Text {
                     text: @tr("No lyrics available");
                     color: Theme.text-muted;
                     font-size: Typography.legal;
                     horizontal-alignment: center;
                     wrap: word-wrap;
+                }
+                // Crowd-source nudge — LRCLIB is community-contributed, so a
+                // miss is an invitation to add them. Small, with a clickable
+                // link to the LRCLIB submission tool.
+                VerticalLayout {
+                    spacing: 2px;
+                    Text {
+                        text: @tr("Missing lyrics? You can contribute them to LRCLIB:");
+                        color: Theme.text-muted;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        link-ta := TouchArea {
+                            width: link-text.preferred-width;
+                            height: link-text.preferred-height;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ArtworkActions.open-in-browser("https://lrclibup.boidu.dev/");
+                            }
+                            link-text := Text {
+                                text: "lrclibup.boidu.dev";
+                                color: link-ta.has-hover ? Theme.accent-hover : Theme.accent;
+                                font-size: 10px;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -263,6 +294,33 @@ export component LyricsSidebar inherits Rectangle {
                 active-color: LyricsState.use-custom-color
                     ? LyricsState.custom-color
                     : Theme.accent;
+            }
+        }
+
+        // Source attribution — a tiny line pinned at the very bottom, always
+        // shown once lyrics are present (incl. Qobuz). "Lyrics source:" in
+        // muted + the provider name in accent. Smallest legible size.
+        if LyricsState.status == 2 && LyricsState.lines.length > 0: HorizontalLayout {
+            alignment: start;
+            padding-left: Spacing.sm;
+            padding-right: Spacing.sm;
+            padding-top: 3px;
+            padding-bottom: 5px;
+            spacing: 3px;
+            Text {
+                text: @tr("Lyrics source") + ":";
+                color: Theme.text-muted;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: LyricsState.provider == "lrclib" ? "LRCLIB"
+                    : LyricsState.provider == "ovh" ? "lyrics.ovh"
+                    : "Qobuz";
+                color: Theme.accent;
+                font-size: 9px;
+                font-weight: Typography.semibold;
+                vertical-alignment: center;
             }
         }
     }

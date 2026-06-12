@@ -1371,6 +1371,12 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         // peer's track (Q7). Fire-and-forget; the stale-response guard (F2)
         // lives in `lyrics::on_track_changed`.
         crate::lyrics::on_track_changed(weak.clone(), &track);
+        // Warm the NEXT queued track's lyrics in the background so the panel is
+        // instant when it becomes current (cache-only; no UI). Generated here
+        // because Tauri only ever fetches the CURRENT track.
+        if let Some(next) = runtime.core().queue().read().await.peek_next() {
+            crate::lyrics::prefetch_lyrics(&next);
+        }
         let notify_meta = qbz_media_controls::NotificationMeta {
             title: title.clone(),
             artist: artist.clone(),
@@ -1732,6 +1738,93 @@ pub fn play_artist_top_tracks(
         let Some(tracks) = fetch_artist_top_for_play(&runtime, &weak, &artist_id).await else {
             return;
         };
+        let start_track_id = tracks[0].id;
+        set_now_playing_context(&weak, "artist", &artist_id);
+        runtime.core().set_queue(tracks, Some(0)).await;
+        after_track_change(&runtime, &weak, start_track_id).await;
+        refresh_sidebar(true);
+    });
+}
+
+/// Enqueue (play-next or append) a subset of the artist's Popular tracks,
+/// identified by catalog id. Re-fetches the page (like the play-all path),
+/// filters to `ids`, preserves the page order, and queues — QConnect-aware
+/// (mirrors `enqueue_queue_tracks`). Drives both the bulk bar (selection)
+/// and the section "more" menu (all ids).
+pub fn enqueue_artist_top_selected(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    artist_id: String,
+    ids: Vec<String>,
+    next: bool,
+) {
+    if ids.is_empty() {
+        return;
+    }
+    handle.spawn(async move {
+        let Some(all) = fetch_artist_top_for_play(&runtime, &weak, &artist_id).await else {
+            return;
+        };
+        let want: std::collections::HashSet<u64> =
+            ids.iter().filter_map(|s| s.parse::<u64>().ok()).collect();
+        let tracks: Vec<QueueTrack> =
+            all.into_iter().filter(|qt| want.contains(&qt.id)).collect();
+        if tracks.is_empty() {
+            return;
+        }
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
+            let handled = if next {
+                svc.play_next_batch_on_peer_if_active(&routed).await
+            } else {
+                svc.add_to_queue_batch_on_peer_if_active(&routed).await
+            };
+            if handled {
+                return;
+            }
+        }
+        if next {
+            for track in tracks.into_iter().rev() {
+                runtime.core().add_track_next(track).await;
+            }
+        } else {
+            runtime.core().add_tracks(tracks).await;
+        }
+        refresh_sidebar(false);
+        crate::toast::success_weak(&weak, if next { "Playing next" } else { "Added to queue" });
+    });
+}
+
+/// Shuffle-play ALL of the artist's Popular tracks (section "more" menu).
+/// Re-fetches, xorshift-shuffles (same seedless mix as `play_album_shuffled`),
+/// and replaces the queue.
+pub fn play_artist_top_shuffled(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    artist_id: String,
+) {
+    handle.spawn(async move {
+        let Some(mut tracks) = fetch_artist_top_for_play(&runtime, &weak, &artist_id).await else {
+            return;
+        };
+        if tracks.is_empty() {
+            return;
+        }
+        let mut seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1)
+            | 1;
+        for i in (1..tracks.len()).rev() {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let j = (seed % (i as u64 + 1)) as usize;
+            tracks.swap(i, j);
+        }
         let start_track_id = tracks[0].id;
         set_now_playing_context(&weak, "artist", &artist_id);
         runtime.core().set_queue(tracks, Some(0)).await;

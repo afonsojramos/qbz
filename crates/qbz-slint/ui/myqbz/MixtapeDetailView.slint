@@ -701,11 +701,14 @@ export component MixtapeDetailView inherits Rectangle {
                         font-weight: Typography.semibold;
                         letter-spacing: 1.2px;
                     }
-                    // Title — canonical hero title size (Album/Playlist heroes).
+                    // Title — canonical hero size, homologated to the Album /
+                    // Artist / Playlist detail heroes (Typography.section, 18px).
+                    // Was Typography.title (25px) despite this comment already
+                    // claiming Album/Playlist parity — a homologation bug.
                     Text {
                         text: MyQbzDetailState.name;
                         color: Theme.text-primary;
-                        font-size: Typography.title;
+                        font-size: Typography.section;
                         font-weight: Typography.bold;
                         wrap: word-wrap;
                     }
@@ -737,7 +740,6 @@ export component MixtapeDetailView inherits Rectangle {
                         CircleAction {
                             icon: @image-url("../assets/icons/play-fill.svg");
                             primary: true;
-                            diameter: 44px;
                             enabled: MyQbzDetailState.item-count > 0;
                             clicked => { MyQbzDetailActions.play-all(); }
                         }
@@ -746,7 +748,6 @@ export component MixtapeDetailView inherits Rectangle {
                             alignment: center;
                             CircleAction {
                                 icon: @image-url("../assets/icons/shuffle.svg");
-                                diameter: 40px;
                                 enabled: MyQbzDetailState.item-count > 0;
                                 clicked => { MyQbzDetailActions.shuffle(); }
                             }
@@ -757,7 +758,6 @@ export component MixtapeDetailView inherits Rectangle {
                             alignment: center;
                             CircleAction {
                                 icon: @image-url("../assets/icons/turntable.svg");
-                                diameter: 40px;
                                 enabled: MyQbzDetailState.item-count > 0;
                                 clicked => { MyQbzDetailActions.dj-mix(); }
                             }
@@ -766,16 +766,15 @@ export component MixtapeDetailView inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             overflow-anchor := Rectangle {
-                                width: 40px;
-                                height: 40px;
+                                width: 32px;
+                                height: 32px;
                                 CircleAction {
                                     icon: @image-url("../assets/icons/ellipsis.svg");
-                                    diameter: 40px;
                                     clicked => { overflow-menu.show(); }
                                 }
                                 overflow-menu := PopupWindow {
                                     x: 0;
-                                    y: 44px;
+                                    y: 36px;
                                     width: 220px;
                                     // Explicit height (same fix as row-menu) sized
                                     // to the MAX item set: 7 items (32px) + 2
@@ -1245,12 +1244,12 @@ export component MixtapeDetailView inherits Rectangle {
             width: 100%;
             selected-count: MyQbzDetailState.selected-count;
             actions: [
-                { id: "add-to-queue", label: @tr("Add to queue"), danger: false, needs-selection: true },
-                { id: "play-next", label: @tr("Play next"), danger: false, needs-selection: true },
-                { id: "add-to-playlist", label: @tr("Add to playlist"), danger: false, needs-selection: true },
-                { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), danger: false, needs-selection: true },
-                { id: "remove-selected", label: @tr("Remove"), danger: true, needs-selection: true },
-                { id: "clear", label: @tr("Clear"), danger: false, needs-selection: true },
+                { id: "add-to-queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
+                { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+                { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
+                { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), icon: @image-url("../assets/icons/cassette-tape.svg"), danger: false, needs-selection: true },
+                { id: "remove-selected", label: @tr("Remove"), icon: @image-url("../assets/icons/trash-2.svg"), danger: true, needs-selection: true },
+                { id: "clear", label: @tr("Clear"), icon: @image-url("../assets/icons/x.svg"), danger: false, needs-selection: true },
             ];
             action(id) => {
                 MyQbzDetailActions.bulk-action(id);

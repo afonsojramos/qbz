@@ -17,12 +17,16 @@ export component IconButton inherits Rectangle {
     // Footprint width; the right-cluster buttons are narrower (28) than the
     // transport (32) so they pack tighter.
     in property <length> btn-width: 32px;
+    // Disabled (e.g. transport with nothing playing) — dimmed + non-clickable,
+    // 1:1 with Tauri's `.disabled` controls (opacity 0.3).
+    in property <bool> enabled: true;
     callback clicked();
 
     width: root.btn-width;
     height: 32px;
     border-radius: Radius.sm;
-    background: ta.has-hover ? Theme.surface-hover : transparent;
+    opacity: root.enabled ? 1.0 : 0.3;
+    background: (ta.has-hover && root.enabled) ? Theme.surface-hover : transparent;
 
     QbzIcon {
         source: root.icon;
@@ -37,12 +41,14 @@ export component IconButton inherits Rectangle {
     }
 
     ta := TouchArea {
-        mouse-cursor: pointer;
+        mouse-cursor: root.enabled ? pointer : default;
         clicked => {
-            root.clicked();
+            if (root.enabled) {
+                root.clicked();
+            }
         }
         changed has-hover => {
-            if (self.has-hover && root.tooltip != "") {
+            if (self.has-hover && root.enabled && root.tooltip != "") {
                 TooltipState.text = root.tooltip;
                 TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
                 TooltipState.anchor-y = root.absolute-position.y;
@@ -64,14 +70,17 @@ export component PlayButton inherits Rectangle {
     // While a play is resolving/downloading (no audio yet) the glyph is
     // swapped for a spinner so the click reads as "heard, audio is coming".
     in property <bool> loading: false;
+    // Disabled when there is nothing to play (no current track).
+    in property <bool> enabled: true;
     callback clicked();
 
     width: root.circle ? 38px : 34px;
     height: root.circle ? 38px : 34px;
     border-radius: root.circle ? 19px : Radius.sm;
+    opacity: root.enabled ? 1.0 : 0.3;
     background: root.circle
-        ? (ta.has-hover ? #ffffffd6 : #ffffff)
-        : (ta.has-hover ? Theme.surface-hover : transparent);
+        ? ((ta.has-hover && root.enabled) ? #ffffffd6 : #ffffff)
+        : ((ta.has-hover && root.enabled) ? Theme.surface-hover : transparent);
 
     if !root.loading: QbzIcon {
         source: root.icon;
@@ -94,12 +103,14 @@ export component PlayButton inherits Rectangle {
     }
 
     ta := TouchArea {
-        mouse-cursor: pointer;
+        mouse-cursor: root.enabled ? pointer : default;
         clicked => {
-            root.clicked();
+            if (root.enabled) {
+                root.clicked();
+            }
         }
         changed has-hover => {
-            if (self.has-hover && root.tooltip != "") {
+            if (self.has-hover && root.enabled && root.tooltip != "") {
                 TooltipState.text = root.tooltip;
                 TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
                 TooltipState.anchor-y = root.absolute-position.y;

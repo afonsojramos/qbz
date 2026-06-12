@@ -253,7 +253,9 @@ export component TrackRow inherits Rectangle {
                 // Wide enough for 4-digit positions (big playlists).
                 width: 32px;
                 color: Theme.text-muted;
-                font-size: Typography.body;
+                // Secondary column — must read SMALLER than the track title
+                // (Typography.link, 14px), not bigger. Was Typography.body (15px).
+                font-size: Typography.legal;
                 horizontal-alignment: center;
                 overflow: elide;
             }
@@ -342,10 +344,25 @@ export component TrackRow inherits Rectangle {
             alignment: center;
             horizontal-stretch: 1;
             spacing: 2px;
-            HorizontalLayout {
-                alignment: start;
-                spacing: 6px;
-                Text {
+            // Title line — femtovg measures some scripts' runs at ~0 (Korean
+            // at Typography.link; Japanese measures fine), so NOTHING about
+            // this line may be content-measured or the line collapses and the
+            // glyphs have nowhere to paint. The first failed fix assigned the
+            // WIDTH (stretch Rectangle) but missed that `alignment: center`
+            // on this column sizes each line to its preferred HEIGHT — the
+            // Korean line still collapsed to ~0 tall and its `clip: true`
+            // erased the glyphs. SongCard parity (the one surface where
+            // Korean renders): a plain Rectangle direct in the column, NO
+            // clip, Text width assigned — plus a FIXED height here, so both
+            // axes are layout-assigned and measurement is never trusted.
+            title-line := Rectangle {
+                height: 20px;
+                title-text := Text {
+                    x: 0;
+                    // Reserve the badge slot (16px + 6px gap) when explicit
+                    // so the elide stops before the badge, never under it.
+                    width: parent.width - (root.track.explicit ? 22px : 0px);
+                    height: 100%;
                     text: root.track.title;
                     color: Theme.text-primary;
                     font-size: Typography.link;
@@ -353,21 +370,31 @@ export component TrackRow inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                 }
-                if root.track.explicit: VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 16px;
-                        height: 16px;
-                        border-radius: 3px;
-                        background: Theme.surface-elevated;
-                        Text {
-                            text: "E";
-                            color: Theme.text-muted;
-                            font-size: 9px;
-                            font-weight: Typography.semibold;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
+                // Explicit "E" badge — hugs the END of the title text (Tauri's
+                // .track-title-row: flex, gap 6px, badge flex-shrink:0), not
+                // the column's far right. preferred-width is only used to
+                // POSITION the badge (the title's own width stays assigned,
+                // so a bogus ~0 measurement can't blank it); when the run
+                // measures ~0 with a non-empty title (the femtovg Korean
+                // case), hugging is impossible, so the badge parks in the
+                // right-edge slot the title width already reserves.
+                if root.track.explicit: Rectangle {
+                    x: (root.track.title != "" && title-text.preferred-width < 1px)
+                        ? title-text.width + 6px
+                        : Math.min(title-text.preferred-width + 6px,
+                                   title-text.width + 6px);
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                    width: 16px;
+                    height: 16px;
+                    border-radius: 3px;
+                    background: Theme.surface-elevated;
+                    Text {
+                        text: "E";
+                        color: Theme.text-muted;
+                        font-size: 9px;
+                        font-weight: Typography.semibold;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
                     }
                 }
             }
@@ -433,7 +460,10 @@ export component TrackRow inherits Rectangle {
             text: root.track.duration;
             width: 70px;
             color: Theme.text-muted;
-            font-size: Typography.body;
+            // Secondary metadata — must read SMALLER than the track title
+            // (Typography.link, 14px), not bigger. Was Typography.body (15px),
+            // which made the duration larger than the title — illogical.
+            font-size: Typography.legal;
             horizontal-alignment: center;
             vertical-alignment: center;
         }

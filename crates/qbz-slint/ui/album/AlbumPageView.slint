@@ -9,7 +9,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
-import { AlbumState, AlbumActions, ArtworkActions, NavState, ContentView, DragState, NowPlayingState } from "../state.slint";
+import { AlbumState, AlbumActions, ArtworkActions, NavState, ContentView, DragState, NowPlayingState, ShellState, TooltipState } from "../state.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
@@ -17,50 +17,57 @@ import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { TrackPlayCell } from "../primitives/TrackPlayCell.slint";
 import { TrackContextMenu } from "../primitives/TrackContextMenu.slint";
+import { AlbumContextMenu } from "../primitives/AlbumContextMenu.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
+import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 
 // One label/award entry in the album sidebar — a round gradient avatar
-// and a name.
+// and a name. In `compact` mode the name is dropped (the rail is an
+// icon-only strip) and shown in a hover tooltip instead.
 component SidebarCard inherits Rectangle {
     in property <image> icon;
     in property <string> name;
     in property <brush> avatar-bg;
+    in property <bool> compact: false;
     callback clicked();
 
-    height: 56px;
+    height: 48px;
     border-radius: Radius.sm;
     background: ta.has-hover ? Theme.surface-hover : transparent;
 
     HorizontalLayout {
-        padding: 8px;
+        padding: 6px;
         spacing: 10px;
+        alignment: root.compact ? center : start;
         VerticalLayout {
             alignment: center;
             Rectangle {
-                width: 36px;
-                height: 36px;
-                border-radius: 18px;
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
                 background: root.avatar-bg;
                 QbzIcon {
                     source: root.icon;
-                    width: 18px;
-                    height: 18px;
+                    width: 13px;
+                    height: 13px;
                     x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                     y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: #ffffff;
                 }
             }
         }
-        VerticalLayout {
+        if !root.compact: VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
             Text {
                 text: root.name;
                 color: Theme.text-secondary;
-                font-size: Typography.link;
+                // -2pts vs the Typography.link (14px) base — the label/award
+                // NAME is what needed trimming, not the LABEL/AWARDS heading.
+                font-size: 12px;
                 font-weight: Typography.medium;
                 wrap: word-wrap;
             }
@@ -69,6 +76,17 @@ component SidebarCard inherits Rectangle {
 
     ta := TouchArea {
         mouse-cursor: pointer;
+        // Compact rail: the name lives in a hover tooltip.
+        changed has-hover => {
+            if (self.has-hover && root.compact && root.name != "") {
+                TooltipState.text = root.name;
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else if (!self.has-hover) {
+                TooltipState.show = false;
+            }
+        }
         clicked => {
             root.clicked();
         }
@@ -88,10 +106,27 @@ export component AlbumPageView inherits Rectangle {
 
     // Whether the full-description modal is open.
     property <bool> show-description: false;
+    // Header description picks the SHORTER cutoff when the content area is
+    // space-constrained (window <1366 AND a right panel open), so the tracks
+    // keep priority; back to the full short text when there's room.
+    property <string> desc-display:
+        ShellState.content-constrained
+            ? AlbumState.description-shorter
+            : AlbumState.description-short;
 
     background: Theme.surface-main;
 
     flick := Flickable {
+        // Full-width: the gradient + page background bleed edge-to-edge so
+        // there is no dark right gutter. Content stays clear of the scrollbar
+        // via the page's 32px right padding — the scrollbar lives in the
+        // outer 18px (parent.width-18 .. parent.width-4), and every text /
+        // track / label-rail child ends at parent.width-32, a 14px gap, so
+        // nothing paints under it. The gradient is the only thing reaching
+        // the edge, which is exactly the desired full-bleed colour. (The
+        // earlier `parent.width - 20px` clipped the gradient too, leaving an
+        // ugly dark gutter strip on the right.)
+        width: parent.width;
         // Freeze scroll during a track drag so the ghost doesn't drift.
         interactive: !DragState.active;
         viewport-width: self.width;
@@ -262,7 +297,41 @@ export component AlbumPageView inherits Rectangle {
                         }
                     }
                     Rectangle { height: 10px; }
-                    Text {
+                    // Meta line. With a navigable label, render it inline as a
+                    // clickable link (Tauri label-link: meta color, accent on
+                    // hover) between the pre (year) and post (genre • tracks •
+                    // duration) segments. Otherwise the plain full line.
+                    if AlbumState.label-id != "" && AlbumState.label != "": HorizontalLayout {
+                        alignment: start;
+                        spacing: 0px;
+                        Text {
+                            text: AlbumState.meta-pre != "" ? AlbumState.meta-pre + "   •   " : "";
+                            color: Theme.text-secondary;
+                            font-size: Typography.body;
+                            vertical-alignment: center;
+                        }
+                        label-area := TouchArea {
+                            width: label-text.preferred-width;
+                            height: label-text.preferred-height;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.media-action("label", AlbumState.label-id, "open");
+                            }
+                            label-text := Text {
+                                text: AlbumState.label;
+                                color: label-area.has-hover ? Theme.accent : Theme.text-secondary;
+                                font-size: Typography.body;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Text {
+                            text: AlbumState.meta-post != "" ? "   •   " + AlbumState.meta-post : "";
+                            color: Theme.text-secondary;
+                            font-size: Typography.body;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if AlbumState.label-id == "" || AlbumState.label == "": Text {
                         text: AlbumState.info-line;
                         color: Theme.text-secondary;
                         font-size: Typography.body;
@@ -280,13 +349,13 @@ export component AlbumPageView inherits Rectangle {
                         // (not the parent layout) to avoid a binding loop:
                         // page padding 32+32, artwork 224, header gap 32.
                         width: root.width - 320px;
-                        text: AlbumState.description-short;
+                        text: root.desc-display;
                         color: Theme.text-secondary;
                         font-size: Typography.legal;
                         wrap: word-wrap;
                     }
-                    if AlbumState.description != AlbumState.description-short: Rectangle { height: 4px; }
-                    if AlbumState.description != AlbumState.description-short: read-more := TouchArea {
+                    if AlbumState.description != root.desc-display: Rectangle { height: 4px; }
+                    if AlbumState.description != root.desc-display: read-more := TouchArea {
                         width: read-more-row.preferred-width;
                         height: 20px;
                         mouse-cursor: pointer;
@@ -310,7 +379,6 @@ export component AlbumPageView inherits Rectangle {
                         CircleAction {
                             icon: @image-url("../assets/icons/play-fill.svg");
                             primary: true;
-                            diameter: 44px;
                             // Spin only while THIS album's first track is fetching.
                             loading: NowPlayingState.loading
                                 && NowPlayingState.album-id == AlbumState.id;
@@ -341,18 +409,17 @@ export component AlbumPageView inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             CircleAction {
-                                icon: @image-url("../assets/icons/heart.svg");
+                                // Live library state: filled accent heart when
+                                // favorited, outline otherwise; spinner while a
+                                // toggle is in flight. "favorite-toggle" adds or
+                                // removes (the grid hearts stay add-only).
+                                icon: AlbumState.is-favorite
+                                    ? @image-url("../assets/icons/heart-filled.svg")
+                                    : @image-url("../assets/icons/heart.svg");
+                                active: AlbumState.is-favorite;
+                                loading: AlbumState.favorite-loading;
                                 clicked => {
-                                    root.media-action("album", AlbumState.id, "favorite");
-                                }
-                            }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            CircleAction {
-                                icon: @image-url("../assets/icons/cloud-download.svg");
-                                clicked => {
-                                    root.media-action("album", AlbumState.id, "cache");
+                                    root.media-action("album", AlbumState.id, "favorite-toggle");
                                 }
                             }
                         }
@@ -365,16 +432,7 @@ export component AlbumPageView inherits Rectangle {
                                 }
                             }
                         }
-                        VerticalLayout {
-                            alignment: center;
-                            CircleAction {
-                                icon: @image-url("../assets/icons/user.svg");
-                                clicked => {
-                                    root.open-artist(AlbumState.artist-id);
-                                }
-                            }
-                        }
-                        VerticalLayout {
+                        if AlbumState.has-booklet: VerticalLayout {
                             alignment: center;
                             CircleAction { icon: @image-url("../assets/icons/book-open.svg"); }
                         }
@@ -387,13 +445,36 @@ export component AlbumPageView inherits Rectangle {
                                 }
                             }
                         }
+                        // Album info (i) — icon only for now; the detail panel
+                        // logic lands later.
                         VerticalLayout {
                             alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/square-check-big.svg"); }
+                            CircleAction { icon: @image-url("../assets/icons/info.svg"); }
                         }
                         VerticalLayout {
                             alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/ellipsis.svg"); }
+                            Rectangle {
+                                width: 32px;
+                                height: 32px;
+                                CircleAction {
+                                    icon: @image-url("../assets/icons/ellipsis.svg");
+                                    clicked => {
+                                        album-menu.show();
+                                    }
+                                }
+                                // Opens below the ⋯, right edges aligned — the
+                                // button sits at the right end of the action row
+                                // so the menu drops leftward (negative x).
+                                album-menu := AlbumContextMenu {
+                                    x: 32px - self.width;
+                                    y: 38px;
+                                    album-id: AlbumState.id;
+                                    fully-cached: AlbumState.album-fully-cached;
+                                    media-action(k, i, a) => {
+                                        root.media-action(k, i, a);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -410,7 +491,7 @@ export component AlbumPageView inherits Rectangle {
             // No `alignment: start` here: it would defeat the track list's
             // horizontal-stretch and leave the sidebar floating mid-row
             // with dead space to its right. The track list stretches and
-            // the 254px sidebar is pushed flush to the right edge; when a
+            // the 214px sidebar is pushed flush to the right edge; when a
             // main right sidebar opens, the whole content region narrows
             // and the sidebar rides along with it.
             HorizontalLayout {
@@ -454,7 +535,9 @@ export component AlbumPageView inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             Rectangle {
-                                width: 280px;
+                                // 60% of the previous 280px so the toolbar gives
+                                // room to the square select button beside it.
+                                width: 168px;
                                 height: 34px;
                                 border-radius: 6px;
                                 border-width: 1px;
@@ -502,7 +585,62 @@ export component AlbumPageView inherits Rectangle {
                                 }
                             }
                         }
+                        // Multi-select toggle — square (matches the search box,
+                        // not the round CircleActions), slightly smaller. Active
+                        // (accent) while select mode is on; toggles it.
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 30px;
+                                height: 30px;
+                                border-radius: 6px;
+                                border-width: 1px;
+                                border-color: AlbumState.multi-select
+                                    ? Theme.accent
+                                    : Theme.border-subtle;
+                                background: (AlbumState.multi-select || select-ta.has-hover)
+                                    ? Theme.surface-hover
+                                    : Theme.surface-elevated;
+                                QbzIcon {
+                                    source: @image-url("../assets/icons/square-check-big.svg");
+                                    width: 15px;
+                                    height: 15px;
+                                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                                    tint: AlbumState.multi-select
+                                        ? Theme.accent
+                                        : (select-ta.has-hover
+                                            ? Theme.text-primary
+                                            : Theme.text-secondary);
+                                }
+                                select-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        AlbumActions.toggle-multi-select();
+                                    }
+                                }
+                            }
+                        }
                     }
+
+                    // Bulk action bar — visible in multi-select mode, over the
+                    // selected catalog rows.
+                    if AlbumState.multi-select: MultiSelectBar {
+                        selected-count: AlbumState.selected-count;
+                        actions: [
+                            { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
+                            { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+                            { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
+                            { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
+                            { id: "add-to-favorites", label: @tr("Add to favorites"), icon: @image-url("../assets/icons/heart.svg"), danger: false, needs-selection: true },
+                            { id: "make-offline", label: @tr("Make available offline"), icon: @image-url("../assets/icons/cloud-download.svg"), danger: false, needs-selection: true },
+                            { id: "clear", label: @tr("Clear"), icon: @image-url("../assets/icons/x.svg"), danger: false, needs-selection: true },
+                        ];
+                        action(id) => {
+                            AlbumActions.bulk-action(id);
+                        }
+                    }
+                    if AlbumState.multi-select: Rectangle { height: 8px; }
 
                     // Column header.
                     HorizontalLayout {
@@ -519,7 +657,8 @@ export component AlbumPageView inherits Rectangle {
                             vertical-alignment: center;
                         }
                         Text {
-                            text: @tr("TITLE");
+                            // Capital-case to match PlaylistView's column headers.
+                            text: @tr("Title");
                             horizontal-stretch: 1;
                             color: Theme.text-muted;
                             font-size: Typography.legal;
@@ -527,7 +666,8 @@ export component AlbumPageView inherits Rectangle {
                             vertical-alignment: center;
                         }
                         Text {
-                            text: @tr("DURATION");
+                            // Capital-case to match PlaylistView's column headers.
+                            text: @tr("Duration");
                             width: 80px;
                             color: Theme.text-muted;
                             font-size: Typography.legal;
@@ -536,7 +676,8 @@ export component AlbumPageView inherits Rectangle {
                             vertical-alignment: center;
                         }
                         Text {
-                            text: @tr("QUALITY");
+                            // Capital-case to match PlaylistView's column headers.
+                            text: @tr("Quality");
                             width: 80px;
                             color: Theme.text-muted;
                             font-size: Typography.legal;
@@ -585,24 +726,38 @@ export component AlbumPageView inherits Rectangle {
                         show-favorite: !AlbumState.is-local;
                         show-download: !AlbumState.is-local;
                         show-source: AlbumState.is-local;
+                        multi-select-mode: AlbumState.multi-select;
                         media-action(kind, id, action) => {
                             root.media-action(kind, id, action);
                         }
                     }
                 }
 
-                // Label / awards sidebar.
+                // Label / awards sidebar. Collapses to a slim ICON RAIL (56px)
+                // when the content area is space-constrained (window <1366 AND
+                // a right panel open), so the tracks — what matters in a music
+                // app — keep priority. In the rail, only the LABEL/AWARDS
+                // headings + the avatars show; names move to hover tooltips.
                 if AlbumState.label != "" || AlbumState.awards.length > 0: VerticalLayout {
-                    width: 254px;
+                    // 160px (was 214px): the LABEL/AWARDS column was too wide
+                    // and the track TITLE — the most important column — paid
+                    // for it. Narrower here returns that width to the list.
+                    width: ShellState.content-constrained ? 56px : 160px;
                     spacing: 24px;
                     alignment: start;
 
                     if AlbumState.label != "": VerticalLayout {
                         spacing: 8px;
-                        SidebarHeading { text: @tr("LABEL"); }
+                        SidebarHeading {
+                            text: @tr("LABEL");
+                            // Centered over the avatar when collapsed to the
+                            // icon rail; left-aligned in the full column.
+                            horizontal-alignment: ShellState.content-constrained ? center : left;
+                        }
                         SidebarCard {
                             icon: @image-url("../assets/icons/disc.svg");
                             name: AlbumState.label;
+                            compact: ShellState.content-constrained;
                             avatar-bg: @linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
                             clicked => {
                                 if (AlbumState.label-id != "") {
@@ -614,10 +769,14 @@ export component AlbumPageView inherits Rectangle {
 
                     if AlbumState.awards.length > 0: VerticalLayout {
                         spacing: 8px;
-                        SidebarHeading { text: @tr("AWARDS"); }
+                        SidebarHeading {
+                            text: @tr("AWARDS");
+                            horizontal-alignment: ShellState.content-constrained ? center : left;
+                        }
                         for award in AlbumState.awards: SidebarCard {
                             icon: @image-url("../assets/laurels.svg");
                             name: award;
+                            compact: ShellState.content-constrained;
                             avatar-bg: @linear-gradient(135deg, #b45309 0%, #eab308 100%);
                         }
                     }

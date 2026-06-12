@@ -37,6 +37,7 @@ export component TransportControls inherits HorizontalLayout {
         IconButton {
             icon: @image-url("../assets/icons/info.svg");
             tooltip: @tr("Track info");
+            enabled: NowPlayingState.has-track;
             clicked => {
                 if (NowPlayingState.has-track) {
                     root.media-action("track", NowPlayingState.track-id, "track-info");
@@ -51,6 +52,7 @@ export component TransportControls inherits HorizontalLayout {
             icon-size: 16px;
             tooltip: @tr("Shuffle");
             active: NowPlayingState.shuffle;
+            enabled: NowPlayingState.has-track;
             clicked => {
                 NowPlayingState.toggle-shuffle();
             }
@@ -61,6 +63,7 @@ export component TransportControls inherits HorizontalLayout {
         IconButton {
             icon: @image-url("../assets/icons/skip-back.svg");
             tooltip: @tr("Previous");
+            enabled: NowPlayingState.has-track;
             clicked => {
                 NowPlayingState.previous();
             }
@@ -75,6 +78,7 @@ export component TransportControls inherits HorizontalLayout {
                 ? @image-url("../assets/icons/pause.svg")
                 : @image-url("../assets/icons/play-fill.svg");
             tooltip: NowPlayingState.playing ? @tr("Pause") : @tr("Play");
+            enabled: NowPlayingState.has-track;
             clicked => {
                 NowPlayingState.toggle-play();
             }
@@ -85,6 +89,7 @@ export component TransportControls inherits HorizontalLayout {
         IconButton {
             icon: @image-url("../assets/icons/skip-forward.svg");
             tooltip: @tr("Next");
+            enabled: NowPlayingState.has-track;
             clicked => {
                 NowPlayingState.next();
             }
@@ -99,6 +104,7 @@ export component TransportControls inherits HorizontalLayout {
             icon-size: 16px;
             tooltip: @tr("Repeat");
             active: NowPlayingState.repeat-mode != 0;
+            enabled: NowPlayingState.has-track;
             clicked => {
                 NowPlayingState.cycle-repeat();
             }
@@ -115,6 +121,7 @@ export component TransportControls inherits HorizontalLayout {
                 icon: @image-url("../assets/icons/plus.svg");
                 icon-size: 16px;
                 tooltip: @tr("Add to…");
+                enabled: NowPlayingState.has-track;
                 clicked => {
                     add-menu.show();
                 }
@@ -181,6 +188,7 @@ export component TransportControls inherits HorizontalLayout {
             icon: @image-url("../assets/icons/plus.svg");
             icon-size: 16px;
             tooltip: @tr("Add to playlist");
+            enabled: NowPlayingState.has-track;
             clicked => {
                 root.media-action("track", NowPlayingState.track-id, "add-to-playlist");
             }
@@ -193,7 +201,8 @@ export component TransportControls inherits HorizontalLayout {
             width: 32px;
             height: 32px;
             border-radius: Radius.sm;
-            background: fav-ta.has-hover ? Theme.surface-hover : transparent;
+            opacity: NowPlayingState.has-track ? 1.0 : 0.3;
+            background: (fav-ta.has-hover && NowPlayingState.has-track) ? Theme.surface-hover : transparent;
             QbzIcon {
                 source: QueueState.now-playing-favorite
                     ? @image-url("../assets/icons/heart-filled.svg")
@@ -207,12 +216,14 @@ export component TransportControls inherits HorizontalLayout {
                     : (fav-ta.has-hover ? Theme.text-primary : Theme.text-secondary);
             }
             fav-ta := TouchArea {
-                mouse-cursor: pointer;
+                mouse-cursor: NowPlayingState.has-track ? pointer : default;
                 clicked => {
-                    QueueState.toggle-now-playing-favorite();
+                    if (NowPlayingState.has-track) {
+                        QueueState.toggle-now-playing-favorite();
+                    }
                 }
                 changed has-hover => {
-                    if (self.has-hover) {
+                    if (self.has-hover && NowPlayingState.has-track) {
                         TooltipState.text = QueueState.now-playing-favorite
                             ? @tr("Remove from library")
                             : @tr("Add to library");

@@ -587,10 +587,30 @@ fn apply_artwork(
             }
         }
         ArtworkTarget::SearchArtist { idx } => {
-            let model = window.global::<SearchState>().get_artists();
+            let state = window.global::<SearchState>();
+            let model = state.get_artists();
+            let mut artist_id = None;
             if let Some(mut item) = model.row_data(idx) {
-                item.artwork = image;
+                artist_id = Some(item.id.clone());
+                item.artwork = image.clone();
                 model.set_row_data(idx, item);
+            }
+            // The All-tab carousel is a SEPARATE model (`artists_carousel`,
+            // built as a clone with the hero dup dropped), so the artwork
+            // pipeline never reaches it. Mirror the cover into the matching
+            // carousel row by id (indices differ when the artist hero drops
+            // the first entry) so the carousel cards show their images.
+            if let Some(aid) = artist_id {
+                let carousel = state.get_artists_carousel();
+                for i in 0..carousel.row_count() {
+                    if let Some(mut c) = carousel.row_data(i) {
+                        if c.id == aid {
+                            c.artwork = image.clone();
+                            carousel.set_row_data(i, c);
+                            break;
+                        }
+                    }
+                }
             }
         }
         ArtworkTarget::SearchPlaylistCover { idx, slot } => {

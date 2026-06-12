@@ -160,7 +160,6 @@ export component MixView inherits Rectangle {
                         CircleAction {
                             icon: @image-url("../assets/icons/play-fill.svg");
                             primary: true;
-                            diameter: 44px;
                             enabled: MixState.tracks.length > 0;
                             clicked => {
                                 root.play-all();

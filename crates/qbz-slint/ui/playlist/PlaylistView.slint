@@ -77,17 +77,17 @@ export component PlaylistView inherits Rectangle {
     // Play next / Add to queue / Add to playlist over the selection,
     // Remove owner-only — followed playlists keep the queueing actions.
     property <[BulkAction]> bulk-actions-owner: [
-        { id: "select-all", label: @tr("Select all"), danger: false, needs-selection: false },
-        { id: "play-next-selected", label: @tr("Play next"), danger: false, needs-selection: true },
-        { id: "queue-selected", label: @tr("Add to queue"), danger: false, needs-selection: true },
-        { id: "add-selected-to-playlist", label: @tr("Add to playlist"), danger: false, needs-selection: true },
-        { id: "remove-selected", label: @tr("Remove"), danger: true, needs-selection: true },
+        { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
+        { id: "play-next-selected", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+        { id: "queue-selected", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
+        { id: "add-selected-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
+        { id: "remove-selected", label: @tr("Remove"), icon: @image-url("../assets/icons/trash-2.svg"), danger: true, needs-selection: true },
     ];
     property <[BulkAction]> bulk-actions-follower: [
-        { id: "select-all", label: @tr("Select all"), danger: false, needs-selection: false },
-        { id: "play-next-selected", label: @tr("Play next"), danger: false, needs-selection: true },
-        { id: "queue-selected", label: @tr("Add to queue"), danger: false, needs-selection: true },
-        { id: "add-selected-to-playlist", label: @tr("Add to playlist"), danger: false, needs-selection: true },
+        { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
+        { id: "play-next-selected", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+        { id: "queue-selected", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
+        { id: "add-selected-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
     ];
 
     // Label for the active sort field.
@@ -324,7 +324,6 @@ export component PlaylistView inherits Rectangle {
                         CircleAction {
                             icon: @image-url("../assets/icons/play-fill.svg");
                             primary: true;
-                            diameter: 44px;
                             enabled: PlaylistState.tracks.length > 0;
                             clicked => {
                                 root.play-all();
@@ -716,7 +715,9 @@ export component PlaylistView inherits Rectangle {
         width: 44px;
         height: 44px;
         border-radius: 22px;
-        x: parent.width - self.width - 24px;
+        // Clear the right-gutter scrollbar (14px + 4px margin) so the FAB
+        // never sits over it.
+        x: parent.width - self.width - 40px;
         y: parent.height - self.height - 24px;
         background: btt-ta.has-hover ? Theme.accent : Theme.surface-elevated;
         border-width: 1px;

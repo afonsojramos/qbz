@@ -169,7 +169,6 @@ export component LabelPageView inherits Rectangle {
                     HorizontalLayout {
                         alignment: start;
                         CircleAction {
-                            diameter: 44px;
                             active: LabelState.is-following;
                             icon: LabelState.is-following
                                 ? @image-url("../assets/icons/check.svg")
@@ -409,16 +408,6 @@ export component LabelPageView inherits Rectangle {
         }
     }
 
-    // Shared scrollbar in the right gutter (homologated cross-view).
-    ListScrollbar {
-        x: parent.width - self.width - 4px;
-        width: 14px;
-        height: 100%;
-        viewport-height: page-flickable.viewport-height;
-        visible-height: page-flickable.height;
-        viewport-y <=> page-flickable.viewport-y;
-    }
-
     // --- Sticky JUMP TO bar -------------------------------------------------
     // Same sticky math as ArtistPageView: tracks the page scroll until the
     // header scrolls away, then pins to y = 0. No inline search (Tauri's
@@ -436,6 +425,19 @@ export component LabelPageView inherits Rectangle {
             root.active-jump-tab = id;
             page-flickable.viewport-y = -(anchor-y - self.height);
         }
+    }
+
+    // Shared scrollbar in the right gutter (homologated cross-view).
+    // Declared AFTER the sticky JUMP TO bar so it paints ON TOP of it (the
+    // full-width jump bar was overlapping it), but BEFORE the modal below
+    // so the modal still stacks above the scrollbar.
+    ListScrollbar {
+        x: parent.width - self.width - 4px;
+        width: 14px;
+        height: 100%;
+        viewport-height: page-flickable.viewport-height;
+        visible-height: page-flickable.height;
+        viewport-y <=> page-flickable.viewport-y;
     }
 
     // --- Full-description modal ---------------------------------------------

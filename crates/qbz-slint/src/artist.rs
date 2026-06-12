@@ -20,7 +20,7 @@ use crate::home::CardData;
 use crate::{
     AlbumCardItem, TrackItem, AppWindow, ArtistState, DiscoverSection, DiscoveryArtist,
     JumpNavTab, LabelEntry, MbOriginData, MbRelationship, MbRelationshipsData,
-    NetworkSidebarState, SimilarEntry,
+    NetworkSidebarState, ShellState, SimilarEntry,
 };
 
 /// Plain, `Send` artist data produced on the worker thread.
@@ -697,7 +697,85 @@ pub fn reset_artist(window: &AppWindow) {
     state.set_name("".into());
     state.set_bio("".into());
     state.set_bio_source("".into());
+    state.set_top_tracks_multi_select(false);
+    state.set_top_tracks_selected_count(0);
     state.set_loading(true);
+}
+
+// ============== Popular Tracks multi-select (mirrors AlbumState) ==========
+
+/// Toggle Popular Tracks multi-select; leaving the mode clears the selection.
+pub fn set_multi_select(window: &AppWindow, on: bool) {
+    let state = window.global::<ArtistState>();
+    state.set_top_tracks_multi_select(on);
+    if !on {
+        clear_selection(window);
+    }
+}
+
+/// Recompute the "N selected" count from the Popular Tracks rows.
+pub fn recount_selected(window: &AppWindow) {
+    let state = window.global::<ArtistState>();
+    let model = state.get_top_tracks();
+    let count = (0..model.row_count())
+        .filter(|&i| model.row_data(i).map(|t| t.selected).unwrap_or(false))
+        .count();
+    state.set_top_tracks_selected_count(count as i32);
+}
+
+/// Select every row, or clear if all are already selected.
+pub fn select_all(window: &AppWindow) {
+    let model = window.global::<ArtistState>().get_top_tracks();
+    let total = model.row_count();
+    let selected = (0..total)
+        .filter(|&i| model.row_data(i).map(|t| t.selected).unwrap_or(false))
+        .count();
+    let target = selected != total;
+    for i in 0..total {
+        if let Some(mut item) = model.row_data(i) {
+            if item.selected != target {
+                item.selected = target;
+                model.set_row_data(i, item);
+            }
+        }
+    }
+    recount_selected(window);
+}
+
+/// Clear the selection (uncheck all), keeping multi-select mode on.
+pub fn clear_selection(window: &AppWindow) {
+    let model = window.global::<ArtistState>().get_top_tracks();
+    for i in 0..model.row_count() {
+        if let Some(mut item) = model.row_data(i) {
+            if item.selected {
+                item.selected = false;
+                model.set_row_data(i, item);
+            }
+        }
+    }
+    window.global::<ArtistState>().set_top_tracks_selected_count(0);
+}
+
+/// Catalog ids of the selected Popular Tracks rows (Qobuz ids only).
+pub fn selected_ids(window: &AppWindow) -> Vec<String> {
+    let model = window.global::<ArtistState>().get_top_tracks();
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .filter(|t| t.selected)
+        .map(|t| t.id.to_string())
+        .filter(|s| s.parse::<u64>().is_ok())
+        .collect()
+}
+
+/// Catalog ids of ALL Popular Tracks rows (for the section "more" menu's
+/// all-tracks actions).
+pub fn all_top_track_ids(window: &AppWindow) -> Vec<String> {
+    let model = window.global::<ArtistState>().get_top_tracks();
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .map(|t| t.id.to_string())
+        .filter(|s| s.parse::<u64>().is_ok())
+        .collect()
 }
 
 /// Apply decoded portrait artwork. Runs on the Slint event loop.
@@ -732,19 +810,30 @@ pub struct MbOrigin {
     pub location_clickable: bool,
 }
 
-/// Reset the network sidebar's MB-driven state and force-open the
-/// panel. Called when the artist changes so a stale Origin /
-/// Relationships / Discovery never bleeds across artists, and so the
-/// sidebar always starts open on every artist visit (per user policy
-/// — close is per-session, never persisted).
+/// Reset the network sidebar's MB-driven state and (re)apply the open
+/// state on artist change so a stale Origin / Relationships / Discovery
+/// never bleeds across artists. The sidebar opens fresh on every artist
+/// visit (per user policy — close is per-session, never persisted)
+/// EXCEPT when the content area is space-constrained (a Queue / Lyrics
+/// right panel is open on a non-wide window). In that case it stays
+/// collapsed so the Popular Tracks list keeps priority — mirroring the
+/// `!net-cramped` rule the ArtistPageView Slint handlers use. Reading
+/// the constraint here (instead of unconditionally force-opening) is
+/// what fixes the artist->artist navigation case: when a panel was
+/// already open, navigating to a new artist no longer re-opens the
+/// sidebar over the Slint handler.
 pub fn reset_network_sidebar(window: &AppWindow) {
     // Drop the previous artist's cached location params so a stale
     // scene-view click can't fire for the wrong artist.
     if let Ok(mut guard) = LOCATION_PARAMS.lock() {
         *guard = None;
     }
+    // Open only when there's room — mirror ShellState.content-constrained
+    // (the same signal AlbumView + the ArtistPageView `net-cramped`
+    // handlers use). Constrained => keep collapsed.
+    let constrained = window.global::<ShellState>().get_content_constrained();
     let state = window.global::<NetworkSidebarState>();
-    state.set_open(true);
+    state.set_open(!constrained);
     state.set_mb_available(true);
     state.set_mb_mbid("".into());
     state.set_origin_loading(false);

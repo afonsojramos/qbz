@@ -8,34 +8,38 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { BulkAction } from "../state.slint";
+import { QbzIcon } from "QbzIcon.slint";
+import { BulkAction, TooltipState } from "../state.slint";
 
-// One action button — borderless hover for a normal action, red-bordered
-// for a danger action, dimmed + non-interactive when it needs a selection
-// and there is none.
+// One action button — an ICON with a hover tooltip (the action's label).
+// Borderless hover for a normal action, red-bordered for a danger action,
+// dimmed + non-interactive when it needs a selection and there is none.
 component BulkButton inherits Rectangle {
-    in property <string> label;
+    in property <image> icon;
+    in property <string> tooltip;
     in property <bool> danger: false;
     in property <bool> enabled-when: true;
     callback clicked();
 
-    width: lbl.preferred-width + 24px;
+    width: 34px;
     height: 30px;
     border-radius: Radius.sm;
-    opacity: root.enabled-when ? 1.0 : 0.5;
+    opacity: root.enabled-when ? 1.0 : 0.4;
     background: root.danger
         ? (ta.has-hover ? #ef444433 : transparent)
         : (ta.has-hover ? Theme.surface-hover : transparent);
     border-width: root.danger ? 1px : 0px;
     border-color: #ef4444;
 
-    lbl := Text {
-        text: root.label;
-        color: root.danger ? #ef4444 : Theme.text-secondary;
-        font-size: Typography.legal;
-        font-weight: root.danger ? Typography.medium : Typography.regular;
+    QbzIcon {
+        source: root.icon;
+        width: 16px;
+        height: 16px;
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        tint: root.danger
+            ? #ef4444
+            : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
     }
 
     ta := TouchArea {
@@ -43,6 +47,18 @@ component BulkButton inherits Rectangle {
         clicked => {
             if (root.enabled-when) {
                 root.clicked();
+            }
+        }
+        // Shared tooltip bubble (same channel as CircleAction), so each
+        // icon explains itself on hover.
+        changed has-hover => {
+            if (self.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else if (!self.has-hover) {
+                TooltipState.show = false;
             }
         }
     }
@@ -60,7 +76,7 @@ export component MultiSelectBar inherits Rectangle {
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 10px;
-        spacing: 12px;
+        spacing: 6px;
         Text {
             text: root.selected-count + " " + @tr("selected");
             color: Theme.text-secondary;
@@ -71,7 +87,8 @@ export component MultiSelectBar inherits Rectangle {
         for act in root.actions: VerticalLayout {
             alignment: center;
             BulkButton {
-                label: act.label;
+                icon: act.icon;
+                tooltip: act.label;
                 danger: act.danger;
                 enabled-when: !act.needs-selection || root.selected-count > 0;
                 clicked => {

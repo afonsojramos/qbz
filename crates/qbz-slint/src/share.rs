@@ -11,6 +11,13 @@ pub fn qobuz_playlist_url(playlist_id: &str) -> String {
     format!("https://play.qobuz.com/playlist/{playlist_id}")
 }
 
+/// Qobuz web-player album URL (matches Tauri's `shareAlbumQobuzLink`,
+/// `https://play.qobuz.com/album/{id}`). Also the source URL fed to
+/// Song.link for the album-level "Album.link".
+pub fn qobuz_album_url(album_id: &str) -> String {
+    format!("https://play.qobuz.com/album/{album_id}")
+}
+
 /// Copy `text` to the system clipboard. Runs on a blocking thread —
 /// clipboard backends (X11/Wayland) can block, and arboard keeps an
 /// owner thread alive so the contents persist after this returns.

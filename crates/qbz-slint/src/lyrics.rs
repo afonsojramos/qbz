@@ -278,6 +278,35 @@ fn provider_label(provider: LyricsProvider) -> &'static str {
 /// panel-open path for the current track. Fire-and-forget: pushes the
 /// loading state immediately, resolves through the engine off-loop, and
 /// commits the response only if the track is still current (F2).
+/// Resolve + CACHE lyrics for a track in the BACKGROUND without touching the
+/// UI — warms the lyrics cache for an upcoming queued track so the panel is
+/// instant when that track becomes current (the user's "prefetch the next
+/// track's lyrics" request; Tauri only fetches the current one). Fire-and-
+/// forget; skipped offline so we never spend network warming ahead.
+pub fn prefetch_lyrics(track: &QueueTrack) {
+    let Some(service) = SERVICE.get().cloned() else {
+        return;
+    };
+    if crate::offline_mode::engine().is_offline() {
+        return;
+    }
+    let source = source_kind(track);
+    let request = LyricsRequest {
+        track_id: (source == LyricsSourceKind::Qobuz).then_some(track.id),
+        source,
+        title: track.title.clone(),
+        artist: track.artist.clone(),
+        album: (!track.album.is_empty()).then(|| track.album.clone()),
+        duration_secs: (track.duration_secs > 0).then_some(track.duration_secs),
+        offline: false,
+    };
+    tokio::spawn(async move {
+        // Resolution upserts into lyrics.db; the result is discarded (no UI).
+        // On advance, on_track_changed hits this warm cache instantly.
+        let _ = service.get(request).await;
+    });
+}
+
 pub fn on_track_changed(weak: slint::Weak<AppWindow>, track: &QueueTrack) {
     let Some(service) = SERVICE.get().cloned() else {
         log::debug!("[qbz-slint] lyrics fetch skipped: service not installed");

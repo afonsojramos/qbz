@@ -470,8 +470,14 @@ export component SearchResultsView inherits Rectangle {
                 if SearchState.tab == 0 && SearchState.most-popular-kind != "": HorizontalLayout {
                     spacing: 24px;
 
-                    // Most-popular hero column.
+                    // Most-popular hero column. Fixed at 200px (= the widest
+                    // hero, the album card) so the Artists carousel always
+                    // starts at the same x regardless of the hero kind — the
+                    // 160px artist/track cards used to pull the carousel ~40px
+                    // left versus an album hero. The card is centered in the
+                    // slot.
                     VerticalLayout {
+                        width: 200px;
                         spacing: 12px;
                         HorizontalLayout {
                             spacing: 8px;
@@ -492,20 +498,23 @@ export component SearchResultsView inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
-                        if SearchState.most-popular-kind == "artist": ArtistCard {
-                            artist: SearchState.most-popular-artist;
-                            clicked(id) => { root.open-artist(id); }
-                            media-action(k, i, a) => { root.media-action(k, i, a); }
-                        }
-                        if SearchState.most-popular-kind == "album": AlbumCard {
-                            album: SearchState.most-popular-album;
-                            clicked(id) => { root.open-album(id); }
-                            media-action(k, i, a) => { root.media-action(k, i, a); }
-                        }
-                        if SearchState.most-popular-kind == "track": SearchTrackHero {
-                            track: SearchState.most-popular-track;
-                            quality-label: SearchState.most-popular-quality-label;
-                            media-action(k, i, a) => { root.media-action(k, i, a); }
+                        HorizontalLayout {
+                            alignment: center;
+                            if SearchState.most-popular-kind == "artist": ArtistCard {
+                                artist: SearchState.most-popular-artist;
+                                clicked(id) => { root.open-artist(id); }
+                                media-action(k, i, a) => { root.media-action(k, i, a); }
+                            }
+                            if SearchState.most-popular-kind == "album": AlbumCard {
+                                album: SearchState.most-popular-album;
+                                clicked(id) => { root.open-album(id); }
+                                media-action(k, i, a) => { root.media-action(k, i, a); }
+                            }
+                            if SearchState.most-popular-kind == "track": SearchTrackHero {
+                                track: SearchState.most-popular-track;
+                                quality-label: SearchState.most-popular-quality-label;
+                                media-action(k, i, a) => { root.media-action(k, i, a); }
+                            }
                         }
                     }
 

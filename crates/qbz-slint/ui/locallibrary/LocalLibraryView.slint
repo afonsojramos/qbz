@@ -150,7 +150,6 @@ component EphemeralPane inherits Rectangle {
                     CircleAction {
                         icon: @image-url("../assets/icons/play-fill.svg");
                         primary: true;
-                        diameter: 44px;
                         tooltip: @tr("Play all");
                         clicked => {
                             LocalLibraryActions.ephemeral-play-all();
@@ -161,7 +160,6 @@ component EphemeralPane inherits Rectangle {
                     alignment: center;
                     CircleAction {
                         icon: @image-url("../assets/icons/x.svg");
-                        diameter: 40px;
                         tooltip: @tr("Clear session");
                         clicked => {
                             LocalLibraryActions.ephemeral-clear();
@@ -1326,12 +1324,12 @@ export component LocalLibraryView inherits Rectangle {
                         if LocalLibraryState.tracks-multi-select: MultiSelectBar {
                             selected-count: LocalLibraryState.tracks-selected-count;
                             actions: [
-                                { id: "select-all", label: @tr("Select all"), danger: false, needs-selection: false },
-                                { id: "queue", label: @tr("Add to queue"), danger: false, needs-selection: true },
-                                { id: "play-next", label: @tr("Play next"), danger: false, needs-selection: true },
-                                { id: "add-to-playlist", label: @tr("Add to playlist"), danger: false, needs-selection: true },
-                                { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), danger: false, needs-selection: true },
-                                { id: "clear", label: @tr("Clear"), danger: false, needs-selection: true },
+                                { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
+                                { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
+                                { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+                                { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
+                                { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), icon: @image-url("../assets/icons/cassette-tape.svg"), danger: false, needs-selection: true },
+                                { id: "clear", label: @tr("Clear"), icon: @image-url("../assets/icons/x.svg"), danger: false, needs-selection: true },
                             ];
                             action(id) => {
                                 LocalLibraryActions.tracks-bulk-action(id);
@@ -1860,7 +1858,6 @@ export component LocalLibraryView inherits Rectangle {
                                             CircleAction {
                                                 icon: @image-url("../assets/icons/play-fill.svg");
                                                 primary: true;
-                                                diameter: 40px;
                                                 tooltip: @tr("Play all");
                                                 clicked => {
                                                     LocalLibraryActions.folders-play-node(

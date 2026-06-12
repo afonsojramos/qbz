@@ -138,22 +138,46 @@ component LyricsLineRow inherits VerticalLayout {
         if (root.dimming-mode == 1) {
             return 0.6;
         }
+        // strong (default) — ASYMMETRIC: incoming (future) lines fade much
+        // harder than already-sung ones, nearly dissolving into the
+        // background and brightening as they approach the active line, for a
+        // stronger timing cue. Past lines keep a gentler fall-off.
+        if (root.is-past) {
+            if (root.distance == 1) {
+                return 0.5;
+            }
+            if (root.distance == 2) {
+                return 0.35;
+            }
+            if (root.distance == 3) {
+                return 0.25;
+            }
+            return 0.18;
+        }
         if (root.distance == 1) {
-            return 0.5;
+            return 0.4;
         }
         if (root.distance == 2) {
-            return 0.35;
+            return 0.2;
         }
         if (root.distance == 3) {
-            return 0.25;
+            return 0.08;
         }
-        return 0.15;
+        return 0.03;
     }
 
     base := Text {
         text: root.display-text;
         wrap: word-wrap;
         opacity: root.line-opacity();
+        // 1:1 with Tauri's `transition: opacity 220ms ease-out`
+        // (LyricsLines.svelte:613-614): upcoming lines fade IN as they brighten
+        // toward active, passed lines fade OUT to their dim tier — instead of
+        // the opacity snapping between dimming steps.
+        animate opacity {
+            duration: 220ms;
+            easing: ease-out;
+        }
         // Active base = the DIM (unsung) layer under the karaoke overlay
         // (Tauri gradient parity: unsung stays dim, sung sweeps in accent).
         color: root.is-active
@@ -324,17 +348,10 @@ export component LyricsLinesView inherits Rectangle {
             }
 
             if LyricsState.synced: Rectangle { height: root.spacer-height; }
-
-            // Fallback-provider attribution (LRCLIB / lyrics.ovh). Tauri keeps
-            // these in the About modal (AboutModal.svelte:141,144); Slint has
-            // no About surface yet, so the line lives at the end of the scroll.
-            // Qobuz is first-party: provider-label is empty, nothing renders.
-            if root.show-attribution && LyricsState.provider-label != "": Text {
-                text: @tr("Lyrics provided by {}", LyricsState.provider-label);
-                color: Theme.text-muted;
-                font-size: 10px;
-                horizontal-alignment: center;
-            }
+            // Provider attribution moved to a fixed footer in LyricsSidebar
+            // ("Lyrics source: <provider>"), shown for ALL providers incl.
+            // Qobuz — so the scrolling attribution that used to live here is
+            // gone (it only covered the LRCLIB/ovh fallbacks).
         }
     }
 }

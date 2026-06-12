@@ -103,7 +103,8 @@ export component LabelReleasesView inherits Rectangle {
                     Text {
                         text: LabelState.name;
                         color: Theme.text-primary;
-                        font-size: Typography.title;
+                        // Hero homologated to the canonical 18px (section).
+                        font-size: Typography.section;
                         font-weight: Typography.bold;
                     }
                     if LabelState.total > 0: Text {

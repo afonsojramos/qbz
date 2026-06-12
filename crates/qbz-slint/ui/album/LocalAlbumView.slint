@@ -270,7 +270,6 @@ export component LocalAlbumView inherits Rectangle {
                         CircleAction {
                             icon: @image-url("../assets/icons/play-fill.svg");
                             primary: true;
-                            diameter: 44px;
                             loading: NowPlayingState.loading
                                 && NowPlayingState.album-id == LocalAlbumState.id;
                             clicked => {
@@ -442,7 +441,8 @@ export component LocalAlbumView inherits Rectangle {
                         vertical-alignment: center;
                     }
                     Text {
-                        text: @tr("TITLE");
+                        // Capital-case to match PlaylistView's column headers.
+                        text: @tr("Title");
                         horizontal-stretch: 1;
                         color: Theme.text-muted;
                         font-size: Typography.legal;
@@ -450,7 +450,8 @@ export component LocalAlbumView inherits Rectangle {
                         vertical-alignment: center;
                     }
                     Text {
-                        text: @tr("DURATION");
+                        // Capital-case to match PlaylistView's column headers.
+                        text: @tr("Duration");
                         width: 80px;
                         color: Theme.text-muted;
                         font-size: Typography.legal;
@@ -459,7 +460,8 @@ export component LocalAlbumView inherits Rectangle {
                         vertical-alignment: center;
                     }
                     Text {
-                        text: @tr("QUALITY");
+                        // Capital-case to match PlaylistView's column headers.
+                        text: @tr("Quality");
                         width: 80px;
                         color: Theme.text-muted;
                         font-size: Typography.legal;
