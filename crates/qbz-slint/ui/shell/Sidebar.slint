@@ -25,10 +25,14 @@ component MenuItem inherits Rectangle {
     in property <bool> selected: false;
     in property <image> icon;
     in property <bool> has-icon: false;
+    // When false the row is muted and ignores clicks (Import while
+    // offline). Same pattern as ContextMenuItem's enabled.
+    in property <bool> enabled: true;
     callback activated();
     height: 30px;
     border-radius: 5px;
-    background: mi-ta.has-hover ? Theme.surface-hover : transparent;
+    background: (mi-ta.has-hover && root.enabled) ? Theme.surface-hover : transparent;
+    opacity: root.enabled ? 1.0 : 0.4;
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
@@ -63,9 +67,11 @@ component MenuItem inherits Rectangle {
         }
     }
     mi-ta := TouchArea {
-        mouse-cursor: pointer;
+        mouse-cursor: root.enabled ? pointer : default;
         clicked => {
-            root.activated();
+            if (root.enabled) {
+                root.activated();
+            }
         }
     }
 }
@@ -848,6 +854,16 @@ export component Sidebar inherits Rectangle {
                             has-icon: true;
                             icon: @image-url("../assets/icons/library-big.svg");
                             activated => { SidebarActions.manage-playlists(); }
+                        }
+                        // Import playlist — open the importer modal. Dimmed
+                        // + inert while offline; the modal's own offline
+                        // banner is the second layer, exactly like Tauri.
+                        MenuItem {
+                            label: @tr("Import");
+                            has-icon: true;
+                            icon: @image-url("../assets/icons/import.svg");
+                            enabled: !OfflineState.offline;
+                            activated => { SidebarActions.import-playlist(); }
                         }
                         // Refresh — re-fetch the playlist list.
                         MenuItem {

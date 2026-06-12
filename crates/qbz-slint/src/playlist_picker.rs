@@ -23,6 +23,7 @@ pub fn open(window: &AppWindow, track_id: &str) {
     state.set_track_id(track_id.into());
     state.set_track_ids(ModelRc::new(VecModel::from(Vec::<slint::SharedString>::new())));
     state.set_playlists(ModelRc::new(VecModel::from(Vec::<PlaylistPickItem>::new())));
+    state.set_filter_matches(0);
     state.set_local_mode(false);
     state.set_loading(true);
     state.set_open(true);
@@ -39,6 +40,7 @@ pub fn open_multi(window: &AppWindow, ids: &[String], local: bool) {
     let model: Vec<slint::SharedString> = ids.iter().map(|s| s.clone().into()).collect();
     state.set_track_ids(ModelRc::new(VecModel::from(model)));
     state.set_playlists(ModelRc::new(VecModel::from(Vec::<PlaylistPickItem>::new())));
+    state.set_filter_matches(0);
     state.set_local_mode(local);
     state.set_loading(true);
     state.set_open(true);
@@ -88,7 +90,8 @@ where
 pub fn apply(window: &AppWindow, playlists: Vec<PickPlaylist>) {
     let items: Vec<PlaylistPickItem> = playlists
         .into_iter()
-        .map(|p| PlaylistPickItem {
+        .enumerate()
+        .map(|(i, p)| PlaylistPickItem {
             id: p.id.into(),
             name: p.name.into(),
             tracks_line: if p.tracks > 0 {
@@ -97,9 +100,15 @@ pub fn apply(window: &AppWindow, playlists: Vec<PickPlaylist>) {
                 "".into()
             },
             is_local: p.is_local,
+            // No filter yet on (re)load — every row matches, ranked in
+            // list order.
+            filter_rank: i as i32,
         })
         .collect();
     let state = window.global::<PlaylistPickerState>();
+    state.set_filter_matches(items.len() as i32);
     state.set_playlists(ModelRc::new(VecModel::from(items)));
+    // Reset the filter affordance whenever the list is repopulated.
+    state.set_filter("".into());
     state.set_loading(false);
 }

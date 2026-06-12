@@ -74,6 +74,7 @@ mod offline_favorites;
 mod offline_manager;
 mod offline_mode;
 mod playlist;
+mod playlist_import;
 mod playlist_manager;
 mod playlist_snapshot;
 mod plex_auth;
@@ -286,6 +287,19 @@ async fn enter_shell(
                 }
                 Err(e) => log::warn!("[qbz-slint] favorite cache load failed: {e}"),
             }
+        });
+    }
+
+    // Same for favorite ALBUMS — seeds fav_cache so the album header heart is
+    // correct from first open without visiting the Favorites view.
+    {
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            if crate::offline_mode::engine().is_offline() {
+                return;
+            }
+            let ids = favorites::favorite_album_ids(&runtime).await;
+            let _ = tokio::task::spawn_blocking(move || fav_cache::set_all_albums(ids)).await;
         });
     }
 
@@ -709,6 +723,20 @@ fn set_row_cache_status(window: &AppWindow, track_id: &str, status: i32, progres
         hero.cache_progress = progress;
         search.set_most_popular_track(hero);
     }
+
+    // Keep the album header's "fully cached" gate live as the album's own
+    // rows flip to ready (drives Make-available-offline -> Refresh in the
+    // ⋯ menu). Only the open album view consults it.
+    {
+        let album = window.global::<AlbumState>();
+        let tracks = album.get_tracks();
+        let n = tracks.row_count();
+        let fully = n > 0
+            && (0..n).all(|i| tracks.row_data(i).is_some_and(|t| t.cache_status == 3));
+        if album.get_album_fully_cached() != fully {
+            album.set_album_fully_cached(fully);
+        }
+    }
 }
 
 /// Toggle the unlocking (padlock) flag of every visible row matching
@@ -1042,6 +1070,48 @@ thread_local! {
     /// Debounce timer for the header live search — restarted on every
     /// keystroke, fires the search 300 ms after typing stops.
     static SEARCH_DEBOUNCE: slint::Timer = slint::Timer::default();
+
+    /// Stash for the "Duplicate tracks" confirm sub-modal. Slint can't hold a
+    /// `Vec<u64>` ergonomically, so when a Qobuz→Qobuz add finds duplicates we
+    /// park the full context here and the DuplicateConfirmActions handlers read
+    /// it back. Cleared on add-all / add-new-only / cancel. The tuple is
+    /// `(playlist_id, all_track_ids, duplicate_track_ids, playlist_name)`.
+    static DUP_CONFIRM_STASH: std::cell::RefCell<
+        Option<(u64, Vec<u64>, std::collections::HashSet<u64>, String)>
+    > = const { std::cell::RefCell::new(None) };
+}
+
+/// Look up a playlist's display name from the picker state model by id
+/// (the picker only carries names UI-side in `PlaylistPickItem`). Used for
+/// the "Added N tracks to <name>" success toast. Falls back to an empty
+/// string when the id is not found.
+fn picker_playlist_name(w: &AppWindow, id: &str) -> String {
+    use slint::Model;
+    let model = w.global::<PlaylistPickerState>().get_playlists();
+    for i in 0..model.row_count() {
+        if let Some(item) = model.row_data(i) {
+            if item.id == id {
+                return item.name.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Success toast for a playlist add ("Added N tracks to <playlist>"). Hops
+/// onto the event loop, so it is safe to call from a worker task. An empty
+/// `name` degrades to "Added N tracks". The count is the number actually
+/// written.
+fn toast_added_tracks(weak: &slint::Weak<AppWindow>, count: usize, name: String) {
+    if count == 0 {
+        return;
+    }
+    let msg = if name.is_empty() {
+        format!("Added {count} tracks")
+    } else {
+        format!("Added {count} tracks to {name}")
+    };
+    crate::toast::success_weak(weak, msg);
 }
 
 /// Run a search and show the results view. Shared by the search-submit
@@ -5042,6 +5112,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle.spawn(async move {
                         match runtime.core().add_favorite("album", &album_id).await {
                             Ok(()) => {
+                                // Keep the favorite-album cache in sync so the
+                                // album-header heart reflects a grid favorite.
+                                crate::fav_cache::set_album(&album_id, true);
                                 crate::toast::success_weak(&weak, "Added to favorites");
                             }
                             Err(e) => {
@@ -5051,12 +5124,130 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     });
                 }
+                ("album", "favorite-toggle") => {
+                    // The album-header heart: a TRUE toggle that reflects the
+                    // favorite-album cache (the grid "favorite" arm above stays
+                    // add-only). Optimistic on the open header, reconciled on
+                    // the server result.
+                    let Some(w) = weak.upgrade() else {
+                        return;
+                    };
+                    let was_fav = crate::fav_cache::is_album_favorite(&id);
+                    let new_state = !was_fav;
+                    let st = w.global::<AlbumState>();
+                    let is_open = st.get_id() == id.as_str();
+                    if is_open {
+                        st.set_is_favorite(new_state);
+                        st.set_favorite_loading(true);
+                    }
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let album_id = id.clone();
+                    handle.spawn(async move {
+                        let res = if new_state {
+                            runtime.core().add_favorite("album", &album_id).await
+                        } else {
+                            runtime.core().remove_favorite("album", &album_id).await
+                        };
+                        let ok = res.is_ok();
+                        if let Err(e) = &res {
+                            log::error!(
+                                "[qbz-slint] toggle favorite album {album_id} failed: {e}"
+                            );
+                        }
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            let st = w.global::<AlbumState>();
+                            let open_now = st.get_id() == album_id.as_str();
+                            if ok {
+                                crate::fav_cache::set_album(&album_id, new_state);
+                                if open_now {
+                                    st.set_favorite_loading(false);
+                                    st.set_is_favorite(new_state);
+                                }
+                                crate::toast::success(
+                                    &w,
+                                    if new_state {
+                                        "Added to favorites"
+                                    } else {
+                                        "Removed from favorites"
+                                    },
+                                );
+                            } else {
+                                if open_now {
+                                    st.set_favorite_loading(false);
+                                    st.set_is_favorite(was_fav);
+                                }
+                                crate::toast::error(&w, "Couldn't update favorites");
+                            }
+                        });
+                    });
+                }
                 ("album", "cache") => offline_cache::cache_album(
                     runtime.clone(),
                     weak.clone(),
                     handle.clone(),
                     id,
                 ),
+                ("album", "recache") => offline_cache::redownload_album(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id,
+                    // Refresh the WHOLE album (Tauri's "Refresh offline copy"
+                    // re-downloads every track, not only the failed ones).
+                    false,
+                ),
+                ("album", "add-to-playlist") => {
+                    // Resolve the album's loaded tracks to their Qobuz catalog
+                    // ids and open the playlist picker for the whole set
+                    // (mirrors Tauri's album → Add to playlist). Local/Plex
+                    // albums carry no catalog ids, so the entry no-ops there
+                    // (the header menu is a Qobuz surface).
+                    let Some(w) = weak.upgrade() else {
+                        return;
+                    };
+                    let ids: Vec<String> = {
+                        use slint::Model;
+                        w.global::<AlbumState>()
+                            .get_tracks()
+                            .iter()
+                            .map(|t| t.id.to_string())
+                            .filter(|s| s.parse::<u64>().is_ok())
+                            .collect()
+                    };
+                    if ids.is_empty() {
+                        toast::error(&w, "No tracks to add");
+                        return;
+                    }
+                    playlist_picker::open_multi(&w, &ids, false);
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    handle.spawn(async move {
+                        let playlists = playlist_picker::load(&runtime).await;
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            playlist_picker::apply(&w, playlists);
+                        });
+                    });
+                }
+                ("album", "share-qobuz") => {
+                    share::copy_to_clipboard(share::qobuz_album_url(&id));
+                    log::info!("[qbz-slint] copied Qobuz link for album {id}");
+                }
+                ("album", "share-songlink") => {
+                    let source = share::qobuz_album_url(&id);
+                    let album = id.clone();
+                    handle.spawn(async move {
+                        match share::songlink_url(&source).await {
+                            Some(url) => {
+                                share::copy_to_clipboard(url);
+                                log::info!("[qbz-slint] copied Album.link for album {album}");
+                            }
+                            None => {
+                                log::warn!("[qbz-slint] Album.link resolution failed for {album}")
+                            }
+                        }
+                    });
+                }
                 ("track", "play-next") => {
                     // Source-typed routing — see the ("track","queue") arm
                     // (same seam, insert-next instead of append).
@@ -5549,6 +5740,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // the artist Popular Tracks, or the label Popular Tracks.
                     if let Some(w) = weak.upgrade() {
                         let model = match w.global::<NavState>().get_view() {
+                            ContentView::Album => w.global::<AlbumState>().get_tracks(),
                             ContentView::Playlist => w.global::<PlaylistState>().get_tracks(),
                             ContentView::Label => w.global::<LabelState>().get_top_tracks(),
                             ContentView::Favorites => {
@@ -5571,6 +5763,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         match w.global::<NavState>().get_view() {
+                            ContentView::Album => album::recount_selected(&w),
+                            ContentView::Artist => artist::recount_selected(&w),
                             ContentView::Playlist => playlist::recount_selected(&w),
                             ContentView::Favorites => favorites::recount_selected(&w),
                             _ => {}
@@ -6503,6 +6697,112 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // Album multi-select: the toolbar toggle next to the search box.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<AlbumActions>()
+            .on_toggle_multi_select(move || {
+                if let Some(w) = weak.upgrade() {
+                    let on = w.global::<AlbumState>().get_multi_select();
+                    album::set_multi_select(&w, !on);
+                }
+            });
+    }
+
+    // Album multi-select bulk bar — actions over the selected catalog rows.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<AlbumActions>()
+            .on_bulk_action(move |action| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                match action.as_str() {
+                    "select-all" => album::select_all(&w),
+                    "clear" => album::clear_selection(&w),
+                    "queue" => {
+                        let tracks = album::selected_play_tracks(&w);
+                        if !tracks.is_empty() {
+                            playback::enqueue_tracks(
+                                runtime.clone(),
+                                handle.clone(),
+                                tracks,
+                                false,
+                            );
+                        }
+                    }
+                    "play-next" => {
+                        let tracks = album::selected_play_tracks(&w);
+                        if !tracks.is_empty() {
+                            playback::enqueue_tracks(
+                                runtime.clone(),
+                                handle.clone(),
+                                tracks,
+                                true,
+                            );
+                        }
+                    }
+                    "make-offline" => {
+                        let tracks = album::selected_play_tracks(&w);
+                        if !tracks.is_empty() {
+                            offline_cache::cache_tracks(
+                                runtime.clone(),
+                                weak.clone(),
+                                handle.clone(),
+                                tracks,
+                            );
+                            album::clear_selection(&w);
+                        }
+                    }
+                    "add-to-playlist" => {
+                        let ids = album::selected_ids(&w);
+                        if !ids.is_empty() {
+                            playlist_picker::open_multi(&w, &ids, false);
+                            let runtime = runtime.clone();
+                            let weak = weak.clone();
+                            handle.spawn(async move {
+                                let playlists = playlist_picker::load(&runtime).await;
+                                let _ = weak.upgrade_in_event_loop(move |w| {
+                                    playlist_picker::apply(&w, playlists);
+                                });
+                            });
+                        }
+                    }
+                    "add-to-favorites" => {
+                        let ids = album::selected_ids(&w);
+                        if ids.is_empty() {
+                            return;
+                        }
+                        let runtime = runtime.clone();
+                        let weak = weak.clone();
+                        handle.spawn(async move {
+                            for id in &ids {
+                                match runtime.core().add_favorite("track", id).await {
+                                    Ok(()) => {
+                                        if let Ok(tid) = id.parse::<u64>() {
+                                            crate::fav_cache::set(tid, true);
+                                        }
+                                    }
+                                    Err(e) => log::error!(
+                                        "[qbz-slint] bulk favorite track {id} failed: {e}"
+                                    ),
+                                }
+                            }
+                            let _ = weak.upgrade_in_event_loop(|w| {
+                                album::clear_selection(&w);
+                                crate::toast::success(&w, "Added to favorites");
+                            });
+                        });
+                    }
+                    _ => {}
+                }
+            });
+    }
+
     // Artist in-page search — client-side filter over Popular Tracks
     // and every release-section album.
     {
@@ -6516,11 +6816,158 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // Artist Popular Tracks multi-select — the section toggle.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<ArtistActions>()
+            .on_toggle_top_tracks_select(move || {
+                if let Some(w) = weak.upgrade() {
+                    let on = w.global::<ArtistState>().get_top_tracks_multi_select();
+                    artist::set_multi_select(&w, !on);
+                }
+            });
+    }
+
+    // Artist Popular Tracks bulk bar — actions over the selected rows.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<ArtistActions>()
+            .on_top_tracks_bulk_action(move |action| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let artist_id = w.global::<ArtistState>().get_id().to_string();
+                match action.as_str() {
+                    "select-all" => artist::select_all(&w),
+                    "clear" => artist::clear_selection(&w),
+                    "play-next" => playback::enqueue_artist_top_selected(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        artist_id,
+                        artist::selected_ids(&w),
+                        true,
+                    ),
+                    "queue" => playback::enqueue_artist_top_selected(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        artist_id,
+                        artist::selected_ids(&w),
+                        false,
+                    ),
+                    "add-to-playlist" => {
+                        let ids = artist::selected_ids(&w);
+                        if !ids.is_empty() {
+                            playlist_picker::open_multi(&w, &ids, false);
+                            let runtime = runtime.clone();
+                            let weak = weak.clone();
+                            handle.spawn(async move {
+                                let playlists = playlist_picker::load(&runtime).await;
+                                let _ = weak.upgrade_in_event_loop(move |w| {
+                                    playlist_picker::apply(&w, playlists);
+                                });
+                            });
+                        }
+                    }
+                    "add-to-favorites" => {
+                        let ids = artist::selected_ids(&w);
+                        if ids.is_empty() {
+                            return;
+                        }
+                        let runtime = runtime.clone();
+                        let weak = weak.clone();
+                        handle.spawn(async move {
+                            for id in &ids {
+                                match runtime.core().add_favorite("track", id).await {
+                                    Ok(()) => {
+                                        if let Ok(tid) = id.parse::<u64>() {
+                                            crate::fav_cache::set(tid, true);
+                                        }
+                                    }
+                                    Err(e) => log::error!(
+                                        "[qbz-slint] bulk favorite track {id} failed: {e}"
+                                    ),
+                                }
+                            }
+                            let _ = weak.upgrade_in_event_loop(|w| {
+                                artist::clear_selection(&w);
+                                crate::toast::success(&w, "Added to favorites");
+                            });
+                        });
+                    }
+                    _ => {}
+                }
+            });
+    }
+
+    // Artist Popular Tracks section "more" menu — all-tracks actions.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<ArtistActions>()
+            .on_top_tracks_menu_action(move |action| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let artist_id = w.global::<ArtistState>().get_id().to_string();
+                if artist_id.is_empty() {
+                    return;
+                }
+                match action.as_str() {
+                    "next-all" => playback::enqueue_artist_top_selected(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        artist_id,
+                        artist::all_top_track_ids(&w),
+                        true,
+                    ),
+                    "queue-all" => playback::enqueue_artist_top_selected(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        artist_id,
+                        artist::all_top_track_ids(&w),
+                        false,
+                    ),
+                    "shuffle-all" => playback::play_artist_top_shuffled(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        artist_id,
+                    ),
+                    "playlist-all" => {
+                        let ids = artist::all_top_track_ids(&w);
+                        if !ids.is_empty() {
+                            playlist_picker::open_multi(&w, &ids, false);
+                            let runtime = runtime.clone();
+                            let weak = weak.clone();
+                            handle.spawn(async move {
+                                let playlists = playlist_picker::load(&runtime).await;
+                                let _ = weak.upgrade_in_event_loop(move |w| {
+                                    playlist_picker::apply(&w, playlists);
+                                });
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            });
+    }
+
     // Artist network sidebar — no persistence. Default open, user can
-    // close per-session, and reset_network_sidebar reopens it on every
-    // artist navigation. The toggle callback stays a no-op on the
-    // Rust side — Slint already flips NetworkSidebarState.open
-    // directly in the click handler.
+    // close per-session, and reset_network_sidebar re-applies the open
+    // state on every artist navigation (open unless the content area is
+    // space-constrained — see reset_network_sidebar). The toggle
+    // callback stays a no-op on the Rust side — Slint already flips
+    // NetworkSidebarState.open directly in the click handler.
     window
         .global::<NetworkSidebarActions>()
         .on_toggle(|| {});
@@ -9041,6 +9488,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Bulk add carries track-ids; single add carries track-id.
                 let ids_model = picker.get_track_ids();
                 let track_id_single = picker.get_track_id().to_string();
+                // Resolve the target name for the success toast BEFORE the
+                // model is torn down by closing the picker.
+                let target_name = picker_playlist_name(&w, playlist_id.as_str());
                 picker.set_open(false);
 
                 // LOCAL playlist target (id "local:<uuid>") — writes go to
@@ -9058,11 +9508,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if refs.is_empty() {
                             return;
                         }
+                        let weak = weak.clone();
+                        let tname = target_name.clone();
                         handle.spawn(async move {
-                            let _ = tokio::task::spawn_blocking(move || {
+                            let added = tokio::task::spawn_blocking(move || {
                                 local_playlist::add_local_refs_blocking(&target, &refs)
                             })
-                            .await;
+                            .await
+                            .unwrap_or(0);
+                            // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                            toast_added_tracks(&weak, added, tname);
                         });
                         return;
                     }
@@ -9078,11 +9533,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if ids.is_empty() {
                         return;
                     }
+                    let weak = weak.clone();
+                    let tname = target_name.clone();
                     handle.spawn(async move {
-                        let _ = tokio::task::spawn_blocking(move || {
+                        let added = tokio::task::spawn_blocking(move || {
                             local_playlist::add_qobuz_tracks_blocking(&target, &ids)
                         })
-                        .await;
+                        .await
+                        .unwrap_or(0);
+                        // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                        toast_added_tracks(&weak, added, tname);
                     });
                     return;
                 }
@@ -9109,10 +9569,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // sidebar's session cache; re-adding an existing ref
                     // MOVES it to the append slot (INSERT OR REPLACE, E4).
                     let qobuz_count = sidebar::playlist_track_count(pid).unwrap_or(0);
+                    let refs_count = refs.len();
                     let runtime = runtime.clone();
                     let weak = weak.clone();
                     let handle2 = handle.clone();
                     let image_cache = image_cache.clone();
+                    let tname = target_name.clone();
                     handle.spawn(async move {
                         let _ = tokio::task::spawn_blocking(move || {
                             crate::library_db::with_db(|db| {
@@ -9131,6 +9593,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             })
                         })
                         .await;
+                        // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                        toast_added_tracks(&weak, refs_count, tname);
                         // E12: the open detail re-merges so the rows show
                         // up immediately.
                         let _ = weak.clone().upgrade_in_event_loop(move |w| {
@@ -9151,7 +9615,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
 
-                // Qobuz path.
+                // Qobuz tracks → Qobuz playlist. Run duplicate detection first
+                // (Tauri parity: this is the ONLY branch that checks dupes).
+                // If any of the ids are already in the target, park the context
+                // in DUP_CONFIRM_STASH and open the confirm sub-modal; the user
+                // then chooses add-all / add-new-only. With no dupes we add
+                // directly and toast.
                 let mut ids: Vec<u64> = (0..ids_model.row_count())
                     .filter_map(|i| ids_model.row_data(i))
                     .filter_map(|s| s.parse::<u64>().ok())
@@ -9165,9 +9634,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
                 let runtime = runtime.clone();
+                let weak = weak.clone();
+                let tname = target_name.clone();
                 handle.spawn(async move {
-                    if let Err(e) = runtime.core().add_tracks_to_playlist(pid, &ids).await {
-                        log::error!("[qbz-slint] add to playlist failed: {e}");
+                    match runtime.core().check_playlist_duplicates(pid, &ids).await {
+                        Ok(dup) if dup.duplicate_count > 0 => {
+                            // Stash the full context; the confirm handlers read
+                            // it back. Open the sub-modal with the counts.
+                            let total = dup.total_tracks as i32;
+                            let dupc = dup.duplicate_count as i32;
+                            let dup_ids = dup.duplicate_track_ids.clone();
+                            let stash = (pid, ids.clone(), dup_ids, tname.clone());
+                            let _ = weak.upgrade_in_event_loop(move |w| {
+                                DUP_CONFIRM_STASH.with(|c| *c.borrow_mut() = Some(stash));
+                                let st = w.global::<DuplicateConfirmState>();
+                                st.set_duplicate_count(dupc);
+                                st.set_total_count(total);
+                                st.set_busy(false);
+                                st.set_playlist_name(tname.into());
+                                st.set_open(true);
+                            });
+                        }
+                        Ok(_) => {
+                            // No duplicates — add directly + toast.
+                            let n = ids.len();
+                            if let Err(e) =
+                                runtime.core().add_tracks_to_playlist(pid, &ids).await
+                            {
+                                log::error!("[qbz-slint] add to playlist failed: {e}");
+                            } else {
+                                // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                                toast_added_tracks(&weak, n, tname);
+                            }
+                        }
+                        Err(e) => {
+                            // Dup check failed (e.g. transient API) — fall back
+                            // to a direct add so the action still completes.
+                            log::warn!(
+                                "[qbz-slint] dup check failed, adding directly: {e}"
+                            );
+                            let n = ids.len();
+                            if let Err(e) =
+                                runtime.core().add_tracks_to_playlist(pid, &ids).await
+                            {
+                                log::error!("[qbz-slint] add to playlist failed: {e}");
+                            } else {
+                                // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                                toast_added_tracks(&weak, n, tname);
+                            }
+                        }
                     }
                 });
             });
@@ -9178,7 +9693,291 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .global::<PlaylistPickerActions>()
             .on_close(move || {
                 if let Some(w) = weak.upgrade() {
-                    w.global::<PlaylistPickerState>().set_open(false);
+                    let st = w.global::<PlaylistPickerState>();
+                    st.set_open(false);
+                    // Reset the inline-create + filter affordances so the next
+                    // open starts clean.
+                    st.set_creating_open(false);
+                    st.set_create_name("".into());
+                    st.set_creating(false);
+                    st.set_filter("".into());
+                }
+            });
+    }
+
+    // Inline "Create new playlist" → create-and-add. Creates a playlist
+    // (Qobuz online / local offline per D8) and adds the carried tracks to
+    // it, then closes the picker. Discriminates the carried ids exactly like
+    // the pick handler (local-mode refs vs Qobuz u64 ids).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PlaylistPickerActions>()
+            .on_create_and_add(move || {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                use slint::Model;
+                let picker = w.global::<PlaylistPickerState>();
+                let name = picker.get_create_name().to_string();
+                if name.trim().is_empty() || picker.get_creating() {
+                    return;
+                }
+                let is_local = picker.get_local_mode();
+                let ids_model = picker.get_track_ids();
+                let track_id_single = picker.get_track_id().to_string();
+                // Local-mode refs (LocalLibrary row ids / "plex:<key>") for the
+                // local-playlist add; Qobuz u64 ids for the online path.
+                let refs: Vec<String> = (0..ids_model.row_count())
+                    .filter_map(|i| ids_model.row_data(i))
+                    .map(|s| s.to_string())
+                    .collect();
+                let mut qobuz_ids: Vec<u64> = (0..ids_model.row_count())
+                    .filter_map(|i| ids_model.row_data(i))
+                    .filter_map(|s| s.parse::<u64>().ok())
+                    .collect();
+                if qobuz_ids.is_empty() {
+                    if let Ok(tid) = track_id_single.parse::<u64>() {
+                        qobuz_ids.push(tid);
+                    }
+                }
+                picker.set_creating(true);
+
+                let offline_now = offline_mode::engine().is_offline();
+                let nm = name.trim().to_string();
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle2 = handle.clone();
+
+                if offline_now {
+                    // D8: offline ⇒ LOCAL playlist (library.db), never the
+                    // retired pending-playlist engine. Mirrors the create
+                    // modal's offline branch.
+                    let local_refs = refs.clone();
+                    let local_qobuz = qobuz_ids.clone();
+                    handle.spawn(async move {
+                        let created = tokio::task::spawn_blocking({
+                            let nm = nm.clone();
+                            move || local_playlist::create_blocking(&nm, None, true)
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        let mut added = 0usize;
+                        if let Some(ref new_id) = created {
+                            let new_id = new_id.clone();
+                            added = tokio::task::spawn_blocking(move || {
+                                if is_local {
+                                    local_playlist::add_local_refs_blocking(
+                                        &new_id,
+                                        &local_refs,
+                                    )
+                                } else {
+                                    local_playlist::add_qobuz_tracks_blocking(
+                                        &new_id,
+                                        &local_qobuz,
+                                    )
+                                }
+                            })
+                            .await
+                            .unwrap_or(0);
+                        }
+                        // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                        let r2 = runtime.clone();
+                        let h2 = handle2.clone();
+                        let weak2 = weak.clone();
+                        let nm2 = nm.clone();
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            let st = w.global::<PlaylistPickerState>();
+                            st.set_creating(false);
+                            st.set_creating_open(false);
+                            st.set_create_name("".into());
+                            st.set_open(false);
+                            match created {
+                                Some(_) => {
+                                    toast_added_tracks(&weak2, added, nm2);
+                                    load_sidebar_playlists(r2, weak2, &h2);
+                                }
+                                None => {
+                                    log::error!(
+                                        "[qbz-slint] create-and-add (local) failed"
+                                    );
+                                }
+                            }
+                        });
+                    });
+                    return;
+                }
+
+                // Online ⇒ Qobuz playlist, then add the carried tracks.
+                handle.spawn(async move {
+                    match runtime.core().create_playlist(&nm, None, false).await {
+                        Ok(playlist) => {
+                            let pid = playlist.id;
+                            let n = qobuz_ids.len();
+                            if !qobuz_ids.is_empty() {
+                                if let Err(e) = runtime
+                                    .core()
+                                    .add_tracks_to_playlist(pid, &qobuz_ids)
+                                    .await
+                                {
+                                    log::error!(
+                                        "[qbz-slint] create-and-add: add failed: {e}"
+                                    );
+                                }
+                            }
+                            // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                            let r2 = runtime.clone();
+                            let h2 = handle2.clone();
+                            let weak2 = weak.clone();
+                            let nm2 = nm.clone();
+                            let _ = weak.upgrade_in_event_loop(move |w| {
+                                let st = w.global::<PlaylistPickerState>();
+                                st.set_creating(false);
+                                st.set_creating_open(false);
+                                st.set_create_name("".into());
+                                st.set_open(false);
+                                toast_added_tracks(&weak2, n, nm2);
+                                load_sidebar_playlists(r2, weak2, &h2);
+                            });
+                        }
+                        Err(e) => {
+                            log::error!("[qbz-slint] create-and-add: create failed: {e}");
+                            let _ = weak.upgrade_in_event_loop(|w| {
+                                w.global::<PlaylistPickerState>().set_creating(false);
+                            });
+                        }
+                    }
+                });
+            });
+    }
+
+    // Picker client-side filter — recompute each row's `filter-rank`
+    // (case-insensitive substring; Slint 1.16 has no string `.contains`, so
+    // the match runs here). Rank = match ordinal among the filtered rows,
+    // -1 = filtered out; the total lands in `filter-matches`. Pure frontend,
+    // no backend call.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistPickerActions>()
+            .on_filter_changed(move |query| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                use slint::Model;
+                let needle = query.to_lowercase();
+                let model = w.global::<PlaylistPickerState>().get_playlists();
+                let mut rank: i32 = 0;
+                for i in 0..model.row_count() {
+                    if let Some(mut item) = model.row_data(i) {
+                        let matches = needle.is_empty()
+                            || item.name.to_lowercase().contains(&needle);
+                        let new_rank = if matches { rank } else { -1 };
+                        if matches {
+                            rank += 1;
+                        }
+                        if item.filter_rank != new_rank {
+                            item.filter_rank = new_rank;
+                            model.set_row_data(i, item);
+                        }
+                    }
+                }
+                w.global::<PlaylistPickerState>().set_filter_matches(rank);
+            });
+    }
+
+    // Duplicate-confirm sub-modal handlers. The pending context lives in
+    // DUP_CONFIRM_STASH (set by the picker's Qobuz→Qobuz branch). Each handler
+    // reads it, performs the chosen add, toasts, then closes + clears.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<DuplicateConfirmActions>()
+            .on_add_all(move || {
+                let Some(stash) = DUP_CONFIRM_STASH.with(|c| c.borrow_mut().take()) else {
+                    return;
+                };
+                let (pid, all_ids, _dup_ids, name) = stash;
+                if let Some(w) = weak.upgrade() {
+                    w.global::<DuplicateConfirmState>().set_busy(true);
+                }
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                handle.spawn(async move {
+                    let n = all_ids.len();
+                    if let Err(e) = runtime.core().add_tracks_to_playlist(pid, &all_ids).await
+                    {
+                        log::error!("[qbz-slint] dup add-all failed: {e}");
+                    } else {
+                        // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                        toast_added_tracks(&weak, n, name);
+                    }
+                    let _ = weak.upgrade_in_event_loop(|w| {
+                        let st = w.global::<DuplicateConfirmState>();
+                        st.set_busy(false);
+                        st.set_open(false);
+                    });
+                });
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<DuplicateConfirmActions>()
+            .on_add_new_only(move || {
+                let Some(stash) = DUP_CONFIRM_STASH.with(|c| c.borrow_mut().take()) else {
+                    return;
+                };
+                let (pid, all_ids, dup_ids, name) = stash;
+                // Add only the non-duplicate ids (all \ duplicates). If nothing
+                // is left, just close.
+                let to_add: Vec<u64> =
+                    all_ids.into_iter().filter(|id| !dup_ids.contains(id)).collect();
+                if to_add.is_empty() {
+                    if let Some(w) = weak.upgrade() {
+                        w.global::<DuplicateConfirmState>().set_open(false);
+                    }
+                    return;
+                }
+                if let Some(w) = weak.upgrade() {
+                    w.global::<DuplicateConfirmState>().set_busy(true);
+                }
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                handle.spawn(async move {
+                    let n = to_add.len();
+                    if let Err(e) = runtime.core().add_tracks_to_playlist(pid, &to_add).await
+                    {
+                        log::error!("[qbz-slint] dup add-new-only failed: {e}");
+                    } else {
+                        // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                        toast_added_tracks(&weak, n, name);
+                    }
+                    let _ = weak.upgrade_in_event_loop(|w| {
+                        let st = w.global::<DuplicateConfirmState>();
+                        st.set_busy(false);
+                        st.set_open(false);
+                    });
+                });
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<DuplicateConfirmActions>()
+            .on_cancel(move || {
+                DUP_CONFIRM_STASH.with(|c| *c.borrow_mut() = None);
+                if let Some(w) = weak.upgrade() {
+                    let st = w.global::<DuplicateConfirmState>();
+                    st.set_busy(false);
+                    st.set_open(false);
                 }
             });
     }
@@ -9775,6 +10574,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        // Import playlist — open the importer modal fully reset, with the
+        // folder dropdown rebuilt from the current sidebar folder list.
+        let weak = window.as_weak();
+        window
+            .global::<SidebarActions>()
+            .on_import_playlist(move || {
+                if let Some(w) = weak.upgrade() {
+                    playlist_import::open(&w);
+                }
+            });
+    }
+    {
         // Edit playlist (sidebar context menu) — open the edit-playlist
         // modal, prefilled from the cached name + description.
         let weak = window.as_weak();
@@ -10040,6 +10851,175 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             log::error!("[qbz-slint] create playlist failed: {e}");
                             let _ = weak.upgrade_in_event_loop(|w| {
                                 w.global::<CreatePlaylistState>().set_creating(false);
+                            });
+                        }
+                    }
+                });
+            });
+    }
+
+    // ---- Playlist Importer (public playlists) — spec §3.3 ----
+    {
+        // No cancel exists: a running import task continues to completion
+        // (§1.8); closing only hides the modal.
+        let weak = window.as_weak();
+        window.global::<PlaylistImportActions>().on_close(move || {
+            if let Some(w) = weak.upgrade() {
+                w.global::<PlaylistImportState>().set_open(false);
+            }
+        });
+    }
+    {
+        // Provider detection per keystroke (Slint 1.16 has no `.contains`).
+        let weak = window.as_weak();
+        window
+            .global::<PlaylistImportActions>()
+            .on_url_edited(move |text| {
+                if let Some(w) = weak.upgrade() {
+                    playlist_import::on_url_edited(&w, text.as_str());
+                }
+            });
+    }
+    {
+        window
+            .global::<PlaylistImportActions>()
+            .on_name_edited(move |text| {
+                playlist_import::on_name_edited(text.as_str());
+            });
+    }
+    {
+        // Step A: fetch the preview (no session needed).
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<PlaylistImportActions>().on_fetch(move || {
+            let Some(w) = weak.upgrade() else { return; };
+            let Some(url) = playlist_import::begin_fetch(&w) else {
+                return;
+            };
+            // A reopen mid-fetch bumps the generation; the stale preview
+            // result must not land on the fresh modal (§1.8).
+            let generation = playlist_import::current_generation();
+            let weak = weak.clone();
+            handle.spawn(async move {
+                let res = qbz_playlist_import::preview_public_playlist(&url).await;
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    if generation != playlist_import::current_generation() {
+                        return;
+                    }
+                    match res {
+                        Ok(p) => playlist_import::apply_preview_ok(&w, &url, p),
+                        Err(e) => playlist_import::apply_preview_err(&w, &e.to_string()),
+                    }
+                });
+            });
+        });
+    }
+    {
+        // Step B: execute the import (re-fetches the URL internally —
+        // Tauri behavior, kept) with live sink progress.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<PlaylistImportActions>()
+            .on_execute(move || {
+                let Some(w) = weak.upgrade() else { return; };
+                let Some(args) = playlist_import::begin_execute(&w) else {
+                    return;
+                };
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                let image_cache = image_cache.clone();
+                handle.clone().spawn(async move {
+                    // Tauri's RequiresUserSession gate: execute needs a
+                    // logged-in client (the preview does not).
+                    let client = runtime.core().client().read().await.clone();
+                    let Some(client) = client else {
+                        let g = args.generation;
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            if g == playlist_import::current_generation() {
+                                playlist_import::apply_execute_err(
+                                    &w,
+                                    "Not logged in to Qobuz",
+                                );
+                            }
+                            toast::show(&w, "Playlist import failed", ToastKind::Error);
+                        });
+                        return;
+                    };
+                    let sink: Arc<dyn qbz_playlist_import::ImportProgressSink> = Arc::new(
+                        playlist_import::SlintSink::new(weak.clone(), args.generation),
+                    );
+                    let res = qbz_playlist_import::import_public_playlist(
+                        &args.url,
+                        &client,
+                        args.name_override.as_deref(),
+                        false, // is_public — Tauri hardcodes false, no toggle
+                        sink,
+                    )
+                    .await;
+                    match res {
+                        Ok(summary) => {
+                            // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                            // NOTE: Tauri's importer never logged reco — adding it here is parity-plus, one event per matched track on import success.
+                            // Assign every created part to the chosen folder
+                            // (local DB) BEFORE the sidebar reload — mirrors
+                            // the create-playlist precedent above.
+                            if !args.folder_id.is_empty() {
+                                for pid in &summary.qobuz_playlist_ids {
+                                    let (pid, fid) = (*pid, args.folder_id.clone());
+                                    tokio::task::spawn_blocking(move || {
+                                        folders::move_playlist(pid, Some(fid.as_str()));
+                                    })
+                                    .await
+                                    .ok();
+                                }
+                            }
+                            let g = args.generation;
+                            let weak2 = weak.clone();
+                            let r2 = runtime.clone();
+                            let h2 = handle.clone();
+                            let _ = weak.upgrade_in_event_loop(move |w| {
+                                // Toast + sidebar refresh fire even after a
+                                // close mid-import (§1.8); the generation
+                                // guard keeps a stale run's writes off a
+                                // reopened modal's fresh state.
+                                if g == playlist_import::current_generation() {
+                                    playlist_import::apply_execute_ok(&w, &summary);
+                                }
+                                if summary.matched_tracks > 0 {
+                                    toast::show(&w, "Playlist imported", ToastKind::Success);
+                                }
+                                load_sidebar_playlists(r2.clone(), weak2.clone(), &h2);
+                                if let Some(first) = summary.qobuz_playlist_ids.first() {
+                                    // Navigate only while the modal is still
+                                    // open AND this run is current (§1.8).
+                                    if g == playlist_import::current_generation()
+                                        && w.global::<PlaylistImportState>().get_open()
+                                    {
+                                        nav::record(nav::NavEntry::Playlist(first.to_string()));
+                                        navigate_playlist(
+                                            r2,
+                                            weak2,
+                                            &h2,
+                                            image_cache,
+                                            first.to_string(),
+                                        );
+                                        update_nav_flags(&w);
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            let g = args.generation;
+                            let msg = e.to_string();
+                            let _ = weak.upgrade_in_event_loop(move |w| {
+                                if g == playlist_import::current_generation() {
+                                    playlist_import::apply_execute_err(&w, &msg);
+                                }
+                                toast::show(&w, "Playlist import failed", ToastKind::Error);
                             });
                         }
                     }
@@ -10530,6 +11510,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 };
                 favorites::mark_album_removing(&w, &id);
+                // Keep the favorite-album cache in sync so the album-header
+                // heart reflects an unfavorite done from the Favorites view.
+                crate::fav_cache::set_album(&id, false);
                 let id_srv = id.to_string();
                 let runtime = runtime.clone();
                 handle.spawn(async move {

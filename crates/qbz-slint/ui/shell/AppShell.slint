@@ -17,6 +17,7 @@ import { SidebarFolderPopup } from "SidebarFolderPopup.slint";
 import { SidebarTooltip } from "SidebarTooltip.slint";
 import { SidebarPlaylistsPopup } from "SidebarPlaylistsPopup.slint";
 import { PlaylistPickerModal } from "../primitives/PlaylistPickerModal.slint";
+import { PlaylistDuplicateConfirmModal } from "../primitives/PlaylistDuplicateConfirmModal.slint";
 import { CreatePlaylistModal } from "../primitives/CreatePlaylistModal.slint";
 import { EditPlaylistModal } from "../primitives/EditPlaylistModal.slint";
 import { CreateFolderModal } from "../primitives/CreateFolderModal.slint";
@@ -28,6 +29,7 @@ import { EphemeralPlayChoiceModal } from "../primitives/EphemeralPlayChoiceModal
 import { FolderEditModal } from "../primitives/FolderEditModal.slint";
 import { LibFolderEditModal } from "../settings/LibFolderEditModal.slint";
 import { TagEditorModal } from "../primitives/TagEditorModal.slint";
+import { PlaylistImportModal } from "../primitives/PlaylistImportModal.slint";
 import { QconnectDevModal } from "QconnectDevModal.slint";
 import { DragGhost } from "../primitives/DragGhost.slint";
 import { Toast } from "../primitives/Toast.slint";
@@ -369,7 +371,11 @@ export component AppShell inherits Rectangle {
             // When both are open each section vertical-stretches to half; when
             // only one is open it fills.
             Rectangle {
-                width: (ShellState.queue-open || ShellState.lyrics-open) ? 280px : 0px;
+                // 300px so the lines/queue gain +20px of CONTENT width
+                // (padding/margins unchanged inside the panels). Both share
+                // the column (stacked mode), so both widen together — keeping
+                // Queue and Lyrics aligned when stacked.
+                width: (ShellState.queue-open || ShellState.lyrics-open) ? 300px : 0px;
                 clip: true;
                 animate width { duration: 160ms; easing: ease-in-out; }
                 background: Theme.surface-card;
@@ -428,6 +434,10 @@ export component AppShell inherits Rectangle {
     // context menu.
     PlaylistPickerModal { }
 
+    // "Duplicate tracks" confirm sub-modal — mounted AFTER the picker so it
+    // stacks above it (Slint stacking = declaration order; ADR-009/010).
+    PlaylistDuplicateConfirmModal { }
+
     // Global "Create playlist" modal, opened from the sidebar "+".
     CreatePlaylistModal { }
 
@@ -461,6 +471,12 @@ export component AppShell inherits Rectangle {
 
     // Global "Tag editor" modal (local album metadata).
     TagEditorModal { }
+
+    // Global "Import Playlist" modal (public-playlist importer). Mounted
+    // LAST among the feature modals so it stacks above them (ADR-009
+    // declaration-order z; ADR-010 conditional mount via the global's
+    // `open`), keeping QconnectDevModal topmost.
+    PlaylistImportModal { }
 
     // Qobuz Connect DEV diagnostics modal (opened from the connect flyout).
     QconnectDevModal {

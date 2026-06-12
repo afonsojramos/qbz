@@ -5422,6 +5422,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-playlist-import"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "log",
+ "qbz-models",
+ "qbz-qobuz",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "qbz-plex"
 version = "0.1.0"
 dependencies = [
@@ -5513,6 +5528,7 @@ dependencies = [
  "qbz-models",
  "qbz-offline-cache",
  "qbz-player",
+ "qbz-playlist-import",
  "qbz-plex",
  "qbz-qobuz",
  "qconnect-app",

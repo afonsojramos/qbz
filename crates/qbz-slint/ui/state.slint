@@ -40,7 +40,8 @@ export struct AlphaJump {
 // One button in the shared multi-select bulk bar (MultiSelectBar).
 export struct BulkAction {
     id: string,             // emitted verbatim via MultiSelectBar.action(id)
-    label: string,          // already-translated button label
+    label: string,          // already-translated text — now the hover tooltip
+    icon: image,            // the button glyph (the bar is icon-only)
     danger: bool,           // red-bordered destructive button (e.g. Remove)
     needs-selection: bool,  // dimmed + disabled while nothing is selected
 }
@@ -288,6 +289,11 @@ export global AlbumState {
     in property <string> artwork-url;
     in property <bool> has-custom-cover: false;
     in property <string> info-line;
+    // Meta-line split around the label so the header can render the label
+    // as a clickable link: meta-pre (year) + [label] + meta-post
+    // (genre • N tracks • duration). info-line stays the fallback.
+    in property <string> meta-pre;
+    in property <string> meta-post;
     in property <string> quality-tier;
     // "24-bit / 96 kHz" — quality-badge detail line.
     in property <string> quality-detail;
@@ -295,6 +301,10 @@ export global AlbumState {
     in property <string> description;
     // Truncated description for the header; full text lives in the modal.
     in property <string> description-short;
+    // Half-length truncation used when the content area is space-constrained
+    // (ShellState.content-constrained) so the header stays compact and the
+    // tracks keep priority. Falls back to the full short text when there's room.
+    in property <string> description-shorter;
     in property <image> artwork;
     // Artwork-derived tint for the header gradient.
     in property <color> header-color: #181820;
@@ -302,6 +312,25 @@ export global AlbumState {
     // Label id for the sidebar label card → label page navigation ("" = none).
     in property <string> label-id;
     in property <[string]> awards: [];
+    // True when the album ships a downloadable booklet/liner-notes PDF
+    // (Qobuz goodies). Gates the booklet button in the header — not every
+    // album has one.
+    in property <bool> has-booklet: false;
+    // True when EVERY track of the album is cached offline (cache-status 3).
+    // Swaps the header menu's "Make available offline" for "Refresh offline
+    // copy" (Tauri's isAlbumFullyDownloaded). Kept live as downloads land.
+    in property <bool> album-fully-cached: false;
+    // Whether the album is in the user's favorites (library). Drives the
+    // header heart (filled accent when on). Seeded from fav_cache on open,
+    // flipped optimistically on toggle.
+    in property <bool> is-favorite: false;
+    // True while a favorite toggle is in flight (spinner on the heart).
+    in property <bool> favorite-loading: false;
+    // Multi-select (track selection) mode for the track list. in-out: the
+    // toolbar toggle flips it from the UI; Rust resets it on album change.
+    in-out property <bool> multi-select: false;
+    // Number of selected rows (drives the bulk bar count + select-all label).
+    in property <int> selected-count: 0;
     in property <[TrackItem]> tracks: [];
     in property <bool> loading: false;
     // True when this is a Local Library album (local files / offline copies).
@@ -316,6 +345,12 @@ export global AlbumState {
 export global AlbumActions {
     // Filter the visible track list by a query (client-side).
     callback search(string);
+    // Toggle multi-select (track selection) mode on the album track list.
+    callback toggle-multi-select();
+    // Bulk-bar action over the selected rows (id = "select-all" | "play-next"
+    // | "queue" | "add-to-playlist" | "add-to-favorites" | "make-offline" |
+    // "clear").
+    callback bulk-action(string);
 }
 
 // Track drag-and-drop onto sidebar playlists (a star QBZ feature).
@@ -1128,6 +1163,8 @@ export global SidebarActions {
     callback refresh-playlists();
     // Open the full Playlist Manager view.
     callback manage-playlists();
+    // Open the playlist importer modal (sidebar "..." menu).
+    callback import-playlist();
 }
 
 // "Create playlist" modal state. Mirrors Tauri's PlaylistModal (create
@@ -2413,6 +2450,11 @@ export global ArtistState {
     // Artwork-derived tint for the header gradient.
     in property <color> header-color: #181820;
     in property <[TrackItem]> top-tracks: [];
+    // Popular Tracks multi-select (track selection) mode + selected count —
+    // mirrors AlbumState. in-out: the section toggle flips it from the UI;
+    // Rust resets it on artist change.
+    in-out property <bool> top-tracks-multi-select: false;
+    in property <int> top-tracks-selected-count: 0;
     // Releases grouped into titled sections (Albums, EPs & Singles, ...).
     in property <[DiscoverSection]> release-sections: [];
     // Labels collected from the artist's own album releases (deduped by
@@ -2449,6 +2491,15 @@ export global ArtistActions {
     // a query string (client-side substring match, mirrors the album
     // track search in AlbumActions).
     callback search(string);
+    // Toggle Popular Tracks multi-select mode.
+    callback toggle-top-tracks-select();
+    // Bulk-bar action over the selected Popular Tracks (id = "select-all" |
+    // "play-next" | "queue" | "add-to-playlist" | "add-to-favorites" |
+    // "clear").
+    callback top-tracks-bulk-action(string);
+    // Popular Tracks section "more" menu (id = "next-all" | "queue-all" |
+    // "shuffle-all" | "playlist-all").
+    callback top-tracks-menu-action(string);
 }
 
 // Artist network sidebar — Origin / Labels / Similar / Relationships /
@@ -2746,6 +2797,16 @@ export global ShellState {
     // where lyrics closed queue and vice-versa.)
     in-out property <bool> queue-open: false;
     in-out property <bool> lyrics-open: false;
+    // Live WINDOW width (set from the AppWindow root). Views read it to make
+    // content-area responsiveness decisions independent of their own
+    // (sidebar-shrunk) width — e.g. the album Label/Awards sidebar collapses
+    // to an icon rail at the now-playing-bar breakpoint (1366px) WHEN a right
+    // panel is open. Defaults to the preferred window width.
+    in-out property <length> window-width: 1180px;
+    // True when the content area is space-constrained: window at/under the
+    // NPB responsive breakpoint AND a right panel (Queue/Lyrics) is open.
+    out property <bool> content-constrained:
+        root.window-width < 1366px && (root.queue-open || root.lyrics-open);
     // Section navigation placement: the sections (Discover/Library/Local
     // Library/My QBZ) now live in the sidebar and open right-flyout menus.
     in-out property <bool> nav-in-sidebar: true;
@@ -3067,6 +3128,11 @@ export struct PlaylistPickItem {
     // LOCAL playlist (library.db entity, id "local:<uuid>") — the row
     // shows a hard-drive glyph; adds write the local repo (works offline).
     is-local: bool,
+    // Client-side filter result — recomputed Rust-side on every filter
+    // keystroke (Slint 1.16 has no string `.contains`, so the substring
+    // match lives in Rust). Match ordinal among the filtered rows;
+    // -1 = filtered out. Rows ranked >= 8 hide behind the overflow row.
+    filter-rank: int,
 }
 
 // "Add to playlist" picker — a global overlay opened from the track
@@ -3081,11 +3147,49 @@ export global PlaylistPickerState {
     // True when track-ids are LocalLibrary row ids (i64) -> route to
     // add_local_track_to_playlist instead of the Qobuz endpoint.
     in property <bool> local-mode: false;
+    // Client-side filter: case-insensitive substring over playlist names.
+    // Pure frontend, no backend call. The list filters live as the user types.
+    in-out property <string> filter: "";
+    // Total rows matching the current filter — drives the dropdown's
+    // no-results/overflow rows and its explicit height.
+    in property <int> filter-matches: 0;
+    // Inline "Create new playlist" affordance (mirrors Tauri's
+    // CREATE_NEW_PLAYLIST inline name field). When `creating-open` is true the
+    // name input is revealed; `create-name` holds the typed name; `creating`
+    // gates the confirm while the create-and-add runs.
+    in-out property <bool> creating-open: false;
+    in-out property <string> create-name: "";
+    in-out property <bool> creating: false;
 }
 
 export global PlaylistPickerActions {
     callback pick(string /* playlist id */);
     callback close();
+    // Inline create-and-add: creates a new playlist (Qobuz online / local
+    // offline per D8) and adds the carried tracks to it.
+    callback create-and-add();
+    // Client-side filter changed — Rust recomputes each row's filter-rank
+    // plus filter-matches (case-insensitive substring) since Slint 1.16
+    // lacks string `.contains`.
+    callback filter-changed(string);
+}
+
+// "Duplicate tracks" confirm sub-modal — shown when a Qobuz-tracks → Qobuz-
+// playlist add finds tracks already in the target. The track-id Vec<u64> and
+// the duplicate id set live Rust-side in a stash cell (Slint never holds
+// them); this global only carries the counts + busy flag for rendering.
+export global DuplicateConfirmState {
+    in-out property <bool> open: false;
+    in property <int> duplicate-count: 0;
+    in property <int> total-count: 0;
+    in property <bool> busy: false;
+    in property <string> playlist-name;
+}
+
+export global DuplicateConfirmActions {
+    callback add-all();
+    callback add-new-only();
+    callback cancel();
 }
 
 // One artist tile in the Favorites > Artists grid.
@@ -3353,4 +3457,72 @@ export global OfflineFavoritesActions {
     // Play the rail starting at the clicked track id (offline-capable
     // queue path; the cached copies play through the offline tier).
     callback play(string);
+}
+
+// ================= Playlist Importer (public playlists) ==================
+// "Import Playlist" modal state — 1:1 port of Tauri's
+// PlaylistImportModal.svelte. All interpolated strings (log lines, status
+// line, summary block) arrive pre-formatted from the Rust controller
+// (crate::playlist_import); the UI renders them verbatim. Provider
+// detection lives Rust-side too (Slint 1.16 has no string `.contains`) —
+// every URL keystroke round-trips through `url-edited`.
+
+// One append-only line in the conversion log.
+export struct ImportLogEntry {
+    // Final display string (pre-formatted Rust-side).
+    message: string,
+    // "info" | "success" | "error" — drives the row color.
+    status: string,
+}
+
+export global PlaylistImportState {
+    in-out property <bool> open: false;
+    in-out property <string> url;
+    // Rename field — prefilled with the fetched playlist name.
+    in-out property <string> custom-name;
+    // True during preview fetch AND import execute.
+    in property <bool> loading: false;
+    // "" = none; shown as the red banner at the top of the body.
+    in property <string> error: "";
+    // "" | "spotify" | "apple" | "tidal" | "deezer" — the locked-or-
+    // detected provider; its source logo renders full-opacity.
+    in property <string> active-provider: "";
+    // Rust-computed: provider detected && !offline.
+    in property <bool> can-fetch: false;
+    // Rust-computed: a preview exists AND the URL hasn't been edited
+    // since the fetch — flips the modal into step B (rename + Import).
+    in property <bool> show-preview: false;
+    in property <bool> import-completed: false;
+    // The "Conversion progress" panel (any log lines, or loading).
+    in property <bool> progress-visible: false;
+    // Bar + status/current-track lines visible.
+    in property <bool> has-progress: false;
+    in property <float> progress: 0.0; // 0..1
+    in property <string> status-line: "";
+    in property <string> current-track: "";
+    in property <[ImportLogEntry]> log: [];
+    // Folder dropdown options — exact CreatePlaylistState pattern: index
+    // 0 is always "No folder" (id ""), the rest are the user's folder
+    // names parallel to `folder-ids`.
+    in property <[string]> folder-options: ["No folder"];
+    in property <[string]> folder-ids: [""];
+    in-out property <int> folder-index: 0;
+    // Summary block, pre-formatted lines ("" = hidden).
+    in property <string> summary-playlist: "";
+    in property <string> summary-matched: "";
+    in property <string> summary-skipped: "";
+    in property <string> summary-parts: "";
+}
+
+export global PlaylistImportActions {
+    callback close();
+    // Fired on every URL keystroke — Rust recomputes active-provider /
+    // can-fetch / show-preview (and the post-completion reset path).
+    callback url-edited(string);
+    // Keeps Rust's custom_name mirror fresh.
+    callback name-edited(string);
+    // Step A: preview_public_playlist(url).
+    callback fetch();
+    // Step B: import_public_playlist(...) with rename + folder choice.
+    callback execute();
 }
