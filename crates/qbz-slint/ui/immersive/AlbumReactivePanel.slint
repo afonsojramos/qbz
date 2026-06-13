@@ -109,8 +109,14 @@ export component AlbumReactivePanel inherits Rectangle {
     // glowOpacity = min(0.1 + globalEnergy * 1.5, 1)  (Svelte line 167)
     property <float> glow-opacity: Math.min(0.1 + root.global-energy * 1.5, 1.0);
 
-    // Base art box: Svelte `min(52vh, 460px)`. viewport-height is the vh basis.
-    property <length> base-art: Math.min(root.viewport-height * 0.52, 460px);
+    // Base art box. Tauri uses `min(52vh, 460px)`, but the Slint group must also
+    // leave room for the metadata block + the floating player, or the quality
+    // badge gets clipped under the bar. So size the art so the WHOLE group
+    // (art*1.25 growth + spacing + info) fits the viewport height, with a width
+    // cap for narrow windows. Reserve = pad-top(52) + spacing(40) + info(~160) +
+    // player clearance(132) = 384px. Clamped to a sane 180..460px range.
+    property <length> base-art: Math.max(180px,
+        Math.min(Math.min((root.viewport-height - 384px) / 1.25, root.viewport-width * 0.55), 460px));
     // Reactive size = base * artScale. The glow layer and the art share this
     // exact size/position so the halo stays glued to the art edge (per risk).
     property <length> art-size: root.base-art * root.art-scale;
@@ -127,12 +133,13 @@ export component AlbumReactivePanel inherits Rectangle {
         y: 0px;
         width: root.viewport-width;
         height: root.viewport-height;
-        // Reserve the Svelte top/bottom padding (52px / 88px) so the group does
-        // not collide with the ModeBar (top) or the player bar (bottom).
+        // Reserve top for the ModeBar and bottom for the floating player bar
+        // (90px + 24px margin + gap). base-art's reserve constant (384px) is kept
+        // in sync with these (pad-top 52 + spacing 40 + info ~160 + pad-bottom 132).
         padding-top: 52px;
-        padding-bottom: 88px;
+        padding-bottom: 132px;
         alignment: center;
-        spacing: 60px;
+        spacing: 40px;
 
         // --- Artwork + glow ------------------------------------------------
         artwork-block := Rectangle {
