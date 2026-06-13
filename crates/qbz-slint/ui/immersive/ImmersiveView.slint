@@ -4,7 +4,7 @@
 
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { NowPlayingState, VisualizerState, ImmersiveState } from "../state.slint";
+import { NowPlayingState, VisualizerState, ImmersiveState, SettingsState } from "../state.slint";
 import { ImmersiveAtmosphere } from "ImmersiveAtmosphere.slint";
 
 component GhostButton inherits Rectangle {
@@ -129,10 +129,104 @@ component TinyBar inherits Rectangle {
     }
 }
 
+// Volume slider mirroring Tauri's VolumeSlider.svelte: thin white-on-glass
+// track, hover-revealed thumb, drag-time percent bubble, and a locked state
+// that pins the fill to 100% and dims/no-ops (bit-perfect ALSA-Direct or a
+// QConnect peer that disallows remote volume). NOTE: `opacity:` is intentionally
+// NOT applied to the root (it would corrupt absolute positioning); inner content
+// is dimmed instead.
+component VolumeBar inherits Rectangle {
+    in property <float> value: 0.0;        // 0..1
+    in property <bool> locked: false;
+    callback changed(float);               // emits 0..1
+
+    // The visual fill fraction: pinned to 100% when locked (matches Tauri).
+    property <float> shown: root.locked ? 1.0 : Math.max(0.0, Math.min(1.0, root.value));
+
+    height: 12px;
+    background: transparent;
+
+    // Drag-time / hover percent readout. Hidden when locked.
+    Rectangle {
+        x: root.width - self.width;
+        y: -26px;
+        width: 34px;
+        height: 20px;
+        border-radius: 6px;
+        background: #000000b3;
+        visible: !root.locked && (ta.has-hover || ta.pressed);
+        Text {
+            text: Math.round(root.shown * 100) + "";
+            color: #ffffff;
+            font-size: 11px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            x: 0; y: 0;
+            width: parent.width;
+            height: parent.height;
+        }
+    }
+
+    // Track background.
+    Rectangle {
+        x: 0px;
+        y: 5px;
+        width: root.width;
+        height: 2px;
+        border-radius: 1px;
+        background: root.locked ? #ffffff1f : #ffffff33;
+    }
+    // Fill.
+    Rectangle {
+        x: 0px;
+        y: 5px;
+        height: 2px;
+        width: root.width * root.shown;
+        border-radius: 1px;
+        background: root.locked ? #ffffff66 : #ffffffb3;
+    }
+    // Hover-revealed thumb. Position is computed from `root.width`, not from
+    // layout-managed geometry, so no recursion/binding-loop risk.
+    Rectangle {
+        x: root.width * root.shown - self.width / 2;
+        y: 0px;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: #ffffff;
+        opacity: (!root.locked && (ta.has-hover || ta.pressed)) ? 1.0 : 0.0;
+        animate opacity { duration: 150ms; }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: root.locked ? default : pointer;
+        clicked => {
+            if (!root.locked) {
+                root.changed(Math.max(0.0, Math.min(1.0, self.mouse-x / self.width)));
+            }
+        }
+        moved => {
+            if (!root.locked && self.pressed) {
+                root.changed(Math.max(0.0, Math.min(1.0, self.mouse-x / self.width)));
+            }
+        }
+    }
+}
+
 component ImmersivePlayerBar inherits Rectangle {
     in property <length> viewport-width: 720px;
     callback media-action(string, string, string);
     callback wake();
+
+    // Volume lock, identical to PlayerBar.slint:154-155 / Tauri's
+    // handleVolumeChange formula:
+    //   (isAlsaDirectHw && !peerActive) || (peerActive && !remoteVolumeAllowed)
+    // The local ALSA-Direct (bit-perfect) lock is LIFTED while controlling a
+    // peer (the `!is-remote` term) so the user can still drive the renderer's
+    // volume; the peer half is the sink-pushed NowPlayingState.volume-locked.
+    property <bool> vol-locked: (SettingsState.backend-is-alsa && SettingsState.alsa-plugin-is-hw && !NowPlayingState.is-remote)
+        || NowPlayingState.volume-locked;
 
     width: Math.min(root.viewport-width - 32px, 720px);
     height: 90px;
@@ -215,18 +309,29 @@ component ImmersivePlayerBar inherits Rectangle {
     GhostButton {
         x: root.width - 156px;
         y: 22px;
-        icon: NowPlayingState.muted || NowPlayingState.volume == 0
+        // Under lock the fill pins to 100%, so the icon must NOT show the
+        // muted/zero glyph (matches Tauri VolumeSlider: Volume2 when locked).
+        icon: (!root.vol-locked && (NowPlayingState.muted || NowPlayingState.volume == 0))
             ? @image-url("../assets/icons/volume-x.svg")
             : @image-url("../assets/icons/volume-2.svg");
-        enabled: !NowPlayingState.volume-locked;
-        clicked => { NowPlayingState.toggle-mute(); }
+        enabled: !root.vol-locked;
+        clicked => {
+            if (!root.vol-locked) {
+                NowPlayingState.toggle-mute();
+            }
+        }
     }
-    TinyBar {
+    VolumeBar {
         x: root.width - 112px;
         y: 31px;
         width: 64px;
         value: NowPlayingState.volume;
-        changed(v) => { NowPlayingState.set-volume(v); }
+        locked: root.vol-locked;
+        changed(v) => {
+            if (!root.vol-locked) {
+                NowPlayingState.set-volume(v);
+            }
+        }
     }
     Rectangle {
         x: root.width - 42px;
