@@ -6,7 +6,8 @@
 //! cover is applied to its own `AlbumCardItem` row on the Slint event
 //! loop, so artwork arriving never resets a list (POC ADR 16 and 18).
 
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use qbz_cache::ImageCacheService;
 use qbz_models::ArtworkRef;
@@ -422,6 +423,69 @@ fn decode_rgba(bytes: &[u8], decode_size: u32) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgba.into_raw(), width, height))
 }
 
+/// A decoded cover, ready for `pixels_to_image`. `slint::Image` is `!Send`, so
+/// the cache stores the RGBA tuple (which IS `Send`) and the event loop builds
+/// the `slint::Image` on demand. `Arc`-wrapped so cache hits clone a pointer,
+/// not the ~36KB buffer.
+pub type DecodedPixels = (Arc<Vec<u8>>, u32, u32);
+
+/// Decoded-pixel LRU. Repeat decodes of the same `(url, size)` — exactly what
+/// the coverflow / queue refresh hammered every click — become a HashMap hit +
+/// a cheap pixel upload instead of a full `image::load_from_memory().thumbnail()`.
+/// Capped to keep a long session from leaking; insertion order approximates LRU
+/// (re-insert on hit moves the entry to the back).
+const DECODED_CACHE_CAP: usize = 256;
+
+struct DecodedCache {
+    /// `(url, size)` -> decoded pixels. Insertion order = eviction order.
+    map: HashMap<(String, u32), DecodedPixels>,
+    /// Keys in insertion order; the front is the eviction candidate.
+    order: Vec<(String, u32)>,
+}
+
+static DECODED_PIXEL_CACHE: LazyLock<Mutex<DecodedCache>> = LazyLock::new(|| {
+    Mutex::new(DecodedCache {
+        map: HashMap::new(),
+        order: Vec::new(),
+    })
+});
+
+/// Decoded-pixel cache lookup for `(url, size)`. A hit returns the shared RGBA
+/// tuple — callers build the `slint::Image` via [`pixels_to_image`] on the event
+/// loop and SKIP the expensive decode entirely.
+pub fn decoded_pixels(url: &str, size: u32) -> Option<DecodedPixels> {
+    let mut cache = DECODED_PIXEL_CACHE.lock().ok()?;
+    let key = (url.to_string(), size);
+    let hit = cache.map.get(&key).cloned();
+    if hit.is_some() {
+        // Move to the back (most-recently-used).
+        if let Some(pos) = cache.order.iter().position(|k| k == &key) {
+            cache.order.remove(pos);
+        }
+        cache.order.push(key);
+    }
+    hit
+}
+
+/// Store decoded pixels for `(url, size)`, evicting the oldest entry past the cap.
+fn store_decoded(url: &str, size: u32, pixels: &DecodedPixels) {
+    let Ok(mut cache) = DECODED_PIXEL_CACHE.lock() else {
+        return;
+    };
+    let key = (url.to_string(), size);
+    if cache.map.insert(key.clone(), pixels.clone()).is_none() {
+        cache.order.push(key);
+    } else if let Some(pos) = cache.order.iter().position(|k| k == &key) {
+        // Refresh recency on an overwrite.
+        cache.order.remove(pos);
+        cache.order.push(key);
+    }
+    while cache.order.len() > DECODED_CACHE_CAP {
+        let oldest = cache.order.remove(0);
+        cache.map.remove(&oldest);
+    }
+}
+
 /// Resolve an [`ArtworkRef`] to raw RGBA8 pixels, downscaled to
 /// `decode_size`, regardless of origin. This is the source-aware entry
 /// point that fixes local/Plex artwork never reaching the UI: HTTP and Plex
@@ -436,6 +500,30 @@ pub async fn fetch_and_decode_ref(
     if art.is_empty() {
         return None;
     }
+
+    // Decoded-pixel cache key: the stable resolved location for this art at this
+    // decode size. A hit returns the already-decoded RGBA tuple and skips both
+    // the disk read AND the `image::load_from_memory().thumbnail()` decode — this
+    // is what makes a one-position queue/coverflow shift near-free (the 6 covers
+    // still on screen reuse their decoded pixels instead of being re-decoded).
+    // `Embedded` has no stable URL, so it is never decode-cached.
+    let cache_key: Option<String> = match art {
+        ArtworkRef::None | ArtworkRef::Embedded(_) => None,
+        ArtworkRef::LocalFile(path) => Some(path.clone()),
+        ArtworkRef::Remote(url) => Some(url.clone()),
+        ArtworkRef::PlexThumb {
+            base_url,
+            token,
+            path,
+            size,
+        } => Some(qbz_models::plex_thumb_url(base_url, token, path, *size)),
+    };
+    if let Some(key) = cache_key.as_deref() {
+        if let Some((pixels, w, h)) = decoded_pixels(key, decode_size) {
+            return Some(((*pixels).clone(), w, h));
+        }
+    }
+
     let bytes: Vec<u8> = match art {
         ArtworkRef::None => return None,
         ArtworkRef::Embedded(b) => b.clone(),
@@ -457,7 +545,11 @@ pub async fn fetch_and_decode_ref(
             fetch_cached_http(&url, cache, false).await?
         }
     };
-    decode_rgba(&bytes, decode_size)
+    let (pixels, w, h) = decode_rgba(&bytes, decode_size)?;
+    if let Some(key) = cache_key {
+        store_decoded(&key, decode_size, &(Arc::new(pixels.clone()), w, h));
+    }
+    Some((pixels, w, h))
 }
 
 /// Resolve one cover image (by remote URL) to raw RGBA8 pixels. Kept for the

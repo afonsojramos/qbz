@@ -1,35 +1,40 @@
-// Coverflow foreground (Immersive mode 2) — a faithful PURE-SLINT 2D port of
-// the Tauri `src/lib/components/immersive/panels/CoverflowPanel.svelte`.
+// Coverflow foreground (Immersive mode 2) — a CHEAP "rocola" (jukebox)
+// PYRAMID of flat scaled cards.
 //
-// OWNER DECISION (binding): Tauri's coverflow uses true CSS 3D — perspective:1400px
-// + rotateY(45/55deg) on the side covers + a hover micro-turn. Declarative Slint
-// has NO perspective / 3D / shear, so the true-3D rotateY foreshortening, the
-// 1400px perspective, and the hover micro-turn are DROPPED and DEFERRED to a
-// future wgpu/Skia session. This is the FAITHFUL-POSSIBLE 2D version:
-//   - a clean scaled fan: now-playing cover CENTERED + on top; played covers
-//     (QueueState.history) fanned LEFT; upcoming covers (QueueState.upcoming-page)
-//     fanned RIGHT.
-//   - depth via SCALE + per-depth drop-shadow + a far-edge shade gradient +
-//     dimming-by-distance. NO rotateY, NO skew, NO perspective, NO fake tilt
-//     (a fake 2D tilt is exactly the approximation trap the owner rejected).
-//   - a ~500ms reflow on track change via `animate x, width, height` on the
-//     data-derived slot bindings + `animate opacity` on the INNER dim Rectangle
-//     (never on the slot root — root opacity corrupts absolute positioning).
+// OWNER DECISION (binding, REPLACES the old true-3D-aspiring fan): NO rotateY /
+// skew / perspective / reflection, NO far-edge shade gradient, NO transparency
+// on the card root. Just flat scaled cards. Depth reads from (a) a step-down
+// SCALE so the silhouette is a pyramid (center tallest) and (b) a per-depth
+// semi-transparent BLACK overlay on an INNER rectangle (attenuation, darker
+// the further out). A real blur is too expensive and is NOT used — the owner
+// said "un blur o atenuación... basta", so attenuation + scale is the depth cue.
+//
+// LAYOUT: 7 cards = 3 past (left, history) + center + 3 upcoming (right). The
+// now-playing cover is ALWAYS centered and ALWAYS on top in Z (declared LAST =
+// paints last). Cards may overlap toward the center (jukebox stack).
+//
+// PERF: the old version animated x / width / height over 500ms on every slot,
+// re-laying-out clipped images each frame on every click. That is DROPPED — the
+// cards snap to their new depth on a click (Option A). Combined with the Rust
+// decoded-handle reuse (queue.rs) the covers no longer blink, so the snap is
+// clean. A single 120ms opacity cross-fade on the INNER dim overlay (Option B)
+// is the only motion — GPU-only, no relayout, no texture re-upload.
 //
 // SLINT GOTCHAS honored: `parent` is never read in any root binding (viewport
-// dims passed as props; CoverSlot dims passed as props). No Repeater for the
-// slots (hand-placed 5 fixed instances) and NO `changed x/y/width/height`
-// watchers -> avoids the "Recursion detected" panic. Slot painting order is
-// declaration order, so the center slot is declared LAST (paints on top).
+// dims passed as props; CoverSlot dims passed as props). Hand-placed fixed
+// instances (no Repeater) and NO `changed x/y/width/height` watchers -> avoids
+// the "Recursion detected" panic. `dim` is applied on an INNER Rectangle, never
+// the slot root opacity (root opacity corrupts absolute positioning). The
+// off-clamp uses Math.min (max-width is ignored on hand-positioned Rectangles).
 //
-// DATA MAPPING (QueueState is host-split, not Tauri's flat queue+index):
-//   center  (offset 0)  <- NowPlayingState (unified source, also feeds card)
-//   right-1 (offset +1)  <- QueueState.upcoming-page[0]  (idx 0 = next track)
-//   right-2 (offset +2)  <- QueueState.upcoming-page[1]
-//   left-1  (offset -1)  <- QueueState.history[0]        (recent-first = prev)
-//   left-2  (offset -2)  <- QueueState.history[1]
-// Side covers navigate DIRECTLY via QueueState.play-upcoming / play-history
-// (QueueState is a global; no ImmersiveView plumbing needed).
+// DATA MAPPING (unfiltered coverflow lists, correct regardless of sidebar
+// page/search — populated in queue.rs refresh_async from state.upcoming[..3] /
+// state.history[..3] with decoded-handle reuse):
+//   center  (depth 0)  <- NowPlayingState (unified source, also feeds the card)
+//   right-n (depth n)   <- QueueState.coverflow-upcoming[n-1]  (next tracks)
+//   left-n  (depth n)   <- QueueState.coverflow-history[n-1]   (recent-first)
+// Side covers navigate via QueueState.play-upcoming / play-history (index n-1);
+// the center is non-interactive.
 
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { NowPlayingState, QueueState } from "../state.slint";
@@ -82,22 +87,18 @@ component EqualizerBars inherits Rectangle {
     }
 }
 
-// One fanned cover. Dims passed as props (NEVER `parent` in the root binding).
-// `dim` is the distance darkening (0 center .. 0.45 outermost); applied on an
-// INNER Rectangle, never the root opacity. The far-edge shade gradient is the
-// only honest nod to the Tauri turn — `side` selects which edge darkens
-// (-1 = left covers darken their LEFT/far edge, +1 = right covers darken their
-// RIGHT/far edge, 0 = center, no shade). `has-art` true when the cover image is
-// resolved; when an item exists but its art is not yet decoded we show a neutral
-// placeholder instead of a 0-size collapse. The 500ms reflow lives on the
-// animatable x / size / dim bindings.
+// One flat card in the pyramid. Dims passed as props (NEVER `parent` in the
+// root binding). `dim` is the per-depth attenuation (0 center .. 0.55 outermost)
+// applied on an INNER Rectangle, never the root opacity. `has-art` is true when
+// the cover image is resolved; otherwise a neutral placeholder shows instead of
+// a 0-size collapse. NO animated geometry — the card snaps to its depth on a
+// click; only the dim overlay cross-fades (120ms, GPU-only).
 component CoverSlot inherits Rectangle {
     in property <image> art;
     in property <length> slot-size;
     in property <length> center-x;     // window-x of the cover CENTER
     in property <length> stage-height;
-    in property <float> dim: 0.0;       // 0..1 extra darken
-    in property <int> side: 0;          // -1 left, 0 center, +1 right
+    in property <float> dim: 0.0;       // 0..1 per-depth black-overlay opacity
     in property <bool> has-art: false;  // art image resolved (width > 0)
     in property <bool> interactive: false;
     callback navigate();
@@ -105,20 +106,17 @@ component CoverSlot inherits Rectangle {
     width: root.slot-size;
     height: root.slot-size;
     x: root.center-x - root.slot-size / 2;
-    // Vertical center of the stage, small upward bias to leave room for the card.
+    // Shared center band; the larger center card naturally rises. Small upward
+    // bias to leave room for the song card below.
     y: (root.stage-height - root.slot-size) / 2 - 12px;
     border-radius: 8px;
     clip: true;
 
-    // Per-depth drop-shadow: center 32px @ 0.4, sides 16px @ 0.25 (spec :246/:288).
-    drop-shadow-blur: root.side == 0 ? 32px : 16px;
-    drop-shadow-color: root.side == 0 ? #00000066 : #00000040;
-    drop-shadow-offset-y: root.side == 0 ? 8px : 4px;
-
-    // 500ms reflow on track change — bindings recompute when the data reshuffles.
-    animate x { duration: 500ms; easing: cubic-bezier(0.4, 0, 0.2, 1); }
-    animate width { duration: 500ms; easing: cubic-bezier(0.4, 0, 0.2, 1); }
-    animate height { duration: 500ms; easing: cubic-bezier(0.4, 0, 0.2, 1); }
+    // Static drop-shadow on the center card only (never animated, never on the
+    // side cards — the attenuation carries their depth).
+    drop-shadow-blur: root.dim == 0.0 ? 28px : 0px;
+    drop-shadow-color: #00000066;
+    drop-shadow-offset-y: root.dim == 0.0 ? 8px : 0px;
 
     // Neutral placeholder when the item exists but its art is unresolved.
     Rectangle {
@@ -137,35 +135,20 @@ component CoverSlot inherits Rectangle {
         visible: root.has-art;
     }
 
-    // Far-edge shade gradient — the only honest nod to the Tauri turn (NOT a
-    // tilt). Left covers darken their LEFT edge; right covers their RIGHT edge.
-    if root.side == -1: Rectangle {
-        width: parent.width;
-        height: parent.height;
-        border-radius: 8px;
-        background: @linear-gradient(90deg, #00000050 0%, transparent 35%);
-    }
-    if root.side == 1: Rectangle {
-        width: parent.width;
-        height: parent.height;
-        border-radius: 8px;
-        background: @linear-gradient(90deg, transparent 65%, #00000050 100%);
-    }
-
-    // Distance dimming — on an INNER Rectangle (never the slot root opacity,
-    // which corrupts absolute positioning). Animated so the dim cross-fades
-    // during the 500ms reflow.
-    dim-overlay := Rectangle {
+    // Per-depth attenuation — a semi-transparent BLACK overlay on an INNER
+    // Rectangle (never the slot root opacity). The ONLY animation: a short
+    // opacity cross-fade so the attenuation eases as a card changes depth.
+    // GPU-only (no relayout, no clipped-image re-raster) -> no CPU spike.
+    Rectangle {
         width: parent.width;
         height: parent.height;
         border-radius: 8px;
         background: #000000;
         opacity: root.dim;
-        animate opacity { duration: 500ms; easing: cubic-bezier(0.4, 0, 0.2, 1); }
+        animate opacity { duration: 120ms; easing: ease-out; }
     }
 
-    // Side covers navigate; the center is non-interactive (like the disabled
-    // Tauri center button).
+    // Side cards navigate; the center is non-interactive.
     if root.interactive: TouchArea {
         mouse-cursor: pointer;
         clicked => { root.navigate(); }
@@ -180,28 +163,29 @@ export component CoverflowPanel inherits Rectangle {
     height: root.viewport-height;
     background: transparent;
 
-    // --- Geometry (faithful, scaled from the spec) -----------------------
-    // Center cover edge. Reserve = pad-top(52) + fan + info(~160) +
-    // player-clearance(132) = 364px (same budget as StaticPanel). Width cap 0.42
-    // keeps both side fans inside the window (covers must not clip at narrow
-    // widths). Clamped 180..460px.
-    property <length> base-art: Math.max(180px,
-        Math.min(Math.min(root.viewport-height - 364px, root.viewport-width * 0.42), 460px));
-    // Side cover edges from the spec scale ratios (0.82/0.65 against the 380 side
-    // base relative to the 460 center): side1 = base*0.68, side2 = base*0.54.
-    property <length> side1-size: root.base-art * 0.68;
-    property <length> side2-size: root.base-art * 0.54;
+    // --- Geometry --------------------------------------------------------
+    // Center cover edge (base-art = depth-0 scale). Honors the 132px player
+    // clearance: reserve = pad-top(52) + info + clearance(132) = 364px.
+    property <length> base-art: Math.max(160px,
+        Math.min(Math.min(root.viewport-height - 364px, root.viewport-width * 0.42), 440px));
 
-    // X offsets scaled to base-art (spec ±200/±340 against a 460 center):
-    // off1 = base*0.435, off2 = base*0.739. Clamp so off2 + side2/2 stays inside
-    // the half-window with a 24px margin (narrow-width clip guard; max-width is
-    // ignored on hand-positioned Rectangles, so use Math.min).
+    // Step-down SCALE (center tallest): depth0 1.00, depth1 0.80, depth2 0.64,
+    // depth3 0.50.
+    property <length> size1: root.base-art * 0.80;
+    property <length> size2: root.base-art * 0.64;
+    property <length> size3: root.base-art * 0.50;
+
+    // X offsets (center-anchored, overlapping inward). Spec ratios off1 0.42,
+    // off2 0.74, off3 1.02. Each clamped so the card stays inside the half-window
+    // with a 16px margin (Math.min — max-width is ignored on hand-positioned
+    // rects). Chain off1 < off2 < off3 so the order never crosses.
     property <length> half-w: root.viewport-width / 2;
-    property <length> off2-max: Math.max(0px, root.half-w - root.side2-size / 2 - 24px);
-    property <length> off2: Math.min(root.base-art * 0.739, root.off2-max);
-    // Keep off1 strictly inside off2 (never overlap the order) while honoring
-    // the spec ratio; clamp to off2 minus a small gap.
-    property <length> off1: Math.min(root.base-art * 0.435, Math.max(0px, root.off2 - root.side2-size / 4));
+    property <length> off3: Math.min(root.base-art * 1.02,
+        Math.max(0px, root.half-w - root.size3 / 2 - 16px));
+    property <length> off2: Math.min(root.base-art * 0.74,
+        Math.max(0px, root.off3 - root.size3 / 4));
+    property <length> off1: Math.min(root.base-art * 0.42,
+        Math.max(0px, root.off2 - root.size2 / 4));
 
     // --- Center artwork source (unified NowPlayingState, like the siblings) --
     property <image> center-art: NowPlayingState.artwork-large.width > 0
@@ -209,98 +193,113 @@ export component CoverflowPanel inherits Rectangle {
         : NowPlayingState.artwork;
     property <bool> center-has-art: root.center-art.width > 0;
 
-    // --- Side item presence + art (async-decoded; guard with .width > 0) ----
-    property <bool> has-up1: QueueState.upcoming-page.length > 0;
-    property <bool> has-up2: QueueState.upcoming-page.length > 1;
-    property <bool> has-hist1: QueueState.history.length > 0;
-    property <bool> has-hist2: QueueState.history.length > 1;
+    // --- Side item presence (unfiltered coverflow lists) ----------------
+    property <bool> has-up1: QueueState.coverflow-upcoming.length > 0;
+    property <bool> has-up2: QueueState.coverflow-upcoming.length > 1;
+    property <bool> has-up3: QueueState.coverflow-upcoming.length > 2;
+    property <bool> has-hist1: QueueState.coverflow-history.length > 0;
+    property <bool> has-hist2: QueueState.coverflow-history.length > 1;
+    property <bool> has-hist3: QueueState.coverflow-history.length > 2;
 
-    // --- Fan stage -------------------------------------------------------
-    // A content stage centered horizontally, leaving the pad-top/clearance to
-    // the surrounding card layout. The stage height drives the slots' vertical
-    // center.
+    // --- Pyramid stage ---------------------------------------------------
     fan := Rectangle {
         x: 0px;
-        // pad-top 52 (true visual center offset, matches the siblings).
-        y: 52px;
+        y: 52px;                       // pad-top, matches the siblings
         width: root.viewport-width;
-        // The fan occupies the area above the song card; the card is pinned at
-        // the bottom with the 132px player clearance via the VerticalLayout.
         height: root.base-art + 56px;
 
         property <length> cx: root.viewport-width / 2;
 
-        // Declaration order = paint order: far -> near, CENTER LAST (on top).
-        // left-2 (offset -2) <- history[1]
+        // Declaration order = paint order: depth3 -> depth1 outward-to-inward,
+        // CENTER LAST (on top). Left/right of each depth interleaved.
+        // depth3 LEFT <- history[2]
         CoverSlot {
-            slot-size: root.side2-size;
+            slot-size: root.size3;
+            center-x: parent.cx - root.off3;
+            stage-height: parent.height;
+            dim: 0.55;
+            art: root.has-hist3 ? QueueState.coverflow-history[2].artwork : root.center-art;
+            has-art: root.has-hist3 && QueueState.coverflow-history[2].artwork.width > 0;
+            interactive: root.has-hist3;
+            visible: root.has-hist3;
+            navigate => { QueueState.play-history(2); }
+        }
+        // depth3 RIGHT <- upcoming[2]
+        CoverSlot {
+            slot-size: root.size3;
+            center-x: parent.cx + root.off3;
+            stage-height: parent.height;
+            dim: 0.55;
+            art: root.has-up3 ? QueueState.coverflow-upcoming[2].artwork : root.center-art;
+            has-art: root.has-up3 && QueueState.coverflow-upcoming[2].artwork.width > 0;
+            interactive: root.has-up3;
+            visible: root.has-up3;
+            navigate => { QueueState.play-coverflow-upcoming(2); }
+        }
+        // depth2 LEFT <- history[1]
+        CoverSlot {
+            slot-size: root.size2;
             center-x: parent.cx - root.off2;
             stage-height: parent.height;
-            dim: 0.45;
-            side: -1;
-            art: root.has-hist2 ? QueueState.history[1].artwork : root.center-art;
-            has-art: root.has-hist2 && QueueState.history[1].artwork.width > 0;
+            dim: 0.40;
+            art: root.has-hist2 ? QueueState.coverflow-history[1].artwork : root.center-art;
+            has-art: root.has-hist2 && QueueState.coverflow-history[1].artwork.width > 0;
             interactive: root.has-hist2;
             visible: root.has-hist2;
             navigate => { QueueState.play-history(1); }
         }
-        // right-2 (offset +2) <- upcoming-page[1]
+        // depth2 RIGHT <- upcoming[1]
         CoverSlot {
-            slot-size: root.side2-size;
+            slot-size: root.size2;
             center-x: parent.cx + root.off2;
             stage-height: parent.height;
-            dim: 0.45;
-            side: 1;
-            art: root.has-up2 ? QueueState.upcoming-page[1].artwork : root.center-art;
-            has-art: root.has-up2 && QueueState.upcoming-page[1].artwork.width > 0;
+            dim: 0.40;
+            art: root.has-up2 ? QueueState.coverflow-upcoming[1].artwork : root.center-art;
+            has-art: root.has-up2 && QueueState.coverflow-upcoming[1].artwork.width > 0;
             interactive: root.has-up2;
             visible: root.has-up2;
-            navigate => { QueueState.play-upcoming(1); }
+            navigate => { QueueState.play-coverflow-upcoming(1); }
         }
-        // left-1 (offset -1) <- history[0]
+        // depth1 LEFT <- history[0]
         CoverSlot {
-            slot-size: root.side1-size;
+            slot-size: root.size1;
             center-x: parent.cx - root.off1;
             stage-height: parent.height;
-            dim: 0.15;
-            side: -1;
-            art: root.has-hist1 ? QueueState.history[0].artwork : root.center-art;
-            has-art: root.has-hist1 && QueueState.history[0].artwork.width > 0;
+            dim: 0.22;
+            art: root.has-hist1 ? QueueState.coverflow-history[0].artwork : root.center-art;
+            has-art: root.has-hist1 && QueueState.coverflow-history[0].artwork.width > 0;
             interactive: root.has-hist1;
             visible: root.has-hist1;
             navigate => { QueueState.play-history(0); }
         }
-        // right-1 (offset +1) <- upcoming-page[0]
+        // depth1 RIGHT <- upcoming[0]
         CoverSlot {
-            slot-size: root.side1-size;
+            slot-size: root.size1;
             center-x: parent.cx + root.off1;
             stage-height: parent.height;
-            dim: 0.15;
-            side: 1;
-            art: root.has-up1 ? QueueState.upcoming-page[0].artwork : root.center-art;
-            has-art: root.has-up1 && QueueState.upcoming-page[0].artwork.width > 0;
+            dim: 0.22;
+            art: root.has-up1 ? QueueState.coverflow-upcoming[0].artwork : root.center-art;
+            has-art: root.has-up1 && QueueState.coverflow-upcoming[0].artwork.width > 0;
             interactive: root.has-up1;
             visible: root.has-up1;
-            navigate => { QueueState.play-upcoming(0); }
+            navigate => { QueueState.play-coverflow-upcoming(0); }
         }
-        // CENTER (offset 0) <- NowPlayingState. Declared LAST = paints on top.
-        // Non-interactive (no TouchArea), like the disabled Tauri center button.
+        // CENTER (depth 0) <- NowPlayingState. Declared LAST = paints on top.
+        // Non-interactive, like the disabled Tauri center button.
         CoverSlot {
             slot-size: root.base-art;
             center-x: parent.cx;
             stage-height: parent.height;
             dim: 0.0;
-            side: 0;
             art: root.center-art;
             has-art: root.center-has-art;
             interactive: false;
         }
     }
 
-    // --- Song card below the fan ----------------------------------------
-    // Reuses the StaticPanel pattern verbatim, fed by NowPlayingState (unifies
-    // the Tauri dual-source). Pinned under the fan, respecting the 132px player
-    // clearance.
+    // --- Song card below the pyramid ------------------------------------
+    // Reuses the StaticPanel pattern verbatim, fed by NowPlayingState. Pinned
+    // under the pyramid, respecting the 132px player clearance.
     VerticalLayout {
         x: 0px;
         y: 0px;

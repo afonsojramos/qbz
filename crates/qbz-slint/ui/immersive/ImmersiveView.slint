@@ -620,12 +620,12 @@ export component ImmersiveView inherits Rectangle {
         viewport-width: root.width;
         viewport-height: root.height;
     }
-    // (2c) Coverflow mode foreground (mode == 2) — a faithful PURE-SLINT 2D fan
-    // (now-playing centered + on top, history fanned left, upcoming right;
-    // scale-by-depth + far-edge shade + per-depth shadow + distance dimming;
-    // ~500ms reflow on track change). True-3D rotateY/perspective DROPPED
-    // (deferred to a wgpu/Skia session). Same conditional-mount + viewport-prop
-    // contract as the siblings (ADR-010).
+    // (2c) Coverflow mode foreground (mode == 2) — a CHEAP jukebox PYRAMID of
+    // flat scaled cards (now-playing centered + on top, 3 past left + 3 upcoming
+    // right; step-down scale + per-depth black-overlay attenuation; cards snap on
+    // click, no 3D / reflection / gradient / 500ms reflow). True-3D rotateY/
+    // perspective remains deferred to a wgpu/Skia session. Same conditional-mount
+    // + viewport-prop contract as the siblings (ADR-010).
     if ImmersiveState.mode == 2: CoverflowPanel {
         x: 0px;
         y: 0px;

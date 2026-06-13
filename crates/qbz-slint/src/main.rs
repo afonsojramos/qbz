@@ -6599,6 +6599,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         {
             let c = controller.clone();
+            qs.on_play_coverflow_upcoming(move |index| {
+                c.play_coverflow_upcoming(index.max(0) as usize)
+            });
+        }
+        {
+            let c = controller.clone();
             qs.on_play_history(move |index| c.play_history(index.max(0) as usize));
         }
         {

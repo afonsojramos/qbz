@@ -261,6 +261,22 @@ impl QueueController {
         let history_rows: Vec<RowData> =
             state.history.iter().map(|t| row_from(t, false)).collect();
 
+        // --- COVERFLOW (unfiltered next-3 / prev-3) -----------------------
+        // Built from the UNFILTERED queue so the immersive pyramid is correct
+        // regardless of sidebar page/search. Index 0 = next / most-recent.
+        let coverflow_up_rows: Vec<RowData> = state
+            .upcoming
+            .iter()
+            .take(3)
+            .map(|t| row_from(t, false))
+            .collect();
+        let coverflow_hist_rows: Vec<RowData> = state
+            .history
+            .iter()
+            .take(3)
+            .map(|t| row_from(t, false))
+            .collect();
+
         // --- Infinite-play flag ------------------------------------------
         let infinite = self
             .playback
@@ -286,20 +302,49 @@ impl QueueController {
                 art_jobs.push((ArtTarget::History(idx), row.artwork_url.clone()));
             }
         }
+        for (idx, row) in coverflow_up_rows.iter().enumerate() {
+            if !row.artwork_url.is_empty() {
+                art_jobs.push((ArtTarget::CoverflowUpcoming(idx), row.artwork_url.clone()));
+            }
+        }
+        for (idx, row) in coverflow_hist_rows.iter().enumerate() {
+            if !row.artwork_url.is_empty() {
+                art_jobs.push((ArtTarget::CoverflowHistory(idx), row.artwork_url.clone()));
+            }
+        }
 
         let weak = self.weak.clone();
         let _ = weak.upgrade_in_event_loop(move |w| {
             let qs = w.global::<QueueState>();
 
+            // Snapshot prior decoded handles per list BEFORE replacing the
+            // models, so unchanged tracks keep their decoded artwork instead of
+            // blanking to the default (which forced a full re-decode + blink on
+            // every click). Diffed per-list so a track present in both history
+            // and upcoming can't cross-map.
+            let prior_page = prior_art_map(&qs.get_upcoming_page());
+            let prior_history = prior_art_map(&qs.get_history());
+            let prior_cf_up = prior_art_map(&qs.get_coverflow_upcoming());
+            let prior_cf_hist = prior_art_map(&qs.get_coverflow_history());
+
             let np_item = now_playing
                 .as_ref()
-                .map(|r| to_item(r))
+                .map(|r| {
+                    // Reuse the prior now-playing cover only if the same track.
+                    let prior = qs.get_now_playing();
+                    let mut map = std::collections::HashMap::new();
+                    if prior.artwork.size().width > 0 {
+                        map.insert(prior.id.clone(), prior.artwork.clone());
+                    }
+                    to_item_reuse(r, &map)
+                })
                 .unwrap_or_default();
             qs.set_has_current(now_playing.is_some());
             qs.set_now_playing(np_item);
             qs.set_now_playing_favorite(now_playing_favorite);
 
-            let page_items: Vec<QueueItem> = page_rows.iter().map(to_item).collect();
+            let page_items: Vec<QueueItem> =
+                page_rows.iter().map(|r| to_item_reuse(r, &prior_page)).collect();
             qs.set_upcoming_page(slint::ModelRc::new(slint::VecModel::from(page_items)));
             qs.set_upcoming_total(upcoming_total as i32);
             qs.set_upcoming_remaining(remaining as i32);
@@ -308,8 +353,21 @@ impl QueueController {
             qs.set_page_start(page_start as i32);
             qs.set_page_end(page_end as i32);
 
-            let history_items: Vec<QueueItem> = history_rows.iter().map(to_item).collect();
+            let history_items: Vec<QueueItem> =
+                history_rows.iter().map(|r| to_item_reuse(r, &prior_history)).collect();
             qs.set_history(slint::ModelRc::new(slint::VecModel::from(history_items)));
+
+            // Coverflow lists (unfiltered next-3 / prev-3), reusing handles.
+            let cf_up_items: Vec<QueueItem> = coverflow_up_rows
+                .iter()
+                .map(|r| to_item_reuse(r, &prior_cf_up))
+                .collect();
+            qs.set_coverflow_upcoming(slint::ModelRc::new(slint::VecModel::from(cf_up_items)));
+            let cf_hist_items: Vec<QueueItem> = coverflow_hist_rows
+                .iter()
+                .map(|r| to_item_reuse(r, &prior_cf_hist))
+                .collect();
+            qs.set_coverflow_history(slint::ModelRc::new(slint::VecModel::from(cf_hist_items)));
 
             qs.set_infinite_play(infinite);
             // Keep the Slint tab property in sync with the view state so the
@@ -343,6 +401,25 @@ impl QueueController {
                 .await
             else {
                 log::warn!("[qbz-slint] queue: play_upcoming_at {upcoming_index} miss");
+                return;
+            };
+            crate::playback::after_track_change(&this.runtime, &this.weak, track.id).await;
+            this.refresh_async().await;
+        });
+    }
+
+    /// Play an upcoming track by its QUEUE-WIDE (unfiltered) index. The immersive
+    /// coverflow lists `state.upcoming.take(3)` regardless of the sidebar's page
+    /// or search, so its cards must NOT go through `play_upcoming`'s page-local
+    /// `resolve_upcoming_index` (that would play the wrong track when the sidebar
+    /// is paged/filtered). History is already queue-wide via `play_history`.
+    pub fn play_coverflow_upcoming(&self, upcoming_index: usize) {
+        let this = self.clone();
+        self.handle.spawn(async move {
+            let Some(track) = this.runtime.core().play_upcoming_at(upcoming_index).await else {
+                log::warn!(
+                    "[qbz-slint] queue: play_coverflow_upcoming {upcoming_index} miss"
+                );
                 return;
             };
             crate::playback::after_track_change(&this.runtime, &this.weak, track.id).await;
@@ -633,21 +710,52 @@ enum ArtTarget {
     NowPlaying,
     Upcoming(usize),
     History(usize),
+    CoverflowUpcoming(usize),
+    CoverflowHistory(usize),
 }
 
-/// Build a `QueueItem` from plain row data (no artwork — that resolves
-/// asynchronously and is set onto the row afterward).
-fn to_item(row: &RowData) -> QueueItem {
+/// Build a `QueueItem` from plain row data, REUSING a prior decoded artwork
+/// handle when the same track id was already on screen. This is the core of the
+/// CPU-spike fix: a one-position queue shift keeps the decoded `slint::Image`
+/// for every unchanged row instead of resetting it to `Image::default()` and
+/// forcing a full re-decode (which also caused the empty-then-fill blink).
+///
+/// `prior` maps track id -> the decoded image from the model being replaced.
+/// Unchanged rows reuse their handle; only genuinely-new rows fall back to the
+/// default placeholder (their cover is decoded once by the artwork pipeline).
+fn to_item_reuse(
+    row: &RowData,
+    prior: &std::collections::HashMap<slint::SharedString, slint::Image>,
+) -> QueueItem {
+    let id: slint::SharedString = row.id.clone().into();
+    let artwork = prior.get(&id).cloned().unwrap_or_default();
     QueueItem {
-        id: row.id.clone().into(),
+        id: id.clone(),
         title: row.title.clone().into(),
         artist: row.artist.clone().into(),
-        artwork: slint::Image::default(),
+        artwork,
         playing: row.playing,
         duration: row.duration.clone().into(),
         explicit: row.explicit,
         is_ephemeral: row.is_ephemeral,
     }
+}
+
+/// Snapshot the current id -> decoded-artwork map for a Slint model, so the
+/// rebuilt rows can reuse handles for tracks that did not change. Only rows
+/// whose artwork is actually resolved (`width > 0`) are recorded.
+fn prior_art_map(
+    model: &slint::ModelRc<QueueItem>,
+) -> std::collections::HashMap<slint::SharedString, slint::Image> {
+    let mut map = std::collections::HashMap::new();
+    for i in 0..model.row_count() {
+        if let Some(item) = model.row_data(i) {
+            if item.artwork.size().width > 0 {
+                map.insert(item.id.clone(), item.artwork.clone());
+            }
+        }
+    }
+    map
 }
 
 #[cfg(test)]
@@ -759,6 +867,9 @@ fn load_artwork(
     plex_base_url: String,
     plex_token: String,
 ) {
+    /// Decode size for all queue/coverflow covers (matches the artwork pipeline).
+    const QUEUE_DECODE: u32 = 96;
+
     let Some(cache) = crate::artwork::shared_cache() else {
         return;
     };
@@ -783,42 +894,85 @@ fn load_artwork(
                 path: url,
                 // Queue rows + now-playing item render small; request a
                 // 96px server-side transcode (the decode size used below).
-                size: Some(96),
+                size: Some(QUEUE_DECODE),
             }
         } else {
             qbz_models::ArtworkRef::LocalFile(url)
         };
+
+        // Decoded-pixel fast path: if this exact cover was already decoded at
+        // this size (true for the covers still on screen after a one-position
+        // shift), upload the cached pixels on the event loop and SKIP the tokio
+        // decode entirely. This is the bulk of the per-click CPU-spike fix.
+        let cache_key = match &art {
+            qbz_models::ArtworkRef::Remote(u) => Some(u.clone()),
+            qbz_models::ArtworkRef::LocalFile(p) => Some(p.clone()),
+            qbz_models::ArtworkRef::PlexThumb { base_url, token, path, size } => {
+                Some(qbz_models::plex_thumb_url(base_url, token, path, *size))
+            }
+            _ => None,
+        };
+        if let Some(key) = cache_key.as_deref() {
+            if let Some((pixels, w, h)) = crate::artwork::decoded_pixels(key, QUEUE_DECODE) {
+                let weak = weak.clone();
+                let _ = weak.upgrade_in_event_loop(move |win| {
+                    let img = crate::artwork::pixels_to_image(&pixels, w, h);
+                    apply_queue_art(&win, target, img);
+                });
+                continue;
+            }
+        }
+
         tokio::spawn(async move {
             let Some((pixels, w, h)) =
-                crate::artwork::fetch_and_decode_ref(&art, &cache, 96).await
+                crate::artwork::fetch_and_decode_ref(&art, &cache, QUEUE_DECODE).await
             else {
                 return;
             };
             let _ = weak.upgrade_in_event_loop(move |win| {
                 let img = crate::artwork::pixels_to_image(&pixels, w, h);
-                let qs = win.global::<QueueState>();
-                match target {
-                    ArtTarget::NowPlaying => {
-                        let mut item = qs.get_now_playing();
-                        item.artwork = img;
-                        qs.set_now_playing(item);
-                    }
-                    ArtTarget::Upcoming(idx) => {
-                        let items = qs.get_upcoming_page();
-                        if let Some(mut item) = items.row_data(idx) {
-                            item.artwork = img;
-                            items.set_row_data(idx, item);
-                        }
-                    }
-                    ArtTarget::History(idx) => {
-                        let items = qs.get_history();
-                        if let Some(mut item) = items.row_data(idx) {
-                            item.artwork = img;
-                            items.set_row_data(idx, item);
-                        }
-                    }
-                }
+                apply_queue_art(&win, target, img);
             });
         });
+    }
+}
+
+/// Apply a resolved cover onto its queue/coverflow row. Runs on the event loop.
+fn apply_queue_art(win: &AppWindow, target: ArtTarget, img: slint::Image) {
+    let qs = win.global::<QueueState>();
+    match target {
+        ArtTarget::NowPlaying => {
+            let mut item = qs.get_now_playing();
+            item.artwork = img;
+            qs.set_now_playing(item);
+        }
+        ArtTarget::Upcoming(idx) => {
+            let items = qs.get_upcoming_page();
+            if let Some(mut item) = items.row_data(idx) {
+                item.artwork = img;
+                items.set_row_data(idx, item);
+            }
+        }
+        ArtTarget::History(idx) => {
+            let items = qs.get_history();
+            if let Some(mut item) = items.row_data(idx) {
+                item.artwork = img;
+                items.set_row_data(idx, item);
+            }
+        }
+        ArtTarget::CoverflowUpcoming(idx) => {
+            let items = qs.get_coverflow_upcoming();
+            if let Some(mut item) = items.row_data(idx) {
+                item.artwork = img;
+                items.set_row_data(idx, item);
+            }
+        }
+        ArtTarget::CoverflowHistory(idx) => {
+            let items = qs.get_coverflow_history();
+            if let Some(mut item) = items.row_data(idx) {
+                item.artwork = img;
+                items.set_row_data(idx, item);
+            }
+        }
     }
 }
