@@ -9,6 +9,7 @@ import { ImmersiveAtmosphere } from "ImmersiveAtmosphere.slint";
 import { AlbumReactivePanel } from "AlbumReactivePanel.slint";
 import { StaticPanel } from "StaticPanel.slint";
 import { CoverflowPanel } from "CoverflowPanel.slint";
+import { SpectrumPanel } from "SpectrumPanel.slint";
 
 component GhostButton inherits Rectangle {
     in property <image> icon;
@@ -580,7 +581,19 @@ export component ImmersiveView inherits Rectangle {
         viewport-width: root.width;
         viewport-height: root.height;
     }
-    // TODO(S5): Spectrum mode foreground  (mode == 3) — atmosphere-only for now.
+    // (2d) Spectrum mode foreground (mode == 3) — faithful 16-bar mirrored cube
+    // spectrum (14 active bins x 2 mirror = 28 columns) over a solid-black
+    // canvas, with the same centered now-playing card as the siblings. Reads
+    // VisualizerState.bars (pre-smoothed + clamped in Rust). set-enabled is
+    // ALREADY driven on open (the mode-0 AlbumReactivePanel reads
+    // VisualizerState.energy from the same enabled tap). Same conditional-mount +
+    // viewport-prop contract as the siblings (ADR-010).
+    if ImmersiveState.mode == 3: SpectrumPanel {
+        x: 0px;
+        y: 0px;
+        viewport-width: root.width;
+        viewport-height: root.height;
+    }
 
     // (3) Auto-hide compact player.
     ImmersivePlayerBar {
