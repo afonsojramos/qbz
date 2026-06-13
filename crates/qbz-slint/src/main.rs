@@ -4931,7 +4931,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // layouts land.
                 ("npb-view", "immersive") => {
                     if let Some(w) = weak.upgrade() {
-                        w.global::<ImmersiveState>().set_open(true);
+                        let im = w.global::<ImmersiveState>();
+                        // Open deterministically into Album Reactive (mode 0):
+                        // the only real foreground this session. Property default
+                        // is already 0; set explicitly so a prior session's mode
+                        // (once persistence lands) never reopens onto an empty
+                        // atmosphere-only placeholder.
+                        im.set_mode(0);
+                        im.set_open(true);
                         w.global::<VisualizerState>().invoke_set_enabled(true);
                     }
                 }

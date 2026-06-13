@@ -6,6 +6,7 @@ import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { NowPlayingState, VisualizerState, ImmersiveState, SettingsState } from "../state.slint";
 import { ImmersiveAtmosphere } from "ImmersiveAtmosphere.slint";
+import { AlbumReactivePanel } from "AlbumReactivePanel.slint";
 
 component GhostButton inherits Rectangle {
     in property <image> icon;
@@ -413,6 +414,83 @@ component ImmersivePlayerBar inherits Rectangle {
     }
 }
 
+// PROVISIONAL mode selector (top-center). A deliberately plain segmented bar to
+// be replaced by the polished header in a later session (S6). Four tabs map tab
+// position -> ImmersiveState.mode (0 Album Reactive, 1 Static, 2 Coverflow,
+// 3 Spectrum). Each tab has its own TouchArea (pointer cursor); no `changed
+// x/y/width/height` watchers (Recursion-detected risk). Fixed container height,
+// tabs sized to content via HorizontalLayout. Clicking sets the mode and wakes
+// the chrome so the bar resets its hide timer with the player.
+component ModeTab inherits Rectangle {
+    in property <string> label;
+    in property <int> idx;
+    callback clicked();
+
+    property <bool> active: ImmersiveState.mode == root.idx;
+
+    height: 28px;
+    border-radius: 8px;
+    background: root.active ? #ffffff33 : (ta.has-hover ? #ffffff1f : transparent);
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.label;
+                color: root.active ? #ffffff : #ffffffb3;
+                font-size: 13px;
+                font-weight: root.active ? 600 : 400;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component ModeBar inherits Rectangle {
+    callback select(int);
+
+    height: 36px;
+    width: bar.preferred-width + 8px;
+    border-radius: 12px;
+    background: #00000080;
+    border-width: 1px;
+    border-color: #ffffff2e;
+
+    bar := HorizontalLayout {
+        x: 4px;
+        y: 4px;
+        height: 28px;
+        spacing: 4px;
+        ModeTab {
+            label: @tr("Album Reactive");
+            idx: 0;
+            clicked => { root.select(0); }
+        }
+        ModeTab {
+            label: @tr("Static");
+            idx: 1;
+            clicked => { root.select(1); }
+        }
+        ModeTab {
+            label: @tr("Coverflow");
+            idx: 2;
+            clicked => { root.select(2); }
+        }
+        ModeTab {
+            label: @tr("Spectrum");
+            idx: 3;
+            clicked => { root.select(3); }
+        }
+    }
+}
+
 export component ImmersiveView inherits Rectangle {
     callback media-action(string, string, string);
 
@@ -461,6 +539,7 @@ export component ImmersiveView inherits Rectangle {
         changed mouse-y => { root.wake(); }
     }
 
+    // (1) Bottom: moving blurred-art atmosphere.
     ImmersiveAtmosphere {
         source-image: ImmersiveState.bg-image;
         fallback-image: NowPlayingState.artwork-large.width > 0
@@ -469,6 +548,21 @@ export component ImmersiveView inherits Rectangle {
         dim: 0.15;
     }
 
+    // (2) Foreground: switches on ImmersiveState.mode via conditional mount
+    // (ADR-010). Mode 0 = Album Reactive (the only real foreground this
+    // session). Modes 1/2/3 mount NO foreground — the atmosphere is the
+    // explicit placeholder until those sessions land.
+    if ImmersiveState.mode == 0: AlbumReactivePanel {
+        x: 0px;
+        y: 0px;
+        viewport-width: root.width;
+        viewport-height: root.height;
+    }
+    // TODO(S3): Static mode foreground   (mode == 1) — atmosphere-only for now.
+    // TODO(S4): Coverflow mode foreground (mode == 2) — atmosphere-only for now.
+    // TODO(S5): Spectrum mode foreground  (mode == 3) — atmosphere-only for now.
+
+    // (3) Auto-hide compact player.
     ImmersivePlayerBar {
         viewport-width: root.width;
         x: Math.round((root.width - self.width) / 2 / 1px) * 1px;
@@ -477,5 +571,19 @@ export component ImmersiveView inherits Rectangle {
         animate opacity { duration: 300ms; }
         wake => { root.wake(); }
         media-action(kind, id, action) => { root.media-action(kind, id, action); }
+    }
+
+    // (4) Top-center mode selector. Shares the same chrome-visible flag so it
+    // auto-hides/wakes with the player (no second timer). Horizontally
+    // centered, pinned near the window top so it never overlaps the player.
+    ModeBar {
+        x: Math.round((root.width - self.width) / 2 / 1px) * 1px;
+        y: 16px;
+        opacity: root.chrome-visible ? 1.0 : 0.0;
+        animate opacity { duration: 300ms; }
+        select(idx) => {
+            ImmersiveState.mode = idx;
+            root.wake();
+        }
     }
 }
