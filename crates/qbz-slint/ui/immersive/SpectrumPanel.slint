@@ -53,7 +53,7 @@
 // "Recursion detected" panic.
 
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
-import { NowPlayingState, VisualizerState } from "../state.slint";
+import { NowPlayingState, VisualizerState, ImmersiveState } from "../state.slint";
 
 // One mirrored pair of bars for a single active source bin. Draws the LEFT
 // column at `x-left` and the RIGHT (mirror) column at `x-right`, both from the
@@ -94,7 +94,7 @@ component BarPair inherits Rectangle {
         y: root.base-y - self.height;
         // cyan at base -> purple at the tip (Svelte default). If it looks
         // inverted, swap the two stops.
-        background: @linear-gradient(0deg, #00dcc8 0%, #9632ff 100%);
+        background: @linear-gradient(0deg, ImmersiveState.spectrum-primary 0%, ImmersiveState.spectrum-secondary 100%);
     }
 
     // RIGHT (mirror) bar — same source bin.
@@ -103,7 +103,7 @@ component BarPair inherits Rectangle {
         width: root.bar-width;
         height: root.bar-height;
         y: root.base-y - self.height;
-        background: @linear-gradient(0deg, #00dcc8 0%, #9632ff 100%);
+        background: @linear-gradient(0deg, ImmersiveState.spectrum-primary 0%, ImmersiveState.spectrum-secondary 100%);
     }
 }
 

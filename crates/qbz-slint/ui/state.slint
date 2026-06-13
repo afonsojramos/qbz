@@ -2972,6 +2972,11 @@ export global ImmersiveState {
     // does NOT match Tauri's focus-tab string order (coverflow first). Product
     // default + persistence ("remember last view") is a later (header) session.
     in-out property <int> mode: 0;
+    // Spectrum bar gradient, derived from the album art (contrast colors;
+    // negative fallback for dark covers so the bars read against the black bg).
+    // Defaults = the Svelte cyan -> purple until the art resolves.
+    in property <color> spectrum-primary: #00dcc8;
+    in property <color> spectrum-secondary: #9632ff;
 }
 
 // Now-playing / transport state. The Rust playback poll loop pushes the

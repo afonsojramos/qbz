@@ -53,6 +53,97 @@ pub fn glow_color(pixels: &[u8], width: u32, height: u32) -> Color {
     Color::from_argb_u8(0x59, best.0, best.1, best.2)
 }
 
+/// Two vivid bar colors for the Spectrum visualizer, derived from the artwork
+/// and guaranteed to read against a BLACK background. The bars sit on solid
+/// black, so a dark/desaturated cover (e.g. a near-black Metallica album) would
+/// vanish; in that case we fall back to the NEGATIVE (inverted) color so the
+/// bars pop. Returns (primary at the base, secondary at the tip).
+pub fn spectrum_colors(pixels: &[u8], width: u32, height: u32) -> (Color, Color) {
+    let default = (
+        Color::from_rgb_u8(0, 220, 200),
+        Color::from_rgb_u8(150, 50, 255),
+    );
+    let Some(src) = RgbaImage::from_raw(width, height, pixels.to_vec()) else {
+        return default;
+    };
+    let tiny = imageops::resize(&src, 8, 8, imageops::FilterType::Triangle);
+
+    // HSL-ish saturation (same measure as glow_color).
+    let sat = |r: f32, g: f32, b: f32| -> f32 {
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        if (max - min).abs() < f32::EPSILON {
+            0.0
+        } else if (max + min) / 2.0 > 127.0 {
+            (max - min) / (510.0 - max - min).max(1.0)
+        } else {
+            (max - min) / (max + min).max(1.0)
+        }
+    };
+
+    let mut cands: Vec<(f32, (u8, u8, u8))> = Vec::new();
+    let (mut ar, mut ag, mut ab, mut n) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    for px in tiny.pixels() {
+        let (r, g, b) = (px[0] as f32, px[1] as f32, px[2] as f32);
+        ar += r;
+        ag += g;
+        ab += b;
+        n += 1.0;
+        cands.push((sat(r, g, b), (px[0], px[1], px[2])));
+    }
+    cands.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let n = n.max(1.0);
+    let avg = ((ar / n) as u8, (ag / n) as u8, (ab / n) as u8);
+
+    let hue_diff = |a: (u8, u8, u8), b: (u8, u8, u8)| -> i32 {
+        (a.0 as i32 - b.0 as i32).abs()
+            + (a.1 as i32 - b.1 as i32).abs()
+            + (a.2 as i32 - b.2 as i32).abs()
+    };
+
+    // Primary = most saturated usable sample; else the NEGATIVE of the average
+    // (handles black/grey covers -> bright, visible bars).
+    let top = cands.first().copied().unwrap_or((0.0, avg));
+    let (primary, secondary) = if top.0 > 0.12 {
+        let prim = top.1;
+        let sec = cands
+            .iter()
+            .skip(1)
+            .find(|c| hue_diff(c.1, prim) > 90)
+            .map(|c| c.1)
+            .unwrap_or((prim.1, prim.2, prim.0)); // channel-rotate for a distinct stop
+        (prim, sec)
+    } else {
+        let neg = (255 - avg.0, 255 - avg.1, 255 - avg.2);
+        (neg, (neg.2, neg.0, neg.1))
+    };
+
+    (
+        ensure_visible_on_black(primary),
+        ensure_visible_on_black(secondary),
+    )
+}
+
+/// Guarantee a color reads against black: if it is too dark, invert it
+/// (negative); if it is still dim, lift it toward a visible brightness.
+fn ensure_visible_on_black((r, g, b): (u8, u8, u8)) -> Color {
+    let luma = |r: u8, g: u8, b: u8| 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+    let (mut r, mut g, mut b) = (r, g, b);
+    if luma(r, g, b) < 70.0 {
+        r = 255 - r;
+        g = 255 - g;
+        b = 255 - b;
+    }
+    let l = luma(r, g, b);
+    if l > 0.0 && l < 110.0 {
+        let k = 110.0 / l;
+        r = (r as f32 * k).min(255.0) as u8;
+        g = (g as f32 * k).min(255.0) as u8;
+        b = (b as f32 * k).min(255.0) as u8;
+    }
+    Color::from_rgb_u8(r, g, b)
+}
+
 fn color_adjust(mut img: RgbaImage) -> RgbaImage {
     let mut min_r = 255.0f32;
     let mut min_g = 255.0f32;

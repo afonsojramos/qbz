@@ -1199,6 +1199,11 @@ fn load_now_playing_artwork_large(weak: slint::Weak<AppWindow>, art: qbz_models:
             }
             win.global::<ImmersiveState>()
                 .set_glow_color(crate::immersive::glow_color(&pixels, w, h));
+            let (spec_primary, spec_secondary) =
+                crate::immersive::spectrum_colors(&pixels, w, h);
+            win.global::<ImmersiveState>().set_spectrum_primary(spec_primary);
+            win.global::<ImmersiveState>()
+                .set_spectrum_secondary(spec_secondary);
             win.global::<NowPlayingState>().set_artwork_large(img);
         });
     });
