@@ -1,0 +1,372 @@
+// Coverflow foreground (Immersive mode 2) — a faithful PURE-SLINT 2D port of
+// the Tauri `src/lib/components/immersive/panels/CoverflowPanel.svelte`.
+//
+// OWNER DECISION (binding): Tauri's coverflow uses true CSS 3D — perspective:1400px
+// + rotateY(45/55deg) on the side covers + a hover micro-turn. Declarative Slint
+// has NO perspective / 3D / shear, so the true-3D rotateY foreshortening, the
+// 1400px perspective, and the hover micro-turn are DROPPED and DEFERRED to a
+// future wgpu/Skia session. This is the FAITHFUL-POSSIBLE 2D version:
+//   - a clean scaled fan: now-playing cover CENTERED + on top; played covers
+//     (QueueState.history) fanned LEFT; upcoming covers (QueueState.upcoming-page)
+//     fanned RIGHT.
+//   - depth via SCALE + per-depth drop-shadow + a far-edge shade gradient +
+//     dimming-by-distance. NO rotateY, NO skew, NO perspective, NO fake tilt
+//     (a fake 2D tilt is exactly the approximation trap the owner rejected).
+//   - a ~500ms reflow on track change via `animate x, width, height` on the
+//     data-derived slot bindings + `animate opacity` on the INNER dim Rectangle
+//     (never on the slot root — root opacity corrupts absolute positioning).
+//
+// SLINT GOTCHAS honored: `parent` is never read in any root binding (viewport
+// dims passed as props; CoverSlot dims passed as props). No Repeater for the
+// slots (hand-placed 5 fixed instances) and NO `changed x/y/width/height`
+// watchers -> avoids the "Recursion detected" panic. Slot painting order is
+// declaration order, so the center slot is declared LAST (paints on top).
+//
+// DATA MAPPING (QueueState is host-split, not Tauri's flat queue+index):
+//   center  (offset 0)  <- NowPlayingState (unified source, also feeds card)
+//   right-1 (offset +1)  <- QueueState.upcoming-page[0]  (idx 0 = next track)
+//   right-2 (offset +2)  <- QueueState.upcoming-page[1]
+//   left-1  (offset -1)  <- QueueState.history[0]        (recent-first = prev)
+//   left-2  (offset -2)  <- QueueState.history[1]
+// Side covers navigate DIRECTLY via QueueState.play-upcoming / play-history
+// (QueueState is a global; no ImmersiveView plumbing needed).
+
+import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
+import { NowPlayingState, QueueState } from "../state.slint";
+
+// Four-bar "now playing" equalizer. Continuous loop driven by the global
+// animation-tick() (pull-based) — NOT a Timer. Verbatim copy of the
+// StaticPanel.slint EqualizerBars; duplicated on purpose so this session does
+// not touch the siblings. (Follow-up: lift into a shared EqualizerBars.slint.)
+component EqualizerBars inherits Rectangle {
+    in property <color> tint: #7c3aed;
+    width: 18px;
+    height: 14px;
+
+    property <float> t: Math.mod(animation-tick() / 1ms, 800.0) / 800.0;
+    function wave(phase: float) -> float {
+        return 0.3 + 0.7 * (0.5 - 0.5 * Math.cos((Math.mod(self.t + phase, 1.0)) * 6.283185 * 1rad));
+    }
+
+    HorizontalLayout {
+        alignment: start;
+        spacing: 2px;
+        Rectangle {
+            width: 3px;
+            y: parent.height - self.height;
+            height: parent.height * 0.6 * root.wave(0.0);
+            border-radius: 1px;
+            background: root.tint;
+        }
+        Rectangle {
+            width: 3px;
+            y: parent.height - self.height;
+            height: parent.height * 1.0 * root.wave(0.25);
+            border-radius: 1px;
+            background: root.tint;
+        }
+        Rectangle {
+            width: 3px;
+            y: parent.height - self.height;
+            height: parent.height * 0.4 * root.wave(0.125);
+            border-radius: 1px;
+            background: root.tint;
+        }
+        Rectangle {
+            width: 3px;
+            y: parent.height - self.height;
+            height: parent.height * 0.8 * root.wave(0.375);
+            border-radius: 1px;
+            background: root.tint;
+        }
+    }
+}
+
+// One fanned cover. Dims passed as props (NEVER `parent` in the root binding).
+// `dim` is the distance darkening (0 center .. 0.45 outermost); applied on an
+// INNER Rectangle, never the root opacity. The far-edge shade gradient is the
+// only honest nod to the Tauri turn — `side` selects which edge darkens
+// (-1 = left covers darken their LEFT/far edge, +1 = right covers darken their
+// RIGHT/far edge, 0 = center, no shade). `has-art` true when the cover image is
+// resolved; when an item exists but its art is not yet decoded we show a neutral
+// placeholder instead of a 0-size collapse. The 500ms reflow lives on the
+// animatable x / size / dim bindings.
+component CoverSlot inherits Rectangle {
+    in property <image> art;
+    in property <length> slot-size;
+    in property <length> center-x;     // window-x of the cover CENTER
+    in property <length> stage-height;
+    in property <float> dim: 0.0;       // 0..1 extra darken
+    in property <int> side: 0;          // -1 left, 0 center, +1 right
+    in property <bool> has-art: false;  // art image resolved (width > 0)
+    in property <bool> interactive: false;
+    callback navigate();
+
+    width: root.slot-size;
+    height: root.slot-size;
+    x: root.center-x - root.slot-size / 2;
+    // Vertical center of the stage, small upward bias to leave room for the card.
+    y: (root.stage-height - root.slot-size) / 2 - 12px;
+    border-radius: 8px;
+    clip: true;
+
+    // Per-depth drop-shadow: center 32px @ 0.4, sides 16px @ 0.25 (spec :246/:288).
+    drop-shadow-blur: root.side == 0 ? 32px : 16px;
+    drop-shadow-color: root.side == 0 ? #00000066 : #00000040;
+    drop-shadow-offset-y: root.side == 0 ? 8px : 4px;
+
+    // 500ms reflow on track change — bindings recompute when the data reshuffles.
+    animate x { duration: 500ms; easing: cubic-bezier(0.4, 0, 0.2, 1); }
+    animate width { duration: 500ms; easing: cubic-bezier(0.4, 0, 0.2, 1); }
+    animate height { duration: 500ms; easing: cubic-bezier(0.4, 0, 0.2, 1); }
+
+    // Neutral placeholder when the item exists but its art is unresolved.
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 8px;
+        background: #ffffff14;
+        visible: !root.has-art;
+    }
+
+    Image {
+        source: root.art;
+        image-fit: cover;
+        width: parent.width;
+        height: parent.height;
+        visible: root.has-art;
+    }
+
+    // Far-edge shade gradient — the only honest nod to the Tauri turn (NOT a
+    // tilt). Left covers darken their LEFT edge; right covers their RIGHT edge.
+    if root.side == -1: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 8px;
+        background: @linear-gradient(90deg, #00000050 0%, transparent 35%);
+    }
+    if root.side == 1: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 8px;
+        background: @linear-gradient(90deg, transparent 65%, #00000050 100%);
+    }
+
+    // Distance dimming — on an INNER Rectangle (never the slot root opacity,
+    // which corrupts absolute positioning). Animated so the dim cross-fades
+    // during the 500ms reflow.
+    dim-overlay := Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 8px;
+        background: #000000;
+        opacity: root.dim;
+        animate opacity { duration: 500ms; easing: cubic-bezier(0.4, 0, 0.2, 1); }
+    }
+
+    // Side covers navigate; the center is non-interactive (like the disabled
+    // Tauri center button).
+    if root.interactive: TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.navigate(); }
+    }
+}
+
+export component CoverflowPanel inherits Rectangle {
+    in property <length> viewport-width: 1280px;
+    in property <length> viewport-height: 720px;
+
+    width: root.viewport-width;
+    height: root.viewport-height;
+    background: transparent;
+
+    // --- Geometry (faithful, scaled from the spec) -----------------------
+    // Center cover edge. Reserve = pad-top(52) + fan + info(~160) +
+    // player-clearance(132) = 364px (same budget as StaticPanel). Width cap 0.42
+    // keeps both side fans inside the window (covers must not clip at narrow
+    // widths). Clamped 180..460px.
+    property <length> base-art: Math.max(180px,
+        Math.min(Math.min(root.viewport-height - 364px, root.viewport-width * 0.42), 460px));
+    // Side cover edges from the spec scale ratios (0.82/0.65 against the 380 side
+    // base relative to the 460 center): side1 = base*0.68, side2 = base*0.54.
+    property <length> side1-size: root.base-art * 0.68;
+    property <length> side2-size: root.base-art * 0.54;
+
+    // X offsets scaled to base-art (spec ±200/±340 against a 460 center):
+    // off1 = base*0.435, off2 = base*0.739. Clamp so off2 + side2/2 stays inside
+    // the half-window with a 24px margin (narrow-width clip guard; max-width is
+    // ignored on hand-positioned Rectangles, so use Math.min).
+    property <length> half-w: root.viewport-width / 2;
+    property <length> off2-max: Math.max(0px, root.half-w - root.side2-size / 2 - 24px);
+    property <length> off2: Math.min(root.base-art * 0.739, root.off2-max);
+    // Keep off1 strictly inside off2 (never overlap the order) while honoring
+    // the spec ratio; clamp to off2 minus a small gap.
+    property <length> off1: Math.min(root.base-art * 0.435, Math.max(0px, root.off2 - root.side2-size / 4));
+
+    // --- Center artwork source (unified NowPlayingState, like the siblings) --
+    property <image> center-art: NowPlayingState.artwork-large.width > 0
+        ? NowPlayingState.artwork-large
+        : NowPlayingState.artwork;
+    property <bool> center-has-art: root.center-art.width > 0;
+
+    // --- Side item presence + art (async-decoded; guard with .width > 0) ----
+    property <bool> has-up1: QueueState.upcoming-page.length > 0;
+    property <bool> has-up2: QueueState.upcoming-page.length > 1;
+    property <bool> has-hist1: QueueState.history.length > 0;
+    property <bool> has-hist2: QueueState.history.length > 1;
+
+    // --- Fan stage -------------------------------------------------------
+    // A content stage centered horizontally, leaving the pad-top/clearance to
+    // the surrounding card layout. The stage height drives the slots' vertical
+    // center.
+    fan := Rectangle {
+        x: 0px;
+        // pad-top 52 (true visual center offset, matches the siblings).
+        y: 52px;
+        width: root.viewport-width;
+        // The fan occupies the area above the song card; the card is pinned at
+        // the bottom with the 132px player clearance via the VerticalLayout.
+        height: root.base-art + 56px;
+
+        property <length> cx: root.viewport-width / 2;
+
+        // Declaration order = paint order: far -> near, CENTER LAST (on top).
+        // left-2 (offset -2) <- history[1]
+        CoverSlot {
+            slot-size: root.side2-size;
+            center-x: parent.cx - root.off2;
+            stage-height: parent.height;
+            dim: 0.45;
+            side: -1;
+            art: root.has-hist2 ? QueueState.history[1].artwork : root.center-art;
+            has-art: root.has-hist2 && QueueState.history[1].artwork.width > 0;
+            interactive: root.has-hist2;
+            visible: root.has-hist2;
+            navigate => { QueueState.play-history(1); }
+        }
+        // right-2 (offset +2) <- upcoming-page[1]
+        CoverSlot {
+            slot-size: root.side2-size;
+            center-x: parent.cx + root.off2;
+            stage-height: parent.height;
+            dim: 0.45;
+            side: 1;
+            art: root.has-up2 ? QueueState.upcoming-page[1].artwork : root.center-art;
+            has-art: root.has-up2 && QueueState.upcoming-page[1].artwork.width > 0;
+            interactive: root.has-up2;
+            visible: root.has-up2;
+            navigate => { QueueState.play-upcoming(1); }
+        }
+        // left-1 (offset -1) <- history[0]
+        CoverSlot {
+            slot-size: root.side1-size;
+            center-x: parent.cx - root.off1;
+            stage-height: parent.height;
+            dim: 0.15;
+            side: -1;
+            art: root.has-hist1 ? QueueState.history[0].artwork : root.center-art;
+            has-art: root.has-hist1 && QueueState.history[0].artwork.width > 0;
+            interactive: root.has-hist1;
+            visible: root.has-hist1;
+            navigate => { QueueState.play-history(0); }
+        }
+        // right-1 (offset +1) <- upcoming-page[0]
+        CoverSlot {
+            slot-size: root.side1-size;
+            center-x: parent.cx + root.off1;
+            stage-height: parent.height;
+            dim: 0.15;
+            side: 1;
+            art: root.has-up1 ? QueueState.upcoming-page[0].artwork : root.center-art;
+            has-art: root.has-up1 && QueueState.upcoming-page[0].artwork.width > 0;
+            interactive: root.has-up1;
+            visible: root.has-up1;
+            navigate => { QueueState.play-upcoming(0); }
+        }
+        // CENTER (offset 0) <- NowPlayingState. Declared LAST = paints on top.
+        // Non-interactive (no TouchArea), like the disabled Tauri center button.
+        CoverSlot {
+            slot-size: root.base-art;
+            center-x: parent.cx;
+            stage-height: parent.height;
+            dim: 0.0;
+            side: 0;
+            art: root.center-art;
+            has-art: root.center-has-art;
+            interactive: false;
+        }
+    }
+
+    // --- Song card below the fan ----------------------------------------
+    // Reuses the StaticPanel pattern verbatim, fed by NowPlayingState (unifies
+    // the Tauri dual-source). Pinned under the fan, respecting the 132px player
+    // clearance.
+    VerticalLayout {
+        x: 0px;
+        y: 0px;
+        width: root.viewport-width;
+        height: root.viewport-height;
+        padding-top: 52px;
+        padding-bottom: 132px;
+        alignment: end;
+        spacing: 6px;
+
+        info-block := VerticalLayout {
+            alignment: center;
+            spacing: 6px;
+
+            // "Now Playing" indicator — shown only while playing.
+            if NowPlayingState.playing: HorizontalLayout {
+                alignment: center;
+                spacing: 8px;
+                padding-bottom: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    EqualizerBars {
+                        tint: #7c3aed;
+                    }
+                }
+                Text {
+                    text: @tr("Now Playing");
+                    color: #7c3aed;
+                    font-size: 12px;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                text: NowPlayingState.title;
+                color: #ffffff;
+                font-size: 28px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: NowPlayingState.artist;
+                color: #ffffffb3;
+                font-size: 18px;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            if NowPlayingState.album != "": Text {
+                text: NowPlayingState.album;
+                color: #ffffff80;
+                font-size: 14px;
+                font-italic: true;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                alignment: center;
+                padding-top: 12px;
+                QualityBadgeFull {
+                    tier: NowPlayingState.quality-tier;
+                    detail: NowPlayingState.quality-detail;
+                }
+            }
+        }
+    }
+}
