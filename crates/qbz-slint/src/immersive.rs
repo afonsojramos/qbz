@@ -53,11 +53,15 @@ pub fn glow_color(pixels: &[u8], width: u32, height: u32) -> Color {
     Color::from_argb_u8(0x59, best.0, best.1, best.2)
 }
 
-/// Two vivid bar colors for the Spectrum visualizer, derived from the artwork
-/// and guaranteed to read against a BLACK background. The bars sit on solid
-/// black, so a dark/desaturated cover (e.g. a near-black Metallica album) would
-/// vanish; in that case we fall back to the NEGATIVE (inverted) color so the
-/// bars pop. Returns (primary at the base, secondary at the tip).
+/// Two vivid bar colors for the Spectrum visualizer, derived from the artwork's
+/// PERCEIVED dominant tone. We bin chromatic pixels by hue and pick the most
+/// ABUNDANT hue (one vote per pixel = coverage), NOT the most saturated — so a
+/// metallic/dark cover resolves to the steel-blue you actually see, instead of
+/// an amplified speck of an unseen magenta highlight. The picked hue is forced
+/// vivid + mid-bright so it reads on the black bg; the secondary stop rotates
+/// +55° for a clear gradient. A cover with essentially no chromatic pixels (a
+/// true B&W cover) falls back to a default duotone.
+/// Returns (primary at the base, secondary at the tip).
 pub fn spectrum_colors(pixels: &[u8], width: u32, height: u32) -> (Color, Color) {
     let default = (
         Color::from_rgb_u8(0, 220, 200),
@@ -66,82 +70,91 @@ pub fn spectrum_colors(pixels: &[u8], width: u32, height: u32) -> (Color, Color)
     let Some(src) = RgbaImage::from_raw(width, height, pixels.to_vec()) else {
         return default;
     };
-    let tiny = imageops::resize(&src, 8, 8, imageops::FilterType::Triangle);
+    let tiny = imageops::resize(&src, 16, 16, imageops::FilterType::Triangle);
 
-    // HSL-ish saturation (same measure as glow_color).
-    let sat = |r: f32, g: f32, b: f32| -> f32 {
-        let max = r.max(g).max(b);
-        let min = r.min(g).min(b);
-        if (max - min).abs() < f32::EPSILON {
-            0.0
-        } else if (max + min) / 2.0 > 127.0 {
-            (max - min) / (510.0 - max - min).max(1.0)
-        } else {
-            (max - min) / (max + min).max(1.0)
-        }
-    };
-
-    let mut cands: Vec<(f32, (u8, u8, u8))> = Vec::new();
-    let (mut ar, mut ag, mut ab, mut n) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    // Hue histogram over CHROMATIC pixels, weighted by COVERAGE (one vote per
+    // pixel). 24 bins of 15°. Near-grey / near-black / near-white pixels carry
+    // no usable hue and are skipped, so the grey mass never votes.
+    const BINS: usize = 24;
+    let mut hist = [0.0f32; BINS];
+    let mut chromatic = 0u32;
     for px in tiny.pixels() {
-        let (r, g, b) = (px[0] as f32, px[1] as f32, px[2] as f32);
-        ar += r;
-        ag += g;
-        ab += b;
-        n += 1.0;
-        cands.push((sat(r, g, b), (px[0], px[1], px[2])));
+        let (h, s, l) = rgb_to_hsl(px[0], px[1], px[2]);
+        if !(0.10..=0.93).contains(&l) || s < 0.08 {
+            continue;
+        }
+        let bin = ((h / 360.0 * BINS as f32) as usize).min(BINS - 1);
+        hist[bin] += 1.0;
+        chromatic += 1;
     }
-    cands.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    let n = n.max(1.0);
-    let avg = ((ar / n) as u8, (ag / n) as u8, (ab / n) as u8);
 
-    let hue_diff = |a: (u8, u8, u8), b: (u8, u8, u8)| -> i32 {
-        (a.0 as i32 - b.0 as i32).abs()
-            + (a.1 as i32 - b.1 as i32).abs()
-            + (a.2 as i32 - b.2 as i32).abs()
-    };
+    // Too few tinted pixels (effectively a B&W cover): no perceived tone.
+    if chromatic < 4 {
+        return default;
+    }
 
-    // Primary = most saturated usable sample; else the NEGATIVE of the average
-    // (handles black/grey covers -> bright, visible bars).
-    let top = cands.first().copied().unwrap_or((0.0, avg));
-    let (primary, secondary) = if top.0 > 0.12 {
-        let prim = top.1;
-        let sec = cands
-            .iter()
-            .skip(1)
-            .find(|c| hue_diff(c.1, prim) > 90)
-            .map(|c| c.1)
-            .unwrap_or((prim.1, prim.2, prim.0)); // channel-rotate for a distinct stop
-        (prim, sec)
-    } else {
-        let neg = (255 - avg.0, 255 - avg.1, 255 - avg.2);
-        (neg, (neg.2, neg.0, neg.1))
-    };
+    // Most ABUNDANT hue cluster: the peak bin plus its circular neighbours.
+    let mut best_i = 0usize;
+    let mut best = -1.0f32;
+    for i in 0..BINS {
+        let score = hist[i] + 0.5 * (hist[(i + BINS - 1) % BINS] + hist[(i + 1) % BINS]);
+        if score > best {
+            best = score;
+            best_i = i;
+        }
+    }
+    let dom_hue = (best_i as f32 + 0.5) * (360.0 / BINS as f32);
 
+    let primary = hsl_to_rgb(dom_hue, 0.85, 0.56);
+    let secondary = hsl_to_rgb((dom_hue + 55.0).rem_euclid(360.0), 0.92, 0.62);
     (
-        ensure_visible_on_black(primary),
-        ensure_visible_on_black(secondary),
+        Color::from_rgb_u8(primary.0, primary.1, primary.2),
+        Color::from_rgb_u8(secondary.0, secondary.1, secondary.2),
     )
 }
 
-/// Guarantee a color reads against black: if it is too dark, invert it
-/// (negative); if it is still dim, lift it toward a visible brightness.
-fn ensure_visible_on_black((r, g, b): (u8, u8, u8)) -> Color {
-    let luma = |r: u8, g: u8, b: u8| 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-    let (mut r, mut g, mut b) = (r, g, b);
-    if luma(r, g, b) < 70.0 {
-        r = 255 - r;
-        g = 255 - g;
-        b = 255 - b;
+/// RGB(0..255) -> HSL with H in [0,360), S and L in [0,1].
+fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let r = r as f32 / 255.0;
+    let g = g as f32 / 255.0;
+    let b = b as f32 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d < 1.0e-6 {
+        return (0.0, 0.0, l);
     }
-    let l = luma(r, g, b);
-    if l > 0.0 && l < 110.0 {
-        let k = 110.0 / l;
-        r = (r as f32 * k).min(255.0) as u8;
-        g = (g as f32 * k).min(255.0) as u8;
-        b = (b as f32 * k).min(255.0) as u8;
-    }
-    Color::from_rgb_u8(r, g, b)
+    let s = (d / (1.0 - (2.0 * l - 1.0).abs())).clamp(0.0, 1.0);
+    let h = if max == r {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    (h.rem_euclid(360.0), s, l)
+}
+
+/// HSL (H in degrees, S and L in [0,1]) -> RGB(0..255).
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h.rem_euclid(360.0) / 60.0;
+    let x = c * (1.0 - (hp.rem_euclid(2.0) - 1.0).abs());
+    let (r1, g1, b1) = match hp as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    (
+        ((r1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((g1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((b1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+    )
 }
 
 fn color_adjust(mut img: RgbaImage) -> RgbaImage {
