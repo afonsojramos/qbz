@@ -100,18 +100,27 @@ component CoverCard inherits Rectangle {
     in property <length> stage-cx;       // window-x of the center
     in property <length> stage-height;
     in property <bool> interactive: false;
+    // Whether THIS card is the one responsible for painting its slot. The fan is
+    // split into a LEFT Repeater (forward model) and a RIGHT Repeater (reversed
+    // model) plus a dedicated center card; each repeater card sets this true only
+    // for its own side's offset window so a slot is never double-drawn (GHOST FIX
+    // + symmetric Z-ORDER). Defaults true for the standalone center card.
+    in property <bool> paint-side: true;
     callback navigate();
 
     property <float> ao: Math.abs(root.offset);
-    // Step-down scale: center 1.0 -> ~0.5 at |offset| >= ~2.8.
+    // Step-down scale: center 1.0 -> ~0.5 at |offset| >= ~2.8. Symmetric: depends
+    // only on |offset|, so a left and right card at the same |offset| match.
     property <float> scale: Math.max(0.5, 1.0 - 0.18 * root.ao);
     property <length> slot: root.base-art * root.scale;
-    // Per-depth black overlay: 0 at center, up to 0.55 outward.
+    // Per-depth black overlay: 0 at center, up to 0.55 outward. Symmetric in |offset|.
     property <float> dim: Math.min(0.55, root.ao * 0.18);
 
-    // Only ~7 cards near the center paint; the rest are dropped (no texture
-    // cost from off-screen rows — visible:false stops painting).
-    visible: root.ao <= 3.2;
+    // Only ~7 cards near the center paint; the rest are dropped (no texture cost
+    // from off-screen rows). A card paints only inside the ±3.2 clamp AND when it
+    // owns its side (paint-side) — the latter hides the center-index Repeater
+    // copies (ghost) and the opposite half.
+    visible: root.ao <= 3.2 && root.paint-side;
 
     width: root.slot;
     height: root.slot;
@@ -199,35 +208,68 @@ export component CoverflowPanel inherits Rectangle {
         height: root.base-art + 56px;
 
         property <length> cx: root.viewport-width / 2;
+        // Length of the flat model — used to map a reversed-model index back to
+        // the ORIGINAL flat index on the RIGHT side. Read once here (not `parent`
+        // in a card root binding, which Slint forbids).
+        property <int> cf-len: QueueState.coverflow-tracks.length;
 
-        // All side + far covers from the stable flat model. The center is drawn
-        // separately (below) so it paints on top — a Repeater renders in data
-        // order and cannot reorder by |offset|.
+        // --- LEFT (history) Repeater -------------------------------------
+        // Iterates the FORWARD model in ascending index, so it paints
+        // far-left -> near-left: the near-left cover (highest left index) is
+        // declared last among the left cards => paints ON TOP. Correct as-is.
+        // Visible only for the history side: offset in (-3.5, -0.5) (strictly
+        // left of center; the center itself is the dedicated top card).
         for item[i] in QueueState.coverflow-tracks: CoverCard {
-            offset: i - root.scroll;
+            property <float> off: i - root.scroll;
+            offset: self.off;
             base-art: root.base-art;
             pitch: root.pitch;
             stage-cx: parent.cx;
             stage-height: parent.height;
             art: item.artwork;
             has-art: item.artwork.width > 0;
-            // The center (i == current index) is drawn by the top instance; this
-            // Repeater copy stays non-interactive and hides exactly at center so
-            // there is no double-draw flicker through the 320ms ease.
-            interactive: i != root.center-idx;
+            // Left side only; hides the center-index card (GHOST FIX: the
+            // dedicated center card below is the ONLY center cover) and the whole
+            // right half (the RIGHT Repeater owns it). The strict < -0.5 / > -3.5
+            // window mirrors the right side's (0.5, 3.5).
+            paint-side: self.off < -0.5 && self.off > -3.5;
+            interactive: true;
             navigate => {
-                // Flat index -> queue-wide play call. Flat order is
-                // [history.reversed (oldest-first) ++ NOW ++ upcoming], and
-                // center-idx = history.len():
-                //   i < center-idx  -> a history cover. flat history is
-                //     oldest-first while QueueStateFull.history is most-recent-
-                //     first, so hist_index = center-idx - 1 - i.
-                //   i > center-idx  -> an upcoming cover.
-                //     up_index = i - center-idx - 1.
+                // i < center-idx -> a history cover. flat history is oldest-first
+                // while QueueStateFull.history is most-recent-first, so
+                // hist_index = center-idx - 1 - i.
                 if (i < root.center-idx) {
                     QueueState.play-history(root.center-idx - 1 - i);
-                } else if (i > root.center-idx) {
-                    QueueState.play-coverflow-upcoming(i - root.center-idx - 1);
+                }
+            }
+        }
+
+        // --- RIGHT (upcoming) Repeater -----------------------------------
+        // Iterates the REVERSED model. rev index `j` is original flat index
+        // `orig = cf-len - 1 - j`, so the loop walks orig = high..low, i.e.
+        // far-upcoming -> near-upcoming: the near-upcoming cover is declared last
+        // among the right cards => paints ON TOP (Z-ORDER FIX, symmetric with the
+        // left). Offset is computed from `orig` so x/scale/dim match the left
+        // side exactly; at the ±0.5 hand-off a track's left- and right-element
+        // share the SAME offset (= orig - scroll) -> seamless. Visible only for
+        // offset in (0.5, 3.5).
+        for item[j] in QueueState.coverflow-tracks-rev: CoverCard {
+            property <int> orig: parent.cf-len - 1 - j;
+            property <float> off: self.orig - root.scroll;
+            offset: self.off;
+            base-art: root.base-art;
+            pitch: root.pitch;
+            stage-cx: parent.cx;
+            stage-height: parent.height;
+            art: item.artwork;
+            has-art: item.artwork.width > 0;
+            paint-side: self.off > 0.5 && self.off < 3.5;
+            interactive: true;
+            navigate => {
+                // orig > center-idx -> an upcoming cover.
+                // up_index = orig - center-idx - 1.
+                if (self.orig > root.center-idx) {
+                    QueueState.play-coverflow-upcoming(self.orig - root.center-idx - 1);
                 }
             }
         }

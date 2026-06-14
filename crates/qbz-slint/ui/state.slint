@@ -3259,6 +3259,18 @@ export global QueueState {
     // Image churn), so visible covers never re-decode. Windowed (±4) lazy decode
     // keeps at most one new cover decoding per advance.
     in property <[QueueItem]> coverflow-tracks: [];
+    // The SAME flat model, REVERSED (last..first). Rebuilt under the same
+    // id-sequence gate as `coverflow-tracks` (so equally stable — never touched
+    // on a pure advance). The RIGHT (upcoming) Repeater iterates THIS list so it
+    // paints far-upcoming -> near-upcoming: a Slint Repeater paints in model
+    // order and there is no per-element z-index in Slint 1.16, so reversing the
+    // model is how we get the nearer (upcoming) cover to paint ON TOP of farther
+    // ones — symmetric with the LEFT side, which already paints far->near in
+    // ascending index order. A track's element holds the SAME decoded image on
+    // both lists (the reversed list is built by cloning + reversing the forward
+    // QueueItems), so no extra decode and offsets computed from the original
+    // index match the forward side exactly during the ±0.5 slide hand-off.
+    in property <[QueueItem]> coverflow-tracks-rev: [];
     // Flat index of the NOW-PLAYING cover within `coverflow-tracks`
     // (= history.len() when a current track exists, else 0). The .slint panel
     // binds an animated `scroll` float to this int so a change eases the fan.

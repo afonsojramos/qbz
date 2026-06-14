@@ -443,7 +443,18 @@ impl QueueController {
                     .iter()
                     .map(|r| to_item_reuse(r, &prior_all))
                     .collect();
+                // The reversed model: same QueueItems (so a track's element holds
+                // the SAME decoded handle on both sides — no extra decode), just
+                // in reverse order. The RIGHT Repeater iterates THIS so it paints
+                // far-upcoming -> near-upcoming, putting the nearer cover on top.
+                // Rebuilt under the SAME seq gate as the forward model, so a pure
+                // advance never touches it either.
+                let mut cf_items_rev = cf_items.clone();
+                cf_items_rev.reverse();
                 qs.set_coverflow_tracks(slint::ModelRc::new(slint::VecModel::from(cf_items)));
+                qs.set_coverflow_tracks_rev(slint::ModelRc::new(slint::VecModel::from(
+                    cf_items_rev,
+                )));
                 qs.set_coverflow_seq_hash(coverflow_seq_hash as i32);
                 log::debug!(
                     "[coverflow-perf] rebuild seq={coverflow_seq_hash} len={} idx={coverflow_index}",
@@ -1075,11 +1086,25 @@ fn apply_queue_art(win: &AppWindow, target: ArtTarget, img: slint::Image) {
         ArtTarget::CoverflowFlat(idx) => {
             let items = qs.get_coverflow_tracks();
             if let Some(mut item) = items.row_data(idx) {
-                item.artwork = img;
+                item.artwork = img.clone();
                 // set_row_data on a SINGLE flat row — does NOT replace the
                 // VecModel, so the Repeater is not rebuilt and the other covers'
                 // sources are untouched. Only this one cell's image changes.
                 items.set_row_data(idx, item);
+            }
+            // Mirror the decode onto the reversed model used by the RIGHT
+            // Repeater. The reversed model is the forward list reversed, so the
+            // same track sits at `len-1-idx`. Updating a single row here (not
+            // replacing the VecModel) keeps that Repeater stable too — no rebuild,
+            // no churn — it just fills in the same cover the forward side got.
+            let rev = qs.get_coverflow_tracks_rev();
+            let rev_len = rev.row_count();
+            if rev_len > 0 && idx < rev_len {
+                let rev_idx = rev_len - 1 - idx;
+                if let Some(mut item) = rev.row_data(rev_idx) {
+                    item.artwork = img;
+                    rev.set_row_data(rev_idx, item);
+                }
             }
         }
     }
