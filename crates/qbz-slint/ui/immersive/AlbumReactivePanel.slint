@@ -18,6 +18,17 @@
 // parity is a Rust-side follow-up, flagged in the handoff risks; it must NOT
 // touch the audio path.)
 //
+// Speaker-cone pulse (NO lateral movement): Tauri scales the art with
+// `transform: scale(artScale)`, which is intrinsically center-anchored — the
+// art grows/shrinks in place like a vibrating loudspeaker cone, never sliding
+// sideways. Slint has no `transform: scale` on a clipped Image, so we animate
+// width/height instead and recompute the centering x/y from the live size.
+// CRITICAL: x/y are NOT animated. Animating x/y put the centering offset on its
+// own 100ms easing timeline, desynced from the width/height timeline, so the box
+// drifted off-center mid-pulse (the reported lateral movement). Leaving x/y as
+// plain bindings makes them recompute in exact lockstep with the animated size
+// → pure centered pulse, zero translate, matching Tauri.
+//
 // Glow fidelity gap (known, flagged): CSS box-shadow has blur AND spread; Slint
 // drop-shadow has blur only. We use glowSpread as the blur radius — the halo
 // reads slightly tighter than Tauri but blur+opacity dominate the look.
@@ -153,6 +164,11 @@ export component AlbumReactivePanel inherits Rectangle {
             glow := Rectangle {
                 width: root.art-size;
                 height: root.art-size;
+                // Center anchor. NOT animated: it recomputes in exact lockstep
+                // with the animated width/height each frame, so the box grows
+                // symmetrically from its center (like Tauri's `transform:
+                // scale()`) with ZERO lateral drift. Animating x/y on their own
+                // 100ms timeline desyncs from the size and makes the art slide.
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 border-radius: 8px;
@@ -160,16 +176,21 @@ export component AlbumReactivePanel inherits Rectangle {
                 opacity: root.glow-opacity;
                 drop-shadow-blur: root.glow-spread;
                 drop-shadow-color: ImmersiveState.glow-color;
-                animate width, height, x, y { duration: 100ms; easing: ease; }
+                animate width, height { duration: 100ms; easing: ease; }
                 animate opacity, drop-shadow-blur { duration: 100ms; easing: ease; }
             }
 
             // Artwork. Grows from center via reactive width/height (Slint has no
-            // transform:scale on a clipped Image). Static drop shadows mirror
+            // transform:scale on a clipped Image). This is the SPEAKER-CONE
+            // pulse: a centered scale driven by audio energy, exactly like
+            // Tauri's `transform: scale({artScale})`. Static drop shadows mirror
             // the Svelte .artwork-container box-shadow.
             art := Rectangle {
                 width: root.art-size;
                 height: root.art-size;
+                // Center anchor. NOT animated (see glow note): recomputes in
+                // lockstep with the animated size so the art pulses in place
+                // with NO lateral/sideways movement.
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 border-radius: 8px;
@@ -177,7 +198,7 @@ export component AlbumReactivePanel inherits Rectangle {
                 drop-shadow-blur: 32px;
                 drop-shadow-color: #00000080;
                 drop-shadow-offset-y: 8px;
-                animate width, height, x, y { duration: 100ms; easing: ease; }
+                animate width, height { duration: 100ms; easing: ease; }
 
                 Image {
                     source: NowPlayingState.artwork-large.width > 0
