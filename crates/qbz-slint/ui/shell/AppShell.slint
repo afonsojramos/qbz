@@ -35,6 +35,7 @@ import { TrackInfoModal } from "../album/TrackInfoModal.slint";
 import { AlbumCreditsModal } from "../album/AlbumCreditsModal.slint";
 import { ImmersiveView } from "../immersive/ImmersiveView.slint";
 import { QconnectDevModal } from "QconnectDevModal.slint";
+import { DiscoverConfigModal } from "../discover/DiscoverConfigModal.slint";
 import { DragGhost } from "../primitives/DragGhost.slint";
 import { Toast } from "../primitives/Toast.slint";
 import { NowPlayingBar } from "NowPlayingBar.slint";
@@ -503,6 +504,13 @@ export component AppShell inherits Rectangle {
 
     // Qobuz Connect DEV diagnostics modal (opened from the connect flyout).
     QconnectDevModal {
+        width: 100%;
+        height: 100%;
+    }
+
+    // Discover section configurator (Slice 5). Mounted after the other modals
+    // so its declaration order keeps it on top of them (ADR-009).
+    DiscoverConfigModal {
         width: 100%;
         height: 100%;
     }

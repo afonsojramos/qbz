@@ -230,10 +230,14 @@ export component HomeView inherits Rectangle {
                         GenreFilterState.open = !GenreFilterState.open;
                     }
                 }
-                // Per-tab sort / show-hide control for the Discover
-                // sections (not global Settings — that lives in the
-                // header menu). Its menu is a later increment.
-                GearButton { }
+                // Per-tab show/hide + reorder control for the Discover
+                // sections (not global Settings — that lives in the header
+                // menu). Opens the configurator modal for the active tab.
+                GearButton {
+                    clicked => {
+                        DiscoverActions.open-configurator();
+                    }
+                }
             }
         }
         Rectangle {

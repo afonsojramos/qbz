@@ -1,0 +1,283 @@
+// Discover section configurator (Slice 5) — the per-tab "Customize" modal:
+// reorder + show/hide the active tab's Discover sections, with a perf-warning
+// banner, an enabled/total count, and a Reset-to-defaults footer. No Save
+// button — every toggle / move / reset persists live (the controller re-pushes
+// config-rows immediately, so the list stays authoritative).
+//
+// Reuses the codebase modal idiom (self-contained Rectangle, full-window scrim +
+// centered panel; mounted LAST in AppShell so declaration order = top z-stack,
+// satisfying ADR-009 >= 3000 structurally). There is NO shared Modal component.
+//
+// Labels are resolved in Rust (DiscoverState.config-rows[].label) — Slint @tr
+// needs a literal key and the gettext pipeline is unwired, so section labels are
+// English strings (consistent with every other Slint section title). The modal's
+// own chrome strings use @tr literals (passthrough today).
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { Radius } from "../foundation/radius.slint";
+import { DiscoverState, DiscoverActions, ConfigRow } from "../state.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { QbzCheckbox } from "../primitives/QbzCheckbox.slint";
+
+// A 28x28 ghost reorder button (chevron up / down). Dims + drops the pointer
+// cursor at the list boundary.
+component ReorderButton inherits Rectangle {
+    in property <image> glyph;
+    in property <bool> button-enabled: true;
+    callback clicked();
+
+    width: 28px;
+    height: 28px;
+    border-radius: Radius.sm;
+    opacity: root.button-enabled ? 1.0 : 0.3;
+    background: (root.button-enabled && ta.has-hover) ? Theme.surface-hover : transparent;
+
+    QbzIcon {
+        source: root.glyph;
+        width: 16px;
+        height: 16px;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        tint: Theme.text-secondary;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: root.button-enabled ? pointer : default;
+        enabled: root.button-enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// One configurator row: [checkbox] [label (stretch)] [up] [down].
+component ConfigRowView inherits Rectangle {
+    in property <ConfigRow> row;
+    in property <int> index;
+    in property <int> last-index;
+    in property <string> tab;
+
+    height: 40px;
+    border-radius: Radius.sm;
+    background: row-ta.has-hover ? Theme.surface-hover : transparent;
+
+    // Whole-row tap toggles (primary affordance). The checkbox below also
+    // toggles; the Rust re-push of config-rows re-asserts truth either way.
+    row-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            DiscoverActions.toggle-section(root.tab, root.row.id);
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 6px;
+        spacing: 12px;
+
+        VerticalLayout {
+            alignment: center;
+            QbzCheckbox {
+                checked: root.row.enabled;
+                toggled => {
+                    DiscoverActions.toggle-section(root.tab, root.row.id);
+                }
+            }
+        }
+
+        Text {
+            text: root.row.label;
+            color: root.row.enabled ? Theme.text-primary : Theme.text-muted;
+            font-size: Typography.body;
+            font-weight: Typography.medium;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            ReorderButton {
+                glyph: @image-url("../assets/icons/chevron-up.svg");
+                button-enabled: root.index > 0;
+                clicked => {
+                    DiscoverActions.move-section(root.tab, root.row.id, -1);
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            ReorderButton {
+                glyph: @image-url("../assets/icons/chevron-down.svg");
+                button-enabled: root.index < root.last-index;
+                clicked => {
+                    DiscoverActions.move-section(root.tab, root.row.id, 1);
+                }
+            }
+        }
+    }
+}
+
+export component DiscoverConfigModal inherits Rectangle {
+    visible: DiscoverState.configurator-open;
+
+    if DiscoverState.configurator-open: Rectangle {
+        // Scrim — closes on outside click.
+        background: #000000bf;
+        TouchArea {
+            mouse-cursor: default;
+            clicked => {
+                DiscoverActions.close-configurator();
+            }
+        }
+
+        // Panel.
+        Rectangle {
+            width: Math.min(root.width - 80px, 520px);
+            height: Math.min(panel.preferred-height, root.height * 0.78);
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+            border-radius: Radius.md;
+            background: Theme.surface-card;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            drop-shadow-blur: 32px;
+            drop-shadow-color: #00000080;
+            clip: true;
+            // Swallow clicks so they do not fall through to the scrim.
+            TouchArea { }
+
+            panel := VerticalLayout {
+                padding: 20px;
+                spacing: 14px;
+
+                // Title row + close.
+                HorizontalLayout {
+                    Text {
+                        text: @tr("Customize");
+                        color: Theme.text-primary;
+                        font-size: Typography.heading;
+                        font-weight: Typography.semibold;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    close-x := TouchArea {
+                        width: 28px;
+                        height: 28px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            DiscoverActions.close-configurator();
+                        }
+                        QbzIcon {
+                            source: @image-url("../assets/icons/x.svg");
+                            width: 17px;
+                            height: 17px;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                            tint: close-x.has-hover ? Theme.text-primary : Theme.text-muted;
+                        }
+                    }
+                }
+
+                // Perf-warning banner.
+                Rectangle {
+                    border-radius: Radius.sm;
+                    background: Theme.surface-elevated;
+                    banner := HorizontalLayout {
+                        padding: 10px;
+                        spacing: 10px;
+                        VerticalLayout {
+                            alignment: start;
+                            QbzIcon {
+                                source: @image-url("../assets/icons/triangle-alert.svg");
+                                width: 16px;
+                                height: 16px;
+                                tint: #FFA726;
+                            }
+                        }
+                        Text {
+                            text: @tr("Enabling more sections increases load time.");
+                            color: Theme.text-secondary;
+                            font-size: Typography.legal;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+
+                // Count line.
+                Text {
+                    text: @tr("{} of {} enabled", DiscoverState.enabled-count, DiscoverState.total-count);
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    font-weight: Typography.medium;
+                }
+
+                // Section list (scrolls when taller than the panel cap).
+                Rectangle {
+                    vertical-stretch: 1;
+                    clip: true;
+                    list-flick := Flickable {
+                        width: 100%;
+                        height: 100%;
+                        viewport-width: self.width;
+                        viewport-height: list-col.preferred-height;
+                        list-col := VerticalLayout {
+                            spacing: 2px;
+                            alignment: start;
+                            for row[idx] in DiscoverState.config-rows: ConfigRowView {
+                                row: row;
+                                index: idx;
+                                last-index: DiscoverState.config-rows.length - 1;
+                                tab: DiscoverState.active-tab;
+                            }
+                        }
+                    }
+                }
+
+                // Footer — Reset to defaults, pinned left.
+                HorizontalLayout {
+                    reset-btn := Rectangle {
+                        width: reset-row.preferred-width + 24px;
+                        height: 34px;
+                        border-radius: Radius.sm;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+                        background: reset-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+                        reset-row := HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 8px;
+                            alignment: center;
+                            VerticalLayout {
+                                alignment: center;
+                                QbzIcon {
+                                    source: @image-url("../assets/icons/rotate-ccw.svg");
+                                    width: 15px;
+                                    height: 15px;
+                                    tint: Theme.text-secondary;
+                                }
+                            }
+                            Text {
+                                text: @tr("Reset to defaults");
+                                color: Theme.text-primary;
+                                font-size: Typography.body;
+                                vertical-alignment: center;
+                            }
+                        }
+                        reset-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                DiscoverActions.reset-tab(DiscoverState.active-tab);
+                            }
+                        }
+                    }
+                    // Spacer pushes the reset button to the left edge.
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+    }
+}
