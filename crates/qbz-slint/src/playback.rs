@@ -2722,6 +2722,55 @@ pub fn play_track_next(
     });
 }
 
+/// Play a whole playlist (by id) NOW — replace the queue with the playlist's
+/// tracks and start at the first one. Fetches the tracks fresh, so it works
+/// from any playlist CARD (Discover / Search / Label carousels) without a
+/// PlaylistView open, unlike the `play-all` arm (which reads the open detail's
+/// PlaylistState). Mirrors `enqueue_playlist`'s fetch + mixed-sidecar interleave
+/// but calls `set_queue` instead of `add_tracks`, like `play_album`.
+pub fn play_playlist(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    playlist_id: String,
+) {
+    let Ok(pid) = playlist_id.parse::<u64>() else {
+        return;
+    };
+    handle.spawn(async move {
+        let playlist = match runtime.core().get_playlist(pid).await {
+            Ok(playlist) => playlist,
+            Err(e) => {
+                log::error!("[qbz-slint] playback: play get_playlist {pid} failed: {e}");
+                return;
+            }
+        };
+        let qobuz_tracks: Vec<Track> = playlist.tracks.map(|c| c.items).unwrap_or_default();
+        // Same mixed-playlist merge as `enqueue_playlist`: interleave the
+        // local/Plex sidecar rows at their stored slots so a card play carries
+        // every row WITH its source. Pure-Qobuz playlists read an empty sidecar.
+        let qobuz_count = qobuz_tracks.len() as u32;
+        let sidecar = tokio::task::spawn_blocking(move || {
+            crate::local_playlist::read_sidecar_rows_blocking(pid, qobuz_count, true)
+        })
+        .await
+        .unwrap_or_default();
+        let rows = crate::playlist::interleave_rows(qobuz_tracks, sidecar);
+        let tracks: Vec<QueueTrack> = rows
+            .iter()
+            .filter_map(|row| crate::local_playlist::row_queue_track(&row.item))
+            .collect();
+        if tracks.is_empty() {
+            return;
+        }
+        let start_track_id = tracks[0].id;
+        set_now_playing_context(&weak, "playlist", &playlist_id);
+        runtime.core().set_queue(tracks, Some(0)).await;
+        after_track_change(&runtime, &weak, start_track_id).await;
+        refresh_sidebar(true);
+    });
+}
+
 /// Enqueue a whole playlist (by id) at the end of the queue, or immediately
 /// after the current track when `next`. Fetches the playlist's tracks fresh,
 /// so it works from any playlist CARD (carousels, search, favorites) — not just

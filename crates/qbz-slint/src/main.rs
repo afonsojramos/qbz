@@ -5904,6 +5904,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                 }
+                ("playlist", "play") => {
+                    // Play a playlist by id NOW (replace the queue), from any
+                    // playlist CARD overlay / context menu (Discover qobuzPlaylists,
+                    // Search, Label) where no PlaylistView is open. The `play-all`
+                    // arm below reads the open detail's PlaylistState, so it cannot
+                    // serve a cold card play — this fetches the playlist by id.
+                    playback::play_playlist(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id.clone(),
+                    );
+                }
                 ("playlist", "play-all") => {
                     // LOCAL playlist detail — its own queue snapshot +
                     // offline-only stamp (D8); the offline sidecar view of
