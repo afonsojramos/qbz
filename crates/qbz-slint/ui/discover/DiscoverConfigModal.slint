@@ -53,7 +53,7 @@ component ReorderButton inherits Rectangle {
 
 // One configurator row: [checkbox] [label (stretch)] [up] [down].
 component ConfigRowView inherits Rectangle {
-    in property <ConfigRow> row;
+    in property <ConfigRow> entry; // NOT `row`: `row` is a reserved Slint grid attached-property
     in property <int> index;
     in property <int> last-index;
     in property <string> tab;
@@ -67,7 +67,7 @@ component ConfigRowView inherits Rectangle {
     row-ta := TouchArea {
         mouse-cursor: pointer;
         clicked => {
-            DiscoverActions.toggle-section(root.tab, root.row.id);
+            DiscoverActions.toggle-section(root.tab, root.entry.id);
         }
     }
 
@@ -79,16 +79,16 @@ component ConfigRowView inherits Rectangle {
         VerticalLayout {
             alignment: center;
             QbzCheckbox {
-                checked: root.row.enabled;
+                checked: root.entry.enabled;
                 toggled => {
-                    DiscoverActions.toggle-section(root.tab, root.row.id);
+                    DiscoverActions.toggle-section(root.tab, root.entry.id);
                 }
             }
         }
 
         Text {
-            text: root.row.label;
-            color: root.row.enabled ? Theme.text-primary : Theme.text-muted;
+            text: root.entry.label;
+            color: root.entry.enabled ? Theme.text-primary : Theme.text-muted;
             font-size: Typography.body;
             font-weight: Typography.medium;
             vertical-alignment: center;
@@ -101,7 +101,7 @@ component ConfigRowView inherits Rectangle {
                 glyph: @image-url("../assets/icons/chevron-up.svg");
                 button-enabled: root.index > 0;
                 clicked => {
-                    DiscoverActions.move-section(root.tab, root.row.id, -1);
+                    DiscoverActions.move-section(root.tab, root.entry.id, -1);
                 }
             }
         }
@@ -111,7 +111,7 @@ component ConfigRowView inherits Rectangle {
                 glyph: @image-url("../assets/icons/chevron-down.svg");
                 button-enabled: root.index < root.last-index;
                 clicked => {
-                    DiscoverActions.move-section(root.tab, root.row.id, 1);
+                    DiscoverActions.move-section(root.tab, root.entry.id, 1);
                 }
             }
         }
@@ -232,7 +232,7 @@ export component DiscoverConfigModal inherits Rectangle {
                             spacing: 2px;
                             alignment: start;
                             for row[idx] in DiscoverState.config-rows: ConfigRowView {
-                                row: row;
+                                entry: row;
                                 index: idx;
                                 last-index: DiscoverState.config-rows.length - 1;
                                 tab: DiscoverState.active-tab;
