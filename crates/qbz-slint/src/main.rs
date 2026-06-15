@@ -782,17 +782,7 @@ fn ensure_for_you_loaded(
         return;
     }
     foryou::reset_loading(&w);
-    let runtime = runtime.clone();
-    let weak = weak.clone();
-    let image_cache = image_cache.clone();
-    handle.spawn(async move {
-        let data = foryou::load_for_you(&runtime).await;
-        let jobs = foryou::artwork_jobs(&data);
-        let _ = weak.upgrade_in_event_loop(move |w| {
-            foryou::apply_for_you(&w, &data);
-        });
-        artwork::spawn_loads(jobs, weak, image_cache);
-    });
+    foryou::spawn_for_you(runtime.clone(), weak.clone(), handle, image_cache.clone());
 }
 
 /// Load an album and show the album view, then fetch its artwork. Shared

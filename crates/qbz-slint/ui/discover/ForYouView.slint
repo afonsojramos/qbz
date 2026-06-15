@@ -29,12 +29,18 @@ export component ForYouView inherits VerticalLayout {
     callback start-radio-album(string);
     callback open-mix(string);
 
-    // While the first lazy load is in flight, show the same pulsing
-    // skeleton Home uses (the Qobuz Mixes tiles stay — they're static).
+    // Progressive load: while the first lazy load is in flight, show the
+    // skeleton Home uses (the Qobuz Mixes tiles stay — they're static). It
+    // hides as soon as ANY content paints — the recently-played sections
+    // render first (local, instant), the rest fill in via each section's own
+    // `if length > 0` gate. The page-level `loading` latch only keeps the
+    // skeleton up while every backing section is still empty.
     property <bool> show-skeleton:
         ForYouState.loading
         && ForYouState.release-watch.albums.length == 0
-        && ForYouState.top-artists.length == 0;
+        && ForYouState.top-artists.length == 0
+        && ForYouState.recent-albums.albums.length == 0
+        && ForYouState.recent-tracks.length == 0;
 
     spacing: 40px;
     alignment: start;

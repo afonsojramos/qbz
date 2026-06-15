@@ -1,46 +1,50 @@
 //! Discover > For You controller.
 //!
-//! Loads the personalized For You sections the Slint MVP can source
-//! today and pushes them into `ForYouState`. Each section reuses an
-//! existing card component (album Carousel, SlimCarousel, artist
-//! ArtistCarousel). Lazy: the tab loads once on first open.
+//! Loads the personalized For You sections and pushes them into
+//! `ForYouState`. Each section reuses an existing card component (album
+//! Carousel, SlimCarousel, artist ArtistCarousel).
 //!
-//! Backed sections: Release Watch (get_release_watch), Recently
-//! Played Tracks / Albums (local play-history), Your Top Artists
-//! (favorites), Artists to Follow (similar artists seeded from
-//! favorites). The reco-DB sections (Qobuz mixes, more from library,
-//! rediscover, spotlight, radio) are separate later increments.
+//! ## Progressive, parallel loading
+//!
+//! The tab loads once on first open ([`spawn_for_you`]). Rather than
+//! awaiting one long sequential chain of API calls and applying every
+//! section at the very end (the old behaviour — up to ~9 serialized
+//! round-trips before anything painted), the loader now:
+//!
+//!   1. Paints the local/static sections instantly (recently-played
+//!      tracks + albums) before any network call.
+//!   2. Fans the independent API calls out into concurrent branches
+//!      (release-watch ∥ favorite-artists ∥ favorite-albums ∥
+//!      album-suggest), each applying its own section the moment its
+//!      data resolves, via `upgrade_in_event_loop`.
+//!   3. Latches `ForYouState.loaded = true` ONLY after every branch has
+//!      resolved, so the one-shot re-entry guard in `main.rs`
+//!      (`ensure_for_you_loaded`) can never strand a partially-loaded
+//!      tab.
+//!
+//! Backed sections: Release Watch (get_release_watch), Recently Played
+//! Tracks / Albums (local play-history), Your Top Artists (favorites),
+//! Artists to Follow (similar artists seeded from favorites), Rediscover
+//! + Radio (favorite albums), More From Your Library (album/suggest),
+//! Spotlight (a rotated favorite artist's page).
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
+use futures_util::future::join_all;
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
 use qbz_models::{Album, Artist};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use crate::artwork::{ArtworkJob, ArtworkTarget};
+use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
 use crate::{AlbumCardItem, AppWindow, DiscoverSection, ForYouState, SlimItem};
 
 const ARTIST_SEEDS: usize = 4;
 const SIMILAR_PER_SEED: u32 = 10;
 const FOLLOW_MAX: usize = 18;
-
-pub struct ForYouData {
-    pub release_watch: Vec<AlbumCard>,
-    pub recent_albums: Vec<AlbumCard>,
-    pub recent_tracks: Vec<TrackSlim>,
-    pub top_artists: Vec<ArtistSlim>,
-    pub artists_to_follow: Vec<ArtistSlim>,
-    /// Favorite albums not in the recent play-history — an
-    /// approximation of Tauri's reco-DB "forgotten favorites".
-    pub rediscover: Vec<AlbumCard>,
-    /// Albums similar to a recently-played / favorite seed album.
-    pub more_from_library: Vec<AlbumCard>,
-    /// Album-seeded radio tiles (recent + favorite albums).
-    pub radio_stations: Vec<RadioSeed>,
-    pub spotlight: Option<SpotlightData>,
-}
 
 #[derive(Clone)]
 pub struct RadioSeed {
@@ -127,47 +131,26 @@ fn map_artist(artist: Artist, following: bool) -> ArtistSlim {
     }
 }
 
-pub async fn load_for_you<A>(runtime: &Arc<AppRuntime<A>>) -> ForYouData
+// ---------------------------------------------------------------------------
+// Per-section fetch helpers (network). Each returns owned, mapped data so the
+// orchestrator can fire its apply the moment the call resolves.
+// ---------------------------------------------------------------------------
+
+async fn fetch_release_watch<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<AlbumCard>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
-    // Release Watch — new releases from followed artists.
-    let release_watch: Vec<AlbumCard> = match runtime
-        .core()
-        .get_release_watch("artists", 18, 0)
-        .await
-    {
+    match runtime.core().get_release_watch("artists", 18, 0).await {
         Ok(page) => page.items.into_iter().map(map_album).collect(),
         Err(_) => Vec::new(),
-    };
+    }
+}
 
-    // Recently played — local play-history store.
-    let recent_albums: Vec<AlbumCard> = crate::recently::load_albums()
-        .into_iter()
-        .map(|a| AlbumCard {
-            id: a.id,
-            title: a.title,
-            artist: a.artist,
-            artist_id: String::new(),
-            year: String::new(),
-            quality_tier: a.quality_tier,
-            quality_label: a.quality_label,
-            artwork_url: a.artwork_url,
-        })
-        .collect();
-    let recent_tracks: Vec<TrackSlim> = crate::recently::load()
-        .into_iter()
-        .take(24)
-        .map(|t| TrackSlim {
-            id: t.id,
-            title: t.title,
-            subtitle: t.subtitle,
-            artwork_url: t.artwork_url,
-        })
-        .collect();
-
-    // Your Top Artists — the user's favorite artists.
-    let fav_artists: Vec<Artist> = match runtime.core().get_favorites("artists", 50, 0).await {
+async fn fetch_fav_artists<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<Artist>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    match runtime.core().get_favorites("artists", 50, 0).await {
         Ok(value) => {
             let items = value
                 .get("artists")
@@ -177,45 +160,14 @@ where
             serde_json::from_value(items).unwrap_or_default()
         }
         Err(_) => Vec::new(),
-    };
-    let favorite_ids: HashSet<u64> = fav_artists.iter().map(|a| a.id).collect();
-    let top_artists: Vec<ArtistSlim> = fav_artists
-        .iter()
-        .take(18)
-        .cloned()
-        .map(|a| map_artist(a, true))
-        .collect();
-
-    // Artists to Follow — similar artists seeded from a few favorites,
-    // excluding ones already followed.
-    let mut to_follow: Vec<ArtistSlim> = Vec::new();
-    let mut seen: HashSet<u64> = favorite_ids.clone();
-    for seed in fav_artists.iter().take(ARTIST_SEEDS) {
-        if to_follow.len() >= FOLLOW_MAX {
-            break;
-        }
-        if let Ok(page) = runtime
-            .core()
-            .get_similar_artists(seed.id, SIMILAR_PER_SEED, 0)
-            .await
-        {
-            for artist in page.items {
-                if seen.insert(artist.id) {
-                    to_follow.push(map_artist(artist, false));
-                    if to_follow.len() >= FOLLOW_MAX {
-                        break;
-                    }
-                }
-            }
-        }
     }
+}
 
-    // Favorite albums (full list) — feeds Rediscover + the More from
-    // your library seed.
-    let recent_album_list = crate::recently::load_albums();
-    let recent_ids: HashSet<String> =
-        recent_album_list.iter().map(|a| a.id.clone()).collect();
-    let fav_albums: Vec<Album> = match runtime.core().get_favorites("albums", 100, 0).await {
+async fn fetch_fav_albums<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<Album>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    match runtime.core().get_favorites("albums", 100, 0).await {
         Ok(value) => {
             let items = value
                 .get("albums")
@@ -225,84 +177,67 @@ where
             serde_json::from_value(items).unwrap_or_default()
         }
         Err(_) => Vec::new(),
-    };
+    }
+}
 
-    // Rediscover — favorite albums not in the recent play-history.
-    // (Tauri uses a reco DB tracking play recency; the Slint MVP
-    // approximates with the local recently-played album set.)
-    let rediscover: Vec<AlbumCard> = fav_albums
-        .iter()
-        .filter(|a| !recent_ids.contains(&a.id))
-        .take(18)
-        .cloned()
-        .map(map_album)
-        .collect();
+async fn fetch_suggest<A>(runtime: &Arc<AppRuntime<A>>, album_id: &str) -> Vec<AlbumCard>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    if album_id.is_empty() {
+        return Vec::new();
+    }
+    match runtime.core().get_album_suggest(album_id).await {
+        Ok(resp) => resp
+            .albums
+            .map(|p| p.items)
+            .unwrap_or_default()
+            .into_iter()
+            .take(18)
+            .map(map_album)
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
 
-    // More from your library — albums similar to a seed (most recent
-    // played album, else first favorite) via /album/suggest.
-    let seed_id = recent_album_list
-        .first()
-        .map(|a| a.id.clone())
-        .or_else(|| fav_albums.first().map(|a| a.id.clone()));
-    let more_from_library: Vec<AlbumCard> = match seed_id {
-        Some(id) if !id.is_empty() => match runtime.core().get_album_suggest(&id).await {
-            Ok(resp) => resp
-                .albums
-                .map(|p| p.items)
-                .unwrap_or_default()
-                .into_iter()
-                .take(18)
-                .map(map_album)
-                .collect(),
-            Err(_) => Vec::new(),
-        },
-        _ => Vec::new(),
-    };
+/// Artists to Follow — similar artists seeded from up to `ARTIST_SEEDS`
+/// favorites, excluding ones already followed.
+///
+/// The ≤4 seed calls are issued CONCURRENTLY (was a sequential await loop),
+/// but the dedup + `FOLLOW_MAX` cap are then re-applied SEQUENTIALLY over the
+/// joined results IN SEED ORDER — this preserves the exact membership the old
+/// sequential loop produced (same `seen` set seeded with the favorite ids,
+/// same first-wins dedup, same early cap), only faster.
+async fn fetch_to_follow<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    fav_artists: &[Artist],
+    favorite_ids: &HashSet<u64>,
+) -> Vec<ArtistSlim>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let seeds: Vec<u64> = fav_artists.iter().take(ARTIST_SEEDS).map(|a| a.id).collect();
+    let futures = seeds.into_iter().map(|id| {
+        let runtime = runtime.clone();
+        async move { runtime.core().get_similar_artists(id, SIMILAR_PER_SEED, 0).await }
+    });
+    let results = join_all(futures).await; // Vec<Result<..>> in seed order
 
-    // Radio Stations — album-seeded radio tiles from recent +
-    // favorite albums, deduped, capped at 12.
-    let mut radio_seen: HashSet<String> = HashSet::new();
-    let mut radio_stations: Vec<RadioSeed> = Vec::new();
-    for a in &recent_album_list {
-        if radio_seen.insert(a.id.clone()) {
-            radio_stations.push(RadioSeed {
-                album_id: a.id.clone(),
-                title: a.title.clone(),
-                artist: a.artist.clone(),
-                artwork_url: a.artwork_url.clone(),
-            });
+    let mut seen: HashSet<u64> = favorite_ids.clone();
+    let mut to_follow: Vec<ArtistSlim> = Vec::new();
+    'outer: for res in results {
+        if let Ok(page) = res {
+            for artist in page.items {
+                if to_follow.len() >= FOLLOW_MAX {
+                    break 'outer;
+                }
+                if seen.insert(artist.id) {
+                    to_follow.push(map_artist(artist, false));
+                }
+            }
         }
     }
-    for a in &fav_albums {
-        if radio_stations.len() >= 12 {
-            break;
-        }
-        if radio_seen.insert(a.id.clone()) {
-            radio_stations.push(RadioSeed {
-                album_id: a.id.clone(),
-                title: a.title.clone(),
-                artist: a.artist.name.clone(),
-                artwork_url: a.image.best().cloned().unwrap_or_default(),
-            });
-        }
-    }
-    radio_stations.truncate(12);
-
-    // Spotlight — highlight one favorite artist (rotated by time) with
-    // their page (albums + whether they have top tracks).
-    let spotlight = load_spotlight(runtime, &fav_artists).await;
-
-    ForYouData {
-        release_watch,
-        recent_albums,
-        recent_tracks,
-        top_artists,
-        artists_to_follow: to_follow,
-        rediscover,
-        more_from_library,
-        radio_stations,
-        spotlight,
-    }
+    to_follow
 }
 
 async fn load_spotlight<A>(
@@ -407,6 +342,98 @@ where
     })
 }
 
+// ---------------------------------------------------------------------------
+// Pure builders (no network) for the locally-derived sections.
+// ---------------------------------------------------------------------------
+
+fn recent_album_cards(list: &[crate::recently::RecentAlbum]) -> Vec<AlbumCard> {
+    list.iter()
+        .cloned()
+        .map(|a| AlbumCard {
+            id: a.id,
+            title: a.title,
+            artist: a.artist,
+            artist_id: String::new(),
+            year: String::new(),
+            quality_tier: a.quality_tier,
+            quality_label: a.quality_label,
+            artwork_url: a.artwork_url,
+        })
+        .collect()
+}
+
+fn recent_track_slims() -> Vec<TrackSlim> {
+    crate::recently::load()
+        .into_iter()
+        .take(24)
+        .map(|t| TrackSlim {
+            id: t.id,
+            title: t.title,
+            subtitle: t.subtitle,
+            artwork_url: t.artwork_url,
+        })
+        .collect()
+}
+
+fn top_artist_slims(fav_artists: &[Artist]) -> Vec<ArtistSlim> {
+    fav_artists
+        .iter()
+        .take(18)
+        .cloned()
+        .map(|a| map_artist(a, true))
+        .collect()
+}
+
+/// Rediscover — favorite albums not in the recent play-history.
+fn build_rediscover(fav_albums: &[Album], recent_ids: &HashSet<String>) -> Vec<AlbumCard> {
+    fav_albums
+        .iter()
+        .filter(|a| !recent_ids.contains(&a.id))
+        .take(18)
+        .cloned()
+        .map(map_album)
+        .collect()
+}
+
+/// Radio Stations — album-seeded tiles from recent + favorite albums,
+/// deduped, capped at 12.
+fn build_radio(
+    recent_album_list: &[crate::recently::RecentAlbum],
+    fav_albums: &[Album],
+) -> Vec<RadioSeed> {
+    let mut radio_seen: HashSet<String> = HashSet::new();
+    let mut radio_stations: Vec<RadioSeed> = Vec::new();
+    for a in recent_album_list {
+        if radio_seen.insert(a.id.clone()) {
+            radio_stations.push(RadioSeed {
+                album_id: a.id.clone(),
+                title: a.title.clone(),
+                artist: a.artist.clone(),
+                artwork_url: a.artwork_url.clone(),
+            });
+        }
+    }
+    for a in fav_albums {
+        if radio_stations.len() >= 12 {
+            break;
+        }
+        if radio_seen.insert(a.id.clone()) {
+            radio_stations.push(RadioSeed {
+                album_id: a.id.clone(),
+                title: a.title.clone(),
+                artist: a.artist.name.clone(),
+                artwork_url: a.image.best().cloned().unwrap_or_default(),
+            });
+        }
+    }
+    radio_stations.truncate(12);
+    radio_stations
+}
+
+// ---------------------------------------------------------------------------
+// Slint model mappers.
+// ---------------------------------------------------------------------------
+
 fn album_items(cards: &[AlbumCard]) -> Vec<AlbumCardItem> {
     cards
         .iter()
@@ -452,144 +479,352 @@ fn section(title: &str, cards: &[AlbumCard]) -> DiscoverSection {
     }
 }
 
-pub fn apply_for_you(window: &AppWindow, data: &ForYouData) {
-    let state = window.global::<ForYouState>();
-    state.set_release_watch(section("Release Watch", &data.release_watch));
-    state.set_recent_albums(section("Recently Played Albums", &data.recent_albums));
-    let tracks: Vec<SlimItem> = data
-        .recent_tracks
-        .iter()
-        .map(|t| SlimItem {
-            id: t.id.clone().into(),
-            title: t.title.clone().into(),
-            subtitle: t.subtitle.clone().into(),
-            rank: "".into(),
-            artwork_url: t.artwork_url.clone().into(),
-            artwork: slint::Image::default(),
-            following: false,
-        })
-        .collect();
-    state.set_recent_tracks(ModelRc::new(VecModel::from(tracks)));
-    state.set_top_artists(ModelRc::new(VecModel::from(artist_items(&data.top_artists))));
-    state.set_artists_to_follow(ModelRc::new(VecModel::from(artist_items(
-        &data.artists_to_follow,
-    ))));
-    state.set_more_from_library(section("More From Your Library", &data.more_from_library));
-    state.set_rediscover(section("Rediscover Your Library", &data.rediscover));
-    let radio: Vec<crate::RadioStationItem> = data
-        .radio_stations
-        .iter()
-        .map(|r| crate::RadioStationItem {
-            album_id: r.album_id.clone().into(),
-            title: r.title.clone().into(),
-            artist: r.artist.clone().into(),
-            artwork_url: r.artwork_url.clone().into(),
-            artwork: slint::Image::default(),
-        })
-        .collect();
-    state.set_radio_stations(ModelRc::new(VecModel::from(radio)));
+// ---------------------------------------------------------------------------
+// Per-section artwork job builders.
+// ---------------------------------------------------------------------------
 
-    if let Some(sp) = &data.spotlight {
-        state.set_spotlight_visible(true);
-        state.set_spotlight_artist_id(sp.artist_id.clone().into());
-        state.set_spotlight_name(sp.artist_name.clone().into());
-        state.set_spotlight_category(sp.category.clone().into());
-        state.set_spotlight_image_url(sp.image_url.clone().into());
-        state.set_spotlight_has_top_tracks(sp.has_top_tracks);
-        state.set_spotlight_albums(ModelRc::new(VecModel::from(album_items(&sp.albums))));
-    } else {
-        state.set_spotlight_visible(false);
-    }
-
-    state.set_loading(false);
-    state.set_loaded(true);
+fn album_jobs(cards: &[AlbumCard], target: impl Fn(usize) -> ArtworkTarget) -> Vec<ArtworkJob> {
+    cards
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.artwork_url.is_empty())
+        .map(|(i, c)| ArtworkJob {
+            url: c.artwork_url.clone(),
+            target: target(i),
+        })
+        .collect()
 }
 
+fn artist_jobs(
+    artists: &[ArtistSlim],
+    target: impl Fn(usize) -> ArtworkTarget,
+) -> Vec<ArtworkJob> {
+    artists
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| !a.artwork_url.is_empty())
+        .map(|(i, a)| ArtworkJob {
+            url: a.artwork_url.clone(),
+            target: target(i),
+        })
+        .collect()
+}
+
+fn track_jobs(tracks: &[TrackSlim]) -> Vec<ArtworkJob> {
+    tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| !t.artwork_url.is_empty())
+        .map(|(i, t)| ArtworkJob {
+            url: t.artwork_url.clone(),
+            target: ArtworkTarget::ForYouRecentTrack { index: i },
+        })
+        .collect()
+}
+
+fn radio_jobs(seeds: &[RadioSeed]) -> Vec<ArtworkJob> {
+    seeds
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| !r.artwork_url.is_empty())
+        .map(|(i, r)| ArtworkJob {
+            url: r.artwork_url.clone(),
+            target: ArtworkTarget::ForYouRadioStation { index: i },
+        })
+        .collect()
+}
+
+fn spotlight_jobs(sp: &SpotlightData) -> Vec<ArtworkJob> {
+    let mut jobs = Vec::new();
+    if !sp.image_url.is_empty() {
+        jobs.push(ArtworkJob {
+            url: sp.image_url.clone(),
+            target: ArtworkTarget::ForYouSpotlightArtist,
+        });
+    }
+    for (i, c) in sp.albums.iter().enumerate() {
+        if !c.artwork_url.is_empty() {
+            jobs.push(ArtworkJob {
+                url: c.artwork_url.clone(),
+                target: ArtworkTarget::ForYouSpotlightAlbum { index: i },
+            });
+        }
+    }
+    jobs
+}
+
+// ---------------------------------------------------------------------------
+// Per-section apply helpers. Each pushes its model on the UI thread, then
+// fires its artwork jobs (async, per-row). NONE of them touches the
+// `loaded` flag — that is latched once at the end of `spawn_for_you`.
+// ---------------------------------------------------------------------------
+
+fn apply_recent(
+    weak: &slint::Weak<AppWindow>,
+    cache: &ImageCache,
+    albums: Vec<AlbumCard>,
+    tracks: Vec<TrackSlim>,
+) {
+    let mut jobs = album_jobs(&albums, |i| ArtworkTarget::ForYouRecentAlbum { index: i });
+    jobs.extend(track_jobs(&tracks));
+    let w = weak.clone();
+    let _ = w.upgrade_in_event_loop(move |w| {
+        let state = w.global::<ForYouState>();
+        state.set_recent_albums(section("Recently Played Albums", &albums));
+        let slim: Vec<SlimItem> = tracks
+            .iter()
+            .map(|t| SlimItem {
+                id: t.id.clone().into(),
+                title: t.title.clone().into(),
+                subtitle: t.subtitle.clone().into(),
+                rank: "".into(),
+                artwork_url: t.artwork_url.clone().into(),
+                artwork: slint::Image::default(),
+                following: false,
+            })
+            .collect();
+        state.set_recent_tracks(ModelRc::new(VecModel::from(slim)));
+    });
+    crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
+}
+
+fn apply_release_watch(weak: &slint::Weak<AppWindow>, cache: &ImageCache, cards: Vec<AlbumCard>) {
+    let jobs = album_jobs(&cards, |i| ArtworkTarget::ForYouReleaseWatch { index: i });
+    let w = weak.clone();
+    let _ = w.upgrade_in_event_loop(move |w| {
+        w.global::<ForYouState>()
+            .set_release_watch(section("Release Watch", &cards));
+    });
+    crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
+}
+
+fn apply_top_artists(weak: &slint::Weak<AppWindow>, cache: &ImageCache, artists: Vec<ArtistSlim>) {
+    let jobs = artist_jobs(&artists, |i| ArtworkTarget::ForYouTopArtist { index: i });
+    let w = weak.clone();
+    let _ = w.upgrade_in_event_loop(move |w| {
+        w.global::<ForYouState>()
+            .set_top_artists(ModelRc::new(VecModel::from(artist_items(&artists))));
+    });
+    crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
+}
+
+fn apply_to_follow(weak: &slint::Weak<AppWindow>, cache: &ImageCache, artists: Vec<ArtistSlim>) {
+    let jobs = artist_jobs(&artists, |i| ArtworkTarget::ForYouToFollow { index: i });
+    let w = weak.clone();
+    let _ = w.upgrade_in_event_loop(move |w| {
+        w.global::<ForYouState>()
+            .set_artists_to_follow(ModelRc::new(VecModel::from(artist_items(&artists))));
+    });
+    crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
+}
+
+fn apply_rediscover(weak: &slint::Weak<AppWindow>, cache: &ImageCache, cards: Vec<AlbumCard>) {
+    let jobs = album_jobs(&cards, |i| ArtworkTarget::ForYouRediscover { index: i });
+    let w = weak.clone();
+    let _ = w.upgrade_in_event_loop(move |w| {
+        w.global::<ForYouState>()
+            .set_rediscover(section("Rediscover Your Library", &cards));
+    });
+    crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
+}
+
+fn apply_more_from_library(
+    weak: &slint::Weak<AppWindow>,
+    cache: &ImageCache,
+    cards: Vec<AlbumCard>,
+) {
+    let jobs = album_jobs(&cards, |i| ArtworkTarget::ForYouMoreFromLibrary { index: i });
+    let w = weak.clone();
+    let _ = w.upgrade_in_event_loop(move |w| {
+        w.global::<ForYouState>()
+            .set_more_from_library(section("More From Your Library", &cards));
+    });
+    crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
+}
+
+fn apply_radio(weak: &slint::Weak<AppWindow>, cache: &ImageCache, seeds: Vec<RadioSeed>) {
+    let jobs = radio_jobs(&seeds);
+    let w = weak.clone();
+    let _ = w.upgrade_in_event_loop(move |w| {
+        let radio: Vec<crate::RadioStationItem> = seeds
+            .iter()
+            .map(|r| crate::RadioStationItem {
+                album_id: r.album_id.clone().into(),
+                title: r.title.clone().into(),
+                artist: r.artist.clone().into(),
+                artwork_url: r.artwork_url.clone().into(),
+                artwork: slint::Image::default(),
+            })
+            .collect();
+        w.global::<ForYouState>()
+            .set_radio_stations(ModelRc::new(VecModel::from(radio)));
+    });
+    crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
+}
+
+fn apply_spotlight(weak: &slint::Weak<AppWindow>, cache: &ImageCache, sp: Option<SpotlightData>) {
+    let jobs = sp.as_ref().map(spotlight_jobs).unwrap_or_default();
+    let w = weak.clone();
+    let _ = w.upgrade_in_event_loop(move |w| {
+        let state = w.global::<ForYouState>();
+        if let Some(sp) = &sp {
+            state.set_spotlight_visible(true);
+            state.set_spotlight_artist_id(sp.artist_id.clone().into());
+            state.set_spotlight_name(sp.artist_name.clone().into());
+            state.set_spotlight_category(sp.category.clone().into());
+            state.set_spotlight_image_url(sp.image_url.clone().into());
+            state.set_spotlight_has_top_tracks(sp.has_top_tracks);
+            state.set_spotlight_albums(ModelRc::new(VecModel::from(album_items(&sp.albums))));
+        } else {
+            state.set_spotlight_visible(false);
+        }
+    });
+    crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator.
+// ---------------------------------------------------------------------------
+
+/// Set the loading flag so the skeleton shows until the first sections paint.
 pub fn reset_loading(window: &AppWindow) {
     window.global::<ForYouState>().set_loading(true);
 }
 
-pub fn artwork_jobs(data: &ForYouData) -> Vec<ArtworkJob> {
-    let mut jobs = Vec::new();
-    for (i, c) in data.release_watch.iter().enumerate() {
-        if !c.artwork_url.is_empty() {
-            jobs.push(ArtworkJob {
-                url: c.artwork_url.clone(),
-                target: ArtworkTarget::ForYouReleaseWatch { index: i },
-            });
-        }
-    }
-    for (i, c) in data.recent_albums.iter().enumerate() {
-        if !c.artwork_url.is_empty() {
-            jobs.push(ArtworkJob {
-                url: c.artwork_url.clone(),
-                target: ArtworkTarget::ForYouRecentAlbum { index: i },
-            });
-        }
-    }
-    for (i, t) in data.recent_tracks.iter().enumerate() {
-        if !t.artwork_url.is_empty() {
-            jobs.push(ArtworkJob {
-                url: t.artwork_url.clone(),
-                target: ArtworkTarget::ForYouRecentTrack { index: i },
-            });
-        }
-    }
-    for (i, a) in data.top_artists.iter().enumerate() {
-        if !a.artwork_url.is_empty() {
-            jobs.push(ArtworkJob {
-                url: a.artwork_url.clone(),
-                target: ArtworkTarget::ForYouTopArtist { index: i },
-            });
-        }
-    }
-    for (i, a) in data.artists_to_follow.iter().enumerate() {
-        if !a.artwork_url.is_empty() {
-            jobs.push(ArtworkJob {
-                url: a.artwork_url.clone(),
-                target: ArtworkTarget::ForYouToFollow { index: i },
-            });
-        }
-    }
-    for (i, r) in data.radio_stations.iter().enumerate() {
-        if !r.artwork_url.is_empty() {
-            jobs.push(ArtworkJob {
-                url: r.artwork_url.clone(),
-                target: ArtworkTarget::ForYouRadioStation { index: i },
-            });
-        }
-    }
-    for (i, c) in data.more_from_library.iter().enumerate() {
-        if !c.artwork_url.is_empty() {
-            jobs.push(ArtworkJob {
-                url: c.artwork_url.clone(),
-                target: ArtworkTarget::ForYouMoreFromLibrary { index: i },
-            });
-        }
-    }
-    for (i, c) in data.rediscover.iter().enumerate() {
-        if !c.artwork_url.is_empty() {
-            jobs.push(ArtworkJob {
-                url: c.artwork_url.clone(),
-                target: ArtworkTarget::ForYouRediscover { index: i },
-            });
-        }
-    }
-    if let Some(sp) = &data.spotlight {
-        if !sp.image_url.is_empty() {
-            jobs.push(ArtworkJob {
-                url: sp.image_url.clone(),
-                target: ArtworkTarget::ForYouSpotlightArtist,
-            });
-        }
-        for (i, c) in sp.albums.iter().enumerate() {
-            if !c.artwork_url.is_empty() {
-                jobs.push(ArtworkJob {
-                    url: c.artwork_url.clone(),
-                    target: ArtworkTarget::ForYouSpotlightAlbum { index: i },
-                });
-            }
-        }
-    }
-    jobs
+/// Load every For You section progressively and in parallel, then latch
+/// `loaded`. Spawned once by `ensure_for_you_loaded` on first tab open.
+///
+/// Dependency layers:
+///   - Layer 0 (instant, no network): Recently Played albums + tracks.
+///   - Layer 0 (concurrent network): release-watch, favorite-artists,
+///     favorite-albums, and album-suggest (common case, seeded from the most
+///     recent local album).
+///   - Layer 1 (after favorite-artists): Your Top Artists (immediate) then
+///     Artists to Follow ∥ Spotlight.
+///   - Layer 1 (after favorite-albums): Rediscover + Radio (and the
+///     album-suggest fallback when there is no recent play-history seed).
+///   - Latch: `loading = false` + `loaded = true` once ALL branches resolve.
+pub fn spawn_for_you<A>(
+    runtime: Arc<AppRuntime<A>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: ImageCache,
+) where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    handle.spawn(async move {
+        // ---- Layer 0: instant local/static sections (no await) ----
+        let recent_album_list = crate::recently::load_albums();
+        let recent_ids: HashSet<String> =
+            recent_album_list.iter().map(|a| a.id.clone()).collect();
+        let recents_seed: Option<String> = recent_album_list
+            .first()
+            .map(|a| a.id.clone())
+            .filter(|s| !s.is_empty());
+        let has_recents_seed = recents_seed.is_some();
+
+        apply_recent(
+            &weak,
+            &image_cache,
+            recent_album_cards(&recent_album_list),
+            recent_track_slims(),
+        );
+
+        // ---- Branch: Release Watch (independent) ----
+        let release_branch: Pin<Box<dyn Future<Output = ()> + Send>> = {
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let cache = image_cache.clone();
+            Box::pin(async move {
+                let cards = fetch_release_watch(&runtime).await;
+                apply_release_watch(&weak, &cache, cards);
+            })
+        };
+
+        // ---- Branch: favorite artists -> Top Artists, then To-Follow ∥ Spotlight ----
+        let artists_branch: Pin<Box<dyn Future<Output = ()> + Send>> = {
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let cache = image_cache.clone();
+            Box::pin(async move {
+                let fav_artists = fetch_fav_artists(&runtime).await;
+                apply_top_artists(&weak, &cache, top_artist_slims(&fav_artists));
+
+                let favorite_ids: HashSet<u64> = fav_artists.iter().map(|a| a.id).collect();
+
+                let follow_branch: Pin<Box<dyn Future<Output = ()> + Send>> = {
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let cache = cache.clone();
+                    let fav_artists = fav_artists.clone();
+                    let favorite_ids = favorite_ids.clone();
+                    Box::pin(async move {
+                        let to_follow =
+                            fetch_to_follow(&runtime, &fav_artists, &favorite_ids).await;
+                        apply_to_follow(&weak, &cache, to_follow);
+                    })
+                };
+                let spotlight_branch: Pin<Box<dyn Future<Output = ()> + Send>> = {
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let cache = cache.clone();
+                    let fav_artists = fav_artists.clone();
+                    Box::pin(async move {
+                        let sp = load_spotlight(&runtime, &fav_artists).await;
+                        apply_spotlight(&weak, &cache, sp);
+                    })
+                };
+                join_all(vec![follow_branch, spotlight_branch]).await;
+            })
+        };
+
+        // ---- Branch: favorite albums -> Rediscover + Radio (+ suggest fallback) ----
+        let albums_branch: Pin<Box<dyn Future<Output = ()> + Send>> = {
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let cache = image_cache.clone();
+            let recent_album_list = recent_album_list.clone();
+            let recent_ids = recent_ids.clone();
+            Box::pin(async move {
+                let fav_albums = fetch_fav_albums(&runtime).await;
+                apply_rediscover(&weak, &cache, build_rediscover(&fav_albums, &recent_ids));
+                apply_radio(&weak, &cache, build_radio(&recent_album_list, &fav_albums));
+
+                // Only the no-recent-history case needs the favorite-album seed;
+                // the common case is handled concurrently in `suggest_branch`.
+                if !has_recents_seed {
+                    if let Some(id) = fav_albums
+                        .first()
+                        .map(|a| a.id.clone())
+                        .filter(|s| !s.is_empty())
+                    {
+                        let cards = fetch_suggest(&runtime, &id).await;
+                        apply_more_from_library(&weak, &cache, cards);
+                    }
+                }
+            })
+        };
+
+        // ---- Branch: More From Your Library (common case — recent-album seed) ----
+        let suggest_branch: Pin<Box<dyn Future<Output = ()> + Send>> = {
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let cache = image_cache.clone();
+            Box::pin(async move {
+                if let Some(id) = recents_seed {
+                    let cards = fetch_suggest(&runtime, &id).await;
+                    apply_more_from_library(&weak, &cache, cards);
+                }
+            })
+        };
+
+        join_all(vec![release_branch, artists_branch, albums_branch, suggest_branch]).await;
+
+        // ---- All branches resolved: latch loaded so re-entry is a no-op ----
+        let _ = weak.upgrade_in_event_loop(|w| {
+            let state = w.global::<ForYouState>();
+            state.set_loading(false);
+            state.set_loaded(true);
+        });
+    });
 }
