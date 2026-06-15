@@ -257,6 +257,7 @@ component PlaylistGrid inherits Rectangle {
         x: Math.mod(i, root.columns) * (root.card-w + root.gap);
         y: Math.floor(i / root.columns) * (root.card-h + root.gap);
         playlist: playlist;
+        body-opens: true; // body click opens the playlist; the overlay button plays
         media-action(k, ii, a) => {
             root.media-action(k, ii, a);
         }
@@ -601,6 +602,7 @@ export component SearchResultsView inherits Rectangle {
                 if SearchState.tab == 0 && SearchState.playlists.length > 0: PlaylistCarousel {
                     title: @tr("Playlists");
                     playlists: SearchState.playlists;
+                    body-opens: true; // body click opens the playlist; the overlay button plays
                     show-view-all: true;
                     media-action(k, i, a) => { root.media-action(k, i, a); }
                     view-all-clicked => { SearchActions.tab-changed(4); }

@@ -370,6 +370,7 @@ export component LabelPageView inherits Rectangle {
             if LabelState.playlists.length > 0: PlaylistCarousel {
                 title: @tr("Playlists");
                 playlists: LabelState.playlists;
+                body-opens: true; // body click opens the playlist; the overlay button plays
                 media-action(kind, id, action) => {
                     root.media-action(kind, id, action);
                 }
