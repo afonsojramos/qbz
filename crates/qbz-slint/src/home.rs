@@ -151,7 +151,6 @@ where
         "/discover/idealDiscography",
         containers.ideal_discography,
     );
-    push_section(&mut sections, "Qobuzissimes", "/discover/qobuzissims", containers.qobuzissims);
     push_section(
         &mut sections,
         "Albums of the Week",
