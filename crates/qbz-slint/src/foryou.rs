@@ -649,12 +649,21 @@ fn apply_more_from_library(
     weak: &slint::Weak<AppWindow>,
     cache: &ImageCache,
     cards: Vec<AlbumCard>,
+    seed_title: String,
 ) {
+    // 1:1 with Tauri's `discovery.similarTo` = "Similar to {seed}", where the
+    // seed is the album the suggestions are seeded from. Falls back to the
+    // plain "More From Your Library" when there is no seed (never titleless).
+    let title = if seed_title.is_empty() {
+        "More From Your Library".to_string()
+    } else {
+        format!("Similar to {seed_title}")
+    };
     let jobs = album_jobs(&cards, |i| ArtworkTarget::ForYouMoreFromLibrary { index: i });
     let w = weak.clone();
     let _ = w.upgrade_in_event_loop(move |w| {
         w.global::<ForYouState>()
-            .set_more_from_library(section("More From Your Library", &cards));
+            .set_more_from_library(section(&title, &cards));
     });
     crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
 }
@@ -738,6 +747,10 @@ pub fn spawn_for_you<A>(
             .first()
             .map(|a| a.id.clone())
             .filter(|s| !s.is_empty());
+        // Seed title for the "Similar to {seed}" header — the most-recent
+        // album's title (its suggestions seed the common-case row).
+        let recents_seed_title: Option<String> =
+            recent_album_list.first().map(|a| a.title.clone());
         let has_recents_seed = recents_seed.is_some();
 
         apply_recent(
@@ -816,8 +829,12 @@ pub fn spawn_for_you<A>(
                         .map(|a| a.id.clone())
                         .filter(|s| !s.is_empty())
                     {
+                        let seed_title = fav_albums
+                            .first()
+                            .map(|a| a.title.clone())
+                            .unwrap_or_default();
                         let cards = fetch_suggest(&runtime, &id).await;
-                        apply_more_from_library(&weak, &cache, cards);
+                        apply_more_from_library(&weak, &cache, cards, seed_title);
                     }
                 }
             })
@@ -831,7 +848,12 @@ pub fn spawn_for_you<A>(
             Box::pin(async move {
                 if let Some(id) = recents_seed {
                     let cards = fetch_suggest(&runtime, &id).await;
-                    apply_more_from_library(&weak, &cache, cards);
+                    apply_more_from_library(
+                        &weak,
+                        &cache,
+                        cards,
+                        recents_seed_title.unwrap_or_default(),
+                    );
                 }
             })
         };
