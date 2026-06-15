@@ -728,43 +728,28 @@ pub fn rerender_active_tab(window: &AppWindow, prefs: &DiscoverPrefs) -> Vec<Art
     jobs
 }
 
-/// Switch the visible Discover tab. Reads the cached section set for
-/// `tab` ("home" | "editorPicks" | "forYou"), swaps it into
-/// HomeState.sections, and returns the artwork jobs to re-fire. No
-/// re-fetch — the sets were cached by the last apply_home.
+/// Switch the visible Discover tab ("home" | "editorPicks" | "forYou"). Writes
+/// the active tab into BOTH HomeState (Slice-3 pill bindings) and DiscoverState
+/// (the prefs-driven render loop + the configurator target — single source of
+/// truth), then re-renders the active tab from the cached section data via the
+/// descriptor lists. No re-fetch. For You renders from its own ForYouView /
+/// ForYouState; the Home/Editor descriptor lists are pushed empty for it.
 pub fn select_tab(window: &AppWindow, tab: &str) -> Vec<ArtworkJob> {
-    let state = window.global::<HomeState>();
-    state.set_active_tab(tab.into());
-    // For You renders from its own dedicated ForYouView/ForYouState,
-    // not HomeState.sections — clear the uniform section list so the
-    // home-content `for` renders nothing for that tab.
+    window.global::<HomeState>().set_active_tab(tab.into());
+    window.global::<DiscoverState>().set_active_tab(tab.into());
+
     if tab == "forYou" {
-        state.set_sections(ModelRc::new(VecModel::from(Vec::<DiscoverSection>::new())));
-        state.set_playlists(ModelRc::new(VecModel::from(Vec::<SearchPlaylistItem>::new())));
+        // Push the For You descriptor list + drive Home/Editor empty, and clear
+        // the legacy HomeState models so nothing lingers under the For You view.
+        let prefs = crate::discover_prefs::prefs_snapshot();
+        crate::discover_prefs::push_descriptors(window, &prefs);
+        let hstate = window.global::<HomeState>();
+        hstate.set_playlists(ModelRc::new(VecModel::from(Vec::<SearchPlaylistItem>::new())));
         return Vec::new();
     }
-    TAB_SECTIONS.with(|cell| {
-        let cache = cell.borrow();
-        let set = match tab {
-            "editorPicks" => &cache.editor,
-            _ => &cache.home,
-        };
-        state.set_sections(ModelRc::new(VecModel::from(build_sections(set))));
-        // Swap the Qobuz Playlists row for the active tab, and append its
-        // single-cover artwork jobs onto the section jobs (one combined return
-        // → the on_select_tab call sites' spawn_loads covers both with no
-        // call-site change).
-        let pls = match tab {
-            "editorPicks" => &cache.editor_playlists,
-            _ => &cache.home_playlists,
-        };
-        state.set_playlists(ModelRc::new(VecModel::from(
-            pls.iter().map(playlist_to_item).collect::<Vec<_>>(),
-        )));
-        let mut jobs = section_artwork_jobs(set);
-        jobs.extend(playlist_artwork_jobs(pls));
-        jobs
-    })
+
+    let prefs = crate::discover_prefs::prefs_snapshot();
+    rerender_active_tab(window, &prefs)
 }
 
 /// Convert worker-thread home data into Slint models and push them onto
@@ -813,6 +798,13 @@ pub fn apply_home(window: &AppWindow, data: HomeData) {
     state.set_recent(ModelRc::new(VecModel::from(recent)));
     state.set_recent_albums(ModelRc::new(VecModel::from(recent_albums)));
     state.set_playlists(ModelRc::new(VecModel::from(home_playlists)));
+
+    // Push the prefs-driven descriptor lists now that the section cache is
+    // populated, so the Home/Editor render loop reflects the fresh data (the
+    // following select_tab re-pushes for the active tab; this keeps the lists
+    // correct even if select_tab is not called).
+    let prefs = crate::discover_prefs::prefs_snapshot();
+    crate::discover_prefs::push_descriptors(window, &prefs);
 }
 
 #[cfg(test)]

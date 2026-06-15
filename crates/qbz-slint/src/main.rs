@@ -451,18 +451,14 @@ async fn reload_home(
 
     match home::load_home(runtime, genre_ids).await {
         Ok(data) => {
-            // Artwork for the active tab's section set (Section-targeted,
-            // so it lands in HomeState.sections once select_tab swaps it
-            // in below). Built before `data` is moved. For You renders
-            // from its own view, so it has no discover-index section
-            // set here.
-            let empty: Vec<home::SectionData> = Vec::new();
-            let active_set = match active_tab.as_str() {
-                "editorPicks" => &data.editor_sections,
-                "forYou" => &empty,
-                _ => &data.sections,
-            };
-            let mut jobs = home::section_artwork_jobs(active_set);
+            // Album-carousel covers are now fired by select_tab below: the
+            // prefs-driven render loop draws Home/Editor album sections from the
+            // DiscoverState descriptor lists, so their artwork is descriptor-
+            // targeted (DiscoverSectionAlbum) and returned by select_tab once the
+            // lists are built. Here we only prebuild the artwork for the models
+            // that still bind HomeState fields (slim grids, recent albums,
+            // playlists), which select_tab does not rebuild.
+            let mut jobs: Vec<artwork::ArtworkJob> = Vec::new();
             // Home-only slim grids (their models are populated regardless
             // of the visible tab; harmless to prefetch).
             jobs.extend(data.popular.iter().enumerate().filter_map(|(idx, slim)| {
@@ -509,11 +505,15 @@ async fn reload_home(
             let weak_for_artwork = weak.clone();
             let weak_for_local = weak.clone();
             let image_cache_local = image_cache.clone();
+            let image_cache_sections = image_cache.clone();
             let _ = weak.upgrade_in_event_loop(move |w| {
                 home::apply_home(&w, data);
-                // apply_home shows the home set; swap to the requested
-                // tab (no-op when it is "home").
-                home::select_tab(&w, &active_tab);
+                // apply_home caches the section sets + pushes the descriptor
+                // lists; select_tab renders the requested tab from them and
+                // returns the descriptor-targeted album-section artwork jobs
+                // (DiscoverSectionAlbum) — spawn them here, on the UI thread.
+                let section_jobs = home::select_tab(&w, &active_tab);
+                artwork::spawn_loads(section_jobs, w.as_weak(), image_cache_sections.clone());
                 w.global::<HomeState>().set_loading(false);
             });
             artwork::spawn_loads(jobs, weak_for_artwork, image_cache.clone());

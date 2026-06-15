@@ -8,7 +8,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { HomeState, HomeActions, GenreFilterState, GenreFilterActions, NavState, ContentView } from "../state.slint";
+import { HomeState, HomeActions, DiscoverState, DiscoverActions, GenreFilterState, GenreFilterActions, NavState, ContentView } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
 import { PlaylistCarousel } from "PlaylistCarousel.slint";
@@ -273,40 +273,110 @@ export component HomeView inherits Rectangle {
                 spacing: 40px;
                 alignment: start;
 
-                if HomeState.active-tab != "forYou"
+                // Loading skeleton: shown while a discover load is in flight and
+                // the active tab's descriptor list is still empty (For You has
+                // its own skeleton inside ForYouView).
+                if DiscoverState.active-tab != "forYou"
                     && HomeState.loading
-                    && HomeState.sections.length == 0: HomeSkeleton { }
+                    && DiscoverState.home-sections.length == 0
+                    && DiscoverState.editor-sections.length == 0: HomeSkeleton { }
 
-                for section in HomeState.sections: Carousel {
-                    section: section;
-                    show-view-all: section.endpoint != "";
-                    album-clicked(id) => {
-                        root.album-clicked(id);
-                    }
-                    media-action(kind, id, action) => {
-                        root.media-action(kind, id, action);
-                    }
-                    view-all-clicked => {
-                        root.discover-view-all(section.endpoint, section.title);
-                    }
-                }
+                // Prefs-driven render loop (Slice 5). Rust pushes the ordered
+                // ENABLED descriptor list for the active tab (home-sections /
+                // editor-sections); the For You tab's lists are pushed empty so
+                // this repeater renders nothing for it (the unconditional-
+                // repeater form — content is controlled purely via the model,
+                // avoiding an `if cond: for ...`). The delegate is a single-root
+                // VerticalLayout whose inner if-chain mounts the right component
+                // and binds the matching data; exactly one arm matches per id.
+                for desc in (DiscoverState.active-tab == "editorPicks"
+                        ? DiscoverState.editor-sections
+                        : DiscoverState.home-sections): VerticalLayout {
+                    spacing: 0px;
 
-                // Qobuz Playlists row — shown on Home + Editor's Picks
-                // (never For You). body=open, overlay=play (1:1 Tauri).
-                if HomeState.active-tab != "forYou"
-                    && HomeState.playlists.length > 0: PlaylistCarousel {
-                    title: @tr("Qobuz Playlists");
-                    playlists: HomeState.playlists;
-                    body-opens: true;
-                    show-view-all: false;
-                    media-action(kind, id, action) => {
-                        root.media-action(kind, id, action);
+                    // Generic album carousels (data embedded in desc.section by
+                    // Rust): newReleases / pressAwards / idealDiscography /
+                    // editorPicks / qobuzissimes, plus mostStreamed when it
+                    // renders as an album carousel (Editor's Picks).
+                    if desc.id == "newReleases"
+                        || desc.id == "pressAwards"
+                        || desc.id == "idealDiscography"
+                        || desc.id == "editorPicks"
+                        || desc.id == "qobuzissimes"
+                        || (desc.id == "mostStreamed" && desc.kind == "albumCarousel"): Carousel {
+                        section: desc.section;
+                        show-view-all: desc.section.endpoint != "";
+                        album-clicked(id) => {
+                            root.album-clicked(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                        view-all-clicked => {
+                            root.discover-view-all(desc.section.endpoint, desc.section.title);
+                        }
+                    }
+
+                    // Qobuz Playlists row — body=open, overlay=play (1:1 Tauri).
+                    if desc.id == "qobuzPlaylists" && HomeState.playlists.length > 0: PlaylistCarousel {
+                        title: @tr("Qobuz Playlists");
+                        playlists: HomeState.playlists;
+                        body-opens: true;
+                        show-view-all: false;
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+
+                    // Recently Played Albums — carousel when it has data, else a
+                    // placeholder (always present on Home, 1:1 Tauri).
+                    if desc.id == "recentlyPlayedAlbums" && HomeState.recent-albums.length > 0: Carousel {
+                        section: {
+                            title: @tr("Recently Played Albums"),
+                            albums: HomeState.recent-albums,
+                        };
+                        album-clicked(id) => {
+                            root.album-clicked(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if desc.id == "recentlyPlayedAlbums" && HomeState.recent-albums.length == 0: RecentPlaceholder {
+                        title: @tr("Recently Played Albums");
+                        hint: @tr("Albums you play will appear here.");
+                    }
+
+                    // Recently Played Tracks — slim carousel when it has data,
+                    // else a placeholder (continueListening id).
+                    if desc.id == "continueListening" && HomeState.recent.length > 0: SlimCarousel {
+                        title: @tr("Recently Played Tracks");
+                        items: HomeState.recent;
+                        item-clicked(id) => {
+                            root.media-action("track", id, "play");
+                        }
+                    }
+                    if desc.id == "continueListening" && HomeState.recent.length == 0: RecentPlaceholder {
+                        title: @tr("Recently Played Tracks");
+                        hint: @tr("Tracks you play will appear here.");
+                    }
+
+                    // Most Streamed on Home renders as the Popular slim grid
+                    // (kind == "slimGrid"); on Editor's Picks it is the album
+                    // carousel handled by the generic arm above.
+                    if desc.id == "mostStreamed" && desc.kind == "slimGrid"
+                        && HomeState.popular.length > 0: SlimCarousel {
+                        title: @tr("Popular albums");
+                        items: HomeState.popular;
+                        item-clicked(id) => {
+                            root.album-clicked(id);
+                        }
                     }
                 }
 
                 // For You renders its own ordered, heterogeneous
                 // sections from ForYouState.
-                if HomeState.active-tab == "forYou": ForYouView {
+                if DiscoverState.active-tab == "forYou": ForYouView {
                     open-album(id) => {
                         root.album-clicked(id);
                     }
@@ -330,56 +400,6 @@ export component HomeView inherits Rectangle {
                     }
                     open-mix(which) => {
                         root.media-action("mix", which, "open");
-                    }
-                }
-
-                // The Recently Played + Popular sections below belong
-                // to the Home tab only; Editor's Picks / For You show
-                // just their own cached section set above.
-
-                // Recently Played Albums — always present; shows a
-                // placeholder until the play history has data.
-                if HomeState.active-tab == "home"
-                    && HomeState.recent-albums.length > 0: Carousel {
-                    section: {
-                        title: @tr("Recently Played Albums"),
-                        albums: HomeState.recent-albums,
-                    };
-                    album-clicked(id) => {
-                        root.album-clicked(id);
-                    }
-                    media-action(kind, id, action) => {
-                        root.media-action(kind, id, action);
-                    }
-                }
-                if HomeState.active-tab == "home"
-                    && HomeState.recent-albums.length == 0: RecentPlaceholder {
-                    title: @tr("Recently Played Albums");
-                    hint: @tr("Albums you play will appear here.");
-                }
-
-                // Recently Played Tracks — paginated 4x3 carousel
-                // (12 per page, up to two pages).
-                if HomeState.active-tab == "home"
-                    && HomeState.recent.length > 0: SlimCarousel {
-                    title: @tr("Recently Played Tracks");
-                    items: HomeState.recent;
-                    item-clicked(id) => {
-                        root.media-action("track", id, "play");
-                    }
-                }
-                if HomeState.active-tab == "home"
-                    && HomeState.recent.length == 0: RecentPlaceholder {
-                    title: @tr("Recently Played Tracks");
-                    hint: @tr("Tracks you play will appear here.");
-                }
-
-                if HomeState.active-tab == "home"
-                    && HomeState.popular.length > 0: SlimCarousel {
-                    title: @tr("Popular albums");
-                    items: HomeState.popular;
-                    item-clicked(id) => {
-                        root.album-clicked(id);
                     }
                 }
             }

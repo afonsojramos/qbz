@@ -1,16 +1,23 @@
-// Discover > For You — dedicated, ordered layout for the For You tab.
-// Unlike Home / Editor's Picks (uniform album carousels from
-// HomeState.sections), For You mixes album carousels, a track
-// carousel, and artist carousels, so it renders from ForYouState.
-// Sections hide themselves when empty.
+// Discover > For You — ordered, heterogeneous layout for the For You tab.
+// Unlike Home / Editor's Picks (uniform album carousels), For You mixes album
+// carousels, a track carousel, artist carousels, radio tiles, Qobuz Mixes, and
+// the Spotlight, so each row is a different component.
+//
+// Slice 5: the order + visibility are driven by the prefs configurator. Rust
+// pushes DiscoverState.foryou-sections (the ordered ENABLED descriptor ids); a
+// single repeater iterates them and an if-chain delegate mounts the right
+// component, reading the matching ForYouState field by id. Each arm keeps its
+// own data `length > 0` self-hide gate (qobuzMixes excepted — always rendered).
+//
+// essentialsByGenre is Slice-2c-blocked (no ForYouState.essentials field yet);
+// Rust drops it from the descriptor list, so there is intentionally no arm for
+// it here. It returns automatically once Slice 2c adds the field + an arm.
 //
 // Reuses the shared cards/carousels — no new card components here.
-// Qobuz Mixes, Radio Stations, Spotlight, and the reco-DB sections
-// (More from library, Rediscover) are later increments.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { ForYouState, RadioStationItem } from "../state.slint";
+import { ForYouState, RadioStationItem, DiscoverState } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
 import { ArtistCarousel } from "ArtistCarousel.slint";
@@ -30,11 +37,8 @@ export component ForYouView inherits VerticalLayout {
     callback open-mix(string);
 
     // Progressive load: while the first lazy load is in flight, show the
-    // skeleton Home uses (the Qobuz Mixes tiles stay — they're static). It
-    // hides as soon as ANY content paints — the recently-played sections
-    // render first (local, instant), the rest fill in via each section's own
-    // `if length > 0` gate. The page-level `loading` latch only keeps the
-    // skeleton up while every backing section is still empty.
+    // skeleton Home uses (the Qobuz Mixes tiles stay — they're static). It hides
+    // as soon as ANY content paints. Static, order-independent (top while empty).
     property <bool> show-skeleton:
         ForYouState.loading
         && ForYouState.release-watch.albums.length == 0
@@ -45,156 +49,165 @@ export component ForYouView inherits VerticalLayout {
     spacing: 40px;
     alignment: start;
 
-    // 0. Qobuz Mixes (static navigation tiles).
-    QobuzMixesRow {
-        open-mix(which) => {
-            root.open-mix(which);
-        }
-    }
-
     if root.show-skeleton: HomeSkeleton { }
 
-    // 1. Release Watch.
-    if ForYouState.release-watch.albums.length > 0: Carousel {
-        section: ForYouState.release-watch;
-        album-clicked(id) => {
-            root.open-album(id);
-        }
-        media-action(kind, id, action) => {
-            root.media-action(kind, id, action);
-        }
-    }
+    // Prefs-driven loop. DiscoverState.foryou-sections = enabled ids in pref
+    // order (recomputed in Rust). Delegate = single-root VerticalLayout whose
+    // inner if-chain mounts the right component + binds the matching global;
+    // exactly one inner `if` matches per descriptor id, so each row resolves to
+    // one visible child (or none, when its data is empty and it self-hides).
+    for desc in DiscoverState.foryou-sections: VerticalLayout {
+        spacing: 0px;
 
-    // 1b. Radio Stations — album-seeded radio tiles.
-    if ForYouState.radio-stations.length > 0: VerticalLayout {
-        spacing: 12px;
-        Text {
-            text: @tr("Radio Stations");
-            color: Theme.text-primary;
-            font-size: 18px;
-            font-weight: Typography.semibold;
+        // qobuzMixes — static navigation tiles, ALWAYS rendered (no data gate).
+        if desc.id == "qobuzMixes": QobuzMixesRow {
+            open-mix(which) => {
+                root.open-mix(which);
+            }
         }
-        Rectangle {
-            height: 234px;
-            clip: true;
-            radio-flick := Flickable {
-                width: 100%;
-                height: parent.height;
-                viewport-width: ForYouState.radio-stations.length * (200px + 32px);
-                viewport-height: self.height;
-                HorizontalLayout {
-                    spacing: 32px;
-                    alignment: start;
-                    for st in ForYouState.radio-stations: RadioCard {
-                        seed-title: st.title;
-                        seed-subtitle: st.artist;
-                        label: "RADIO";
-                        artwork: st.artwork;
-                        clicked => {
-                            root.start-radio-album(st.album-id);
-                        }
-                        play => {
-                            root.start-radio-album(st.album-id);
+
+        // releaseWatch — album carousel.
+        if desc.id == "releaseWatch" && ForYouState.release-watch.albums.length > 0: Carousel {
+            section: ForYouState.release-watch;
+            album-clicked(id) => {
+                root.open-album(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
+        }
+
+        // radioStations — album-seeded radio tiles (bespoke Flickable body).
+        if desc.id == "radioStations" && ForYouState.radio-stations.length > 0: VerticalLayout {
+            spacing: 12px;
+            Text {
+                text: @tr("Radio Stations");
+                color: Theme.text-primary;
+                font-size: 18px;
+                font-weight: Typography.semibold;
+            }
+            Rectangle {
+                height: 234px;
+                clip: true;
+                radio-flick := Flickable {
+                    width: 100%;
+                    height: parent.height;
+                    viewport-width: ForYouState.radio-stations.length * (200px + 32px);
+                    viewport-height: self.height;
+                    HorizontalLayout {
+                        spacing: 32px;
+                        alignment: start;
+                        for st in ForYouState.radio-stations: RadioCard {
+                            seed-title: st.title;
+                            seed-subtitle: st.artist;
+                            label: "RADIO";
+                            artwork: st.artwork;
+                            clicked => {
+                                root.start-radio-album(st.album-id);
+                            }
+                            play => {
+                                root.start-radio-album(st.album-id);
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    // 2. Recently Played Tracks.
-    if ForYouState.recent-tracks.length > 0: SlimCarousel {
-        title: @tr("Recently Played Tracks");
-        items: ForYouState.recent-tracks;
-        item-clicked(id) => {
-            root.play-track(id);
+        // continueListening — recently-played tracks slim carousel.
+        if desc.id == "continueListening" && ForYouState.recent-tracks.length > 0: SlimCarousel {
+            title: @tr("Recently Played Tracks");
+            items: ForYouState.recent-tracks;
+            item-clicked(id) => {
+                root.play-track(id);
+            }
         }
-    }
 
-    // 3. Recently Played Albums.
-    if ForYouState.recent-albums.albums.length > 0: Carousel {
-        section: ForYouState.recent-albums;
-        album-clicked(id) => {
-            root.open-album(id);
+        // recentlyPlayedAlbums — album carousel.
+        if desc.id == "recentlyPlayedAlbums" && ForYouState.recent-albums.albums.length > 0: Carousel {
+            section: ForYouState.recent-albums;
+            album-clicked(id) => {
+                root.open-album(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
         }
-        media-action(kind, id, action) => {
-            root.media-action(kind, id, action);
-        }
-    }
 
-    // 4. Your Top Artists.
-    if ForYouState.top-artists.length > 0: ArtistCarousel {
-        title: @tr("Your Top Artists");
-        artists: ForYouState.top-artists;
-        artist-clicked(id) => {
-            root.open-artist(id);
+        // topArtists — artist carousel.
+        if desc.id == "topArtists" && ForYouState.top-artists.length > 0: ArtistCarousel {
+            title: @tr("Your Top Artists");
+            artists: ForYouState.top-artists;
+            artist-clicked(id) => {
+                root.open-artist(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
         }
-        media-action(kind, id, action) => {
-            root.media-action(kind, id, action);
-        }
-    }
 
-    // 6. Favorite Albums.
-    if ForYouState.favorite-albums.albums.length > 0: Carousel {
-        section: ForYouState.favorite-albums;
-        album-clicked(id) => {
-            root.open-album(id);
+        // favoriteAlbums — album carousel.
+        if desc.id == "favoriteAlbums" && ForYouState.favorite-albums.albums.length > 0: Carousel {
+            section: ForYouState.favorite-albums;
+            album-clicked(id) => {
+                root.open-album(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
         }
-        media-action(kind, id, action) => {
-            root.media-action(kind, id, action);
-        }
-    }
 
-    // 5. More From Your Library.
-    if ForYouState.more-from-library.albums.length > 0: Carousel {
-        section: ForYouState.more-from-library;
-        album-clicked(id) => {
-            root.open-album(id);
+        // similarAlbums — "More From Your Library" album carousel.
+        if desc.id == "similarAlbums" && ForYouState.more-from-library.albums.length > 0: Carousel {
+            section: ForYouState.more-from-library;
+            album-clicked(id) => {
+                root.open-album(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
         }
-        media-action(kind, id, action) => {
-            root.media-action(kind, id, action);
-        }
-    }
 
-    // 6. Rediscover Your Library.
-    if ForYouState.rediscover.albums.length > 0: Carousel {
-        section: ForYouState.rediscover;
-        album-clicked(id) => {
-            root.open-album(id);
+        // rediscoverLibrary — album carousel.
+        if desc.id == "rediscoverLibrary" && ForYouState.rediscover.albums.length > 0: Carousel {
+            section: ForYouState.rediscover;
+            album-clicked(id) => {
+                root.open-album(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
         }
-        media-action(kind, id, action) => {
-            root.media-action(kind, id, action);
-        }
-    }
 
-    // 6. Artists to Follow.
-    if ForYouState.artists-to-follow.length > 0: ArtistCarousel {
-        title: @tr("Artists to Follow");
-        artists: ForYouState.artists-to-follow;
-        artist-clicked(id) => {
-            root.open-artist(id);
+        // artistsToFollow — artist carousel.
+        if desc.id == "artistsToFollow" && ForYouState.artists-to-follow.length > 0: ArtistCarousel {
+            title: @tr("Artists to Follow");
+            artists: ForYouState.artists-to-follow;
+            artist-clicked(id) => {
+                root.open-artist(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
         }
-        media-action(kind, id, action) => {
-            root.media-action(kind, id, action);
-        }
-    }
 
-    // 6. Spotlight.
-    if ForYouState.spotlight-visible: Spotlight {
-        open-artist(id) => {
-            root.open-artist(id);
-        }
-        open-album(id) => {
-            root.open-album(id);
-        }
-        play-top-tracks(id) => {
-            root.play-top-tracks(id);
-        }
-        start-radio(id) => {
-            root.start-radio(id);
-        }
-        media-action(kind, id, action) => {
-            root.media-action(kind, id, action);
+        // artistSpotlight — the Spotlight panel.
+        if desc.id == "artistSpotlight" && ForYouState.spotlight-visible: Spotlight {
+            open-artist(id) => {
+                root.open-artist(id);
+            }
+            open-album(id) => {
+                root.open-album(id);
+            }
+            play-top-tracks(id) => {
+                root.play-top-tracks(id);
+            }
+            start-radio(id) => {
+                root.start-radio(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
         }
     }
 }
