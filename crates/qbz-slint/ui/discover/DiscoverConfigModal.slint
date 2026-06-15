@@ -215,7 +215,13 @@ export component DiscoverConfigModal inherits Rectangle {
 
                 // Section list (scrolls when taller than the panel cap).
                 Rectangle {
-                    vertical-stretch: 1;
+                    // Explicit, content-derived height — NOT vertical-stretch: a
+                    // stretch child inside a panel sized to `preferred-height`
+                    // collapses (a Flickable's intrinsic preferred-height is ~0,
+                    // the documented Slint trap). Cap = window minus the modal
+                    // chrome so the whole panel stays within root.height * 0.78;
+                    // the Flickable scrolls when the rows exceed this.
+                    height: Math.min(list-col.preferred-height, root.height * 0.78 - 260px);
                     clip: true;
                     list-flick := Flickable {
                         width: 100%;
