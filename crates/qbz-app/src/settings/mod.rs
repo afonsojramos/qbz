@@ -1,4 +1,5 @@
 pub mod developer;
+pub mod discover_prefs;
 pub mod download;
 pub mod favorites;
 pub mod favorites_cache;
