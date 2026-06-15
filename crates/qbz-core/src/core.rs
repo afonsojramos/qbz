@@ -12,8 +12,8 @@ use qbz_models::{
     LabelListPage, LabelPageData, LabelStoryResponse, PageArtistResponse,
     MostPopularItem, Playlist, PlaylistDuplicateResult, PlaylistTag, Quality, QueueState,
     QueueTrack, ReleasesGridResponse,
-    RepeatMode, SearchAllResults, SearchResultsPage, StreamUrl, Track, TracksContainer,
-    UserSession,
+    RepeatMode, SearchAllResults, SearchResultsPage, StreamUrl, Track, TrackToAnalyse,
+    TracksContainer, UserSession,
 };
 use qbz_integrations::musicbrainz::cache::MusicBrainzCache;
 use qbz_integrations::musicbrainz::genre::{extract_affinity_seeds, genre_summary, is_broad_genre};
@@ -1315,6 +1315,22 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
         client
             .get_dynamic_suggest(listened_track_ids, limit)
+            .await
+            .map_err(CoreError::Api)
+    }
+
+    /// Dynamic mix suggestions with the `track_to_analysed` payload — the
+    /// PRIMARY DailyQ/WeeklyQ path (see `QobuzClient::get_dynamic_suggest_full`).
+    pub async fn get_dynamic_suggest_full(
+        &self,
+        listened_track_ids: &[u64],
+        tracks_to_analyse: &[TrackToAnalyse],
+        limit: u32,
+    ) -> Result<Vec<Track>, CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+        client
+            .get_dynamic_suggest_full(listened_track_ids, tracks_to_analyse, limit)
             .await
             .map_err(CoreError::Api)
     }

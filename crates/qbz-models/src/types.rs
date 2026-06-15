@@ -9,6 +9,19 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+// ============ Dynamic-suggest (DailyQ/WeeklyQ) ============
+
+/// A seed track resolved for the `/dynamic/suggest` `track_to_analysed`
+/// payload (DailyQ / WeeklyQ). Field names match the Qobuz wire shape
+/// exactly; `0` marks an unknown id (mirrors Tauri's `?? 0`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackToAnalyse {
+    pub track_id: u64,
+    pub artist_id: u64,
+    pub genre_id: u64,
+    pub label_id: u64,
+}
+
 // ============ Quality Types ============
 
 /// Audio quality format IDs (matches Qobuz API format IDs)

@@ -124,6 +124,7 @@ pub use types::{
     StreamUrl,
     Track,
     TrackFileUrl,
+    TrackToAnalyse,
     TracksContainer,
     UserSession,
 };

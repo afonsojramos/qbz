@@ -986,11 +986,25 @@ impl QobuzClient {
         listened_track_ids: &[u64],
         limit: u32,
     ) -> Result<Vec<Track>> {
+        self.get_dynamic_suggest_full(listened_track_ids, &[], limit)
+            .await
+    }
+
+    /// Like [`get_dynamic_suggest`] but carrying the `track_to_analysed`
+    /// payload — the PRIMARY DailyQ/WeeklyQ path. Tauri seeds this with up to 9
+    /// resolved `{track_id, artist_id, genre_id, label_id}` tuples and only
+    /// falls back to an empty analysis when a call returns zero items.
+    pub async fn get_dynamic_suggest_full(
+        &self,
+        listened_track_ids: &[u64],
+        tracks_to_analyse: &[TrackToAnalyse],
+        limit: u32,
+    ) -> Result<Vec<Track>> {
         let url = endpoints::build_url(paths::DYNAMIC_SUGGEST);
         let body = serde_json::json!({
             "limit": limit,
             "listened_tracks_ids": listened_track_ids,
-            "track_to_analysed": [],
+            "track_to_analysed": tracks_to_analyse,
         });
         let http_response = self
             .http()?
