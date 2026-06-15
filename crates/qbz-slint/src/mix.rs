@@ -12,11 +12,12 @@
 //! playlist play-stats ranking — is approximated; the same surfaces
 //! and playback result, sourced from available backend.)
 
+use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
-use qbz_models::Track;
+use qbz_models::{Track, TrackToAnalyse};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget};
@@ -36,31 +37,131 @@ pub fn mix_meta(kind: &str) -> (&'static str, &'static str) {
     }
 }
 
+/// Even-spread sample of up to `n` ids across `ids` (Tauri's pickSpread):
+/// stride through the list so the analysis seeds are not all clustered.
+fn pick_spread(ids: &[u64], n: usize) -> Vec<u64> {
+    if ids.len() <= n {
+        return ids.to_vec();
+    }
+    (0..n).map(|i| ids[i * ids.len() / n]).collect()
+}
+
+/// The DailyQ/WeeklyQ listened-track seed: recent QOBUZ plays + Qobuz
+/// favorites, deduped, capped at 120 (mirrors Tauri's continueListening +
+/// favorites merge). Local/Plex/ephemeral recents carry non-Qobuz ids and are
+/// excluded; `qobuz_download` offline copies keep the real Qobuz id. A
+/// recents-only seed is frequently empty for local-heavy users, so favorites
+/// guarantee a non-empty seed.
+///
+/// NOTE (Slice b3): this body will be swapped to the shared reco-store
+/// home-seeds; the call site and the rest of the mix path stay unchanged.
+async fn mix_listened_seed_ids<A>(runtime: &AppRuntime<A>) -> Vec<u64>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let mut seeds: Vec<u64> = crate::recently::load()
+        .into_iter()
+        .filter(|t| !matches!(t.source.as_str(), "local" | "plex" | "ephemeral"))
+        .filter_map(|t| t.id.parse::<u64>().ok())
+        .collect();
+    let mut seen: HashSet<u64> = seeds.iter().copied().collect();
+    for fav in favorite_tracks(runtime).await {
+        if seen.insert(fav.id) {
+            seeds.push(fav.id);
+        }
+    }
+    seeds.truncate(120);
+    seeds
+}
+
+/// Resolve up to 9 spread seeds into the `track_to_analysed` payload (the
+/// PRIMARY DailyQ/WeeklyQ path, Tauri buildSeeds): `get_track` each, extract
+/// `{track_id, artist_id, genre_id, label_id}` (artist = performer, else
+/// composer; missing ids default to 0), drop any with `artist_id == 0`.
+async fn build_tracks_to_analyse<A>(runtime: &AppRuntime<A>, seeds: &[u64]) -> Vec<TrackToAnalyse>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let mut analysed = Vec::new();
+    for id in pick_spread(seeds, 9) {
+        let Ok(track) = runtime.core().get_track(id).await else {
+            continue;
+        };
+        let artist_id = track
+            .performer
+            .as_ref()
+            .map(|a| a.id)
+            .or_else(|| track.composer.as_ref().map(|a| a.id))
+            .unwrap_or(0);
+        if artist_id == 0 {
+            continue;
+        }
+        analysed.push(TrackToAnalyse {
+            track_id: track.id,
+            artist_id,
+            genre_id: track
+                .album
+                .as_ref()
+                .and_then(|a| a.genre.as_ref())
+                .map(|g| g.id)
+                .unwrap_or(0),
+            label_id: track
+                .album
+                .as_ref()
+                .and_then(|a| a.label.as_ref())
+                .map(|l| l.id)
+                .unwrap_or(0),
+        });
+    }
+    analysed
+}
+
 pub async fn load_mix<A>(runtime: &AppRuntime<A>, kind: &str) -> Vec<Track>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
     match kind {
         "daily" | "weekly" => {
-            // Seed /dynamic/suggest with QOBUZ track ids ONLY. Recently-played
-            // now includes local/Plex tracks whose ids are NOT in the Qobuz
-            // catalog (e.g. numeric Plex rating keys that pass the u64 parse);
-            // sending those made the mix request fail. Empty `source` = legacy
-            // pre-source entries (treated as Qobuz). Local/Plex are excluded.
-            let seeds: Vec<u64> = crate::recently::load()
-                .into_iter()
-                .filter(|t| t.source.is_empty() || t.source == "qobuz")
-                .filter_map(|t| t.id.parse::<u64>().ok())
-                .take(50)
-                .collect();
+            // Tauri buildSeeds parity: seed listened_tracks_ids from recent plays
+            // + favorites (~120), build a track_to_analysed payload from ~9 spread
+            // seeds for the PRIMARY algorithm, and fall back to the empty-analysis
+            // call when the primary returns nothing. DailyQ vs WeeklyQ differ only
+            // by cache bucket (see a3), not by the request.
+            let seeds = mix_listened_seed_ids(runtime).await;
             if seeds.is_empty() {
+                log::warn!(
+                    "[qbz-slint] mix '{kind}': no Qobuz seed tracks (recents + favorites empty) — empty mix"
+                );
                 Vec::new()
             } else {
-                runtime
+                let analysed = build_tracks_to_analyse(runtime, &seeds).await;
+                let limit = (50usize.saturating_sub(analysed.len())).max(1) as u32;
+                let tracks = match runtime
                     .core()
-                    .get_dynamic_suggest(&seeds, 50)
+                    .get_dynamic_suggest_full(&seeds, &analysed, limit)
                     .await
-                    .unwrap_or_default()
+                {
+                    Ok(tracks) if !tracks.is_empty() => tracks,
+                    Ok(_) => {
+                        // FALLBACK (Tauri): retry with empty analysis + limit 50.
+                        runtime
+                            .core()
+                            .get_dynamic_suggest(&seeds, 50)
+                            .await
+                            .unwrap_or_default()
+                    }
+                    Err(e) => {
+                        log::warn!("[qbz-slint] mix '{kind}': dynamic/suggest failed: {e}");
+                        Vec::new()
+                    }
+                };
+                log::info!(
+                    "[qbz-slint] mix '{kind}': {} seeds, {} analysed -> {} tracks",
+                    seeds.len(),
+                    analysed.len(),
+                    tracks.len()
+                );
+                tracks
             }
         }
         "fav" => {
