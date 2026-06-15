@@ -93,6 +93,9 @@ export global HomeState {
     in property <[SlimItem]> popular: [];
     in property <[SlimItem]> recent: [];
     in property <[AlbumCardItem]> recent-albums: [];
+    // Qobuz Playlists row (Home + Editor's Picks). Single-cover cards; the
+    // active tab's set is swapped in by crate::home::select_tab.
+    in property <[SearchPlaylistItem]> playlists: [];
     in property <bool> loading: false;
     // Active Discover tab: "home" | "editorPicks" | "forYou". The
     // three tabs draw from the same fetch; switching swaps which

@@ -11,12 +11,12 @@ use std::sync::Arc;
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
 use qbz_models::{
-    AlbumAward, DiscoverAlbum, DiscoverAudioInfo, DiscoverContainer,
+    AlbumAward, DiscoverAlbum, DiscoverAudioInfo, DiscoverContainer, DiscoverPlaylist,
 };
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget};
-use crate::{AlbumCardItem, AppWindow, DiscoverSection, HomeState, SlimItem};
+use crate::{AlbumCardItem, AppWindow, DiscoverSection, HomeState, SearchPlaylistItem, SlimItem};
 
 /// Plain, `Send` home data produced on the worker thread.
 pub struct HomeData {
@@ -26,6 +26,10 @@ pub struct HomeData {
     pub popular: Vec<SlimData>,
     pub recent: Vec<SlimData>,
     pub recent_albums: Vec<CardData>,
+    /// Qobuz playlists row — home tab.
+    pub playlists: Vec<PlaylistCardData>,
+    /// Qobuz playlists row — editorPicks tab (same data, separate cache slot).
+    pub editor_playlists: Vec<PlaylistCardData>,
 }
 
 thread_local! {
@@ -39,6 +43,8 @@ thread_local! {
 struct TabSections {
     home: Vec<SectionData>,
     editor: Vec<SectionData>,
+    home_playlists: Vec<PlaylistCardData>,
+    editor_playlists: Vec<PlaylistCardData>,
 }
 
 #[derive(Clone)]
@@ -77,6 +83,16 @@ pub struct CardData {
     pub track_count: String,
     /// Bare 4-digit year for the list-row YEAR column ("" = unknown).
     pub plain_year: String,
+}
+
+/// A single-cover playlist card for the Discover `qobuzPlaylists` row
+/// (Home + Editor's Picks). Tauri's PlaylistCardLite renders name only — no
+/// owner/subtitle/track-count — and a single cover, so we drop them too.
+#[derive(Clone)]
+pub struct PlaylistCardData {
+    pub id: String,
+    pub title: String,
+    pub artwork_url: String, // rectangle || covers[0] || ""
 }
 
 /// A compact ranked item for the slim grid sections.
@@ -202,12 +218,25 @@ where
         })
         .collect();
 
+    // Qobuz Playlists row — both the Home and Editor's Picks tabs draw from
+    // the SAME `containers.playlists` (one fetch); capped at 18 (Tauri's
+    // fetchDiscoverIndex(18, …)). Re-filtering on genre change is free:
+    // reload_home re-fetches the index, so no extra plumbing is needed.
+    let playlist_items: Vec<DiscoverPlaylist> =
+        containers.playlists.map(|c| c.data.items).unwrap_or_default();
+    let editor_playlists: Vec<PlaylistCardData> =
+        playlist_items.iter().cloned().take(18).map(map_playlist).collect();
+    let playlists: Vec<PlaylistCardData> =
+        playlist_items.into_iter().take(18).map(map_playlist).collect();
+
     Ok(HomeData {
         sections,
         editor_sections,
         popular,
         recent,
         recent_albums,
+        playlists,
+        editor_playlists,
     })
 }
 
@@ -310,6 +339,23 @@ pub(crate) fn map_album(album: DiscoverAlbum) -> CardData {
         quality_detail,
         track_count,
         plain_year,
+    }
+}
+
+/// Map a Discover playlist into a single-cover card. Preferred cover is the
+/// landscape `rectangle`, falling back to the first square `cover`. Owner,
+/// duration and tracks_count are intentionally dropped (1:1 with Tauri's
+/// PlaylistCardLite, which shows the name only).
+fn map_playlist(p: DiscoverPlaylist) -> PlaylistCardData {
+    let artwork_url = p
+        .image
+        .rectangle
+        .or_else(|| p.image.covers.and_then(|c| c.into_iter().next()))
+        .unwrap_or_default();
+    PlaylistCardData {
+        id: p.id.to_string(),
+        title: p.name,
+        artwork_url,
     }
 }
 
@@ -448,6 +494,27 @@ pub(crate) fn card_to_item(card: CardData) -> AlbumCardItem {
     }
 }
 
+/// Convert one `PlaylistCardData` into the Slint `SearchPlaylistItem`,
+/// single-cover shape (slot 0 only). Mirrors label.rs's playlist converter:
+/// no subtitle (1:1 with Tauri's PlaylistCardLite), cover-count 0 when there
+/// is no artwork so the card draws its placeholder.
+pub(crate) fn playlist_to_item(p: &PlaylistCardData) -> SearchPlaylistItem {
+    SearchPlaylistItem {
+        id: p.id.clone().into(),
+        title: p.title.clone().into(),
+        subtitle: "".into(),
+        cover_count: if p.artwork_url.is_empty() { 0 } else { 1 },
+        url1: p.artwork_url.clone().into(),
+        url2: "".into(),
+        url3: "".into(),
+        url4: "".into(),
+        cover1: slint::Image::default(),
+        cover2: slint::Image::default(),
+        cover3: slint::Image::default(),
+        cover4: slint::Image::default(),
+    }
+}
+
 /// Build the Slint section model for one tab's section set.
 fn build_sections(sections: &[SectionData]) -> Vec<DiscoverSection> {
     sections
@@ -483,6 +550,21 @@ pub fn section_artwork_jobs(sections: &[SectionData]) -> Vec<ArtworkJob> {
     jobs
 }
 
+/// Artwork jobs for the Qobuz Playlists row (single cover per card, so they
+/// target `HomeState.playlists[idx]` directly). Skips cards with no artwork.
+pub fn playlist_artwork_jobs(playlists: &[PlaylistCardData]) -> Vec<ArtworkJob> {
+    playlists
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, p)| {
+            (!p.artwork_url.is_empty()).then(|| ArtworkJob {
+                target: ArtworkTarget::HomePlaylistCover { idx },
+                url: p.artwork_url.clone(),
+            })
+        })
+        .collect()
+}
+
 /// Switch the visible Discover tab. Reads the cached section set for
 /// `tab` ("home" | "editorPicks" | "forYou"), swaps it into
 /// HomeState.sections, and returns the artwork jobs to re-fire. No
@@ -495,6 +577,7 @@ pub fn select_tab(window: &AppWindow, tab: &str) -> Vec<ArtworkJob> {
     // home-content `for` renders nothing for that tab.
     if tab == "forYou" {
         state.set_sections(ModelRc::new(VecModel::from(Vec::<DiscoverSection>::new())));
+        state.set_playlists(ModelRc::new(VecModel::from(Vec::<SearchPlaylistItem>::new())));
         return Vec::new();
     }
     TAB_SECTIONS.with(|cell| {
@@ -504,7 +587,20 @@ pub fn select_tab(window: &AppWindow, tab: &str) -> Vec<ArtworkJob> {
             _ => &cache.home,
         };
         state.set_sections(ModelRc::new(VecModel::from(build_sections(set))));
-        section_artwork_jobs(set)
+        // Swap the Qobuz Playlists row for the active tab, and append its
+        // single-cover artwork jobs onto the section jobs (one combined return
+        // → the on_select_tab call sites' spawn_loads covers both with no
+        // call-site change).
+        let pls = match tab {
+            "editorPicks" => &cache.editor_playlists,
+            _ => &cache.home_playlists,
+        };
+        state.set_playlists(ModelRc::new(VecModel::from(
+            pls.iter().map(playlist_to_item).collect::<Vec<_>>(),
+        )));
+        let mut jobs = section_artwork_jobs(set);
+        jobs.extend(playlist_artwork_jobs(pls));
+        jobs
     })
 }
 
@@ -519,6 +615,8 @@ pub fn apply_home(window: &AppWindow, data: HomeData) {
         *cell.borrow_mut() = TabSections {
             home: data.sections.clone(),
             editor: data.editor_sections.clone(),
+            home_playlists: data.playlists.clone(),
+            editor_playlists: data.editor_playlists.clone(),
         };
     });
 
@@ -541,11 +639,17 @@ pub fn apply_home(window: &AppWindow, data: HomeData) {
     let recent_albums: Vec<AlbumCardItem> =
         data.recent_albums.into_iter().map(card_to_item).collect();
 
+    // Push the HOME tab's Qobuz Playlists row (apply_home runs for the
+    // default Home tab; a tab switch swaps it via select_tab).
+    let home_playlists: Vec<SearchPlaylistItem> =
+        data.playlists.iter().map(playlist_to_item).collect();
+
     let state = window.global::<HomeState>();
     state.set_sections(ModelRc::new(VecModel::from(sections)));
     state.set_popular(ModelRc::new(VecModel::from(popular)));
     state.set_recent(ModelRc::new(VecModel::from(recent)));
     state.set_recent_albums(ModelRc::new(VecModel::from(recent_albums)));
+    state.set_playlists(ModelRc::new(VecModel::from(home_playlists)));
 }
 
 #[cfg(test)]

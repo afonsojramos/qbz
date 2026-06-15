@@ -41,6 +41,9 @@ pub enum ArtworkTarget {
     Recent { idx: usize },
     /// A card in `HomeState.recent-albums[idx]`.
     RecentAlbum { idx: usize },
+    /// A single playlist cover of `HomeState.playlists[idx]` (single cover →
+    /// slot 0, unlike the 4-slot SearchPlaylistCover/FavPlaylistCover).
+    HomePlaylistCover { idx: usize },
     /// A row in `SearchState.albums[idx]`.
     SearchAlbum { idx: usize },
     /// A row in `SearchState.tracks[idx]`.
@@ -663,6 +666,13 @@ fn apply_artwork(
             };
             item.artwork = image;
             albums.set_row_data(idx, item);
+        }
+        ArtworkTarget::HomePlaylistCover { idx } => {
+            let model = home.get_playlists();
+            if let Some(mut item) = model.row_data(idx) {
+                item.cover1 = image; // single cover → slot 0
+                model.set_row_data(idx, item);
+            }
         }
         ArtworkTarget::SearchAlbum { idx } => {
             let model = window.global::<SearchState>().get_albums();

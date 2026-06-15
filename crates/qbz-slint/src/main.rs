@@ -488,6 +488,16 @@ async fn reload_home(
                 }
             }
 
+            // Qobuz Playlists row covers for the active tab (single-cover,
+            // Qobuz CDN URLs → the plain loader, never the local/Plex funnel).
+            let empty_playlists: Vec<home::PlaylistCardData> = Vec::new();
+            let active_playlists = match active_tab.as_str() {
+                "editorPicks" => &data.editor_playlists,
+                "forYou" => &empty_playlists,
+                _ => &data.playlists,
+            };
+            jobs.extend(home::playlist_artwork_jobs(active_playlists));
+
             let weak_for_artwork = weak.clone();
             let weak_for_local = weak.clone();
             let image_cache_local = image_cache.clone();

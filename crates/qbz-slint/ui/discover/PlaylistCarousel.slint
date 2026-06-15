@@ -65,6 +65,9 @@ export component PlaylistCarousel inherits VerticalLayout {
     in property <string> title;
     in property <[SearchPlaylistItem]> playlists;
     in property <bool> show-view-all: false;
+    // When true, a card body click opens the playlist and the overlay button
+    // plays it (1:1 with Tauri Discover). Default false (body=play).
+    in property <bool> body-opens: false;
     callback view-all-clicked();
     callback media-action(string, string, string);
 
@@ -140,6 +143,7 @@ export component PlaylistCarousel inherits VerticalLayout {
                 spacing: root.gap;
                 for playlist in root.playlists: PlaylistCard {
                     playlist: playlist;
+                    body-opens: root.body-opens;
                     media-action(k, i, a) => {
                         root.media-action(k, i, a);
                     }

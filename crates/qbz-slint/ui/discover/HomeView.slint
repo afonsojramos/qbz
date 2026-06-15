@@ -11,6 +11,7 @@ import { Typography } from "../foundation/typography.slint";
 import { HomeState, HomeActions, GenreFilterState, GenreFilterActions, NavState, ContentView } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
+import { PlaylistCarousel } from "PlaylistCarousel.slint";
 import { HomeSkeleton } from "HomeSkeleton.slint";
 import { ForYouView } from "ForYouView.slint";
 import { GenreFilterPopup } from "GenreFilterPopup.slint";
@@ -287,6 +288,19 @@ export component HomeView inherits Rectangle {
                     }
                     view-all-clicked => {
                         root.discover-view-all(section.endpoint, section.title);
+                    }
+                }
+
+                // Qobuz Playlists row — shown on Home + Editor's Picks
+                // (never For You). body=open, overlay=play (1:1 Tauri).
+                if HomeState.active-tab != "forYou"
+                    && HomeState.playlists.length > 0: PlaylistCarousel {
+                    title: @tr("Qobuz Playlists");
+                    playlists: HomeState.playlists;
+                    body-opens: true;
+                    show-view-all: false;
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
                     }
                 }
 
