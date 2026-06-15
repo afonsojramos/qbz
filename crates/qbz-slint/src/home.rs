@@ -169,6 +169,17 @@ where
         "/discover/albumOfTheWeek",
         containers.album_of_the_week,
     );
+    // Qobuzissimes is OFF on the Home tab by DEFAULT (the prefs control
+    // visibility now), but the configurator OFFERS it on Home — so keep its data
+    // in the Home cache pool so enabling it actually renders. Visibility is
+    // governed by DEFAULT_PREFS (off), not by absence from the cache.
+    push_section(
+        &mut sections,
+        DiscoverySectionId::Qobuzissimes,
+        "Qobuzissimes",
+        "/discover/qobuzissims",
+        containers.qobuzissims,
+    );
 
     // Capped at 24 (two carousel pages of 12) — the slim carousel
     // does not show beyond that.
