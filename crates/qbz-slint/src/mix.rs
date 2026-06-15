@@ -42,16 +42,26 @@ where
 {
     match kind {
         "daily" | "weekly" => {
+            // Seed /dynamic/suggest with QOBUZ track ids ONLY. Recently-played
+            // now includes local/Plex tracks whose ids are NOT in the Qobuz
+            // catalog (e.g. numeric Plex rating keys that pass the u64 parse);
+            // sending those made the mix request fail. Empty `source` = legacy
+            // pre-source entries (treated as Qobuz). Local/Plex are excluded.
             let seeds: Vec<u64> = crate::recently::load()
                 .into_iter()
+                .filter(|t| t.source.is_empty() || t.source == "qobuz")
                 .filter_map(|t| t.id.parse::<u64>().ok())
                 .take(50)
                 .collect();
-            runtime
-                .core()
-                .get_dynamic_suggest(&seeds, 50)
-                .await
-                .unwrap_or_default()
+            if seeds.is_empty() {
+                Vec::new()
+            } else {
+                runtime
+                    .core()
+                    .get_dynamic_suggest(&seeds, 50)
+                    .await
+                    .unwrap_or_default()
+            }
         }
         "fav" => {
             let mut tracks = favorite_tracks(runtime).await;
