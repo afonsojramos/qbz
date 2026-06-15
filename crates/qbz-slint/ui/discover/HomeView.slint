@@ -280,10 +280,13 @@ export component HomeView inherits Rectangle {
                 // Loading skeleton: shown while a discover load is in flight and
                 // the active tab's descriptor list is still empty (For You has
                 // its own skeleton inside ForYouView).
-                if DiscoverState.active-tab != "forYou"
-                    && HomeState.loading
-                    && DiscoverState.home-sections.length == 0
-                    && DiscoverState.editor-sections.length == 0: HomeSkeleton { }
+                // Show the skeleton while the initial discover fetch is in
+                // flight. The descriptor list already carries the non-album rows
+                // (recent/continue/playlists) at seed time, so a length check
+                // would suppress it — gate on `loading` alone. The empty-data
+                // placeholders below are gated off while loading, so ONLY the
+                // skeleton shows during the fetch (1:1 Tauri).
+                if DiscoverState.active-tab != "forYou" && HomeState.loading: HomeSkeleton { }
 
                 // Prefs-driven render loop (Slice 5). Rust pushes the ordered
                 // ENABLED descriptor list for the active tab (home-sections /
@@ -346,7 +349,7 @@ export component HomeView inherits Rectangle {
                             root.media-action(kind, id, action);
                         }
                     }
-                    if desc.id == "recentlyPlayedAlbums" && HomeState.recent-albums.length == 0: RecentPlaceholder {
+                    if desc.id == "recentlyPlayedAlbums" && HomeState.recent-albums.length == 0 && !HomeState.loading: RecentPlaceholder {
                         title: @tr("Recently Played Albums");
                         hint: @tr("Albums you play will appear here.");
                     }
@@ -360,7 +363,7 @@ export component HomeView inherits Rectangle {
                             root.media-action("track", id, "play");
                         }
                     }
-                    if desc.id == "continueListening" && HomeState.recent.length == 0: RecentPlaceholder {
+                    if desc.id == "continueListening" && HomeState.recent.length == 0 && !HomeState.loading: RecentPlaceholder {
                         title: @tr("Recently Played Tracks");
                         hint: @tr("Tracks you play will appear here.");
                     }
