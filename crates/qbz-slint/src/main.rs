@@ -11499,6 +11499,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
+        // Generate the per-DAC copy-paste config (Slice 10): re-probe rates off
+        // the UI thread, then fill the review step.
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<DacWizardActions>().on_gen_configs(move || {
+            let Some(w) = weak.upgrade() else {
+                return;
+            };
+            let dacs = dac_wizard::checked_dacs(&w);
+            let weak2 = w.as_weak();
+            handle.spawn_blocking(move || {
+                let data = dac_wizard::gen_configs_blocking(dacs);
+                let _ = weak2.upgrade_in_event_loop(move |w| {
+                    dac_wizard::apply_configs(&w, data);
+                });
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<DacWizardActions>().on_toggle_config(move |i| {
+            if let Some(w) = weak.upgrade() {
+                dac_wizard::toggle_config(&w, i);
+            }
+        });
+    }
+    {
         window
             .global::<DacWizardActions>()
             .on_copy_command(move |cmd| {

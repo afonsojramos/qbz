@@ -459,9 +459,100 @@ export component DacWizardModal inherits Rectangle {
                                 }
                             }
                         }
-                        if DacWizardState.step == 3: StepPlaceholder {
-                            title: @tr("Review & Apply");
-                            note: @tr("Backup, per-DAC sample rates, and the copy-paste config files (Slice 10).");
+                        // ── Step 3: review & apply (copy-paste config) ───
+                        if DacWizardState.step == 3: VerticalLayout {
+                            spacing: 14px;
+                            Text {
+                                text: @tr("Review & Apply");
+                                color: Theme.text-primary;
+                                font-size: Typography.heading;
+                                font-weight: Typography.semibold;
+                            }
+                            WarningBanner {
+                                variant: "info";
+                                title: @tr("QBZ never writes these files");
+                                body: @tr("QBZ already pins rate, sink and exclusive mode at runtime. These files only change system-wide behavior — copy and run them yourself if you want them. Back up first.");
+                            }
+                            // 1. Backup.
+                            CommandBlock {
+                                caption: @tr("1. Back up your current PipeWire/WirePlumber config");
+                                command: DacWizardState.backup-cmd;
+                                copy => {
+                                    DacWizardActions.copy-command(DacWizardState.backup-cmd);
+                                }
+                            }
+                            // 2. Per-DAC config — collapsible accordions.
+                            for cfg[i] in DacWizardState.dac-configs: VerticalLayout {
+                                spacing: 8px;
+                                Rectangle {
+                                    height: 40px;
+                                    border-radius: Radius.sm;
+                                    background: chead.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+                                    border-width: 1px;
+                                    border-color: Theme.border-subtle;
+                                    HorizontalLayout {
+                                        padding-left: 12px;
+                                        padding-right: 12px;
+                                        spacing: 8px;
+                                        QbzIcon {
+                                            width: 16px;
+                                            height: 16px;
+                                            y: (parent.height - self.height) / 2;
+                                            source: cfg.expanded
+                                                ? @image-url("../assets/icons/chevron-down.svg")
+                                                : @image-url("../assets/icons/chevron-right.svg");
+                                            tint: Theme.text-muted;
+                                        }
+                                        Text {
+                                            text: cfg.name;
+                                            color: Theme.text-primary;
+                                            font-size: Typography.body;
+                                            font-weight: Typography.medium;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    chead := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            DacWizardActions.toggle-config(i);
+                                        }
+                                    }
+                                }
+                                if cfg.expanded: VerticalLayout {
+                                    spacing: 8px;
+                                    CommandBlock {
+                                        caption: @tr("Sample-rate switching (PipeWire)");
+                                        command: cfg.pipewire-conf;
+                                        copy => {
+                                            DacWizardActions.copy-command(cfg.pipewire-conf);
+                                        }
+                                    }
+                                    CommandBlock {
+                                        caption: @tr("Per-app bit-perfect (PipeWire client)");
+                                        command: cfg.pulse-conf;
+                                        copy => {
+                                            DacWizardActions.copy-command(cfg.pulse-conf);
+                                        }
+                                    }
+                                    CommandBlock {
+                                        caption: @tr("Pin the DAC + rates (WirePlumber)");
+                                        command: cfg.wireplumber-conf;
+                                        copy => {
+                                            DacWizardActions.copy-command(cfg.wireplumber-conf);
+                                        }
+                                    }
+                                }
+                            }
+                            // 3. Restart (init-aware).
+                            CommandBlock {
+                                caption: @tr("3. Restart the audio services to load the config");
+                                command: DacWizardState.restart-cmd;
+                                copy => {
+                                    DacWizardActions.copy-command(DacWizardState.restart-cmd);
+                                }
+                            }
                         }
                         // ── Step 4: self-service playback test ───────────
                         if DacWizardState.step == 4: VerticalLayout {
@@ -590,9 +681,48 @@ export component DacWizardModal inherits Rectangle {
                                 }
                             }
                         }
-                        if DacWizardState.step == 5: StepPlaceholder {
-                            title: @tr("All set");
-                            note: @tr("Summary and the config paths you created (Slice 10).");
+                        // ── Step 5: done ─────────────────────────────────
+                        if DacWizardState.step == 5: VerticalLayout {
+                            spacing: 14px;
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                QbzIcon {
+                                    width: 24px;
+                                    height: 24px;
+                                    source: @image-url("../assets/icons/circle-check-big.svg");
+                                    tint: #3fae6a;
+                                }
+                                Text {
+                                    text: @tr("All set");
+                                    color: Theme.text-primary;
+                                    font-size: Typography.heading;
+                                    font-weight: Typography.semibold;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            Text {
+                                text: @tr("Your DAC is ready for bit-perfect playback. If you applied the config files, restart the audio services (or log out and back in) for them to take effect.");
+                                color: Theme.text-secondary;
+                                font-size: Typography.body;
+                                wrap: word-wrap;
+                            }
+                            if DacWizardState.created-paths.length > 0: VerticalLayout {
+                                spacing: 6px;
+                                Text {
+                                    text: @tr("Config files you can create:");
+                                    color: Theme.text-secondary;
+                                    font-size: Typography.legal;
+                                    font-weight: Typography.medium;
+                                }
+                                for p in DacWizardState.created-paths: Text {
+                                    text: p;
+                                    color: Theme.text-muted;
+                                    font-size: Typography.legal;
+                                    font-family: "monospace";
+                                    overflow: elide;
+                                }
+                            }
                         }
                     }
                 }
@@ -637,6 +767,10 @@ export component DacWizardModal inherits Rectangle {
                                 // Entering the DACs step kicks off enumeration.
                                 if (DacWizardState.step == 1) {
                                     DacWizardActions.run-detect();
+                                }
+                                // Entering review generates the per-DAC config.
+                                if (DacWizardState.step == 2) {
+                                    DacWizardActions.gen-configs();
                                 }
                                 DacWizardState.step += 1;
                             }

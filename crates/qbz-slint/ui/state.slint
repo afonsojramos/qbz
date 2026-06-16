@@ -3876,6 +3876,16 @@ export struct DacCandidateRow {
     rates-label: string,   // pre-filled supported rates, e.g. "44.1 / 96 / 192 kHz"
 }
 
+// One selected DAC's generated copy-paste config (Slice 10, read-only).
+export struct DacConfigRow {
+    name: string,
+    node-name: string,
+    pipewire-conf: string,
+    pulse-conf: string,
+    wireplumber-conf: string,
+    expanded: bool,        // accordion state
+}
+
 export global DacWizardState {
     in-out property <bool> open: false;
     // 0 welcome · 1 check · 2 select-dacs · 3 review · 4 test · 5 done
@@ -3912,6 +3922,12 @@ export global DacWizardState {
     in-out property <string> test-negotiated-label: "";   // "DAC running at 96000 Hz" (N6)
     in-out property <bool> test-rate-matched: false;
     in-out property <bool> test-playing: false;
+
+    // review-and-apply (Slice 10): generated copy-paste config per selected DAC.
+    in-out property <[DacConfigRow]> dac-configs: [];
+    in-out property <string> backup-cmd: "";
+    in-out property <string> restart-cmd: "";
+    in-out property <[string]> created-paths: [];   // done step
 }
 
 export global DacWizardActions {
@@ -3929,4 +3945,6 @@ export global DacWizardActions {
     callback poll-test();            // refresh the requested-vs-negotiated read-back
     callback test-play-index(int);   // jump straight to one of the 4 test tracks
     callback stop-test();
+    callback gen-configs();          // build the per-DAC copy-paste config (Slice 10)
+    callback toggle-config(int);     // collapse/expand one DAC's config accordion
 }
