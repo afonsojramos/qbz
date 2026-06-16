@@ -137,10 +137,68 @@ pub enum InitSystem {
     Unknown,
 }
 
+impl InitSystem {
+    /// Dropdown order (index = position here). `Unknown` stays last.
+    pub const ALL: [InitSystem; 6] = [
+        InitSystem::Systemd,
+        InitSystem::OpenRc,
+        InitSystem::Runit,
+        InitSystem::S6,
+        InitSystem::Dinit,
+        InitSystem::Unknown,
+    ];
+
+    pub fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|&i| i == self)
+            .unwrap_or(Self::ALL.len() - 1)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            InitSystem::Systemd => "systemd",
+            InitSystem::OpenRc => "OpenRC",
+            InitSystem::Runit => "runit",
+            InitSystem::S6 => "s6",
+            InitSystem::Dinit => "dinit",
+            InitSystem::Unknown => "Other / unknown",
+        }
+    }
+}
+
+/// App packaging sandbox. Inside one, host files (`/etc/os-release`, `/run`,
+/// `/proc/1`) reflect the SANDBOX/runtime, not the user's host — so host
+/// detection must read the host-exposed paths, and init detection can't be
+/// trusted (it falls back to the manual override).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sandbox {
+    None,
+    Flatpak,
+    Snap,
+}
+
+/// Detect the packaging sandbox: Flatpak exposes `/.flatpak-info`, Snap sets `$SNAP`.
+pub fn detect_sandbox() -> Sandbox {
+    if std::path::Path::new("/.flatpak-info").exists() {
+        Sandbox::Flatpak
+    } else if std::env::var_os("SNAP").is_some() {
+        Sandbox::Snap
+    } else {
+        Sandbox::None
+    }
+}
+
 /// Detect the running init system. The `/run/systemd/system` check is the
 /// canonical `sd_booted()` test; the others mirror each supervisor's runtime
 /// dir, with a `/proc/1/comm` fallback.
+///
+/// In a sandbox these all reflect the SANDBOX, not the host, so we return
+/// `Unknown` and let the wizard's init override decide.
 pub fn detect_init() -> InitSystem {
+    if detect_sandbox() != Sandbox::None {
+        return InitSystem::Unknown;
+    }
     use std::path::Path;
     if Path::new("/run/systemd/system").exists() {
         return InitSystem::Systemd;
@@ -174,11 +232,22 @@ fn parse_init_from_comm(comm: &str) -> InitSystem {
     }
 }
 
-/// Detect the distro from `/etc/os-release`, defaulting to `Other`.
+/// Detect the distro from the HOST `os-release`, defaulting to `Other`.
+///
+/// Inside a sandbox the plain `/etc/os-release` is the runtime's (Flatpak
+/// freedesktop-sdk) or the snap base's, NOT the user's distro — so read the
+/// host-exposed path first: Flatpak guarantees `/run/host/os-release`, Snap
+/// mounts the host root at `/var/lib/snapd/hostfs`. Falls back to `/etc`.
 pub fn detect_distro() -> Distro {
-    std::fs::read_to_string("/etc/os-release")
-        .map(|c| parse_distro(&c))
-        .unwrap_or(Distro::Other)
+    let host_path = match detect_sandbox() {
+        Sandbox::Flatpak => Some("/run/host/os-release"),
+        Sandbox::Snap => Some("/var/lib/snapd/hostfs/etc/os-release"),
+        Sandbox::None => None,
+    };
+    let content = host_path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .or_else(|| std::fs::read_to_string("/etc/os-release").ok());
+    content.map(|c| parse_distro(&c)).unwrap_or(Distro::Other)
 }
 
 /// Pure `/etc/os-release` classifier (testable). Reads `ID` then `ID_LIKE`.
