@@ -11347,6 +11347,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
+        // Enumerate DACs (Slice 7) off the UI thread when entering the step.
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<DacWizardActions>().on_run_detect(move || {
+            let Some(w) = weak.upgrade() else {
+                return;
+            };
+            dac_wizard::begin_detect(&w);
+            let weak2 = w.as_weak();
+            handle.spawn_blocking(move || {
+                let data = dac_wizard::detect_blocking();
+                let _ = weak2.upgrade_in_event_loop(move |w| {
+                    dac_wizard::apply_candidates(&w, data);
+                });
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<DacWizardActions>().on_toggle_dac(move |i| {
+            if let Some(w) = weak.upgrade() {
+                dac_wizard::toggle_dac(&w, i);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<DacWizardActions>()
+            .on_validate_manual(move |t| {
+                if let Some(w) = weak.upgrade() {
+                    dac_wizard::validate_manual(&w, t.as_str());
+                }
+            });
+    }
+    {
         window
             .global::<DacWizardActions>()
             .on_copy_command(move |cmd| {

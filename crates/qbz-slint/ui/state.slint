@@ -3900,9 +3900,12 @@ export global DacWizardState {
 
     // select-dacs (Slice 7)
     in-out property <[DacCandidateRow]> candidates: [];
-    in-out property <bool> has-enumeration: true;   // false → manual escape hatch
+    in-out property <bool> detecting: false;         // enumeration in flight
+    in-out property <bool> has-enumeration: true;    // false → manual escape hatch
+    in-out property <bool> any-dac-selected: false;  // gates Next on the DACs step
     in-out property <string> manual-node-name: "";
     in-out property <bool> manual-valid: false;
+    in-out property <string> manual-dac-type: "";    // usb|pci|bluetooth|virtual|unknown
 
     // test (Slice 9): live read-back lines, set by the controller
     in-out property <string> test-requested-label: "";   // "QBZ requesting 96000 Hz · 24-bit"
@@ -3919,7 +3922,8 @@ export global DacWizardActions {
     callback set-init(int);          // recompute service commands for the chosen init
     callback copy-command(string);   // → crate::share::copy_to_clipboard
     callback run-detect();           // enumerate sinks → candidates (Slice 7)
-    callback query-caps(string);     // probe one DAC's rates (Slice 7)
+    callback toggle-dac(int);        // flip one candidate's checked state
+    callback validate-manual(string);// validate a pasted node.name (escape hatch)
     callback start-test();           // queue + play the 4 test tracks (Slice 9)
     callback stop-test();
 }

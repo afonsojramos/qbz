@@ -19,6 +19,7 @@ import { QbzCheckbox } from "QbzCheckbox.slint";
 import { QbzSelect } from "QbzSelect.slint";
 import { CommandBlock } from "CommandBlock.slint";
 import { WarningBanner } from "WarningBanner.slint";
+import { SelectionCheckbox } from "SelectionCheckbox.slint";
 
 // Temporary titled placeholder for steps not yet built. Removed as each step
 // lands (Slices 6/7/9/10).
@@ -43,6 +44,10 @@ component StepPlaceholder inherits VerticalLayout {
 
 export component DacWizardModal inherits Rectangle {
     visible: DacWizardState.open;
+
+    // "Can't see your DAC?" manual escape hatch is collapsed by default when
+    // enumeration found devices; forced open when it found none.
+    property <bool> show-manual: false;
 
     // Step labels for the header rail (index = DacWizardState.step).
     property <[string]> steps: [
@@ -281,9 +286,170 @@ export component DacWizardModal inherits Rectangle {
                                 }
                             }
                         }
-                        if DacWizardState.step == 2: StepPlaceholder {
-                            title: @tr("Which DACs do you want to configure?");
-                            note: @tr("Auto-detected sink list with checkboxes — no manual node.name paste (Slice 7).");
+                        // ── Step 2: select DACs (auto-detect + escape hatch) ──
+                        if DacWizardState.step == 2: VerticalLayout {
+                            spacing: 14px;
+                            Text {
+                                text: @tr("Which DACs do you want to configure?");
+                                color: Theme.text-primary;
+                                font-size: Typography.heading;
+                                font-weight: Typography.semibold;
+                                wrap: word-wrap;
+                            }
+                            if DacWizardState.detecting: Text {
+                                text: @tr("Detecting your DACs…");
+                                color: Theme.text-muted;
+                                font-size: Typography.body;
+                            }
+
+                            // Enumerated candidates — circular multi-select.
+                            for c[i] in DacWizardState.candidates: Rectangle {
+                                height: cand-row.preferred-height;
+                                border-radius: Radius.sm;
+                                background: c.checked ? Theme.surface-hover : transparent;
+                                cand-row := HorizontalLayout {
+                                    padding: 8px;
+                                    spacing: 12px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        SelectionCheckbox {
+                                            checked: c.checked;
+                                            toggled => {
+                                                DacWizardActions.toggle-dac(i);
+                                            }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        spacing: 4px;
+                                        horizontal-stretch: 1;
+                                        Text {
+                                            text: c.description;
+                                            color: Theme.text-primary;
+                                            font-size: Typography.body;
+                                            font-weight: Typography.medium;
+                                            overflow: elide;
+                                        }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            alignment: start;
+                                            // Bus label — bordered box, NOT a pill (ADR-008).
+                                            if c.bus != "": Rectangle {
+                                                border-radius: Radius.sm;
+                                                border-width: 1px;
+                                                border-color: Theme.border-subtle;
+                                                background: Theme.surface-elevated;
+                                                height: 18px;
+                                                HorizontalLayout {
+                                                    padding-left: 6px;
+                                                    padding-right: 6px;
+                                                    Text {
+                                                        text: c.bus;
+                                                        color: Theme.text-muted;
+                                                        font-size: 10px;
+                                                        font-weight: Typography.semibold;
+                                                        vertical-alignment: center;
+                                                    }
+                                                }
+                                            }
+                                            if c.is-default: Text {
+                                                text: @tr("default");
+                                                color: #3fae6a;
+                                                font-size: Typography.legal;
+                                                vertical-alignment: center;
+                                            }
+                                            if c.rates-label != "": Text {
+                                                text: c.rates-label;
+                                                color: Theme.text-muted;
+                                                font-size: Typography.legal;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Escape-hatch toggle (only when enumeration found devices;
+                            // otherwise the manual block shows unconditionally).
+                            if DacWizardState.has-enumeration: TouchArea {
+                                height: 22px;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.show-manual = !root.show-manual;
+                                }
+                                Text {
+                                    text: root.show-manual ? @tr("Hide manual entry") : @tr("Can't see your DAC?");
+                                    color: Theme.accent;
+                                    font-size: Typography.legal;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // Manual node.name entry (escape hatch).
+                            if root.show-manual || !DacWizardState.has-enumeration: VerticalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: @tr("Find your DAC's PipeWire node name and paste it here:");
+                                    color: Theme.text-secondary;
+                                    font-size: Typography.legal;
+                                    wrap: word-wrap;
+                                }
+                                CommandBlock {
+                                    caption: @tr("1. Find your DAC under 'Audio > Sinks' and note its number");
+                                    command: "wpctl status";
+                                    copy => {
+                                        DacWizardActions.copy-command("wpctl status");
+                                    }
+                                }
+                                CommandBlock {
+                                    caption: @tr("2. Run with that number to read the node.name");
+                                    command: "wpctl inspect <ID> | grep node.name";
+                                    copy => {
+                                        DacWizardActions.copy-command("wpctl inspect <ID> | grep node.name");
+                                    }
+                                }
+                                Rectangle {
+                                    height: 43px;
+                                    border-radius: Radius.sm;
+                                    background: Theme.surface-card;
+                                    border-width: 1px;
+                                    border-color: node-input.has-focus ? Theme.accent : Theme.border-subtle;
+                                    HorizontalLayout {
+                                        padding-left: 12px;
+                                        padding-right: 12px;
+                                        Rectangle {
+                                            horizontal-stretch: 1;
+                                            clip: true;
+                                            node-input := TextInput {
+                                                width: 100%;
+                                                height: 100%;
+                                                color: Theme.text-primary;
+                                                font-size: Typography.link;
+                                                vertical-alignment: center;
+                                                single-line: true;
+                                                text <=> DacWizardState.manual-node-name;
+                                                edited => {
+                                                    DacWizardActions.validate-manual(self.text);
+                                                }
+                                            }
+                                            Text {
+                                                visible: node-input.text == "";
+                                                text: "alsa_output.usb-...";
+                                                color: Theme.text-muted;
+                                                font-size: Typography.link;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                                if DacWizardState.manual-node-name != "": Text {
+                                    text: DacWizardState.manual-valid
+                                        ? @tr("Valid node name")
+                                        : @tr("Invalid — should contain alsa_output or alsa_input");
+                                    color: DacWizardState.manual-valid ? #3fae6a : #e0564f;
+                                    font-size: Typography.legal;
+                                }
+                            }
                         }
                         if DacWizardState.step == 3: StepPlaceholder {
                             title: @tr("Review & Apply");
@@ -327,12 +493,20 @@ export component DacWizardModal inherits Rectangle {
                         height: 34px;
                         label: DacWizardState.step == 0 ? @tr("Start")
                             : (DacWizardState.step == 5 ? @tr("Finish") : @tr("Next"));
-                        // Step 0 gated on the accept checkbox; later gates added per slice.
-                        enabled: DacWizardState.step == 0 ? DacWizardState.welcome-confirmed : true;
+                        // step 0: accept checkbox · step 2: ≥1 DAC or a valid manual node.name.
+                        enabled: DacWizardState.step == 0
+                            ? DacWizardState.welcome-confirmed
+                            : (DacWizardState.step == 2
+                                ? (DacWizardState.any-dac-selected || DacWizardState.manual-valid)
+                                : true);
                         clicked => {
                             if (DacWizardState.step == 5) {
                                 DacWizardState.open = false;
                             } else {
+                                // Entering the DACs step kicks off enumeration.
+                                if (DacWizardState.step == 1) {
+                                    DacWizardActions.run-detect();
+                                }
                                 DacWizardState.step += 1;
                             }
                         }
