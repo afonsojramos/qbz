@@ -3928,6 +3928,10 @@ export global DacWizardState {
     in-out property <string> backup-cmd: "";
     in-out property <string> restart-cmd: "";
     in-out property <[string]> created-paths: [];   // done step
+    // Progress checkboxes (Tauri parity) — help the user track what they ran.
+    in-out property <bool> review-backup-done: false;
+    in-out property <bool> review-config-done: false;
+    in-out property <bool> review-restart-done: false;
 }
 
 export global DacWizardActions {

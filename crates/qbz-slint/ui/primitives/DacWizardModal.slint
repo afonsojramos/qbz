@@ -20,6 +20,7 @@ import { QbzSelect } from "QbzSelect.slint";
 import { CommandBlock } from "CommandBlock.slint";
 import { WarningBanner } from "WarningBanner.slint";
 import { SelectionCheckbox } from "SelectionCheckbox.slint";
+import { ListScrollbar } from "ListScrollbar.slint";
 
 export component DacWizardModal inherits Rectangle {
     visible: DacWizardState.open;
@@ -84,9 +85,9 @@ export component DacWizardModal inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         QbzIcon {
-                            source: @image-url("../assets/icons/circle-check-big.svg");
-                            width: 24px;
-                            height: 24px;
+                            source: @image-url("../assets/icons/gandalf.svg");
+                            width: 26px;
+                            height: 26px;
                             tint: #3fae6a;
                         }
                     }
@@ -150,9 +151,11 @@ export component DacWizardModal inherits Rectangle {
                 }
                 Rectangle { height: 1px; background: Theme.border-subtle; }
 
-                // Body — scrolls when a step outgrows the card.
-                Flickable {
+                // Body — scrolls when a step outgrows the card, with a visible
+                // scrollbar. Wrapped in a Rectangle so the scrollbar can overlay.
+                Rectangle {
                     vertical-stretch: 1;
+                    body-flick := Flickable {
                     viewport-width: self.width;
                     viewport-height: body.preferred-height;
 
@@ -460,6 +463,17 @@ export component DacWizardModal inherits Rectangle {
                                     DacWizardActions.copy-command(DacWizardState.backup-cmd);
                                 }
                             }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                QbzCheckbox { checked <=> DacWizardState.review-backup-done; }
+                                Text {
+                                    text: @tr("I created a backup");
+                                    color: Theme.text-secondary;
+                                    font-size: Typography.legal;
+                                    vertical-alignment: center;
+                                }
+                            }
                             // 2. Per-DAC config — collapsible accordions.
                             for cfg[i] in DacWizardState.dac-configs: VerticalLayout {
                                 spacing: 8px;
@@ -524,12 +538,34 @@ export component DacWizardModal inherits Rectangle {
                                     }
                                 }
                             }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                QbzCheckbox { checked <=> DacWizardState.review-config-done; }
+                                Text {
+                                    text: @tr("I created the configuration files");
+                                    color: Theme.text-secondary;
+                                    font-size: Typography.legal;
+                                    vertical-alignment: center;
+                                }
+                            }
                             // 3. Restart (init-aware).
                             CommandBlock {
                                 caption: @tr("3. Restart the audio services to load the config");
                                 command: DacWizardState.restart-cmd;
                                 copy => {
                                     DacWizardActions.copy-command(DacWizardState.restart-cmd);
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                QbzCheckbox { checked <=> DacWizardState.review-restart-done; }
+                                Text {
+                                    text: @tr("I restarted the audio services");
+                                    color: Theme.text-secondary;
+                                    font-size: Typography.legal;
+                                    vertical-alignment: center;
                                 }
                             }
                         }
@@ -704,6 +740,15 @@ export component DacWizardModal inherits Rectangle {
                             }
                         }
                     }
+                    }
+                    ListScrollbar {
+                        x: parent.width - self.width - 2px;
+                        width: 12px;
+                        height: 100%;
+                        viewport-height: body-flick.viewport-height;
+                        visible-height: body-flick.height;
+                        viewport-y <=> body-flick.viewport-y;
+                    }
                 }
 
                 Rectangle { height: 1px; background: Theme.border-subtle; }
@@ -738,7 +783,11 @@ export component DacWizardModal inherits Rectangle {
                             ? DacWizardState.welcome-confirmed
                             : (DacWizardState.step == 2
                                 ? (DacWizardState.any-dac-selected || DacWizardState.manual-valid)
-                                : true);
+                                : (DacWizardState.step == 3
+                                    ? (DacWizardState.review-backup-done
+                                        && DacWizardState.review-config-done
+                                        && DacWizardState.review-restart-done)
+                                    : true));
                         clicked => {
                             if (DacWizardState.step == 5) {
                                 DacWizardState.open = false;

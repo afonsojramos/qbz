@@ -237,6 +237,47 @@ export component AudioSettings inherits VerticalLayout {
         }
     }
 
+    // HiFi Wizard — guided bit-perfect DAC setup (PipeWire only). Lives at the
+    // end of BIT-PERFECT: the whole point of the wizard is bit-perfect.
+    if SettingsState.backend-is-pipewire: SettingRow {
+        label: @tr("HiFi Wizard");
+        description: @tr("Auto-detect your DACs and set up bit-perfect playback, step by step.");
+        wizard-btn := Rectangle {
+            width: 160px;
+            height: 34px;
+            border-radius: Radius.sm;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            background: wizard-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+            HorizontalLayout {
+                alignment: center;
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    QbzIcon {
+                        width: 18px;
+                        height: 18px;
+                        source: @image-url("../assets/icons/gandalf.svg");
+                        tint: Theme.text-primary;
+                    }
+                }
+                Text {
+                    text: @tr("Open Wizard");
+                    color: Theme.text-primary;
+                    font-size: Typography.body;
+                    font-weight: Typography.medium;
+                    vertical-alignment: center;
+                }
+            }
+            wizard-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    DacWizardActions.open();
+                }
+            }
+        }
+    }
+
     Rectangle { height: 12px; }
     Divider { }
     Rectangle { height: 12px; }
@@ -265,35 +306,6 @@ export component AudioSettings inherits VerticalLayout {
             toggled(v) => {
                 SettingsState.skip-sink-switch = v;
                 root.settings-bool("skip-sink-switch", v);
-            }
-        }
-    }
-
-    // HiFi Wizard — guided DAC setup (PipeWire only, mirrors the Tauri gate).
-    if SettingsState.backend-is-pipewire: GroupHeader { text: @tr("DAC SETUP"); }
-    if SettingsState.backend-is-pipewire: SettingRow {
-        label: @tr("HiFi Wizard");
-        description: @tr("Auto-detect your DACs and set up bit-perfect playback, step by step.");
-        wizard-btn := Rectangle {
-            width: 160px;
-            height: 34px;
-            border-radius: Radius.sm;
-            border-width: 1px;
-            border-color: Theme.border-subtle;
-            background: wizard-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
-            Text {
-                text: @tr("Open Wizard");
-                color: Theme.text-primary;
-                font-size: Typography.body;
-                font-weight: Typography.medium;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-            wizard-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    DacWizardActions.open();
-                }
             }
         }
     }
