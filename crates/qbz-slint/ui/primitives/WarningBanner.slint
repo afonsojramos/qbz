@@ -11,19 +11,24 @@ import { QbzIcon } from "QbzIcon.slint";
 export component WarningBanner inherits Rectangle {
     in property <string> title: "";
     in property <string> body: "";
-    in property <string> variant: "warning";
+    in property <string> variant: "warning";   // info | warning | error | success
 
     property <color> tone: root.variant == "error" ? #ef4444
-        : (root.variant == "info" ? #3b82f6 : #eab308);
+        : (root.variant == "info" ? #3b82f6
+        : (root.variant == "success" ? #3fae6a : #eab308));
     property <color> bg: root.variant == "error" ? #ef44441a
-        : (root.variant == "info" ? #3b82f61a : #eab3081a);
+        : (root.variant == "info" ? #3b82f61a
+        : (root.variant == "success" ? #3fae6a1a : #eab3081a));
     property <color> brd: root.variant == "error" ? #ef44444d
-        : (root.variant == "info" ? #3b82f64d : #eab3084d);
+        : (root.variant == "info" ? #3b82f64d
+        : (root.variant == "success" ? #3fae6a4d : #eab3084d));
     property <image> glyph: root.variant == "error"
         ? @image-url("../assets/icons/circle-alert.svg")
         : (root.variant == "info"
             ? @image-url("../assets/icons/info.svg")
-            : @image-url("../assets/icons/triangle-alert.svg"));
+            : (root.variant == "success"
+                ? @image-url("../assets/icons/circle-check-big.svg")
+                : @image-url("../assets/icons/triangle-alert.svg")));
 
     border-radius: 8px;
     background: root.bg;

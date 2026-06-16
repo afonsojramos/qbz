@@ -3859,6 +3859,12 @@ export global PlaylistImportActions {
 // auto-detects DACs (pw-dump, Slice 0), generates copy-paste config, and runs
 // an in-app playback test reading the real negotiated rate (N6, Slice 8b).
 
+// A "you're missing X" fix for the check step: a caption + a copy-paste command.
+export struct RemediationRow {
+    caption: string,
+    command: string,
+}
+
 // One enumerated sink the user can pick to configure.
 export struct DacCandidateRow {
     id: string,            // PipeWire node.name (the value the user used to paste)
@@ -3878,11 +3884,19 @@ export global DacWizardState {
     // welcome
     in-out property <bool> welcome-confirmed: false;
 
-    // check (Slice 6): distro auto-detected, override always visible (Decision 4)
+    // check (Slice 6): distro + init both auto-detected, both overridable
+    // (distro → package manager, init → service commands; they're orthogonal).
     in-out property <[string]> distro-options: [];
     in-out property <int> distro-index: 0;
+    in-out property <[string]> init-options: [];
+    in-out property <int> init-index: 0;
     in-out property <bool> health-ok: false;
     in-out property <string> health-summary: "";
+    in-out property <[RemediationRow]> remediations: [];
+    // In a Flatpak/Snap sandbox QBZ can't inspect the host stack, so it shows
+    // reference setup commands + an info notice instead of a health verdict.
+    in-out property <bool> sandboxed: false;
+    in-out property <string> sandbox-name: "";
 
     // select-dacs (Slice 7)
     in-out property <[DacCandidateRow]> candidates: [];
@@ -3898,8 +3912,11 @@ export global DacWizardState {
 }
 
 export global DacWizardActions {
-    // Wired in Rust from Slice 6 onward (crate::dac_wizard); navigation
-    // (open/close/next/back) is handled inline in the modal via state mutation.
+    // Wired in Rust (crate::dac_wizard); plain step nav (back/close) stays
+    // inline in the modal via state mutation.
+    callback open();                 // open + detect distro/init + run health probe
+    callback set-distro(int);        // recompute remediations for the chosen distro
+    callback set-init(int);          // recompute service commands for the chosen init
     callback copy-command(string);   // → crate::share::copy_to_clipboard
     callback run-detect();           // enumerate sinks → candidates (Slice 7)
     callback query-caps(string);     // probe one DAC's rates (Slice 7)

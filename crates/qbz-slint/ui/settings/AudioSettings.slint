@@ -6,7 +6,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { SettingsState, DacWizardState } from "../state.slint";
+import { SettingsState, DacWizardActions } from "../state.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
@@ -292,9 +292,7 @@ export component AudioSettings inherits VerticalLayout {
             wizard-ta := TouchArea {
                 mouse-cursor: pointer;
                 clicked => {
-                    DacWizardState.open = true;
-                    DacWizardState.step = 0;
-                    DacWizardState.welcome-confirmed = false;
+                    DacWizardActions.open();
                 }
             }
         }

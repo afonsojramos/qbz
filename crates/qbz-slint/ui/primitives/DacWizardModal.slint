@@ -11,11 +11,14 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { DacWizardState } from "../state.slint";
+import { DacWizardState, DacWizardActions } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { QbzPrimaryButton } from "QbzPrimaryButton.slint";
 import { SecondaryButton } from "SecondaryButton.slint";
 import { QbzCheckbox } from "QbzCheckbox.slint";
+import { QbzSelect } from "QbzSelect.slint";
+import { CommandBlock } from "CommandBlock.slint";
+import { WarningBanner } from "WarningBanner.slint";
 
 // Temporary titled placeholder for steps not yet built. Removed as each step
 // lands (Slices 6/7/9/10).
@@ -206,9 +209,77 @@ export component DacWizardModal inherits Rectangle {
                         }
 
                         // ── Steps 1..5: placeholders (filled by later slices)
-                        if DacWizardState.step == 1: StepPlaceholder {
-                            title: @tr("Check Audio Stack");
-                            note: @tr("Auto-probes PipeWire / WirePlumber and surfaces only the packages you are missing (Slice 6).");
+                        // ── Step 1: check audio stack ────────────────────
+                        if DacWizardState.step == 1: VerticalLayout {
+                            spacing: 14px;
+                            Text {
+                                text: @tr("Check Audio Stack");
+                                color: Theme.text-primary;
+                                font-size: Typography.heading;
+                                font-weight: Typography.semibold;
+                            }
+                            // Sandboxed (Flatpak/Snap): can't probe the host —
+                            // show an info notice + reference commands instead.
+                            if DacWizardState.sandboxed: WarningBanner {
+                                variant: "info";
+                                title: @tr("Sandboxed — host check unavailable");
+                                body: @tr("QBZ is packaged as Flatpak/Snap and can't inspect your host audio stack. If playback already works, you're set. Pick your distribution and init system below for the right setup commands.");
+                            }
+                            if !DacWizardState.sandboxed && DacWizardState.health-ok: WarningBanner {
+                                variant: "success";
+                                title: @tr("Audio stack ready");
+                                body: DacWizardState.health-summary;
+                            }
+                            if !DacWizardState.sandboxed && !DacWizardState.health-ok: WarningBanner {
+                                variant: "warning";
+                                title: @tr("Some packages are missing");
+                                body: DacWizardState.health-summary;
+                            }
+                            // Distro — auto-detected, always overridable (Decision 4).
+                            VerticalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: @tr("Your distribution");
+                                    color: Theme.text-secondary;
+                                    font-size: Typography.legal;
+                                    font-weight: Typography.medium;
+                                }
+                                QbzSelect {
+                                    options: DacWizardState.distro-options;
+                                    current-index: DacWizardState.distro-index;
+                                    menu-width: 360px;
+                                    selected(i) => {
+                                        DacWizardActions.set-distro(i);
+                                    }
+                                }
+                            }
+                            // Init system — auto-detected at runtime; override to
+                            // generate service commands for another machine.
+                            VerticalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: @tr("Init system (service commands)");
+                                    color: Theme.text-secondary;
+                                    font-size: Typography.legal;
+                                    font-weight: Typography.medium;
+                                }
+                                QbzSelect {
+                                    options: DacWizardState.init-options;
+                                    current-index: DacWizardState.init-index;
+                                    menu-width: 240px;
+                                    selected(i) => {
+                                        DacWizardActions.set-init(i);
+                                    }
+                                }
+                            }
+                            // One copy-paste fix per missing piece (empty when ready).
+                            for r in DacWizardState.remediations: CommandBlock {
+                                caption: r.caption;
+                                command: r.command;
+                                copy => {
+                                    DacWizardActions.copy-command(r.command);
+                                }
+                            }
                         }
                         if DacWizardState.step == 2: StepPlaceholder {
                             title: @tr("Which DACs do you want to configure?");

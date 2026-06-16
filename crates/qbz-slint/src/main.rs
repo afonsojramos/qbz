@@ -31,6 +31,7 @@ mod favorites;
 mod favorites_prefs;
 mod foryou;
 mod genre_filter;
+mod dac_wizard;
 mod home;
 mod immersive;
 mod info_modals;
@@ -11305,6 +11306,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 });
+            });
+    }
+
+    // ---- HiFi Wizard (DAC setup) — Slice 6 (check step) ----
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.global::<DacWizardActions>().on_open(move || {
+            let Some(w) = weak.upgrade() else {
+                return;
+            };
+            dac_wizard::open_immediate(&w);
+            // Probe the audio stack off the UI thread; fill the check step when done.
+            let weak2 = w.as_weak();
+            handle.spawn_blocking(move || {
+                let health = qbz_audio::audio_stack_health();
+                let _ = weak2.upgrade_in_event_loop(move |w| {
+                    dac_wizard::apply_health(&w, health);
+                });
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<DacWizardActions>()
+            .on_set_distro(move |index| {
+                if let Some(w) = weak.upgrade() {
+                    dac_wizard::set_distro(&w, index);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<DacWizardActions>().on_set_init(move |index| {
+            if let Some(w) = weak.upgrade() {
+                dac_wizard::set_init(&w, index);
+            }
+        });
+    }
+    {
+        window
+            .global::<DacWizardActions>()
+            .on_copy_command(move |cmd| {
+                share::copy_to_clipboard(cmd.to_string());
             });
     }
 
