@@ -39,6 +39,7 @@ pub mod pulse_backend;
 pub mod jack_backend;
 pub mod alsa_direct;
 pub mod coreaudio_direct;
+pub mod dac_probe;
 pub mod analysis;
 pub mod analyzer_tap;
 pub mod device_filter;
@@ -69,6 +70,7 @@ pub use backend::{
     BackendManager, BackendResult, BitPerfectMode,
 };
 pub use coreaudio_direct::CoreAudioExclusiveGuard;
+pub use dac_probe::{negotiated_stream_rate, NegotiatedRate};
 pub use device_reservation::{DeviceReservation, ReservationError};
 pub use diagnostic::{AudioDiagnostic, BitDepthResult, DiagnosticSource};
 pub use dynamic_amplify::DynamicAmplify;
