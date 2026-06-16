@@ -1,0 +1,64 @@
+// WarningBanner — a colored info / warning / error notice (HiFi wizard).
+//
+// variant ∈ {"info","warning","error"}; the tone drives the icon, the 10%
+// alpha background and the 30% alpha border (matching the existing inline
+// banners in PlaylistImportModal). Title + body both wrap; either can be "".
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { QbzIcon } from "QbzIcon.slint";
+
+export component WarningBanner inherits Rectangle {
+    in property <string> title: "";
+    in property <string> body: "";
+    in property <string> variant: "warning";
+
+    property <color> tone: root.variant == "error" ? #ef4444
+        : (root.variant == "info" ? #3b82f6 : #eab308);
+    property <color> bg: root.variant == "error" ? #ef44441a
+        : (root.variant == "info" ? #3b82f61a : #eab3081a);
+    property <color> brd: root.variant == "error" ? #ef44444d
+        : (root.variant == "info" ? #3b82f64d : #eab3084d);
+    property <image> glyph: root.variant == "error"
+        ? @image-url("../assets/icons/circle-alert.svg")
+        : (root.variant == "info"
+            ? @image-url("../assets/icons/info.svg")
+            : @image-url("../assets/icons/triangle-alert.svg"));
+
+    border-radius: 8px;
+    background: root.bg;
+    border-width: 1px;
+    border-color: root.brd;
+    height: row.preferred-height;
+
+    row := HorizontalLayout {
+        padding: 12px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: start;
+            QbzIcon {
+                source: root.glyph;
+                width: 16px;
+                height: 16px;
+                tint: root.tone;
+            }
+        }
+        VerticalLayout {
+            spacing: 3px;
+            horizontal-stretch: 1;
+            if root.title != "": Text {
+                text: root.title;
+                color: root.tone;
+                font-size: Typography.legal;
+                font-weight: Typography.semibold;
+                wrap: word-wrap;
+            }
+            if root.body != "": Text {
+                text: root.body;
+                color: Theme.text-secondary;
+                font-size: Typography.legal;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
