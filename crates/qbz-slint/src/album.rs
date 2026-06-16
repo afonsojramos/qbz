@@ -437,6 +437,7 @@ pub fn reset_album(window: &AppWindow) {
     state.set_selected_count(0);
     state.set_tracks(ModelRc::new(VecModel::from(Vec::<TrackItem>::new())));
     state.set_artwork(slint::Image::default());
+    state.set_header_atmosphere(slint::Image::default());
     // Clear the booklet gate so the previous album's value doesn't linger.
     state.set_has_booklet(false);
     state.set_album_fully_cached(false);
@@ -555,6 +556,11 @@ pub fn apply_artwork(window: &AppWindow, pixels: &[u8], width: u32, height: u32)
     let state = window.global::<AlbumState>();
     state.set_artwork(slint::Image::from_rgba8(buffer));
     state.set_header_color(slint::Color::from_rgb_u8(r, g, b));
+    if let Some(atmosphere) = crate::immersive::generate_atmosphere_image(pixels, width, height) {
+        state.set_header_atmosphere(atmosphere);
+    } else {
+        state.set_header_atmosphere(slint::Image::default());
+    }
 }
 
 #[cfg(test)]

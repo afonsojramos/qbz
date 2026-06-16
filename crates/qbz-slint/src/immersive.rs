@@ -21,6 +21,19 @@ pub fn generate_atmosphere(pixels: &[u8], width: u32, height: u32) -> Option<(Ve
     Some((final_img.into_raw(), 128, 128))
 }
 
+/// Static Slint image for album/artist headers that reuse Immersive's blurred
+/// artwork atmosphere without mounting the animated full-screen scene.
+pub fn generate_atmosphere_image(pixels: &[u8], width: u32, height: u32) -> Option<slint::Image> {
+    let (bg_pixels, bg_w, bg_h) = generate_atmosphere(pixels, width, height)?;
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(bg_w, bg_h);
+    let dst = buffer.make_mut_bytes();
+    if dst.len() != bg_pixels.len() {
+        return None;
+    }
+    dst.copy_from_slice(&bg_pixels);
+    Some(slint::Image::from_rgba8(buffer))
+}
+
 /// AlbumReactive glow color: the most saturated non-extreme 8x8 sample.
 pub fn glow_color(pixels: &[u8], width: u32, height: u32) -> Color {
     let Some(src) = RgbaImage::from_raw(width, height, pixels.to_vec()) else {

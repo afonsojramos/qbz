@@ -406,7 +406,9 @@ export global AlbumState {
     // tracks keep priority. Falls back to the full short text when there's room.
     in property <string> description-shorter;
     in property <image> artwork;
-    // Artwork-derived tint for the header gradient.
+    // Static Immersive-style blurred artwork field for the header backdrop.
+    in property <image> header-atmosphere;
+    // Artwork-derived tint for the header fallback gradient.
     in property <color> header-color: #181820;
     in property <string> label;
     // Label id for the sidebar label card → label page navigation ("" = none).
@@ -2664,7 +2666,9 @@ export global ArtistState {
     // "Source: <name>" line under the Read more toggle when present.
     in property <string> bio-source;
     in property <image> artwork;
-    // Artwork-derived tint for the header gradient.
+    // Static Immersive-style blurred artwork field for the header backdrop.
+    in property <image> header-atmosphere;
+    // Artwork-derived tint for the header fallback gradient.
     in property <color> header-color: #181820;
     in property <[TrackItem]> top-tracks: [];
     // Popular Tracks multi-select (track selection) mode + selected count —

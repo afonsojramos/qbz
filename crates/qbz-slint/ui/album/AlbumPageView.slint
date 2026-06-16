@@ -24,6 +24,7 @@ import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
+import { ImmersiveAtmosphere } from "../immersive/ImmersiveAtmosphere.slint";
 
 // One label/award entry in the album sidebar — a round gradient avatar
 // and a name. In `compact` mode the name is dropped (the rail is an
@@ -145,16 +146,40 @@ export component AlbumPageView inherits Rectangle {
         changed viewport-height => { self.sr-restore(); }
         changed viewport-y => { NavState.report-scroll(self.viewport-y); }
 
-        // Artwork-tinted gradient behind the header; scrolls with content.
-        Rectangle {
+        // Static Immersive-style blurred artwork field behind the header;
+        // scrolls with content. The old tint gradient remains the fallback
+        // until artwork decoding finishes.
+        if AlbumState.header-atmosphere.width > 0: ImmersiveAtmosphere {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 340px;
+            height: 360px;
+            source-image: AlbumState.header-atmosphere;
+            fallback-image: AlbumState.artwork;
+            animated: false;
+            dim: 0.24;
+            base-opacity: 0.92;
+            warp-opacity: 0.38;
+        }
+        if AlbumState.header-atmosphere.width <= 0: Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: 360px;
             background: @linear-gradient(180deg,
                 AlbumState.header-color 0%,
                 AlbumState.header-color 16%,
                 transparent 100%);
+        }
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: 360px;
+            background: @linear-gradient(180deg,
+                transparent 0%,
+                transparent 58%,
+                Theme.surface-main 100%);
         }
 
         page := VerticalLayout {

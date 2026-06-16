@@ -699,6 +699,7 @@ pub fn reset_artist(window: &AppWindow) {
     state.set_similar_artists(ModelRc::new(VecModel::from(Vec::<SimilarEntry>::new())));
     state.set_jump_tabs(ModelRc::new(VecModel::from(Vec::<JumpNavTab>::new())));
     state.set_artwork(slint::Image::default());
+    state.set_header_atmosphere(slint::Image::default());
     state.set_name("".into());
     state.set_bio("".into());
     state.set_bio_source("".into());
@@ -795,6 +796,11 @@ pub fn apply_artwork(window: &AppWindow, pixels: &[u8], width: u32, height: u32)
     let state = window.global::<ArtistState>();
     state.set_artwork(slint::Image::from_rgba8(buffer));
     state.set_header_color(slint::Color::from_rgb_u8(r, g, b));
+    if let Some(atmosphere) = crate::immersive::generate_atmosphere_image(pixels, width, height) {
+        state.set_header_atmosphere(atmosphere);
+    } else {
+        state.set_header_atmosphere(slint::Image::default());
+    }
 }
 
 // ----- MusicBrainz network sidebar ---------------------------------------

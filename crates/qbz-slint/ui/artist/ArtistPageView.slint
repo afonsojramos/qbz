@@ -33,6 +33,7 @@ import { ReleaseGrid } from "ReleaseGrid.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { JumpNavBar, JumpNavTab } from "../primitives/JumpNavBar.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
+import { ImmersiveAtmosphere } from "../immersive/ImmersiveAtmosphere.slint";
 
 component SectionTitle inherits Text {
     color: Theme.text-primary;
@@ -167,16 +168,40 @@ export component ArtistPageView inherits Rectangle {
         changed viewport-height => { self.sr-restore(); }
         changed viewport-y => { NavState.report-scroll(self.viewport-y); }
 
-        // Artwork-tinted gradient behind the header; scrolls with content.
-        Rectangle {
+        // Static Immersive-style blurred artwork field behind the header;
+        // scrolls with content. The old tint gradient remains the fallback
+        // until artwork decoding finishes.
+        if ArtistState.header-atmosphere.width > 0: ImmersiveAtmosphere {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 340px;
+            height: 360px;
+            source-image: ArtistState.header-atmosphere;
+            fallback-image: ArtistState.artwork;
+            animated: false;
+            dim: 0.24;
+            base-opacity: 0.92;
+            warp-opacity: 0.38;
+        }
+        if ArtistState.header-atmosphere.width <= 0: Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: 360px;
             background: @linear-gradient(180deg,
                 ArtistState.header-color 0%,
                 ArtistState.header-color 16%,
                 transparent 100%);
+        }
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: 360px;
+            background: @linear-gradient(180deg,
+                transparent 0%,
+                transparent 58%,
+                Theme.surface-main 100%);
         }
 
         page := VerticalLayout {
