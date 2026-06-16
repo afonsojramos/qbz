@@ -11446,8 +11446,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let weak2 = weak.clone();
             handle.spawn_blocking(move || {
                 let player = runtime.core().player();
-                let req_rate = player.get_sample_rate();
-                let req_bits = player.get_bit_depth();
+                let req_rate = player.state.get_sample_rate();
+                let req_bits = player.state.get_bit_depth();
                 let negotiated = dac_wizard::test_node()
                     .and_then(|n| qbz_audio::negotiated_stream_rate(&n));
                 let _ = weak2.upgrade_in_event_loop(move |w| {
