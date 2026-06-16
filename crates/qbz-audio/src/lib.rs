@@ -74,7 +74,9 @@ pub use backend::{
 pub use coreaudio_direct::CoreAudioExclusiveGuard;
 pub use dac_capabilities::{query_dac_capabilities, DacCapabilities};
 pub use dac_probe::{negotiated_stream_rate, NegotiatedRate};
-pub use health::{audio_stack_health, detect_distro, AudioStackHealth, Distro};
+pub use health::{
+    audio_stack_health, detect_distro, detect_init, AudioStackHealth, Distro, InitSystem,
+};
 pub use device_reservation::{DeviceReservation, ReservationError};
 pub use diagnostic::{AudioDiagnostic, BitDepthResult, DiagnosticSource};
 pub use dynamic_amplify::DynamicAmplify;

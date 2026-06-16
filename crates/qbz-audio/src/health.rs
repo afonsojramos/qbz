@@ -69,41 +69,108 @@ pub fn audio_stack_health() -> AudioStackHealth {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Distro {
     Debian,
+    /// Debian-based but systemd-free (sysVinit/runit).
+    Antix,
     Fedora,
     Arch,
+    /// Arch-based but systemd-free (OpenRC/runit/s6/dinit).
+    Artix,
     OpenSuse,
     Gentoo,
     Void,
+    /// Declarative — packages live in configuration.nix, init is systemd.
+    NixOS,
     Other,
 }
 
 impl Distro {
-    /// Dropdown order (index = position here).
-    pub const ALL: [Distro; 7] = [
+    /// Dropdown order (index = position here). `Other` stays last.
+    pub const ALL: [Distro; 10] = [
         Distro::Debian,
+        Distro::Antix,
         Distro::Fedora,
         Distro::Arch,
+        Distro::Artix,
         Distro::OpenSuse,
         Distro::Gentoo,
         Distro::Void,
+        Distro::NixOS,
         Distro::Other,
     ];
 
     pub fn index(self) -> usize {
-        Self::ALL.iter().position(|&d| d == self).unwrap_or(6)
+        Self::ALL
+            .iter()
+            .position(|&d| d == self)
+            .unwrap_or(Self::ALL.len() - 1)
     }
 
-    /// Human label for the dropdown (mirrors the Tauri DistroSelector).
+    /// Human label for the dropdown (mirrors the Tauri DistroSelector, plus the
+    /// systemd-free families called out so the init-aware commands make sense).
     pub fn label(self) -> &'static str {
         match self {
             Distro::Debian => "Ubuntu / Debian / Mint / Pop!_OS",
+            Distro::Antix => "antiX (systemd-free Debian)",
             Distro::Fedora => "Fedora / RHEL",
             Distro::Arch => "Arch / Manjaro / EndeavourOS",
+            Distro::Artix => "Artix (systemd-free Arch)",
             Distro::OpenSuse => "openSUSE",
             Distro::Gentoo => "Gentoo / Funtoo",
             Distro::Void => "Void Linux",
+            Distro::NixOS => "NixOS",
             Distro::Other => "Other",
         }
+    }
+}
+
+/// The running init / service manager. Detected at RUNTIME — it is orthogonal
+/// to the distro (Gentoo runs OpenRC *or* systemd; Debian runs systemd or
+/// sysVinit/runit on antiX), so service commands must key off this, not the
+/// distro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitSystem {
+    Systemd,
+    OpenRc,
+    Runit,
+    S6,
+    Dinit,
+    Unknown,
+}
+
+/// Detect the running init system. The `/run/systemd/system` check is the
+/// canonical `sd_booted()` test; the others mirror each supervisor's runtime
+/// dir, with a `/proc/1/comm` fallback.
+pub fn detect_init() -> InitSystem {
+    use std::path::Path;
+    if Path::new("/run/systemd/system").exists() {
+        return InitSystem::Systemd;
+    }
+    if Path::new("/run/openrc").exists() {
+        return InitSystem::OpenRc;
+    }
+    if Path::new("/run/runit").exists() || Path::new("/etc/runit").exists() {
+        return InitSystem::Runit;
+    }
+    if Path::new("/run/s6-rc").exists() || Path::new("/run/s6").exists() {
+        return InitSystem::S6;
+    }
+    if Path::new("/run/dinitctl").exists() {
+        return InitSystem::Dinit;
+    }
+    std::fs::read_to_string("/proc/1/comm")
+        .map(|c| parse_init_from_comm(c.trim()))
+        .unwrap_or(InitSystem::Unknown)
+}
+
+/// Pure classifier for PID 1's `comm` (testable fallback path).
+fn parse_init_from_comm(comm: &str) -> InitSystem {
+    match comm {
+        "systemd" => InitSystem::Systemd,
+        "openrc-init" | "openrc" => InitSystem::OpenRc,
+        "runit" | "runsvdir" | "runit-init" => InitSystem::Runit,
+        "s6-svscan" | "s6-linux-init" => InitSystem::S6,
+        "dinit" => InitSystem::Dinit,
+        _ => InitSystem::Unknown,
     }
 }
 
@@ -129,7 +196,16 @@ fn parse_distro(os_release: &str) -> Distro {
     }
     let hay = format!("{} {}", id, id_like);
     let has = |needle: &str| hay.contains(needle);
-    if has("ubuntu") || has("debian") || has("mint") || has("pop") {
+    // Systemd-free derivatives MUST be matched before their parent family —
+    // antiX has ID_LIKE=debian and Artix has ID_LIKE=arch, so the generic
+    // checks below would otherwise swallow them and emit systemd commands.
+    if has("antix") {
+        Distro::Antix
+    } else if has("artix") {
+        Distro::Artix
+    } else if has("nixos") {
+        Distro::NixOS
+    } else if has("ubuntu") || has("debian") || has("mint") || has("pop") {
         Distro::Debian
     } else if has("fedora") || has("rhel") || has("centos") {
         Distro::Fedora
@@ -175,8 +251,28 @@ mod tests {
         // Gentoo's real os-release single-quotes the value.
         assert_eq!(parse_distro("ID='gentoo'\n"), Distro::Gentoo);
         assert_eq!(parse_distro("ID=void\n"), Distro::Void);
-        assert_eq!(parse_distro("ID=nixos\n"), Distro::Other);
+        assert_eq!(parse_distro("ID=slackware\n"), Distro::Other);
         assert_eq!(parse_distro(""), Distro::Other);
+    }
+
+    #[test]
+    fn systemd_free_derivatives_beat_their_parent_family() {
+        // antiX: ID=antix, ID_LIKE=debian — must NOT classify as Debian.
+        assert_eq!(parse_distro("ID=antix\nID_LIKE=debian\n"), Distro::Antix);
+        // Artix: ID=artix, ID_LIKE=arch — must NOT classify as Arch.
+        assert_eq!(parse_distro("ID=artix\nID_LIKE=arch\n"), Distro::Artix);
+        // NixOS: ID=nixos.
+        assert_eq!(parse_distro("ID=nixos\nID_LIKE=\"\"\n"), Distro::NixOS);
+    }
+
+    #[test]
+    fn classifies_init_from_pid1_comm() {
+        assert_eq!(parse_init_from_comm("systemd"), InitSystem::Systemd);
+        assert_eq!(parse_init_from_comm("openrc-init"), InitSystem::OpenRc);
+        assert_eq!(parse_init_from_comm("runit"), InitSystem::Runit);
+        assert_eq!(parse_init_from_comm("s6-svscan"), InitSystem::S6);
+        assert_eq!(parse_init_from_comm("dinit"), InitSystem::Dinit);
+        assert_eq!(parse_init_from_comm("busybox"), InitSystem::Unknown);
     }
 
     #[test]
