@@ -6,7 +6,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { SettingsState } from "../state.slint";
+import { SettingsState, DacWizardState } from "../state.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
@@ -265,6 +265,37 @@ export component AudioSettings inherits VerticalLayout {
             toggled(v) => {
                 SettingsState.skip-sink-switch = v;
                 root.settings-bool("skip-sink-switch", v);
+            }
+        }
+    }
+
+    // HiFi Wizard — guided DAC setup (PipeWire only, mirrors the Tauri gate).
+    if SettingsState.backend-is-pipewire: GroupHeader { text: @tr("DAC SETUP"); }
+    if SettingsState.backend-is-pipewire: SettingRow {
+        label: @tr("HiFi Wizard");
+        description: @tr("Auto-detect your DACs and set up bit-perfect playback, step by step.");
+        wizard-btn := Rectangle {
+            width: 160px;
+            height: 34px;
+            border-radius: Radius.sm;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            background: wizard-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+            Text {
+                text: @tr("Open Wizard");
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                font-weight: Typography.medium;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            wizard-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    DacWizardState.open = true;
+                    DacWizardState.step = 0;
+                    DacWizardState.welcome-confirmed = false;
+                }
             }
         }
     }

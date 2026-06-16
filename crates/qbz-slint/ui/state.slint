@@ -3851,3 +3851,58 @@ export global PlaylistImportActions {
     // Step B: import_public_playlist(...) with rename + folder choice.
     callback execute();
 }
+
+// ── HiFi Wizard (DAC setup) ─────────────────────────────────────────────
+// Native-Slint port + redesign of the Tauri DACSetupWizard. 6-step adaptive
+// flow: welcome → check → select-dacs → review-and-apply → test → done.
+// READ-ONLY by contract: the wizard never writes a system audio config — it
+// auto-detects DACs (pw-dump, Slice 0), generates copy-paste config, and runs
+// an in-app playback test reading the real negotiated rate (N6, Slice 8b).
+
+// One enumerated sink the user can pick to configure.
+export struct DacCandidateRow {
+    id: string,            // PipeWire node.name (the value the user used to paste)
+    description: string,   // pretty name, e.g. "DacMagic Plus Analog Stereo"
+    bus: string,           // "usb" | "pci" | "bluetooth" | ""
+    is-default: bool,      // current system default sink
+    looks-like-dac: bool,  // hardware && bus ∈ {usb,pci} → pre-selected
+    checked: bool,         // user selection
+    rates-label: string,   // pre-filled supported rates, e.g. "44.1 / 96 / 192 kHz"
+}
+
+export global DacWizardState {
+    in-out property <bool> open: false;
+    // 0 welcome · 1 check · 2 select-dacs · 3 review · 4 test · 5 done
+    in-out property <int> step: 0;
+
+    // welcome
+    in-out property <bool> welcome-confirmed: false;
+
+    // check (Slice 6): distro auto-detected, override always visible (Decision 4)
+    in-out property <[string]> distro-options: [];
+    in-out property <int> distro-index: 0;
+    in-out property <bool> health-ok: false;
+    in-out property <string> health-summary: "";
+
+    // select-dacs (Slice 7)
+    in-out property <[DacCandidateRow]> candidates: [];
+    in-out property <bool> has-enumeration: true;   // false → manual escape hatch
+    in-out property <string> manual-node-name: "";
+    in-out property <bool> manual-valid: false;
+
+    // test (Slice 9): live read-back lines, set by the controller
+    in-out property <string> test-requested-label: "";   // "QBZ requesting 96000 Hz · 24-bit"
+    in-out property <string> test-negotiated-label: "";   // "DAC running at 96000 Hz" (N6)
+    in-out property <bool> test-rate-matched: false;
+    in-out property <bool> test-playing: false;
+}
+
+export global DacWizardActions {
+    // Wired in Rust from Slice 6 onward (crate::dac_wizard); navigation
+    // (open/close/next/back) is handled inline in the modal via state mutation.
+    callback copy-command(string);   // → crate::share::copy_to_clipboard
+    callback run-detect();           // enumerate sinks → candidates (Slice 7)
+    callback query-caps(string);     // probe one DAC's rates (Slice 7)
+    callback start-test();           // queue + play the 4 test tracks (Slice 9)
+    callback stop-test();
+}

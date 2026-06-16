@@ -31,6 +31,7 @@ import { FolderEditModal } from "../primitives/FolderEditModal.slint";
 import { LibFolderEditModal } from "../settings/LibFolderEditModal.slint";
 import { TagEditorModal } from "../primitives/TagEditorModal.slint";
 import { PlaylistImportModal } from "../primitives/PlaylistImportModal.slint";
+import { DacWizardModal } from "../primitives/DacWizardModal.slint";
 import { TrackInfoModal } from "../album/TrackInfoModal.slint";
 import { AlbumCreditsModal } from "../album/AlbumCreditsModal.slint";
 import { ImmersiveView } from "../immersive/ImmersiveView.slint";
@@ -489,6 +490,10 @@ export component AppShell inherits Rectangle {
     // declaration-order z; ADR-010 conditional mount via the global's
     // `open`), keeping QconnectDevModal topmost.
     PlaylistImportModal { }
+
+    // HiFi Wizard (DAC setup) — opened from Audio settings (PipeWire only).
+    // Overlay modal; playback keeps running underneath so the test step works.
+    DacWizardModal { }
 
     // Track Info + Album Info (Credits/Review) modals — fed by crate::info_modals
     // through TrackInfoState / AlbumInfoState. Conditional-mount on their own
