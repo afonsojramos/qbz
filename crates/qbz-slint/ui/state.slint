@@ -85,6 +85,21 @@ export struct SearchPlaylistItem {
     cover2: image,
     cover3: image,
     cover4: image,
+    // First tag name (uppercased accent subtag under the title; "" = none).
+    // Only the single-cover Discover playlist cards populate it.
+    category: string,
+    // Dominant colour of the single cover, filling the contain-fit letterbox
+    // on Discover playlist cards (default neutral dark; replaced once the
+    // cover decodes). Mosaic cards ignore it.
+    dominant-color: color,
+}
+
+// One selectable category tag for the Qobuz Playlists multi-select filter.
+// `name` is pre-localized by the discover-index response.
+export struct PlaylistTagItem {
+    slug: string,
+    name: string,
+    selected: bool,
 }
 
 // Discover / Home screen state.
@@ -96,6 +111,11 @@ export global HomeState {
     // Qobuz Playlists row (Home + Editor's Picks). Single-cover cards; the
     // active tab's set is swapped in by crate::home::select_tab.
     in property <[SearchPlaylistItem]> playlists: [];
+    // Category tags for the Qobuz Playlists multi-select filter (from the
+    // discover-index `playlists_tags`). Empty when the response carries none.
+    in property <[PlaylistTagItem]> playlist-tags: [];
+    // Number of currently-selected category tags (0 = show all).
+    in property <int> playlist-tag-count: 0;
     in property <bool> loading: false;
     // Active Discover tab: "home" | "editorPicks" | "forYou". The
     // three tabs draw from the same fetch; switching swaps which
@@ -103,9 +123,15 @@ export global HomeState {
     in-out property <string> active-tab: "home";
 }
 
-// Discover tab switching. Wired in main.rs to crate::home::select_tab.
+// Discover tab switching + the Qobuz Playlists category filter. Wired in
+// main.rs to crate::home.
 export global HomeActions {
     callback select-tab(string);
+    // Toggle one category tag (by slug) in/out of the playlists filter —
+    // client-side, re-filters the cached row. Empty selection = show all.
+    callback toggle-playlist-tag(string);
+    // Clear all selected category tags (back to showing every playlist).
+    callback clear-playlist-tags();
 }
 
 // ---------------------------------------------------------------------------

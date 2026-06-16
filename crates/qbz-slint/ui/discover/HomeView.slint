@@ -12,6 +12,7 @@ import { HomeState, HomeActions, DiscoverState, DiscoverActions, GenreFilterStat
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
 import { PlaylistCarousel } from "PlaylistCarousel.slint";
+import { PlaylistTagFilter } from "PlaylistTagFilter.slint";
 import { HomeSkeleton } from "HomeSkeleton.slint";
 import { ForYouView } from "ForYouView.slint";
 import { GenreFilterPopup } from "GenreFilterPopup.slint";
@@ -325,13 +326,48 @@ export component HomeView inherits Rectangle {
                     }
 
                     // Qobuz Playlists row — body=open, overlay=play (1:1 Tauri).
-                    if desc.id == "qobuzPlaylists" && HomeState.playlists.length > 0: PlaylistCarousel {
-                        title: @tr("Qobuz Playlists");
-                        playlists: HomeState.playlists;
-                        body-opens: true;
-                        show-view-all: false;
-                        media-action(kind, id, action) => {
-                            root.media-action(kind, id, action);
+                    // A category multi-select dropdown (ADR-008: no pills) sits
+                    // on the title line and filters the row client-side. Mounted
+                    // when the row has playlists OR there are category tags to
+                    // offer (so a zero-result filter can still be cleared).
+                    if desc.id == "qobuzPlaylists"
+                        && (HomeState.playlists.length > 0 || HomeState.playlist-tags.length > 0): VerticalLayout {
+                        spacing: 12px;
+
+                        // Title + filter dropdown on one line (the carousel
+                        // below renders its own paging controls, no title).
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text {
+                                text: @tr("Qobuz Playlists");
+                                color: Theme.text-primary;
+                                font-size: 18px;
+                                font-weight: Typography.semibold;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            if HomeState.playlist-tags.length > 0: VerticalLayout {
+                                alignment: center;
+                                PlaylistTagFilter { }
+                            }
+                        }
+
+                        if HomeState.playlists.length > 0: PlaylistCarousel {
+                            // Title shown on the header row above, not here.
+                            title: "";
+                            playlists: HomeState.playlists;
+                            body-opens: true;
+                            show-view-all: false;
+                            media-action(kind, id, action) => {
+                                root.media-action(kind, id, action);
+                            }
+                        }
+
+                        // Empty-result hint when a filter excludes everything.
+                        if HomeState.playlists.length == 0: Text {
+                            text: @tr("No playlists match the selected categories.");
+                            color: Theme.text-muted;
+                            font-size: 13px;
                         }
                     }
 

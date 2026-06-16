@@ -174,7 +174,13 @@ export component PlaylistCard inherits Rectangle {
 
         Rectangle { height: 6px; }
 
-        // --- Title / subtitle --------------------------------------------
+        // --- Title / subtitle line ---------------------------------------
+        // The second line is the playlist's category tag (Discover cards) OR,
+        // when there is no tag, the muted subtitle (owner / track count — used
+        // by the Search + Favorites grids). The category is an UPPERCASE accent
+        // eyebrow (uppercased in Rust; Slint has no text-transform), styled like
+        // the QbzSelect "BP"/section-header accent-caps. Mutually exclusive so
+        // the slot never doubles up.
         VerticalLayout {
             height: 40px;
             spacing: 2px;
@@ -188,7 +194,17 @@ export component PlaylistCard inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
             }
-            Text {
+            if root.playlist.category != "": Text {
+                text: root.playlist.category;
+                height: 16px;
+                color: Theme.accent;
+                font-size: 11px;
+                font-weight: Typography.semibold;
+                letter-spacing: 0.5px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.playlist.category == "": Text {
                 text: root.playlist.subtitle;
                 height: 16px;
                 color: Theme.text-muted;

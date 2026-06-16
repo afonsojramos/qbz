@@ -7854,6 +7854,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // Qobuz Playlists category filter (multi-select, client-side). Toggling /
+    // clearing a tag re-filters the cached playlists row and re-fires the
+    // artwork for the new (filtered) positions — no re-fetch.
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window
+            .global::<HomeActions>()
+            .on_toggle_playlist_tag(move |slug| {
+                if let Some(w) = weak.upgrade() {
+                    let jobs = home::toggle_playlist_tag(&w, slug.as_str());
+                    artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window
+            .global::<HomeActions>()
+            .on_clear_playlist_tags(move || {
+                if let Some(w) = weak.upgrade() {
+                    let jobs = home::clear_playlist_tags(&w);
+                    artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                }
+            });
+    }
+
     // Discover section configurator (Slice 5) — gear opens the modal; toggle /
     // move / reset mutate the per-user prefs, persist, and re-render the active
     // tab from the cache (no refetch). The mutation handlers re-fire artwork for

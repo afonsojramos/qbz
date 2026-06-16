@@ -18,8 +18,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::{
-    AlbumCardItem, AppWindow, DiscoverSection, DiscoverState, HomeState, SearchPlaylistItem,
-    SectionDescriptor, SlimItem,
+    AlbumCardItem, AppWindow, DiscoverSection, DiscoverState, HomeState, PlaylistTagItem,
+    SearchPlaylistItem, SectionDescriptor, SlimItem,
 };
 
 /// Plain, `Send` home data produced on the worker thread.
@@ -34,6 +34,9 @@ pub struct HomeData {
     pub playlists: Vec<PlaylistCardData>,
     /// Qobuz playlists row — editorPicks tab (same data, separate cache slot).
     pub editor_playlists: Vec<PlaylistCardData>,
+    /// Category tags for the Qobuz Playlists multi-select filter: (slug,
+    /// localized name). Empty when the index carries no `playlists_tags`.
+    pub playlist_tags: Vec<(String, String)>,
 }
 
 thread_local! {
@@ -49,6 +52,24 @@ struct TabSections {
     editor: Vec<SectionData>,
     home_playlists: Vec<PlaylistCardData>,
     editor_playlists: Vec<PlaylistCardData>,
+    /// Slugs of the currently-selected category tags (Qobuz Playlists filter).
+    /// Empty = show all. Client-side; survives a tab switch.
+    selected_tags: Vec<String>,
+}
+
+/// Keep only the playlists whose tag slugs intersect `selected` (union of the
+/// selected tags). An empty selection passes everything through.
+fn filter_playlists<'a>(
+    playlists: &'a [PlaylistCardData],
+    selected: &[String],
+) -> Vec<&'a PlaylistCardData> {
+    if selected.is_empty() {
+        return playlists.iter().collect();
+    }
+    playlists
+        .iter()
+        .filter(|p| p.tags.iter().any(|slug| selected.iter().any(|s| s == slug)))
+        .collect()
 }
 
 #[derive(Clone)]
@@ -101,6 +122,11 @@ pub struct PlaylistCardData {
     pub id: String,
     pub title: String,
     pub artwork_url: String, // rectangle || covers[0] || ""
+    /// First tag's localized name — the UPPERCASE accent subtag on the card
+    /// ("" = the playlist carries no tags).
+    pub category: String,
+    /// All tag slugs — the material for the client-side category filter (C).
+    pub tags: Vec<String>,
 }
 
 /// A compact ranked item for the slim grid sections.
@@ -241,15 +267,28 @@ where
         .collect();
 
     // Qobuz Playlists row — both the Home and Editor's Picks tabs draw from
-    // the SAME `containers.playlists` (one fetch); capped at 18 (Tauri's
-    // fetchDiscoverIndex(18, …)). Re-filtering on genre change is free:
-    // reload_home re-fetches the index, so no extra plumbing is needed.
+    // the SAME `containers.playlists` (one fetch). Capped at 100 (raised from
+    // Tauri's 18) so the client-side category filter has material to work with;
+    // the carousel still pages, and the un-filtered view shows the same first
+    // cards. Each card carries its tag slugs for the filter.
     let playlist_items: Vec<DiscoverPlaylist> =
         containers.playlists.map(|c| c.data.items).unwrap_or_default();
     let editor_playlists: Vec<PlaylistCardData> =
-        playlist_items.iter().cloned().take(18).map(map_playlist).collect();
+        playlist_items.iter().cloned().take(100).map(map_playlist).collect();
     let playlists: Vec<PlaylistCardData> =
-        playlist_items.into_iter().take(18).map(map_playlist).collect();
+        playlist_items.into_iter().take(100).map(map_playlist).collect();
+
+    // Category tags for the multi-select filter (slug + localized name).
+    let playlist_tags: Vec<(String, String)> = containers
+        .playlists_tags
+        .map(|c| {
+            c.data
+                .items
+                .into_iter()
+                .map(|tag| (tag.slug, tag.name))
+                .collect()
+        })
+        .unwrap_or_default();
 
     Ok(HomeData {
         sections,
@@ -259,6 +298,7 @@ where
         recent_albums,
         playlists,
         editor_playlists,
+        playlist_tags,
     })
 }
 
@@ -378,10 +418,28 @@ fn map_playlist(p: DiscoverPlaylist) -> PlaylistCardData {
         .rectangle
         .or_else(|| p.image.covers.and_then(|c| c.into_iter().next()))
         .unwrap_or_default();
+    // First tag → the UPPERCASE accent subtag; all tag slugs → the filter
+    // material. DiscoverPlaylist.tags is Option<Vec<PlaylistTag{id,slug,name}>>.
+    // Uppercased here (Slint has no text-transform; same convention as the
+    // MIXTAPE/COLLECTION eyebrow tags). The name is already localized by the
+    // API response.
+    let category = p
+        .tags
+        .as_ref()
+        .and_then(|t| t.first())
+        .map(|t| t.name.to_uppercase())
+        .unwrap_or_default();
+    let tags = p
+        .tags
+        .as_ref()
+        .map(|t| t.iter().map(|tag| tag.slug.clone()).collect())
+        .unwrap_or_default();
     PlaylistCardData {
         id: p.id.to_string(),
         title: p.name,
         artwork_url,
+        category,
+        tags,
     }
 }
 
@@ -538,6 +596,11 @@ pub(crate) fn playlist_to_item(p: &PlaylistCardData) -> SearchPlaylistItem {
         cover2: slint::Image::default(),
         cover3: slint::Image::default(),
         cover4: slint::Image::default(),
+        category: p.category.clone().into(),
+        // Neutral dark letterbox until the cover decodes and the artwork
+        // pipeline writes the real dominant colour (mirrors immersive::
+        // dominant_cover_color's own fallback).
+        dominant_color: slint::Color::from_rgb_u8(30, 30, 34),
     }
 }
 
@@ -720,8 +783,10 @@ pub fn rerender_active_tab(window: &AppWindow, prefs: &DiscoverPrefs) -> Vec<Art
     dstate.set_home_sections(ModelRc::new(VecModel::from(home)));
     dstate.set_editor_sections(ModelRc::new(VecModel::from(editor_list)));
 
-    // Re-push the active tab's Qobuz Playlists row + build the album-section
-    // artwork jobs from the same cached data (one borrow of the cache).
+    // Re-push the active tab's Qobuz Playlists row (category-filtered) + build
+    // the album-section artwork jobs from the same cached data (one borrow of
+    // the cache). The playlist artwork jobs are built from the SAME filtered
+    // slice, so their `idx` aligns with the pushed (filtered) row.
     let hstate = window.global::<HomeState>();
     let (pls, jobs) = TAB_SECTIONS.with(|cell| {
         let cache = cell.borrow();
@@ -730,13 +795,100 @@ pub fn rerender_active_tab(window: &AppWindow, prefs: &DiscoverPrefs) -> Vec<Art
         } else {
             (&cache.home, &cache.home_playlists)
         };
+        let filtered: Vec<PlaylistCardData> = filter_playlists(pls, &cache.selected_tags)
+            .into_iter()
+            .cloned()
+            .collect();
         let mut jobs = discover_section_artwork_jobs(&active_list, album_cache, editor);
-        jobs.extend(playlist_artwork_jobs(pls));
-        (pls.iter().map(playlist_to_item).collect::<Vec<_>>(), jobs)
+        jobs.extend(playlist_artwork_jobs(&filtered));
+        (
+            filtered.iter().map(playlist_to_item).collect::<Vec<_>>(),
+            jobs,
+        )
     });
     hstate.set_playlists(ModelRc::new(VecModel::from(pls)));
 
     jobs
+}
+
+/// Re-push the active tab's Qobuz Playlists row filtered by `selected_tags`,
+/// and return the artwork jobs for the (filtered) row. Shared by the toggle /
+/// clear callbacks: the selection is already updated in the cache. For You has
+/// no playlists row, so it returns no jobs.
+fn rerender_playlists_filtered(window: &AppWindow) -> Vec<ArtworkJob> {
+    let active = window.global::<DiscoverState>().get_active_tab().to_string();
+    if active == "forYou" {
+        return Vec::new();
+    }
+    let editor = active == "editorPicks";
+    let hstate = window.global::<HomeState>();
+    let (pls, jobs) = TAB_SECTIONS.with(|cell| {
+        let cache = cell.borrow();
+        let source = if editor {
+            &cache.editor_playlists
+        } else {
+            &cache.home_playlists
+        };
+        let filtered: Vec<PlaylistCardData> = filter_playlists(source, &cache.selected_tags)
+            .into_iter()
+            .cloned()
+            .collect();
+        let jobs = playlist_artwork_jobs(&filtered);
+        (
+            filtered.iter().map(playlist_to_item).collect::<Vec<_>>(),
+            jobs,
+        )
+    });
+    hstate.set_playlists(ModelRc::new(VecModel::from(pls)));
+    jobs
+}
+
+/// Toggle one category tag (by slug) in the Qobuz Playlists filter, re-filter
+/// the cached row, and return the artwork jobs for the new (filtered) row. Also
+/// updates the `playlist-tags[i].selected` flags + `playlist-tag-count` so the
+/// dropdown reflects the selection.
+pub fn toggle_playlist_tag(window: &AppWindow, slug: &str) -> Vec<ArtworkJob> {
+    let count = TAB_SECTIONS.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        if let Some(pos) = cache.selected_tags.iter().position(|s| s == slug) {
+            cache.selected_tags.remove(pos);
+        } else {
+            cache.selected_tags.push(slug.to_string());
+        }
+        cache.selected_tags.len() as i32
+    });
+    sync_tag_selection(window, count);
+    rerender_playlists_filtered(window)
+}
+
+/// Clear every selected category tag (show all playlists). Returns the artwork
+/// jobs for the now-unfiltered row.
+pub fn clear_playlist_tags(window: &AppWindow) -> Vec<ArtworkJob> {
+    TAB_SECTIONS.with(|cell| cell.borrow_mut().selected_tags.clear());
+    sync_tag_selection(window, 0);
+    rerender_playlists_filtered(window)
+}
+
+/// Mirror the cached selection onto `HomeState.playlist-tags[i].selected` and
+/// publish the selected count. Reads the selection from the cache so the two
+/// never drift.
+fn sync_tag_selection(window: &AppWindow, count: i32) {
+    use slint::Model;
+    // Snapshot the selection so the cache borrow is released before any Slint
+    // model mutation (which can synchronously re-enter Rust closures).
+    let selected: Vec<String> =
+        TAB_SECTIONS.with(|cell| cell.borrow().selected_tags.clone());
+    let model = window.global::<HomeState>().get_playlist_tags();
+    for i in 0..model.row_count() {
+        if let Some(mut item) = model.row_data(i) {
+            let is_sel = selected.iter().any(|s| s.as_str() == item.slug.as_str());
+            if item.selected != is_sel {
+                item.selected = is_sel;
+                model.set_row_data(i, item);
+            }
+        }
+    }
+    window.global::<HomeState>().set_playlist_tag_count(count);
 }
 
 /// Switch the visible Discover tab ("home" | "editorPicks" | "forYou"). Writes
@@ -769,13 +921,15 @@ pub fn apply_home(window: &AppWindow, data: HomeData) {
     let sections: Vec<DiscoverSection> = build_sections(&data.sections);
 
     // Cache the Home + Editor's Picks section sets for instant tab
-    // switching (For You has its own dedicated state/view).
+    // switching (For You has its own dedicated state/view). A fresh index
+    // load resets the category-tag selection (the tag set may have changed).
     TAB_SECTIONS.with(|cell| {
         *cell.borrow_mut() = TabSections {
             home: data.sections.clone(),
             editor: data.editor_sections.clone(),
             home_playlists: data.playlists.clone(),
             editor_playlists: data.editor_playlists.clone(),
+            selected_tags: Vec::new(),
         };
     });
 
@@ -799,9 +953,20 @@ pub fn apply_home(window: &AppWindow, data: HomeData) {
         data.recent_albums.into_iter().map(card_to_item).collect();
 
     // Push the HOME tab's Qobuz Playlists row (apply_home runs for the
-    // default Home tab; a tab switch swaps it via select_tab).
+    // default Home tab; a tab switch swaps it via select_tab). The selection
+    // was just reset, so the unfiltered full set is shown.
     let home_playlists: Vec<SearchPlaylistItem> =
         data.playlists.iter().map(playlist_to_item).collect();
+    // Category tags for the multi-select filter — all start unselected.
+    let tag_items: Vec<PlaylistTagItem> = data
+        .playlist_tags
+        .iter()
+        .map(|(slug, name)| PlaylistTagItem {
+            slug: slug.clone().into(),
+            name: name.clone().into(),
+            selected: false,
+        })
+        .collect();
 
     let state = window.global::<HomeState>();
     state.set_sections(ModelRc::new(VecModel::from(sections)));
@@ -809,6 +974,8 @@ pub fn apply_home(window: &AppWindow, data: HomeData) {
     state.set_recent(ModelRc::new(VecModel::from(recent)));
     state.set_recent_albums(ModelRc::new(VecModel::from(recent_albums)));
     state.set_playlists(ModelRc::new(VecModel::from(home_playlists)));
+    state.set_playlist_tags(ModelRc::new(VecModel::from(tag_items)));
+    state.set_playlist_tag_count(0);
 
     // Push the prefs-driven descriptor lists now that the section cache is
     // populated, so the Home/Editor render loop reflects the fresh data (the

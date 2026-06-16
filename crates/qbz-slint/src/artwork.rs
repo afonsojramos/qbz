@@ -702,6 +702,11 @@ fn apply_artwork(
             let model = home.get_playlists();
             if let Some(mut item) = model.row_data(idx) {
                 item.cover1 = image; // single cover → slot 0
+                // Single-cover Discover cards letterbox a contain-fit cover with
+                // its dominant colour (1:1 with Tauri's PlaylistCardLite). The
+                // decoded pixels are in hand here, so compute it once on apply.
+                item.dominant_color =
+                    crate::immersive::dominant_cover_color(pixels, width, height);
                 model.set_row_data(idx, item);
             }
         }
