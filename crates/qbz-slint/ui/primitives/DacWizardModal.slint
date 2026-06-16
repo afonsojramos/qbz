@@ -21,27 +21,6 @@ import { CommandBlock } from "CommandBlock.slint";
 import { WarningBanner } from "WarningBanner.slint";
 import { SelectionCheckbox } from "SelectionCheckbox.slint";
 
-// Temporary titled placeholder for steps not yet built. Removed as each step
-// lands (Slices 6/7/9/10).
-component StepPlaceholder inherits VerticalLayout {
-    in property <string> title;
-    in property <string> note;
-    spacing: 10px;
-    Text {
-        text: root.title;
-        color: Theme.text-primary;
-        font-size: Typography.heading;
-        font-weight: Typography.semibold;
-        wrap: word-wrap;
-    }
-    Text {
-        text: root.note;
-        color: Theme.text-muted;
-        font-size: Typography.body;
-        wrap: word-wrap;
-    }
-}
-
 export component DacWizardModal inherits Rectangle {
     visible: DacWizardState.open;
 
