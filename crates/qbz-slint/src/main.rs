@@ -3982,6 +3982,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window
         .global::<ShellState>()
         .set_npb_mode(crate::ui_prefs::npb_mode_index(&crate::ui_prefs::load().npb_mode));
+    window
+        .global::<AppearanceState>()
+        .set_album_header_gradient(crate::ui_prefs::load().album_header_gradient);
 
     // Tell the tray settings UI which platform it's on so it can show the
     // macOS-only controls ("Menu Bar" header, hide-Dock toggle) and hide the
@@ -4882,6 +4885,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let appearance = window.global::<AppearanceState>();
         appearance.on_appearance_bool(|key, value| match key.as_str() {
+            "album-header-gradient" => {
+                let mut prefs = crate::ui_prefs::load();
+                prefs.album_header_gradient = value;
+                crate::ui_prefs::save(&prefs);
+            }
             "tray-enable" => tray_settings::set_enable_tray(value),
             "tray-minimize-to-tray" => tray_settings::set_minimize_to_tray(value),
             "tray-close-to-tray" => tray_settings::set_close_to_tray(value),

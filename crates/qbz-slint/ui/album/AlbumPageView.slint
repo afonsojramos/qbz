@@ -9,7 +9,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
-import { AlbumState, AlbumActions, ArtworkActions, NavState, ContentView, DragState, NowPlayingState, ShellState, TooltipState } from "../state.slint";
+import { AlbumState, AlbumActions, ArtworkActions, NavState, ContentView, DragState, NowPlayingState, ShellState, TooltipState, AppearanceState } from "../state.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
@@ -147,9 +147,8 @@ export component AlbumPageView inherits Rectangle {
         changed viewport-y => { NavState.report-scroll(self.viewport-y); }
 
         // Static Immersive-style blurred artwork field behind the header;
-        // scrolls with content. The old tint gradient remains the fallback
-        // until artwork decoding finishes.
-        if AlbumState.header-atmosphere.width > 0: ImmersiveAtmosphere {
+        // scrolls with content when the appearance setting is enabled.
+        if AppearanceState.album-header-gradient && AlbumState.header-atmosphere.width > 0: ImmersiveAtmosphere {
             x: 0;
             y: 0;
             width: parent.width;
@@ -161,7 +160,7 @@ export component AlbumPageView inherits Rectangle {
             base-opacity: 0.92;
             warp-opacity: 0.38;
         }
-        if AlbumState.header-atmosphere.width <= 0: Rectangle {
+        if AppearanceState.album-header-gradient && AlbumState.header-atmosphere.width <= 0: Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
@@ -171,7 +170,7 @@ export component AlbumPageView inherits Rectangle {
                 AlbumState.header-color 16%,
                 transparent 100%);
         }
-        Rectangle {
+        if AppearanceState.album-header-gradient: Rectangle {
             x: 0;
             y: 0;
             width: parent.width;

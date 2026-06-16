@@ -37,6 +37,9 @@ pub const DEFAULT_STREAMING_QUALITY: &str = "hires_plus";
 /// Default now-playing bar layout key (`New`).
 pub const DEFAULT_NPB_MODE: &str = "new";
 
+/// Default album/artist header backdrop setting.
+pub const DEFAULT_ALBUM_HEADER_GRADIENT: bool = true;
+
 /// Persisted UI preferences. New fields must default sanely so an older
 /// file (missing the field) still deserializes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +51,9 @@ pub struct UiPrefs {
     /// `ShellState.npb-mode` (0 / 1 / 2).
     #[serde(default = "default_npb_mode")]
     pub npb_mode: String,
+    /// Whether album/artist detail headers use artwork-derived backdrops.
+    #[serde(default = "default_album_header_gradient")]
+    pub album_header_gradient: bool,
 }
 
 fn default_streaming_quality() -> String {
@@ -58,11 +64,16 @@ fn default_npb_mode() -> String {
     DEFAULT_NPB_MODE.to_string()
 }
 
+fn default_album_header_gradient() -> bool {
+    DEFAULT_ALBUM_HEADER_GRADIENT
+}
+
 impl Default for UiPrefs {
     fn default() -> Self {
         Self {
             streaming_quality: default_streaming_quality(),
             npb_mode: default_npb_mode(),
+            album_header_gradient: default_album_header_gradient(),
         }
     }
 }
@@ -156,5 +167,6 @@ mod tests {
     fn legacy_json_without_field_deserializes() {
         let prefs: UiPrefs = serde_json::from_str("{}").expect("empty object deserializes");
         assert_eq!(prefs.streaming_quality, "hires_plus");
+        assert!(prefs.album_header_gradient);
     }
 }

@@ -175,9 +175,8 @@ export component AppearanceSettings inherits VerticalLayout {
     }
 
     SettingRow {
-        unsupported: true;
         label: @tr("Album header gradient");
-        description: @tr("Use the album cover's dominant color as a backdrop in album detail views.");
+        description: @tr("Use artwork-derived blur as a backdrop in album and artist detail views.");
         QbzToggle {
             checked: AppearanceState.album-header-gradient;
             toggled(v) => {

@@ -19,6 +19,7 @@ import {
     NetworkSidebarActions,
     DragState,
     ShellState,
+    AppearanceState,
 } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
@@ -169,9 +170,8 @@ export component ArtistPageView inherits Rectangle {
         changed viewport-y => { NavState.report-scroll(self.viewport-y); }
 
         // Static Immersive-style blurred artwork field behind the header;
-        // scrolls with content. The old tint gradient remains the fallback
-        // until artwork decoding finishes.
-        if ArtistState.header-atmosphere.width > 0: ImmersiveAtmosphere {
+        // scrolls with content when the appearance setting is enabled.
+        if AppearanceState.album-header-gradient && ArtistState.header-atmosphere.width > 0: ImmersiveAtmosphere {
             x: 0;
             y: 0;
             width: parent.width;
@@ -183,7 +183,7 @@ export component ArtistPageView inherits Rectangle {
             base-opacity: 0.92;
             warp-opacity: 0.38;
         }
-        if ArtistState.header-atmosphere.width <= 0: Rectangle {
+        if AppearanceState.album-header-gradient && ArtistState.header-atmosphere.width <= 0: Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
@@ -193,7 +193,7 @@ export component ArtistPageView inherits Rectangle {
                 ArtistState.header-color 16%,
                 transparent 100%);
         }
-        Rectangle {
+        if AppearanceState.album-header-gradient: Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
