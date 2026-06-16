@@ -11491,11 +11491,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // tracks — the user plays whatever they want; the poll reads the rate.
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
         window.global::<DacWizardActions>().on_verify_own(move || {
-            if let Some(w) = weak.upgrade() {
-                dac_wizard::begin_test(&w);
-            }
-            let _ = runtime.core().resume();
+            let Some(w) = weak.upgrade() else {
+                return;
+            };
+            let runtime = runtime.clone();
+            let weak2 = w.as_weak();
+            handle.spawn(async move {
+                // Guardrail: don't start a read-back on an empty queue.
+                let (tracks, _) = runtime.core().get_all_queue_tracks().await;
+                let empty = tracks.is_empty();
+                if !empty {
+                    let _ = runtime.core().resume();
+                }
+                let _ = weak2.upgrade_in_event_loop(move |w| {
+                    if empty {
+                        dac_wizard::queue_empty_notice(&w);
+                    } else {
+                        dac_wizard::begin_test(&w);
+                    }
+                });
+            });
         });
     }
     {

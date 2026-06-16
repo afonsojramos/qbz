@@ -22,6 +22,37 @@ import { WarningBanner } from "WarningBanner.slint";
 import { SelectionCheckbox } from "SelectionCheckbox.slint";
 import { ListScrollbar } from "ListScrollbar.slint";
 
+// A whole-row-clickable checkbox (HTML <label> behavior — clicking the text
+// toggles it, not just the box). The row TouchArea sits on top of the checkbox,
+// so QbzCheckbox is display-only here (its internal toggle is shadowed).
+component CheckRow inherits Rectangle {
+    in-out property <bool> checked;
+    in property <string> label;
+    height: 28px;
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        VerticalLayout {
+            alignment: center;
+            QbzCheckbox { checked: root.checked; }
+        }
+        Text {
+            text: root.label;
+            color: Theme.text-secondary;
+            font-size: Typography.body;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.checked = !root.checked;
+        }
+    }
+}
+
 export component DacWizardModal inherits Rectangle {
     visible: DacWizardState.open;
 
@@ -185,21 +216,14 @@ export component DacWizardModal inherits Rectangle {
                                 font-size: Typography.legal;
                                 wrap: word-wrap;
                             }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
-                                // QbzCheckbox self-flips `checked` and emits
-                                // toggled(); the two-way bind syncs the state, so
-                                // no toggled handler (it would double-flip).
-                                QbzCheckbox {
-                                    checked <=> DacWizardState.welcome-confirmed;
-                                }
-                                Text {
-                                    text: @tr("I understand and accept these terms");
-                                    color: Theme.text-secondary;
-                                    font-size: Typography.body;
-                                    vertical-alignment: center;
-                                }
+                            WarningBanner {
+                                variant: "info";
+                                title: @tr("What to test with");
+                                body: @tr("The built-in test plays four tracks spanning different bit-depths and sample rates (16/44.1, 24/44.1, 24/96, 24/192) so you can see your DAC switch. If you'd rather use your own queue, add one track of each kind first so every rate is exercised.");
+                            }
+                            CheckRow {
+                                checked <=> DacWizardState.welcome-confirmed;
+                                label: @tr("I understand and accept these terms");
                             }
                         }
 
@@ -463,16 +487,9 @@ export component DacWizardModal inherits Rectangle {
                                     DacWizardActions.copy-command(DacWizardState.backup-cmd);
                                 }
                             }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
-                                QbzCheckbox { checked <=> DacWizardState.review-backup-done; }
-                                Text {
-                                    text: @tr("I created a backup");
-                                    color: Theme.text-secondary;
-                                    font-size: Typography.legal;
-                                    vertical-alignment: center;
-                                }
+                            CheckRow {
+                                checked <=> DacWizardState.review-backup-done;
+                                label: @tr("I created a backup");
                             }
                             // 2. Per-DAC config — collapsible accordions.
                             for cfg[i] in DacWizardState.dac-configs: VerticalLayout {
@@ -538,16 +555,9 @@ export component DacWizardModal inherits Rectangle {
                                     }
                                 }
                             }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
-                                QbzCheckbox { checked <=> DacWizardState.review-config-done; }
-                                Text {
-                                    text: @tr("I created the configuration files");
-                                    color: Theme.text-secondary;
-                                    font-size: Typography.legal;
-                                    vertical-alignment: center;
-                                }
+                            CheckRow {
+                                checked <=> DacWizardState.review-config-done;
+                                label: @tr("I created the configuration files");
                             }
                             // 3. Restart (init-aware).
                             CommandBlock {
@@ -557,16 +567,9 @@ export component DacWizardModal inherits Rectangle {
                                     DacWizardActions.copy-command(DacWizardState.restart-cmd);
                                 }
                             }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
-                                QbzCheckbox { checked <=> DacWizardState.review-restart-done; }
-                                Text {
-                                    text: @tr("I restarted the audio services");
-                                    color: Theme.text-secondary;
-                                    font-size: Typography.legal;
-                                    vertical-alignment: center;
-                                }
+                            CheckRow {
+                                checked <=> DacWizardState.review-restart-done;
+                                label: @tr("I restarted the audio services");
                             }
                         }
                         // ── Step 4: self-service playback test ───────────

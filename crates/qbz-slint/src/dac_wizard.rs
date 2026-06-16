@@ -516,6 +516,18 @@ pub fn end_test(window: &AppWindow) {
     window.global::<DacWizardState>().set_test_playing(false);
 }
 
+/// Guardrail: "Use my current queue" with an empty queue — show a hint instead
+/// of starting a read-back that would just sit on "Nothing playing".
+pub fn queue_empty_notice(window: &AppWindow) {
+    let st = window.global::<DacWizardState>();
+    st.set_test_playing(false);
+    st.set_test_rate_matched(false);
+    st.set_test_negotiated_label("".into());
+    st.set_test_requested_label(
+        "Your queue is empty — add some tracks first, or press Play test.".into(),
+    );
+}
+
 /// Apply one poll: the rate QBZ requested vs the DAC's real negotiated rate (N6).
 pub fn apply_poll(
     window: &AppWindow,
