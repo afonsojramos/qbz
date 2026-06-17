@@ -1,3 +1,4 @@
+pub mod artist_blacklist;
 pub mod developer;
 pub mod discover_prefs;
 pub mod download;
