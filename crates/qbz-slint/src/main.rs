@@ -104,6 +104,10 @@ mod ui_prefs;
 
 use std::sync::Arc;
 
+use i_slint_backend_winit::{
+    winit::event::{ElementState, MouseButton, WindowEvent},
+    EventResult, WinitWindowAccessor,
+};
 use slint::Model;
 
 use adapter::SlintAdapter;
@@ -575,6 +579,61 @@ fn update_nav_flags(window: &AppWindow) {
     let state = window.global::<NavState>();
     state.set_can_back(nav::can_back());
     state.set_can_forward(nav::can_forward());
+}
+
+/// Capture browser mouse buttons before Slint routes them to the topmost
+/// TouchArea, and mirror the cursor position into `ShellState` for passive
+/// hover chrome that must not install a TouchArea over interactive content.
+/// Otherwise cards/sidebar rows can swallow Back/Forward while empty chrome
+/// still works, and hover-only scrollbars cannot reliably see card hover.
+fn install_browser_mouse_nav(window: &AppWindow) {
+    let weak = window.as_weak();
+    window.window().on_winit_window_event(move |slint_window, event| {
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                let Some(window) = weak.upgrade() else {
+                    return EventResult::Propagate;
+                };
+                let position = position.to_logical::<f64>(slint_window.scale_factor() as f64);
+                let state = window.global::<ShellState>();
+                state.set_pointer_x(position.x as f32);
+                state.set_pointer_y(position.y as f32);
+                state.set_pointer_in_window(true);
+                return EventResult::Propagate;
+            }
+            WindowEvent::CursorLeft { .. } => {
+                if let Some(window) = weak.upgrade() {
+                    let state = window.global::<ShellState>();
+                    state.set_pointer_in_window(false);
+                    state.set_pointer_x(-1.0);
+                    state.set_pointer_y(-1.0);
+                }
+                return EventResult::Propagate;
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button,
+                ..
+            } => {
+                let Some(window) = weak.upgrade() else {
+                    return EventResult::Propagate;
+                };
+
+                match button {
+                    MouseButton::Back => {
+                        window.global::<NavState>().invoke_request_back();
+                        EventResult::PreventDefault
+                    }
+                    MouseButton::Forward => {
+                        window.global::<NavState>().invoke_request_forward();
+                        EventResult::PreventDefault
+                    }
+                    _ => EventResult::Propagate,
+                }
+            }
+            _ => EventResult::Propagate,
+        }
+    });
 }
 
 /// Whether the CURRENT content view is one the AppShell swaps for the
@@ -3996,6 +4055,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .select()?;
 
     let window = AppWindow::new()?;
+    install_browser_mouse_nav(&window);
     // FONT TEST (slint-mvp): render with bundled Inter 18pt. Inter is a
     // clean, screen-tuned UI face; combined with the femtovg #5177/#11335
     // text fixes this is the candidate for the final look. Flip

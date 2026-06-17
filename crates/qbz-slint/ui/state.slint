@@ -3088,6 +3088,12 @@ export global ShellState {
     // NPB responsive breakpoint AND a right panel (Queue/Lyrics) is open.
     out property <bool> content-constrained:
         root.window-width < 1366px && (root.queue-open || root.lyrics-open);
+    // Global pointer position in window coords, fed from winit. Used by
+    // hover-only chrome that must not install a TouchArea over interactive
+    // content (for example auto-hide scrollbars over album cards).
+    in-out property <bool> pointer-in-window: false;
+    in-out property <length> pointer-x: -1px;
+    in-out property <length> pointer-y: -1px;
     // Section navigation placement: the sections (Discover/Library/Local
     // Library/My QBZ) now live in the sidebar and open right-flyout menus.
     in-out property <bool> nav-in-sidebar: true;
