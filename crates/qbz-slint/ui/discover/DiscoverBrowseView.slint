@@ -10,7 +10,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { DiscoverBrowseState, DiscoverBrowseActions, GenreFilterState, GenreFilterActions, NavState } from "../state.slint";
+import { DiscoverBrowseState, DiscoverBrowseActions, GenreFilterState, GenreFilterActions, NavState, ShellState } from "../state.slint";
 import { AlbumCollectionView } from "AlbumCollectionView.slint";
 import { GenreFilterPopup } from "GenreFilterPopup.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -338,6 +338,12 @@ export component DiscoverBrowseView inherits Rectangle {
         viewport-height: flick.viewport-height;
         visible-height: flick.height;
         viewport-y <=> flick.viewport-y;
+        auto-hide: true;
+        hover-active: ShellState.pointer-in-window
+            && ShellState.pointer-x >= flick.absolute-position.x
+            && ShellState.pointer-x <= flick.absolute-position.x + flick.width
+            && ShellState.pointer-y >= flick.absolute-position.y
+            && ShellState.pointer-y <= flick.absolute-position.y + flick.height;
     }
 
     // --- Genre filter overlay --------------------------------------------

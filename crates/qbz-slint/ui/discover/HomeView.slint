@@ -8,7 +8,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { HomeState, HomeActions, DiscoverState, DiscoverActions, GenreFilterState, GenreFilterActions, NavState, ContentView } from "../state.slint";
+import { HomeState, HomeActions, DiscoverState, DiscoverActions, GenreFilterState, GenreFilterActions, NavState, ContentView, ShellState } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
 import { PlaylistCarousel } from "PlaylistCarousel.slint";
@@ -253,7 +253,7 @@ export component HomeView inherits Rectangle {
         // Wrapped in a non-layout Rectangle so the shared ListScrollbar can
         // overlay the right gutter without stealing layout space (see the
         // scrollbar homologation note in ListScrollbar.slint).
-        Rectangle {
+        scroll-host := Rectangle {
             vertical-stretch: 1;
             flick := Flickable {
             width: 100%;
@@ -455,6 +455,12 @@ export component HomeView inherits Rectangle {
                 viewport-height: flick.viewport-height;
                 visible-height: flick.height;
                 viewport-y <=> flick.viewport-y;
+                auto-hide: true;
+                hover-active: ShellState.pointer-in-window
+                    && ShellState.pointer-x >= scroll-host.absolute-position.x
+                    && ShellState.pointer-x <= scroll-host.absolute-position.x + scroll-host.width
+                    && ShellState.pointer-y >= scroll-host.absolute-position.y
+                    && ShellState.pointer-y <= scroll-host.absolute-position.y + scroll-host.height;
             }
         }
     }

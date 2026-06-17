@@ -11,6 +11,9 @@ export component ListScrollbar inherits Rectangle {
     in property <length> viewport-height;
     in property <length> visible-height;
     in-out property <length> viewport-y;
+    in property <bool> auto-hide: false;
+    in property <bool> hover-active: false;
+    property <bool> scroll-active: false;
 
     // Only meaningful when the content overflows.
     property <length> max-scroll: max(0px, root.viewport-height - root.visible-height);
@@ -19,9 +22,26 @@ export component ListScrollbar inherits Rectangle {
             ? max(48px, root.visible-height / root.viewport-height * root.height)
             : root.height;
     property <length> travel: max(0px, root.height - root.thumb-h);
+    property <bool> shown: !root.auto-hide || root.hover-active || root.scroll-active || bar-ta.has-hover || bar-ta.pressed;
+
+    changed viewport-y => {
+        if (root.auto-hide) {
+            root.scroll-active = true;
+            hide-timer.running = false;
+            hide-timer.running = true;
+        }
+    }
 
     width: 14px;
     visible: root.max-scroll > 0px;
+
+    hide-timer := Timer {
+        interval: 900ms;
+        triggered => {
+            root.scroll-active = false;
+            self.running = false;
+        }
+    }
 
     // Track.
     Rectangle {
@@ -30,6 +50,8 @@ export component ListScrollbar inherits Rectangle {
         height: 100%;
         background: #ffffff12;
         border-radius: 3px;
+        opacity: root.shown ? 1.0 : 0.0;
+        animate opacity { duration: 160ms; }
     }
 
     // Thumb.
@@ -42,7 +64,9 @@ export component ListScrollbar inherits Rectangle {
             : 0px;
         border-radius: 5px;
         background: bar-ta.has-hover || bar-ta.pressed ? #ffffff77 : #ffffff44;
+        opacity: root.shown ? 1.0 : 0.0;
         animate width { duration: 100ms; }
+        animate opacity { duration: 160ms; }
     }
 
     // Drag / click-to-position over the whole gutter — centers the

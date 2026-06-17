@@ -18,12 +18,12 @@
 // `blind-eye.svg` (TrackRow + ArtistPageView, T5/T9), used here too instead of
 // Tauri's lucide `Ban`.
 
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { BlacklistState, BlacklistActions } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 
@@ -33,11 +33,17 @@ component ArtistRow inherits Rectangle {
     in property <string> added-display;
     in property <string> notes;
     in property <bool> has-notes;
+    property <bool> hovered: ta.has-hover || rm-ta.has-hover;
     callback select();
     callback remove();
+    callback hover-changed(bool);
     height: 64px;
     border-radius: Radius.md;
-    background: ta.has-hover ? Theme.surface-elevated : Theme.surface-card;
+    background: root.hovered ? Theme.surface-elevated : Theme.surface-card;
+
+    changed hovered => {
+        root.hover-changed(self.hovered);
+    }
 
     HorizontalLayout {
         padding-left: 16px;
@@ -134,6 +140,7 @@ export component BlacklistManagerView inherits Rectangle {
     // Local modal flag (Clear-All confirmation). Lives in the view; the
     // confirm only fires BlacklistActions.clear-all on the danger button.
     property <bool> confirm-clear-open: false;
+    property <int> list-hover-rows: 0;
 
     VerticalLayout {
         padding: 24px;
@@ -450,22 +457,44 @@ export component BlacklistManagerView inherits Rectangle {
                 }
             }
 
-            // 4) The list (no virtualization — plain for over the filtered rows).
-            if !BlacklistState.loading && BlacklistState.items.length > 0: ScrollView {
-                VerticalLayout {
-                    spacing: 4px;
-                    for item in BlacklistState.items: ArtistRow {
-                        artist-name: item.artist-name;
-                        added-display: item.added-display;
-                        notes: item.notes;
-                        has-notes: item.has-notes;
-                        select => {
-                            BlacklistActions.artist-select(item.artist-id);
-                        }
-                        remove => {
-                            BlacklistActions.remove(item.artist-id);
+            // 4) The list. Use Flickable + the shared custom scrollbar so the
+            // scrollbar can reveal on list/gutter hover; std ScrollView does
+            // not expose hover-controlled scrollbar visibility.
+            if !BlacklistState.loading && BlacklistState.items.length > 0: Rectangle {
+                list-flick := Flickable {
+                    width: 100%;
+                    height: 100%;
+                    viewport-width: self.width;
+                    viewport-height: list-content.preferred-height;
+                    list-content := VerticalLayout {
+                        width: parent.width - 18px;
+                        spacing: 4px;
+                        for item in BlacklistState.items: ArtistRow {
+                            artist-name: item.artist-name;
+                            added-display: item.added-display;
+                            notes: item.notes;
+                            has-notes: item.has-notes;
+                            select => {
+                                BlacklistActions.artist-select(item.artist-id);
+                            }
+                            remove => {
+                                BlacklistActions.remove(item.artist-id);
+                            }
+                            hover-changed(h) => {
+                                root.list-hover-rows = h ? root.list-hover-rows + 1 : Math.max(0, root.list-hover-rows - 1);
+                            }
                         }
                     }
+                }
+                ListScrollbar {
+                    x: parent.width - self.width - 4px;
+                    width: 14px;
+                    height: 100%;
+                    viewport-height: list-flick.viewport-height;
+                    visible-height: list-flick.height;
+                    viewport-y <=> list-flick.viewport-y;
+                    auto-hide: true;
+                    hover-active: root.list-hover-rows > 0;
                 }
             }
         }
