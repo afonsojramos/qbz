@@ -343,7 +343,7 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
             // composer id — only performer/album-primary — so the composer leg
             // of the D-FEAT predicate is not available here. The album queue
             // builder filters off the raw `Track` (which DOES carry composer)
-            // via `qbz_core::track_blacklisted`, so play-all still honors
+            // via `track_is_blacklisted_full`, so play-all still honors
             // composer; only this row greyout is performer/album-primary-only.
             let row_artist_id = if track.artist_id.is_empty() {
                 album_artist_id.as_str()

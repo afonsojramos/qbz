@@ -2641,8 +2641,15 @@ pub fn play_album_shuffled(
                 return;
             }
         };
+        // D-FEAT: capture the album's primary artist BEFORE moving `tracks`,
+        // so the shuffle path applies the SAME album-primary fallback as
+        // play-all (fetch_album_for_play). Without it a performer-less album
+        // track on a blacklisted artist's album would survive shuffle but be
+        // dropped by play-all — an asymmetry on the same album.
+        let album_primary = Some(album.artist.id);
         let mut tracks: Vec<qbz_models::Track> =
             album.tracks.map(|container| container.items).unwrap_or_default();
+        tracks.retain(|track| !track_is_blacklisted_full(track, album_primary));
         if tracks.is_empty() {
             return;
         }
