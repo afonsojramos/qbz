@@ -116,6 +116,9 @@ pub struct TrackCard {
     pub title: String,
     pub artist: String,
     pub artist_id: String,
+    /// Composer id for the blacklist row stamp (D-FEAT: performer OR composer);
+    /// "" when the track carries no composer.
+    pub composer_id: String,
     pub album: String,
     pub album_id: String,
     pub genre: String,
@@ -404,11 +407,17 @@ fn map_track(track: Track) -> TrackCard {
         .performer
         .map(|p| (p.name, p.id.to_string()))
         .unwrap_or_default();
+    // Composer id for the blacklist row stamp (D-FEAT: performer OR composer).
+    let composer_id = track
+        .composer
+        .map(|c| c.id.to_string())
+        .unwrap_or_default();
     TrackCard {
         id: track.id.to_string(),
         title,
         artist,
         artist_id,
+        composer_id,
         album,
         album_id,
         genre,
@@ -466,7 +475,7 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
                 .map(|t| TrackItem {
                     is_blacklisted: crate::artist_blacklist::stamp_row(
                         "qobuz",
-                        &[t.artist_id.as_str()],
+                        &[t.artist_id.as_str(), t.composer_id.as_str()],
                     ),
                     id: t.id.clone().into(),
                     number: "".into(),

@@ -493,15 +493,25 @@ pub(crate) fn to_item(track: &Track) -> TrackItem {
     if let Some(v) = track.version.as_ref().filter(|v| !v.is_empty()) {
         title = format!("{title} ({v})");
     }
-    // Blacklist key: the track's performer id (pure-Qobuz playlist rows;
-    // local / Plex rows go through local_playlist::row_item, never stamped).
+    // Blacklist key: the track's performer OR composer id (pure-Qobuz playlist
+    // rows; local / Plex rows go through local_playlist::row_item, never
+    // stamped). Composer included so the row greyout matches the queue
+    // predicate (D-FEAT: performer OR composer).
     let performer_id = track
         .performer
         .as_ref()
         .map(|p| p.id.to_string())
         .unwrap_or_default();
+    let composer_id = track
+        .composer
+        .as_ref()
+        .map(|c| c.id.to_string())
+        .unwrap_or_default();
     TrackItem {
-        is_blacklisted: crate::artist_blacklist::stamp_row("qobuz", &[performer_id.as_str()]),
+        is_blacklisted: crate::artist_blacklist::stamp_row(
+            "qobuz",
+            &[performer_id.as_str(), composer_id.as_str()],
+        ),
         id: track.id.to_string().into(),
         number: "".into(),
         title: title.into(),

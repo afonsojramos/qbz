@@ -339,6 +339,12 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
             prev_disc = Some(track.disc);
             // Blacklist key: the row's own performer id, falling back to the
             // album's primary artist when the track carries none (Task 6).
+            // NOTE: the album-track row model (`TrackData`) does NOT carry a
+            // composer id — only performer/album-primary — so the composer leg
+            // of the D-FEAT predicate is not available here. The album queue
+            // builder filters off the raw `Track` (which DOES carry composer)
+            // via `qbz_core::track_blacklisted`, so play-all still honors
+            // composer; only this row greyout is performer/album-primary-only.
             let row_artist_id = if track.artist_id.is_empty() {
                 album_artist_id.as_str()
             } else {
