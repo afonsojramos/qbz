@@ -328,9 +328,12 @@ pub async fn load_search<A>(
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
-    // Plan A passes an empty blacklist; the blacklist module is migrated
-    // separately (roadmap task #9).
-    let blacklist: HashSet<u64> = HashSet::new();
+    // Blacklist filtering (featured-aware via qbz-core helpers); skipped when the feature is disabled.
+    let blacklist = if crate::artist_blacklist::is_enabled() {
+        crate::artist_blacklist::ids_snapshot()
+    } else {
+        std::collections::HashSet::new()
+    };
     let core = runtime.core();
     let (results, favs) = tokio::join!(
         core.search_all(query, &blacklist),
