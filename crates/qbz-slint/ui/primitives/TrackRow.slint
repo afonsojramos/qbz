@@ -18,7 +18,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { TrackItem, DragActions, NowPlayingState, NavState } from "../state.slint";
+import { TrackItem, DragActions, NowPlayingState, NavState, TooltipState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { TrackPlayCell } from "TrackPlayCell.slint";
 import { TrackContextMenu } from "TrackContextMenu.slint";
@@ -26,8 +26,16 @@ import { QualityBadgeFull } from "QualityBadgeFull.slint";
 
 export component TrackRow inherits Rectangle {
     in property <TrackItem> track;
-    // Fade out when the row is being removed (favorites un-favorite).
-    opacity: root.track.removing ? 0.0 : 1.0;
+    // Blacklisted rows render dimmed + INERT in place (never removed):
+    // opacity 0.4, no play/drag/menu-play/favorite/download, nav-only menu,
+    // a blacklist glyph in the number/play cell. Mirrors Tauri's
+    // `TrackRow.svelte` `.blacklisted` (opacity:0.4; cursor:not-allowed;
+    // not draggable; click/contextmenu/keydown short-circuit). This is the
+    // single shared interaction gate every blacklist surface reuses.
+    property <bool> row-inert: root.track.is-blacklisted;
+    // Fade out when the row is being removed (favorites un-favorite); a
+    // blacklisted row that isn't fading dims to 0.4.
+    opacity: root.track.removing ? 0.0 : (root.row-inert ? 0.4 : 1.0);
     animate opacity { duration: 250ms; }
     in property <int> index;
     in property <bool> show-artwork: true;
@@ -113,6 +121,10 @@ export component TrackRow inherits Rectangle {
         // if it's already the current track) — mirrors the play-cell click,
         // applied to every TrackRow across the app.
         double-clicked => {
+            // Blacklisted rows are inert — no play (Tauri click short-circuit).
+            if (root.row-inert) {
+                return;
+            }
             if (NowPlayingState.has-track && NowPlayingState.track-id == root.track.id) {
                 NowPlayingState.toggle-play();
             } else {
@@ -139,7 +151,7 @@ export component TrackRow inherits Rectangle {
             // never overflows past the "..." gutter; vertical overflow at the
             // window bottom matches the existing "..." anchor behavior.
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right
-                && root.show-menu && !root.multi-select-mode) {
+                && root.show-menu && !root.multi-select-mode && !root.row-inert) {
                 root.menu-at-pointer = true;
                 root.menu-click-x = ta.mouse-x;
                 root.menu-click-y = ta.mouse-y;
@@ -174,7 +186,8 @@ export component TrackRow inherits Rectangle {
             }
         }
         moved => {
-            if (ta.pressed && root.draggable) {
+            // Blacklisted rows are not draggable (Tauri `draggable=false`).
+            if (ta.pressed && root.draggable && !root.row-inert) {
                 if (!ta.dragging
                     && (Math.abs(root.absolute-position.x - root.x + ta.mouse-x - ta.down-x) > 6px
                      || Math.abs(root.absolute-position.y - root.y + ta.mouse-y - ta.down-y) > 6px)) {
@@ -276,10 +289,51 @@ export component TrackRow inherits Rectangle {
                     show-artwork: root.show-artwork;
                     art-size: 36px;
                     number-width: 32px;
-                    row-hovered: root.row-hovered && !root.multi-select-mode;
-                    visible: !root.multi-select-mode;
+                    row-hovered: root.row-hovered && !root.multi-select-mode && !root.row-inert;
+                    // Blacklisted rows swap the play/number cell for the
+                    // blacklist glyph below, so hide the play affordance.
+                    visible: !root.multi-select-mode && !root.row-inert;
                     play => {
+                        // Inert guard (the cell is hidden when inert, but keep
+                        // the action gated regardless).
+                        if (root.row-inert) {
+                            return;
+                        }
                         root.media-action("track", root.track.id, "play");
+                    }
+                }
+
+                // Blacklist glyph — replaces the number/play affordance on a
+                // blacklisted (dimmed, inert) row. A bare hover TouchArea drives
+                // the shared tooltip ("Artist is blacklisted") without making
+                // the cell interactive (no play). Mirrors Tauri's number-cell
+                // Ban icon with title="Artist is blacklisted" (TrackRow.svelte).
+                if root.row-inert: Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    QbzIcon {
+                        source: @image-url("../assets/icons/blind-eye.svg");
+                        width: 16px;
+                        height: 16px;
+                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                        tint: Theme.text-muted;
+                    }
+                    blacklist-ta := TouchArea {
+                        mouse-cursor: not-allowed;
+                        changed has-hover => {
+                            if (self.has-hover) {
+                                TooltipState.text = @tr("Artist is blacklisted");
+                                // Anchor on the glyph cell itself (centre-x,
+                                // top-y), matching the CircleAction tooltip
+                                // convention (window coords).
+                                TooltipState.anchor-x = self.absolute-position.x + self.width / 2;
+                                TooltipState.anchor-y = self.absolute-position.y;
+                                TooltipState.show = true;
+                            } else {
+                                TooltipState.show = false;
+                            }
+                        }
                     }
                 }
                 if root.multi-select-mode: Rectangle {
@@ -486,7 +540,7 @@ export component TrackRow inherits Rectangle {
         // Favorite — filled accent heart when favorited, outline heart
         // otherwise. Click toggles (handled in Rust, which flips
         // `is-favorite` optimistically so this updates immediately).
-        if root.show-favorite: VerticalLayout {
+        if root.show-favorite && !root.row-inert: VerticalLayout {
             alignment: center;
             Rectangle {
                 width: 28px;
@@ -514,8 +568,11 @@ export component TrackRow inherits Rectangle {
             }
         }
         // Heart-slot placeholder (column-grid alignment, see the
-        // reserve-favorite doc above).
-        if !root.show-favorite && root.reserve-favorite: Rectangle {
+        // reserve-favorite doc above). Also reserved when a show-favorite
+        // surface hides the heart on a blacklisted row, so the dimmed row
+        // keeps the same duration/quality grid as its siblings.
+        if (!root.show-favorite && root.reserve-favorite)
+            || (root.show-favorite && root.row-inert): Rectangle {
             width: 28px;
         }
         // Offline cache — a stateful affordance reflecting cache-status:
@@ -526,7 +583,7 @@ export component TrackRow inherits Rectangle {
         // Shown when the surface enables it OR the track has active state, so
         // a downloading/ready copy surfaces its status even where the button
         // isn't enabled by default.
-        if root.show-download || root.track.cache-status > 0: VerticalLayout {
+        if (root.show-download || root.track.cache-status > 0) && !root.row-inert: VerticalLayout {
             alignment: center;
             Rectangle {
                 width: 28px;
@@ -572,6 +629,12 @@ export component TrackRow inherits Rectangle {
                 }
             }
         }
+        // Offline-slot placeholder on a blacklisted row whose surface would
+        // otherwise show the offline button — keeps the dimmed row's grid
+        // aligned with its download-bearing siblings.
+        if root.row-inert && (root.show-download || root.track.cache-status > 0): Rectangle {
+            width: 28px;
+        }
 
         // Source indicator (Local Library) — a subtle per-source glyph shown
         // instead of the favorite/offline columns. local -> hard-drive
@@ -598,8 +661,11 @@ export component TrackRow inherits Rectangle {
             }
         }
 
-        // Context menu.
-        if root.show-menu: VerticalLayout {
+        // Context menu. Suppressed on a blacklisted (inert) row — Tauri's
+        // shared TrackRow short-circuits contextmenu and renders no block
+        // menu item; the per-list wrappers (VTL / Album / Playlist) do the
+        // nav-only reduction, not this shared primitive.
+        if root.show-menu && !root.row-inert: VerticalLayout {
             alignment: center;
             Rectangle {
                 width: 32px;
@@ -625,6 +691,12 @@ export component TrackRow inherits Rectangle {
                     }
                 }
             }
+        }
+        // Menu-slot placeholder on a blacklisted row whose surface has the
+        // "..." menu — keeps the dimmed row's trailing edge aligned with
+        // its interactive siblings.
+        if root.show-menu && root.row-inert: Rectangle {
+            width: 32px;
         }
     }
 

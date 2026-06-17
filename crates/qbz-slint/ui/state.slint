@@ -358,6 +358,12 @@ export struct TrackItem {
     // "qobuz" | "local" | "plex" | "" — drives the Local Library source
     // indicator (shown instead of the favorite/offline columns).
     source: string,
+    // Artist-blacklist greyout: when true the row renders dimmed + inert
+    // (no play/drag/favorite/download, nav-only menu) with a blacklist
+    // glyph in the number/play cell. Stamped per-row by the controllers
+    // (Task 6) from the user's blacklisted-artist set; never set on local
+    // / Plex rows. Defaults false (Slint struct fields zero-init).
+    is-blacklisted: bool,
     // Fading out (un-favorited in the favorites view) before removal.
     removing: bool,
     // Offline-cache status: 0 none, 1 queued, 2 downloading, 3 ready, 4 failed.
