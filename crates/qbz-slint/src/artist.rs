@@ -708,6 +708,7 @@ pub fn reset_artist(window: &AppWindow) {
     state.set_bio_source("".into());
     state.set_top_tracks_multi_select(false);
     state.set_top_tracks_selected_count(0);
+    state.set_is_blacklisted(false);
     state.set_loading(true);
 }
 

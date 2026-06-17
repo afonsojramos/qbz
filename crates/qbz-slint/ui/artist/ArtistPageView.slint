@@ -361,12 +361,13 @@ export component ArtistPageView inherits Rectangle {
 
                     Rectangle { height: 18px; }
 
-                    // Action buttons — Heart, Build collection, Radio
-                    // (with QBZ / Qobuz dropdown), Network. Mirrors
+                    // Action buttons — Heart, Radio (with QBZ / Qobuz
+                    // dropdown), Network, and a ⋯ overflow menu. Mirrors
                     // Tauri's artist-actions: NO Play here (top tracks
-                    // has its own play). Hide (blacklist) is still
-                    // deferred until the blacklist module migrates out
-                    // of src-tauri.
+                    // has its own play). The owner-directed overflow menu
+                    // (⋯) consolidates Create Artist Collection, Artist
+                    // Scene (MB-gated), and the Blacklist/Show toggle —
+                    // see the menu block below.
                     HorizontalLayout {
                         alignment: start;
                         spacing: 12px;
@@ -374,12 +375,6 @@ export component ArtistPageView inherits Rectangle {
                             icon: @image-url("../assets/icons/heart.svg");
                             clicked => {
                                 root.media-action("artist", "", "favorite");
-                            }
-                        }
-                        CircleAction {
-                            icon: @image-url("../assets/icons/library-big.svg");
-                            clicked => {
-                                root.media-action("artist", "", "build-collection");
                             }
                         }
                         // Radio with dropdown — QBZ radio (local engine)
@@ -426,6 +421,144 @@ export component ArtistPageView inherits Rectangle {
                             clicked => {
                                 NetworkSidebarState.open = !NetworkSidebarState.open;
                                 NetworkSidebarActions.toggle();
+                            }
+                        }
+                        // ⋯ Overflow menu — owner-directed (2026-06-16,
+                        // supersedes Tauri's hidden eye-icon). Three
+                        // items: Create Artist Collection, Artist Scene
+                        // (MB-gated), separator, Blacklist/Show artist.
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/ellipsis.svg");
+                                clicked => {
+                                    artist-overflow-menu.show();
+                                }
+                            }
+                            // Opens below the ⋯ with the left edge aligned
+                            // to the button (the radio popup uses the same
+                            // x:0 / y:38 anchor).
+                            artist-overflow-menu := PopupWindow {
+                                x: 0px;
+                                y: 38px;
+                                width: 224px;
+                                height: 3 * 33px + 1px + 10px;
+                                close-policy: close-on-click;
+                                ContextMenu {
+                                    // Item 1 — Create Artist Collection.
+                                    // Reuses the existing build-collection
+                                    // seam (folded in from the old
+                                    // standalone CircleAction, per owner).
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/library-big.svg");
+                                        label: @tr("Create Artist Collection");
+                                        clicked => {
+                                            root.media-action(
+                                                "artist", ArtistState.id, "build-collection");
+                                        }
+                                    }
+                                    // Item 2 — Artist Scene. Same seam as
+                                    // the ArtistNetwork Origin link;
+                                    // enabled ONLY when MusicBrainz is
+                                    // available (same gate as the Origin
+                                    // link). Greyed + inert when MB is off
+                                    // or the artist is unmatched, keeping
+                                    // the menu height stable.
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/map-pin.svg");
+                                        label: @tr("Artist Scene");
+                                        enabled: NetworkSidebarState.mb-available;
+                                        clicked => {
+                                            NetworkSidebarActions.location-clicked(
+                                                NetworkSidebarState.mb-mbid);
+                                        }
+                                    }
+                                    // Visible separator.
+                                    Rectangle {
+                                        height: 1px;
+                                        background: Theme.border-subtle;
+                                    }
+                                    // Item 4 — Blacklist / Show artist.
+                                    // Label flips with ArtistState.is-blacklisted.
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/blind-eye.svg");
+                                        label: ArtistState.is-blacklisted
+                                            ? @tr("Show artist")
+                                            : @tr("Blacklist artist");
+                                        clicked => {
+                                            root.media-action(
+                                                "artist", ArtistState.id, "blacklist-toggle");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Hidden-artist banner ----------------------------------------
+            // Shown when the CURRENTLY displayed artist is blacklisted. The
+            // page stays fully navigable (non-obvious behavior #6 — direct
+            // fetch-by-id is never blocked); this is an unblock affordance,
+            // not an access lock. Styled like WarningBanner (warning tone).
+            if ArtistState.is-blacklisted: Rectangle { height: 16px; }
+            if ArtistState.is-blacklisted: Rectangle {
+                border-radius: 8px;
+                background: #eab3081a;
+                border-width: 1px;
+                border-color: #eab3084d;
+                height: banner-row.preferred-height;
+
+                banner-row := HorizontalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+                    VerticalLayout {
+                        alignment: center;
+                        QbzIcon {
+                            source: @image-url("../assets/icons/blind-eye.svg");
+                            width: 16px;
+                            height: 16px;
+                            tint: #eab308;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: @tr("This artist is hidden from discovery");
+                            color: Theme.text-secondary;
+                            font-size: Typography.legal;
+                            wrap: word-wrap;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        Rectangle {
+                            width: show-artist-text.preferred-width + 20px;
+                            height: 28px;
+                            border-radius: 6px;
+                            background: show-artist-ta.has-hover
+                                ? Theme.surface-elevated
+                                : transparent;
+                            show-artist-text := Text {
+                                text: @tr("Show artist");
+                                color: show-artist-ta.has-hover
+                                    ? Theme.accent-hover
+                                    : Theme.accent;
+                                font-size: Typography.legal;
+                                font-weight: Typography.semibold;
+                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                            }
+                            show-artist-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.media-action(
+                                        "artist", ArtistState.id, "blacklist-toggle");
+                                }
                             }
                         }
                     }

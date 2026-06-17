@@ -2697,6 +2697,12 @@ export global ArtistState {
     // ArtistPageView will scroll to when the tab is clicked.
     in property <[JumpNavTab]> jump-tabs: [];
     in property <bool> loading: false;
+    // Whether the CURRENTLY displayed artist is blacklisted. Drives the
+    // overflow-menu Blacklist/Show toggle label + the hidden-artist
+    // banner. Set in navigate_artist from artist_blacklist::is_blacklisted
+    // (which auto-gates on the enabled flag — reads false when the
+    // feature is disabled, which is acceptable here).
+    in-out property <bool> is-blacklisted: false;
 }
 
 // Artwork right-click actions — shared by ArtistPageView and

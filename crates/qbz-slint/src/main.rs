@@ -895,7 +895,14 @@ fn navigate_artist(
         let _ = weak.upgrade_in_event_loop(move |w| {
             artist::reset_artist(&w);
             artist::reset_network_sidebar(&w);
-            w.global::<ArtistState>().set_id(id_for_apply.into());
+            // Reflect whether THIS artist is blacklisted so the overflow
+            // menu shows Show/Blacklist correctly and the hidden banner
+            // appears. is_blacklisted auto-gates on the enabled flag (reads
+            // false when the feature is disabled, which is acceptable here).
+            let is_bl = crate::artist_blacklist::is_blacklisted_id_str(&id_for_apply);
+            let st = w.global::<ArtistState>();
+            st.set_id(id_for_apply.into());
+            st.set_is_blacklisted(is_bl);
             w.global::<NavState>().set_view(ContentView::Artist);
         });
         match artist::load_artist(&runtime, &artist_id).await {
@@ -5722,6 +5729,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 artist_id,
                             );
                             update_nav_flags(&w);
+                        }
+                    }
+                }
+                // Blacklist / Show toggle from the ArtistView overflow
+                // menu (and the hidden-artist banner). Resolves the id
+                // from the passed value, falling back to ArtistState.id
+                // (mirrors build-collection). Reads the name from
+                // ArtistState for storage. Optimistic with rollback: flip
+                // ArtistState.is-blacklisted immediately, perform the
+                // mutation, revert + error-toast on failure. Synchronous
+                // on the event-loop thread, so there is no re-entrancy
+                // window (a second click can't interleave mid-toggle).
+                ("artist", "blacklist-toggle") => {
+                    if let Some(w) = weak.upgrade() {
+                        let st = w.global::<ArtistState>();
+                        let artist_id = if id.is_empty() {
+                            st.get_id().to_string()
+                        } else {
+                            id.clone()
+                        };
+                        let name = st.get_name().to_string();
+                        if let Ok(id_num) = artist_id.parse::<u64>() {
+                            let was_blacklisted =
+                                crate::artist_blacklist::is_blacklisted(id_num);
+                            // Optimistic flip.
+                            st.set_is_blacklisted(!was_blacklisted);
+                            let res = if was_blacklisted {
+                                crate::artist_blacklist::remove(id_num)
+                            } else {
+                                crate::artist_blacklist::add(
+                                    id_num,
+                                    &name,
+                                    None,
+                                )
+                            };
+                            match res {
+                                Ok(()) => {
+                                    // Live refresh for the artist page is the
+                                    // optimistic ArtistState.is-blacklisted
+                                    // flip above (drives the banner + the
+                                    // menu Show/Blacklist label). ArtistView
+                                    // popular-tracks rows are deliberately
+                                    // NOT per-row greyed (T6 scoping — the
+                                    // banner is the artist-page surface);
+                                    // other open views (search, album,
+                                    // favorites) re-stamp on next navigation
+                                    // (no global observer).
+                                    let msg = if was_blacklisted {
+                                        format!("{name} is now visible")
+                                    } else {
+                                        format!("{name} is now hidden")
+                                    };
+                                    crate::toast::success_weak(&weak, msg);
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "[qbz-slint] blacklist toggle failed: {e}"
+                                    );
+                                    // Rollback the optimistic flip.
+                                    st.set_is_blacklisted(was_blacklisted);
+                                    crate::toast::error_weak(
+                                        &weak,
+                                        "Failed to update artist visibility",
+                                    );
+                                }
+                            }
                         }
                     }
                 }
