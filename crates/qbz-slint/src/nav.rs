@@ -59,6 +59,10 @@ pub enum NavEntry {
     /// The Offline Cache Manager — the manage-downloads surface (Tauri's
     /// OfflineCacheManagerView). Session-scoped; no payload.
     OfflineManager,
+    /// The Artist Blacklist Manager — the manage-blacklist surface (Tauri's
+    /// BlacklistManagerView). Reached from the Settings content-filtering row.
+    /// Session-scoped (the search query lives in the controller); no payload.
+    BlacklistManager,
     /// The My QBZ > Mixtapes index grid (read-only in this slice). Toolbar
     /// state (sort/view/search) is session-scoped in the controller, so the
     /// entry carries no payload.

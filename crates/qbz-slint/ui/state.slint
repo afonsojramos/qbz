@@ -601,7 +601,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings, search, musician, label, label-releases, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder }
+export enum ContentView { home, album, artist, settings, search, musician, label, label-releases, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder }
 
 // In-app toast (transient notification). Mirrors Tauri's toastStore:
 // a single toast at a time (a new one replaces the current), auto-hidden
@@ -1815,6 +1815,54 @@ export global OfflineManagerActions {
     callback clear-all();
     callback open-folder();
     callback play-track(string /* track id */);
+}
+
+// === Artist Blacklist Manager (Tauri's BlacklistManagerView) ============
+// The standalone manage-blacklist surface reached from the Settings content-
+// filtering row. One blacklisted-artist row carries everything the view needs;
+// the controller (crate::blacklist_manager) precomputes the date string + the
+// has-notes flag so the .slint does no formatting. Search filtering is done
+// controller-side: `items` already holds only the filtered rows, while `count`
+// stays the FULL list count (drives the badge + the empty/no-results split).
+export struct BlacklistedArtistItem {
+    // Numeric Qobuz artist id (fits an int for display + passing back on click
+    // / remove). Slint has no u64/i64; the controller passes it through as int.
+    artist-id: int,
+    artist-name: string,
+    // Unix seconds (kept for reference; the view renders `added-display`).
+    added-at: int,
+    // Controller-formatted "MMM D, YYYY" (English; gettext for Rust is unwired).
+    added-display: string,
+    notes: string,
+    has-notes: bool,
+}
+
+export global BlacklistState {
+    // The CURRENTLY-VISIBLE rows (already search-filtered by the controller).
+    in property <[BlacklistedArtistItem]> items: [];
+    // Global enable flag (default-enabled, mirrors the backend default).
+    in property <bool> enabled: true;
+    in property <bool> loading: true;
+    // FULL list count (NOT the filtered length) — drives the count badge and
+    // the empty-vs-no-results branch (count==0 = empty; count>0 && items empty
+    // = no search results).
+    in property <int> count: 0;
+    // Echoed back so the search input reflects the controller's query (and the
+    // no-results message can interpolate it).
+    in property <string> search-query: "";
+}
+
+export global BlacklistActions {
+    // Forward-open seam: the Settings content-filtering row (T10) calls this to
+    // navigate INTO the manager (records the nav entry, swaps the view, loads).
+    // Mirrors OfflineManagerActions.open — the back chrome is NavButtons.
+    callback open();
+    callback back();
+    callback artist-select(int /* artist id */);
+    callback toggle-enabled();
+    callback remove(int /* artist id */);
+    callback clear-all();
+    callback search-changed(string /* query */);
 }
 
 // === My QBZ — Mixtapes & Collections (read-only index grids) ============
