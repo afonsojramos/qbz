@@ -125,6 +125,33 @@ pub fn stamp_row(source: &str, artist_ids: &[&str]) -> bool {
     artist_ids.iter().any(|id| is_blacklisted_id_str(id))
 }
 
+/// THE single queue/playback predicate (Task 7). Returns `true` when this track
+/// should be DROPPED from any play / shuffle / queue-next / queue-later / radio
+/// builder. Implemented in terms of the exact same source-guard + per-id check
+/// as [`stamp_row`] so the queue filter and the row greyout can NEVER diverge:
+/// a row that greys out is the row that drops from the queue, and vice versa.
+///
+/// - **HARD local/Plex guard** — a non-Qobuz `source` is NEVER blacklisted
+///   (local copies with a numeric Qobuz id stay playable). Delegates to
+///   [`stamp_row`]'s guard by passing `source` through.
+/// - D-FEAT: performer OR composer — pass both numeric ids; either one being
+///   blacklisted drops the track.
+/// - Missing / `None` ids => fail-open (`false`), so id-less tracks always play.
+///
+/// The enabled-flag gate + the no-session fail-open live in [`is_blacklisted`],
+/// so this returns `false` when the feature is off or no session is bound.
+pub fn is_track_blacklisted(
+    source: &str,
+    performer_id: Option<u64>,
+    composer_id: Option<u64>,
+) -> bool {
+    // Reuse stamp_row's guard + check by funneling the numeric ids through the
+    // same string path — the SINGLE underlying predicate shared with rendering.
+    let performer = performer_id.map(|id| id.to_string()).unwrap_or_default();
+    let composer = composer_id.map(|id| id.to_string()).unwrap_or_default();
+    stamp_row(source, &[performer.as_str(), composer.as_str()])
+}
+
 /// True when the blacklist feature is enabled. Default-enabled (`true`) when no
 /// session is bound.
 pub fn is_enabled() -> bool {

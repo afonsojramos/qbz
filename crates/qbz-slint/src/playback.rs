@@ -1646,6 +1646,49 @@ async fn record_recent(runtime: &Runtime) {
     }
 }
 
+/// THE single queue-drop predicate for an already-built `QueueTrack` (Task 7).
+/// Returns `true` when the track must be removed from a play/shuffle/queue-next/
+/// queue-later builder. Delegates to `artist_blacklist::is_track_blacklisted`,
+/// the SAME underlying source-guard + per-id check the row greyout
+/// (`stamp_row`) uses — so the queue can never diverge from the rendered list.
+///
+/// `QueueTrack` carries `source` + `artist_id` (performer) but NOT a composer
+/// id, so this leg is performer-only. Builders that still hold the full
+/// catalog `Track` (album / playlist / artist-top) ALSO filter at the `Track`
+/// level via `track_is_blacklisted_full` below, which adds the composer leg
+/// (D-FEAT). Local / Plex / no-id tracks => kept (fail-open).
+fn queue_track_blacklisted(track: &QueueTrack) -> bool {
+    let source = track.source.as_deref().unwrap_or("qobuz");
+    crate::artist_blacklist::is_track_blacklisted(source, track.artist_id, None)
+}
+
+/// Drop blacklisted entries from a freshly-built `QueueTrack` queue. Keeps
+/// local / Plex / no-id tracks (fail-open). The single filter every builder
+/// applies before handing the queue to the core.
+fn filter_blacklisted_queue(queue: Vec<QueueTrack>) -> Vec<QueueTrack> {
+    queue
+        .into_iter()
+        .filter(|t| !queue_track_blacklisted(t))
+        .collect()
+}
+
+/// `Track`-level drop predicate (performer OR composer — full D-FEAT), for
+/// builders that still hold the catalog `Track` before mapping to QueueTrack.
+/// `album_primary` is the album's primary-artist id used as the row fallback
+/// when the track carries no performer (album surfaces only — mirror the album
+/// row stamp `track.artist_id ?? album.artist_id`). Always treated as Qobuz
+/// (these builders only run on Qobuz catalog tracks; local/Plex play paths are
+/// separate). Shares the underlying `is_blacklisted` check with the row stamp.
+fn track_is_blacklisted_full(track: &Track, album_primary: Option<u64>) -> bool {
+    let performer = track
+        .performer
+        .as_ref()
+        .map(|p| p.id)
+        .or(album_primary);
+    let composer = track.composer.as_ref().map(|c| c.id);
+    crate::artist_blacklist::is_track_blacklisted("qobuz", performer, composer)
+}
+
 /// Play `album_id` from `start_index`: fetch the album, build the queue,
 /// hand it to the core, and start audio on the start track.
 /// Fetch an album and build its play queue (genre/quality meta cached for
@@ -1669,16 +1712,34 @@ async fn fetch_album_for_play(
     let album_title = album.title.clone();
     let album_artist = album.artist.name.clone();
     let album_artwork = album.image.best().cloned().unwrap_or_default();
+    // Album's primary artist id — the fallback blacklist key for tracks whose
+    // own performer id is missing (D-FEAT album rule: track.artist ?? album).
+    let album_primary = Some(album.artist.id);
     // Cache the album's genre / release date / quality so the Recently
     // Played card the play records carries them (no extra fetch).
     crate::recently::remember_album_meta(&album.id, album_card_meta(&album));
 
-    let tracks: Vec<QueueTrack> = album
+    let raw_tracks = album
         .tracks
         .as_ref()
         .map(|container| container.items.as_slice())
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    // Genuinely empty album → keep the existing "no playable tracks" toast.
+    if raw_tracks.is_empty() {
+        log::warn!("[qbz-slint] playback: album {album_id} has no tracks");
+        crate::toast::error_weak(weak, "This album has no playable tracks");
+        return None;
+    }
+
+    // D-FIX-b: the Tauri `buildAlbumQueueTracks` did NOT filter, so playing an
+    // album where a blacklisted artist is FEATURED still queued that track.
+    // Filter the raw catalog tracks here (composer-aware, album-primary
+    // fallback) BEFORE mapping to QueueTrack so play-all / play-from / shuffle
+    // all skip blacklisted (performer OR composer OR featured) tracks.
+    let tracks: Vec<QueueTrack> = raw_tracks
         .iter()
+        .filter(|track| !track_is_blacklisted_full(track, album_primary))
         .map(|track| {
             make_queue_track(
                 track,
@@ -1691,8 +1752,11 @@ async fn fetch_album_for_play(
         .collect();
 
     if tracks.is_empty() {
-        log::warn!("[qbz-slint] playback: album {album_id} has no tracks");
-        crate::toast::error_weak(weak, "This album has no playable tracks");
+        // Every track was blacklisted → silent early-return (no toast), Tauri
+        // 0-playable parity for the album builders.
+        log::warn!(
+            "[qbz-slint] playback: album {album_id} fully filtered by blacklist; nothing to play"
+        );
         return None;
     }
     Some(tracks)
@@ -1775,15 +1839,22 @@ async fn fetch_artist_top_for_play(
         }
     };
     let artist_name = page.name.display.clone();
-    let tracks: Vec<QueueTrack> = page
+    let raw: Vec<QueueTrack> = page
         .top_tracks
         .unwrap_or_default()
         .into_iter()
         .map(|track| make_top_track_queue(track, &artist_name))
         .collect();
-    if tracks.is_empty() {
+    if raw.is_empty() {
         log::warn!("[qbz-slint] play-top: artist {artist_id} has no top tracks");
         crate::toast::error_weak(weak, "No top tracks available for this artist");
+        return None;
+    }
+    // Drop blacklisted top tracks (a featured/blacklisted performer can appear
+    // in another artist's Popular list). Silent early-return when 0 remain.
+    let tracks = filter_blacklisted_queue(raw);
+    if tracks.is_empty() {
+        log::warn!("[qbz-slint] play-top: artist {artist_id} fully filtered by blacklist");
         return None;
     }
     Some(tracks)
@@ -2285,8 +2356,14 @@ pub fn play_track_in_context(
         ContentView::Search => {
             let model = window.global::<SearchState>().get_tracks();
             let (queue, found) = queue_from_model(&model, clicked_id);
-            if let Some(idx) = found {
-                play_queue(runtime, weak, handle, queue, idx);
+            if found.is_some() {
+                // Drop blacklisted rows that visually follow the clicked track,
+                // then re-anchor the start on the clicked id (it can't itself be
+                // blacklisted — greyed rows are inert). Empty => nothing to do.
+                let queue = filter_blacklisted_queue(queue);
+                if let Some(idx) = queue.iter().position(|q| q.id.to_string() == clicked_id) {
+                    play_queue(runtime, weak, handle, queue, idx);
+                }
                 return;
             }
             // The "most popular" hero is a top-track card, not a results row.
@@ -2297,7 +2374,8 @@ pub fn play_track_in_context(
                 let hero = ss.get_most_popular_track();
                 if hero.id.as_str() == clicked_id {
                     if let Some(hq) = track_item_to_queue(&hero) {
-                        let mut q = queue;
+                        // Filter the trailing results; keep the hero at the head.
+                        let mut q = filter_blacklisted_queue(queue);
                         q.insert(0, hq);
                         play_queue(runtime, weak, handle, q, 0);
                         return;
@@ -2356,8 +2434,13 @@ pub fn play_tracks(
     tracks: Vec<qbz_models::Track>,
     start_index: usize,
 ) -> bool {
+    // Drop blacklisted tracks (performer OR composer — D-FEAT) before building
+    // the queue. Shared sink for radio results, the mix views, and album
+    // shuffle, so this single filter covers all three. No album-primary
+    // fallback here (these are flat track lists, not an album context).
     let queue: Vec<QueueTrack> = tracks
         .iter()
+        .filter(|track| !track_is_blacklisted_full(track, None))
         .map(|track| {
             let (album_id, album_title, album_artwork) = track
                 .album
@@ -2379,6 +2462,9 @@ pub fn play_tracks(
         })
         .collect();
     if queue.is_empty() {
+        // Either nothing was passed, or every track was blacklisted. Silent
+        // early-return (the caller logs); radio callers surface their existing
+        // "returned no tracks" warning, matching Tauri's empty->error path.
         return false;
     }
     let start = start_index.min(queue.len() - 1);
@@ -2503,12 +2589,16 @@ pub fn enqueue_album(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
         let album_artist = album.artist.name.clone();
         let album_artwork = album.image.best().cloned().unwrap_or_default();
         crate::recently::remember_album_meta(&album.id, album_card_meta(&album));
+        // Drop blacklisted tracks (composer-aware, album-primary fallback)
+        // before enqueueing — same predicate as album play-all (D-FIX-b).
+        let album_primary = Some(album.artist.id);
         let tracks: Vec<QueueTrack> = album
             .tracks
             .as_ref()
             .map(|container| container.items.as_slice())
             .unwrap_or_default()
             .iter()
+            .filter(|track| !track_is_blacklisted_full(track, album_primary))
             .map(|track| {
                 make_queue_track(track, &album.id, &album_title, &album_artist, &album_artwork)
             })
@@ -2595,12 +2685,16 @@ pub fn enqueue_album_next(
         let album_artist = album.artist.name.clone();
         let album_artwork = album.image.best().cloned().unwrap_or_default();
         crate::recently::remember_album_meta(&album.id, album_card_meta(&album));
+        // Drop blacklisted tracks (composer-aware, album-primary fallback)
+        // before play-next — same predicate as album play-all (D-FIX-b).
+        let album_primary = Some(album.artist.id);
         let tracks: Vec<QueueTrack> = album
             .tracks
             .as_ref()
             .map(|container| container.items.as_slice())
             .unwrap_or_default()
             .iter()
+            .filter(|track| !track_is_blacklisted_full(track, album_primary))
             .map(|track| {
                 make_queue_track(track, &album.id, &album_title, &album_artist, &album_artwork)
             })
@@ -2756,10 +2850,13 @@ pub fn play_playlist(
         .await
         .unwrap_or_default();
         let rows = crate::playlist::interleave_rows(qobuz_tracks, sidecar);
-        let tracks: Vec<QueueTrack> = rows
-            .iter()
-            .filter_map(|row| crate::local_playlist::row_queue_track(&row.item))
-            .collect();
+        // Drop blacklisted Qobuz rows (performer; local/Plex rows kept by the
+        // source guard). Silent early-return when nothing playable remains.
+        let tracks: Vec<QueueTrack> = filter_blacklisted_queue(
+            rows.iter()
+                .filter_map(|row| crate::local_playlist::row_queue_track(&row.item))
+                .collect(),
+        );
         if tracks.is_empty() {
             return;
         }
@@ -2807,10 +2904,13 @@ pub fn enqueue_playlist(
         .await
         .unwrap_or_default();
         let rows = crate::playlist::interleave_rows(qobuz_tracks, sidecar);
-        let tracks: Vec<QueueTrack> = rows
-            .iter()
-            .filter_map(|row| crate::local_playlist::row_queue_track(&row.item))
-            .collect();
+        // Drop blacklisted Qobuz rows (performer; local/Plex rows kept by the
+        // source guard). Silent early-return when nothing playable remains.
+        let tracks: Vec<QueueTrack> = filter_blacklisted_queue(
+            rows.iter()
+                .filter_map(|row| crate::local_playlist::row_queue_track(&row.item))
+                .collect(),
+        );
         if tracks.is_empty() {
             return;
         }
@@ -2850,6 +2950,15 @@ pub fn enqueue_tracks(
     tracks: Vec<qbz_models::Track>,
     next: bool,
 ) {
+    if tracks.is_empty() {
+        return;
+    }
+    // Drop blacklisted tracks (performer OR composer — D-FEAT) from the bulk
+    // batch before routing/enqueueing. Silent early-return when 0 remain.
+    let tracks: Vec<qbz_models::Track> = tracks
+        .into_iter()
+        .filter(|track| !track_is_blacklisted_full(track, None))
+        .collect();
     if tracks.is_empty() {
         return;
     }
@@ -2922,6 +3031,12 @@ pub fn enqueue_queue_tracks(
     tracks: Vec<QueueTrack>,
     next: bool,
 ) {
+    if tracks.is_empty() {
+        return;
+    }
+    // Drop blacklisted Qobuz rows (performer; local/plex/cached rows kept by the
+    // source guard). Silent early-return when nothing playable remains.
+    let tracks = filter_blacklisted_queue(tracks);
     if tracks.is_empty() {
         return;
     }
