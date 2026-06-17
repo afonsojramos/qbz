@@ -240,6 +240,17 @@ fn seed_tray_appearance(w: &AppWindow, tray: &tray_settings::TraySettings) {
     appearance.set_tray_icon_theme_index(tray_settings::icon_theme_index(&tray.tray_icon_theme));
 }
 
+/// Refresh the blacklist count + enabled flag on `BlacklistState` (T10).
+/// The Settings content-filtering row binds to these, and Settings is reached
+/// independently of the Manager (which seeds them on its own load), so we
+/// re-read the wrapper whenever the Settings view is shown. Fail-open: with no
+/// session the wrapper returns count 0 / enabled true.
+fn seed_blacklist_status(w: &AppWindow) {
+    let st = w.global::<BlacklistState>();
+    st.set_count(crate::artist_blacklist::count() as i32);
+    st.set_enabled(crate::artist_blacklist::is_enabled());
+}
+
 /// Reveal the shell and load the Discover / Home view with real data,
 /// then kick off cached artwork downloads.
 async fn enter_shell(
@@ -1278,6 +1289,7 @@ fn apply_entry(
         }
         nav::NavEntry::Settings => {
             let _ = weak.upgrade_in_event_loop(|w| {
+                seed_blacklist_status(&w);
                 w.global::<NavState>().set_view(ContentView::Settings);
             });
         }
@@ -4677,6 +4689,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.global::<NavState>().on_request_settings(move || {
             nav::record(nav::NavEntry::Settings);
             if let Some(w) = weak.upgrade() {
+                seed_blacklist_status(&w);
                 w.global::<NavState>().set_view(ContentView::Settings);
                 update_nav_flags(&w);
             }

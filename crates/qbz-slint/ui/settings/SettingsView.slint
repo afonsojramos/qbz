@@ -16,6 +16,7 @@ import { PlaybackSettings } from "PlaybackSettings.slint";
 import { AppearanceSettings } from "AppearanceSettings.slint";
 import { OfflineSettings } from "OfflineSettings.slint";
 import { LocalLibrarySettings } from "LocalLibrarySettings.slint";
+import { ContentFilteringSettings } from "ContentFilteringSettings.slint";
 import { IntegrationsSettings } from "IntegrationsSettings.slint";
 import { DeveloperSettings } from "DeveloperSettings.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -151,6 +152,16 @@ export component SettingsView inherits Rectangle {
                             SettingsState.section = 4;
                         }
                     }
+                    // Content filtering (Artist Blacklist) — placed between
+                    // downloads (Offline) and Integrations per the Tauri order.
+                    SubNavItem {
+                        icon: @image-url("../assets/icons/blind-eye.svg");
+                        label: @tr("Blacklist");
+                        active: SettingsState.section == 7;
+                        clicked => {
+                            SettingsState.section = 7;
+                        }
+                    }
                     SubNavItem {
                         icon: @image-url("../assets/icons/refresh-cw.svg");
                         label: @tr("Integrations");
@@ -234,6 +245,7 @@ export component SettingsView inherits Rectangle {
                         }
                     }
                     if !SettingsState.loading && SettingsState.section == 4: LocalLibrarySettings { }
+                    if !SettingsState.loading && SettingsState.section == 7: ContentFilteringSettings { }
                     if !SettingsState.loading && SettingsState.section == 6: IntegrationsSettings { }
                     if !SettingsState.loading && SettingsState.section == 5: DeveloperSettings { }
                 }
