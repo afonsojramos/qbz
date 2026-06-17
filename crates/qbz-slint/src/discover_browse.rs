@@ -73,8 +73,21 @@ pub fn navigate(
             .get_discover_albums(&endpoint_for_fetch, genre_for_fetch, 0, PAGE_SIZE)
             .await
         {
-            Ok(data) => {
+            Ok(mut data) => {
                 let has_more = data.has_more;
+                // T8: drop blacklisted DiscoverAlbums (ANY of artists[],
+                // featured-aware via discover_album_blacklisted). Tauri's
+                // discover surfaces log-only — no count adjustment (the
+                // endpoints carry no `total`; pagination is has_more-driven).
+                let bl = if crate::artist_blacklist::is_enabled() {
+                    crate::artist_blacklist::ids_snapshot()
+                } else {
+                    Default::default()
+                };
+                if !bl.is_empty() {
+                    data.items
+                        .retain(|a| !qbz_core::core::discover_album_blacklisted(a, &bl));
+                }
                 // CardData is plain/Send — map it to the (non-Send)
                 // AlbumCardItem inside the event-loop closure below.
                 let cards: Vec<CardData> =
@@ -137,8 +150,19 @@ pub fn load_more(
             .get_discover_albums(&endpoint, genre_ids, offset, PAGE_SIZE)
             .await
         {
-            Ok(data) => {
+            Ok(mut data) => {
                 let has_more = data.has_more;
+                // T8: same featured-aware drop as the first page (log-only,
+                // no count adjustment).
+                let bl = if crate::artist_blacklist::is_enabled() {
+                    crate::artist_blacklist::ids_snapshot()
+                } else {
+                    Default::default()
+                };
+                if !bl.is_empty() {
+                    data.items
+                        .retain(|a| !qbz_core::core::discover_album_blacklisted(a, &bl));
+                }
                 let cards: Vec<CardData> =
                     data.items.into_iter().map(crate::home::map_album).collect();
                 let jobs = artwork_jobs(&cards, offset as usize);

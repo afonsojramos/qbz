@@ -141,7 +141,24 @@ where
     A: FrontendAdapter + Send + Sync + 'static,
 {
     match runtime.core().get_release_watch("artists", 18, 0).await {
-        Ok(page) => page.items.into_iter().map(map_album).collect(),
+        Ok(page) => {
+            // T8: drop blacklisted flat Albums (primary OR any-artist,
+            // featured-aware via album_blacklisted). Tauri release-watch
+            // also runs the availability filter and bundles BOTH removals
+            // into one `total` decrement — this For You carousel surfaces
+            // no count (it's a fixed 18-item rail) and applies no separate
+            // availability filter, so we just drop the blacklisted rows.
+            let bl = if crate::artist_blacklist::is_enabled() {
+                crate::artist_blacklist::ids_snapshot()
+            } else {
+                Default::default()
+            };
+            page.items
+                .into_iter()
+                .filter(|a| !qbz_core::core::album_blacklisted(a, &bl))
+                .map(map_album)
+                .collect()
+        }
         Err(_) => Vec::new(),
     }
 }
@@ -188,14 +205,24 @@ where
         return Vec::new();
     }
     match runtime.core().get_album_suggest(album_id).await {
-        Ok(resp) => resp
-            .albums
-            .map(|p| p.items)
-            .unwrap_or_default()
-            .into_iter()
-            .take(18)
-            .map(map_album)
-            .collect(),
+        Ok(resp) => {
+            // T8: similar-albums (flat Album). Filter-then-truncate: drop
+            // blacklisted BEFORE take(18) (Tauri parity — may yield fewer
+            // than the limit, no backfill).
+            let bl = if crate::artist_blacklist::is_enabled() {
+                crate::artist_blacklist::ids_snapshot()
+            } else {
+                Default::default()
+            };
+            resp.albums
+                .map(|p| p.items)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|a| !qbz_core::core::album_blacklisted(a, &bl))
+                .take(18)
+                .map(map_album)
+                .collect()
+        }
         Err(_) => Vec::new(),
     }
 }
@@ -230,6 +257,15 @@ where
             for artist in page.items {
                 if to_follow.len() >= FOLLOW_MAX {
                     break 'outer;
+                }
+                // T8: similar-artists surface — drop blacklisted artist ids
+                // (is_blacklisted auto-gates on the enabled flag). This is
+                // the v2_get_similar_artists equivalent; the carousel has no
+                // surfaced total to decrement, so a drop just yields fewer
+                // rows. NOT to be confused with the artist-detail page's own
+                // similar list (a parity-negative left untouched).
+                if crate::artist_blacklist::is_blacklisted(artist.id) {
+                    continue;
                 }
                 if seen.insert(artist.id) {
                     to_follow.push(map_artist(artist, false));

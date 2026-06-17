@@ -1219,6 +1219,11 @@ pub fn apply_mb_discovery(window: &AppWindow, data: MbDiscoveryData) {
     let rows: Vec<DiscoveryArtist> = data
         .artists
         .into_iter()
+        // T8: smart-discovery rail (v2_get_discovery_artists equivalent) —
+        // skip candidates whose resolved Qobuz id is blacklisted.
+        // is_blacklisted_id_str auto-gates on the enabled flag and treats a
+        // missing/non-numeric id as not-blacklisted (kept).
+        .filter(|r| !crate::artist_blacklist::is_blacklisted_id_str(&r.qobuz_id))
         .map(|r| DiscoveryArtist {
             mbid: r.mbid.into(),
             name: r.name.into(),

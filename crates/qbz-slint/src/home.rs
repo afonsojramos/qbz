@@ -152,7 +152,36 @@ where
         .get_discover_index(genre_ids)
         .await
         .map_err(|e| e.to_string())?;
-    let containers = response.containers;
+    let mut containers = response.containers;
+
+    // T8: drop blacklisted DiscoverAlbums (ANY of artists[], featured-aware)
+    // from the discover-index containers. Tauri filters exactly these six
+    // containers (ideal_discography, new_releases, qobuzissims, most_streamed,
+    // press_awards, album_of_the_week) and adjusts NO count — log-only parity
+    // (the carousels are has_more/cache-driven, not total-driven).
+    {
+        let bl = if crate::artist_blacklist::is_enabled() {
+            crate::artist_blacklist::ids_snapshot()
+        } else {
+            Default::default()
+        };
+        if !bl.is_empty() {
+            let retain = |c: &mut Option<DiscoverContainer<DiscoverAlbum>>| {
+                if let Some(container) = c.as_mut() {
+                    container
+                        .data
+                        .items
+                        .retain(|a| !qbz_core::core::discover_album_blacklisted(a, &bl));
+                }
+            };
+            retain(&mut containers.new_releases);
+            retain(&mut containers.qobuzissims);
+            retain(&mut containers.press_awards);
+            retain(&mut containers.most_streamed);
+            retain(&mut containers.ideal_discography);
+            retain(&mut containers.album_of_the_week);
+        }
+    }
 
     // Editorial-only set for the Editor's Picks tab — built first
     // (by cloning the containers) so the same data can also feed the
