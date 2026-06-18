@@ -157,6 +157,31 @@ impl DlnaConnection {
         Ok(())
     }
 
+    /// Run a SOAP action with a timeout. A hung renderer maps to
+    /// `DlnaError::Timeout` instead of blocking the caller forever — closes the
+    /// gap where pause/stop/seek/set_volume had no timeout at all.
+    async fn run_action(
+        service: &Service,
+        device_url: &Uri,
+        name: &str,
+        payload: &str,
+        timeout_secs: u64,
+    ) -> Result<std::collections::HashMap<String, String>, DlnaError> {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            service.action(device_url, name, payload),
+        )
+        .await
+        .map_err(|_| {
+            log::error!("DLNA: {name} action timed out after {timeout_secs}s");
+            DlnaError::Timeout(format!("{name} action timed out"))
+        })?
+        .map_err(|e| {
+            log::error!("DLNA: {name} action failed: {e}");
+            DlnaError::Playback(e.to_string())
+        })
+    }
+
     /// Start/resume playback
     pub async fn play(&mut self) -> Result<(), DlnaError> {
         if !self.connected {
@@ -203,10 +228,14 @@ impl DlnaConnection {
             .as_ref()
             .ok_or_else(|| DlnaError::Playback("Device has no AVTransport service".to_string()))?;
 
-        av_service
-            .action(&self.device_url, "Pause", "<InstanceID>0</InstanceID>")
-            .await
-            .map_err(|e| DlnaError::Playback(e.to_string()))?;
+        Self::run_action(
+            av_service,
+            &self.device_url,
+            "Pause",
+            "<InstanceID>0</InstanceID>",
+            10,
+        )
+        .await?;
 
         self.is_playing = false;
         log::info!("DLNA: Pause");
@@ -224,10 +253,14 @@ impl DlnaConnection {
             .as_ref()
             .ok_or_else(|| DlnaError::Playback("Device has no AVTransport service".to_string()))?;
 
-        av_service
-            .action(&self.device_url, "Stop", "<InstanceID>0</InstanceID>")
-            .await
-            .map_err(|e| DlnaError::Playback(e.to_string()))?;
+        Self::run_action(
+            av_service,
+            &self.device_url,
+            "Stop",
+            "<InstanceID>0</InstanceID>",
+            10,
+        )
+        .await?;
 
         self.is_playing = false;
         self.current_uri = None;
@@ -256,10 +289,7 @@ impl DlnaConnection {
             time_str
         );
 
-        av_service
-            .action(&self.device_url, "Seek", &payload)
-            .await
-            .map_err(|e| DlnaError::Playback(e.to_string()))?;
+        Self::run_action(av_service, &self.device_url, "Seek", &payload, 10).await?;
 
         log::info!("DLNA: Seek to {}", time_str);
         Ok(())
@@ -283,13 +313,58 @@ impl DlnaConnection {
             dlna_volume
         );
 
-        rc_service
-            .action(&self.device_url, "SetVolume", &payload)
-            .await
-            .map_err(|e| DlnaError::Playback(e.to_string()))?;
+        Self::run_action(rc_service, &self.device_url, "SetVolume", &payload, 10).await?;
 
         log::info!("DLNA: Set volume to {}", dlna_volume);
         Ok(())
+    }
+
+    /// Set mute on/off (RenderingControl SetMute, Master channel). Companion to
+    /// `set_volume` — was missing from the crate.
+    pub async fn set_mute(&mut self, mute: bool) -> Result<(), DlnaError> {
+        if !self.connected {
+            return Err(DlnaError::NotConnected);
+        }
+
+        let rc_service = self.rendering_control_service.as_ref().ok_or_else(|| {
+            DlnaError::Playback("Device has no RenderingControl service".to_string())
+        })?;
+
+        let payload = format!(
+            "<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredMute>{}</DesiredMute>",
+            if mute { 1 } else { 0 }
+        );
+
+        Self::run_action(rc_service, &self.device_url, "SetMute", &payload, 10).await?;
+
+        log::info!("DLNA: Set mute to {}", mute);
+        Ok(())
+    }
+
+    /// Query current mute state (RenderingControl GetMute, Master channel).
+    pub async fn get_mute(&self) -> Result<bool, DlnaError> {
+        if !self.connected {
+            return Err(DlnaError::NotConnected);
+        }
+
+        let rc_service = self.rendering_control_service.as_ref().ok_or_else(|| {
+            DlnaError::Playback("Device has no RenderingControl service".to_string())
+        })?;
+
+        let response = Self::run_action(
+            rc_service,
+            &self.device_url,
+            "GetMute",
+            "<InstanceID>0</InstanceID><Channel>Master</Channel>",
+            5,
+        )
+        .await?;
+
+        let muted = response
+            .get("CurrentMute")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        Ok(muted)
     }
 
     /// Get current playback position and transport state
