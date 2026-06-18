@@ -337,6 +337,8 @@ impl SlintCastService {
             self.restore_qconnect().await;
             self.inner.lock().await.qconnect_was_on_before_cast = false;
         }
+        // Hand the lyrics position source back to the local player.
+        crate::lyrics_sync::clear_remote_anchor();
         self.push_connection_state().await;
     }
 
@@ -723,6 +725,21 @@ impl SlintCastService {
             }
         };
 
+        // Many DLNA renderers report TrackDuration as 0 / NOT_IMPLEMENTED in
+        // GetPositionInfo, which left the seekbar permanently full (position/0 ->
+        // clamped to 1.0) with no total time. Fall back to the track's catalog
+        // duration (the position from the renderer is still authoritative).
+        let duration = if duration > 0.0 {
+            duration
+        } else {
+            self.runtime
+                .core()
+                .current_track()
+                .await
+                .map(|t| t.duration_secs as f64)
+                .unwrap_or(0.0)
+        };
+
         // Track-end detection (mirrors castStore): Chromecast {PLAYING,BUFFERING}
         // -> IDLE; DLNA PLAYING -> {STOPPED, NO_MEDIA_PRESENT}. One-shot latch,
         // reset on PLAYING.
@@ -743,6 +760,19 @@ impl SlintCastService {
             }
             ended
         };
+
+        // Feed the lyrics engine our position so it auto-follows while casting
+        // (the local poll is skipped, so it can't drive lyrics). The 30Hz sync
+        // engine extrapolates between these 1s ticks, same as the QConnect path.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        crate::lyrics_sync::publish_remote_anchor(
+            (position.max(0.0) * 1000.0) as u64,
+            now_ms,
+            playing,
+        );
 
         // Push position to CastState + the now-playing bar (the local poll is
         // stopped while casting, so the cast poll drives the bar).

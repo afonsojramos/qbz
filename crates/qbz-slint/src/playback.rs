@@ -3482,18 +3482,14 @@ pub fn start_poll_loop(
                 continue;
             }
 
-            // Not in controller mode (no peer / returned to local): reset the
-            // peer-track edge var so re-entering the peer state refreshes meta.
-            last_peer_track_id = 0;
-            // Lyrics position source back to the local player (Q7 resolver).
-            crate::lyrics_sync::clear_remote_anchor();
-
             // --- CAST mode: the cast service's own 1s poll owns the bar -------
             // While a Chromecast/DLNA renderer is connected the local player is
             // stopped, so the local path below would push position=0 /
             // playing=false / local-volume every 450ms and fight the cast poll
-            // (the reported seekbar flicker, wrong play icon, dead volume bar).
-            // Skip it entirely; cast_service::poll_once drives the bar.
+            // (seekbar flicker, wrong play icon, dead volume bar). Skip it
+            // entirely; cast_service::poll_once drives the bar AND publishes the
+            // lyrics anchor. Checked BEFORE clear_remote_anchor() below so the
+            // local tick doesn't wipe the cast poll's lyrics anchor (auto-follow).
             if let Some(cast) = crate::cast_service::service() {
                 if cast.is_casting().await {
                     last_track_id = 0;
@@ -3502,6 +3498,12 @@ pub fn start_poll_loop(
                     continue;
                 }
             }
+
+            // Not in controller mode (no peer / returned to local): reset the
+            // peer-track edge var so re-entering the peer state refreshes meta.
+            last_peer_track_id = 0;
+            // Lyrics position source back to the local player (Q7 resolver).
+            crate::lyrics_sync::clear_remote_anchor();
 
             let event = runtime.core().player().get_playback_event();
 
