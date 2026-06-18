@@ -364,7 +364,16 @@ impl SlintCastService {
                     .ok_or_else(|| format!("Local file not found for track {}", track.id))?;
                 self.register_local(track.id, &path).await?
             }
-            "qobuz" | "qobuz_download" => self.register_qobuz(track.id).await?,
+            "qobuz" | "qobuz_download" => {
+                // The external-stream resolver is network/CMAF only (it does not
+                // read the offline cache), so Qobuz casting needs a connection.
+                // Local casting still works offline (handled above). Tracked as a
+                // follow-up (offline-cached Qobuz cast).
+                if crate::offline_mode::engine().is_offline() {
+                    return Err("Casting Qobuz tracks requires a connection".to_string());
+                }
+                self.register_qobuz(track.id).await?
+            }
             "plex" => {
                 // TODO(cast-plex): Plex casting needs the Plex bytes resolver
                 // (baseUrl/token/ratingKey -> proxied bytes). Not yet wired in

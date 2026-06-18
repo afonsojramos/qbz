@@ -436,6 +436,21 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
     // already adopted the new track meta in `refresh_now_playing_meta`; this
     // bridges the silent gap until the poll loop sees the audio advancing.
     set_loading(weak, track_id);
+    // CAST (Chromecast / DLNA): when a renderer is connected it owns playback —
+    // route the new track to the renderer instead of starting the local audio
+    // backend (no double audio). Takes priority over QConnect below.
+    if let Some(cast) = crate::cast_service::service() {
+        if cast.is_casting().await {
+            if let Some(qt) = runtime.core().current_track().await {
+                if let Err(e) = cast.cast_track(&qt).await {
+                    log::warn!("[Cast] play new track {track_id} failed: {e}");
+                    crate::toast::show_weak(weak, "Failed to cast track", crate::ToastKind::Error);
+                }
+            }
+            clear_loading(weak, track_id);
+            return;
+        }
+    }
     // QConnect CONTROLLER mode: when a PEER renderer owns playback, route the
     // new play to the peer instead of playing locally. `play_on_peer_if_active`
     // returns false in every non-controller situation (disconnected, renderer
