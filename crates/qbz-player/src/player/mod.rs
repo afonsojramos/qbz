@@ -47,7 +47,7 @@ use qbz_audio::{
     BitPerfectMode, DiagnosticSource, DynamicAmplify, LoudnessAnalyzer, LoudnessCache,
     TappedSource, VisualizerTap,
 };
-use qbz_models::Quality;
+use qbz_models::{AssetOrigin, ExternalStreamAsset, Quality, StreamQualityInfo};
 use qbz_qobuz::QobuzClient;
 
 /// Commands sent to the audio thread
@@ -3763,6 +3763,89 @@ impl Player {
         downloaded
     }
 
+    /// Resolve a fully-materialized audio asset for an EXTERNAL renderer
+    /// (Chromecast / DLNA), carrying the bytes verbatim plus the MIME and the
+    /// quality that was ACTUALLY delivered. Used by the Cast path through the
+    /// local media server.
+    ///
+    /// Unlike `fetch_for_gapless`, this deliberately does NOT read the local
+    /// playback cache: those bytes were fetched at the user's *local* quality
+    /// setting, whereas casting attempts the best tier (UltraHiRes-first) and
+    /// must report the real delivered quality. The CMAF path is preferred (it
+    /// yields decrypted FLAC and exposes the resolved sample-rate/bit-depth);
+    /// the legacy stream-URL download is the fallback.
+    pub async fn fetch_for_external_stream(
+        &self,
+        client: &QobuzClient,
+        track_id: u64,
+        quality: Quality,
+    ) -> Option<ExternalStreamAsset> {
+        // Preferred: CMAF full download (Akamai CDN) -> decrypted FLAC.
+        match qbz_qobuz::cmaf::download_full_with_quality(client, track_id, quality).await {
+            Ok((bytes, q)) => {
+                log::info!(
+                    "[CAST-FETCH] Track {track_id} via CMAF: {} bytes, format_id={}, {:?} kHz/{:?}-bit",
+                    bytes.len(),
+                    q.format_id,
+                    q.sampling_rate_khz,
+                    q.bit_depth
+                );
+                // Warm L1 so a subsequent local replay skips the network.
+                self.audio_cache.insert(track_id, bytes.clone());
+                return Some(ExternalStreamAsset {
+                    bytes,
+                    content_type: "audio/flac".to_string(),
+                    quality: q,
+                    duration_secs: None,
+                    origin: AssetOrigin::Network,
+                });
+            }
+            Err(e) => {
+                log::warn!("[CAST-FETCH] CMAF failed for track {track_id}: {e}, trying legacy");
+            }
+        }
+
+        // Fallback: legacy stream URL + plain HTTP download. Quality and MIME
+        // come from the resolved StreamUrl (which carries the granted tier).
+        match client.get_stream_url_with_fallback(track_id, quality).await {
+            Ok(stream_url) => {
+                let content_type =
+                    external_content_type(&stream_url.mime_type, stream_url.format_id);
+                let q = StreamQualityInfo::from_raw(
+                    stream_url.format_id,
+                    Some(stream_url.sampling_rate),
+                    stream_url.bit_depth,
+                );
+                match self.download_audio(&stream_url.url).await {
+                    Ok(bytes) => {
+                        log::info!(
+                            "[CAST-FETCH] Track {track_id} via legacy: {} bytes, format_id={}, ct={}",
+                            bytes.len(),
+                            q.format_id,
+                            content_type
+                        );
+                        self.audio_cache.insert(track_id, bytes.clone());
+                        Some(ExternalStreamAsset {
+                            bytes,
+                            content_type,
+                            quality: q,
+                            duration_secs: None,
+                            origin: AssetOrigin::Network,
+                        })
+                    }
+                    Err(e) => {
+                        log::warn!("[CAST-FETCH] Legacy download failed for {track_id}: {e}");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[CAST-FETCH] No stream URL for {track_id}: {e}");
+                None
+            }
+        }
+    }
+
     /// Stream CMAF segments to the player's buffer, decrypting on the fly.
     ///
     /// Writes the FLAC header first so the decoder can identify the format,
@@ -4234,9 +4317,27 @@ pub struct PlaybackState {
     pub volume: f32,
 }
 
+/// Pick the MIME to advertise to an external renderer for a legacy stream-URL
+/// download. Prefer the server-provided `mime_type`; when it is empty (Qobuz
+/// can return `""`), fall back by format id so the renderer is never handed an
+/// empty content type (which some Chromecast/DLNA renderers reject).
+pub fn external_content_type(mime: &str, format_id: u32) -> String {
+    let trimmed = mime.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    match qbz_models::Quality::from_id(format_id) {
+        Some(qbz_models::Quality::Mp3) => "audio/mpeg".to_string(),
+        // Lossless / HiRes / UltraHiRes are FLAC over the file/url path.
+        Some(_) => "audio/flac".to_string(),
+        None => "audio/flac".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::compute_needs_new_stream;
+    use super::external_content_type;
 
     #[test]
     fn no_stream_always_needs_new() {
@@ -4352,5 +4453,40 @@ mod tests {
             .store(now_ms - 10_000, Ordering::SeqCst);
         state.position_at_start.store(299, Ordering::SeqCst);
         assert_eq!(state.current_position_ms(), 300_000);
+    }
+
+    #[test]
+    fn external_content_type_prefers_server_mime() {
+        assert_eq!(external_content_type("audio/flac", 7), "audio/flac");
+        assert_eq!(external_content_type("audio/mpeg", 5), "audio/mpeg");
+        // Whitespace-only is treated as empty.
+        assert_eq!(external_content_type("  ", 6), "audio/flac");
+    }
+
+    #[test]
+    fn external_content_type_falls_back_by_format_id() {
+        // Empty MIME (Qobuz can return "") -> derive from format id.
+        assert_eq!(external_content_type("", 5), "audio/mpeg"); // Mp3
+        assert_eq!(external_content_type("", 6), "audio/flac"); // Lossless
+        assert_eq!(external_content_type("", 7), "audio/flac"); // HiRes
+        assert_eq!(external_content_type("", 27), "audio/flac"); // UltraHiRes
+        assert_eq!(external_content_type("", 999), "audio/flac"); // unknown -> flac
+    }
+
+    #[test]
+    fn stream_quality_normalizes_units() {
+        use qbz_models::StreamQualityInfo;
+        // kHz input stays kHz.
+        let khz = StreamQualityInfo::from_raw(7, Some(96.0), Some(24));
+        assert_eq!(khz.sampling_rate_khz, Some(96.0));
+        // Hz input is converted to kHz.
+        let hz = StreamQualityInfo::from_raw(27, Some(192000.0), Some(24));
+        assert_eq!(hz.sampling_rate_khz, Some(192.0));
+        // Zero / unknown -> None.
+        let zero = StreamQualityInfo::from_raw(6, Some(0.0), Some(16));
+        assert_eq!(zero.sampling_rate_khz, None);
+        // Tier label from format id.
+        assert_eq!(khz.tier_label(), "FLAC 24-bit/≤96kHz");
+        assert_eq!(hz.tier_label(), "FLAC 24-bit/>96kHz");
     }
 }

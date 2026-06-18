@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use qbz_models::{
+    ExternalStreamAsset,
     Album, Artist, ArtistAlbums, CoreEvent, DiscoverAlbum, DiscoverData, DiscoverPlaylistsResponse,
     DiscoverResponse, FrontendAdapter, GenreInfo, LabelExploreResponse, LabelGetListResponse,
     LabelListPage, LabelPageData, LabelStoryResponse, PageArtistResponse,
@@ -662,6 +663,23 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         let guard = self.client.read().await;
         let client = guard.as_ref()?;
         self.player.fetch_for_gapless(client, track_id, quality).await
+    }
+
+    /// Resolve a fully-materialized audio asset (bytes + MIME + delivered
+    /// quality) for an EXTERNAL renderer (Chromecast / DLNA). The Cast service
+    /// hands the bytes to the local media server and the quality to the UI.
+    /// Attempts the best tier first (pass `Quality::UltraHiRes`); the resolver
+    /// falls back down the chain and reports what was actually delivered.
+    pub async fn fetch_for_external_stream_resolved(
+        &self,
+        track_id: u64,
+        quality: Quality,
+    ) -> Option<ExternalStreamAsset> {
+        let guard = self.client.read().await;
+        let client = guard.as_ref()?;
+        self.player
+            .fetch_for_external_stream(client, track_id, quality)
+            .await
     }
 
     /// Advance to next track in queue

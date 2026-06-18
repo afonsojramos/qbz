@@ -129,6 +129,92 @@ pub struct StreamRestriction {
     pub code: String,
 }
 
+// ============ External streaming (Cast / DLNA) ============
+
+/// Resolved audio quality actually delivered for an external stream, in the
+/// kHz convention used across the catalog and [`StreamUrl`]. Surfaced so the
+/// UI can show the REAL quality of a cast stream, which can fall back below
+/// the requested tier (HiRes -> Lossless -> Mp3) without the user knowing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamQualityInfo {
+    /// Qobuz format id: 5=MP3, 6=Lossless, 7=HiRes, 27=UltraHiRes.
+    pub format_id: u32,
+    /// Sampling rate in kHz (e.g. 96.0, 192.0), when known.
+    pub sampling_rate_khz: Option<f64>,
+    /// Bit depth (16 / 24), when known.
+    pub bit_depth: Option<u32>,
+}
+
+impl StreamQualityInfo {
+    /// Build from a raw sampling-rate value whose unit may be kHz or Hz
+    /// depending on the Qobuz endpoint (`get_stream_url` reports kHz as f64,
+    /// `file/url` reports an integer that has been observed as kHz). Normalize
+    /// to kHz robustly: any real audio rate is < 1000 kHz and >= 8000 Hz, so a
+    /// value >= 1000 is Hz and gets divided. Zero/negative -> unknown.
+    pub fn from_raw(format_id: u32, raw_rate: Option<f64>, bit_depth: Option<u32>) -> Self {
+        let sampling_rate_khz = raw_rate.and_then(|r| {
+            if r <= 0.0 {
+                None
+            } else if r >= 1000.0 {
+                Some(r / 1000.0)
+            } else {
+                Some(r)
+            }
+        });
+        Self {
+            format_id,
+            sampling_rate_khz,
+            bit_depth,
+        }
+    }
+
+    /// The `Quality` tier this format id maps to, if recognized.
+    pub fn quality(&self) -> Option<Quality> {
+        Quality::from_id(self.format_id)
+    }
+
+    /// Coarse tier label like "FLAC 24-bit/>96kHz" (from the format id).
+    pub fn tier_label(&self) -> &'static str {
+        self.quality().map(|q| q.label()).unwrap_or("Unknown")
+    }
+}
+
+/// Where the bytes for an external/cast track were resolved from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AssetOrigin {
+    Network,
+    Cache,
+    Offline,
+}
+
+/// A fully-materialized audio asset to hand to an external renderer
+/// (Chromecast / DLNA) through the local media server. Carries the raw bytes
+/// VERBATIM (no transcode), the MIME to advertise, and the quality actually
+/// resolved so the UI can display it. Casting bypasses the local audio
+/// backend, so this is the only place the delivered quality is known.
+#[derive(Clone)]
+pub struct ExternalStreamAsset {
+    pub bytes: Vec<u8>,
+    pub content_type: String,
+    pub quality: StreamQualityInfo,
+    /// Track duration in seconds, when known by the resolver.
+    pub duration_secs: Option<f64>,
+    pub origin: AssetOrigin,
+}
+
+impl std::fmt::Debug for ExternalStreamAsset {
+    // Don't dump the whole byte vec into logs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExternalStreamAsset")
+            .field("bytes", &format_args!("{} bytes", self.bytes.len()))
+            .field("content_type", &self.content_type)
+            .field("quality", &self.quality)
+            .field("duration_secs", &self.duration_secs)
+            .field("origin", &self.origin)
+            .finish()
+    }
+}
+
 // ============ CMAF Stream Types ============
 
 /// Response from POST /api.json/0.2/session/start

@@ -35,7 +35,7 @@
 
 use std::sync::Arc;
 
-use qbz_models::Quality;
+use qbz_models::{Quality, StreamQualityInfo};
 
 use crate::client::QobuzClient;
 use crate::error::Result;
@@ -205,6 +205,31 @@ pub async fn download_full_with_progress(
     quality: Quality,
     on_progress: Option<CmafProgressCallback>,
 ) -> std::result::Result<Vec<u8>, String> {
+    download_full_with_quality_progress(client, track_id, quality, on_progress)
+        .await
+        .map(|(bytes, _quality)| bytes)
+}
+
+/// Like [`download_full`] but also returns the quality actually resolved from
+/// the CMAF init segment (`format_id` / `sampling_rate` / `bit_depth`). Used
+/// by the external-stream (Cast / DLNA) path, which must surface the real
+/// delivered quality. The CMAF path always yields decrypted FLAC, so the
+/// caller's content type is `audio/flac`.
+pub async fn download_full_with_quality(
+    client: &QobuzClient,
+    track_id: u64,
+    quality: Quality,
+) -> std::result::Result<(Vec<u8>, StreamQualityInfo), String> {
+    download_full_with_quality_progress(client, track_id, quality, None).await
+}
+
+/// [`download_full_with_quality`] + a per-segment progress callback.
+pub async fn download_full_with_quality_progress(
+    client: &QobuzClient,
+    track_id: u64,
+    quality: Quality,
+    on_progress: Option<CmafProgressCallback>,
+) -> std::result::Result<(Vec<u8>, StreamQualityInfo), String> {
     let setup = setup_streaming(client, track_id, quality).await?;
     let http = build_cdn_client()?;
 
@@ -230,7 +255,14 @@ pub async fn download_full_with_progress(
         output.len() as f64 / (1024.0 * 1024.0),
         total_size as f64 / (1024.0 * 1024.0),
     );
-    Ok(output)
+
+    // `from_raw` normalizes the rate unit (kHz vs Hz) defensively.
+    let quality_info = StreamQualityInfo::from_raw(
+        setup.format_id,
+        setup.sampling_rate.map(|v| v as f64),
+        setup.bit_depth,
+    );
+    Ok((output, quality_info))
 }
 
 /// Download a track's complete CMAF stream and return it as a raw (still
