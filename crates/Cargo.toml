@@ -78,3 +78,12 @@ strsim = "0.11"
 
 # Note: Linux-specific dependencies (alsa) go in individual crate Cargo.toml files
 # because workspace manifests cannot have [target] sections
+
+[patch.crates-io]
+# Slint 1.16's femtovg-wgpu renderer leaves the wgpu surface alpha mode at
+# `Auto`, which resolves as an opaque compositor surface on KWin/Wayland and
+# makes borderless transparent windows show a black rectangular backing. The
+# patch keeps Slint pinned but chooses a supported non-opaque composite alpha
+# mode when the surface advertises one, so the miniplayer card can have real
+# transparent rounded corners.
+i-slint-renderer-femtovg = { path = "vendor/i-slint-renderer-femtovg-1.16.1" }
