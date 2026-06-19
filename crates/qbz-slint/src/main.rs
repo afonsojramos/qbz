@@ -672,55 +672,47 @@ fn install_browser_mouse_nav(window: &AppWindow) {
 fn wire_window_controls(window: &AppWindow) {
     let actions = window.global::<WindowControlActions>();
 
+    // Window state (minimize / maximize / fullscreen) is driven through SLINT's
+    // own Window API, NOT a direct winit call. The winit adapter reconciles the
+    // window from Slint's own properties on every realization
+    // (winitwindowadapter.rs ~1328 toggles winit to match `properties.is_fullscreen()`),
+    // so a direct `winit.set_fullscreen(..)` gets UNDONE on the next frame — the
+    // same "use Slint's native mechanism, don't fight winit" lesson as the
+    // miniplayer's decorations fix. `slint::Window::{set_minimized,set_maximized,
+    // set_fullscreen}` (api.rs:576/586/596) write the property the adapter reads.
+
     // Minimize.
     {
         let weak = window.as_weak();
         actions.on_minimize(move || {
             if let Some(w) = weak.upgrade() {
-                w.window().with_winit_window(|win| {
-                    win.set_minimized(true);
-                });
+                w.window().set_minimized(true);
             }
         });
     }
 
-    // Maximize / Restore toggle. Read current state inside the closure, flip it,
-    // then mirror the new value onto the global for the glyph swap.
+    // Maximize / Restore toggle.
     {
         let weak = window.as_weak();
         actions.on_toggle_maximize(move || {
             if let Some(w) = weak.upgrade() {
-                let new_max = w.window().with_winit_window(|win| {
-                    let m = win.is_maximized();
-                    win.set_maximized(!m);
-                    !m
-                });
-                if let Some(m) = new_max {
-                    w.global::<WindowControlActions>().set_is_maximized(m);
-                }
+                let m = !w.window().is_maximized();
+                w.window().set_maximized(m);
+                w.global::<WindowControlActions>().set_is_maximized(m);
             }
         });
     }
 
     // Fullscreen toggle (true fullscreen hides the native titlebar — the
-    // genuinely useful immersive control).
+    // genuinely useful immersive control). MUST go through slint::Window so the
+    // realization reconciliation keeps it instead of reverting it.
     {
         let weak = window.as_weak();
         actions.on_toggle_fullscreen(move || {
-            use i_slint_backend_winit::winit::window::Fullscreen;
             if let Some(w) = weak.upgrade() {
-                let new_fs = w.window().with_winit_window(|win| {
-                    if win.fullscreen().is_some() {
-                        win.set_fullscreen(None);
-                        false
-                    } else {
-                        win.set_fullscreen(Some(Fullscreen::Borderless(None)));
-                        true
-                    }
-                });
-                if let Some(fs) = new_fs {
-                    w.global::<WindowControlActions>().set_is_fullscreen(fs);
-                }
+                let fs = !w.window().is_fullscreen();
+                w.window().set_fullscreen(fs);
+                w.global::<WindowControlActions>().set_is_fullscreen(fs);
             }
         });
     }
