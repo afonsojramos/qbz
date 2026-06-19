@@ -77,25 +77,6 @@ export component LyricsSidebar inherits Rectangle {
             height: 56px;
             spacing: Spacing.sm;
 
-            // Icon tile — 36px, mic-vocal 18, accent tint.
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 36px;
-                    height: 36px;
-                    border-radius: Radius.sm;
-                    background: Theme.surface-elevated;
-                    QbzIcon {
-                        source: @image-url("../assets/icons/mic-vocal.svg");
-                        width: 18px;
-                        height: 18px;
-                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                        tint: Theme.accent;
-                    }
-                }
-            }
-
             // Title block: overline + playing-track meta.
             VerticalLayout {
                 alignment: center;
