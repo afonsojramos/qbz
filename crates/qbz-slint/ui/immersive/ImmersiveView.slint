@@ -814,79 +814,147 @@ component ImmersiveWindowBtn inherits Rectangle {
     }
 }
 
-// Header-right window-controls cluster, ported 1:1 from Tauri's ImmersiveHeader
-// (ImmersiveHeader.svelte:343-410 — the .window-controls capsule). Six controls:
-// Drag / Fullscreen / Maximize-Restore / Minimize / Exit-immersive (ChevronDown)
-// / Close-app (X). All native-window controls (Drag/Fullscreen/Maximize/Minimize/
-// Close) route through the WindowControlActions global, wired in
-// src/main.rs::wire_window_controls onto the MAIN AppWindow's winit handle.
-// Exit Immersive keeps its in-overlay close path (ImmersiveState.open = false +
-// VisualizerState.set-enabled(false)). Same flat-glass capsule idiom as the
-// dropdown.
+// Header-right window-controls cluster (overhaul 2026-06-19): a COLLAPSED CIRCLE
+// (sliders glyph, 36px) pinned to the header's RIGHT edge by default. On hover it
+// EXPANDS LEFTWARD into a glass capsule revealing TWO controls — Fullscreen toggle
+// and Close-app — with the RIGHT EDGE FIXED so the growth never pushes the
+// centered search (declaration order keeps it on top per ADR-009; on narrow
+// windows the capsule simply overlays nearby space, it never displaces search).
+//
+// The two ACTIVE controls are Fullscreen toggle and Close (exit the immersive
+// overlay). The window-management controls (Minimize, Maximize/Restore, Drag,
+// Close-app) are PARKED as commented-out blocks below — owner: "mientras no
+// hagamos el qbz titlebar, quitamos maximizar/restaurar minimizar y drag ...
+// déjalos comentados para cuando se haga eso". Their WindowControlActions
+// callbacks + Rust wiring stay intact; restoring = uncomment the blocks and grow
+// `expanded-width` / `row-width` to fit them.
+//
+// Hover source: a TouchArea's `has-hover` covering the whole capsule region
+// (`TouchArea.moved` only fires while pressed — project animation/hover gotcha).
+// Width is ABSOLUTELY computed and right-anchored by the PARENT (this component
+// reports a fixed collapsed footprint via its own width binding to `expanded`,
+// and the parent pins `x: root.width - pad - self.width`). Collapsed = one circle
+// (36px); expanded = circle + two 32px buttons + gaps (~120px). Width animates.
 component ImmersiveWindowControls inherits Rectangle {
+    // The two expanded control buttons (32px) + the collapsed circle slot (36px),
+    // 3px gaps, 2px inset on both sides. Collapsed shows only the circle.
+    property <length> collapsed-width: 40px;
+    property <length> expanded-width: 124px;
+    in-out property <bool> expanded: hover-ta.has-hover;
+
     height: 36px;
-    width: cluster.preferred-width + 8px;
+    width: root.expanded ? root.expanded-width : root.collapsed-width;
+    animate width { duration: 150ms; easing: ease-in-out; }
     border-radius: 18px;
+    // Collapsed: a plain glass circle. Expanded: the same glass capsule.
     background: #00000080;
     border-width: 1px;
-    border-color: #ffffff2e;
+    border-color: root.expanded ? #ffffff42 : #ffffff2e;
+    animate border-color { duration: 150ms; }
     drop-shadow-blur: 32px;
     drop-shadow-color: #00000066;
     drop-shadow-offset-y: 8px;
+    clip: true;
 
-    cluster := HorizontalLayout {
-        x: 2px;
+    // Whole-capsule hover region. Declared FIRST so it sits at the BOTTOM of the
+    // declaration-order stack (ADR-009): the ImmersiveWindowBtn TouchAreas below
+    // are declared later and therefore receive clicks, while this area still
+    // registers `has-hover` over the full capsule to drive the expand. It has NO
+    // click handler, so taps on empty capsule space are inert.
+    hover-ta := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+    }
+
+    // Collapsed indicator: the sliders glyph, pinned to the RIGHT edge so it
+    // stays put as the capsule grows leftward. Fades out as the buttons appear.
+    Rectangle {
+        x: root.width - self.width - 2px;
         y: 2px;
+        width: 32px;
         height: 32px;
-        spacing: 3px;
-        alignment: center;
-
-        // Drag (move the native window).
-        ImmersiveWindowBtn {
-            icon: @image-url("../assets/icons/move.svg");
-            clicked => { WindowControlActions.drag-move(); }
+        opacity: root.expanded ? 0.0 : 1.0;
+        animate opacity { duration: 120ms; }
+        QbzIcon {
+            source: @image-url("../assets/icons/sliders-horizontal.svg");
+            width: 16px;
+            height: 16px;
+            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+            tint: hover-ta.has-hover ? #ffffff : #ffffffcc;
         }
+    }
+
+    // Expanded buttons row, right-anchored (absolute, per edge-pin rule). The row
+    // is sized to the two 32px buttons + 3px gap; its right edge sits at a fixed
+    // 2px inset from the capsule's right edge, so it reveals leftward. Fades/
+    // slides in on hover; pointer-events only matter while expanded (collapsed it
+    // sits under the circle but is transparent + behind the hover TouchArea).
+    Rectangle {
+        property <length> row-width: 67px; // 32 + 3 + 32
+        x: root.width - self.width - 2px;
+        y: 2px;
+        width: self.row-width;
+        height: 32px;
+        opacity: root.expanded ? 1.0 : 0.0;
+        animate opacity { duration: 150ms; }
 
         // Fullscreen toggle — glyph swaps on WindowControlActions.is-fullscreen
-        // (shrink/minimize-2 when fullscreen, expand/maximize-2 otherwise).
-        ImmersiveWindowBtn {
+        // (minimize-2 when fullscreen, maximize-2 otherwise).
+        fs-btn := ImmersiveWindowBtn {
+            x: 0px;
+            y: 0px;
             icon: WindowControlActions.is-fullscreen
                 ? @image-url("../assets/icons/minimize-2.svg")
                 : @image-url("../assets/icons/maximize-2.svg");
             clicked => { WindowControlActions.toggle-fullscreen(); }
         }
 
-        // Maximize / Restore — glyph swaps on WindowControlActions.is-maximized
-        // (copy = restore/overlap when maximized, square otherwise).
+        // Close — EXITS the immersive overlay (not close-app; close-app is a
+        // titlebar function, parked below). Plain X (leaving the overlay is not
+        // a destructive action), same path as Escape and the player menu.
         ImmersiveWindowBtn {
-            icon: WindowControlActions.is-maximized
-                ? @image-url("../assets/icons/copy.svg")
-                : @image-url("../assets/icons/square.svg");
-            clicked => { WindowControlActions.toggle-maximize(); }
-        }
-
-        // Minimize.
-        ImmersiveWindowBtn {
-            icon: @image-url("../assets/icons/minus.svg");
-            clicked => { WindowControlActions.minimize(); }
-        }
-
-        // Exit Immersive — the in-overlay close path (ChevronDown glyph, 1:1
-        // with Tauri's exit-immersive control).
-        ImmersiveWindowBtn {
-            icon: @image-url("../assets/icons/chevron-down.svg");
+            x: 35px; // 32 + 3 gap
+            y: 0px;
+            icon: @image-url("../assets/icons/x.svg");
             clicked => {
                 ImmersiveState.open = false;
                 VisualizerState.set-enabled(false);
             }
         }
 
-        // Close App — danger-tinted X; routes to the AppWindow close-app path.
-        ImmersiveWindowBtn {
-            icon: @image-url("../assets/icons/x.svg");
-            danger: true;
-            clicked => { WindowControlActions.close-app(); }
-        }
+        // --- PARKED for the qbz custom titlebar (uncomment when it lands) -----
+        // Owner removed the window-management controls from the immersive header
+        // until the qbz titlebar exists. To restore: uncomment, lay them out to
+        // the LEFT (lower x) of the two active buttons, and bump `expanded-width`
+        // (+~35px each) + this row's `row-width`. Callbacks live in
+        // WindowControlActions (global + Rust wiring, both intact).
+        //
+        // Minimize:
+        // ImmersiveWindowBtn {
+        //     icon: @image-url("../assets/icons/minus.svg");
+        //     clicked => { WindowControlActions.minimize(); }
+        // }
+        // Maximize / Restore (glyph swaps on WindowControlActions.is-maximized):
+        // ImmersiveWindowBtn {
+        //     icon: WindowControlActions.is-maximized
+        //         ? @image-url("../assets/icons/copy.svg")
+        //         : @image-url("../assets/icons/square.svg");
+        //     clicked => { WindowControlActions.toggle-maximize(); }
+        // }
+        // Drag (start a window-move drag):
+        // ImmersiveWindowBtn {
+        //     icon: @image-url("../assets/icons/move.svg");
+        //     clicked => { WindowControlActions.drag-move(); }
+        // }
+        // Close app (quit the application):
+        // ImmersiveWindowBtn {
+        //     icon: @image-url("../assets/icons/x.svg");
+        //     danger: true;
+        //     clicked => { WindowControlActions.close-app(); }
+        // }
     }
 }
 
@@ -1244,62 +1312,72 @@ export component ImmersiveView inherits Rectangle {
         media-action(kind, id, action) => { root.media-action(kind, id, action); }
     }
 
-    // (4) Header (overhaul 2026-06-19): three groups, left -> right —
-    //   [ TV-glyph two-level dropdown ]  [ inert Search placeholder ]  [ controls ]
-    // Replaces the old ModeBar (focus/split toggle + tabs) AND the ShaderBar;
-    // both now live inside the single dropdown. Shares the chrome-visible flag
-    // so the whole header fades/wakes with the player (no second timer).
-    HorizontalLayout {
+    // (4) Header (overhaul 2026-06-19): three ABSOLUTELY-positioned groups inside
+    // a fixed-geometry band so the SEARCH is dead-centered to the WINDOW (like the
+    // main UI), independent of the asymmetric left/right group widths:
+    //   - LEFT  : the view-menu trigger pinned to the band's left edge (x: pad).
+    //   - CENTER: the search, `x = (band.width - search.width) / 2` — centered to
+    //             the band (full header width), NOT to a stretch slot, so the
+    //             asymmetric left trigger + right controls never push it off true
+    //             center.
+    //   - RIGHT : the controls capsule pinned to the band's RIGHT edge via the
+    //             edge-pin rule (`x: band.width - pad - self.width`); because its
+    //             width animates on hover-expand, anchoring on its OWN `self.width`
+    //             keeps the right edge fixed while it grows leftward — and since it
+    //             is declared LAST it stacks ABOVE the search (ADR-009), so on
+    //             narrow windows it overlays the search rather than displacing it.
+    // A plain Rectangle band (not a layout) hosts the absolute positions. Shares
+    // the chrome-visible flag so the whole header fades/wakes with the player.
+    header-band := Rectangle {
         x: 24px;
         y: 16px;
         width: root.width - 48px;
         height: 36px;
-        spacing: 16px;
+        background: transparent;
         opacity: root.chrome-visible ? 1.0 : 0.0;
         animate opacity { duration: 300ms; }
 
-        // LEFT: the TV-glyph two-level view dropdown. Fires the same per-panel
-        // entry triggers the old ModeBar tabs did (load-on-entry preserved).
-        VerticalLayout {
-            horizontal-stretch: 0;
-            alignment: start;
-            ImmersiveViewMenu {
-                lyrics-entered => {
-                    LyricsState.panel-opened();
-                    root.wake();
-                }
-                queue-entered => {
-                    QueueState.panel-opened();
-                    root.wake();
-                }
-                trackinfo-entered => {
-                    TrackInfoActions.load-inline(NowPlayingState.track-id);
-                    root.wake();
-                }
-                suggestions-entered => {
-                    SuggestionsActions.load(NowPlayingState.track-id);
-                    root.wake();
-                }
-                wake => { root.wake(); }
+        // LEFT: the TV-glyph two-level view dropdown, pinned to the left edge.
+        // Fires the same per-panel entry triggers the old ModeBar tabs did
+        // (load-on-entry preserved).
+        ImmersiveViewMenu {
+            x: 0px;
+            y: 0px;
+            lyrics-entered => {
+                LyricsState.panel-opened();
+                root.wake();
             }
+            queue-entered => {
+                QueueState.panel-opened();
+                root.wake();
+            }
+            trackinfo-entered => {
+                TrackInfoActions.load-inline(NowPlayingState.track-id);
+                root.wake();
+            }
+            suggestions-entered => {
+                SuggestionsActions.load(NowPlayingState.track-id);
+                root.wake();
+            }
+            wake => { root.wake(); }
         }
 
-        // CENTER: inert search placeholder (future-session search lives here).
-        // Bounded so it doesn't stretch the full width; centered in the gap.
-        Rectangle {
-            horizontal-stretch: 1;
-            ImmersiveSearchPlaceholder {
-                width: Math.min(parent.width, 420px);
-                x: (parent.width - self.width) / 2;
-                y: 0px;
-            }
+        // CENTER: inert search placeholder, ABSOLUTELY centered to the band width
+        // (= header width). Bounded (max 420px) via Math.min — `max-width` is
+        // ignored on hand-positioned Rectangles. Declared before the controls so
+        // the controls capsule overlays it (never the reverse) on narrow windows.
+        search-box := ImmersiveSearchPlaceholder {
+            width: Math.min(header-band.width, 420px);
+            x: (header-band.width - self.width) / 2;
+            y: 0px;
         }
 
-        // RIGHT: window-controls cluster (ported from Tauri's ImmersiveHeader).
-        VerticalLayout {
-            horizontal-stretch: 0;
-            alignment: start;
-            ImmersiveWindowControls { }
+        // RIGHT: collapsed-circle controls capsule, right-anchored (edge-pin rule).
+        // `self.width` animates on hover; anchoring on it keeps the RIGHT EDGE
+        // fixed while the capsule expands leftward. Declared LAST → stacks on top.
+        ImmersiveWindowControls {
+            x: header-band.width - self.width;
+            y: 0px;
         }
     }
 }
