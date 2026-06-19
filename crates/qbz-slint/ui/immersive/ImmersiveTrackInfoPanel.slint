@@ -7,18 +7,80 @@
 // Data is fed by crate::info_modals::load_track_info_inline via
 // TrackInfoActions.load-inline — it populates the SAME TrackInfoState the
 // floating modal reads, but never sets `open`, so the overlay modal does NOT
-// appear over the immersive view. The shared metadata/credit cells are reused
-// 1:1 from TrackInfoModal.slint (MetaCell / CreditCell).
+// appear over the immersive view.
 //
-// Rendered white-on-dark over the atmosphere backdrop (vs the modal's
-// surface-card), matching the other immersive split panels. Viewport dims are
-// passed as props (no `parent` in the root binding); no `opacity:` on the
-// root; no `changed` watcher on layout geometry (ADR-009 declaration order,
-// reference_slint_* gotchas).
+// CONTRAST: this panel renders OVER the dynamic album-art atmosphere backdrop,
+// whose brightness/hue VARY per album. The modal's shared MetaCell/CreditCell
+// label color (Theme.text-muted — a dark gray tuned for the dark surface-card)
+// disappears over a bright atmosphere, so this panel uses LOCAL cell variants
+// (MetaCellLight / CreditCellLight) with near-white labels/values that stay
+// legible on any background (does NOT rely solely on the split-right backing).
+//
+// Rendered white-on-dark over the atmosphere backdrop, matching the other
+// immersive split panels. Viewport dims are passed as props (no `parent` in the
+// root binding); no `opacity:` on the root; no `changed` watcher on layout
+// geometry (ADR-009 declaration order, reference_slint_* gotchas).
 
-import { TrackInfoState, TrackInfoActions } from "../state.slint";
-import { MetaCell, CreditCell } from "../album/TrackInfoModal.slint";
+import { TrackInfoState, TrackInfoActions, InfoCreditRow } from "../state.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
+
+// Local bright metadata cell: uppercase label (legible light tone over the
+// atmosphere, NOT the modal's dark text-muted) + a value supplied as a child.
+component MetaCellLight inherits VerticalLayout {
+    in property <string> label;
+    spacing: 6px;
+    Text {
+        text: root.label;
+        // Legible light label over a variable backdrop (was Theme.text-muted).
+        color: #ffffffb3;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.6px;
+    }
+    @children
+}
+
+// Local bright credit cell: role label (legible light) + clickable performer
+// names. Clipped so a long name list can't bleed into the neighbouring column.
+component CreditCellLight inherits VerticalLayout {
+    in property <InfoCreditRow> cell;
+    callback name-clicked(string /* name */, string /* role-raw */);
+    spacing: 6px;
+    Text {
+        text: root.cell.role;
+        color: #ffffffb3;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.6px;
+    }
+    Rectangle {
+        clip: true;
+        height: names-row.preferred-height;
+        names-row := HorizontalLayout {
+            alignment: start;
+            for name[j] in root.cell.names: HorizontalLayout {
+                nta := TouchArea {
+                    width: nm.preferred-width;
+                    height: nm.preferred-height;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.name-clicked(name, root.cell.role-raw);
+                    }
+                    nm := Text {
+                        text: name;
+                        color: nta.has-hover ? #b794f6 : #ffffff;
+                        font-size: 14px;
+                    }
+                }
+                if j < root.cell.names.length - 1: Text {
+                    text: ", ";
+                    color: #ffffffcc;
+                    font-size: 14px;
+                }
+            }
+        }
+    }
+}
 
 export component ImmersiveTrackInfoPanel inherits Rectangle {
     // Slot dimensions, supplied by the mount site (the split-right Rectangle).
@@ -45,7 +107,7 @@ export component ImmersiveTrackInfoPanel inherits Rectangle {
             // ---- Loading -----------------------------------------------
             if TrackInfoState.loading && TrackInfoState.error == "": Text {
                 text: @tr("Loading track info...");
-                color: #ffffff80;
+                color: #ffffffcc;
                 font-size: 18px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -59,13 +121,14 @@ export component ImmersiveTrackInfoPanel inherits Rectangle {
                 spacing: 8px;
                 Text {
                     text: @tr("Failed to load track info");
-                    color: #ffffff80;
+                    color: #ffffffe6;
                     font-size: 18px;
+                    font-weight: 600;
                     horizontal-alignment: center;
                 }
                 Text {
                     text: TrackInfoState.error;
-                    color: #ffffff66;
+                    color: #ffffff99;
                     font-size: 13px;
                     horizontal-alignment: center;
                     wrap: word-wrap;
@@ -75,7 +138,7 @@ export component ImmersiveTrackInfoPanel inherits Rectangle {
             // ---- Empty (no track / not yet loaded) ---------------------
             if !TrackInfoState.loading && TrackInfoState.error == "" && TrackInfoState.title == "": Text {
                 text: @tr("No track selected");
-                color: #ffffff66;
+                color: #ffffffb3;
                 font-size: 18px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -93,23 +156,23 @@ export component ImmersiveTrackInfoPanel inherits Rectangle {
 
                     body := VerticalLayout {
                         width: parent.width;
-                        padding-right: 12px;
+                        padding-right: 14px;
 
                         // Header: track title + album.
                         VerticalLayout {
-                            spacing: 4px;
-                            padding-bottom: 24px;
+                            spacing: 6px;
+                            padding-bottom: 28px;
                             Text {
                                 text: TrackInfoState.title;
                                 color: #ffffff;
-                                font-size: 24px;
+                                font-size: 26px;
                                 font-weight: 700;
                                 wrap: word-wrap;
                             }
                             if TrackInfoState.album != "": Text {
                                 text: TrackInfoState.album;
-                                color: #ffffff99;
-                                font-size: 18px;
+                                color: #ffffffcc;
+                                font-size: 17px;
                                 wrap: word-wrap;
                             }
                         }
@@ -119,30 +182,32 @@ export component ImmersiveTrackInfoPanel inherits Rectangle {
                             spacing: 24px;
                             HorizontalLayout {
                                 spacing: 24px;
-                                MetaCell {
+                                MetaCellLight {
                                     horizontal-stretch: 1;
                                     label: @tr("Duration");
                                     Text {
                                         text: TrackInfoState.duration;
                                         color: #ffffff;
                                         font-size: 14px;
+                                        font-weight: 500;
                                     }
                                 }
-                                MetaCell {
+                                MetaCellLight {
                                     horizontal-stretch: 1;
                                     label: @tr("Quality");
                                     Text {
                                         text: TrackInfoState.quality;
                                         color: #ffffff;
                                         font-size: 14px;
+                                        font-weight: 500;
                                     }
                                 }
-                                if TrackInfoState.isrc != "": MetaCell {
+                                if TrackInfoState.isrc != "": MetaCellLight {
                                     horizontal-stretch: 1;
                                     label: "ISRC";
                                     Text {
                                         text: TrackInfoState.isrc;
-                                        color: #ffffffb3;
+                                        color: #ffffffe6;
                                         font-size: 13px;
                                     }
                                 }
@@ -150,7 +215,7 @@ export component ImmersiveTrackInfoPanel inherits Rectangle {
                             }
                             if TrackInfoState.label != "": HorizontalLayout {
                                 spacing: 24px;
-                                MetaCell {
+                                MetaCellLight {
                                     horizontal-stretch: 1;
                                     label: @tr("Label");
                                     label-link := TouchArea {
@@ -167,6 +232,7 @@ export component ImmersiveTrackInfoPanel inherits Rectangle {
                                             color: (label-link.has-hover && TrackInfoState.label-id != "")
                                                 ? #b794f6 : #ffffff;
                                             font-size: 14px;
+                                            font-weight: 500;
                                         }
                                     }
                                 }
@@ -176,24 +242,24 @@ export component ImmersiveTrackInfoPanel inherits Rectangle {
                         }
 
                         // Grouped CREDITS (2-column), only when present.
-                        if TrackInfoState.credits.length > 0: Rectangle { height: 20px; }
+                        if TrackInfoState.credits.length > 0: Rectangle { height: 24px; }
                         if TrackInfoState.credits.length > 0: Rectangle {
                             height: 1px;
-                            background: #ffffff1a;
+                            background: #ffffff26;
                         }
-                        if TrackInfoState.credits.length > 0: Rectangle { height: 20px; }
+                        if TrackInfoState.credits.length > 0: Rectangle { height: 24px; }
                         if TrackInfoState.credits.length > 0: VerticalLayout {
-                            spacing: 16px;
+                            spacing: 18px;
                             for pair in TrackInfoState.credits: HorizontalLayout {
                                 spacing: 24px;
-                                CreditCell {
+                                CreditCellLight {
                                     horizontal-stretch: 1;
                                     cell: pair.left;
                                     name-clicked(n, r) => {
                                         TrackInfoActions.open-musician(n, r);
                                     }
                                 }
-                                if pair.has-right: CreditCell {
+                                if pair.has-right: CreditCellLight {
                                     horizontal-stretch: 1;
                                     cell: pair.right;
                                     name-clicked(n, r) => {
@@ -205,15 +271,15 @@ export component ImmersiveTrackInfoPanel inherits Rectangle {
                         }
 
                         // Copyright.
-                        if TrackInfoState.copyright != "": Rectangle { height: 20px; }
+                        if TrackInfoState.copyright != "": Rectangle { height: 24px; }
                         if TrackInfoState.copyright != "": Rectangle {
                             height: 1px;
-                            background: #ffffff1a;
+                            background: #ffffff26;
                         }
-                        if TrackInfoState.copyright != "": Rectangle { height: 20px; }
+                        if TrackInfoState.copyright != "": Rectangle { height: 24px; }
                         if TrackInfoState.copyright != "": Text {
                             text: TrackInfoState.copyright;
-                            color: #ffffff66;
+                            color: #ffffff99;
                             font-size: 12px;
                             wrap: word-wrap;
                         }

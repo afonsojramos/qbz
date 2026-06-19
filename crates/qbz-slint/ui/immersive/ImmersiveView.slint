@@ -435,10 +435,12 @@ component ImmersivePlayerBar inherits Rectangle {
 // One grouped section header inside the view menu ("Focus" / "Split").
 component ImmersiveMenuGroupHeader inherits Rectangle {
     in property <string> label;
-    height: 26px;
+    height: 28px;
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 4px;
         alignment: start;
         Text {
             text: root.label;
@@ -446,8 +448,9 @@ component ImmersiveMenuGroupHeader inherits Rectangle {
             font-size: 11px;
             font-weight: 700;
             vertical-alignment: center;
-            // Uppercase-ish section header look without a font dependency.
-            letter-spacing: 0.6px;
+            // ALL-CAPS section-header look per the UI alignment standard
+            // (GroupHeader: 11px, semibold, wide tracking, muted).
+            letter-spacing: 1.5px;
         }
     }
 }
@@ -524,7 +527,7 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
     property <int> md: ImmersiveState.mode;
     property <int> sp: ImmersiveState.split-panel;
 
-    width: 244px;
+    width: 256px;
     height: menu-body.preferred-height;
     // close-on-click dismisses the menu on ANY click, including a row tap —
     // so a child selection both applies its state and closes the popup (the
@@ -532,20 +535,20 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
     close-policy: close-on-click;
 
     Rectangle {
-        background: #0b0b0ef2;
-        border-radius: 14px;
+        background: #0b0b0ef7;
+        border-radius: 16px;
         border-width: 1px;
         border-color: #ffffff2e;
-        drop-shadow-blur: 32px;
-        drop-shadow-color: #00000099;
-        drop-shadow-offset-y: 10px;
+        drop-shadow-blur: 36px;
+        drop-shadow-color: #000000a6;
+        drop-shadow-offset-y: 12px;
 
         menu-body := VerticalLayout {
-            padding: 6px;
-            spacing: 1px;
+            padding: 8px;
+            spacing: 2px;
 
             // ---- FOCUS group ----
-            ImmersiveMenuGroupHeader { label: @tr("Focus"); }
+            ImmersiveMenuGroupHeader { label: @tr("FOCUS"); }
             ImmersiveMenuRow {
                 icon: @image-url("../assets/icons/audio-lines.svg");
                 label: @tr("Album Reactive");
@@ -631,17 +634,17 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
             }
 
             // Divider between the two groups.
-            Rectangle { height: 7px;
+            Rectangle { height: 11px;
                 Rectangle {
-                    y: 3px; height: 1px;
-                    width: parent.width - 16px;
-                    x: 8px;
+                    y: 5px; height: 1px;
+                    width: parent.width - 20px;
+                    x: 10px;
                     background: #ffffff1f;
                 }
             }
 
             // ---- SPLIT group ----
-            ImmersiveMenuGroupHeader { label: @tr("Split"); }
+            ImmersiveMenuGroupHeader { label: @tr("SPLIT"); }
             ImmersiveMenuRow {
                 icon: @image-url("../assets/icons/mic-vocal.svg");
                 label: @tr("Lyrics");
@@ -698,12 +701,13 @@ component ImmersiveViewMenu inherits Rectangle {
     callback suggestions-entered();
     callback wake();
 
-    width: 40px;
+    width: 44px;
     height: 36px;
-    border-radius: 12px;
-    background: #00000080;
+    border-radius: 18px;
+    background: trigger-ta.has-hover ? #000000a6 : #00000080;
     border-width: 1px;
-    border-color: #ffffff2e;
+    border-color: trigger-ta.has-hover ? #ffffff42 : #ffffff2e;
+    animate background, border-color { duration: 120ms; }
     drop-shadow-blur: 32px;
     drop-shadow-color: #00000066;
     drop-shadow-offset-y: 8px;
@@ -744,27 +748,30 @@ component ImmersiveViewMenu inherits Rectangle {
 // is a future session.
 component ImmersiveSearchPlaceholder inherits Rectangle {
     height: 36px;
-    border-radius: 8px;
-    background: #00000066;
+    border-radius: 18px;
+    background: #00000080;
     border-width: 1px;
     border-color: #ffffff26;
+    drop-shadow-blur: 32px;
+    drop-shadow-color: #00000066;
+    drop-shadow-offset-y: 8px;
 
     HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 8px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 10px;
         VerticalLayout {
             alignment: center;
             QbzIcon {
                 source: @image-url("../assets/icons/search.svg");
                 width: 15px;
                 height: 15px;
-                tint: #ffffff8c;
+                tint: #ffffff80;
             }
         }
         Text {
             text: @tr("Search");
-            color: #ffffff8c;
+            color: #ffffff80;
             font-size: 13px;
             vertical-alignment: center;
             horizontal-stretch: 1;
@@ -783,7 +790,7 @@ component ImmersiveWindowBtn inherits Rectangle {
     height: 32px;
     border-radius: 16px;
     background: ta.has-hover
-        ? (root.danger ? #ef4444cc : #ffffff26)
+        ? (root.danger ? #ef4444b3 : #ffffff26)
         : transparent;
     animate background { duration: 120ms; }
 
@@ -793,7 +800,12 @@ component ImmersiveWindowBtn inherits Rectangle {
         height: 15px;
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-        tint: ta.has-hover ? #ffffff : #ffffffd9;
+        // Idle: the close-app X carries a faint danger tint so it reads as the
+        // destructive control even before hover; hover goes full white on the
+        // red wash.
+        tint: ta.has-hover
+            ? #ffffff
+            : (root.danger ? #ff8f8fd9 : #ffffffd9);
     }
 
     ta := TouchArea {
@@ -826,7 +838,7 @@ component ImmersiveWindowControls inherits Rectangle {
         x: 2px;
         y: 2px;
         height: 32px;
-        spacing: 2px;
+        spacing: 3px;
         alignment: center;
 
         // Drag (move the native window).
@@ -1050,9 +1062,9 @@ export component ImmersiveView inherits Rectangle {
         // the focus panels' clearance so nothing tucks under the chrome.
         padding-top: 56px;
         padding-bottom: 132px;
-        padding-left: 48px;
-        padding-right: 48px;
-        spacing: 40px;
+        padding-left: 56px;
+        padding-right: 56px;
+        spacing: 48px;
 
         // LEFT (~55%): artwork + shared metadata block, centered in its half.
         // horizontal-stretch 11 (vs the right's 9) yields the 55/45 ratio.
@@ -1060,7 +1072,7 @@ export component ImmersiveView inherits Rectangle {
             property <length> col-h: parent.col-h;
             horizontal-stretch: 11;
             alignment: center;
-            spacing: 24px;
+            spacing: 28px;
 
             // Artwork. Large + responsive: a square bounded by this column's
             // resolved width and the available height (minus a budget for the
@@ -1069,7 +1081,7 @@ export component ImmersiveView inherits Rectangle {
             // `height`, never the column's own width, so there's no loop.
             left-art := Rectangle {
                 property <length> art-size:
-                    Math.max(220px,
+                    Math.max(240px,
                         Math.min(self.width, left-col.col-h - 200px));
                 height: self.art-size;
                 horizontal-stretch: 1;
@@ -1078,11 +1090,11 @@ export component ImmersiveView inherits Rectangle {
                     height: parent.art-size;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    border-radius: 8px;
+                    border-radius: 12px;
                     clip: true;
-                    drop-shadow-blur: 32px;
-                    drop-shadow-color: #00000080;
-                    drop-shadow-offset-y: 8px;
+                    drop-shadow-blur: 40px;
+                    drop-shadow-color: #00000099;
+                    drop-shadow-offset-y: 12px;
                     Image {
                         source: NowPlayingState.artwork-large.width > 0
                             ? NowPlayingState.artwork-large
@@ -1093,17 +1105,63 @@ export component ImmersiveView inherits Rectangle {
                     }
                 }
             }
-            // Shared metadata block (reused from the focus panels).
-            ImmersiveTrackInfo {
-                equalizer-tint: #7c3aed;
+            // Shared metadata block (reused from the focus panels). Wrapped in a
+            // subtle dark plate so the title/artist text reads cleanly over the
+            // variable atmosphere instead of washing out — the art above stays
+            // prominent (no plate of its own; its drop-shadow carries it). The
+            // plate is full column width with 22px side gutters so the elided
+            // Text rows have a real width to truncate against.
+            meta-plate := Rectangle {
+                background: #00000059;
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: #ffffff14;
+                horizontal-stretch: 1;
+                height: meta-block.preferred-height + 28px;
+                meta-block := VerticalLayout {
+                    padding-top: 14px;
+                    padding-bottom: 14px;
+                    padding-left: 22px;
+                    padding-right: 22px;
+                    alignment: center;
+                    ImmersiveTrackInfo {
+                        equalizer-tint: #7c3aed;
+                    }
+                }
             }
         }
 
-        // RIGHT (~45%): the active split panel, full column width + height.
+        // RIGHT (~45%): the active split panel sits inside a semi-opaque dark
+        // rounded BACKING so any mounted panel's text reads cleanly over the
+        // variable atmosphere (root-cause fix for the washed-out Track Info /
+        // Suggestions / Queue / Lyrics labels). #000000 @ ~58% alpha, hairline
+        // #ffffff1a border, 16px radius, 20px inner padding. The mounted panel
+        // receives the backing's INNER box (column width/height minus 2×pad)
+        // via viewport-width/viewport-height so it never overflows the corners.
         // horizontal-stretch 9 (vs the left's 11) yields the 45% share.
-        Rectangle {
+        right-plate := Rectangle {
+            // The backing's inner padding. The mounted panel's content box
+            // (`right-inner`) subtracts this on both axes so nothing tucks under
+            // the rounded corners.
+            property <length> pad: 20px;
             horizontal-stretch: 9;
+            // The dark legibility plate.
+            background: #00000094;
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: #ffffff1a;
+            drop-shadow-blur: 36px;
+            drop-shadow-color: #00000080;
+            drop-shadow-offset-y: 10px;
             clip: true;
+
+            // Inner content box, inset by the backing padding on all sides.
+            right-inner := Rectangle {
+                x: right-plate.pad;
+                y: right-plate.pad;
+                width: right-plate.width - right-plate.pad * 2;
+                height: right-plate.height - right-plate.pad * 2;
+                clip: true;
             if ImmersiveState.split-panel == 0: LyricsLinesView {
                 init => { LyricsState.panel-opened(); }
                 width: 100%;
@@ -1139,8 +1197,8 @@ export component ImmersiveView inherits Rectangle {
                 changed live-track-id => { TrackInfoActions.load-inline(self.live-track-id); }
                 width: 100%;
                 height: 100%;
-                viewport-width: parent.width;
-                viewport-height: parent.height;
+                viewport-width: right-inner.width;
+                viewport-height: right-inner.height;
                 centered: true;
             }
             // Checkpoint D: the live Suggestions panel (artist playlists +
@@ -1156,8 +1214,8 @@ export component ImmersiveView inherits Rectangle {
                 changed live-track-id => { SuggestionsActions.load(self.live-track-id); }
                 width: 100%;
                 height: 100%;
-                viewport-width: parent.width;
-                viewport-height: parent.height;
+                viewport-width: right-inner.width;
+                viewport-height: right-inner.height;
                 centered: true;
             }
             // Checkpoint B: the Queue + History panel, centered in the right
@@ -1167,9 +1225,10 @@ export component ImmersiveView inherits Rectangle {
                 init => { QueueState.panel-opened(); }
                 width: 100%;
                 height: 100%;
-                viewport-width: parent.width;
-                viewport-height: parent.height;
+                viewport-width: right-inner.width;
+                viewport-height: right-inner.height;
                 centered: true;
+            }
             }
         }
     }

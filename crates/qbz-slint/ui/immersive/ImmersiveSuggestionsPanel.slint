@@ -32,12 +32,19 @@ component OverlayButton inherits Rectangle {
     in property <length> icon-size: 16px;
     callback clicked();
 
-    width: root.primary ? 40px : 32px;
-    height: root.primary ? 40px : 32px;
+    width: root.primary ? 44px : 34px;
+    height: root.primary ? 44px : 34px;
     border-radius: self.width / 2;
     background: root.primary
         ? (ta.has-hover ? Theme.accent-hover : Theme.accent)
-        : (ta.has-hover ? #ffffff80 : #ffffff4d);
+        : (ta.has-hover ? #ffffff33 : #ffffff1f);
+    // Hairline rim so the secondary discs read on any backdrop.
+    border-width: root.primary ? 0px : 1px;
+    border-color: #ffffff4d;
+    animate background { duration: 120ms; }
+    // Subtle lift on the primary disc.
+    drop-shadow-blur: root.primary ? 12px : 0px;
+    drop-shadow-color: #00000066;
 
     QbzIcon {
         source: root.icon;
@@ -76,12 +83,14 @@ component SuggestionCardView inherits Rectangle {
     in property <int> index;
 
     width: 168px;
-    height: 220px;
+    height: 224px;
     border-radius: 12px;
-    background: card-ta.has-hover ? #ffffff26 : #ffffff1a;
+    background: card-ta.has-hover ? #ffffff2e : #ffffff1f;
     border-width: 1px;
-    border-color: #ffffff1a;
-    animate background { duration: 150ms; }
+    border-color: card-ta.has-hover ? #ffffff40 : #ffffff26;
+    drop-shadow-blur: 16px;
+    drop-shadow-color: #00000059;
+    animate background, border-color { duration: 150ms; }
 
     property <bool> is-radio: root.card.kind == "radio";
 
@@ -160,22 +169,31 @@ component SuggestionCardView inherits Rectangle {
             }
 
             // Corner badge (above the collage): the full-colour Qobuz logo
-            // (playlist cards) or a white radio glyph (radio card).
-            if root.card.badge == "qobuz": Image {
-                x: parent.width - self.width - 8px;
-                y: 8px;
-                width: 22px;
-                height: 22px;
-                image-fit: contain;
-                source: @image-url("../assets/icons/qobuz-logo-filled.svg");
-            }
-            if root.card.badge != "qobuz": QbzIcon {
-                x: parent.width - self.width - 8px;
-                y: 8px;
-                width: 20px;
-                height: 20px;
-                source: @image-url("../assets/icons/radio.svg");
-                tint: #ffffffcc;
+            // (playlist cards) or a white radio glyph (radio card). A small dark
+            // disc behind it keeps the glyph legible over any collage cover.
+            badge-disc := Rectangle {
+                x: parent.width - self.width - 6px;
+                y: 6px;
+                width: 30px;
+                height: 30px;
+                border-radius: self.width / 2;
+                background: #000000a6;
+                if root.card.badge == "qobuz": Image {
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    image-fit: contain;
+                    source: @image-url("../assets/icons/qobuz-logo-filled.svg");
+                }
+                if root.card.badge != "qobuz": QbzIcon {
+                    width: 18px;
+                    height: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    source: @image-url("../assets/icons/radio.svg");
+                    tint: #ffffff;
+                }
             }
 
             // Radio building spinner — dim veil + the shared LoadingSpinner
@@ -263,7 +281,7 @@ component SuggestionCardView inherits Rectangle {
         }
         Text {
             text: root.card.subtitle;
-            color: #ffffff80;
+            color: #ffffffb3;
             font-size: 13px;
             overflow: elide;
         }
@@ -277,7 +295,7 @@ component RecTrackRow inherits Rectangle {
 
     height: 56px;
     border-radius: 8px;
-    background: row-ta.has-hover ? #ffffff1a : transparent;
+    background: row-ta.has-hover ? #ffffff21 : transparent;
     animate background { duration: 150ms; }
 
     HorizontalLayout {
@@ -327,11 +345,12 @@ component RecTrackRow inherits Rectangle {
                 text: root.track.title;
                 color: #ffffff;
                 font-size: 15px;
+                font-weight: 500;
                 overflow: elide;
             }
             Text {
                 text: root.track.artist;
-                color: #ffffff99;
+                color: #ffffffb3;
                 font-size: 13px;
                 overflow: elide;
             }
@@ -342,8 +361,9 @@ component RecTrackRow inherits Rectangle {
             alignment: center;
             Text {
                 text: root.track.duration;
-                color: #ffffff80;
+                color: #ffffff99;
                 font-size: 13px;
+                font-weight: 500;
             }
         }
     }
@@ -381,12 +401,12 @@ export component ImmersiveSuggestionsPanel inherits Rectangle {
                         source: @image-url("../assets/icons/radio.svg");
                         width: 32px;
                         height: 32px;
-                        tint: #ffffff80;
+                        tint: #ffffffb3;
                     }
                 }
                 Text {
                     text: @tr("No track selected");
-                    color: #ffffff80;
+                    color: #ffffffb3;
                     font-size: 18px;
                     horizontal-alignment: center;
                 }
@@ -396,7 +416,7 @@ export component ImmersiveSuggestionsPanel inherits Rectangle {
             if SuggestionsState.loading && SuggestionsState.cards.length == 0
                 && SuggestionsState.tracks.length == 0: Text {
                 text: @tr("Loading suggestions...");
-                color: #ffffff80;
+                color: #ffffffcc;
                 font-size: 18px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -407,8 +427,9 @@ export component ImmersiveSuggestionsPanel inherits Rectangle {
             // ---- Error ------------------------------------------------
             if SuggestionsState.error != "": Text {
                 text: @tr("Failed to load suggestions");
-                color: #ffffff80;
+                color: #ffffffe6;
                 font-size: 18px;
+                font-weight: 600;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 width: 100%;
@@ -442,9 +463,10 @@ export component ImmersiveSuggestionsPanel inherits Rectangle {
                         // Recommended tracks.
                         if SuggestionsState.tracks.length > 0: Text {
                             text: @tr("Recommended tracks");
-                            color: #ffffff80;
+                            color: #ffffffe6;
                             font-size: 14px;
                             font-weight: 600;
+                            letter-spacing: 0.4px;
                         }
                         if SuggestionsState.tracks.length > 0: VerticalLayout {
                             spacing: 4px;
