@@ -649,6 +649,88 @@ component ModeBar inherits Rectangle {
     }
 }
 
+// Compact shader-scene picker. A small text-label segmented row (ModeTab
+// styling idiom: flat highlight, no pill — ADR-008) that sets
+// ImmersiveState.shader-mode (0 Off, 1 Plasma, 2 Tunnel, 3 Aurora). Placed in
+// the header chrome, right-aligned, so it does not collide with the centered
+// ModeBar (focus/split toggle + panel tabs).
+component ShaderTab inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked();
+
+    property <color> fg: root.active ? #ffffff : (ta.has-hover ? #fffffff2 : #ffffffb3);
+
+    height: 28px;
+    border-radius: 8px;
+    background: root.active ? #ffffff33 : (ta.has-hover ? #ffffff1f : transparent);
+    animate background { duration: 150ms; }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: root.fg;
+            font-size: 12px;
+            font-weight: root.active ? 600 : 500;
+            vertical-alignment: center;
+            animate color { duration: 150ms; }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component ShaderBar inherits Rectangle {
+    // Sets ImmersiveState.shader-mode (0..3). Self-contained: no callbacks, it
+    // writes the global directly (the picker has no other side effects).
+    callback picked();
+
+    height: 36px;
+    width: bar.preferred-width + 8px;
+    border-radius: 12px;
+    background: #00000080;
+    border-width: 1px;
+    border-color: #ffffff2e;
+    drop-shadow-blur: 32px;
+    drop-shadow-color: #00000066;
+    drop-shadow-offset-y: 8px;
+
+    bar := HorizontalLayout {
+        x: 4px;
+        y: 4px;
+        height: 28px;
+        spacing: 4px;
+        alignment: center;
+
+        ShaderTab {
+            label: @tr("Off");
+            active: ImmersiveState.shader-mode == 0;
+            clicked => { ImmersiveState.shader-mode = 0; root.picked(); }
+        }
+        ShaderTab {
+            label: @tr("Plasma");
+            active: ImmersiveState.shader-mode == 1;
+            clicked => { ImmersiveState.shader-mode = 1; root.picked(); }
+        }
+        ShaderTab {
+            label: @tr("Tunnel");
+            active: ImmersiveState.shader-mode == 2;
+            clicked => { ImmersiveState.shader-mode = 2; root.picked(); }
+        }
+        ShaderTab {
+            label: @tr("Aurora");
+            active: ImmersiveState.shader-mode == 3;
+            clicked => { ImmersiveState.shader-mode = 3; root.picked(); }
+        }
+    }
+}
+
 export component ImmersiveView inherits Rectangle {
     callback media-action(string, string, string);
 
@@ -670,12 +752,11 @@ export component ImmersiveView inherits Rectangle {
                 VisualizerState.set-enabled(false);
                 return accept;
             }
-            // WGPU UNDERLAY SPIKE: 'g' (GPU) toggles the shader scene on/off in
-            // place so the owner can A/B the shader vs the existing atmosphere /
-            // panels in a single run. Remove (or repurpose to a real picker)
-            // once the spike is validated.
+            // 'g' (GPU) cycles the shader scene 0 -> 1 -> 2 -> 3 -> 0 (Off ->
+            // Plasma -> Tunnel -> Aurora -> Off) as a quick keyboard shortcut;
+            // the header shader picker is the discoverable control.
             if (event.text == "g" || event.text == "G") {
-                ImmersiveState.shader-mode = ImmersiveState.shader-mode > 0 ? 0 : 1;
+                ImmersiveState.shader-mode = Math.mod(ImmersiveState.shader-mode + 1, 4);
                 root.wake();
                 return accept;
             }
@@ -989,5 +1070,16 @@ export component ImmersiveView inherits Rectangle {
             SuggestionsActions.load(NowPlayingState.track-id);
             root.wake();
         }
+    }
+
+    // (5) Top-right shader-scene picker. Right-aligned in the header so it never
+    // overlaps the centered ModeBar; shares the chrome-visible flag (auto-hide /
+    // wake) so it fades with the rest of the chrome.
+    ShaderBar {
+        x: root.width - self.width - 24px;
+        y: 16px;
+        opacity: root.chrome-visible ? 1.0 : 0.0;
+        animate opacity { duration: 300ms; }
+        picked => { root.wake(); }
     }
 }

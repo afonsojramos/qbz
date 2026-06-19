@@ -148,8 +148,9 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
             last_tr *= 0.85;
             if let Some(w) = weak.upgrade() {
                 let imm = w.global::<ImmersiveState>();
-                if imm.get_shader_mode() > 0 {
-                    if let Some(img) = crate::shader_underlay::render_frame(last_e0, last_tr) {
+                let m = imm.get_shader_mode();
+                if m > 0 {
+                    if let Some(img) = crate::shader_underlay::render_frame(m, last_e0, last_tr) {
                         imm.set_shader_texture(img);
                     }
                 }

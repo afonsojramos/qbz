@@ -64,11 +64,26 @@ fn uniforms_bytes(u: &Uniforms) -> &[u8] {
 struct RenderState {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipeline: wgpu::RenderPipeline,
+    /// One render pipeline per shader scene, indexed by `mode - 1`:
+    ///   pipelines[0] = plasma  (mode 1)
+    ///   pipelines[1] = tunnel  (mode 2)
+    ///   pipelines[2] = aurora  (mode 3)
+    /// All share the same bind group / uniform buffer / vertex setup; only the
+    /// fragment shader differs. `render_frame(mode, ..)` picks one by index.
+    pipelines: Vec<wgpu::RenderPipeline>,
     uniform_buf: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     start: std::time::Instant,
 }
+
+/// The WGSL source for each scene, in mode order (index = mode - 1). Adding a
+/// scene = one `include_str!` here + one entry in the picker (state/UI). All
+/// must declare the SAME `Uniforms` block (group0/binding0) as plasma.wgsl.
+const SHADER_SOURCES: &[&str] = &[
+    include_str!("../ui/shaders/plasma.wgsl"),
+    include_str!("../ui/shaders/tunnel.wgsl"),
+    include_str!("../ui/shaders/aurora.wgsl"),
+];
 
 thread_local! {
     static STATE: RefCell<Option<RenderState>> = const { RefCell::new(None) };
@@ -78,11 +93,6 @@ thread_local! {
 /// `RenderingSetup`. Idempotent-ish: a second call rebuilds (cheap; only happens
 /// if the rendering surface is torn down and re-created).
 pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("qbz-plasma-shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../ui/shaders/plasma.wgsl").into()),
-    });
-
     let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("qbz-shader-bgl"),
         entries: &[wgpu::BindGroupLayoutEntry {
@@ -120,43 +130,57 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         immediate_size: 0,
     });
 
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("qbz-shader-pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &module,
-            entry_point: Some("vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &module,
-            entry_point: Some("fs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: TEX_FORMAT,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    });
+    // Build one pipeline per scene (plasma + tunnel + aurora). They share the
+    // pipeline layout / bind group / uniform buffer / vertex stage; only the
+    // fragment shader source differs. `vs_main` / `fs_main` entry points are
+    // identical across all three WGSL files (the fullscreen-triangle template).
+    let mut pipelines: Vec<wgpu::RenderPipeline> = Vec::with_capacity(SHADER_SOURCES.len());
+    for (i, src) in SHADER_SOURCES.iter().enumerate() {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("qbz-shader-module"),
+            source: wgpu::ShaderSource::Wgsl((*src).into()),
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("qbz-shader-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: TEX_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        pipelines.push(pipeline);
+        log::debug!("[shader] pipeline {} built (mode {})", i, i + 1);
+    }
 
+    let n = pipelines.len();
     STATE.with(|s| {
         *s.borrow_mut() = Some(RenderState {
             device,
             queue,
-            pipeline,
+            pipelines,
             uniform_buf,
             bind_group,
             start: std::time::Instant::now(),
         });
     });
-    log::info!("[shader] wgpu underlay pipeline ready ({TEX_W}x{TEX_H} {TEX_FORMAT:?})");
+    log::info!("[shader] wgpu underlay ready ({n} scenes, {TEX_W}x{TEX_H} {TEX_FORMAT:?})");
 }
 
 /// Drop the pipeline at surface teardown.
@@ -165,12 +189,24 @@ pub fn teardown() {
     log::info!("[shader] wgpu underlay torn down");
 }
 
-/// Render one frame into a fresh texture and return it as a Slint `Image`.
-/// Returns `None` before `setup()` has run. Driven at 30 fps from visualizer.rs.
-pub fn render_frame(energy0: f32, transient: f32) -> Option<Image> {
+/// Render one frame of scene `mode` into a fresh texture and return it as a
+/// Slint `Image`. `mode` is the `ImmersiveState.shader-mode` value (1 = plasma,
+/// 2 = tunnel, 3 = aurora); the pipeline index is `mode - 1`. Returns `None`
+/// before `setup()` has run, for `mode <= 0`, or for an out-of-range mode
+/// (defensive — the UI never sends one). Driven at 30 fps from visualizer.rs.
+pub fn render_frame(mode: i32, energy0: f32, transient: f32) -> Option<Image> {
+    if mode <= 0 {
+        return None;
+    }
     STATE.with(|s| {
         let borrow = s.borrow();
         let st = borrow.as_ref()?;
+
+        // Bounds-guard: fall back to the plasma pipeline (index 0) if a mode is
+        // ever out of range, so the underlay degrades gracefully instead of
+        // panicking on an indexing error.
+        let idx = (mode - 1) as usize;
+        let pipeline = st.pipelines.get(idx).or_else(|| st.pipelines.first())?;
 
         let uniforms = Uniforms {
             time: st.start.elapsed().as_secs_f32(),
@@ -227,7 +263,7 @@ pub fn render_frame(energy0: f32, transient: f32) -> Option<Image> {
                 // we don't use multiview (single 2D target), so None.
                 multiview_mask: None,
             });
-            pass.set_pipeline(&st.pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &st.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
