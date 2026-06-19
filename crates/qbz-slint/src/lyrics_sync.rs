@@ -53,7 +53,7 @@ use qbz_app::shell::AppRuntime;
 
 use crate::adapter::SlintAdapter;
 use crate::lyrics_measure;
-use crate::{AppWindow, LyricsSegment, LyricsState, ShellState};
+use crate::{AppWindow, ImmersiveState, LyricsSegment, LyricsState, ShellState};
 
 type Runtime = Arc<AppRuntime<SlintAdapter>>;
 
@@ -194,8 +194,24 @@ fn resolve_position_ms(runtime: &Runtime) -> (u64, bool) {
 /// `LyricsState` — equality-guarded, animation zeroed across
 /// discontinuities. Returns whether the gate is fully open (open + synced +
 /// playing) so the caller can pick the cadence.
+/// The sync engine ticks while ANY lyrics surface is showing: the main
+/// sidebar (`ShellState.lyrics-open`) OR an immersive lyrics panel (FOCUS
+/// mode 4, or SPLIT panel 0). The immersive panels reuse this same engine, so
+/// without widening the gate it stayed sidebar-only and immersive lyrics froze
+/// in place (`active-index`/`line-progress` never advanced, and the open-time
+/// `kick()` no-op'd because it bails here before computing).
+fn lyrics_surface_open(window: &AppWindow) -> bool {
+    if window.global::<ShellState>().get_lyrics_open() {
+        return true;
+    }
+    let imm = window.global::<ImmersiveState>();
+    imm.get_open()
+        && ((imm.get_view_mode() == 0 && imm.get_mode() == 4)
+            || (imm.get_view_mode() == 1 && imm.get_split_panel() == 0))
+}
+
 fn compute_and_push(window: &AppWindow, runtime: &Runtime, require_playing: bool) -> bool {
-    if !window.global::<ShellState>().get_lyrics_open() {
+    if !lyrics_surface_open(window) {
         return false;
     }
     let lyrics = window.global::<LyricsState>();
