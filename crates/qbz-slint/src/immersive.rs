@@ -158,6 +158,58 @@ pub fn spectrum_colors(pixels: &[u8], width: u32, height: u32) -> (Color, Color)
     )
 }
 
+/// Immersive lyrics-focus accent: a color DERIVED from the album art but
+/// chosen to CONTRAST with the atmosphere background (which is itself built
+/// from the same cover). Using the cover's dominant hue (e.g. `spectrum-primary`)
+/// fails on monochromatic covers — the text lands the same tone as its own
+/// background and disappears. So we take the cover's coverage-dominant hue and
+/// rotate it to its COMPLEMENT (+180°), forced vivid + mid-bright so the single
+/// focus line reads against the warm/dark atmosphere (owner-reported: a warm
+/// cover gave salmon-on-orange). A near-grey (B&W) cover has no usable hue, so
+/// it falls back to a fixed high-contrast teal.
+pub fn lyrics_accent_color(pixels: &[u8], width: u32, height: u32) -> Color {
+    let default = Color::from_rgb_u8(0x3f, 0xd9, 0xc8); // bright teal
+    let Some(src) = RgbaImage::from_raw(width, height, pixels.to_vec()) else {
+        return default;
+    };
+    let tiny = imageops::resize(&src, 16, 16, imageops::FilterType::Triangle);
+
+    // Coverage-weighted dominant hue (same binning as spectrum_colors: one vote
+    // per chromatic pixel, so the perceived dominant tone wins over a speck).
+    const BINS: usize = 24;
+    let mut hist = [0.0f32; BINS];
+    let mut chromatic = 0u32;
+    for px in tiny.pixels() {
+        let (h, s, l) = rgb_to_hsl(px[0], px[1], px[2]);
+        if !(0.10..=0.93).contains(&l) || s < 0.08 {
+            continue;
+        }
+        let bin = ((h / 360.0 * BINS as f32) as usize).min(BINS - 1);
+        hist[bin] += 1.0;
+        chromatic += 1;
+    }
+    // Effectively B&W cover -> no honest album hue to complement.
+    if chromatic < 4 {
+        return default;
+    }
+    let score_at = |i: usize| hist[i] + 0.5 * (hist[(i + BINS - 1) % BINS] + hist[(i + 1) % BINS]);
+    let mut best_i = 0usize;
+    let mut best = -1.0f32;
+    for i in 0..BINS {
+        let sc = score_at(i);
+        if sc > best {
+            best = sc;
+            best_i = i;
+        }
+    }
+    let dominant_hue = (best_i as f32 + 0.5) * (360.0 / BINS as f32);
+    // Complement = guaranteed contrast against the dominant tone the atmosphere
+    // is built from. Vivid + mid-bright so it reads on the dark/warm field.
+    let accent_hue = (dominant_hue + 180.0).rem_euclid(360.0);
+    let (r, g, b) = hsl_to_rgb(accent_hue, 0.85, 0.62);
+    Color::from_rgb_u8(r, g, b)
+}
+
 /// Dominant swatch of a cover, for the single-cover playlist card letterbox.
 ///
 /// Mirrors Tauri's `extractPalette().dominant`: the card uses `image-fit:

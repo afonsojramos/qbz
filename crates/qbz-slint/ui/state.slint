@@ -3303,14 +3303,24 @@ export global ImmersiveState {
     // Defaults = the Svelte cyan -> purple until the art resolves.
     in property <color> spectrum-primary: #00dcc8;
     in property <color> spectrum-secondary: #9632ff;
+    // Lyrics-focus single-line accent: derived from the album art but rotated
+    // to the COMPLEMENT of the cover's dominant hue, so it contrasts with the
+    // atmosphere (which is built from the same cover) instead of blending into
+    // it. Default high-contrast teal until the art resolves / for B&W covers.
+    in property <color> lyrics-accent: #3fd9c8;
 
-    // WGPU UNDERLAY SPIKE: a GPU fragment shader rendered into a wgpu texture by
+    // GPU fragment-shader underlay: a WGSL shader rendered into a wgpu texture by
     // src/shader_underlay.rs and handed back here each drain tick. `shader-mode`
-    // selects the scene: 0 = OFF (use the existing atmosphere + panels), >0 = a
-    // shader scene (1 = plasma spike). When >0 the atmosphere + the mode panels
-    // are hidden so the shader is the visible background; the auto-hide chrome
-    // (mode picker + compact player) stays on top. Toggle in-view with the 'g'
-    // key during the spike.
+    // selects the scene:
+    //   0 = OFF     — use the existing atmosphere + visualizer panels.
+    //   1 = Plasma  — classic sin-field plasma (ui/shaders/plasma.wgsl).
+    //   2 = Tunnel  — neon polar-warped tunnel (ui/shaders/tunnel.wgsl).
+    //   3 = Aurora  — domain-warped aurora curtains (ui/shaders/aurora.wgsl).
+    // Each scene maps to shader_underlay pipeline index (shader-mode - 1). When
+    // shader-mode > 0 the atmosphere + the mode panels are hidden so the shader
+    // is the visible background; the auto-hide chrome (scene picker + compact
+    // player) stays on top. Pick a scene via the header shader picker, or cycle
+    // 0->1->2->3->0 with the 'g' key.
     in property <image> shader-texture;
     in-out property <int> shader-mode: 0;
 }

@@ -20,7 +20,7 @@
 // ROOT (corrupts absolute positioning — the dim/fade lives on the inner text);
 // no `changed x/y/width/height` watchers.
 
-import { LyricsState } from "../state.slint";
+import { LyricsState, ImmersiveState } from "../state.slint";
 
 export component ImmersiveLyricsFocusPanel inherits Rectangle {
     in property <length> viewport-width: 1280px;
@@ -99,7 +99,12 @@ export component ImmersiveLyricsFocusPanel inherits Rectangle {
             // skipped per recon §3 Slint note). Centered in the wrapper.
             if root.has-current: Text {
                 text: root.current-line;
-                color: #ffffff;
+                // The single highlighted line takes an ALBUM-ART accent that is
+                // the COMPLEMENT of the cover's dominant hue, so it contrasts
+                // with the atmosphere (built from the same cover) instead of
+                // blending into it — NOT the UI lyrics color, NOT plain white
+                // (owner request + owner-reported salmon-on-orange blend fix).
+                color: ImmersiveState.lyrics-accent;
                 font-size: root.line-size;
                 font-weight: 700;
                 letter-spacing: 0.2px;

@@ -1228,6 +1228,7 @@ fn load_now_playing_artwork_large(weak: slint::Weak<AppWindow>, art: qbz_models:
                 crate::immersive::spectrum_colors(&pixels, w, h);
             imm.set_spectrum_primary(spec_primary);
             imm.set_spectrum_secondary(spec_secondary);
+            imm.set_lyrics_accent(crate::immersive::lyrics_accent_color(&pixels, w, h));
         });
     });
 }
