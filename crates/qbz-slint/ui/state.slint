@@ -3218,8 +3218,9 @@ export global ImmersiveState {
     // FOCUS-mode foreground for the conditional-mounted panel (read only while
     // view-mode == 0):
     //   0 = Album Reactive, 1 = Static, 2 = Coverflow, 3 = Spectrum,
-    //   4 = Lyrics-focus (one giant centered current line).
-    // (5 = Queue-focus is reserved for a later checkpoint — NOT added yet.)
+    //   4 = Lyrics-focus (one giant centered current line),
+    //   5 = Queue-focus (full-screen Queue + History panel; reuses QueueState,
+    //       no extra state field — same component as the split Queue panel).
     // SESSION default 0 (Album Reactive) so opening shows a real foreground.
     // NOTE: this compact enum is a Slint-scaffold contract; it deliberately
     // does NOT match Tauri's focus-tab string order (coverflow first). Product

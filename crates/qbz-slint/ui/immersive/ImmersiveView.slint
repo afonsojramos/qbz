@@ -4,13 +4,14 @@
 
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { NowPlayingState, VisualizerState, ImmersiveState, SettingsState, LyricsState } from "../state.slint";
+import { NowPlayingState, VisualizerState, ImmersiveState, SettingsState, LyricsState, QueueState } from "../state.slint";
 import { ImmersiveAtmosphere } from "ImmersiveAtmosphere.slint";
 import { AlbumReactivePanel } from "AlbumReactivePanel.slint";
 import { StaticPanel } from "StaticPanel.slint";
 import { CoverflowPanel } from "CoverflowPanel.slint";
 import { SpectrumPanel } from "SpectrumPanel.slint";
 import { ImmersiveLyricsFocusPanel } from "ImmersiveLyricsFocusPanel.slint";
+import { ImmersiveQueuePanel } from "ImmersiveQueuePanel.slint";
 import { ImmersiveTrackInfo } from "ImmersiveTrackInfo.slint";
 import { LyricsLinesView } from "../shell/LyricsLinesView.slint";
 
@@ -487,6 +488,9 @@ component ModeBar inherits Rectangle {
     // Fired whenever the user enters a lyrics surface (focus Lyrics tab or
     // split Lyrics panel) so the parent can kick LyricsState.panel-opened().
     callback lyrics-entered();
+    // Fired whenever the user enters a queue surface (focus Queue tab or split
+    // Queue panel) so the parent can kick QueueState.panel-opened().
+    callback queue-entered();
 
     property <bool> is-split: ImmersiveState.view-mode == 1;
 
@@ -582,10 +586,19 @@ component ModeBar inherits Rectangle {
                     root.lyrics-entered();
                 }
             }
+            ModeTab {
+                icon: @image-url("../assets/icons/list-music.svg");
+                label: @tr("Queue");
+                active: ImmersiveState.mode == 5;
+                clicked => {
+                    root.select(5);
+                    root.queue-entered();
+                }
+            }
         }
 
-        // SPLIT rail: only Lyrics for Checkpoint A (Track Info / Suggestions /
-        // Queue tabs land in their own checkpoints).
+        // SPLIT rail: Lyrics (Checkpoint A) + Queue (Checkpoint B). Track Info /
+        // Suggestions tabs land in their own checkpoints.
         if root.is-split: HorizontalLayout {
             spacing: 4px;
             ModeTab {
@@ -595,6 +608,15 @@ component ModeBar inherits Rectangle {
                 clicked => {
                     root.select-split(0);
                     root.lyrics-entered();
+                }
+            }
+            ModeTab {
+                icon: @image-url("../assets/icons/list-music.svg");
+                label: @tr("Queue");
+                active: ImmersiveState.split-panel == 3;
+                clicked => {
+                    root.select-split(3);
+                    root.queue-entered();
                 }
             }
         }
@@ -737,6 +759,19 @@ export component ImmersiveView inherits Rectangle {
         viewport-width: root.width;
         viewport-height: root.height;
     }
+    // (2f) Queue-focus foreground (mode == 5) — the SAME ImmersiveQueuePanel as
+    // the split placement, full-screen (centered: false). Queue + History
+    // sub-tabs. `init` pulls a fresh queue snapshot (mirror of the sidebar's
+    // init -> panel-opened()). Same conditional-mount + viewport-prop contract
+    // as the siblings (ADR-010).
+    if ImmersiveState.shader-mode == 0 && ImmersiveState.view-mode == 0 && ImmersiveState.mode == 5: ImmersiveQueuePanel {
+        init => { QueueState.panel-opened(); }
+        x: 0px;
+        y: 0px;
+        viewport-width: root.width;
+        viewport-height: root.height;
+        centered: false;
+    }
 
     // (2-split) SPLIT layout (view-mode == 1): artwork + metadata LEFT, the
     // active data panel RIGHT (ADR-010 conditional mount). The atmosphere stays
@@ -820,6 +855,17 @@ export component ImmersiveView inherits Rectangle {
                 // Solid white active line in immersive (data-panels.md §2).
                 active-color: #ffffff;
             }
+            // Checkpoint B: the Queue + History panel, centered in the right
+            // half. Same component as the focus mount; `centered: true` fills
+            // the slot (data-panels §4 — one QueuePanel in both placements).
+            if ImmersiveState.split-panel == 3: ImmersiveQueuePanel {
+                init => { QueueState.panel-opened(); }
+                width: 100%;
+                height: 100%;
+                viewport-width: parent.width;
+                viewport-height: parent.height;
+                centered: true;
+            }
         }
     }
 
@@ -861,6 +907,10 @@ export component ImmersiveView inherits Rectangle {
         }
         lyrics-entered => {
             LyricsState.panel-opened();
+            root.wake();
+        }
+        queue-entered => {
+            QueueState.panel-opened();
             root.wake();
         }
     }

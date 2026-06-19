@@ -1,0 +1,437 @@
+// Immersive Queue panel (Checkpoint B) — ONE component used in BOTH the
+// focus full-screen placement (ImmersiveState.mode == 5) and the split centered
+// placement (ImmersiveState.split-panel == 3), mirroring Tauri's single
+// QueuePanel.svelte (data-panels.md §4 Queue + §5 History).
+//
+// Two sub-tabs ("Queue" / "History") bound to QueueState.tab via
+// QueueState.set-tab(...). The Queue tab shows a highlighted NOW PLAYING card
+// plus a scrolling UP NEXT list of the upcoming entries; the History tab shows
+// the most-recent-first history list. Rows reuse QueueSidebar's QueueRow visual
+// structure (40x40-ish cover, title/artist, duration, hover-reveal play button).
+// Playback logic is NOT duplicated — rows only fire QueueState callbacks.
+//
+// SLINT GOTCHAS honored:
+//   - viewport dims are passed in as props; `parent` is NEVER read in the root
+//     binding (Slint recursion trap).
+//   - `opacity:` is NEVER set on the root (it corrupts absolute positioning);
+//     inner content is dimmed instead. Chrome fade lives on the parent.
+//   - no `changed`-watching of layout geometry; no z-index (declaration order is
+//     the stacking order, ADR-009).
+//   - scrolling uses Flickable + the shared ListScrollbar idiom (codebase
+//     convention, see MiniQueueSurface) — NOT a bare native ScrollView.
+
+import { NowPlayingState, QueueState, QueueItem } from "../state.slint";
+import { ListScrollbar } from "../primitives/ListScrollbar.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+
+// Explicit "E" badge — immersive (white-on-glass) variant of the queue badge.
+component ImmExplicitBadge inherits Rectangle {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    background: #ffffff1f;
+    Text {
+        text: "E";
+        color: #ffffffa6;
+        font-size: 9px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 0; y: 0;
+        width: parent.width;
+        height: parent.height;
+    }
+}
+
+// One Queue / History sub-tab — plain text, NO pill (ADR-008). Mirrors the
+// QueueSidebar QueueTab brightness idiom, recolored white-on-glass for the
+// immersive backdrop.
+component SubTab inherits Rectangle {
+    in property <string> label;
+    in property <int> count: 0;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 32px;
+    border-radius: 8px;
+    background: root.active ? #ffffff26 : (ta.has-hover ? #ffffff14 : transparent);
+    animate background { duration: 150ms; }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 6px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: root.active ? #ffffff : (ta.has-hover ? #ffffffd9 : #ffffff99);
+            font-size: 17px;
+            font-weight: root.active ? 600 : 500;
+            vertical-alignment: center;
+            animate color { duration: 150ms; }
+        }
+        if root.count > 0: Text {
+            text: "(" + root.count + ")";
+            color: #ffffff66;
+            font-size: 15px;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// One UP NEXT / History row. 40x40 cover, title/artist, duration, and a
+// hover-revealed circular play button. Fires `play()` on click OR play-button —
+// the parent maps it to the right QueueState callback. Reuses QueueRow's visual
+// structure (data-panels.md §4 `.track-item` 40px art + ellipsis title).
+component ImmQueueRow inherits Rectangle {
+    in property <QueueItem> item;
+    in property <bool> current: false;     // NOW PLAYING highlight
+    callback play();
+
+    height: 56px;
+    border-radius: 8px;
+    // `.track-item.current` (data-panels §4): --alpha-10 bg + 1px --alpha-15
+    // border. Plain rows: transparent, hover --alpha-10.
+    background: root.current
+        ? #ffffff1a
+        : (ta.has-hover ? #ffffff1a : transparent);
+    border-width: root.current ? 1px : 0px;
+    border-color: #ffffff26;
+    animate background { duration: 150ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.play(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        // 40x40 cover.
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 4px;
+                background: #ffffff14;
+                clip: true;
+                if root.item.artwork.width > 0: Image {
+                    source: root.item.artwork;
+                    width: 100%;
+                    height: 100%;
+                    image-fit: cover;
+                }
+            }
+        }
+
+        // Title + artist.
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 5px;
+                Text {
+                    text: root.item.title;
+                    color: #ffffff;
+                    font-size: 17px;
+                    font-weight: 500;
+                    overflow: elide;
+                }
+                if root.item.explicit: VerticalLayout {
+                    alignment: center;
+                    ImmExplicitBadge {}
+                }
+            }
+            Text {
+                text: root.item.artist;
+                color: #ffffff99;
+                font-size: 16px;
+                overflow: elide;
+            }
+        }
+
+        // Duration.
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.item.duration;
+                color: #ffffff80;
+                font-size: 16px;
+            }
+        }
+
+        // Hover-revealed circular play button (28px). Hidden for the current
+        // (now-playing) row, which is not re-playable.
+        VerticalLayout {
+            alignment: center;
+            width: 32px;
+            if !root.current: play-btn := Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: pta.has-hover ? #ffffff40 : #ffffff26;
+                opacity: ta.has-hover || pta.has-hover ? 1.0 : 0.0;
+                animate opacity { duration: 150ms; }
+                QbzIcon {
+                    source: @image-url("../assets/icons/play-fill.svg");
+                    width: 13px;
+                    height: 13px;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px + 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                    tint: #ffffff;
+                }
+                pta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.play(); }
+                }
+            }
+        }
+    }
+}
+
+export component ImmersiveQueuePanel inherits Rectangle {
+    in property <length> viewport-width: 1280px;
+    in property <length> viewport-height: 720px;
+    // true in the split (centered) placement, false in focus full-screen.
+    in property <bool> centered: false;
+
+    background: transparent;
+
+    // Content width: in focus full-screen we cap to a comfortable reading
+    // column and center it; in split we already live in the right half, so we
+    // fill it. (data-panels §4 `.centered-layout` width:100%.)
+    property <length> content-width: root.centered
+        ? root.viewport-width
+        : Math.min(root.viewport-width - 96px, 720px);
+
+    // The upcoming entries are the slice of `coverflow-tracks` AFTER the
+    // now-playing index. Their COUNT (page/search-independent) drives the tab
+    // badge + section header. Floored at 0.
+    property <int> upcoming-count:
+        Math.max(0, QueueState.coverflow-tracks.length - QueueState.coverflow-index - 1);
+
+    // Centered content column.
+    HorizontalLayout {
+        alignment: center;
+        VerticalLayout {
+            width: root.content-width;
+            padding-top: 56px;       // clear the top ModeBar chrome
+            padding-bottom: 132px;   // clear the floating player chrome
+            padding-left: root.centered ? 0px : 8px;
+            padding-right: root.centered ? 0px : 8px;
+            spacing: 16px;
+
+            // --- Sub-tab header (Queue / History) ---------------------------
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                SubTab {
+                    label: @tr("Queue");
+                    count: root.upcoming-count;
+                    active: QueueState.tab == 0;
+                    clicked => { QueueState.set-tab(0); }
+                }
+                SubTab {
+                    label: @tr("History");
+                    count: QueueState.history.length;
+                    active: QueueState.tab == 1;
+                    clicked => { QueueState.set-tab(1); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                // Clear-queue button — Queue tab only, when there is something
+                // upcoming (data-panels §4 `.clear-btn`).
+                if QueueState.tab == 0 && root.upcoming-count > 0: VerticalLayout {
+                    alignment: center;
+                    clear-btn := Rectangle {
+                        height: 30px;
+                        border-radius: 8px;
+                        background: cta.has-hover ? #ffffff26 : #ffffff14;
+                        animate background { duration: 150ms; }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 6px;
+                            alignment: center;
+                            QbzIcon {
+                                source: @image-url("../assets/icons/trash-2.svg");
+                                width: 14px;
+                                height: 14px;
+                                tint: #ffffffcc;
+                            }
+                            Text {
+                                text: @tr("Clear");
+                                color: #ffffffcc;
+                                font-size: 16px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        cta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { QueueState.clear-queue(); }
+                        }
+                    }
+                }
+            }
+            // Header underline (data-panels §4 `.panel-header` border-bottom).
+            Rectangle {
+                height: 1px;
+                background: #ffffff1a;
+            }
+
+            // --- Body -------------------------------------------------------
+            Rectangle {
+                vertical-stretch: 1;
+
+                // ===== QUEUE tab =====
+                if QueueState.tab == 0: Rectangle {
+                    // NOW PLAYING card + UP NEXT list, OR empty state.
+                    if QueueState.has-current || root.upcoming-count > 0: VerticalLayout {
+                        spacing: 12px;
+
+                        // NOW PLAYING section.
+                        if QueueState.has-current: VerticalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: @tr("NOW PLAYING");
+                                color: #ffffff80;
+                                font-size: 15px;
+                                font-weight: 600;
+                                letter-spacing: 0.5px;
+                            }
+                            ImmQueueRow {
+                                item: QueueState.now-playing;
+                                current: true;
+                            }
+                        }
+
+                        // UP NEXT section.
+                        if root.upcoming-count > 0: VerticalLayout {
+                            vertical-stretch: 1;
+                            spacing: 8px;
+                            Text {
+                                text: @tr("UP NEXT");
+                                color: #ffffff80;
+                                font-size: 15px;
+                                font-weight: 600;
+                                letter-spacing: 0.5px;
+                            }
+                            Rectangle {
+                                vertical-stretch: 1;
+                                up-flick := Flickable {
+                                    width: 100%;
+                                    height: 100%;
+                                    viewport-width: self.width;
+                                    viewport-height: up-list.preferred-height;
+                                    up-list := VerticalLayout {
+                                        width: parent.width;
+                                        // spacing 0 — the inter-row gap is baked
+                                        // into each VISIBLE wrapper's height (60 =
+                                        // 56 row + 4 gap), with the row anchored to
+                                        // the bottom. History entries (idx <=
+                                        // coverflow-index) collapse to 0px AND
+                                        // contribute no spacing, so a long history
+                                        // adds NO phantom top space.
+                                        spacing: 0px;
+                                        // Iterate the flat whole-queue model and
+                                        // render only the entries AFTER the
+                                        // now-playing index. Flat index `idx`
+                                        // maps to the queue-wide upcoming index
+                                        // `idx - coverflow-index - 1`
+                                        // (data-panels §4 actualIndex math; see
+                                        // QueueState.play-coverflow-upcoming).
+                                        for item[idx] in QueueState.coverflow-tracks: Rectangle {
+                                            height: idx > QueueState.coverflow-index ? 60px : 0px;
+                                            if idx > QueueState.coverflow-index: ImmQueueRow {
+                                                x: 0;
+                                                y: parent.height - self.height;
+                                                width: parent.width;
+                                                height: 56px;
+                                                item: item;
+                                                play => {
+                                                    QueueState.play-coverflow-upcoming(
+                                                        idx - QueueState.coverflow-index - 1);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                ListScrollbar {
+                                    x: parent.width - self.width;
+                                    y: 0;
+                                    height: parent.height;
+                                    viewport-height: up-flick.viewport-height;
+                                    visible-height: up-flick.height;
+                                    viewport-y <=> up-flick.viewport-y;
+                                    auto-hide: true;
+                                }
+                            }
+                        }
+                    }
+
+                    // Empty state — nothing playing and nothing upcoming.
+                    if !QueueState.has-current && root.upcoming-count == 0: VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: @tr("Your queue is empty");
+                            color: #ffffff66;
+                            font-size: 18px;
+                            font-italic: true;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+
+                // ===== HISTORY tab =====
+                if QueueState.tab == 1: Rectangle {
+                    if QueueState.history.length > 0: Rectangle {
+                        hist-flick := Flickable {
+                            width: 100%;
+                            height: 100%;
+                            viewport-width: self.width;
+                            viewport-height: hist-list.preferred-height;
+                            hist-list := VerticalLayout {
+                                width: parent.width;
+                                spacing: 4px;
+                                // QueueState.history is already most-recent-first
+                                // (matches QueueSidebar), and play-history(idx)
+                                // indexes it directly — no coverflow math here.
+                                for item[idx] in QueueState.history: ImmQueueRow {
+                                    item: item;
+                                    play => { QueueState.play-history(idx); }
+                                }
+                            }
+                        }
+                        ListScrollbar {
+                            x: parent.width - self.width;
+                            y: 0;
+                            height: parent.height;
+                            viewport-height: hist-flick.viewport-height;
+                            visible-height: hist-flick.height;
+                            viewport-y <=> hist-flick.viewport-y;
+                            auto-hide: true;
+                        }
+                    }
+                    if QueueState.history.length == 0: VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: @tr("Nothing played yet");
+                            color: #ffffff66;
+                            font-size: 18px;
+                            font-italic: true;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
