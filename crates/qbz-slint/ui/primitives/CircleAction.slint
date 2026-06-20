@@ -62,6 +62,32 @@ export component CircleAction inherits Rectangle {
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
     }
 
+    // Keyboard activation: Enter/Space fire the same click. The TouchArea below
+    // stays the pointer source; this only adds key activation + focusability.
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // Non-layout focus ring — transparent-bordered overlay shown only on
+    // keyboard focus, circular to match the button so it never reflows.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+        border-width: 2px;
+        border-color: fs.has-focus ? Theme.focus-ring : transparent;
+        border-radius: root.diameter / 2;
+    }
+
     ta := TouchArea {
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
