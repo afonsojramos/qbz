@@ -44,8 +44,10 @@ export component QualityBadge inherits Rectangle {
             height: 16px;
             source: @image-url("../assets/cd.svg");
             image-fit: contain;
-            // Tinted light, matching the Tauri CD badge.
-            tint: #b0b0b0;
+            // Muted-tier mark — themed so it stays legible on light/HC themes
+            // (a fixed mid-grey vanished on light backgrounds). Hi-Res keeps
+            // its brand colors (it is a non-tinted Image above).
+            tint: Theme.text-muted;
         }
     }
     if root.tier == "mp3": Rectangle {
@@ -62,7 +64,7 @@ export component QualityBadge inherits Rectangle {
             height: 16px;
             source: @image-url("../assets/mp3.svg");
             image-fit: contain;
-            tint: #b0b0b0;
+            tint: Theme.text-muted;
         }
     }
     // Un-hydrated lossless: the bit-depth/rate isn't known yet, but the
@@ -79,7 +81,7 @@ export component QualityBadge inherits Rectangle {
             x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
             y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             text: root.detail;
-            color: #b0b0b0;
+            color: Theme.text-muted;
             font-size: 9px;
             font-weight: Typography.medium;
         }

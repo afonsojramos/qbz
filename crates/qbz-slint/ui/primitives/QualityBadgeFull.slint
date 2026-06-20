@@ -51,7 +51,8 @@ export component QualityBadgeFull inherits Rectangle {
         alignment: root.bare ? center : start;
 
         // Format icon. The Hi-Res brand mark keeps its own colors; the
-        // CD / MP3 marks render in muted grey.
+        // CD / MP3 marks render in the themed muted tier (legible on
+        // light/HC themes, unlike the old fixed mid-grey).
         if root.show-icon: VerticalLayout {
             alignment: center;
             if root.tier == "hires": Image {
@@ -64,13 +65,13 @@ export component QualityBadgeFull inherits Rectangle {
                 source: @image-url("../assets/cd.svg");
                 width: (root.compact ? 13px : 16px) * root.scale-factor;
                 height: (root.compact ? 13px : 16px) * root.scale-factor;
-                tint: #b0b0b0;
+                tint: Theme.text-muted;
             }
             if root.tier == "mp3": QbzIcon {
                 source: @image-url("../assets/mp3.svg");
                 width: (root.compact ? 13px : 16px) * root.scale-factor;
                 height: (root.compact ? 13px : 16px) * root.scale-factor;
-                tint: #b0b0b0;
+                tint: Theme.text-muted;
             }
             // Un-hydrated lossless (filetype known, bit-depth/rate not yet):
             // reuse the neutral disc mark; the detail line carries "FLAC".
@@ -78,7 +79,7 @@ export component QualityBadgeFull inherits Rectangle {
                 source: @image-url("../assets/cd.svg");
                 width: (root.compact ? 13px : 16px) * root.scale-factor;
                 height: (root.compact ? 13px : 16px) * root.scale-factor;
-                tint: #b0b0b0;
+                tint: Theme.text-muted;
             }
         }
 
@@ -87,7 +88,7 @@ export component QualityBadgeFull inherits Rectangle {
             spacing: 1px;
             Text {
                 text: root.tier-label;
-                color: #b0b0b0;
+                color: Theme.text-secondary;
                 font-size: (root.compact ? 7px : 8px) * root.scale-factor;
                 font-weight: 100;
                 letter-spacing: 0.5px;
@@ -95,7 +96,7 @@ export component QualityBadgeFull inherits Rectangle {
             }
             Text {
                 text: root.detail;
-                color: #999999;
+                color: Theme.text-muted;
                 font-size: (root.compact ? 8px : 9px) * root.scale-factor;
                 font-weight: 100;
                 horizontal-alignment: root.bare ? center : left;

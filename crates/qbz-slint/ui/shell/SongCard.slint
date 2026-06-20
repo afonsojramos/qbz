@@ -74,9 +74,10 @@ component DotLed inherits Rectangle {
             }
         }
         Text {
-            // Quality-badge text grey — constant regardless of on/off.
+            // Muted-tier label — constant regardless of on/off. Themed so it
+            // stays legible on light/HC themes (the dot signals state).
             text: root.label;
-            color: #b0b0b0;
+            color: Theme.text-muted;
             font-size: 8px;
             font-weight: 600;
             letter-spacing: 0.3px;
