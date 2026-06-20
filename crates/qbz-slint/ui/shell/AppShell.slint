@@ -8,7 +8,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState } from "../state.slint";
+import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions } from "../state.slint";
 import { Sidebar } from "Sidebar.slint";
 import { HeaderBar } from "HeaderBar.slint";
 import { HeaderMenuOverlay } from "HeaderMenuOverlay.slint";
@@ -69,6 +69,7 @@ import { OfflinePlaceholder } from "../offline/OfflinePlaceholder.slint";
 import { LocalLibraryView } from "../locallibrary/LocalLibraryView.slint";
 import { SettingsView } from "../settings/SettingsView.slint";
 import { SearchResultsView } from "../search/SearchResultsView.slint";
+import { Cortinilla } from "../search/Cortinilla.slint";
 
 export component AppShell inherits Rectangle {
     callback open-album(string);
@@ -111,6 +112,20 @@ export component AppShell inherits Rectangle {
             && !PlaylistState.is-local && !PlaylistState.offline-subset));
 
     background: Theme.surface-main;
+
+    // Close the live search "cortinilla" on ANY view change, whatever drove it
+    // (header back/forward, the nav-tab menu, a sidebar item, the player bar, a
+    // row click that navigates). Every navigation path ultimately sets
+    // `NavState.view`, so a single `changed` on a property mirroring it is the
+    // one chokepoint that covers them all — otherwise the dropdown + its
+    // click-outside scrim stay mounted over the new page and the scrim eats the
+    // first click. The cortinilla's own handlers (submit / search-all / row /
+    // dismiss / short-query) still close it directly; this just adds the
+    // "navigated away by other means" case.
+    property <ContentView> tracked-view: NavState.view;
+    changed tracked-view => {
+        SearchActions.cortinilla-dismiss();
+    }
 
     // Bottom layer: catches the mouse back / forward buttons for history
     // navigation. Declared first so the real UI sits on top of it.
@@ -460,6 +475,27 @@ export component AppShell inherits Rectangle {
     HeaderMenuOverlay {
         navigate(route) => {
             root.header-menu-navigate(route);
+        }
+    }
+
+    // Live as-you-type search dropdown (the "cortinilla"), anchored under the
+    // centered header search box. A plain in-window overlay (NOT a PopupWindow)
+    // so the search box stays typeable and the rows stay hoverable while
+    // results stream in. Declared after HeaderMenuOverlay (same header-anchored
+    // z-tier, above content) and before the feature modals / toasts so those
+    // still stack on top. Its callbacks forward straight to SearchActions.
+    Cortinilla {
+        row-clicked(fi) => {
+            SearchActions.cortinilla-row-clicked(fi);
+        }
+        view-more(kind) => {
+            SearchActions.cortinilla-view-more(kind);
+        }
+        search-all => {
+            SearchActions.cortinilla-search-all();
+        }
+        dismiss => {
+            SearchActions.cortinilla-dismiss();
         }
     }
 

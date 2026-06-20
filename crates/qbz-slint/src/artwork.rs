@@ -63,6 +63,16 @@ pub enum ArtworkTarget {
     SidebarPlaylistCover { idx: usize, slot: usize },
     /// The most-popular search hero (its kind is read from SearchState).
     SearchMostPopular,
+    /// A cortinilla row addressed by its stable flat index: 0 = the
+    /// `SearchState.top-result`, 1.. = the section rows in declaration order
+    /// (the same flat-index convention the click/keyboard path uses).
+    CortinillaRow { flat_index: usize },
+    /// An immersive-search dropdown row in `ImmersiveState.search-sections`,
+    /// addressed by its stable flat index (1..). The immersive cortinilla has
+    /// NO top result (top = None), so flat-index 0 is never produced; every job
+    /// targets a section row. Mirrors `CortinillaRow` but writes the immersive
+    /// global instead of `SearchState`.
+    ImmersiveSearchRow { flat_index: usize },
     /// A release card in `ArtistState.release-sections[section_idx]
     /// .albums[album_idx]`.
     ArtistRelease { section_idx: usize, album_idx: usize },
@@ -319,8 +329,9 @@ pub fn spawn_loads(jobs: Vec<ArtworkJob>, window: slint::Weak<AppWindow>, cache:
             let (pixels, width, height) =
                 fetch_and_decode(&job.url, &cache, decode_size).await?;
             let target = job.target;
+            let url = job.url;
             let _ = window.upgrade_in_event_loop(move |w| {
-                apply_artwork(&w, target, &pixels, width, height);
+                apply_artwork(&w, target, &url, &pixels, width, height);
             });
             Some(())
         });
@@ -342,8 +353,9 @@ pub fn spawn_local_loads(jobs: Vec<ArtworkJob>, window: slint::Weak<AppWindow>, 
             let art = ArtworkRef::LocalFile(job.url.clone());
             let (pixels, width, height) = fetch_and_decode_ref(&art, &cache, decode_size).await?;
             let target = job.target;
+            let url = job.url;
             let _ = window.upgrade_in_event_loop(move |w| {
-                apply_artwork(&w, target, &pixels, width, height);
+                apply_artwork(&w, target, &url, &pixels, width, height);
             });
             Some(())
         });
@@ -396,8 +408,9 @@ pub fn spawn_local_or_plex_loads(
             };
             let (pixels, width, height) = fetch_and_decode_ref(&art, &cache, decode_size).await?;
             let target = job.target;
+            let url = job.url;
             let _ = window.upgrade_in_event_loop(move |w| {
-                apply_artwork(&w, target, &pixels, width, height);
+                apply_artwork(&w, target, &url, &pixels, width, height);
             });
             Some(())
         });
@@ -637,6 +650,7 @@ pub fn header_tint(pixels: &[u8]) -> (u8, u8, u8) {
 fn apply_artwork(
     window: &AppWindow,
     target: ArtworkTarget,
+    url: &str,
     pixels: &[u8],
     width: u32,
     height: u32,
@@ -793,6 +807,67 @@ fn apply_artwork(
                     state.set_most_popular_track(it);
                 }
                 _ => {}
+            }
+        }
+        ArtworkTarget::CortinillaRow { flat_index } => {
+            let state = window.global::<SearchState>();
+            // Late-arrival guard (URL match): only paint if the row STILL carries
+            // the exact URL we loaded. The cortinilla re-renders on every
+            // keystroke and REUSES flat indices, so a slow load from a previous
+            // query would otherwise paint the wrong cover onto the new row that
+            // now occupies the same flat-index — the "momentary wrong cover" the
+            // image cache is too slow to avoid. Matching the URL makes a stale
+            // load a true no-op.
+            if flat_index == 0 {
+                let mut top = state.get_top_result();
+                if top.artwork_url.as_str() == url {
+                    top.artwork = image;
+                    state.set_top_result(top);
+                }
+            } else {
+                let sections = state.get_sections();
+                'outer: for s in 0..sections.row_count() {
+                    if let Some(section) = sections.row_data(s) {
+                        let rows = section.rows.clone();
+                        for r in 0..rows.row_count() {
+                            if let Some(mut row) = rows.row_data(r) {
+                                if row.flat_index as usize == flat_index
+                                    && row.artwork_url.as_str() == url
+                                {
+                                    row.artwork = image.clone();
+                                    rows.set_row_data(r, row);
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ArtworkTarget::ImmersiveSearchRow { flat_index } => {
+            // Same late-arrival URL-match guard as `CortinillaRow`: only paint
+            // when the row STILL carries the exact URL we loaded. The immersive
+            // cortinilla re-renders on every keystroke and REUSES flat indices,
+            // so a slow load from a previous query would otherwise paint the
+            // wrong cover onto the new row that now occupies the same flat-index.
+            // The immersive cortinilla has no top result, so flat-index 0 is
+            // never produced — every job is a section row.
+            let sections = window.global::<crate::ImmersiveState>().get_search_sections();
+            'outer: for s in 0..sections.row_count() {
+                if let Some(section) = sections.row_data(s) {
+                    let rows = section.rows.clone();
+                    for r in 0..rows.row_count() {
+                        if let Some(mut row) = rows.row_data(r) {
+                            if row.flat_index as usize == flat_index
+                                && row.artwork_url.as_str() == url
+                            {
+                                row.artwork = image.clone();
+                                rows.set_row_data(r, row);
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
             }
         }
         ArtworkTarget::ArtistRelease {

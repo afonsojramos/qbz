@@ -111,6 +111,38 @@ export struct PlaylistTagItem {
     selected: bool,
 }
 
+// One row in the search cortinilla (the live as-you-type dropdown under the
+// header search box). Frontend-agnostic: a flat row carrying everything the
+// SlimCard-style render needs. `source` is "qobuz" or "local" — it selects
+// which controller seam fires on click (Qobuz media-action vs local play).
+// `kind` is the navigable category ("album" | "artist" | "track" |
+// "playlist" | "localTrack"). Declared before HomeState so the cortinilla
+// overlay (a separate component file) can import it from state.slint.
+export struct CortinillaRow {
+    kind: string,          // "album" | "artist" | "track" | "playlist" | "localTrack"
+    id: string,
+    source: string,        // "qobuz" | "local"
+    title: string,
+    subtitle: string,
+    artwork-url: string,   // raw URL/fs path — drives the controller artwork job
+    artwork: image,        // empty until the artwork pipeline resolves it
+    // Stable flat selection index across ALL cortinilla rows: 0 = top-result,
+    // then 1.. enumerated section by section (declaration order). Set by the
+    // controller so the overlay needs no cross-loop accumulator (Slint has
+    // none). Used for click dispatch AND keyboard/hover highlight.
+    flat-index: int,
+}
+
+// One labelled section in the cortinilla (e.g. "Albums", "Tracks",
+// "From your library"). `kind` is the category these rows belong to (drives
+// `cortinilla-view-more`). `has-more` toggles the trailing "View more" row.
+export struct CortinillaSection {
+    title: string,
+    kind: string,
+    rows: [CortinillaRow],
+    has-more: bool,
+}
+
 // Discover / Home screen state.
 export global HomeState {
     in property <[DiscoverSection]> sections: [];
@@ -2566,11 +2598,19 @@ export global AppearanceState {
     in-out property <[string]> ui-scales: ["80%", "85%", "90%", "95%", "100%", "110%", "125%", "150%", "175%"];
     in-out property <int> ui-scale-index: 4;
 
+    // Immersive search action — what selecting a result in the Immersive search
+    // cortinilla does (index: 0=Disabled, 1=Replace queue, 2=Play next,
+    // 3=Add to queue). Persisted via appearance-select("immersive-search-action").
+    in-out property <[string]> immersive-search-actions: ["Disabled", "Replace current queue", "Play next", "Add to queue"];
+    in-out property <int> immersive-search-action-index: 1;
+
     // --- VISUAL EXTRAS -----------------------------------------------------
     // sidebar-playlist-collage is wired to SidebarState.playlist-collage in
     // the panel (the only already-functional flag here).
     in-out property <bool> sidebar-playlist-collage: true;
     in-out property <bool> local-library-track-artwork: false;
+    // Intelligent search: smart cache, ranking, and the search preview dropdown.
+    in-out property <bool> intelligent-search: true;
     // Player volume +/- stepper buttons — opt-in, hidden by default.
     in-out property <bool> show-volume-steppers: false;
 
@@ -3323,6 +3363,28 @@ export global ImmersiveState {
     // 0->1->2->3->0 with the 'g' key.
     in property <image> shader-texture;
     in-out property <int> shader-mode: 0;
+
+    // --- Immersive search cortinilla (parallel to SearchState.cortinilla-*) ---
+    // Albums/Artists/Playlists only; selecting ACTS ON PLAYBACK (per the Settings
+    // "search action") instead of navigating, since immersive has no nav. While
+    // search-open is true the HUD must NOT auto-hide. See the immersive-search
+    // design spec (qbz-nix-docs/specs/2026-06-20-immersive-search-design.md).
+    in-out property <bool> search-open: false;
+    in property <string> search-query;
+    in property <bool> search-loading: false;
+    in property <[CortinillaSection]> search-sections: [];
+    in-out property <int> search-selected-index: -1;
+    in property <length> search-scroll-y: 0px;
+}
+
+// Callbacks for the immersive search cortinilla — parallel to SearchActions but
+// scoped to the immersive overlay (load on type, keyboard nav, select-acts-on-
+// playback, dismiss). Wired in main.rs; active only while ImmersiveState.open.
+export global ImmersiveSearchActions {
+    callback live(string /* query */);
+    callback row-clicked(int /* flat-index */);
+    callback move-selection(int /* delta: -1 up / +1 down */);
+    callback dismiss();
 }
 
 // Native window-control actions for the MAIN AppWindow, exposed to the
@@ -4045,6 +4107,30 @@ export global SearchState {
     // Active searchType filter, as a dropdown index (0 = no filter).
     // The controller owns the index -> API-value mapping.
     in property <int> filter-index: 0;
+
+    // ---- Cortinilla (live as-you-type dropdown under the header search) ----
+    // Whether the cortinilla overlay is currently shown. The overlay is a
+    // LAST child of AppShell, visibility-gated on this flag.
+    in-out property <bool> cortinilla-open: false;
+    // The query the cortinilla currently reflects (the live header text).
+    in property <string> cortinilla-query;
+    // A live cortinilla fetch is in flight (spinner / shimmer affordance).
+    in property <bool> cortinilla-loading: false;
+    // The single best match shown at the very top of the cortinilla. Its
+    // flat index is always 0 (see the flat-index convention on
+    // SearchActions.cortinilla-row-clicked). `kind == ""` = no top result.
+    in property <CortinillaRow> top-result;
+    // The labelled result sections (Albums / Tracks / Artists / Playlists /
+    // library), each with its own rows + "View more" affordance.
+    in property <[CortinillaSection]> sections: [];
+    // Keyboard-nav highlight into the FLAT navigable list (top-result = 0,
+    // then each section's rows in declaration order). -1 = nothing selected,
+    // so Enter falls through to a full search-all instead of opening a row.
+    in-out property <int> selected-index: -1;
+    // Content-space top-y (px) of the currently keyboard-selected row, set by
+    // the controller on arrow nav so the overlay can scroll it into view. 0 when
+    // nothing is selected (scroll to top).
+    in property <length> cortinilla-scroll-y: 0px;
 }
 
 // Search actions wired to the Rust search controller.
@@ -4059,6 +4145,27 @@ export global SearchActions {
     callback filter-changed(int);
     // Request the next page for the given tab.
     callback load-more(int);
+
+    // ---- Cortinilla (live as-you-type dropdown) ----
+    // A cortinilla row was activated (click or Enter on a highlighted row).
+    // The argument is a FLAT index into the navigable list, where:
+    //   0                = top-result (SearchState.top-result)
+    //   1..              = section rows, in section declaration order, each
+    //                      section's rows enumerated in order before the next.
+    // The controller resolves the flat index back to a CortinillaRow and
+    // dispatches on its `source`/`kind` (Qobuz media-action vs local play).
+    callback cortinilla-row-clicked(int /* flat-index */);
+    // "View more" pressed on a section — open the full results page (or the
+    // LocalLibrary Tracks tab for the local section) for that category.
+    callback cortinilla-view-more(string /* kind */);
+    // Enter with nothing highlighted (selected-index == -1) — run a full
+    // search-all and navigate to the results page.
+    callback cortinilla-search-all();
+    // Click-outside / Escape — close the cortinilla without acting.
+    callback cortinilla-dismiss();
+    // Arrow key moved the keyboard highlight: delta -1 = up, +1 = down.
+    // Wraps/clamps against the flat navigable list in the controller.
+    callback cortinilla-move-selection(int /* delta: -1 up / +1 down */);
 }
 
 // ============================ Offline MODE ================================

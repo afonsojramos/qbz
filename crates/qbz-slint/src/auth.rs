@@ -112,6 +112,8 @@ where
         crate::fav_cache::init_for_user(&dir);
         crate::discover_prefs::init_for_user(&dir);
         crate::artist_blacklist::init_for_user(&dir);
+        // Intelligent Search (cache + ranking), seeded from the persisted pref.
+        crate::search_service::init(&dir, crate::ui_prefs::load().intelligent_search);
     }
     // Lyrics cache (per-user, shared lyrics.db with Tauri).
     crate::lyrics::init_for_user(core.client(), user_id);
@@ -223,6 +225,8 @@ where
                 crate::fav_cache::init_for_user(&dir);
                 crate::discover_prefs::init_for_user(&dir);
                 crate::artist_blacklist::init_for_user(&dir);
+                // Intelligent Search (cache + ranking), seeded from the pref.
+                crate::search_service::init(&dir, crate::ui_prefs::load().intelligent_search);
             }
             // Lyrics cache (per-user, shared lyrics.db with Tauri).
             crate::lyrics::init_for_user(core.client(), user_id);
@@ -271,6 +275,7 @@ where
     crate::fav_cache::teardown();
     crate::discover_prefs::teardown();
     crate::artist_blacklist::teardown();
+    crate::search_service::teardown();
     crate::lyrics::teardown();
     runtime.deactivate().await?;
     log::info!("[qbz-slint] logged out");

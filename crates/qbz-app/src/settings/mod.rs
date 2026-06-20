@@ -13,5 +13,8 @@ pub mod plex;
 pub mod reco_store;
 pub mod remote_control;
 pub mod scrobblers;
+pub mod search_cache;
+pub mod search_ranking;
+pub mod search_service;
 pub mod subscription;
 pub mod tray;

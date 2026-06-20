@@ -14,13 +14,30 @@ use qbz_models::{Album, Artist, MostPopularItem, Playlist, SearchAllResults, Tra
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget};
-use crate::{AlbumCardItem, AppWindow, SearchPlaylistItem, SearchState, TrackItem, SlimItem};
+use crate::{
+    AlbumCardItem, AppWindow, CortinillaRow as CortinillaRowItem,
+    CortinillaSection as CortinillaSectionItem, SearchPlaylistItem, SearchState, SlimItem,
+    TrackItem,
+};
 
 thread_local! {
     /// Monotonic search-attempt counter. Each `navigate_search` captures the
     /// current value; a stale async load whose version is no longer current
     /// must not overwrite a newer search's results. UI thread only.
     static SEARCH_VERSION: std::cell::Cell<u64> = std::cell::Cell::new(0);
+
+    /// Monotonic cortinilla-attempt counter — SEPARATE from `SEARCH_VERSION`.
+    /// The live dropdown fires far more often than the results page (one bump
+    /// per debounced keystroke + the instant cached paint), and a stale
+    /// revalidation must not overwrite a newer query's dropdown. UI thread only.
+    static CORTINILLA_VERSION: std::cell::Cell<u64> = std::cell::Cell::new(0);
+
+    /// Monotonic immersive-search-attempt counter — SEPARATE from both the
+    /// results-page (`SEARCH_VERSION`) and the main-header (`CORTINILLA_VERSION`)
+    /// counters, so the in-immersive dropdown's stale-load guard never collides
+    /// with the main cortinilla's (both surfaces can be open across a session).
+    /// UI thread only.
+    static IMMERSIVE_SEARCH_VERSION: std::cell::Cell<u64> = std::cell::Cell::new(0);
 }
 
 /// Bump the search version and return the new value.
@@ -35,6 +52,34 @@ pub fn next_search_version() -> u64 {
 /// Whether `version` is still the most recent search attempt.
 pub fn is_current_version(version: u64) -> bool {
     SEARCH_VERSION.with(|c| c.get() == version)
+}
+
+/// Bump the cortinilla version and return the new value.
+pub fn next_cortinilla_version() -> u64 {
+    CORTINILLA_VERSION.with(|c| {
+        let v = c.get() + 1;
+        c.set(v);
+        v
+    })
+}
+
+/// Whether `version` is still the most recent cortinilla attempt.
+pub fn is_current_cortinilla_version(version: u64) -> bool {
+    CORTINILLA_VERSION.with(|c| c.get() == version)
+}
+
+/// Bump the immersive-search version and return the new value.
+pub fn next_immersive_search_version() -> u64 {
+    IMMERSIVE_SEARCH_VERSION.with(|c| {
+        let v = c.get() + 1;
+        c.set(v);
+        v
+    })
+}
+
+/// Whether `version` is still the most recent immersive-search attempt.
+pub fn is_current_immersive_search_version(version: u64) -> bool {
+    IMMERSIVE_SEARCH_VERSION.with(|c| c.get() == version)
 }
 
 // ==================== Plain (Send) row types ====================
@@ -118,6 +163,50 @@ pub struct SearchData {
     pub playlists_total: u32,
     pub most_popular: MostPopularRow,
 }
+
+// ==================== Cortinilla (live dropdown) row types ====================
+
+/// One plain (`Send`) cortinilla row, before it becomes a Slint
+/// `CortinillaRow`. `source` selects the click seam ("qobuz" media/nav vs
+/// "local" play); `kind` is the navigable category. `flat_index` is the stable
+/// 0-based selection index across the WHOLE navigable list (top-result = 0,
+/// then section rows in display order), assigned by `map_search_all_to_cortinilla`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CortRow {
+    pub kind: String,
+    pub id: String,
+    pub source: String,
+    pub title: String,
+    pub subtitle: String,
+    pub artwork_url: String,
+    pub flat_index: usize,
+}
+
+/// One labelled cortinilla section (e.g. "Artists", "Albums").
+#[derive(Debug, Clone, PartialEq)]
+pub struct CortSection {
+    pub title: String,
+    pub kind: String,
+    pub rows: Vec<CortRow>,
+    pub has_more: bool,
+}
+
+/// The full cortinilla payload, as plain `Send` data.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CortinillaData {
+    pub query: String,
+    pub top: Option<CortRow>,
+    pub sections: Vec<CortSection>,
+}
+
+/// How many rows each cortinilla category shows before "View more".
+/// Per-category row caps in the cortinilla. Artists are rarely opened past the
+/// first hit, so they get the smallest cap and the freed space goes to albums
+/// (the most-scanned category). Tracks/playlists keep the default 3.
+const CORTINILLA_CAP_ALBUMS: usize = 5;
+const CORTINILLA_CAP_ARTISTS: usize = 2;
+const CORTINILLA_CAP_TRACKS: usize = 3;
+const CORTINILLA_CAP_PLAYLISTS: usize = 3;
 
 // ==================== Pure helpers ====================
 
@@ -317,6 +406,409 @@ pub fn map_search_all(
     }
 }
 
+// ==================== Cortinilla mapping ====================
+
+/// Build the cortinilla payload from a combined-search result.
+///
+/// Section order (display + flat-index order): **Top result**, then **Albums,
+/// Artists, Tracks, Playlists** (spec §6.2.3). Per-category caps (albums 5,
+/// artists 2, tracks/playlists 3) — artists are rarely opened past the first
+/// hit, so albums get the freed space; `has_more` is set when the category's
+/// reported total exceeds the rows shown.
+///
+/// Intra-category order applies the qbz-app learned ranking
+/// (`search_service::rank_within`) BEFORE truncation, so a frequently-opened
+/// entity floats to the top of its section.
+///
+/// Top result: if `top_kind_id` (the learned `(kind, id)` for this query) is
+/// `Some` and matches a mapped row, that row is promoted; otherwise the
+/// `most_popular` hero is used; otherwise the first artist, then the first
+/// album. The promoted entity is NOT removed from its section (the cortinilla
+/// is small; a one-row dup is acceptable and matches the results page, which
+/// keeps the artist in the Artists tab).
+pub fn map_search_all_to_cortinilla(
+    query: &str,
+    results: &SearchAllResults,
+    top_kind_id: Option<(String, String)>,
+) -> CortinillaData {
+    // Map each category to CortRow (source = "qobuz"), apply ranking, truncate.
+    let rank_and_take = |kind: &str, mut rows: Vec<CortRow>, cap: usize| -> (Vec<CortRow>, usize) {
+        let total = rows.len();
+        crate::search_service::rank_within(query, kind, &mut rows, |r| r.id.clone());
+        rows.truncate(cap);
+        (rows, total)
+    };
+
+    let to_artist_row = |a: &Artist| CortRow {
+        kind: "artist".into(),
+        id: a.id.to_string(),
+        source: "qobuz".into(),
+        title: a.name.clone(),
+        subtitle: map_artist(a, false).subtitle,
+        artwork_url: a
+            .image
+            .as_ref()
+            .and_then(|i| i.best().cloned())
+            .unwrap_or_default(),
+        flat_index: 0,
+    };
+    let to_album_row = |al: &Album| {
+        let m = map_album(al.clone());
+        CortRow {
+            kind: "album".into(),
+            id: m.id,
+            source: "qobuz".into(),
+            title: m.title,
+            subtitle: m.artist,
+            artwork_url: m.artwork_url,
+            flat_index: 0,
+        }
+    };
+    let to_track_row = |t: &Track| {
+        let m = map_track(t.clone());
+        CortRow {
+            kind: "track".into(),
+            id: m.id,
+            source: "qobuz".into(),
+            title: m.title,
+            subtitle: m.artist,
+            artwork_url: m.artwork_url,
+            flat_index: 0,
+        }
+    };
+    let to_playlist_row = |p: &Playlist| {
+        let m = map_playlist(p.clone());
+        CortRow {
+            kind: "playlist".into(),
+            id: m.id,
+            source: "qobuz".into(),
+            title: m.title,
+            subtitle: m.subtitle,
+            artwork_url: m.cover_urls.first().cloned().unwrap_or_default(),
+            flat_index: 0,
+        }
+    };
+
+    // Borrow the closures (`&F: Fn` when `F: Fn`) so they are not consumed here
+    // — the top-result fallback below reuses the same closures.
+    let artist_rows: Vec<CortRow> = results.artists.items.iter().map(&to_artist_row).collect();
+    let album_rows: Vec<CortRow> = results.albums.items.iter().map(&to_album_row).collect();
+    let track_rows: Vec<CortRow> = results.tracks.items.iter().map(&to_track_row).collect();
+    let playlist_rows: Vec<CortRow> =
+        results.playlists.items.iter().map(&to_playlist_row).collect();
+
+    let (artists, _) = rank_and_take("artist", artist_rows, CORTINILLA_CAP_ARTISTS);
+    let (albums, _) = rank_and_take("album", album_rows, CORTINILLA_CAP_ALBUMS);
+    let (tracks, _) = rank_and_take("track", track_rows, CORTINILLA_CAP_TRACKS);
+    let (playlists, _) = rank_and_take("playlist", playlist_rows, CORTINILLA_CAP_PLAYLISTS);
+
+    // Pick the top result. The promoted row is identified by (kind, id) so it
+    // can be located across the already-mapped section rows; if the learned
+    // pick is not present in the (truncated) sections, fall back to mapping the
+    // raw catalog entry directly so it still shows even when ranked out.
+    let find_in =
+        |kind: &str, id: &str| -> Option<CortRow> {
+            let sect = match kind {
+                "artist" => &artists,
+                "album" => &albums,
+                "track" => &tracks,
+                "playlist" => &playlists,
+                _ => return None,
+            };
+            sect.iter().find(|r| r.id == id).cloned()
+        };
+
+    let top: Option<CortRow> = top_kind_id
+        .and_then(|(kind, id)| {
+            // Prefer a row already mapped; else map the raw catalog entry.
+            find_in(&kind, &id).or_else(|| match kind.as_str() {
+                "artist" => results
+                    .artists
+                    .items
+                    .iter()
+                    .find(|a| a.id.to_string() == id)
+                    .map(&to_artist_row),
+                "album" => results
+                    .albums
+                    .items
+                    .iter()
+                    .find(|a| a.id == id)
+                    .map(&to_album_row),
+                "track" => results
+                    .tracks
+                    .items
+                    .iter()
+                    .find(|t| t.id.to_string() == id)
+                    .map(&to_track_row),
+                "playlist" => results
+                    .playlists
+                    .items
+                    .iter()
+                    .find(|p| p.id.to_string() == id)
+                    .map(&to_playlist_row),
+                _ => None,
+            })
+        })
+        .or_else(|| match &results.most_popular {
+            // Reuse the existing most-popular shape as a fallback top result.
+            Some(MostPopularItem::Artists(a)) => Some(to_artist_row(a)),
+            Some(MostPopularItem::Albums(a)) => Some(to_album_row(a)),
+            Some(MostPopularItem::Tracks(t)) => Some(to_track_row(t)),
+            None => None,
+        })
+        .or_else(|| artists.first().cloned())
+        .or_else(|| albums.first().cloned());
+
+    // Assemble sections in display order (spec §6.2.3): Albums, Artists,
+    // Tracks, Playlists. The local "On this device" section is appended LAST,
+    // outside this function (see `append_local_section`).
+    let mut sections: Vec<CortSection> = Vec::new();
+    let mut push_section = |title: &str, kind: &str, rows: Vec<CortRow>, total: u32| {
+        if !rows.is_empty() {
+            sections.push(CortSection {
+                title: title.to_string(),
+                kind: kind.to_string(),
+                has_more: total as usize > rows.len(),
+                rows,
+            });
+        }
+    };
+    push_section("Albums", "album", albums, results.albums.total);
+    push_section("Artists", "artist", artists, results.artists.total);
+    push_section("Tracks", "track", tracks, results.tracks.total);
+    push_section("Playlists", "playlist", playlists, results.playlists.total);
+
+    // Assign the flat selection index across the whole navigable list:
+    // top-result = 0, then every section's rows in display order.
+    let mut data = CortinillaData {
+        query: query.to_string(),
+        top,
+        sections,
+    };
+    assign_flat_indices(&mut data);
+    data
+}
+
+/// Per-category caps for the IMMERSIVE search cortinilla (owner sketch).
+const IMMERSIVE_CAP_ARTISTS: usize = 2;
+const IMMERSIVE_CAP_ALBUMS: usize = 5;
+const IMMERSIVE_CAP_PLAYLISTS: usize = 2;
+
+/// Immersive-search variant of [`map_search_all_to_cortinilla`]: **Albums /
+/// Artists / Playlists ONLY** (no tracks, no local, no top-result hero —
+/// immersive has no navigation, so selecting a row acts on the queue instead).
+/// Section order matches the owner sketch: Artists, Albums, Playlists. Intra-
+/// category order still applies the learned ranking before truncation.
+pub fn map_search_all_to_immersive(query: &str, results: &SearchAllResults) -> CortinillaData {
+    let to_artist_row = |a: &Artist| CortRow {
+        kind: "artist".into(),
+        id: a.id.to_string(),
+        source: "qobuz".into(),
+        title: a.name.clone(),
+        subtitle: map_artist(a, false).subtitle,
+        artwork_url: a
+            .image
+            .as_ref()
+            .and_then(|i| i.best().cloned())
+            .unwrap_or_default(),
+        flat_index: 0,
+    };
+    let to_album_row = |al: &Album| {
+        let m = map_album(al.clone());
+        CortRow {
+            kind: "album".into(),
+            id: m.id,
+            source: "qobuz".into(),
+            title: m.title,
+            subtitle: m.artist,
+            artwork_url: m.artwork_url,
+            flat_index: 0,
+        }
+    };
+    let to_playlist_row = |p: &Playlist| {
+        let m = map_playlist(p.clone());
+        CortRow {
+            kind: "playlist".into(),
+            id: m.id,
+            source: "qobuz".into(),
+            title: m.title,
+            subtitle: m.subtitle,
+            artwork_url: m.cover_urls.first().cloned().unwrap_or_default(),
+            flat_index: 0,
+        }
+    };
+
+    let take = |kind: &str, mut rows: Vec<CortRow>, cap: usize| -> Vec<CortRow> {
+        crate::search_service::rank_within(query, kind, &mut rows, |r| r.id.clone());
+        rows.truncate(cap);
+        rows
+    };
+
+    let artists = take(
+        "artist",
+        results.artists.items.iter().map(to_artist_row).collect(),
+        IMMERSIVE_CAP_ARTISTS,
+    );
+    let albums = take(
+        "album",
+        results.albums.items.iter().map(to_album_row).collect(),
+        IMMERSIVE_CAP_ALBUMS,
+    );
+    let playlists = take(
+        "playlist",
+        results.playlists.items.iter().map(to_playlist_row).collect(),
+        IMMERSIVE_CAP_PLAYLISTS,
+    );
+
+    let mut sections: Vec<CortSection> = Vec::new();
+    let mut push = |title: &str, kind: &str, rows: Vec<CortRow>, total: u32| {
+        if !rows.is_empty() {
+            sections.push(CortSection {
+                title: title.to_string(),
+                kind: kind.to_string(),
+                has_more: total as usize > rows.len(),
+                rows,
+            });
+        }
+    };
+    push("Artists", "artist", artists, results.artists.total);
+    push("Albums", "album", albums, results.albums.total);
+    push("Playlists", "playlist", playlists, results.playlists.total);
+
+    let mut data = CortinillaData {
+        query: query.to_string(),
+        top: None,
+        sections,
+    };
+    assign_flat_indices(&mut data);
+    data
+}
+
+/// How many on-disk rows the local cortinilla section shows before "View more".
+const CORTINILLA_LOCAL_PER_SECTION: usize = 3;
+
+/// Map one `LocalTrack` to a cortinilla `CortRow` tagged `source = "local"`.
+///
+/// `kind = "track"` (it navigates/plays as a track), but the click router keys
+/// off `source == "local"` to play it through the LOCAL seam
+/// (`playback::play_local_tracks`) rather than the Qobuz media-action. The id
+/// is the library row id (`LocalTrack::id`) — the click router resolves the
+/// concrete `LocalTrack` back from the per-query snapshot, NOT from this id.
+///
+/// Artwork prefixing mirrors `playback::local_queue_track` /
+/// `local_library::map_local_track`: a raw fs path is `file://`-prefixed unless
+/// it already carries a `file://` scheme (a Plex thumb never reaches here — the
+/// local-library DB query returns user files / offline copies only, never the
+/// Plex cache).
+fn map_local_track_to_cort_row(t: &qbz_library::LocalTrack) -> CortRow {
+    let artwork_url = t
+        .artwork_path
+        .as_ref()
+        .map(|p| {
+            if p.starts_with("file://") {
+                p.clone()
+            } else {
+                format!("file://{p}")
+            }
+        })
+        .unwrap_or_default();
+    // Subtitle: "artist · album" when both are present, else whichever exists.
+    let subtitle = match (t.artist.is_empty(), t.album.is_empty()) {
+        (false, false) => format!("{} · {}", t.artist, t.album),
+        (false, true) => t.artist.clone(),
+        (true, false) => t.album.clone(),
+        (true, true) => String::new(),
+    };
+    CortRow {
+        kind: "track".into(),
+        id: t.id.to_string(),
+        source: "local".into(),
+        title: t.title.clone(),
+        subtitle,
+        artwork_url,
+        flat_index: 0,
+    }
+}
+
+/// Append the "On this device" local section to a cortinilla payload (placed
+/// LAST, after every Qobuz category, per D1/D2 — local results live ONLY in the
+/// cortinilla, and the on-device block sits below the catalog matches). `rows`
+/// is the FULL local result set (the load path fetches up to 6); this caps the
+/// shown rows at [`CORTINILLA_LOCAL_PER_SECTION`] and sets `has_more` when more
+/// were found. No-op when `rows` is empty (no empty section). Re-runs
+/// `assign_flat_indices` so the local rows get contiguous flat indices AFTER
+/// the Qobuz sections.
+pub fn append_local_section(data: &mut CortinillaData, rows: &[qbz_library::LocalTrack]) {
+    if rows.is_empty() {
+        return;
+    }
+    let total = rows.len();
+    let cort_rows: Vec<CortRow> = rows
+        .iter()
+        .take(CORTINILLA_LOCAL_PER_SECTION)
+        .map(map_local_track_to_cort_row)
+        .collect();
+    let shown = cort_rows.len();
+    data.sections.push(CortSection {
+        title: "On this device".to_string(),
+        kind: "local".to_string(),
+        rows: cort_rows,
+        has_more: total > shown,
+    });
+    assign_flat_indices(data);
+}
+
+/// Fetch up to [`CORTINILLA_LOCAL_LIMIT`] local-library tracks matching `query`,
+/// off the UI thread (the rusqlite read is sync + blocking, so it runs inside
+/// `spawn_blocking`). Returns an empty Vec when the module is disabled, the
+/// library is empty, or no row matches — the caller then simply adds no section.
+///
+/// Independent of the Qobuz search: callers `tokio::join!` this with
+/// `core.search_all`, so an offline / slow Qobuz never blocks the on-device
+/// results (and vice-versa).
+pub async fn load_cortinilla_local(query: &str) -> Vec<qbz_library::LocalTrack> {
+    // Gate: only touch the DB when the intelligent-search module is enabled.
+    if !crate::search_service::is_enabled() {
+        return Vec::new();
+    }
+    let q = query.trim().to_string();
+    if q.chars().count() < 2 {
+        return Vec::new();
+    }
+    let exclude_network = crate::local_library::exclude_network_folders_now();
+    tokio::task::spawn_blocking(move || {
+        crate::library_db::with_db(|db| {
+            db.search_with_filter_page(q.trim(), 0, CORTINILLA_LOCAL_LIMIT, true, exclude_network)
+        })
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// How many local rows the cortinilla fetches (a small over-fetch beyond the 3
+/// shown so `has_more` is accurate and the "View more" affordance is honest).
+const CORTINILLA_LOCAL_LIMIT: u64 = 6;
+
+/// (Re)assign `flat_index` across a cortinilla payload: top-result = 0, then
+/// each section's rows in declaration order, 1..N. Called after the local
+/// section is appended too, so indices stay contiguous.
+pub fn assign_flat_indices(data: &mut CortinillaData) {
+    let mut next = 0usize;
+    if let Some(top) = data.top.as_mut() {
+        top.flat_index = next;
+    }
+    // Whether or not there is a top result, section rows start at 1 (index 0 is
+    // reserved for the top-result slot the overlay always treats as flat 0).
+    next = 1;
+    for section in data.sections.iter_mut() {
+        for row in section.rows.iter_mut() {
+            row.flat_index = next;
+            next += 1;
+        }
+    }
+}
+
 // ==================== Load (async, worker thread) ====================
 
 /// Run a combined search and map it to plain `Send` data. The search and
@@ -342,6 +834,88 @@ where
     let results = results.map_err(|e| e.to_string())?;
     let favs = favs.unwrap_or_default();
     Ok(map_search_all(query, results, &favs))
+}
+
+/// Run a combined search for the live cortinilla, store it in the per-user
+/// cache, and map it to the dropdown payload. Reuses the same blacklist +
+/// `search_all` shape as [`load_search`]. The learned top-result for the query
+/// is folded in by `map_search_all_to_cortinilla`.
+///
+/// Returns the mapped dropdown payload AND the raw `LocalTrack` rows that backed
+/// the on-device section, so the caller can snapshot them for click routing
+/// (the click router plays a local row through `playback::play_local_tracks`,
+/// which needs the concrete `LocalTrack`, not just its id).
+pub async fn load_cortinilla<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    query: &str,
+) -> Result<(CortinillaData, Vec<qbz_library::LocalTrack>), String>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let blacklist = if crate::artist_blacklist::is_enabled() {
+        crate::artist_blacklist::ids_snapshot()
+    } else {
+        std::collections::HashSet::new()
+    };
+    let core = runtime.core();
+    // Fire the Qobuz search and the local-library search CONCURRENTLY. The local
+    // query is independent — if Qobuz is slow/offline the on-device rows still
+    // fill in (a Qobuz error falls into the local-only branch below instead of
+    // discarding everything; the local rows are already resolved by then).
+    let (results, local_rows) =
+        tokio::join!(core.search_all(query, &blacklist), load_cortinilla_local(query));
+    let mut data = match results {
+        Ok(results) => {
+            // Persist the live page so a later keystroke (or restart) can paint
+            // instantly from cache (SWR). No-op when the module is disabled.
+            crate::search_service::store(query, &results);
+            let top = crate::search_service::top_for_query(query);
+            map_search_all_to_cortinilla(query, &results, top)
+        }
+        Err(e) => {
+            // Qobuz failed (offline / API error). The on-device rows resolved
+            // independently, so still build a dropdown from JUST the local
+            // section rather than dropping everything. An empty local set then
+            // yields an empty payload (the overlay shows only "Search for …").
+            log::debug!("[qbz-slint] cortinilla: qobuz search failed ({e}); local-only");
+            CortinillaData {
+                query: query.to_string(),
+                top: None,
+                sections: Vec::new(),
+            }
+        }
+    };
+    // Append the "On this device" section LAST (after every Qobuz category) and
+    // re-run flat-index assignment so the local rows get contiguous indices.
+    append_local_section(&mut data, &local_rows);
+    Ok((data, local_rows))
+}
+
+/// Run a combined search for the in-immersive dropdown and map it to the
+/// immersive payload (Albums/Artists/Playlists only — no local section, no
+/// top-result hero). Reuses the same blacklist snapshot + `search_all` shape as
+/// [`load_cortinilla`], but does NOT query the local library (immersive has no
+/// on-device section) and does NOT persist to the search cache / learn a top
+/// result (the immersive dropdown is playback-only, so the ranking-feedback
+/// surface stays the main cortinilla's).
+pub async fn load_immersive_search<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    query: &str,
+) -> Result<CortinillaData, String>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let blacklist = if crate::artist_blacklist::is_enabled() {
+        crate::artist_blacklist::ids_snapshot()
+    } else {
+        std::collections::HashSet::new()
+    };
+    let core = runtime.core();
+    let results = core
+        .search_all(query, &blacklist)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(map_search_all_to_immersive(query, &results))
 }
 
 // ==================== Apply (Slint event loop) ====================
@@ -489,6 +1063,125 @@ pub fn apply_search(window: &AppWindow, data: SearchData) {
             state.set_most_popular_kind("".into());
         }
     }
+}
+
+// ==================== Cortinilla apply + artwork ====================
+
+/// Turn a plain `CortRow` into its Slint item. `artwork` starts empty; the
+/// artwork pipeline resolves it in place keyed off `flat_index`.
+fn cortinilla_row_item(row: &CortRow) -> CortinillaRowItem {
+    CortinillaRowItem {
+        kind: row.kind.clone().into(),
+        id: row.id.clone().into(),
+        source: row.source.clone().into(),
+        title: row.title.clone().into(),
+        subtitle: row.subtitle.clone().into(),
+        artwork_url: row.artwork_url.clone().into(),
+        artwork: slint::Image::default(),
+        flat_index: row.flat_index as i32,
+    }
+}
+
+/// Write a cortinilla payload into `SearchState`. Runs on the Slint event loop.
+/// Clears `cortinilla-loading`. Does NOT reset `selected-index` here — the live
+/// handler resets selection only when the query actually changed, so a late
+/// revalidation overwrite keeps the user's current highlight.
+pub fn apply_cortinilla(window: &AppWindow, data: CortinillaData) {
+    let state = window.global::<SearchState>();
+    state.set_cortinilla_query(data.query.clone().into());
+
+    // Top result — an empty CortinillaRow (kind == "") means "no top result".
+    match &data.top {
+        Some(top) => state.set_top_result(cortinilla_row_item(top)),
+        // An all-default row (kind == "", id == "") is the overlay's "no top
+        // result" sentinel.
+        None => state.set_top_result(CortinillaRowItem::default()),
+    }
+
+    let sections: Vec<CortinillaSectionItem> = data
+        .sections
+        .iter()
+        .map(|s| {
+            let rows: Vec<CortinillaRowItem> = s.rows.iter().map(cortinilla_row_item).collect();
+            CortinillaSectionItem {
+                title: s.title.clone().into(),
+                kind: s.kind.clone().into(),
+                rows: ModelRc::new(VecModel::from(rows)),
+                has_more: s.has_more,
+            }
+        })
+        .collect();
+    state.set_sections(ModelRc::new(VecModel::from(sections)));
+    state.set_cortinilla_loading(false);
+}
+
+/// Build artwork download jobs for a cortinilla payload — one per row that
+/// carries a URL, keyed by the row's stable `flat_index` (top-result = 0).
+pub fn cortinilla_artwork_jobs(data: &CortinillaData) -> Vec<ArtworkJob> {
+    let mut jobs = Vec::new();
+    if let Some(top) = &data.top {
+        jobs.extend(simple_job(
+            ArtworkTarget::CortinillaRow {
+                flat_index: top.flat_index,
+            },
+            &top.artwork_url,
+        ));
+    }
+    for section in &data.sections {
+        for row in &section.rows {
+            jobs.extend(simple_job(
+                ArtworkTarget::CortinillaRow {
+                    flat_index: row.flat_index,
+                },
+                &row.artwork_url,
+            ));
+        }
+    }
+    jobs
+}
+
+/// Write an immersive-search payload into `ImmersiveState`. Runs on the Slint
+/// event loop. Builds the `[CortinillaSection]` model from `data.sections`
+/// (reusing the shared row/section item-builders) and clears `search-loading`.
+/// Does NOT touch `search-selected-index` — the controller owns selection and
+/// resets it on every open/refine, so a late revalidation must not clobber it.
+/// The immersive payload has no top result, so none is written.
+pub fn apply_immersive_search(window: &AppWindow, data: &CortinillaData) {
+    let state = window.global::<crate::ImmersiveState>();
+    let sections: Vec<CortinillaSectionItem> = data
+        .sections
+        .iter()
+        .map(|s| {
+            let rows: Vec<CortinillaRowItem> = s.rows.iter().map(cortinilla_row_item).collect();
+            CortinillaSectionItem {
+                title: s.title.clone().into(),
+                kind: s.kind.clone().into(),
+                rows: ModelRc::new(VecModel::from(rows)),
+                has_more: s.has_more,
+            }
+        })
+        .collect();
+    state.set_search_sections(ModelRc::new(VecModel::from(sections)));
+    state.set_search_loading(false);
+}
+
+/// Build artwork download jobs for an immersive-search payload — one per row
+/// that carries a URL, keyed by the row's stable `flat_index`. Targets
+/// `ImmersiveSearchRow` (the immersive global) instead of `CortinillaRow`. The
+/// immersive payload has no top result, so only section rows produce jobs.
+pub fn immersive_cortinilla_artwork_jobs(data: &CortinillaData) -> Vec<ArtworkJob> {
+    let mut jobs = Vec::new();
+    for section in &data.sections {
+        for row in &section.rows {
+            jobs.extend(simple_job(
+                ArtworkTarget::ImmersiveSearchRow {
+                    flat_index: row.flat_index,
+                },
+                &row.artwork_url,
+            ));
+        }
+    }
+    jobs
 }
 
 /// Clear search state and show the loading state (used when starting a new

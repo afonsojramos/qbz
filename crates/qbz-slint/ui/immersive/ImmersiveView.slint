@@ -3,8 +3,10 @@
 // rebuilt on top of this base after the background/player are approved.
 
 import { Radius } from "../foundation/radius.slint";
+import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { NowPlayingState, VisualizerState, ImmersiveState, SettingsState, LyricsState, QueueState, TrackInfoActions, SuggestionsActions, WindowControlActions } from "../state.slint";
+import { NowPlayingState, VisualizerState, ImmersiveState, ImmersiveSearchActions, SettingsState, LyricsState, QueueState, TrackInfoActions, SuggestionsActions, WindowControlActions, ShellState } from "../state.slint";
+import { ImmersiveSearchCortinilla } from "ImmersiveSearchCortinilla.slint";
 import { ImmersiveAtmosphere } from "ImmersiveAtmosphere.slint";
 import { AlbumReactivePanel } from "AlbumReactivePanel.slint";
 import { StaticPanel } from "StaticPanel.slint";
@@ -700,6 +702,8 @@ component ImmersiveViewMenu inherits Rectangle {
     callback trackinfo-entered();
     callback suggestions-entered();
     callback wake();
+    // Exposed so the HUD auto-hide stays awake while the pointer rests on it.
+    out property <bool> hovered: trigger-ta.has-hover;
 
     width: 44px;
     height: 36px;
@@ -741,11 +745,17 @@ component ImmersiveViewMenu inherits Rectangle {
     }
 }
 
-// INERT search placeholder (header center). Visual-only this session: a rounded
-// input styled like the app's search inputs (HeaderBar:534 — 6px radius, 1px
-// border, elevated surface) but rendered in the immersive dark glass palette,
-// with a leading magnifier + "Search" placeholder text. NO wiring; search logic
-// is a future session.
+// INTERACTIVE immersive search field (header center). Glass-styled rounded input
+// (18px radius, dark translucent surface) wrapped in a FocusScope so the
+// immersive cortinilla can be driven by the keyboard WITHOUT stealing focus from
+// the input — the exact idiom from HeaderBar.slint's `search-scope`. The
+// FocusScope owns focus, `forward-focus: input` routes typing to the TextInput,
+// and its key-pressed runs FIRST: Return activates the keyboard selection,
+// Escape dismisses, and arrows are REJECTED (the controller captures Up/Down at
+// the winit level when search-open, so we must NOT also fire move-selection here
+// — just reject so the single-line input doesn't do a weird cursor move). A
+// future controller flips ImmersiveState.search-open true on type; this field
+// only fires ImmersiveSearchActions.live(text).
 component ImmersiveSearchPlaceholder inherits Rectangle {
     height: 36px;
     border-radius: 18px;
@@ -756,25 +766,128 @@ component ImmersiveSearchPlaceholder inherits Rectangle {
     drop-shadow-color: #00000066;
     drop-shadow-offset-y: 8px;
 
-    HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 16px;
-        spacing: 10px;
-        VerticalLayout {
-            alignment: center;
-            QbzIcon {
-                source: @image-url("../assets/icons/search.svg");
-                width: 15px;
-                height: 15px;
-                tint: #ffffff80;
+    search-scope := FocusScope {
+        width: 100%;
+        height: 100%;
+        forward-focus: input;
+
+        // Enter activates the CURRENT keyboard selection: a row when one is
+        // arrow-highlighted (search-selected-index >= 0). Immersive has no
+        // "Full results" page, so with no selection Enter is a no-op (the search
+        // stays open). Hover never writes search-selected-index, so a stale hover
+        // can't hijack Enter.
+        function on-enter() {
+            if (ImmersiveState.search-selected-index >= 0) {
+                ImmersiveSearchActions.row-clicked(ImmersiveState.search-selected-index);
+            }
+        }
+
+        key-pressed(event) => {
+            // Return activates the selection; Escape dismisses — both WITHOUT the
+            // input losing focus. Arrows are rejected (the controller captures
+            // them at winit level when search-open); everything else (letters,
+            // backspace, …) reaches the input.
+            if (event.text == Key.Return) {
+                search-scope.on-enter();
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                if (ImmersiveState.search-open) {
+                    ImmersiveSearchActions.dismiss();
+                    return accept;
+                }
+                return reject;
+            }
+            // DownArrow / UpArrow: reject so the input cursor doesn't move oddly;
+            // the controller's winit capture owns selection movement.
+            return reject;
+        }
+
+        // Magnifier — absolutely LEFT (no layout space) so the input/placeholder
+        // text centers against the FULL field width regardless of the helpers.
+        QbzIcon {
+            source: @image-url("../assets/icons/search.svg");
+            width: 15px;
+            height: 15px;
+            x: 16px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+            tint: #ffffff80;
+        }
+
+        // Full-width input — text ALWAYS centered against the whole field (every
+        // helper is absolute, so the centering never shifts when the × appears).
+        input := TextInput {
+            width: 100%;
+            height: 100%;
+            color: #ffffffcc;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            single-line: true;
+            accepted => { search-scope.on-enter(); }
+            edited => { ImmersiveSearchActions.live(self.text); }
+            // On focus-IN: route focus to the wrapping scope (so its key-pressed
+            // intercepts Return/Escape) and re-open the cortinilla with a usable
+            // query. A direct click focuses the TextInput, NOT the scope — so
+            // route focus back to the scope; `forward-focus: input` immediately
+            // hands the cursor back here, so typing is unaffected.
+            changed has-focus => {
+                if (self.has-focus) {
+                    search-scope.focus();
+                    if (self.text != "") {
+                        ImmersiveSearchActions.live(self.text);
+                    }
+                }
             }
         }
         Text {
+            visible: input.text == "";
             text: @tr("Search");
+            width: 100%;
+            height: 100%;
             color: #ffffff80;
             font-size: 13px;
             vertical-alignment: center;
-            horizontal-stretch: 1;
+            horizontal-alignment: center;
+        }
+
+        // Clear (×) — ALWAYS pinned to the far-right edge (absolute). Shown only
+        // when the field has text.
+        if input.text != "": Rectangle {
+            width: 18px;
+            height: 18px;
+            x: parent.width - self.width - 14px;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+            clear-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    input.text = "";
+                    search-scope.focus();
+                    ImmersiveSearchActions.dismiss();
+                }
+            }
+            QbzIcon {
+                source: @image-url("../assets/icons/x.svg");
+                width: 14px;
+                height: 14px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                tint: clear-ta.has-hover ? #ffffff : #ffffff80;
+            }
+        }
+
+        // Enter hint — to the LEFT of the clear (×), absolutely positioned so it
+        // never shifts the centered text. Shown only while the search is open
+        // (which implies text exists, so the × is present at the right edge); its
+        // right edge sits 8px left of the × (× left edge = width - 32).
+        if ImmersiveState.search-open: Text {
+            text: "↵  " + @tr("Enter");
+            color: #ffffff80;
+            font-size: 11px;
+            font-weight: Typography.medium;
+            vertical-alignment: center;
+            x: parent.width - 40px - self.width;
+            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         }
     }
 }
@@ -848,7 +961,9 @@ component ImmersiveWindowControls inherits Rectangle {
     // sat over the circle and exited immersive on click, and stole the hover so
     // only a sliver of the circle reacted). Right edge fixed → never pushes the
     // centered search.
-    property <length> collapsed-width: 40px;
+    // Collapsed footprint matches the view-menu button (44x36) so the two top
+    // controls read as twins; expands leftward on hover.
+    property <length> collapsed-width: 44px;
     property <length> expanded-width: 112px;
     // Click-to-open latch (so it opens even if a hover didn't register).
     in-out property <bool> pinned: false;
@@ -858,6 +973,9 @@ component ImmersiveWindowControls inherits Rectangle {
     property <bool> any-hover: bg-ta.has-hover || circle-ta.has-hover
         || fs-btn.hovered || exit-btn.hovered;
     in-out property <bool> expanded: root.pinned || root.any-hover;
+    // Exposed so the ImmersiveView HUD can keep the chrome awake while the
+    // pointer rests on this cluster (the auto-hide must not fire over it).
+    out property <bool> hovered: root.any-hover;
 
     height: 36px;
     width: root.expanded ? root.expanded-width : root.collapsed-width;
@@ -922,7 +1040,9 @@ component ImmersiveWindowControls inherits Rectangle {
     // covers the FULL circle: hover expands, click toggles the pin. Declared
     // LAST so it sits on top of its area (clicks/hover land on circle-ta here).
     Rectangle {
-        x: root.width - self.width - 2px;
+        // Right-anchored while expanded (the buttons reveal to its left); CENTERED
+        // while collapsed so the glyph sits dead-center like the view-menu button.
+        x: root.expanded ? root.width - self.width - 2px : (root.width - self.width) / 2;
         y: 2px;
         width: 32px;
         height: 32px;
@@ -932,8 +1052,8 @@ component ImmersiveWindowControls inherits Rectangle {
         }
         QbzIcon {
             source: @image-url("../assets/icons/sliders-horizontal.svg");
-            width: 16px;
-            height: 16px;
+            width: 18px;
+            height: 18px;
             x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
             y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             tint: (circle-ta.has-hover || root.expanded) ? #ffffff : #ffffffcc;
@@ -958,6 +1078,14 @@ export component ImmersiveView inherits Rectangle {
 
     property <bool> chrome-visible: true;
 
+    // True while the pointer rests on a chrome region — the top header band
+    // (controls/views buttons + search) or the bottom player bar. Uses the
+    // winit-tracked GLOBAL pointer (always updated, even over a button's own
+    // TouchArea — unlike the bottom `hover` area, which loses tracking there),
+    // so the auto-hide never dims the HUD while the cursor is on its controls.
+    property <bool> pointer-in-chrome: ShellState.pointer-in-window
+        && (ShellState.pointer-y <= 64px || ShellState.pointer-y >= root.height - 132px);
+
     background: #0a0a0b;
     clip: true;
 
@@ -965,6 +1093,16 @@ export component ImmersiveView inherits Rectangle {
         root.chrome-visible = true;
         hide-timer.running = false;
         hide-timer.running = true;
+    }
+
+    // While the immersive search is open the HUD must NOT dim (the field +
+    // cortinilla must stay visible/typeable). Wake on open so the chrome is up
+    // the moment the dropdown appears; the hide-timer's guard keeps it up.
+    property <bool> search-open-mirror: ImmersiveState.search-open;
+    changed search-open-mirror => {
+        if (root.search-open-mirror) {
+            root.wake();
+        }
     }
 
     keys := FocusScope {
@@ -996,9 +1134,13 @@ export component ImmersiveView inherits Rectangle {
     }
 
     hide-timer := Timer {
-        interval: 4000ms;
+        interval: 6000ms;
         triggered => {
-            root.chrome-visible = false;
+            // Keep the HUD up while the immersive search is open OR while the
+            // pointer rests on a chrome region (controls/views/search/player bar).
+            if (!ImmersiveState.search-open && !root.pointer-in-chrome) {
+                root.chrome-visible = false;
+            }
         }
     }
 
@@ -1374,5 +1516,25 @@ export component ImmersiveView inherits Rectangle {
             x: header-band.width - self.width;
             y: 0px;
         }
+    }
+
+    // (5) Immersive search cortinilla — the live as-you-type dropdown, anchored
+    // under the centered header search field. Declared LAST so it stacks ABOVE the
+    // panels + player bar (ADR-009); its own scrims dismiss on outside clicks while
+    // leaving the field clickable. window-* are passed in (the component never
+    // touches `parent` in a root binding). anchor-y = header-band y (16) + field
+    // height (36) + a 6px gap = 58px. bottom-reserved = player bar height (90) +
+    // its bottom inset (24) + a 24px breathing gap = 138px, so the panel never
+    // covers the compact player bar.
+    ImmersiveSearchCortinilla {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        window-width: root.width;
+        window-height: root.height;
+        anchor-y: 58px;
+        bottom-reserved: 138px;
+        accent: ImmersiveState.lyrics-accent;
     }
 }

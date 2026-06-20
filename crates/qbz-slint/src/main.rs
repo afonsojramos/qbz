@@ -96,6 +96,7 @@ mod recently;
 mod scrobble;
 mod scrobbler_settings;
 mod search;
+mod search_service;
 // WGPU UNDERLAY SPIKE: GPU fragment-shader background for ImmersiveView.
 mod shader_underlay;
 mod settings;
@@ -111,6 +112,7 @@ use std::sync::Arc;
 
 use i_slint_backend_winit::{
     winit::event::{ElementState, MouseButton, WindowEvent},
+    winit::keyboard::{Key, NamedKey},
     EventResult, WinitWindowAccessor,
 };
 use slint::Model;
@@ -417,6 +419,9 @@ async fn enter_shell_offline(
         // D-FIX-a: bind the blacklist offline too — Tauri never initialized it
         // in offline mode, so blacklisted artists leaked into offline surfaces.
         crate::artist_blacklist::init_for_user(&dir);
+        // Intelligent Search (cache + ranking), seeded from the persisted pref.
+        // Cached results stay searchable offline; live revalidation no-ops.
+        crate::search_service::init(&dir, crate::ui_prefs::load().intelligent_search);
     }
     // Lyrics cache (per-user, shared file with Tauri) — offline sessions
     // serve cached lyrics (deviation D3, cache-first offline contract).
@@ -655,6 +660,50 @@ fn install_browser_mouse_nav(window: &AppWindow) {
                     _ => EventResult::Propagate,
                 }
             }
+            // Steal Up/Down ONLY while a search dropdown is open, BEFORE the
+            // search input's cursor can eat the first press. This is what makes
+            // the very first ArrowDown move the selection from the input INTO the
+            // dropdown (the input is a single-line TextInput that otherwise
+            // consumes the first arrow as a cursor move). Enter/Escape stay with
+            // the FocusScope. Two surfaces share this hook: the IMMERSIVE dropdown
+            // takes priority when immersive is open + its search is open (it sits
+            // on top of everything), otherwise the MAIN header cortinilla.
+            WindowEvent::KeyboardInput { event: key_event, .. }
+                if key_event.state == ElementState::Pressed =>
+            {
+                let Some(window) = weak.upgrade() else {
+                    return EventResult::Propagate;
+                };
+                let immersive_search_open = window.global::<ImmersiveState>().get_open()
+                    && window.global::<ImmersiveState>().get_search_open();
+                let main_cortinilla_open =
+                    window.global::<SearchState>().get_cortinilla_open();
+                if !immersive_search_open && !main_cortinilla_open {
+                    return EventResult::Propagate;
+                }
+                let move_selection = |delta: i32| {
+                    if immersive_search_open {
+                        window
+                            .global::<ImmersiveSearchActions>()
+                            .invoke_move_selection(delta);
+                    } else {
+                        window
+                            .global::<SearchActions>()
+                            .invoke_cortinilla_move_selection(delta);
+                    }
+                };
+                match &key_event.logical_key {
+                    Key::Named(NamedKey::ArrowDown) => {
+                        move_selection(1);
+                        EventResult::PreventDefault
+                    }
+                    Key::Named(NamedKey::ArrowUp) => {
+                        move_selection(-1);
+                        EventResult::PreventDefault
+                    }
+                    _ => EventResult::Propagate,
+                }
+            }
             _ => EventResult::Propagate,
         }
     });
@@ -802,6 +851,36 @@ fn set_row_favorite(window: &AppWindow, track_id: &str, favorite: bool) {
         hero.is_favorite = favorite;
         search.set_most_popular_track(hero);
     }
+}
+
+/// Feed Capa B (intelligent-search ranking) from a RESULTS-PAGE click, but only
+/// when the results page is the active view. `on_open_album` / `on_open_artist`
+/// / `on_media_action` are global handlers shared by every view (album detail,
+/// home, favorites, …); without this gate a play/open from any of those would
+/// be misattributed to the current search query. The `SearchState.query`
+/// (results-page query, distinct from the live `cortinilla-query`) is the key.
+///
+/// No-op when the active view is not Search, when the module is disabled (the
+/// `record` accessor itself no-ops then too), or when the query is empty. LOCAL
+/// entities are NOT routed here — local rows never reach the Qobuz results page
+/// (D1/D2) and use a different id space (D4).
+fn record_search_interaction(
+    window: &AppWindow,
+    kind: &str,
+    id: &str,
+    action: crate::search_service::InteractionAction,
+) {
+    if window.global::<NavState>().get_view() != ContentView::Search {
+        return;
+    }
+    if !crate::search_service::is_enabled() {
+        return;
+    }
+    let query = window.global::<SearchState>().get_query().to_string();
+    if query.trim().is_empty() {
+        return;
+    }
+    crate::search_service::record(&query, kind, id, action);
 }
 
 /// Toggle a track favorite by its REAL Qobuz id: offline guard (read-only
@@ -1272,6 +1351,43 @@ thread_local! {
     /// Debounce timer for the header live search — restarted on every
     /// keystroke, fires the search 300 ms after typing stops.
     static SEARCH_DEBOUNCE: slint::Timer = slint::Timer::default();
+
+    /// Debounce timer for the cortinilla (live dropdown) network load —
+    /// restarted on every keystroke so the skeleton shows while typing and a
+    /// single clean result paint lands ~220 ms after typing stops (no cached
+    /// instant-paint, so results never "jump" from a cached to a fresh state).
+    static CORTINILLA_DEBOUNCE: slint::Timer = slint::Timer::default();
+
+    /// Snapshot of the cortinilla payload currently shown, so a
+    /// `cortinilla-row-clicked(flat_index)` can resolve the flat index back to
+    /// the concrete row (kind/id/source) and dispatch. UI thread only; set
+    /// whenever `apply_cortinilla` writes a new payload.
+    static LAST_CORTINILLA: std::cell::RefCell<Option<search::CortinillaData>> =
+        const { std::cell::RefCell::new(None) };
+
+    /// Snapshot of the raw `LocalTrack` rows that backed the cortinilla's "On
+    /// this device" section currently shown. The click router resolves a local
+    /// row (`source == "local"`) to its concrete `LocalTrack` here (the row's
+    /// `id` is the library row id) so it can play through
+    /// `playback::play_local_tracks`. Updated in lockstep with `LAST_CORTINILLA`
+    /// whenever a cortinilla payload is applied. UI thread only.
+    static LAST_CORTINILLA_LOCAL: std::cell::RefCell<Vec<qbz_library::LocalTrack>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Debounce timer for the IMMERSIVE search dropdown network load — SEPARATE
+    /// from `CORTINILLA_DEBOUNCE` so a keystroke in one surface never cancels
+    /// the other's pending load. Same 220 ms single-shot skeleton-then-paint as
+    /// the main cortinilla.
+    static IMMERSIVE_SEARCH_DEBOUNCE: slint::Timer = slint::Timer::default();
+
+    /// Snapshot of the immersive-search payload currently shown, so an
+    /// immersive `row-clicked(flat_index)` / `move-selection(delta)` can resolve
+    /// the flat index back to the concrete row and dispatch to playback. The
+    /// immersive dropdown has no local section, so (unlike the main cortinilla)
+    /// no parallel `LocalTrack` snapshot is needed. UI thread only; set whenever
+    /// `apply_immersive_search` writes a new payload.
+    static LAST_IMMERSIVE_SEARCH: std::cell::RefCell<Option<search::CortinillaData>> =
+        const { std::cell::RefCell::new(None) };
 
     /// Stash for the "Duplicate tracks" confirm sub-modal. Slint can't hold a
     /// `Vec<u64>` ergonomically, so when a Qobuz→Qobuz add finds duplicates we
@@ -4320,6 +4436,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window
         .global::<AppearanceState>()
         .set_album_header_gradient(crate::ui_prefs::load().album_header_gradient);
+    window
+        .global::<AppearanceState>()
+        .set_intelligent_search(crate::ui_prefs::load().intelligent_search);
+    window.global::<AppearanceState>().set_immersive_search_action_index(
+        crate::ui_prefs::immersive_search_action_index(
+            &crate::ui_prefs::load().immersive_search_action,
+        ),
+    );
 
     // Tell the tray settings UI which platform it's on so it can show the
     // macOS-only controls ("Menu Bar" header, hide-Dock toggle) and hide the
@@ -4781,6 +4905,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     album_id,
                 );
             } else {
+                // Feed Capa B if this Qobuz album was opened from the search
+                // results page (gated inside the helper). Local-album keys take
+                // the branch above and never reach here.
+                if let Some(w) = weak.upgrade() {
+                    record_search_interaction(
+                        &w,
+                        "album",
+                        &album_id,
+                        crate::search_service::InteractionAction::Open,
+                    );
+                }
                 nav::record(nav::NavEntry::Album(album_id.clone()));
                 navigate_album(
                     runtime.clone(),
@@ -4809,6 +4944,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // "Go to artist") pass the NAME instead → the LocalLibrary Artists
             // tab, focused on that artist.
             if artist_ref.parse::<u64>().is_ok() {
+                // Feed Capa B if this Qobuz artist was opened from the search
+                // results page (gated inside the helper). Local/Plex artists
+                // pass a NAME (non-numeric) and take the branch below — never
+                // recorded.
+                if let Some(w) = weak.upgrade() {
+                    record_search_interaction(
+                        &w,
+                        "artist",
+                        &artist_ref,
+                        crate::search_service::InteractionAction::Open,
+                    );
+                }
                 nav::record(nav::NavEntry::Artist(artist_ref.clone()));
                 navigate_artist(
                     runtime.clone(),
@@ -4841,6 +4988,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             nav::push_or_replace_search(q.clone());
             navigate_search(runtime.clone(), weak.clone(), &handle, image_cache.clone(), q);
             if let Some(w) = weak.upgrade() {
+                // Enter -> results page: dismiss the live dropdown and always
+                // land on Search > All (never a lingering per-type tab).
+                let st = w.global::<SearchState>();
+                st.set_cortinilla_open(false);
+                st.set_tab(0);
                 update_nav_flags(&w);
             }
         });
@@ -4855,10 +5007,105 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let image_cache = image_cache.clone();
         window.global::<SearchActions>().on_live(move |query| {
             let q = query.trim().to_string();
-            if q.len() < 2 {
+            // chars().count(): the >= 2 gate is on grapheme-ish length, not
+            // bytes, so a 2-char multibyte query (e.g. CJK) is not rejected.
+            if q.chars().count() < 2 {
+                SEARCH_DEBOUNCE.with(|t| t.stop());
+                // Below the threshold — close the cortinilla so a backspaced
+                // query does not leave a stale dropdown open.
+                if let Some(w) = weak.upgrade() {
+                    w.global::<SearchState>().set_cortinilla_open(false);
+                }
+                return;
+            }
+
+            // --- Cortinilla (live dropdown), only when the module is ON (D5) ---
+            // The results-page debounce below is untouched; the cortinilla is a
+            // separate, additive surface gated on the kill switch.
+            if crate::search_service::is_enabled() {
+                if let Some(w) = weak.upgrade() {
+                    let st = w.global::<SearchState>();
+                    // Always reset the keyboard selection + scroll on (re)open or
+                    // refine — never leave a stale "active row" from a prior
+                    // search. Arrow nav fires no keystroke, so it is unaffected.
+                    st.set_selected_index(-1);
+                    st.set_cortinilla_scroll_y(0.0);
+                    st.set_cortinilla_open(true);
+                    st.set_cortinilla_query(q.clone().into());
+                    st.set_cortinilla_loading(true);
+                }
+                let cort_version = search::next_cortinilla_version();
+
+                // No cached instant-paint. The cached -> fresh swap (plus the
+                // local-fold mid-apply) made the results visibly "jump". Instead
+                // the placeholder skeleton (cortinilla-loading) shows while typing
+                // and a SINGLE apply paints the real results ~220 ms after the
+                // last keystroke — debounced so rapid typing fires one load, not
+                // one per keystroke. The version guard drops any stale in-flight
+                // load; `load_cortinilla` already folds the on-device section in,
+                // so this is one combined paint with no intermediate states.
+                {
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let handle = handle.clone();
+                    let image_cache = image_cache.clone();
+                    let q = q.clone();
+                    CORTINILLA_DEBOUNCE.with(|t| {
+                        t.start(
+                            slint::TimerMode::SingleShot,
+                            std::time::Duration::from_millis(220),
+                            move || {
+                                let runtime = runtime.clone();
+                                let weak = weak.clone();
+                                let image_cache = image_cache.clone();
+                                let q = q.clone();
+                                handle.spawn(async move {
+                                    match search::load_cortinilla(&runtime, &q).await {
+                                        Ok((data, local_rows)) => {
+                                            let jobs = search::cortinilla_artwork_jobs(&data);
+                                            let _ = weak.clone().upgrade_in_event_loop(move |w| {
+                                                if search::is_current_cortinilla_version(cort_version) {
+                                                    LAST_CORTINILLA.with(|c| {
+                                                        *c.borrow_mut() = Some(data.clone())
+                                                    });
+                                                    LAST_CORTINILLA_LOCAL
+                                                        .with(|c| *c.borrow_mut() = local_rows);
+                                                    search::apply_cortinilla(&w, data);
+                                                }
+                                            });
+                                            artwork::spawn_loads(jobs, weak.clone(), image_cache);
+                                        }
+                                        Err(e) => {
+                                            log::error!("[qbz-slint] cortinilla load failed: {e}");
+                                            let _ = weak.upgrade_in_event_loop(move |w| {
+                                                if search::is_current_cortinilla_version(cort_version) {
+                                                    w.global::<SearchState>()
+                                                        .set_cortinilla_loading(false);
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
+                            },
+                        );
+                    });
+                }
+            }
+
+            // --- Results page LIVE search — ONLY when the module is OFF --------
+            // When Intelligent Search is ON, the cortinilla above is the live
+            // preview; typing must NOT auto-navigate to the results page. The
+            // 300 ms debounce-navigate would otherwise hijack navigation — a
+            // pending fire lands on the results page ~300 ms after the last
+            // keystroke and overrides wherever the user just went (e.g. a
+            // cortinilla row-click), so "I can't navigate anywhere, it takes me
+            // to the result". Enter (on_submit) still navigates there. When the
+            // module is OFF, keep the Phase-1 live-results behavior unchanged.
+            if crate::search_service::is_enabled() {
                 SEARCH_DEBOUNCE.with(|t| t.stop());
                 return;
             }
+            // --- Results page (module OFF): debounce 300 ms, then full search ---
             let runtime = runtime.clone();
             let weak = weak.clone();
             let handle = handle.clone();
@@ -4983,6 +5230,676 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
         });
+    }
+
+    // Cortinilla: dismiss (click-outside / Escape).
+    {
+        let weak = window.as_weak();
+        window.global::<SearchActions>().on_cortinilla_dismiss(move || {
+            if let Some(w) = weak.upgrade() {
+                let st = w.global::<SearchState>();
+                st.set_cortinilla_open(false);
+                // Clear the keyboard/hover highlight too — a dismissed dropdown
+                // has no meaningful selection, and the `changed view` close-hook
+                // (AppShell) relies on this to reset the highlight on navigation.
+                st.set_selected_index(-1);
+            }
+        });
+    }
+
+    // Cortinilla: arrow-key move the keyboard highlight (delta -1 up / +1 down).
+    // The valid navigable flat indices are NOT guaranteed to be a contiguous
+    // 0..=max range (when there is no top result, index 0 is skipped and the
+    // section rows start at 1), so the order is rebuilt from the live snapshot:
+    // the top-result's flat index first (when present), then every section row's
+    // flat index in declaration order. `selected-index == -1` means "nothing
+    // highlighted" (Enter falls through to search-all); Down from -1 lands on the
+    // first row, Up from the first row returns to -1. Both ends clamp (no wrap).
+    {
+        let weak = window.as_weak();
+        window
+            .global::<SearchActions>()
+            .on_cortinilla_move_selection(move |delta| {
+                let Some(w) = weak.upgrade() else { return };
+                // Build the ordered list of navigable flat indices.
+                let order: Vec<i32> = LAST_CORTINILLA.with(|c| {
+                    let snap = c.borrow();
+                    let Some(data) = snap.as_ref() else {
+                        return Vec::new();
+                    };
+                    let mut v: Vec<i32> = Vec::new();
+                    if let Some(top) = &data.top {
+                        v.push(top.flat_index as i32);
+                    }
+                    for section in &data.sections {
+                        for row in &section.rows {
+                            v.push(row.flat_index as i32);
+                        }
+                    }
+                    v
+                });
+                if order.is_empty() {
+                    return;
+                }
+                let st = w.global::<SearchState>();
+                let current = st.get_selected_index();
+                // Current position within the navigable order (-1 if nothing /
+                // stale value not present anymore).
+                let pos = order.iter().position(|&fi| fi == current);
+                let new_index: i32 = if delta > 0 {
+                    // Down: from "nothing" -> first; otherwise advance, clamping
+                    // at the last row.
+                    match pos {
+                        None => order[0],
+                        Some(p) if p + 1 < order.len() => order[p + 1],
+                        Some(_) => order[order.len() - 1],
+                    }
+                } else {
+                    // Up: from "nothing" stay nothing; from the first row -> -1;
+                    // otherwise step back.
+                    match pos {
+                        None => -1,
+                        Some(0) => -1,
+                        Some(p) => order[p - 1],
+                    }
+                };
+                st.set_selected_index(new_index);
+                // Content-top y of the selected row so the overlay can scroll it
+                // into view. Mirrors Cortinilla.slint's layout EXACTLY: top-result
+                // block = padTop(4) + label(22) + row(56); each section block =
+                // padTop(4) + header(24) + rows × 56. 0 when nothing is selected.
+                let scroll_y: f32 = if new_index < 0 {
+                    0.0
+                } else {
+                    LAST_CORTINILLA.with(|c| {
+                        let snap = c.borrow();
+                        let Some(data) = snap.as_ref() else {
+                            return 0.0;
+                        };
+                        let mut y: f32 = 0.0;
+                        if let Some(top) = &data.top {
+                            if top.flat_index as i32 == new_index {
+                                return y + 26.0; // padTop 4 + label 22
+                            }
+                            y += 82.0; // 4 + 22 + 56
+                        }
+                        for section in &data.sections {
+                            y += 28.0; // padTop 4 + header 24
+                            for row in &section.rows {
+                                if row.flat_index as i32 == new_index {
+                                    return y;
+                                }
+                                y += 56.0;
+                            }
+                        }
+                        0.0
+                    })
+                };
+                st.set_cortinilla_scroll_y(scroll_y);
+            });
+    }
+
+    // Cortinilla: Enter with nothing highlighted — run a full search-all on the
+    // current live query (same path as submit) and dismiss the dropdown.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<SearchActions>()
+            .on_cortinilla_search_all(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let q = w
+                    .global::<SearchState>()
+                    .get_cortinilla_query()
+                    .trim()
+                    .to_string();
+                if q.chars().count() < 2 {
+                    return;
+                }
+                let st = w.global::<SearchState>();
+                st.set_cortinilla_open(false);
+                // Enter always lands on Search > All, never a per-type tab.
+                st.set_tab(0);
+                SEARCH_DEBOUNCE.with(|t| t.stop());
+                nav::push_or_replace_search(q.clone());
+                navigate_search(runtime.clone(), weak.clone(), &handle, image_cache.clone(), q);
+                update_nav_flags(&w);
+            });
+    }
+
+    // Cortinilla: "View more" on a section. Qobuz categories open the full
+    // results page on the matching tab (albums=1, tracks=2, artists=3,
+    // playlists=4); the "local" section opens the LocalLibrary Tracks tab
+    // pre-filtered to the live query (local results never enter the Qobuz
+    // results page — D1/D2).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<SearchActions>()
+            .on_cortinilla_view_more(move |kind| {
+                let Some(w) = weak.upgrade() else { return };
+                let kind = kind.to_string();
+                let q = w
+                    .global::<SearchState>()
+                    .get_cortinilla_query()
+                    .trim()
+                    .to_string();
+                if q.chars().count() < 2 {
+                    return;
+                }
+                w.global::<SearchState>().set_cortinilla_open(false);
+                SEARCH_DEBOUNCE.with(|t| t.stop());
+
+                // On-device "View more": leave the Qobuz results page entirely
+                // and open the LocalLibrary Tracks tab pre-filtered to the live
+                // query (D1/D2: local results never live in the Qobuz results
+                // page). Set the tracks search, navigate to the Tracks tab, then
+                // reload so the filtered set renders.
+                if kind == "local" {
+                    w.global::<LocalLibraryState>().set_tracks_search(q.clone().into());
+                    nav::record(nav::NavEntry::LocalLibrary {
+                        tab: local_library::LibTab::Tracks.tab_id().to_string(),
+                    });
+                    navigate_local_library(
+                        runtime.clone(),
+                        weak.clone(),
+                        &handle,
+                        image_cache.clone(),
+                        local_library::LibTab::Tracks,
+                    );
+                    // `navigate_local_library` only lazy-loads on an EMPTY tracks
+                    // model (re-entry keeps the prior set), so force a reload to
+                    // apply the freshly-set search filter regardless.
+                    local_library::reload_tracks(weak.clone(), handle.clone());
+                    update_nav_flags(&w);
+                    return;
+                }
+
+                // Qobuz category → open the full results page on the matching tab.
+                let tab = match kind.as_str() {
+                    "album" => 1,
+                    "track" => 2,
+                    "artist" => 3,
+                    "playlist" => 4,
+                    _ => 0,
+                };
+                nav::push_or_replace_search(q.clone());
+                navigate_search(runtime.clone(), weak.clone(), &handle, image_cache.clone(), q);
+                // search_all loads every category; the tab switch only changes
+                // which list renders. Apply it after navigate so it sticks.
+                w.global::<SearchState>().set_tab(tab);
+                update_nav_flags(&w);
+            });
+    }
+
+    // Cortinilla: a row was activated (click or Enter on a highlight). Resolve
+    // the flat index against the controller snapshot, then dispatch to the SAME
+    // nav/play seams the results page uses.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<SearchActions>()
+            .on_cortinilla_row_clicked(move |flat_index| {
+                let Some(w) = weak.upgrade() else { return };
+                // Resolve flat_index -> the concrete row from the snapshot.
+                let row = LAST_CORTINILLA.with(|c| {
+                    let snap = c.borrow();
+                    let data = snap.as_ref()?;
+                    if let Some(top) = &data.top {
+                        if top.flat_index as i32 == flat_index {
+                            return Some(top.clone());
+                        }
+                    }
+                    data.sections
+                        .iter()
+                        .flat_map(|s| s.rows.iter())
+                        .find(|r| r.flat_index as i32 == flat_index)
+                        .cloned()
+                });
+                let Some(row) = row else { return };
+
+                // Capture the live cortinilla query BEFORE dismissing so the
+                // ranking feedback (Capa B) is keyed off the query that produced
+                // this row.
+                let cort_query = w
+                    .global::<SearchState>()
+                    .get_cortinilla_query()
+                    .to_string();
+
+                // Dismiss the dropdown before acting.
+                w.global::<SearchState>().set_cortinilla_open(false);
+
+                // Feed Capa B: a clicked QOBUZ row is an interaction with the
+                // search-surfaced entity. action = Play for tracks (they play on
+                // click), Open for album/artist/playlist (they navigate). LOCAL
+                // rows are intentionally NOT recorded — local entities use a
+                // different id space (D4) and are skipped in v1. record() no-ops
+                // when the module is disabled, so the unconditional call is safe.
+                if row.source != "local" {
+                    let action = if row.kind == "track" {
+                        crate::search_service::InteractionAction::Play
+                    } else {
+                        crate::search_service::InteractionAction::Open
+                    };
+                    crate::search_service::record(&cort_query, &row.kind, &row.id, action);
+                }
+
+                if row.source == "local" {
+                    // On-device row: play through the LOCAL seam, not the Qobuz
+                    // media-action. Resolve the clicked `LocalTrack` (+ its
+                    // sibling on-device rows, so the queue continues down the
+                    // list) from the per-query snapshot, then start at the
+                    // clicked one. `row.id` is the library row id.
+                    let tracks = LAST_CORTINILLA_LOCAL.with(|c| c.borrow().clone());
+                    let start = tracks
+                        .iter()
+                        .position(|t| t.id.to_string() == row.id)
+                        .unwrap_or(0);
+                    if !tracks.is_empty() {
+                        playback::play_local_tracks(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            tracks,
+                            start,
+                            false,
+                        );
+                    }
+                    return;
+                }
+
+                match row.kind.as_str() {
+                    "album" => {
+                        let id = row.id.clone();
+                        nav::record(nav::NavEntry::Album(id.clone()));
+                        navigate_album(
+                            runtime.clone(),
+                            weak.clone(),
+                            &handle,
+                            image_cache.clone(),
+                            id,
+                        );
+                        update_nav_flags(&w);
+                    }
+                    "artist" => {
+                        let id = row.id.clone();
+                        nav::record(nav::NavEntry::Artist(id.clone()));
+                        navigate_artist(
+                            runtime.clone(),
+                            weak.clone(),
+                            &handle,
+                            image_cache.clone(),
+                            id,
+                        );
+                        update_nav_flags(&w);
+                    }
+                    "playlist" => {
+                        let id = row.id.clone();
+                        nav::record(nav::NavEntry::Playlist(id.clone()));
+                        navigate_playlist(
+                            runtime.clone(),
+                            weak.clone(),
+                            &handle,
+                            image_cache.clone(),
+                            id,
+                        );
+                        update_nav_flags(&w);
+                    }
+                    "track" => {
+                        // A clicked Qobuz track plays immediately (single-track
+                        // queue), matching the results-row "play".
+                        if let Ok(track_id) = row.id.parse::<u64>() {
+                            playback::play_track_now(
+                                runtime.clone(),
+                                weak.clone(),
+                                handle.clone(),
+                                track_id,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            });
+    }
+
+    // ===================== Immersive in-view search =====================
+    // The in-immersive search dropdown mirrors the main header cortinilla but
+    // (1) targets ImmersiveState/ImmersiveSearchActions, (2) loads ONLY
+    // Albums/Artists/Playlists (no local, no top result), and (3) on select
+    // ACTS ON PLAYBACK (per the Settings "search action") instead of navigating
+    // — immersive has no navigation. Gated on ImmersiveState.open AND the
+    // configured action != "disabled".
+
+    // Immersive search: live load on type (>= 2 chars; 220 ms debounce; version
+    // guard; skeleton-only, no cached instant-paint — same as the main
+    // cortinilla now).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<ImmersiveSearchActions>()
+            .on_live(move |query| {
+                let Some(w) = weak.upgrade() else { return };
+                // Gate: only while the immersive overlay is open AND the action
+                // is not "disabled" (the action doubles as the enable switch).
+                if !w.global::<ImmersiveState>().get_open() {
+                    return;
+                }
+                if crate::ui_prefs::load().immersive_search_action == "disabled" {
+                    return;
+                }
+                let q = query.trim().to_string();
+                // chars().count(): grapheme-ish length so a 2-char multibyte
+                // query (CJK) is not rejected.
+                if q.chars().count() < 2 {
+                    IMMERSIVE_SEARCH_DEBOUNCE.with(|t| t.stop());
+                    // Below the threshold — close the dropdown so a backspaced
+                    // query does not leave a stale one open.
+                    w.global::<ImmersiveState>().set_search_open(false);
+                    return;
+                }
+
+                {
+                    let im = w.global::<ImmersiveState>();
+                    im.set_search_open(true);
+                    im.set_search_query(q.clone().into());
+                    im.set_search_loading(true);
+                    // ALWAYS reset selection + scroll on every open/refine — never
+                    // leave a stale "active row" from a prior query. Arrow nav
+                    // fires no keystroke through here, so it is unaffected.
+                    im.set_search_selected_index(-1);
+                    im.set_search_scroll_y(0.0);
+                }
+                let version = search::next_immersive_search_version();
+
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle = handle.clone();
+                let image_cache = image_cache.clone();
+                let q = q.clone();
+                IMMERSIVE_SEARCH_DEBOUNCE.with(|t| {
+                    t.start(
+                        slint::TimerMode::SingleShot,
+                        std::time::Duration::from_millis(220),
+                        move || {
+                            let runtime = runtime.clone();
+                            let weak = weak.clone();
+                            let image_cache = image_cache.clone();
+                            let q = q.clone();
+                            handle.spawn(async move {
+                                match search::load_immersive_search(&runtime, &q).await {
+                                    Ok(data) => {
+                                        let jobs =
+                                            search::immersive_cortinilla_artwork_jobs(&data);
+                                        let _ = weak.clone().upgrade_in_event_loop(move |w| {
+                                            if search::is_current_immersive_search_version(version) {
+                                                LAST_IMMERSIVE_SEARCH.with(|c| {
+                                                    *c.borrow_mut() = Some(data.clone())
+                                                });
+                                                search::apply_immersive_search(&w, &data);
+                                            }
+                                        });
+                                        artwork::spawn_loads(jobs, weak.clone(), image_cache);
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "[qbz-slint] immersive search load failed: {e}"
+                                        );
+                                        let _ = weak.upgrade_in_event_loop(move |w| {
+                                            if search::is_current_immersive_search_version(version)
+                                            {
+                                                w.global::<ImmersiveState>()
+                                                    .set_search_loading(false);
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                        },
+                    );
+                });
+            });
+    }
+
+    // Immersive search: arrow-key move the keyboard highlight (delta -1 up / +1
+    // down). The immersive payload has NO top result, so the navigable order is
+    // built from section rows only (flat indices start at 1). `-1` means
+    // "nothing highlighted"; Down from -1 lands on the first row, Up from the
+    // first row returns to -1. Both ends clamp (no wrap).
+    {
+        let weak = window.as_weak();
+        window
+            .global::<ImmersiveSearchActions>()
+            .on_move_selection(move |delta| {
+                let Some(w) = weak.upgrade() else { return };
+                let order: Vec<i32> = LAST_IMMERSIVE_SEARCH.with(|c| {
+                    let snap = c.borrow();
+                    let Some(data) = snap.as_ref() else {
+                        return Vec::new();
+                    };
+                    // No top result in the immersive payload — section rows only.
+                    let mut v: Vec<i32> = Vec::new();
+                    for section in &data.sections {
+                        for row in &section.rows {
+                            v.push(row.flat_index as i32);
+                        }
+                    }
+                    v
+                });
+                if order.is_empty() {
+                    return;
+                }
+                let im = w.global::<ImmersiveState>();
+                let current = im.get_search_selected_index();
+                let pos = order.iter().position(|&fi| fi == current);
+                let new_index: i32 = if delta > 0 {
+                    match pos {
+                        None => order[0],
+                        Some(p) if p + 1 < order.len() => order[p + 1],
+                        Some(_) => order[order.len() - 1],
+                    }
+                } else {
+                    match pos {
+                        None => -1,
+                        Some(0) => -1,
+                        Some(p) => order[p - 1],
+                    }
+                };
+                im.set_search_selected_index(new_index);
+                // Content-top y of the selected row so the overlay scrolls it
+                // into view. The immersive cortinilla has NO top-result block, so
+                // each section block = padTop(4) + header(24) + rows × 56. These
+                // constants MUST match the immersive cortinilla component's
+                // layout (UI agent owns ImmersiveSearchCortinilla.slint — if its
+                // row height / section header / pad differ from 56 / 24 / 4, this
+                // arithmetic must be updated to match).
+                let scroll_y: f32 = if new_index < 0 {
+                    0.0
+                } else {
+                    LAST_IMMERSIVE_SEARCH.with(|c| {
+                        let snap = c.borrow();
+                        let Some(data) = snap.as_ref() else {
+                            return 0.0;
+                        };
+                        let mut y: f32 = 0.0;
+                        for section in &data.sections {
+                            y += 28.0; // padTop 4 + header 24
+                            for row in &section.rows {
+                                if row.flat_index as i32 == new_index {
+                                    return y;
+                                }
+                                y += 56.0; // row height
+                            }
+                        }
+                        0.0
+                    })
+                };
+                im.set_search_scroll_y(scroll_y);
+            });
+    }
+
+    // Immersive search: dismiss (click-outside / Escape).
+    {
+        let weak = window.as_weak();
+        window
+            .global::<ImmersiveSearchActions>()
+            .on_dismiss(move || {
+                if let Some(w) = weak.upgrade() {
+                    let im = w.global::<ImmersiveState>();
+                    im.set_search_open(false);
+                    im.set_search_selected_index(-1);
+                }
+            });
+    }
+
+    // Immersive search: a row was activated (click or Enter on a highlight).
+    // Resolve the flat index against the controller snapshot, then DISPATCH TO
+    // PLAYBACK per the configured "search action" (immersive has no navigation,
+    // so a selection acts on the queue and STAYS in immersive).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<ImmersiveSearchActions>()
+            .on_row_clicked(move |flat_index| {
+                let Some(w) = weak.upgrade() else { return };
+                // Resolve flat_index -> the concrete row from the snapshot (no
+                // top result in the immersive payload — section rows only).
+                let row = LAST_IMMERSIVE_SEARCH.with(|c| {
+                    let snap = c.borrow();
+                    let data = snap.as_ref()?;
+                    data.sections
+                        .iter()
+                        .flat_map(|s| s.rows.iter())
+                        .find(|r| r.flat_index as i32 == flat_index)
+                        .cloned()
+                });
+                let Some(row) = row else { return };
+
+                // Close the dropdown (STAY in immersive — no navigation). The
+                // query is kept so the field still reflects what was searched.
+                w.global::<ImmersiveState>().set_search_open(false);
+
+                // Read the configured action fresh (it can change in Settings
+                // while immersive is open). "disabled" is also gated upstream in
+                // on_live, but guard here too in case the dropdown was already
+                // open when it flipped.
+                let action = crate::ui_prefs::load().immersive_search_action;
+                if action == "disabled" {
+                    return;
+                }
+                let id = row.id.clone();
+                match (row.kind.as_str(), action.as_str()) {
+                    // ---- Replace the queue and play (the play_* seams) -------
+                    ("album", "replace") => playback::play_album(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id,
+                        0,
+                    ),
+                    ("playlist", "replace") => playback::play_playlist(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id,
+                    ),
+                    ("artist", "replace") => playback::play_artist_top_tracks(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id,
+                    ),
+                    // ---- Play next (insert after current, no replace) --------
+                    ("album", "next") => playback::enqueue_album_next(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id,
+                    ),
+                    ("playlist", "next") => playback::enqueue_playlist(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id,
+                        true,
+                    ),
+                    // ---- Add to queue (append, no replace) -------------------
+                    ("album", "queue") => playback::enqueue_album(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id,
+                    ),
+                    ("playlist", "queue") => playback::enqueue_playlist(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id,
+                        false,
+                    ),
+                    // ---- Artist next/queue: no id-less artist enqueue seam
+                    // exists, so fetch the artist's top-track ids and route
+                    // through the proven `enqueue_artist_top_selected` (it
+                    // re-fetches + filters blacklist + is QConnect-aware). The
+                    // page is cached, so the extra id-fetch is cheap.
+                    ("artist", "next") | ("artist", "queue") => {
+                        let next = action == "next";
+                        let runtime = runtime.clone();
+                        let weak = weak.clone();
+                        let handle = handle.clone();
+                        let artist_id = id.clone();
+                        handle.clone().spawn(async move {
+                            let pid: u64 = match artist_id.parse() {
+                                Ok(v) => v,
+                                Err(_) => return,
+                            };
+                            let ids: Vec<String> = match runtime.core().get_artist_page(pid, None).await
+                            {
+                                Ok(page) => page
+                                    .top_tracks
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|t| t.id.to_string())
+                                    .collect(),
+                                Err(e) => {
+                                    log::error!(
+                                        "[qbz-slint] immersive search: artist top fetch failed: {e}"
+                                    );
+                                    return;
+                                }
+                            };
+                            if ids.is_empty() {
+                                return;
+                            }
+                            // `enqueue_artist_top_selected` is a plain fn that
+                            // spawns its own task (it does not touch Slint state
+                            // synchronously), so it is safe to call straight from
+                            // this worker task — no event-loop hop needed.
+                            playback::enqueue_artist_top_selected(
+                                runtime.clone(),
+                                weak.clone(),
+                                handle.clone(),
+                                artist_id.clone(),
+                                ids,
+                                next,
+                            );
+                        });
+                    }
+                    _ => {}
+                }
+            });
     }
 
     // History navigation — back / forward / settings, all recorded by the
@@ -5231,6 +6148,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prefs.album_header_gradient = value;
                 crate::ui_prefs::save(&prefs);
             }
+            "intelligent-search" => {
+                let mut prefs = crate::ui_prefs::load();
+                prefs.intelligent_search = value;
+                crate::ui_prefs::save(&prefs);
+                // Propagate the toggle to the bound SearchService kill switch
+                // (no-op if no session is bound; the next session init re-seeds
+                // the flag from the persisted pref above).
+                crate::search_service::set_enabled(value);
+            }
             "tray-enable" => tray_settings::set_enable_tray(value),
             "tray-minimize-to-tray" => tray_settings::set_minimize_to_tray(value),
             "tray-close-to-tray" => tray_settings::set_close_to_tray(value),
@@ -5244,6 +6170,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(t) = tray::handle() {
                     t.set_icon_theme(tray_settings::theme_for_index(index));
                 }
+            }
+            "immersive-search-action" => {
+                // 0 = Disabled, 1 = Replace, 2 = Play next, 3 = Add to queue.
+                let mut prefs = crate::ui_prefs::load();
+                prefs.immersive_search_action =
+                    crate::ui_prefs::immersive_search_action_for_index(index).to_string();
+                crate::ui_prefs::save(&prefs);
             }
             other => log::debug!("[qbz-slint] unhandled appearance-select '{other}'"),
         });
@@ -5320,6 +6253,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+
+            // === Capa B feedback (intelligent search) ====================
+            // Feed the ranking model from RESULTS-PAGE clicks, gated to the
+            // Search view inside `record_search_interaction` so the same global
+            // media-action handler fired from other views never mis-attributes.
+            // Only QOBUZ result clicks are recorded; the search results page
+            // never carries local rows (D1/D2), so no source check is needed.
+            //   - track play              -> Play
+            //   - album play              -> Play (an album-card play is still a
+            //                                play interaction with the entity)
+            //   - album favorite (add)    -> Favorite (the grid/menu heart arm is
+            //                                add-only)
+            //   - artist follow (add)     -> Favorite (search artist cards show
+            //                                "Follow" only when NOT following, so
+            //                                this action is always an add)
+            //   - track favorite (toggle) -> Favorite ONLY when transitioning to
+            //                                favorited (Favorite weight must only
+            //                                ADD — never record on un-favorite)
+            if let Some(w) = weak.upgrade() {
+                use crate::search_service::InteractionAction;
+                match (kind.as_str(), action.as_str()) {
+                    ("track", "play") | ("album", "play") => {
+                        record_search_interaction(&w, &kind, &id, InteractionAction::Play);
+                    }
+                    ("album", "favorite") | ("artist", "follow") => {
+                        // Both are add-only paths on a search card.
+                        record_search_interaction(&w, &kind, &id, InteractionAction::Favorite);
+                    }
+                    ("track", "favorite") => {
+                        // Toggle: record ONLY when this click ADDS the favorite
+                        // (the current cached state is "not favorite"). Reading
+                        // the pre-toggle state here matches `toggle_track_favorite`,
+                        // which flips off the same `fav_cache::is_favorite`.
+                        if !crate::fav_cache::is_favorite(&id) {
+                            record_search_interaction(&w, &kind, &id, InteractionAction::Favorite);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             match (kind.as_str(), action.as_str()) {
                 // Now-playing bar layout switch (New / Classic / Small).
                 // Persisted to ui_prefs so the choice survives restarts.

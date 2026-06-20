@@ -186,6 +186,18 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
 
+    SettingRow {
+        label: @tr("Intelligent Search");
+        description: @tr("Smart search cache, ranking, and the search preview dropdown. On by default.");
+        QbzToggle {
+            checked: AppearanceState.intelligent-search;
+            toggled(v) => {
+                AppearanceState.intelligent-search = v;
+                AppearanceState.appearance-bool("intelligent-search", v);
+            }
+        }
+    }
+
     // Auto-Theme controls — only when the "System" theme is selected.
     if AppearanceState.theme-is-system: SettingRow {
         unsupported: true;
@@ -274,6 +286,20 @@ export component AppearanceSettings inherits VerticalLayout {
             selected(i) => {
                 AppearanceState.ui-scale-index = i;
                 AppearanceState.appearance-select("ui-scale", i);
+            }
+        }
+    }
+
+    SettingRow {
+        label: @tr("Immersive search");
+        description: @tr("What selecting a result in the Immersive search does. Disabled turns the in-immersive search off.");
+        QbzSelect {
+            menu-width: 200px;
+            options: AppearanceState.immersive-search-actions;
+            current-index: AppearanceState.immersive-search-action-index;
+            selected(i) => {
+                AppearanceState.immersive-search-action-index = i;
+                AppearanceState.appearance-select("immersive-search-action", i);
             }
         }
     }

@@ -40,6 +40,40 @@ pub const DEFAULT_NPB_MODE: &str = "new";
 /// Default album/artist header backdrop setting.
 pub const DEFAULT_ALBUM_HEADER_GRADIENT: bool = true;
 
+/// Default intelligent-search setting (smart cache, ranking, preview dropdown).
+pub const DEFAULT_INTELLIGENT_SEARCH: bool = true;
+
+/// Default immersive-search action. The in-immersive search dropdown acts on
+/// playback (immersive has no navigation): `"disabled"` turns the field inert,
+/// `"replace"` swaps the queue and plays, `"next"` inserts after the current
+/// track, `"queue"` appends to the end. Default = `"replace"`.
+pub const DEFAULT_IMMERSIVE_SEARCH_ACTION: &str = "replace";
+
+/// Map an immersive-search-action select index to its persisted key. The
+/// on-screen order is Disabled / Replace / Play next / Add to queue (0-3);
+/// any unknown index falls back to the default (`"replace"`).
+pub fn immersive_search_action_for_index(index: i32) -> &'static str {
+    match index {
+        0 => "disabled",
+        1 => "replace",
+        2 => "next",
+        3 => "queue",
+        _ => DEFAULT_IMMERSIVE_SEARCH_ACTION,
+    }
+}
+
+/// Inverse of [`immersive_search_action_for_index`]: the select index for a
+/// persisted key, falling back to the default's index (1 = "replace").
+pub fn immersive_search_action_index(key: &str) -> i32 {
+    match key {
+        "disabled" => 0,
+        "replace" => 1,
+        "next" => 2,
+        "queue" => 3,
+        _ => 1,
+    }
+}
+
 /// Persisted UI preferences. New fields must default sanely so an older
 /// file (missing the field) still deserializes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +88,14 @@ pub struct UiPrefs {
     /// Whether album/artist detail headers use artwork-derived backdrops.
     #[serde(default = "default_album_header_gradient")]
     pub album_header_gradient: bool,
+    /// Whether intelligent search (cache, ranking, preview dropdown) is enabled.
+    #[serde(default = "default_intelligent_search")]
+    pub intelligent_search: bool,
+    /// Immersive in-view search action: `"disabled"` | `"replace"` | `"next"` |
+    /// `"queue"`. Doubles as the enable switch (`"disabled"` keeps the field
+    /// inert). See [`DEFAULT_IMMERSIVE_SEARCH_ACTION`].
+    #[serde(default = "default_immersive_search_action")]
+    pub immersive_search_action: String,
 
     // ---- Miniplayer ----------------------------------------------------
     /// Last miniplayer surface: 0 micro · 1 compact · 2 artwork · 3 queue · 4 lyrics.
@@ -97,12 +139,22 @@ fn default_album_header_gradient() -> bool {
     DEFAULT_ALBUM_HEADER_GRADIENT
 }
 
+fn default_intelligent_search() -> bool {
+    DEFAULT_INTELLIGENT_SEARCH
+}
+
+fn default_immersive_search_action() -> String {
+    DEFAULT_IMMERSIVE_SEARCH_ACTION.to_string()
+}
+
 impl Default for UiPrefs {
     fn default() -> Self {
         Self {
             streaming_quality: default_streaming_quality(),
             npb_mode: default_npb_mode(),
             album_header_gradient: default_album_header_gradient(),
+            intelligent_search: default_intelligent_search(),
+            immersive_search_action: default_immersive_search_action(),
             mini_surface: default_mini_surface(),
             mini_width: default_mini_width(),
             mini_height: default_mini_height(),

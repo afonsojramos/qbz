@@ -14,7 +14,7 @@ import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions, SidebarPlaylistsPopupState, OfflineState, SettingsState, OfflineModeActions } from "../state.slint";
+import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions, SearchState, SidebarPlaylistsPopupState, OfflineState, SettingsState, OfflineModeActions } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SecondaryButton } from "../primitives/SecondaryButton.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
@@ -531,7 +531,15 @@ export component HeaderBar inherits Rectangle {
     // three sacred nav buttons), so it can never overlap them.
 
     // --- Search (absolutely centered on the window) ------------------------
-    Rectangle {
+    // The search box is wrapped in a FocusScope so the cortinilla (the live
+    // dropdown) can be driven by the keyboard WITHOUT stealing focus from the
+    // input. Idiom (mirrors PlaylistPickerModal): the FocusScope owns focus and
+    // `forward-focus: search-input` routes typing into the TextInput. The
+    // FocusScope's key-pressed runs FIRST — it `accept`s Up/Down/Enter/Escape
+    // (cortinilla nav) so the input never sees them as cursor moves, and
+    // `reject`s every other key so normal typing reaches the input. This keeps
+    // the input visibly focused + typeable while arrows move the highlight.
+    search-scope := FocusScope {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         width: root.search-width;
@@ -539,46 +547,146 @@ export component HeaderBar inherits Rectangle {
         // header (and the x recenters with it).
         animate width { duration: 220ms; easing: ease-in-out; }
         height: 32px;
-        border-radius: 6px;
-        border-width: 1px;
-        border-color: Theme.border-subtle;
-        background: Theme.surface-elevated;
+        forward-focus: search-input;
 
-        // Magnifier — absolutely positioned on the left so it does NOT take
-        // layout space; the text/placeholder center against the full input
-        // width as if the icon weren't there.
-        QbzIcon {
-            source: @image-url("../assets/icons/search.svg");
-            width: 14px;
-            height: 14px;
-            x: 10px;
-            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-            tint: Theme.text-muted;
+        // Enter ALWAYS goes to Search > All when the cortinilla is open — it
+        // never opens a hovered/lingering selection (the user's rule: only a
+        // CLICK opens a specific row; Enter is always the full search). Closed ->
+        // the plain submit, which also lands on the results page (All tab).
+        // Enter activates the CURRENT keyboard selection: a row when one is
+        // arrow-highlighted (selected-index >= 0), else "Full results" (Search >
+        // All). Hover no longer writes selected-index, so a stale hover can never
+        // hijack Enter. Cortinilla closed -> the plain submit (also Search > All).
+        function on-enter() {
+            if (SearchState.cortinilla-open) {
+                if (SearchState.selected-index >= 0) {
+                    SearchActions.cortinilla-row-clicked(SearchState.selected-index);
+                } else {
+                    SearchActions.cortinilla-search-all();
+                }
+            } else {
+                SearchActions.submit(search-input.text);
+            }
         }
 
-        // Full-width input — text centered against the whole box.
-        search-input := TextInput {
-            width: parent.width;
-            height: 100%;
-            color: Theme.text-primary;
-            font-size: 13px;
-            vertical-alignment: center;
-            horizontal-alignment: center;
-            single-line: true;
-            // Enter submits to the full results page; every edit feeds the
-            // debounced live search (Rust side).
-            accepted => { SearchActions.submit(self.text); }
-            edited => { SearchActions.live(self.text); }
+        key-pressed(event) => {
+            // While the cortinilla is open, arrows move the keyboard selection,
+            // Enter activates it, Escape dismisses — all WITHOUT the input losing
+            // focus. Otherwise the keys reach the input (single-line cursor moves
+            // are a harmless no-op).
+            if (event.text == Key.DownArrow) {
+                if (SearchState.cortinilla-open) {
+                    SearchActions.cortinilla-move-selection(1);
+                    return accept;
+                }
+                return reject;
+            }
+            if (event.text == Key.UpArrow) {
+                if (SearchState.cortinilla-open) {
+                    SearchActions.cortinilla-move-selection(-1);
+                    return accept;
+                }
+                return reject;
+            }
+            if (event.text == Key.Return) {
+                search-scope.on-enter();
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                if (SearchState.cortinilla-open) {
+                    SearchActions.cortinilla-dismiss();
+                    return accept;
+                }
+                return reject;
+            }
+            // Everything else (letters, backspace, …) goes to the input.
+            return reject;
         }
-        Text {
-            visible: search-input.text == "";
-            text: @tr("Search");
-            width: parent.width;
+
+        Rectangle {
+            width: 100%;
             height: 100%;
-            color: Theme.text-muted;
-            font-size: 13px;
-            vertical-alignment: center;
-            horizontal-alignment: center;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            background: Theme.surface-elevated;
+
+            // Magnifier — absolutely positioned on the left so it does NOT take
+            // layout space; the text/placeholder center against the full input
+            // width as if the icon weren't there.
+            QbzIcon {
+                source: @image-url("../assets/icons/search.svg");
+                width: 14px;
+                height: 14px;
+                x: 10px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                tint: Theme.text-muted;
+            }
+
+            // Full-width input — text centered against the whole box.
+            search-input := TextInput {
+                width: parent.width;
+                height: 100%;
+                color: Theme.text-primary;
+                font-size: 13px;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                single-line: true;
+                // Enter is handled by the FocusScope (cortinilla-aware); keep
+                // `accepted` as a fallback for the rare case the input owns the
+                // event directly (e.g. focus routed straight to it).
+                accepted => { search-scope.on-enter(); }
+                edited => { SearchActions.live(self.text); }
+                // On focus-IN: route focus to the wrapping scope (so its
+                // key-pressed intercepts arrows) and re-open the cortinilla.
+                // On focus-OUT the AppShell scrim handles click-outside; a pure
+                // focus-out (e.g. Tab away) is dismissed via Escape /
+                // click-outside, matching the menu overlays.
+                changed has-focus => {
+                    if (self.has-focus) {
+                        // A direct click focuses the TextInput, NOT the wrapping
+                        // FocusScope — and then the scope's key-pressed (the
+                        // cortinilla arrow/Enter/Escape interception) would not
+                        // run. Route focus to the scope so it owns the key
+                        // events; `forward-focus: search-input` immediately hands
+                        // the cursor back to this input, so typing is unaffected.
+                        search-scope.focus();
+                        // Re-open the cortinilla when focus returns with a usable
+                        // query. live() re-runs the >= 2-chars + module-on gate
+                        // and the SWR instant-paint, so the dropdown comes back
+                        // with its last results.
+                        if (self.text != "") {
+                            SearchActions.live(self.text);
+                        }
+                    }
+                }
+            }
+            Text {
+                visible: search-input.text == "";
+                text: @tr("Search");
+                width: parent.width;
+                height: 100%;
+                color: Theme.text-muted;
+                font-size: 13px;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+
+            // Enter hint — mirrors the magnifier but on the RIGHT edge, shown
+            // only while the cortinilla is open (the live dropdown replaced the
+            // in-dropdown "Full results" row with this contextual key hint).
+            // Absolutely positioned so it takes no layout space — the centered
+            // query text is unaffected. Enter runs the search / opens the
+            // highlighted result.
+            Text {
+                visible: SearchState.cortinilla-open;
+                text: "↵  " + @tr("Enter");
+                color: Theme.text-muted;
+                font-size: 11px;
+                font-weight: Typography.medium;
+                x: parent.width - self.width - 10px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+            }
         }
     }
 
