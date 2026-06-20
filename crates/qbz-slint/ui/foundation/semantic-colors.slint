@@ -1,95 +1,13 @@
 // Semantic color tokens — the contract every component consumes.
 //
-// `Theme` is the surface that swaps palettes: every token is conditional on
-// ThemeState.mode (0 = Dark, 1 = OLED Black, 2 = Tokyo Night, 3 = System).
-// The System mode sources colors from the std-widgets Palette, which follows
-// the OS light/dark scheme. Token names stay stable so components never
-// change. The fixed values mirror src/app.css.
+// The implementation moved to `theme.slint` (a Rust-driven dumb sink: one
+// `ThemeColors` struct pushed in per theme change, instead of per-token
+// ternaries on `ThemeState.mode`). This file is kept as the stable public
+// import path: the ~150 components that `import { Theme } from
+// "semantic-colors.slint"` keep working unchanged. New code may import from
+// either path.
+//
+// Token names are identical to before; System mode still follows the OS
+// std-widgets Palette (handled inside `theme.slint` via `Theme.is-system`).
 
-import { Palette } from "palette.slint";
-import { Palette as StdPalette } from "std-widgets.slint";
-import { ThemeState } from "theme-state.slint";
-
-export global Theme {
-    // Surfaces (--bg-primary / --bg-secondary / --bg-tertiary)
-    out property <color> surface-main:
-        ThemeState.mode == 1 ? #000000
-        : ThemeState.mode == 2 ? #1a1b26
-        : ThemeState.mode == 3 ? StdPalette.background
-        : Palette.black-0;
-    out property <color> surface-card:
-        ThemeState.mode == 1 ? #0a0a0a
-        : ThemeState.mode == 2 ? #16161e
-        : ThemeState.mode == 3 ? StdPalette.alternate-background
-        : Palette.black-1;
-    out property <color> surface-elevated:
-        ThemeState.mode == 1 ? #1a1a1a
-        : ThemeState.mode == 2 ? #1c1d29
-        : ThemeState.mode == 3 ? StdPalette.control-background
-        : Palette.black-2;
-
-    // Text (Tokyo Night recolors; OLED keeps the default dark text; System
-    // derives muted tiers from the OS foreground via alpha)
-    out property <color> text-primary:
-        ThemeState.mode == 2 ? #a9b1d6
-        : ThemeState.mode == 3 ? StdPalette.foreground
-        : Palette.white;
-    out property <color> text-secondary:
-        ThemeState.mode == 2 ? #787c99
-        : ThemeState.mode == 3 ? StdPalette.foreground.with-alpha(0.78)
-        : Palette.gray-c;
-    out property <color> text-muted:
-        ThemeState.mode == 2 ? #545c7e
-        : ThemeState.mode == 3 ? StdPalette.foreground.with-alpha(0.55)
-        : Palette.gray-8;
-    out property <color> text-disabled:
-        ThemeState.mode == 2 ? #3d425e
-        : ThemeState.mode == 3 ? StdPalette.foreground.with-alpha(0.35)
-        : Palette.gray-5;
-
-    // Accent (--accent-primary / hover / active / btn-primary-text)
-    out property <color> accent:
-        ThemeState.mode == 2 ? #7aa2f7
-        : ThemeState.mode == 3 ? StdPalette.accent-background
-        : Palette.blue;
-    out property <color> accent-hover:
-        ThemeState.mode == 2 ? #7dcfff
-        : ThemeState.mode == 3 ? StdPalette.accent-background.brighter(0.15)
-        : Palette.blue-hover;
-    out property <color> accent-pressed:
-        ThemeState.mode == 2 ? #bb9af7
-        : ThemeState.mode == 3 ? StdPalette.accent-background.darker(0.15)
-        : Palette.blue-active;
-    out property <color> accent-text:
-        ThemeState.mode == 2 ? #1a1b26
-        : ThemeState.mode == 3 ? StdPalette.accent-foreground
-        : Palette.white;
-
-    // Favorite (heart) — the active "loved" state.
-    out property <color> favorite: Palette.danger;
-
-    // Surfaces — interaction
-    out property <color> surface-hover: Palette.alpha-6;
-
-    // Borders
-    out property <color> border-subtle: Palette.alpha-8;
-    // A more defined border for surfaces that share the content
-    // background and need a visible edge (popover menus, dropdowns).
-    out property <color> border-muted: Palette.alpha-strong;
-
-    // Effects
-    out property <color> card-shadow: Palette.shadow;
-
-    // Alpha-white overlay tiers — mirror the --alpha-* CSS vars in src/app.css.
-    // Fixed white (NOT mode-conditional) to stay 1:1 with the Tauri miniplayer,
-    // which uses fixed white alphas regardless of theme. Consumed by the mini
-    // surfaces/footer/capsule for hover fills, hairlines, and muted glyphs.
-    out property <color> alpha-08: #ffffff14;  // 8%
-    out property <color> alpha-10: #ffffff1a;  // 10%
-    out property <color> alpha-12: #ffffff1f;  // 12%
-    out property <color> alpha-18: #ffffff2e;  // 18%
-    out property <color> alpha-55: #ffffff8c;  // 55%
-    out property <color> alpha-65: #ffffffa6;  // 65%
-    out property <color> alpha-70: #ffffffb3;  // 70%
-    out property <color> alpha-75: #ffffffbf;  // 75%
-}
+export { Theme, ThemeColors } from "theme.slint";
