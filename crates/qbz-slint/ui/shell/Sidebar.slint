@@ -209,11 +209,11 @@ component SidebarRow inherits Rectangle {
     visible: !root.hidden-in-mini;
     border-radius: 6px;
     background: root.drop-hot
-        ? #22c55e26
+        ? Theme.success-bg
         : (ta.has-hover || root.active
             ? Theme.surface-hover : transparent);
     border-width: root.drop-hot ? 1px : 0px;
-    border-color: #22c55e66;
+    border-color: Theme.success-border;
 
     HorizontalLayout {
         padding-left: ShellState.sidebar-mini ? 0px : (root.entry.indent ? 24px : 8px);
@@ -316,6 +316,20 @@ component SidebarRow inherits Rectangle {
         // row, like the folders' removed one). Move-to-folder is reached by
         // right-clicking the row instead (see the `ta` pointer-event below);
         // folder management itself lives in the Playlist Manager.
+    }
+    // Active-row redundant shape cue: a 3px accent bar on the left edge.
+    // Active and hover both paint surface-hover, so the only prior active
+    // signal was a text-primary/secondary value shift — too subtle on its
+    // own. The bar is a non-layout overlay (positioned off the row root's
+    // own geometry, never a sibling .height) so it never reflows the row,
+    // and reads as polish in all 33 themes.
+    if root.active && !root.drop-hot: Rectangle {
+        x: 0;
+        y: Math.round((root.height - self.height) / 2 / 1px) * 1px;
+        width: 3px;
+        height: root.height - 12px;
+        border-radius: 1.5px;
+        background: Theme.accent;
     }
     ta := TouchArea {
         mouse-cursor: pointer;

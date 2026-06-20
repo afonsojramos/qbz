@@ -16,7 +16,7 @@ export component QbzPrimaryButton inherits Rectangle {
     border-radius: Radius.sm;
     opacity: root.enabled ? 1.0 : 0.5;
     background: root.destructive
-        ? (ta.has-hover && root.enabled ? #e57373d9 : #e57373)
+        ? (ta.has-hover && root.enabled ? Theme.danger-hover : Theme.danger)
         : (ta.has-hover && root.enabled ? Theme.accent-hover : Theme.accent);
 
     animate background { duration: 150ms; }
@@ -44,5 +44,32 @@ export component QbzPrimaryButton inherits Rectangle {
         clicked => {
             root.clicked();
         }
+    }
+
+    // Keyboard activation: Enter/Space fire the same click. The TouchArea above
+    // stays the pointer source; this only adds key activation + focusability.
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // Non-layout focus ring — a transparent-bordered overlay shown only on
+    // keyboard focus, so it never reflows the button (universal a11y, neutral
+    // at rest in all themes).
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+        border-width: 2px;
+        border-color: fs.has-focus ? Theme.focus-ring : transparent;
+        border-radius: parent.border-radius;
     }
 }
