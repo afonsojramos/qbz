@@ -102,14 +102,41 @@ mod tests {
     }
 
     #[test]
-    fn implemented_list_is_the_four_p1_themes() {
+    fn implemented_list_is_all_standard_themes() {
+        // After P2 every non-accessibility theme is materialized; the 5 a11y
+        // themes (WcagLight/WcagDark/HighContrast/HighContrastLight/Colorblind)
+        // land in P3.
         let list = implemented_theme_list();
-        assert_eq!(list.len(), 4);
+        assert_eq!(list.len(), ALL.len() - 5);
         let slugs: Vec<&str> = list.iter().map(|e| e.slug).collect();
+        // P1 originals still present:
         assert!(slugs.contains(&"dark"));
         assert!(slugs.contains(&"oled"));
         assert!(slugs.contains(&"tokyo-night"));
         assert!(slugs.contains(&"system"));
+        // P2 additions (spot-check across categories):
+        assert!(slugs.contains(&"light"));
+        assert!(slugs.contains(&"nord"));
+        assert!(slugs.contains(&"dracula"));
+        assert!(slugs.contains(&"frost"));
+        assert!(slugs.contains(&"langley"));
+        assert!(slugs.contains(&"alucard"));
+        assert!(slugs.contains(&"kurosaki"));
+        // accessibility themes NOT yet implemented:
+        assert!(!slugs.contains(&"wcag-dark"));
+        assert!(!slugs.contains(&"high-contrast"));
+        assert!(!slugs.contains(&"colorblind"));
+    }
+
+    #[test]
+    fn light_dark_filter_is_luminance_correct() {
+        // Corrected flags: Alucard light; Frost/Langley dark despite Tauri type.
+        assert!(is_light(ThemeId::Alucard));
+        assert!(is_light(ThemeId::Light));
+        assert!(is_light(ThemeId::SnowStorm));
+        assert!(!is_light(ThemeId::Frost));
+        assert!(!is_light(ThemeId::Langley));
+        assert!(!is_light(ThemeId::Nord));
     }
 
     #[test]

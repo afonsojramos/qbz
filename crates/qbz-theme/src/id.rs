@@ -114,13 +114,12 @@ impl ThemeId {
         ThemeId::Oled
     }
 
-    /// Whether this theme is fully materialized by the registry in P1. Used by
-    /// the frontend list builder to expose only ready themes during P1/P2.
+    /// Whether this theme is fully materialized by the registry. Used by the
+    /// frontend list builder to expose only ready themes during the phased
+    /// rollout. After P2 every standard (non-accessibility) theme is materialized;
+    /// the 5 accessibility themes are filled in P3.
     pub fn is_implemented(self) -> bool {
-        matches!(
-            self,
-            ThemeId::Dark | ThemeId::Oled | ThemeId::TokyoNight | ThemeId::System
-        )
+        !matches!(self.category(), ThemeCategory::Accessibility)
     }
 
     /// Stable persisted slug. MUST NOT change once shipped.
