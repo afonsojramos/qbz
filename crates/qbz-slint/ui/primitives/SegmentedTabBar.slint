@@ -26,6 +26,11 @@ component Segment inherits Rectangle {
     border-radius: 4px;
     background: root.active ? Theme.surface-main
         : ta.has-hover ? Theme.surface-hover : transparent;
+    // HC-only: a 1px strong border makes the active/inactive distinction
+    // survive a flattened High-Contrast palette where the fill alone reads
+    // weakly. Gated so the 31 normal themes keep their clean borderless look.
+    border-width: (Theme.is-high-contrast && root.active) ? 1px : 0px;
+    border-color: Theme.border-strong;
 
     HorizontalLayout {
         padding-left: 12px;
@@ -49,7 +54,9 @@ component Segment inherits Rectangle {
                 min-width: 18px;
                 height: 16px;
                 border-radius: 8px;
-                background: root.active ? #ffffff24 : #ffffff14;
+                // Alpha-token badge fill follows theme polarity (black-on-light
+                // in light themes) instead of a fixed white wash.
+                background: root.active ? Theme.alpha-15 : Theme.alpha-8;
                 HorizontalLayout {
                     alignment: center;
                     padding-left: 5px;
@@ -64,6 +71,21 @@ component Segment inherits Rectangle {
                 }
             }
         }
+    }
+
+    // Redundant non-color shape cue for the active segment (Radix/Spotify
+    // underline equivalent): a 2px accent bar pinned to the segment's bottom
+    // edge, shown only when active. Drawn as a non-layout overlay (positioned
+    // off the Segment root's own geometry, never a sibling .height reference)
+    // so toggling it never reflows the row. Reads as polish in all 33 themes,
+    // not just High-Contrast.
+    if root.active: Rectangle {
+        x: 4px;
+        width: root.width - 8px;
+        height: 2px;
+        y: root.height - self.height;
+        border-radius: 1px;
+        background: Theme.accent;
     }
 
     ta := TouchArea {
