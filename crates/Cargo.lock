@@ -5783,6 +5783,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-theme"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "qconnect-app"
 version = "0.1.0"
 dependencies = [
