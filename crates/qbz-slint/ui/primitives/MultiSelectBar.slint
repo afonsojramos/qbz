@@ -26,10 +26,10 @@ component BulkButton inherits Rectangle {
     border-radius: Radius.sm;
     opacity: root.enabled-when ? 1.0 : 0.4;
     background: root.danger
-        ? (ta.has-hover ? #ef444433 : transparent)
+        ? (ta.has-hover ? Theme.danger-hover : transparent)
         : (ta.has-hover ? Theme.surface-hover : transparent);
     border-width: root.danger ? 1px : 0px;
-    border-color: #ef4444;
+    border-color: Theme.danger-border;
 
     QbzIcon {
         source: root.icon;
@@ -38,7 +38,7 @@ component BulkButton inherits Rectangle {
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.danger
-            ? #ef4444
+            ? Theme.danger
             : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
     }
 
