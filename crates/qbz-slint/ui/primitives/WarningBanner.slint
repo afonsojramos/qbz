@@ -13,15 +13,20 @@ export component WarningBanner inherits Rectangle {
     in property <string> body: "";
     in property <string> variant: "warning";   // info | warning | error | success
 
-    property <color> tone: root.variant == "error" ? #ef4444
-        : (root.variant == "info" ? #3b82f6
-        : (root.variant == "success" ? #3fae6a : #eab308));
-    property <color> bg: root.variant == "error" ? #ef44441a
-        : (root.variant == "info" ? #3b82f61a
-        : (root.variant == "success" ? #3fae6a1a : #eab3081a));
-    property <color> brd: root.variant == "error" ? #ef44444d
-        : (root.variant == "info" ? #3b82f64d
-        : (root.variant == "success" ? #3fae6a4d : #eab3084d));
+    // Themed via the semantic families. error→danger, success→success,
+    // warning(default)→warning. "info" has no dedicated token, so it maps to
+    // the themed informational color (accent) with the same 10% bg / 30% border
+    // alphas the literals used. The per-variant glyph already carries the
+    // non-color cue (WCAG 1.4.1); this only makes the tone themeable.
+    property <color> tone: root.variant == "error" ? Theme.danger
+        : (root.variant == "info" ? Theme.accent
+        : (root.variant == "success" ? Theme.success : Theme.warning));
+    property <color> bg: root.variant == "error" ? Theme.danger-bg
+        : (root.variant == "info" ? Theme.accent.with-alpha(0.10)
+        : (root.variant == "success" ? Theme.success-bg : Theme.warning-bg));
+    property <color> brd: root.variant == "error" ? Theme.danger-border
+        : (root.variant == "info" ? Theme.accent.with-alpha(0.30)
+        : (root.variant == "success" ? Theme.success-border : Theme.warning-border));
     property <image> glyph: root.variant == "error"
         ? @image-url("../assets/icons/circle-alert.svg")
         : (root.variant == "info"
