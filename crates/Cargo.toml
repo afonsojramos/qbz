@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
     "qbz-app",
+    "qbz-theme",
     "qbz-models",
     "qbz-audio",
     "qbz-player",

@@ -155,6 +155,34 @@ export component QbzSelect inherits Rectangle {
         }
     }
 
+    // Keyboard activation: Enter/Space open the option list, same as a click.
+    // The TouchArea stays the pointer source; this only adds key activation +
+    // focusability on the collapsed control.
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.filter = "";
+                popup.show();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // Non-layout focus ring — transparent-bordered overlay shown only on
+    // keyboard focus, matching the control's radius so it never reflows.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+        border-width: 2px;
+        border-color: fs.has-focus ? Theme.focus-ring : transparent;
+        border-radius: parent.border-radius;
+    }
+
     popup := PopupWindow {
         // Right-anchored so a list wider than the control grows leftward
         // and stays on-screen.

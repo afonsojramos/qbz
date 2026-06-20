@@ -35,4 +35,30 @@ export component QbzToggle inherits Rectangle {
             }
         }
     }
+
+    // Keyboard activation: Enter/Space flip the switch, same as a click. The
+    // TouchArea stays the pointer source; this only adds key activation + focus.
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.toggled(!root.checked);
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // Non-layout focus ring — transparent-bordered overlay shown only on
+    // keyboard focus, matching the switch's pill radius so it never reflows.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+        border-width: 2px;
+        border-color: fs.has-focus ? Theme.focus-ring : transparent;
+        border-radius: parent.border-radius;
+    }
 }

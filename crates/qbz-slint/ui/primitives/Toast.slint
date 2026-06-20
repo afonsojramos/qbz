@@ -28,11 +28,14 @@ export component Toast inherits Rectangle {
         : root.kind == ToastKind.buffering ? @image-url("../assets/icons/loader-circle.svg")
         : @image-url("../assets/icons/info.svg");
 
-    // Per-kind accent, matching Tauri's colors.
+    // Per-kind accent, themed via the semantic tokens. The per-kind icon
+    // (success check / error alert / warning triangle) already carries the
+    // non-color cue for WCAG 1.4.1; this just makes the tint themeable so it
+    // stays high-contrast in the a11y palettes. buffering/info keep accent.
     property <color> icon-color:
-        root.kind == ToastKind.success ? #4CAF50
-        : root.kind == ToastKind.error ? #ff6b6b
-        : root.kind == ToastKind.warning ? #FFA726
+        root.kind == ToastKind.success ? Theme.success
+        : root.kind == ToastKind.error ? Theme.danger
+        : root.kind == ToastKind.warning ? Theme.warning
         : Theme.accent;
 
     toast := Rectangle {

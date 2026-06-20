@@ -39,14 +39,14 @@ export component ContextMenuItem inherits Rectangle {
                 width: 15px;
                 height: 15px;
                 tint: root.danger
-                    ? #ef4444
+                    ? Theme.danger
                     : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
             }
         }
         Text {
             text: root.label;
             color: root.danger
-                ? #ef4444
+                ? Theme.danger
                 : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
             font-size: 13px;
             vertical-alignment: center;

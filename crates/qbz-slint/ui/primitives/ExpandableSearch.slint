@@ -78,7 +78,10 @@ export component ExpandableSearch inherits Rectangle {
         background: Theme.surface-card;
         border-radius: 6px;
         border-width: root.open ? 1px : 0px;
-        border-color: input.has-focus ? Theme.accent : Theme.border-subtle;
+        // Focused border uses the dedicated focus-ring token (accent-equal in
+        // most themes, distinct in the a11y palettes) so keyboard focus reads
+        // consistently with every other primitive's ring.
+        border-color: input.has-focus ? Theme.focus-ring : Theme.border-subtle;
         clip: true;
         animate width { duration: 200ms; easing: ease-in-out; }
 

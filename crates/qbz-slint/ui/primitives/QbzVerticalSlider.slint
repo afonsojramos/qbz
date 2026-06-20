@@ -23,12 +23,15 @@ export component QbzVerticalSlider inherits Rectangle {
     // Travel range for the thumb centre (top..bottom of the column).
     property <length> travel: root.height - root.thumb-size;
 
-    // Track (the full vertical rail).
+    // Track (the full vertical rail). HC-only outline keeps the rail visible
+    // when accent flattens.
     Rectangle {
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         width: 4px;
         border-radius: 2px;
         background: Theme.surface-elevated;
+        border-width: Theme.is-high-contrast ? 1px : 0px;
+        border-color: Theme.border-strong;
     }
 
     // Accent fill — grows UP from the bottom (inverted: more value = taller).
@@ -43,6 +46,7 @@ export component QbzVerticalSlider inherits Rectangle {
     }
 
     // Thumb. fraction 1.0 (max) → top (y == 0); fraction 0.0 (min) → bottom.
+    // HC-only border delineates the disc against the filled track.
     Rectangle {
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         y: (1.0 - root.fraction) * root.travel;
@@ -50,6 +54,8 @@ export component QbzVerticalSlider inherits Rectangle {
         height: root.thumb-size;
         border-radius: root.thumb-size / 2;
         background: Theme.text-primary;
+        border-width: Theme.is-high-contrast ? 1px : 0px;
+        border-color: Theme.border-strong;
     }
 
     // Map a pointer y to a clamped, rounded integer value (inverted axis).

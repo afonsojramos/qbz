@@ -1,0 +1,14 @@
+[package]
+name = "qbz-theme"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Frontend-agnostic theme/palette registry for QBZ (ADR-006). No Slint, no Tauri, no heavy deps."
+
+[dependencies]
+# Serde only — for persisting/parsing the stable theme slug. No color/UI deps:
+# all color + contrast math is hand-rolled so this crate stays light and fast.
+serde = { workspace = true }
+
+[dev-dependencies]

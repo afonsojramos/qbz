@@ -23,12 +23,14 @@ export component QbzSlider inherits Rectangle {
     // Travel range for the thumb centre.
     property <length> travel: root.width - root.thumb-size;
 
-    // Track.
+    // Track. HC-only outline so the rail stays visible when accent flattens.
     Rectangle {
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         height: 4px;
         border-radius: 2px;
         background: Theme.surface-elevated;
+        border-width: Theme.is-high-contrast ? 1px : 0px;
+        border-color: Theme.border-strong;
     }
 
     // Accent fill.
@@ -41,7 +43,7 @@ export component QbzSlider inherits Rectangle {
         background: Theme.accent;
     }
 
-    // Thumb.
+    // Thumb. HC-only border delineates the disc against the filled track.
     Rectangle {
         x: root.fraction * root.travel;
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
@@ -49,6 +51,8 @@ export component QbzSlider inherits Rectangle {
         height: root.thumb-size;
         border-radius: root.thumb-size / 2;
         background: Theme.text-primary;
+        border-width: Theme.is-high-contrast ? 1px : 0px;
+        border-color: Theme.border-strong;
     }
 
     // Map a pointer x to a clamped, rounded integer value.

@@ -47,4 +47,30 @@ export component SecondaryButton inherits Rectangle {
             }
         }
     }
+
+    // Keyboard activation: Enter/Space fire the same click. The TouchArea stays
+    // the pointer source; this only adds key activation + focusability.
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // Non-layout focus ring — transparent-bordered overlay shown only on
+    // keyboard focus, so it never reflows the button.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+        border-width: 2px;
+        border-color: fs.has-focus ? Theme.focus-ring : transparent;
+        border-radius: parent.border-radius;
+    }
 }

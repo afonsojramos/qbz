@@ -114,14 +114,14 @@ component ArtistRow inherits Rectangle {
                 width: 36px;
                 height: 36px;
                 border-radius: Radius.sm;
-                background: rm-ta.has-hover ? #ef444426 : transparent;
+                background: rm-ta.has-hover ? Theme.danger-bg : transparent;
                 QbzIcon {
                     source: @image-url("../assets/icons/x.svg");
                     width: 18px;
                     height: 18px;
                     x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                     y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                    tint: rm-ta.has-hover ? #ef4444 : Theme.text-muted;
+                    tint: rm-ta.has-hover ? Theme.danger : Theme.text-muted;
                 }
                 rm-ta := TouchArea {
                     mouse-cursor: pointer;
@@ -299,7 +299,7 @@ export component BlacklistManagerView inherits Rectangle {
                 width: clear-all-row.preferred-width + 28px;
                 height: 34px;
                 border-radius: Radius.sm;
-                background: clear-all-ta.has-hover ? #ef444426 : Theme.surface-elevated;
+                background: clear-all-ta.has-hover ? Theme.danger-bg : Theme.surface-elevated;
                 clear-all-row := HorizontalLayout {
                     x: 14px;
                     width: self.preferred-width;
@@ -311,14 +311,14 @@ export component BlacklistManagerView inherits Rectangle {
                             source: @image-url("../assets/icons/trash-2.svg");
                             width: 16px;
                             height: 16px;
-                            tint: #ef4444;
+                            tint: Theme.danger;
                         }
                     }
                     VerticalLayout {
                         alignment: center;
                         Text {
                             text: @tr("Clear All");
-                            color: #ef4444;
+                            color: Theme.danger;
                             font-size: Typography.legal;
                             vertical-alignment: center;
                         }
@@ -352,9 +352,9 @@ export component BlacklistManagerView inherits Rectangle {
             vertical-stretch: 0;
             height: warn-row.preferred-height + 24px;
             border-radius: Radius.md;
-            background: #fbbf241a;
+            background: Theme.warning-bg;
             border-width: 1px;
-            border-color: #fbbf244d;
+            border-color: Theme.warning-border;
             warn-row := HorizontalLayout {
                 padding: 12px;
                 spacing: 10px;
@@ -364,14 +364,14 @@ export component BlacklistManagerView inherits Rectangle {
                         source: @image-url("../assets/icons/circle-alert.svg");
                         width: 16px;
                         height: 16px;
-                        tint: #fbbf24;
+                        tint: Theme.warning;
                     }
                 }
                 VerticalLayout {
                     alignment: center;
                     Text {
                         text: @tr("Blacklist filtering is disabled. Blacklisted artists are shown everywhere until you re-enable it.");
-                        color: #fbbf24;
+                        color: Theme.warning;
                         font-size: Typography.legal;
                         wrap: word-wrap;
                     }
@@ -586,7 +586,16 @@ export component BlacklistManagerView inherits Rectangle {
                         width: danger-lbl.preferred-width + 32px;
                         height: 36px;
                         border-radius: Radius.sm;
-                        background: danger-ta.has-hover ? #dc2626 : #ef4444;
+                        // Solid-filled danger button: base is the theme's
+                        // danger color, hover a derived darker solid shade.
+                        // NOT Theme.danger-hover — that token is a translucent
+                        // hover-tint for ghost/borderless danger surfaces (the
+                        // trash buttons above); using it on a filled button
+                        // would wash the fill out (and is LIGHTER in some a11y
+                        // themes per the migration palette), regressing the
+                        // white label's contrast. .darker() mirrors how
+                        // accent-pressed is derived in theme.slint.
+                        background: danger-ta.has-hover ? Theme.danger.darker(0.12) : Theme.danger;
                         danger-lbl := Text {
                             text: @tr("Clear All");
                             color: #ffffff;

@@ -67,12 +67,17 @@ export component SeekBar inherits HorizontalLayout {
                 border-radius: 2px;
                 background: Theme.accent;
             }
-            // Hover thumb.
+            // Hover thumb. HC-only border delineates the disc against the
+            // filled track. (No HC outline on the 3px rail itself: a 1px
+            // border top+bottom would swallow the thin line — the thumb
+            // border carries the redundant-encoding for the seek bar.)
             Rectangle {
                 width: 12px;
                 height: 12px;
                 border-radius: 6px;
                 background: Theme.text-primary;
+                border-width: Theme.is-high-contrast ? 1px : 0px;
+                border-color: Theme.border-strong;
                 y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                 x: parent.width * root.clamp01(root.progress) - self.width / 2;
                 opacity: ta.has-hover ? 1.0 : 0.0;
