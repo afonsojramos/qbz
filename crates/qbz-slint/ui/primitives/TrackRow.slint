@@ -559,7 +559,12 @@ export component TrackRow inherits Rectangle {
                     x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                     y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     tint: root.track.is-favorite
-                        ? Theme.accent
+                        // Dedicated favorite token (not the generic accent):
+                        // a stable >=3:1-vs-row color in every theme, and the
+                        // intended heart fill. The filled/outline SVG swap is
+                        // the primary 1.4.1 shape cue; this keeps the fill from
+                        // flattening against accent in High-Contrast.
+                        ? Theme.favorite
                         : (fav-ta.has-hover ? Theme.text-primary : Theme.text-muted);
                 }
                 fav-ta := TouchArea {
