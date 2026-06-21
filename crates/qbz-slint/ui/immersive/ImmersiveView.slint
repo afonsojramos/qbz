@@ -5,7 +5,7 @@
 import { Radius } from "../foundation/radius.slint";
 import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { NowPlayingState, VisualizerState, ImmersiveState, ImmersiveSearchActions, SettingsState, LyricsState, QueueState, TrackInfoActions, SuggestionsActions, WindowControlActions, ShellState } from "../state.slint";
+import { NowPlayingState, VisualizerState, ImmersiveState, ImmersiveSearchActions, ImmersiveActions, SettingsState, LyricsState, QueueState, TrackInfoActions, SuggestionsActions, WindowControlActions, ShellState } from "../state.slint";
 import { ImmersiveSearchCortinilla } from "ImmersiveSearchCortinilla.slint";
 import { ImmersiveAtmosphere } from "ImmersiveAtmosphere.slint";
 import { AlbumReactivePanel } from "AlbumReactivePanel.slint";
@@ -1089,6 +1089,18 @@ export component ImmersiveView inherits Rectangle {
     background: #0a0a0b;
     clip: true;
 
+    // The component is conditionally mounted (it exists only while the overlay is
+    // OPEN), so init == the overlay opening. Rust applies the configured default
+    // view here (pinned view, or restore-last). Per the precedent this is the
+    // only `init` on the root.
+    init => { ImmersiveActions.opened(); }
+
+    // Fingerprint of the active view (view-mode * 100 + mode * 10 + split-panel).
+    // Any change while the overlay is open fires `view-changed()` so Rust can
+    // persist the current view for the "Remember last" default.
+    property <int> view-sig: ImmersiveState.view-mode * 100 + ImmersiveState.mode * 10 + ImmersiveState.split-panel;
+    changed view-sig => { ImmersiveActions.view-changed(); }
+
     function wake() {
         root.chrome-visible = true;
         hide-timer.running = false;
@@ -1271,11 +1283,13 @@ export component ImmersiveView inherits Rectangle {
         padding-right: 56px;
         spacing: 48px;
 
-        // LEFT (~55%): artwork + shared metadata block, centered in its half.
-        // horizontal-stretch 11 (vs the right's 9) yields the 55/45 ratio.
+        // LEFT (50%): artwork + shared metadata block, centered in its half.
+        // EXPLICIT half-width (root.width minus the 56+56 padding and 48 spacing,
+        // halved) gives a true 50/50 — horizontal-stretch weights did not, because
+        // the left's intrinsic content out-measured the right and skewed the split.
         left-col := VerticalLayout {
             property <length> col-h: parent.col-h;
-            horizontal-stretch: 11;
+            width: (root.width - 160px) / 2;
             alignment: center;
             spacing: 28px;
 
@@ -1285,9 +1299,17 @@ export component ImmersiveView inherits Rectangle {
             // `self.width` is the layout-resolved column width; it only drives
             // `height`, never the column's own width, so there's no loop.
             left-art := Rectangle {
+                // Native source resolution (physical px) of the active cover, so
+                // the art is never UPSCALED beyond its own size on a large window
+                // (the cause of the blurry oversized cover when the window leaves
+                // the responsive/constrained range).
+                property <length> src-native:
+                    (NowPlayingState.artwork-large.width > 0
+                        ? NowPlayingState.artwork-large.width
+                        : NowPlayingState.artwork.width) * 1px;
                 property <length> art-size:
                     Math.max(240px,
-                        Math.min(self.width, left-col.col-h - 200px));
+                        Math.min(self.width, left-col.col-h - 200px, self.src-native));
                 height: self.art-size;
                 horizontal-stretch: 1;
                 art-inner := Rectangle {
@@ -1317,10 +1339,9 @@ export component ImmersiveView inherits Rectangle {
             // plate is full column width with 22px side gutters so the elided
             // Text rows have a real width to truncate against.
             meta-plate := Rectangle {
-                background: #00000059;
-                border-radius: 14px;
-                border-width: 1px;
-                border-color: #ffffff14;
+                // Glass plate removed (owner: looked bad) — the metadata sits
+                // directly on the atmosphere; ImmersiveTrackInfo carries its own
+                // text shadows for legibility.
                 horizontal-stretch: 1;
                 height: meta-block.preferred-height + 28px;
                 meta-block := VerticalLayout {
@@ -1345,19 +1366,13 @@ export component ImmersiveView inherits Rectangle {
         // via viewport-width/viewport-height so it never overflows the corners.
         // horizontal-stretch 9 (vs the left's 11) yields the 45% share.
         right-plate := Rectangle {
-            // The backing's inner padding. The mounted panel's content box
+            // The panel's inner padding. The mounted panel's content box
             // (`right-inner`) subtracts this on both axes so nothing tucks under
-            // the rounded corners.
+            // the edges.
             property <length> pad: 20px;
-            horizontal-stretch: 9;
-            // The dark legibility plate.
-            background: #00000094;
-            border-radius: 16px;
-            border-width: 1px;
-            border-color: #ffffff1a;
-            drop-shadow-blur: 36px;
-            drop-shadow-color: #00000080;
-            drop-shadow-offset-y: 10px;
+            width: (root.width - 160px) / 2;
+            // Glass legibility backing removed (owner: looked bad) — the split
+            // panel sits directly on the atmosphere.
             clip: true;
 
             // Inner content box, inset by the backing padding on all sides.

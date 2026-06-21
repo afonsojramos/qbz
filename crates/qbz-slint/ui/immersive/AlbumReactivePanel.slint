@@ -77,8 +77,16 @@ export component AlbumReactivePanel inherits Rectangle {
     // window; we raise the hard cap from 460 -> 660px and the width fraction
     // 0.55 -> 0.62 so the art keeps growing on a big screen instead of stalling.
     // The 180px floor keeps small windows safe (small was confirmed good).
+    // Native source resolution — cap the RESTING art so it is never upscaled
+    // beyond its own size on a large window (owner: oversized blurry art looked
+    // nefasto). The audio breathing (art-scale) still grows it momentarily — that
+    // is the intended reactive effect, not the static oversizing being fixed.
+    property <length> src-native:
+        (NowPlayingState.artwork-large.width > 0
+            ? NowPlayingState.artwork-large.width
+            : NowPlayingState.artwork.width) * 1px;
     property <length> base-art: Math.max(180px,
-        Math.min(Math.min((root.viewport-height - 384px) / 1.25, root.viewport-width * 0.62), 660px));
+        Math.min(Math.min(Math.min((root.viewport-height - 384px) / 1.25, root.viewport-width * 0.62), 660px), root.src-native));
     // Reactive size = base * artScale. The glow layer and the art share this
     // exact size/position so the halo stays glued to the art edge (per risk).
     property <length> art-size: root.base-art * root.art-scale;

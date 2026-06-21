@@ -1200,8 +1200,14 @@ fn load_now_playing_artwork_large(weak: slint::Weak<AppWindow>, art: qbz_models:
         return;
     };
     tokio::spawn(async move {
+        // Decode at high resolution (was 300 — the hover-preview size). The
+        // IMMERSIVE view grows this cover to 600-800px, so a 300px decode was
+        // upscaled and looked blurry on large windows. Decoding up to 1000px lets
+        // the FULL source resolution through (Qobuz typically serves ~600); the
+        // immersive's native-size cap then grows the art sharply up to that real
+        // resolution instead of upscaling a tiny decode.
         let Some((pixels, w, h)) =
-            crate::artwork::fetch_and_decode_ref(&art, &cache, 300).await
+            crate::artwork::fetch_and_decode_ref(&art, &cache, 1000).await
         else {
             return;
         };
@@ -1345,7 +1351,10 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     // Higher-res cover for the hover preview that floats above the bar art. Same
     // source-aware funnel; a ~300px server-side transcode so the ~220px popup is
     // crisp without paying for the full original. One extra fetch per track.
-    let preview_artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, Some(300));
+    // Immersive-grade size: Plex covers transcode at 1000px (the immersive grows
+    // the cover large). Qobuz ignores the hint (its URL is fixed) — the high-res
+    // comes from the larger decode in load_now_playing_artwork_large.
+    let preview_artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, Some(1000));
     // Quality badge: tier from bit depth (24-bit+ = Hi-Res), exact detail line
     // reused from the shared formatter so it matches the track-row badges.
     let quality_tier = match track.bit_depth {

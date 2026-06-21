@@ -2606,6 +2606,14 @@ export global AppearanceState {
     in-out property <[string]> immersive-search-actions: ["Disabled", "Replace current queue", "Play next", "Add to queue"];
     in-out property <int> immersive-search-action-index: 1;
 
+    // Immersive default view — which immersive view opens by default.
+    //   0 = Remember last (restore the last view that was open),
+    //   1 = Album Reactive, 2 = Static, 3 = Coverflow, 4 = Spectrum,
+    //   5 = Lyrics, 6 = Queue (all 1-6 pin a FOCUS view-mode foreground).
+    // Persisted via appearance-select("immersive-default-view").
+    in-out property <[string]> immersive-default-views: ["Remember last", "Album Reactive", "Static", "Coverflow", "Spectrum", "Lyrics", "Queue"];
+    in-out property <int> immersive-default-view-index: 0;
+
     // --- VISUAL EXTRAS -----------------------------------------------------
     // sidebar-playlist-collage is wired to SidebarState.playlist-collage in
     // the panel (the only already-functional flag here).
@@ -3387,6 +3395,16 @@ export global ImmersiveSearchActions {
     callback row-clicked(int /* flat-index */);
     callback move-selection(int /* delta: -1 up / +1 down */);
     callback dismiss();
+}
+
+// Lifecycle hooks for the immersive overlay, wired in main.rs. The ImmersiveView
+// component is conditionally mounted (it exists only while the overlay is OPEN),
+// so its `init` == the overlay opening. `opened()` lets Rust apply the configured
+// default view (pinned, or restore-last); `view-changed()` lets Rust persist the
+// current view when the configured default is "remember last".
+export global ImmersiveActions {
+    callback opened();
+    callback view-changed();
 }
 
 // Native window-control actions for the MAIN AppWindow, exposed to the

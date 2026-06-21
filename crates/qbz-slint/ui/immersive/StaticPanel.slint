@@ -41,8 +41,14 @@ export component StaticPanel inherits Rectangle {
     // scales, and we raise the hard cap 460 -> 640px and the width fraction
     // 0.55 -> 0.62 so a big window is filled. The 180px floor keeps small windows
     // safe (small was confirmed good).
+    // Native source resolution — cap so the cover is never UPSCALED beyond its
+    // own size on a large window (owner: oversized blurry art looked nefasto).
+    property <length> src-native:
+        (NowPlayingState.artwork-large.width > 0
+            ? NowPlayingState.artwork-large.width
+            : NowPlayingState.artwork.width) * 1px;
     property <length> base-art: Math.max(180px,
-        Math.min(Math.min(root.viewport-height - 364px, root.viewport-width * 0.62), 640px));
+        Math.min(Math.min(Math.min(root.viewport-height - 364px, root.viewport-width * 0.62), 640px), root.src-native));
     // Fixed size — no art-scale.
     property <length> art-size: root.base-art;
 

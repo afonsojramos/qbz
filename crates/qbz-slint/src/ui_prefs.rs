@@ -74,6 +74,42 @@ pub fn immersive_search_action_index(key: &str) -> i32 {
     }
 }
 
+/// Default immersive default-view. `"remember"` restores whatever immersive view
+/// was open last time; the other keys PIN a fixed FOCUS-mode foreground.
+pub const DEFAULT_IMMERSIVE_DEFAULT_VIEW: &str = "remember";
+
+/// Map an immersive-default-view select index to its persisted key. The
+/// on-screen order is Remember last / Album Reactive / Static / Coverflow /
+/// Spectrum / Lyrics / Queue (0-6); any unknown index falls back to the
+/// default (`"remember"`).
+pub fn immersive_default_view_for_index(index: i32) -> &'static str {
+    match index {
+        0 => "remember",
+        1 => "reactive",
+        2 => "static",
+        3 => "coverflow",
+        4 => "spectrum",
+        5 => "lyrics",
+        6 => "queue",
+        _ => DEFAULT_IMMERSIVE_DEFAULT_VIEW,
+    }
+}
+
+/// Inverse of [`immersive_default_view_for_index`]: the select index for a
+/// persisted key, falling back to the default's index (0 = "remember").
+pub fn immersive_default_view_index(key: &str) -> i32 {
+    match key {
+        "remember" => 0,
+        "reactive" => 1,
+        "static" => 2,
+        "coverflow" => 3,
+        "spectrum" => 4,
+        "lyrics" => 5,
+        "queue" => 6,
+        _ => 0,
+    }
+}
+
 /// Persisted UI preferences. New fields must default sanely so an older
 /// file (missing the field) still deserializes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +132,23 @@ pub struct UiPrefs {
     /// inert). See [`DEFAULT_IMMERSIVE_SEARCH_ACTION`].
     #[serde(default = "default_immersive_search_action")]
     pub immersive_search_action: String,
+    /// Immersive default-view key: `"remember"` restores the last view, else one
+    /// of `"reactive"` | `"static"` | `"coverflow"` | `"spectrum"` | `"lyrics"` |
+    /// `"queue"` pins a fixed FOCUS view. See [`DEFAULT_IMMERSIVE_DEFAULT_VIEW`].
+    #[serde(default = "default_immersive_default_view")]
+    pub immersive_default_view: String,
+    /// Last immersive view-mode (0 FOCUS / 1 SPLIT), persisted only while the
+    /// default is `"remember"`; restored on the next overlay open.
+    #[serde(default)]
+    pub immersive_last_view_mode: i32,
+    /// Last immersive FOCUS panel (read when last view-mode == 0). Same
+    /// remember-last persistence as [`Self::immersive_last_view_mode`].
+    #[serde(default)]
+    pub immersive_last_mode: i32,
+    /// Last immersive SPLIT panel (read when last view-mode == 1). Same
+    /// remember-last persistence as [`Self::immersive_last_view_mode`].
+    #[serde(default)]
+    pub immersive_last_split_panel: i32,
     /// Active theme — a stable `qbz_theme::ThemeId` slug ("oled", "dark",
     /// "tokyo-night", "system", ...). Stored as a slug (not an index) so it is
     /// order-independent and stable across releases. Owner default: OLED Dark.
@@ -152,6 +205,10 @@ fn default_immersive_search_action() -> String {
     DEFAULT_IMMERSIVE_SEARCH_ACTION.to_string()
 }
 
+fn default_immersive_default_view() -> String {
+    DEFAULT_IMMERSIVE_DEFAULT_VIEW.to_string()
+}
+
 /// Default theme slug. Owner decision 2026-06-20: OLED Dark is the default for
 /// fresh installs and any profile without a persisted theme. Sourced from the
 /// `qbz-theme` registry so the default stays single-sourced.
@@ -167,6 +224,10 @@ impl Default for UiPrefs {
             album_header_gradient: default_album_header_gradient(),
             intelligent_search: default_intelligent_search(),
             immersive_search_action: default_immersive_search_action(),
+            immersive_default_view: default_immersive_default_view(),
+            immersive_last_view_mode: 0,
+            immersive_last_mode: 0,
+            immersive_last_split_panel: 0,
             theme: default_theme(),
             mini_surface: default_mini_surface(),
             mini_width: default_mini_width(),

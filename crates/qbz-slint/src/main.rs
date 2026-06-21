@@ -4445,6 +4445,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &crate::ui_prefs::load().immersive_search_action,
         ),
     );
+    window.global::<AppearanceState>().set_immersive_default_view_index(
+        crate::ui_prefs::immersive_default_view_index(
+            &crate::ui_prefs::load().immersive_default_view,
+        ),
+    );
 
     // Theme: seed the dropdown list from the Rust registry, then restore the
     // persisted theme (slug is the source of truth; the dropdown index is
@@ -5594,6 +5599,81 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // ===================== Immersive default view =======================
+    // The ImmersiveView is conditionally mounted, so its `init` fires `opened()`
+    // exactly when the overlay opens. We apply the configured default view here:
+    //   - "remember": restore the persisted last view (view-mode/mode/split-panel).
+    //   - pinned view: force FOCUS (view-mode 0) + the matching `mode`.
+    // While the overlay is open, `view-changed()` persists the current view so a
+    // "remember" default restores it next time (a pinned default never persists —
+    // the pin always wins on the next open).
+    {
+        let weak = window.as_weak();
+        window
+            .global::<ImmersiveActions>()
+            .on_opened(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let prefs = crate::ui_prefs::load();
+                let im = w.global::<ImmersiveState>();
+                // A pinned/restored view must not be hidden behind a shader scene.
+                im.set_shader_mode(0);
+                match prefs.immersive_default_view.as_str() {
+                    "remember" => {
+                        im.set_view_mode(prefs.immersive_last_view_mode);
+                        im.set_mode(prefs.immersive_last_mode);
+                        im.set_split_panel(prefs.immersive_last_split_panel);
+                    }
+                    // Pinned FOCUS views: view-mode 0 + the matching `mode`.
+                    // reactive=0, static=1, coverflow=2, spectrum=3, lyrics=4,
+                    // queue=5 (FOCUS-mode panel enum in ImmersiveState).
+                    "reactive" => {
+                        im.set_view_mode(0);
+                        im.set_mode(0);
+                    }
+                    "static" => {
+                        im.set_view_mode(0);
+                        im.set_mode(1);
+                    }
+                    "coverflow" => {
+                        im.set_view_mode(0);
+                        im.set_mode(2);
+                    }
+                    "spectrum" => {
+                        im.set_view_mode(0);
+                        im.set_mode(3);
+                    }
+                    "lyrics" => {
+                        im.set_view_mode(0);
+                        im.set_mode(4);
+                    }
+                    "queue" => {
+                        im.set_view_mode(0);
+                        im.set_mode(5);
+                    }
+                    _ => {}
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<ImmersiveActions>()
+            .on_view_changed(move || {
+                let Some(w) = weak.upgrade() else { return };
+                // Only persist for the "remember last" default; a pinned default
+                // always wins on the next open, so do not overwrite it.
+                let mut prefs = crate::ui_prefs::load();
+                if prefs.immersive_default_view != "remember" {
+                    return;
+                }
+                let im = w.global::<ImmersiveState>();
+                prefs.immersive_last_view_mode = im.get_view_mode();
+                prefs.immersive_last_mode = im.get_mode();
+                prefs.immersive_last_split_panel = im.get_split_panel();
+                crate::ui_prefs::save(&prefs);
+            });
+    }
+
     // ===================== Immersive in-view search =====================
     // The in-immersive search dropdown mirrors the main header cortinilla but
     // (1) targets ImmersiveState/ImmersiveSearchActions, (2) loads ONLY
@@ -6201,6 +6281,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut prefs = crate::ui_prefs::load();
                 prefs.immersive_search_action =
                     crate::ui_prefs::immersive_search_action_for_index(index).to_string();
+                crate::ui_prefs::save(&prefs);
+            }
+            "immersive-default-view" => {
+                // 0 = Remember last, 1-6 = pinned FOCUS views (reactive / static /
+                // coverflow / spectrum / lyrics / queue).
+                let mut prefs = crate::ui_prefs::load();
+                prefs.immersive_default_view =
+                    crate::ui_prefs::immersive_default_view_for_index(index).to_string();
                 crate::ui_prefs::save(&prefs);
             }
             "theme" => {

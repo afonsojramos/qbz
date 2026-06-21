@@ -305,6 +305,20 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
 
+    SettingRow {
+        label: @tr("Immersive default view");
+        description: @tr("Which immersive view opens by default. 'Remember last' restores your last view.");
+        QbzSelect {
+            menu-width: 200px;
+            options: AppearanceState.immersive-default-views;
+            current-index: AppearanceState.immersive-default-view-index;
+            selected(i) => {
+                AppearanceState.immersive-default-view-index = i;
+                AppearanceState.appearance-select("immersive-default-view", i);
+            }
+        }
+    }
+
     Rectangle { height: 12px; }
     Divider { }
     Rectangle { height: 12px; }
