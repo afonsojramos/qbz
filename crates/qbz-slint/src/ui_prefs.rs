@@ -117,10 +117,18 @@ pub struct UiPrefs {
     /// Streaming-quality key — one of `STREAMING_QUALITIES[*].key`.
     #[serde(default = "default_streaming_quality")]
     pub streaming_quality: String,
-    /// Now-playing bar layout: `"new"` | `"classic"` | `"small"`. Maps to
-    /// `ShellState.npb-mode` (0 / 1 / 2).
+    /// Now-playing bar layout: `"new"` | `"classic"` | `"small"` | `"large"`.
+    /// Maps to `ShellState.npb-mode` (0 / 1 / 2 / 3).
     #[serde(default = "default_npb_mode")]
     pub npb_mode: String,
+    /// Large-NPB dock visualizer on/off (the cover's top-right eye toggle).
+    /// Persisted so a user who dislikes the spectrum keeps it off across runs.
+    #[serde(default = "default_large_visualizer")]
+    pub large_visualizer: bool,
+    /// Large-NPB dock spectrum visualization: `"bars"` | `"waveform"` | `"energy"`.
+    /// Maps to `ShellState.large-spectrum-mode` (0 / 1 / 2).
+    #[serde(default = "default_large_spectrum_mode")]
+    pub large_spectrum_mode: String,
     /// Whether album/artist detail headers use artwork-derived backdrops.
     #[serde(default = "default_album_header_gradient")]
     pub album_header_gradient: bool,
@@ -193,6 +201,14 @@ fn default_npb_mode() -> String {
     DEFAULT_NPB_MODE.to_string()
 }
 
+fn default_large_visualizer() -> bool {
+    true
+}
+
+fn default_large_spectrum_mode() -> String {
+    "bars".to_string()
+}
+
 fn default_album_header_gradient() -> bool {
     DEFAULT_ALBUM_HEADER_GRADIENT
 }
@@ -221,6 +237,8 @@ impl Default for UiPrefs {
         Self {
             streaming_quality: default_streaming_quality(),
             npb_mode: default_npb_mode(),
+            large_visualizer: default_large_visualizer(),
+            large_spectrum_mode: default_large_spectrum_mode(),
             album_header_gradient: default_album_header_gradient(),
             intelligent_search: default_intelligent_search(),
             immersive_search_action: default_immersive_search_action(),
@@ -239,12 +257,32 @@ impl Default for UiPrefs {
 }
 
 /// Map a persisted npb-mode key to the `ShellState.npb-mode` int
-/// (New = 0, Classic = 1, Small = 2). Unknown keys fall back to New.
+/// (New = 0, Classic = 1, Small = 2, Large = 3). Unknown keys fall back to New.
 pub fn npb_mode_index(key: &str) -> i32 {
     match key {
         "classic" => 1,
         "small" => 2,
+        "large" => 3,
         _ => 0,
+    }
+}
+
+/// Map a persisted Large-dock spectrum key to `ShellState.large-spectrum-mode`
+/// (Bars = 0, Waveform = 1, Energy = 2). Unknown keys fall back to Bars.
+pub fn large_spectrum_mode_index(key: &str) -> i32 {
+    match key {
+        "waveform" => 1,
+        "energy" => 2,
+        _ => 0,
+    }
+}
+
+/// Inverse of [`large_spectrum_mode_index`] — the persisted key for an int mode.
+pub fn large_spectrum_mode_key(index: i32) -> &'static str {
+    match index {
+        1 => "waveform",
+        2 => "energy",
+        _ => "bars",
     }
 }
 

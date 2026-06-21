@@ -4429,11 +4429,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.set_system_font(font.into());
     }
 
-    // Now-playing bar layout (New = 0 / Classic = 1) — restore the persisted
-    // choice before the shell renders so the bar opens in the right mode.
-    window
-        .global::<ShellState>()
-        .set_npb_mode(crate::ui_prefs::npb_mode_index(&crate::ui_prefs::load().npb_mode));
+    // Now-playing bar layout (New = 0 / Classic = 1 / Small = 2 / Large = 3) —
+    // restore the persisted choice before the shell renders so the bar opens in
+    // the right mode. The sidebar defaults open (state 0), so a persisted "large"
+    // restores a valid Large; if some future startup leaves the sidebar closed,
+    // `large-active` stays false and the dock simply doesn't mount.
+    let restored_prefs = crate::ui_prefs::load();
+    let restored_npb = crate::ui_prefs::npb_mode_index(&restored_prefs.npb_mode);
+    {
+        let shell = window.global::<ShellState>();
+        shell.set_npb_mode(restored_npb);
+        // Large dock toggles — restore the persisted visualizer state + spectrum
+        // choice (default ON / Bars) before the shell renders.
+        shell.set_large_visualizer_on(restored_prefs.large_visualizer);
+        shell.set_large_spectrum_mode(crate::ui_prefs::large_spectrum_mode_index(
+            &restored_prefs.large_spectrum_mode,
+        ));
+    }
+    // NOTE: the FFT tap is primed AFTER visualizer::install() (further below) — not
+    // here — because install() registers the `on_set_enabled` handler this call
+    // depends on.
     window
         .global::<AppearanceState>()
         .set_album_header_gradient(crate::ui_prefs::load().album_header_gradient);
@@ -4488,6 +4503,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Inert (tap disabled, no capture / no FFT cost) until the immersive view
     // opens. Must run on the UI thread before window.run().
     visualizer::install(&window, &app_runtime);
+
+    // Prime the FFT tap if we restored straight into Large with the visualizer ON.
+    // This MUST run AFTER visualizer::install() — install() registers the
+    // `on_set_enabled` handler, so an earlier invoke would no-op (the cause of the
+    // dock spectrum sitting idle on the very first playback until the eye toggle
+    // was pressed). The AppShell `changed viz-should-run` handler covers every
+    // later transition; this only seeds the initial value.
+    {
+        let shell = window.global::<ShellState>();
+        if shell.get_large_active() && shell.get_large_visualizer_on() {
+            window.global::<VisualizerState>().invoke_set_enabled(true);
+        }
+    }
 
     // WGPU UNDERLAY SPIKE: capture Slint's own wgpu Device/Queue at RenderingSetup
     // so shader_underlay allocates its texture + submits on the SAME device Slint
@@ -6600,12 +6628,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("npb-view", "miniplayer") => {
                     crate::miniplayer::enter();
                 }
+                // Large (mode 3) — docks the cover + spectrum at the bottom of
+                // the OPEN sidebar, so force the sidebar to its open state before
+                // switching. The FFT tap is driven by AppShell's combined
+                // `viz-should-run` changed handler (Large active OR immersive
+                // open); forcing the state below makes `large-active` true, which
+                // turns the tap on.
+                ("npb-view", "large") => {
+                    if let Some(w) = weak.upgrade() {
+                        let shell = w.global::<ShellState>();
+                        shell.set_sidebar_state(0);
+                        shell.set_npb_mode(crate::ui_prefs::npb_mode_index("large"));
+                        let mut prefs = crate::ui_prefs::load();
+                        prefs.npb_mode = "large".to_string();
+                        crate::ui_prefs::save(&prefs);
+                    }
+                }
                 ("npb-view", mode @ ("new" | "classic" | "small")) => {
                     if let Some(w) = weak.upgrade() {
                         w.global::<ShellState>()
                             .set_npb_mode(crate::ui_prefs::npb_mode_index(mode));
                         let mut prefs = crate::ui_prefs::load();
                         prefs.npb_mode = mode.to_string();
+                        crate::ui_prefs::save(&prefs);
+                    }
+                }
+                // Large dock: visualizer on/off toggle (the cover's eye button).
+                // Routed through Rust so the choice persists in ui_prefs; the
+                // AppShell viz-should-run handler idles the FFT tap when off.
+                ("npb-large", "viz-toggle") => {
+                    if let Some(w) = weak.upgrade() {
+                        let shell = w.global::<ShellState>();
+                        let on = !shell.get_large_visualizer_on();
+                        shell.set_large_visualizer_on(on);
+                        let mut prefs = crate::ui_prefs::load();
+                        prefs.large_visualizer = on;
+                        crate::ui_prefs::save(&prefs);
+                    }
+                }
+                // Large dock: cycle the spectrum visualization (Bars -> Waveform
+                // -> Energy), persisted in ui_prefs.
+                ("npb-large", "spectrum-cycle") => {
+                    if let Some(w) = weak.upgrade() {
+                        let shell = w.global::<ShellState>();
+                        let next = (shell.get_large_spectrum_mode() + 1).rem_euclid(3);
+                        shell.set_large_spectrum_mode(next);
+                        let mut prefs = crate::ui_prefs::load();
+                        prefs.large_spectrum_mode =
+                            crate::ui_prefs::large_spectrum_mode_key(next).to_string();
                         crate::ui_prefs::save(&prefs);
                     }
                 }

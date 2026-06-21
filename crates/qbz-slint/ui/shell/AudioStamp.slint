@@ -1,0 +1,122 @@
+// Inline 2-row AudioStamp (owner redesign — NO format icon). Extracted from
+// PlayerBarSmall.slint so BOTH the Small bar and the Large bar (centre cluster)
+// can mount the same component; the def is now exported.
+//
+//   Row 1 (focus): [TIER]  [detail]      e.g.  HI-RES   24-bit / 96 kHz
+//   Row 2 (secondary): [BACKEND] [MODE]  the two LEDs, smaller, below.
+//
+// The quality line is the BRIGHTER one (detail = text-primary, tier =
+// text-secondary, ~9px) so the LEDs (~6px, below) don't steal the focus. The
+// tier label is built MANUALLY from NowPlayingState.quality-tier (no
+// QualityBadgeFull — that one carries the icon + stacks tier/detail vertically).
+//
+// No pills (ADR-008): backend LED blue when active, mode LED green when active,
+// muted grey otherwise. Right-aligned + width-clamped (via the parent's
+// max-width) so it never blows out the control row. The cast/remote variants
+// are kept, re-fit under the new 2-row structure.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { NowPlayingState } from "../state.slint";
+
+export component AudioStamp inherits VerticalLayout {
+    spacing: 1px;
+    alignment: center;
+    horizontal-stretch: 0;
+
+    // Manual tier label: hires→HI-RES, mp3→MP3, lossless→LOSSLESS, else→CD.
+    property <string> tier-label: NowPlayingState.quality-tier == "hires"
+        ? "HI-RES"
+        : (NowPlayingState.quality-tier == "mp3"
+            ? "MP3"
+            : (NowPlayingState.quality-tier == "lossless" ? "LOSSLESS" : "CD"));
+
+    // === Row 1 — quality, INLINE + BRIGHT (the focus) ====================
+    HorizontalLayout {
+        spacing: 5px;
+        alignment: end;
+        Text {
+            text: root.tier-label;
+            font-size: 9px;
+            font-weight: 700;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            letter-spacing: 0.3px;
+        }
+        Text {
+            text: NowPlayingState.quality-detail;
+            font-size: 9px;
+            font-weight: 600;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    // === Row 2 — the LEDs (secondary), BELOW the quality line ============
+    // Local output → backend + mode labels side-by-side, ~6px, muted unless
+    // active. Hidden while remote/cast (those variants take the slot instead).
+    if !NowPlayingState.is-remote && !NowPlayingState.cast-active: HorizontalLayout {
+        spacing: 5px;
+        alignment: end;
+        Text {
+            text: NowPlayingState.output-backend-label;
+            font-size: 7px;
+            font-weight: 700;
+            color: NowPlayingState.output-backend-active
+                ? #5b8def
+                : Theme.text-muted;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: NowPlayingState.output-mode-label;
+            font-size: 7px;
+            font-weight: 700;
+            color: NowPlayingState.output-mode-active
+                ? #3fae6a
+                : Theme.text-muted;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    // Local-network cast (Chromecast / DLNA) → a single purple protocol LED,
+    // re-fit on row 2 under the quality line.
+    if NowPlayingState.cast-active && !NowPlayingState.is-remote: HorizontalLayout {
+        alignment: end;
+        Text {
+            text: NowPlayingState.cast-protocol == "dlna" ? "DLNA" : "CAST";
+            font-size: 7px;
+            font-weight: 700;
+            color: #a855f7;
+            vertical-alignment: center;
+        }
+    }
+
+    // QConnect renderer-name caption — shown only when a PEER renderer owns
+    // playback AND a name is known (existing cast-target field; no new state).
+    // Sits on row 2 under the quality line.
+    if NowPlayingState.is-remote && NowPlayingState.cast-target != "": HorizontalLayout {
+        spacing: 3px;
+        alignment: end;
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: @image-url("../assets/icons/monitor-speaker.svg");
+                width: 10px;
+                height: 10px;
+                tint: #e0b341;
+            }
+        }
+        Text {
+            text: NowPlayingState.cast-target;
+            font-size: 8px;
+            font-weight: 600;
+            color: #e0b341;
+            vertical-alignment: center;
+            overflow: elide;
+            max-width: 220px;
+        }
+    }
+}

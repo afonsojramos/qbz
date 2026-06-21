@@ -8,8 +8,9 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions } from "../state.slint";
+import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions, VisualizerState } from "../state.slint";
 import { Sidebar } from "Sidebar.slint";
+import { SidebarNowPlayingDock } from "SidebarNowPlayingDock.slint";
 import { HeaderBar } from "HeaderBar.slint";
 import { HeaderMenuOverlay } from "HeaderMenuOverlay.slint";
 import { TooltipOverlay } from "TooltipOverlay.slint";
@@ -127,6 +128,21 @@ export component AppShell inherits Rectangle {
         SearchActions.cortinilla-dismiss();
     }
 
+    // FFT visualizer tap — single source of truth. The tap (frontend-agnostic
+    // producer in qbz-audio, driven by crate::visualizer) must run whenever the
+    // immersive overlay OR the Large-NPB sidebar dock is showing a spectrum, and
+    // idle otherwise (no capture, no FFT cost). This `changed` catches every
+    // transition: immersive open/close, Large enter/exit, and the sidebar
+    // cycling out of "open" (which reverts Large in cycle-sidebar). The Large
+    // menu arm and immersive-open path in Rust also prime it for the initial
+    // value (changed only fires on transitions). Immersive's own close handlers
+    // defer to `large-active` so closing it never kills an active Large dock.
+    property <bool> viz-should-run: ImmersiveState.open
+        || (ShellState.large-active && ShellState.large-visualizer-on);
+    changed viz-should-run => {
+        VisualizerState.set-enabled(self.viz-should-run);
+    }
+
     // Bottom layer: catches the mouse back / forward buttons for history
     // navigation. Declared first so the real UI sits on top of it.
     TouchArea {
@@ -201,13 +217,15 @@ export component AppShell inherits Rectangle {
                         // shell). `root.height` is the AppShell height (pinned to
                         // the window in app.slint).
                         //
-                        // NOTE: the bar height is mode-aware. New + Classic use the
-                        // full `Layout.player-bar-height` (112px); Small (npb-mode 2)
-                        // collapses the bar to one header-tall row (42px), so the
-                        // content area gains ~70px. Computed inline (mirrors the same
-                        // expression in PlayerBar.slint `height:`) to keep `Layout`
-                        // a pure leaf independent of ShellState. Large (mode 3) will
-                        // add its own branch here when it lands.
+                        // NOTE: the bar height is mode-aware. New + Classic + Large
+                        // use the full `Layout.player-bar-height` (112px); only Small
+                        // (npb-mode 2) collapses the bar to one header-tall row
+                        // (42px), so the content area gains ~70px. Computed inline
+                        // (mirrors the same expression in PlayerBar.slint `height:`)
+                        // to keep `Layout` a pure leaf independent of ShellState.
+                        // Large (mode 3) keeps the full bar height — its only
+                        // restructuring (cover + spectrum) lives inside the sidebar,
+                        // not in this content-height math.
                         height: root.height - Layout.header-height
                             - (ShellState.npb-mode == 2 ? Layout.header-height : Layout.player-bar-height)
                             - 8px;
@@ -465,6 +483,23 @@ export component AppShell inherits Rectangle {
             settings-bool(k, v) => {
                 root.settings-bool(k, v);
             }
+        }
+    }
+
+    // Large-NPB cover + spectrum dock — a ROOT overlay pinned flush to the window
+    // bottom-left (the L's vertical arm), painting over the bar's surface-card in
+    // that corner. Declared AFTER the outer VerticalLayout so it stacks above the
+    // bar, and BEFORE HeaderMenuOverlay so header flyouts (and every modal/toast
+    // below) still stack above it (ADR-009 declaration-order z). Only mounted
+    // while Large is active (sidebar open + npb-mode 3). x/width give equal L/R
+    // gutters (16 + 208 + 16 = 240); y pins the cover flush to the window bottom.
+    // The dock self-derives its height (must equal ShellState.large-dock-height).
+    if ShellState.large-active: SidebarNowPlayingDock {
+        width: ShellState.large-dock-width;
+        x: 16px;
+        y: root.height - ShellState.large-dock-height;
+        media-action(k, i, a) => {
+            root.media-action(k, i, a);
         }
     }
 

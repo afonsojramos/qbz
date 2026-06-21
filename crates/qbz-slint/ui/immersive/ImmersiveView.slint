@@ -389,7 +389,9 @@ component ImmersivePlayerBar inherits Rectangle {
                         mouse-cursor: pointer;
                         clicked => {
                             ImmersiveState.open = false;
-                            VisualizerState.set-enabled(false);
+                            // Keep the tap alive if the Large NPB dock still needs
+                            // its spectrum; only idle it when nothing else does.
+                            VisualizerState.set-enabled(ShellState.large-active && ShellState.large-visualizer-on);
                         }
                     }
                     QbzIcon {
@@ -1025,7 +1027,8 @@ component ImmersiveWindowControls inherits Rectangle {
             icon: @image-url("../assets/icons/x.svg");
             clicked => {
                 ImmersiveState.open = false;
-                VisualizerState.set-enabled(false);
+                // Keep the tap alive for the Large NPB dock if it is active.
+                VisualizerState.set-enabled(ShellState.large-active && ShellState.large-visualizer-on);
             }
         }
 
@@ -1126,7 +1129,8 @@ export component ImmersiveView inherits Rectangle {
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 ImmersiveState.open = false;
-                VisualizerState.set-enabled(false);
+                // Keep the tap alive for the Large NPB dock if it is active.
+                VisualizerState.set-enabled(ShellState.large-active && ShellState.large-visualizer-on);
                 return accept;
             }
             // 'g' (GPU) cycles the shader scene 0 -> 1 -> 2 -> 3 -> 0 (Off ->

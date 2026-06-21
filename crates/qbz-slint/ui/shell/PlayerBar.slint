@@ -19,6 +19,7 @@ import { IconButton, PlayButton } from "../primitives/BarControls.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { SeekBar } from "SeekBar.slint";
 import { SongCard } from "SongCard.slint";
+import { AudioStamp } from "AudioStamp.slint";
 import { TransportControls } from "TransportControls.slint";
 import { NowPlayingState, ShellState, AppearanceState, SettingsState, TooltipState, QconnectDevState, QconnectDevice, CastState, CastActions } from "../state.slint";
 
@@ -163,9 +164,12 @@ export component PlayerBar inherits Rectangle {
     VerticalLayout {
         Rectangle { height: 6px; }
 
-        // Full-width seek bar (6px side margins, times at the ends).
+        // Full-width seek bar (6px side margins, times at the ends). In Large the
+        // seek arm is LEFT-INSET by the sidebar/cover column width so the bar
+        // begins to the right of the docked cover (the L's horizontal arm). Gate
+        // on large-active (it already asserts the sidebar is open at 240).
         HorizontalLayout {
-            padding-left: 6px;
+            padding-left: ShellState.large-active ? ShellState.sidebar-rendered-width : 6px;
             padding-right: 6px;
             SeekBar {
                 height: 20px;
@@ -191,6 +195,12 @@ export component PlayerBar inherits Rectangle {
         //     so clipping is safe.
         HorizontalLayout {
             vertical-stretch: 1;
+            // NOTE: the row is NOT inset in Large — keeping padding-left==
+            // padding-right (6px) is what keeps the centre transport on the
+            // WINDOW centre (symmetric side columns). In Large only the LEFT
+            // song card's CONTENT is shifted right to clear the docked cover
+            // (see the SongCard `x`/`width` below); the seekbar above is inset
+            // separately. PLAY stays dead-centre, matching the owner's mock.
             padding-left: 6px;
             padding-right: 6px;
             spacing: 0px;
@@ -207,7 +217,11 @@ export component PlayerBar inherits Rectangle {
                 // stamp to the right wall. Vertical centring is handled by the
                 // card's own sub-columns. Do NOT wrap it in an `alignment:
                 // start` layout — that forces preferred sizing and kills both.
-                if ShellState.npb-mode == 0: SongCard {
+                // New (0) AND Large (3) share this left song card. Large hides
+                // the cover (`show-art: false`) because the cover lives in the
+                // sidebar dock; everything else (title / context / audio stamp)
+                // is identical, so the layout is reused verbatim.
+                if ShellState.npb-mode == 0 || ShellState.npb-mode == 3: SongCard {
                     // EXPLICIT height (= controls-row height). Without it the
                     // inner `height: root.height` formed a binding loop that sized
                     // the card to the TEXT content (~50px) instead of the cover
@@ -217,6 +231,21 @@ export component PlayerBar inherits Rectangle {
                     height: Layout.player-bar-height - 38px;
                     y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     art-size: Layout.player-bar-height - 38px;
+                    // Large: the cover is docked in the sidebar, so drop it here.
+                    show-art: ShellState.npb-mode != 3;
+                    // Large: the quality badge + LEDs move OUT of the song card to
+                    // the SMALL inline AudioStamp on the right column's left wall.
+                    // New mode 0 shares this branch and KEEPS its badges.
+                    show-badges: ShellState.npb-mode != 3;
+                    // Large: shift the card RIGHT so it clears the docked cover
+                    // overlay (which occupies the bottom-left ~sidebar-width). The
+                    // row itself is NOT inset (PLAY stays window-centred), so only
+                    // this card's content moves. New mode 0 keeps x:0/full width
+                    // (identical to the previous fill default).
+                    x: ShellState.large-active ? (ShellState.sidebar-rendered-width - 6px) : 0px;
+                    width: ShellState.large-active
+                        ? (parent.width - (ShellState.sidebar-rendered-width - 6px))
+                        : parent.width;
                     // Homologate the stamp with classic: full-size badge + LEDs,
                     // not the compact variant.
                     compact-stamp: false;
@@ -259,8 +288,11 @@ export component PlayerBar inherits Rectangle {
             Rectangle {
                 width: (parent.width - 12px) * root.col-centre;
                 clip: true;
-                // New: centred transport, PLAY on the window centre.
-                if ShellState.npb-mode == 0: VerticalLayout {
+                // New (0) AND Large (3): centred transport, PLAY on the window
+                // centre. Large keeps PLAY centred too (the AudioStamp moves to
+                // the right column's left wall, NOT into this centred group — so
+                // PLAY never drifts off the window centre).
+                if ShellState.npb-mode == 0 || ShellState.npb-mode == 3: VerticalLayout {
                     alignment: center;
                     HorizontalLayout {
                         alignment: center;
@@ -329,8 +361,30 @@ export component PlayerBar inherits Rectangle {
                 width: (parent.width - 12px) * root.col-side;
                 clip: true;
                 HorizontalLayout {
-                    alignment: end;
                     spacing: 1px;
+
+                // LEADING stretch pushes everything that follows to the right wall
+                // in EVERY mode (replaces the old `alignment: end`; with no stamp
+                // it is identical). Because the stretch is BEFORE the stamp, the
+                // stamp travels glued to the icon cluster at a CONSTANT gap as the
+                // window grows — the gap no longer widens with screen size.
+                Rectangle { horizontal-stretch: 1; }
+
+                // Large: the SMALL AudioStamp sits just LEFT of the icon cluster,
+                // separated by a FIXED gap (so its distance to the buttons stays
+                // constant at any window width). horizontal-stretch:0 so it keeps
+                // its own size and rides the right-packed group.
+                if ShellState.npb-mode == 3: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    AudioStamp {
+                        max-width: 140px;
+                    }
+                }
+                if ShellState.npb-mode == 3: Rectangle {
+                    width: 12px;
+                    horizontal-stretch: 0;
+                }
 
                 // Qobuz Connect — golden when remote; opens the connect flyout.
                 VerticalLayout {
@@ -700,7 +754,12 @@ export component PlayerBar inherits Rectangle {
                                 ContextMenuItem {
                                     icon: @image-url("../assets/icons/layout-grid.svg");
                                     label: @tr("Large");
-                                    enabled: false;
+                                    selected: ShellState.npb-mode == 3;
+                                    // Always selectable: Large docks the cover +
+                                    // spectrum in the open sidebar, and the Rust
+                                    // "large" arm forces the sidebar open, so it
+                                    // works from any current sidebar state.
+                                    enabled: true;
                                     clicked => {
                                         root.media-action("npb-view", "", "large");
                                     }
@@ -771,7 +830,11 @@ export component PlayerBar inherits Rectangle {
                     alignment: center;
                     opacity: root.vol-locked ? 0.4 : 1.0;
                     QbzSlider {
-                        width: 90px;
+                        // -10% width (owner: tighten the horizontal volume in all
+                        // NPB modes to free a little room). Shared by New/Classic/
+                        // Large (this slider is outside any npb-mode conditional).
+                        // 90 -> 81.
+                        width: 81px;
                         minimum: 0;
                         maximum: 100;
                         value: NowPlayingState.volume * 100;

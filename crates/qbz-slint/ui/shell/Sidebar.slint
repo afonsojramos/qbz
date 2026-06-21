@@ -11,6 +11,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Spacing } from "../foundation/spacing.slint";
+import { Layout } from "../foundation/layout.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SidebarPlaylistCollage } from "../primitives/SidebarPlaylistCollage.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
@@ -640,7 +641,14 @@ export component Sidebar inherits Rectangle {
     animate width { duration: 160ms; easing: ease-in-out; }
 
     VerticalLayout {
-        padding: ShellState.sidebar-mini ? 8px : Spacing.md;
+        // Per-side padding so Large can zero ONLY the bottom: the reserved dock
+        // band (and the AppShell overlay aligned to it) then reaches the true
+        // window bottom-left, letting the cover sit flush (the L corner). L/R/top
+        // stay exactly as before, so the cover keeps equal left/right gutters.
+        padding-left: ShellState.sidebar-mini ? 8px : Spacing.md;
+        padding-right: ShellState.sidebar-mini ? 8px : Spacing.md;
+        padding-top: ShellState.sidebar-mini ? 8px : Spacing.md;
+        padding-bottom: ShellState.large-active ? 0px : (ShellState.sidebar-mini ? 8px : Spacing.md);
         spacing: Spacing.md;
 
         // ---- Section nav — each row opens its dropdown as a right flyout,
@@ -1008,6 +1016,23 @@ export component Sidebar inherits Rectangle {
         // Keep the layout stretching even while collapsed.
         if SidebarState.playlists-collapsed: Rectangle {
             vertical-stretch: 1;
+        }
+
+        // ---- Large-NPB dock space reservation -----------------------------
+        // The cover + spectrum dock is now an AppShell-ROOT overlay pinned flush
+        // to the window bottom-left (so the cover reaches the true window edge,
+        // past where the bar starts — the L's vertical arm). Here we only RESERVE
+        // its vertical band so the playlist Flickable above (vertical-stretch:1)
+        // shrinks and never renders beneath it. When the visualizer toggles off,
+        // `large-dock-height` shrinks and the list reclaims the freed space.
+        //
+        // IMPORTANT: the dock overlay extends `player-bar-height` BELOW the
+        // sidebar row (its cover sits over the bar's bottom-left corner — the L).
+        // So only the IN-SIDEBAR portion (large-dock-height - bar height) must be
+        // reserved here; reserving the full height would leave a phantom gap above
+        // the spectrum once the playlist list fills.
+        if ShellState.large-active: Rectangle {
+            height: ShellState.large-dock-height - Layout.player-bar-height;
         }
     }
     // The drag-to-resize handle was removed: the sidebar is now a fixed
