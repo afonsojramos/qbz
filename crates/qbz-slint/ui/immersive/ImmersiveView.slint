@@ -824,6 +824,11 @@ component ImmersiveSearchPlaceholder inherits Rectangle {
             vertical-alignment: center;
             horizontal-alignment: center;
             single-line: true;
+            // Two-way bound to a DEDICATED raw-text property so the controller can
+            // clear the field after a result is activated (consistency with the
+            // main cortinilla). Separate from the trimmed `search-query`. Typing
+            // still flows through `edited`.
+            text <=> ImmersiveState.search-input-text;
             accepted => { search-scope.on-enter(); }
             edited => { ImmersiveSearchActions.live(self.text); }
             // On focus-IN: route focus to the wrapping scope (so its key-pressed

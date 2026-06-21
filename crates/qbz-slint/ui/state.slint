@@ -3380,7 +3380,14 @@ export global ImmersiveState {
     // search-open is true the HUD must NOT auto-hide. See the immersive-search
     // design spec (qbz-nix-docs/specs/2026-06-20-immersive-search-design.md).
     in-out property <bool> search-open: false;
+    // The TRIMMED query the cortinilla reflects (controller-set, display only).
     in property <string> search-query;
+    // The raw immersive search TextInput text, two-way bound to the field (in-out)
+    // so the controller can CLEAR it after the user activates a result —
+    // consistency with the main header cortinilla. Kept SEPARATE from the trimmed
+    // `search-query` so the controller writing the trimmed value never fights the
+    // user's in-progress text (e.g. trailing spaces).
+    in-out property <string> search-input-text: "";
     in property <bool> search-loading: false;
     in property <[CortinillaSection]> search-sections: [];
     in-out property <int> search-selected-index: -1;
@@ -4127,6 +4134,13 @@ export global SearchState {
     // Active searchType filter, as a dropdown index (0 = no filter).
     // The controller owns the index -> API-value mapping.
     in property <int> filter-index: 0;
+
+    // The live header search-box text, two-way bound to the TextInput in
+    // HeaderBar. Owned here (not internal to the TextInput) so the controller
+    // can CLEAR it after the user activates a cortinilla element (row click /
+    // "View more" / Enter) — lingering text would otherwise re-invoke the
+    // dropdown when focus bounces back to the field after any UI interaction.
+    in-out property <string> header-search-text: "";
 
     // ---- Cortinilla (live as-you-type dropdown under the header search) ----
     // Whether the cortinilla overlay is currently shown. The overlay is a

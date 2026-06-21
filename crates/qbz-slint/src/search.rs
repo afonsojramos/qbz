@@ -560,8 +560,8 @@ pub fn map_search_all_to_cortinilla(
         .or_else(|| albums.first().cloned());
 
     // Assemble sections in display order (spec §6.2.3): Albums, Artists,
-    // Tracks, Playlists. The local "On this device" section is appended LAST,
-    // outside this function (see `append_local_section`).
+    // Tracks, Playlists. The local "on this device" sections are appended LAST,
+    // outside this function (see `append_local_sections`).
     let mut sections: Vec<CortSection> = Vec::new();
     let mut push_section = |title: &str, kind: &str, rows: Vec<CortRow>, total: u32| {
         if !rows.is_empty() {
@@ -684,8 +684,139 @@ pub fn map_search_all_to_immersive(query: &str, results: &SearchAllResults) -> C
     data
 }
 
-/// How many on-disk rows the local cortinilla section shows before "View more".
-const CORTINILLA_LOCAL_PER_SECTION: usize = 3;
+/// Per-section caps for the LOCAL cortinilla sections. Two profiles: the NORMAL
+/// (online + signed-in) profile keeps the on-device block compact since the
+/// Qobuz catalog dominates the dropdown; the EXPANDED profile (offline OR not
+/// signed in, so the cortinilla is local-only) turns it into a small on-device
+/// browser with more rows per section.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalCaps {
+    pub albums: usize,
+    pub artists: usize,
+    pub tracks: usize,
+}
+
+impl LocalCaps {
+    /// Normal profile (Qobuz present): compact on-device block.
+    const NORMAL: LocalCaps = LocalCaps {
+        albums: 3,
+        artists: 2,
+        tracks: 3,
+    };
+    /// Expanded profile (offline / not signed in → local-only dropdown).
+    const EXPANDED: LocalCaps = LocalCaps {
+        albums: 8,
+        artists: 4,
+        tracks: 8,
+    };
+
+    /// Pick the profile for the current session state. `expand` is true when the
+    /// session is offline OR unauthenticated (the cortinilla has no Qobuz half).
+    pub fn for_session(expand: bool) -> LocalCaps {
+        if expand {
+            Self::EXPANDED
+        } else {
+            Self::NORMAL
+        }
+    }
+
+    /// How many raw local TRACK rows to fetch so the grouped album/artist
+    /// sections can be filled. Albums/artists are derived by grouping tracks, so
+    /// a single album can swallow many rows — over-fetch well beyond the shown
+    /// caps to surface enough distinct groups.
+    fn fetch_limit(self) -> u64 {
+        ((self.albums.max(self.tracks) * 12) + 40) as u64
+    }
+}
+
+/// The artwork key for a local/Plex cortinilla row: the RAW path, so the search
+/// artwork dispatcher (`artwork::spawn_search_loads`) can route it by scheme —
+/// `/library/…` & `/photo/…` → PlexThumb, http(s) → Qobuz CDN, anything else
+/// (an absolute filesystem path) → `LocalFile` (decoded with `fs::read`, so NO
+/// `file://` prefix). A stray `file://` is stripped for the same reason.
+fn local_artwork_url(path: Option<&str>) -> String {
+    path.map(|p| p.strip_prefix("file://").unwrap_or(p).to_string())
+        .unwrap_or_default()
+}
+
+/// The canonical "artist" attributed to a local track for grouping: the
+/// album-artist tag when present, else the track performer. Mirrors the album-
+/// grouping helper in `local_library` so cortinilla artists line up with the
+/// LocalLibrary Artists tab (which `open_local_artist` selects by NAME).
+fn local_album_artist(t: &qbz_library::LocalTrack) -> String {
+    t.album_artist
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| t.artist.clone())
+}
+
+/// Group local TRACK rows into local ALBUM cortinilla rows (`source = "local"`,
+/// `kind = "album"`). Grouped by `album_group_key` in first-seen order (the DB
+/// returns rows by match relevance). `id` is the group key — the click router
+/// opens the LocalAlbum view with it (`navigate_local_album`). Returns the
+/// capped rows plus whether more distinct albums existed than shown.
+fn derive_local_album_rows(rows: &[qbz_library::LocalTrack], cap: usize) -> (Vec<CortRow>, bool) {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<CortRow> = Vec::new();
+    let mut total = 0usize;
+    for t in rows {
+        let key = t.album_group_key.clone();
+        if key.is_empty() || !seen.insert(key.clone()) {
+            continue;
+        }
+        total += 1;
+        if out.len() >= cap {
+            continue; // keep counting for an honest has_more
+        }
+        let title = if t.album_group_title.is_empty() {
+            t.album.clone()
+        } else {
+            t.album_group_title.clone()
+        };
+        out.push(CortRow {
+            kind: "album".into(),
+            id: key,
+            source: "local".into(),
+            title,
+            subtitle: local_album_artist(t),
+            artwork_url: local_artwork_url(t.artwork_path.as_deref()),
+            flat_index: 0,
+        });
+    }
+    let has_more = total > out.len();
+    (out, has_more)
+}
+
+/// Group local TRACK rows into local ARTIST cortinilla rows (`source = "local"`,
+/// `kind = "artist"`). Grouped by the canonical album-artist, case-insensitively,
+/// in first-seen order. Local artists have no id — the click router opens the
+/// LocalLibrary Artists tab by NAME (the row `title`), so `id` is left empty.
+fn derive_local_artist_rows(rows: &[qbz_library::LocalTrack], cap: usize) -> (Vec<CortRow>, bool) {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<CortRow> = Vec::new();
+    let mut total = 0usize;
+    for t in rows {
+        let name = local_album_artist(t);
+        if name.is_empty() || !seen.insert(name.to_lowercase()) {
+            continue;
+        }
+        total += 1;
+        if out.len() >= cap {
+            continue;
+        }
+        out.push(CortRow {
+            kind: "artist".into(),
+            id: String::new(),
+            source: "local".into(),
+            title: name,
+            subtitle: String::new(),
+            artwork_url: local_artwork_url(t.artwork_path.as_deref()),
+            flat_index: 0,
+        });
+    }
+    let has_more = total > out.len();
+    (out, has_more)
+}
 
 /// Map one `LocalTrack` to a cortinilla `CortRow` tagged `source = "local"`.
 ///
@@ -701,17 +832,7 @@ const CORTINILLA_LOCAL_PER_SECTION: usize = 3;
 /// local-library DB query returns user files / offline copies only, never the
 /// Plex cache).
 fn map_local_track_to_cort_row(t: &qbz_library::LocalTrack) -> CortRow {
-    let artwork_url = t
-        .artwork_path
-        .as_ref()
-        .map(|p| {
-            if p.starts_with("file://") {
-                p.clone()
-            } else {
-                format!("file://{p}")
-            }
-        })
-        .unwrap_or_default();
+    let artwork_url = local_artwork_url(t.artwork_path.as_deref());
     // Subtitle: "artist · album" when both are present, else whichever exists.
     let subtitle = match (t.artist.is_empty(), t.album.is_empty()) {
         (false, false) => format!("{} · {}", t.artist, t.album),
@@ -730,45 +851,105 @@ fn map_local_track_to_cort_row(t: &qbz_library::LocalTrack) -> CortRow {
     }
 }
 
-/// Append the "On this device" local section to a cortinilla payload (placed
-/// LAST, after every Qobuz category, per D1/D2 — local results live ONLY in the
-/// cortinilla, and the on-device block sits below the catalog matches). `rows`
-/// is the FULL local result set (the load path fetches up to 6); this caps the
-/// shown rows at [`CORTINILLA_LOCAL_PER_SECTION`] and sets `has_more` when more
-/// were found. No-op when `rows` is empty (no empty section). Re-runs
-/// `assign_flat_indices` so the local rows get contiguous flat indices AFTER
-/// the Qobuz sections.
-pub fn append_local_section(data: &mut CortinillaData, rows: &[qbz_library::LocalTrack]) {
+/// Append the local "on this device" sections to a MAIN cortinilla payload,
+/// placed LAST (after every Qobuz category, per D1/D2 — local results live ONLY
+/// in the cortinilla). Three sections in display order: **Albums**, **Artists**,
+/// **Tracks** (mirrors the Qobuz section order), each capped per [`LocalCaps`].
+/// Albums/artists are DERIVED by grouping the local track rows. Section `kind`s
+/// are `local-album` / `local-artist` / `local` so the "View more" router opens
+/// the matching LocalLibrary tab; per-row `kind` stays album/artist/track so the
+/// thumbnail shape + the row click router route correctly. No-op when `rows` is
+/// empty. Re-runs `assign_flat_indices` so the local rows get contiguous flat
+/// indices AFTER the Qobuz sections.
+pub fn append_local_sections(
+    data: &mut CortinillaData,
+    rows: &[qbz_library::LocalTrack],
+    caps: LocalCaps,
+) {
     if rows.is_empty() {
         return;
     }
-    let total = rows.len();
-    let cort_rows: Vec<CortRow> = rows
+    let (album_rows, albums_more) = derive_local_album_rows(rows, caps.albums);
+    if !album_rows.is_empty() {
+        data.sections.push(CortSection {
+            title: "Albums on Local Library".to_string(),
+            kind: "local-album".to_string(),
+            rows: album_rows,
+            has_more: albums_more,
+        });
+    }
+    let (artist_rows, artists_more) = derive_local_artist_rows(rows, caps.artists);
+    if !artist_rows.is_empty() {
+        data.sections.push(CortSection {
+            title: "Artists on Local Library".to_string(),
+            kind: "local-artist".to_string(),
+            rows: artist_rows,
+            has_more: artists_more,
+        });
+    }
+    let track_rows: Vec<CortRow> = rows
         .iter()
-        .take(CORTINILLA_LOCAL_PER_SECTION)
+        .take(caps.tracks)
         .map(map_local_track_to_cort_row)
         .collect();
-    let shown = cort_rows.len();
+    if !track_rows.is_empty() {
+        let shown = track_rows.len();
+        data.sections.push(CortSection {
+            title: "On Local Library".to_string(),
+            kind: "local".to_string(),
+            rows: track_rows,
+            has_more: rows.len() > shown,
+        });
+    }
+    assign_flat_indices(data);
+}
+
+/// Append the local ALBUM section to an IMMERSIVE cortinilla payload (immersive
+/// shows albums ONLY — selecting one queues it per the configured action). Rows
+/// are derived local albums tagged `kind = "album"` / `source = "local"`,
+/// `kind`-tagged section `local-album`. No "View more" in immersive, so the
+/// `has_more` flag is carried but unused by the UI. No-op when `rows` is empty.
+fn append_immersive_local_albums(
+    data: &mut CortinillaData,
+    rows: &[qbz_library::LocalTrack],
+    cap: usize,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let (album_rows, has_more) = derive_local_album_rows(rows, cap);
+    if album_rows.is_empty() {
+        return;
+    }
     data.sections.push(CortSection {
-        title: "On this device".to_string(),
-        kind: "local".to_string(),
-        rows: cort_rows,
-        has_more: total > shown,
+        title: "Albums on Local Library".to_string(),
+        kind: "local-album".to_string(),
+        rows: album_rows,
+        has_more,
     });
     assign_flat_indices(data);
 }
 
-/// Fetch up to [`CORTINILLA_LOCAL_LIMIT`] local-library tracks matching `query`,
-/// off the UI thread (the rusqlite read is sync + blocking, so it runs inside
-/// `spawn_blocking`). Returns an empty Vec when the module is disabled, the
-/// library is empty, or no row matches — the caller then simply adds no section.
+/// Fetch up to `limit` local-library tracks matching `query`, off the UI thread
+/// (the rusqlite read is sync + blocking, so it runs inside `spawn_blocking`).
+/// Returns an empty Vec when the module is gated off, the library is empty, or no
+/// row matches — the caller then simply adds no local section. `gated` makes the
+/// fetch respect the intelligent-search toggle (main cortinilla); the immersive
+/// search passes `false` since it has its own enable.
 ///
 /// Independent of the Qobuz search: callers `tokio::join!` this with
 /// `core.search_all`, so an offline / slow Qobuz never blocks the on-device
 /// results (and vice-versa).
-pub async fn load_cortinilla_local(query: &str) -> Vec<qbz_library::LocalTrack> {
-    // Gate: only touch the DB when the intelligent-search module is enabled.
-    if !crate::search_service::is_enabled() {
+pub async fn load_cortinilla_local(
+    query: &str,
+    limit: u64,
+    gated: bool,
+) -> Vec<qbz_library::LocalTrack> {
+    // Gate: the MAIN cortinilla only touches the DB when the intelligent-search
+    // module is enabled (`gated = true`). The immersive search is governed by its
+    // own "search action" enable instead, so it passes `gated = false`.
+    if gated && !crate::search_service::is_enabled() {
+        log::info!("[qbz-slint] cortinilla local: gated off (intelligent-search disabled)");
         return Vec::new();
     }
     let q = query.trim().to_string();
@@ -776,19 +957,42 @@ pub async fn load_cortinilla_local(query: &str) -> Vec<qbz_library::LocalTrack> 
         return Vec::new();
     }
     let exclude_network = crate::local_library::exclude_network_folders_now();
-    tokio::task::spawn_blocking(move || {
-        crate::library_db::with_db(|db| {
-            db.search_with_filter_page(q.trim(), 0, CORTINILLA_LOCAL_LIMIT, true, exclude_network)
+    // Plex is part of the user's Local Library (the Artists/Tracks tabs union it),
+    // so the cortinilla must include it too. `db.search` only hits `local_tracks`;
+    // the Plex cache is a separate bounded set merged here (same shape as the
+    // LocalLibrary Tracks tab, see local_library::fetch_tracks_page).
+    let plex_enabled = crate::plex_settings::get().enabled;
+    let q_log = q.clone();
+    let rows: Vec<qbz_library::LocalTrack> = tokio::task::spawn_blocking(move || {
+        let mut rows = crate::library_db::with_db(|db| {
+            db.search_with_filter_page(q.trim(), 0, limit, true, exclude_network)
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+        if plex_enabled {
+            if let Ok(plex_rows) =
+                qbz_plex::plex_cache_search_tracks(q.trim().to_string(), None)
+            {
+                // Map Plex rows into the LocalTrack shape (source=plex, file_path=
+                // rating_key, plex:album: group keys) and PREPEND so Plex content
+                // is visible without scrolling past a full local page.
+                let mut merged: Vec<qbz_library::LocalTrack> = plex_rows
+                    .into_iter()
+                    .map(crate::local_library::map_plex_cached_to_local_track)
+                    .collect();
+                merged.append(&mut rows);
+                rows = merged;
+            }
+        }
+        rows
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_default();
+    log::debug!(
+        "[qbz-slint] cortinilla local: query={q_log:?} limit={limit} plex={plex_enabled} -> {} rows",
+        rows.len()
+    );
+    rows
 }
-
-/// How many local rows the cortinilla fetches (a small over-fetch beyond the 3
-/// shown so `has_more` is accurate and the "View more" affordance is honest).
-const CORTINILLA_LOCAL_LIMIT: u64 = 6;
 
 /// (Re)assign `flat_index` across a cortinilla payload: top-result = 0, then
 /// each section's rows in declaration order, 1..N. Called after the local
@@ -848,6 +1052,7 @@ where
 pub async fn load_cortinilla<A>(
     runtime: &Arc<AppRuntime<A>>,
     query: &str,
+    expand_local: bool,
 ) -> Result<(CortinillaData, Vec<qbz_library::LocalTrack>), String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
@@ -857,13 +1062,18 @@ where
     } else {
         std::collections::HashSet::new()
     };
+    // Offline / not-signed-in → the dropdown is local-only, so widen the local
+    // section caps (and the raw fetch that feeds the derived album/artist groups).
+    let caps = LocalCaps::for_session(expand_local);
     let core = runtime.core();
     // Fire the Qobuz search and the local-library search CONCURRENTLY. The local
     // query is independent — if Qobuz is slow/offline the on-device rows still
     // fill in (a Qobuz error falls into the local-only branch below instead of
     // discarding everything; the local rows are already resolved by then).
-    let (results, local_rows) =
-        tokio::join!(core.search_all(query, &blacklist), load_cortinilla_local(query));
+    let (results, local_rows) = tokio::join!(
+        core.search_all(query, &blacklist),
+        load_cortinilla_local(query, caps.fetch_limit(), true)
+    );
     let mut data = match results {
         Ok(results) => {
             // Persist the live page so a later keystroke (or restart) can paint
@@ -885,9 +1095,10 @@ where
             }
         }
     };
-    // Append the "On this device" section LAST (after every Qobuz category) and
-    // re-run flat-index assignment so the local rows get contiguous indices.
-    append_local_section(&mut data, &local_rows);
+    // Append the local "on this device" sections LAST (after every Qobuz
+    // category) and re-run flat-index assignment so the local rows get
+    // contiguous indices.
+    append_local_sections(&mut data, &local_rows, caps);
     Ok((data, local_rows))
 }
 
@@ -901,6 +1112,7 @@ where
 pub async fn load_immersive_search<A>(
     runtime: &Arc<AppRuntime<A>>,
     query: &str,
+    expand_local: bool,
 ) -> Result<CortinillaData, String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
@@ -910,12 +1122,31 @@ where
     } else {
         std::collections::HashSet::new()
     };
+    let caps = LocalCaps::for_session(expand_local);
     let core = runtime.core();
-    let results = core
-        .search_all(query, &blacklist)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(map_search_all_to_immersive(query, &results))
+    // Qobuz catalog + local albums CONCURRENTLY. Local is ungated (immersive
+    // search has its own "search action" enable, independent of the main
+    // cortinilla's intelligent-search toggle).
+    let (results, local_rows) = tokio::join!(
+        core.search_all(query, &blacklist),
+        load_cortinilla_local(query, caps.fetch_limit(), false)
+    );
+    // A Qobuz error (offline / not signed in) still yields a local-only dropdown
+    // rather than discarding everything — the local albums are already resolved.
+    let mut data = match results {
+        Ok(results) => map_search_all_to_immersive(query, &results),
+        Err(e) => {
+            log::debug!("[qbz-slint] immersive search: qobuz failed ({e}); local-only");
+            CortinillaData {
+                query: query.to_string(),
+                top: None,
+                sections: Vec::new(),
+            }
+        }
+    };
+    // Immersive shows albums ONLY; selecting one queues it per the action.
+    append_immersive_local_albums(&mut data, &local_rows, caps.albums);
+    Ok(data)
 }
 
 // ==================== Apply (Slint event loop) ====================

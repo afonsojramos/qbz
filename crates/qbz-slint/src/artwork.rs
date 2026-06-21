@@ -417,6 +417,62 @@ pub fn spawn_local_or_plex_loads(
     }
 }
 
+/// Artwork dispatch for the SEARCH cortinilla, whose rows mix three sources in a
+/// single payload: Qobuz catalog covers (http(s) URLs), Local Library covers
+/// (absolute filesystem paths) and Plex covers (`/library/…` / `/photo/…` thumb
+/// paths). Each job is routed by its url's shape — http → the HTTP cache path
+/// (gated offline, like Qobuz CDN covers); a Plex thumb → `PlexThumb` (tokenized
+/// LAN fetch, NOT gated by induced offline); anything else → `LocalFile`
+/// (`fs::read`). Plex creds empty / absent → Plex thumbs fall back to a local
+/// read (which fails soft to the placeholder).
+pub fn spawn_search_loads(
+    jobs: Vec<ArtworkJob>,
+    plex_base_url: String,
+    plex_token: String,
+    window: slint::Weak<AppWindow>,
+    cache: ImageCache,
+) {
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT));
+    let plex_base_url = Arc::new(plex_base_url);
+    let plex_token = Arc::new(plex_token);
+    for job in jobs {
+        let semaphore = semaphore.clone();
+        let window = window.clone();
+        let cache = cache.clone();
+        let plex_base_url = plex_base_url.clone();
+        let plex_token = plex_token.clone();
+        tokio::spawn(async move {
+            let _permit = semaphore.acquire().await.ok()?;
+            let decode_size = job.target.decode_size();
+            let is_http =
+                job.url.starts_with("http://") || job.url.starts_with("https://");
+            let is_plex_path =
+                job.url.starts_with("/library/") || job.url.starts_with("/photo/");
+            let (pixels, width, height) = if is_http {
+                // Qobuz CDN cover (internet) — offline-gated inside fetch_and_decode.
+                fetch_and_decode(&job.url, &cache, decode_size).await?
+            } else if is_plex_path && !plex_base_url.is_empty() && !plex_token.is_empty() {
+                let art = ArtworkRef::PlexThumb {
+                    base_url: (*plex_base_url).clone(),
+                    token: (*plex_token).clone(),
+                    path: job.url.clone(),
+                    size: Some(decode_size),
+                };
+                fetch_and_decode_ref(&art, &cache, decode_size).await?
+            } else {
+                let art = ArtworkRef::LocalFile(job.url.clone());
+                fetch_and_decode_ref(&art, &cache, decode_size).await?
+            };
+            let target = job.target;
+            let url = job.url;
+            let _ = window.upgrade_in_event_loop(move |w| {
+                apply_artwork(&w, target, &url, &pixels, width, height);
+            });
+            Some(())
+        });
+    }
+}
+
 /// Resolve a remote URL to raw bytes via the shared disk cache: a hit reads
 /// from disk, a miss downloads and stores. HTTP(S) only.
 ///

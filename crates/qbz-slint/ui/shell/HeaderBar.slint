@@ -632,6 +632,10 @@ export component HeaderBar inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-alignment: center;
                 single-line: true;
+                // Two-way bound so the controller can clear the field after a
+                // cortinilla element is activated (stops the focus-bounce
+                // re-invocation). Typing still flows through `edited` below.
+                text <=> SearchState.header-search-text;
                 // Enter is handled by the FocusScope (cortinilla-aware); keep
                 // `accepted` as a fallback for the rare case the input owns the
                 // event directly (e.g. focus routed straight to it).

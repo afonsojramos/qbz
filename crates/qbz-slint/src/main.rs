@@ -5052,7 +5052,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // The results-page debounce below is untouched; the cortinilla is a
             // separate, additive surface gated on the kill switch.
             if crate::search_service::is_enabled() {
-                if let Some(w) = weak.upgrade() {
+                let expand_local = if let Some(w) = weak.upgrade() {
                     let st = w.global::<SearchState>();
                     // Always reset the keyboard selection + scroll on (re)open or
                     // refine — never leave a stale "active row" from a prior
@@ -5062,7 +5062,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     st.set_cortinilla_open(true);
                     st.set_cortinilla_query(q.clone().into());
                     st.set_cortinilla_loading(true);
-                }
+                    // Offline OR an unauthenticated (offline) session → the Qobuz
+                    // half is empty, so the dropdown is local-only; widen the
+                    // on-device section caps.
+                    let off = w.global::<OfflineState>();
+                    off.get_offline() || off.get_offline_session()
+                } else {
+                    false
+                };
                 let cort_version = search::next_cortinilla_version();
 
                 // No cached instant-paint. The cached -> fresh swap (plus the
@@ -5089,7 +5096,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let image_cache = image_cache.clone();
                                 let q = q.clone();
                                 handle.spawn(async move {
-                                    match search::load_cortinilla(&runtime, &q).await {
+                                    match search::load_cortinilla(&runtime, &q, expand_local).await {
                                         Ok((data, local_rows)) => {
                                             let jobs = search::cortinilla_artwork_jobs(&data);
                                             let _ = weak.clone().upgrade_in_event_loop(move |w| {
@@ -5102,7 +5109,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     search::apply_cortinilla(&w, data);
                                                 }
                                             });
-                                            artwork::spawn_loads(jobs, weak.clone(), image_cache);
+                                            // Mixed payload (Qobuz http / local fs / Plex
+                                            // /library/) — route each cover by scheme.
+                                            let plex = crate::plex_settings::get();
+                                            artwork::spawn_search_loads(
+                                                jobs,
+                                                plex.base_url,
+                                                plex.token,
+                                                weak.clone(),
+                                                image_cache,
+                                            );
                                         }
                                         Err(e) => {
                                             log::error!("[qbz-slint] cortinilla load failed: {e}");
@@ -5389,6 +5405,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let st = w.global::<SearchState>();
                 st.set_cortinilla_open(false);
+                // Activating the cortinilla's Enter affordance clears the input
+                // too (consistent with row-click / View-more), so it can't
+                // re-invoke the dropdown over the results page.
+                st.set_header_search_text("".into());
                 // Enter always lands on Search > All, never a per-type tab.
                 st.set_tab(0);
                 SEARCH_DEBOUNCE.with(|t| t.stop());
@@ -5421,14 +5441,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if q.chars().count() < 2 {
                     return;
                 }
-                w.global::<SearchState>().set_cortinilla_open(false);
+                {
+                    let st = w.global::<SearchState>();
+                    st.set_cortinilla_open(false);
+                    // Clear the input so it can't re-invoke the dropdown later.
+                    st.set_header_search_text("".into());
+                }
                 SEARCH_DEBOUNCE.with(|t| t.stop());
 
                 // On-device "View more": leave the Qobuz results page entirely
-                // and open the LocalLibrary Tracks tab pre-filtered to the live
+                // and open the matching LocalLibrary tab pre-filtered to the live
                 // query (D1/D2: local results never live in the Qobuz results
-                // page). Set the tracks search, navigate to the Tracks tab, then
-                // reload so the filtered set renders.
+                // page). Albums / Artists / Tracks each route to their own tab,
+                // setting that tab's search filter then forcing a re-derive so the
+                // filtered set renders on both first-visit and re-entry.
+                if kind == "local-album" {
+                    w.global::<LocalLibraryState>().set_albums_search(q.clone().into());
+                    nav::record(nav::NavEntry::LocalLibrary {
+                        tab: local_library::LibTab::Albums.tab_id().to_string(),
+                    });
+                    navigate_local_library(
+                        runtime.clone(),
+                        weak.clone(),
+                        &handle,
+                        image_cache.clone(),
+                        local_library::LibTab::Albums,
+                    );
+                    // Force a reload so the freshly-set search filter applies even
+                    // when the Albums tab was already loaded (re-entry).
+                    local_library::reload_albums(weak.clone(), handle.clone(), image_cache.clone());
+                    update_nav_flags(&w);
+                    return;
+                }
+                if kind == "local-artist" {
+                    w.global::<LocalLibraryState>().set_artists_search(q.clone().into());
+                    nav::record(nav::NavEntry::LocalLibrary {
+                        tab: local_library::LibTab::Artists.tab_id().to_string(),
+                    });
+                    navigate_local_library(
+                        runtime.clone(),
+                        weak.clone(),
+                        &handle,
+                        image_cache.clone(),
+                        local_library::LibTab::Artists,
+                    );
+                    // Re-derive in place so the filter applies on re-entry (the
+                    // async first-load re-derives with the same filter on its own).
+                    local_library::derive_artists(&w);
+                    update_nav_flags(&w);
+                    return;
+                }
                 if kind == "local" {
                     w.global::<LocalLibraryState>().set_tracks_search(q.clone().into());
                     nav::record(nav::NavEntry::LocalLibrary {
@@ -5503,8 +5565,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .get_cortinilla_query()
                     .to_string();
 
-                // Dismiss the dropdown before acting.
-                w.global::<SearchState>().set_cortinilla_open(false);
+                // Dismiss the dropdown before acting AND clear the header input —
+                // once the user activates a row, leftover text would otherwise
+                // re-invoke the cortinilla when focus bounces back to the field.
+                {
+                    let st = w.global::<SearchState>();
+                    st.set_cortinilla_open(false);
+                    st.set_header_search_text("".into());
+                }
 
                 // Feed Capa B: a clicked QOBUZ row is an interaction with the
                 // search-surfaced entity. action = Play for tracks (they play on
@@ -5522,25 +5590,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if row.source == "local" {
-                    // On-device row: play through the LOCAL seam, not the Qobuz
-                    // media-action. Resolve the clicked `LocalTrack` (+ its
-                    // sibling on-device rows, so the queue continues down the
-                    // list) from the per-query snapshot, then start at the
-                    // clicked one. `row.id` is the library row id.
-                    let tracks = LAST_CORTINILLA_LOCAL.with(|c| c.borrow().clone());
-                    let start = tracks
-                        .iter()
-                        .position(|t| t.id.to_string() == row.id)
-                        .unwrap_or(0);
-                    if !tracks.is_empty() {
-                        playback::play_local_tracks(
-                            runtime.clone(),
-                            weak.clone(),
-                            handle.clone(),
-                            tracks,
-                            start,
-                            false,
-                        );
+                    // On-device rows route by kind (the "links go to LocalLibrary"
+                    // requirement): a local ALBUM opens the LocalAlbum view by its
+                    // group key; a local ARTIST opens the LocalLibrary Artists tab
+                    // by NAME (local artists have no id); a local TRACK plays
+                    // through the LOCAL seam.
+                    match row.kind.as_str() {
+                        "album" => {
+                            // `row.id` is the album_group_key (a local album key).
+                            let key = row.id.clone();
+                            nav::record(nav::NavEntry::LocalAlbum(key.clone()));
+                            navigate_local_album(
+                                runtime.clone(),
+                                weak.clone(),
+                                &handle,
+                                image_cache.clone(),
+                                key,
+                            );
+                            update_nav_flags(&w);
+                        }
+                        "artist" => {
+                            // Local artists are keyed by NAME (`row.title`).
+                            open_local_artist(
+                                &runtime,
+                                &weak,
+                                &handle,
+                                &image_cache,
+                                row.title.clone(),
+                            );
+                        }
+                        _ => {
+                            // Track: play this on-device row + its siblings (so the
+                            // queue continues down the list), starting at the
+                            // clicked one. `row.id` is the library row id.
+                            let tracks = LAST_CORTINILLA_LOCAL.with(|c| c.borrow().clone());
+                            let start = tracks
+                                .iter()
+                                .position(|t| t.id.to_string() == row.id)
+                                .unwrap_or(0);
+                            if !tracks.is_empty() {
+                                playback::play_local_tracks(
+                                    runtime.clone(),
+                                    weak.clone(),
+                                    handle.clone(),
+                                    tracks,
+                                    start,
+                                    false,
+                                );
+                            }
+                        }
                     }
                     return;
                 }
@@ -5724,6 +5822,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     im.set_search_selected_index(-1);
                     im.set_search_scroll_y(0.0);
                 }
+                // Offline OR an unauthenticated session → widen the on-device
+                // album cap (immersive shows local albums only).
+                let expand_local = {
+                    let off = w.global::<OfflineState>();
+                    off.get_offline() || off.get_offline_session()
+                };
                 let version = search::next_immersive_search_version();
 
                 let runtime = runtime.clone();
@@ -5741,7 +5845,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let image_cache = image_cache.clone();
                             let q = q.clone();
                             handle.spawn(async move {
-                                match search::load_immersive_search(&runtime, &q).await {
+                                match search::load_immersive_search(&runtime, &q, expand_local).await {
                                     Ok(data) => {
                                         let jobs =
                                             search::immersive_cortinilla_artwork_jobs(&data);
@@ -5753,7 +5857,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 search::apply_immersive_search(&w, &data);
                                             }
                                         });
-                                        artwork::spawn_loads(jobs, weak.clone(), image_cache);
+                                        // Mixed payload (Qobuz http / Plex /library/) —
+                                        // route each cover by scheme.
+                                        let plex = crate::plex_settings::get();
+                                        artwork::spawn_search_loads(
+                                            jobs,
+                                            plex.base_url,
+                                            plex.token,
+                                            weak.clone(),
+                                            image_cache,
+                                        );
                                     }
                                     Err(e) => {
                                         log::error!(
@@ -5891,9 +6004,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
                 let Some(row) = row else { return };
 
-                // Close the dropdown (STAY in immersive — no navigation). The
-                // query is kept so the field still reflects what was searched.
-                w.global::<ImmersiveState>().set_search_open(false);
+                // Close the dropdown (STAY in immersive — no navigation) AND clear
+                // the field, mirroring the main cortinilla: once a result is
+                // activated, a lingering query would re-invoke the dropdown when
+                // focus returns to the field.
+                {
+                    let im = w.global::<ImmersiveState>();
+                    im.set_search_open(false);
+                    im.set_search_input_text("".into());
+                }
 
                 // Read the configured action fresh (it can change in Settings
                 // while immersive is open). "disabled" is also gated upstream in
@@ -5903,6 +6022,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if action == "disabled" {
                     return;
                 }
+
+                // Local album rows queue the ON-DEVICE album per the action
+                // (immersive shows local albums only). Branch BEFORE the Qobuz
+                // (kind, action) match — `play_album`/`enqueue_album*` expect a
+                // numeric Qobuz id, but a local album's id is a group key.
+                if row.source == "local" {
+                    let group_key = row.id.clone();
+                    match action.as_str() {
+                        "replace" => playback::play_local_album(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            group_key,
+                            None,
+                        ),
+                        next_or_queue @ ("next" | "queue") => {
+                            // Fetch the album's local tracks off-thread (covers
+                            // filled like play_local_album), then enqueue: "next"
+                            // inserts after the current track, "queue" appends.
+                            let next = next_or_queue == "next";
+                            let runtime = runtime.clone();
+                            let handle = handle.clone();
+                            handle.clone().spawn(async move {
+                                let tracks = tokio::task::spawn_blocking(move || {
+                                    let mut t = crate::local_library::fetch_album_tracks_blocking(
+                                        &group_key,
+                                    );
+                                    playback::fill_missing_covers(&mut t);
+                                    t
+                                })
+                                .await
+                                .unwrap_or_default();
+                                if !tracks.is_empty() {
+                                    playback::enqueue_local_tracks(runtime, handle, tracks, next);
+                                }
+                            });
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+
                 let id = row.id.clone();
                 match (row.kind.as_str(), action.as_str()) {
                     // ---- Replace the queue and play (the play_* seams) -------
