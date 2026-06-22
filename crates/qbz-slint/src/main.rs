@@ -19,6 +19,8 @@ mod album;
 mod album_map;
 mod artist;
 mod artist_blacklist;
+mod artist_prefs;
+mod artist_releases;
 mod artwork;
 mod auth;
 mod award;
@@ -1082,11 +1084,27 @@ fn navigate_album(
         match album::load_album(&runtime, &album_id).await {
             Ok(data) => {
                 let artwork_url = data.artwork_url.clone();
+                // A user-set custom cover (keyed by album id) wins and is the
+                // only image source for albums with no Qobuz cover. Same bug
+                // class as the artist portrait fix.
+                let custom_cover_path = crate::custom_artwork::album_cover(&album_id);
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     album::apply_album(&w, data);
                     w.global::<AlbumState>().set_loading(false);
                 });
-                if !artwork_url.is_empty() {
+                if let Some(path) = custom_cover_path {
+                    if let Some((pixels, width, height)) = artwork::fetch_and_decode_ref(
+                        &qbz_models::ArtworkRef::LocalFile(path),
+                        &image_cache,
+                        448,
+                    )
+                    .await
+                    {
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            album::apply_artwork(&w, &pixels, width, height);
+                        });
+                    }
+                } else if !artwork_url.is_empty() {
                     if let Some((pixels, width, height)) =
                         artwork::fetch_and_decode(&artwork_url, &image_cache, 448).await
                     {
@@ -1167,6 +1185,10 @@ fn navigate_artist(
                 let artwork_url = data.artwork_url.clone();
                 let jobs = artist::artwork_jobs(&data);
                 let artist_name = data.name.clone();
+                // Resolve a user-set custom portrait (keyed by artist name)
+                // up front — it persists across navigation and is the ONLY
+                // image source for artists with no Qobuz portrait (Vicky).
+                let custom_image_path = crate::custom_artwork::artist_image(&artist_name);
                 let similar_names_for_discovery: Vec<String> = data
                     .similar_artists
                     .iter()
@@ -1177,6 +1199,22 @@ fn navigate_artist(
                     w.global::<ArtistState>().set_loading(false);
                 });
                 artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+
+                // Magazine / Stories — fetch the editorial teasers in
+                // parallel; the sidebar section stays hidden if there are none.
+                {
+                    let runtime_story = runtime.clone();
+                    let weak_story = weak.clone();
+                    let artist_id_story = artist_id.clone();
+                    let image_cache_story = image_cache.clone();
+                    tokio::spawn(async move {
+                        let stories = artist::load_stories(&runtime_story, &artist_id_story).await;
+                        let _ = weak_story.upgrade_in_event_loop(move |w| {
+                            let jobs = artist::apply_stories(&w, stories);
+                            artwork::spawn_loads(jobs, w.as_weak(), image_cache_story);
+                        });
+                    });
+                }
 
                 // Network sidebar — kick the MB enrichment off in
                 // parallel with artwork. Origin shows a loading state
@@ -1249,7 +1287,21 @@ fn navigate_artist(
                     }
                 });
 
-                if !artwork_url.is_empty() {
+                if let Some(path) = custom_image_path {
+                    // User-set custom portrait wins (and is the only source
+                    // for artists with no Qobuz image).
+                    if let Some((pixels, width, height)) = artwork::fetch_and_decode_ref(
+                        &qbz_models::ArtworkRef::LocalFile(path),
+                        &image_cache,
+                        440,
+                    )
+                    .await
+                    {
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            artist::apply_artwork(&w, &pixels, width, height);
+                        });
+                    }
+                } else if !artwork_url.is_empty() {
                     if let Some((pixels, width, height)) =
                         artwork::fetch_and_decode(&artwork_url, &image_cache, 440).await
                     {
@@ -1506,6 +1558,7 @@ fn scope_for(entry: &nav::NavEntry) -> String {
         nav::NavEntry::LabelReleases { .. } => "label-releases".into(),
         nav::NavEntry::Award { .. } => "award".into(),
         nav::NavEntry::AwardAlbums { .. } => "award-albums".into(),
+        nav::NavEntry::ArtistReleases { .. } => "artist-releases".into(),
         nav::NavEntry::Location { .. } => "location".into(),
     }
 }
@@ -1623,6 +1676,21 @@ fn apply_entry(
                 image_cache.clone(),
                 id,
                 name,
+            );
+        }
+        nav::NavEntry::ArtistReleases {
+            id,
+            name,
+            release_type,
+        } => {
+            navigate_artist_releases(
+                runtime.clone(),
+                weak.clone(),
+                handle,
+                image_cache.clone(),
+                id,
+                name,
+                release_type,
             );
         }
         nav::NavEntry::DiscoverBrowse { endpoint, title } => {
@@ -1835,6 +1903,46 @@ fn navigate_label_releases(
                 log::error!("[qbz-slint] label releases load failed: {e}");
                 let _ = weak.upgrade_in_event_loop(|w| {
                     w.global::<LabelState>().set_loading(false);
+                });
+            }
+        }
+    });
+}
+
+/// Open the dedicated discography page for one release bucket of an artist.
+/// Reuses `artist::load_release_page` (get_releases_grid) for the first page.
+fn navigate_artist_releases(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+    artist_id: String,
+    name: String,
+    release_type: String,
+) {
+    handle.spawn(async move {
+        let title = artist::release_type_title(&release_type);
+        let aid = artist_id.clone();
+        let nm = name.clone();
+        let rt = release_type.clone();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            artist_releases::reset(&w, &aid, &nm, &rt, &title);
+            w.global::<NavState>().set_view(ContentView::ArtistReleases);
+        });
+        match artist::load_release_page(&runtime, &artist_id, &release_type, 0).await {
+            Ok((cards, has_more)) => {
+                let image_cache = image_cache.clone();
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    let jobs = artist_releases::apply_page(&w, cards, has_more, true);
+                    artwork::spawn_loads(jobs, w.as_weak(), image_cache);
+                });
+            }
+            Err(e) => {
+                log::error!("[qbz-slint] artist releases load failed: {e}");
+                let _ = weak.upgrade_in_event_loop(|w| {
+                    let st = w.global::<ArtistReleasesState>();
+                    st.set_loading(false);
+                    st.set_load_error(true);
                 });
             }
         }
@@ -7403,6 +7511,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // mutation, revert + error-toast on failure. Synchronous
                 // on the event-loop thread, so there is no re-entrancy
                 // window (a second click can't interleave mid-toggle).
+                ("artist", "share") => {
+                    let artist_id = if id.is_empty() {
+                        weak.upgrade()
+                            .map(|w| w.global::<ArtistState>().get_id().to_string())
+                            .unwrap_or_default()
+                    } else {
+                        id.clone()
+                    };
+                    if !artist_id.is_empty() {
+                        share::copy_to_clipboard(share::qobuz_artist_url(&artist_id));
+                        if let Some(w) = weak.upgrade() {
+                            crate::toast::success(&w, "Link copied");
+                        }
+                    }
+                }
                 ("artist", "blacklist-toggle") => {
                     if let Some(w) = weak.upgrade() {
                         let st = w.global::<ArtistState>();
@@ -8918,6 +9041,190 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = weak.upgrade() {
                     artist::filter_artist(&w, query.as_str());
                 }
+            });
+    }
+
+    // Artist per-section sort (persisted by release_type).
+    {
+        let weak = window.as_weak();
+        window
+            .global::<ArtistActions>()
+            .on_set_section_sort(move |rt, sort| {
+                if let Some(w) = weak.upgrade() {
+                    artist::resort_section(&w, rt.as_str(), sort.as_str());
+                }
+            });
+    }
+
+    // Artist per-section load-more (capped to 4 pages; reuses get_releases_grid).
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<ArtistActions>()
+            .on_load_more_section(move |rt| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let release_type = rt.to_string();
+                if !artist::section_can_load_more(&release_type) {
+                    return;
+                }
+                let artist_id = w.global::<ArtistState>().get_id().to_string();
+                if artist_id.is_empty() {
+                    return;
+                }
+                let offset = artist::section_loaded_count(&w, &release_type) as u32;
+                let runtime = runtime.clone();
+                let weak2 = weak.clone();
+                let image_cache = image_cache.clone();
+                handle.spawn(async move {
+                    match artist::load_release_page(&runtime, &artist_id, &release_type, offset)
+                        .await
+                    {
+                        Ok((cards, has_more)) => {
+                            let image_cache = image_cache.clone();
+                            let rt2 = release_type.clone();
+                            let _ = weak2.upgrade_in_event_loop(move |w| {
+                                let jobs =
+                                    artist::append_release_page(&w, &rt2, cards, has_more);
+                                artwork::spawn_loads(jobs, w.as_weak(), image_cache);
+                            });
+                        }
+                        Err(e) => {
+                            log::warn!("[qbz-slint] load-more {release_type} failed: {e}")
+                        }
+                    }
+                });
+            });
+    }
+
+    // Artist "See discography" — open the dedicated releases page pre-filtered.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<ArtistActions>()
+            .on_open_releases(move |rt| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let artist_id = w.global::<ArtistState>().get_id().to_string();
+                let artist_name = w.global::<ArtistState>().get_name().to_string();
+                if artist_id.is_empty() {
+                    return;
+                }
+                let release_type = rt.to_string();
+                nav::record(nav::NavEntry::ArtistReleases {
+                    id: artist_id.clone(),
+                    name: artist_name.clone(),
+                    release_type: release_type.clone(),
+                });
+                navigate_artist_releases(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    artist_id,
+                    artist_name,
+                    release_type,
+                );
+                update_nav_flags(&w);
+            });
+    }
+
+    // Dedicated discography page — infinite load-more.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<ArtistReleasesActions>()
+            .on_load_more(move || {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let st = w.global::<ArtistReleasesState>();
+                if st.get_load_more_loading() || !st.get_has_more() {
+                    return;
+                }
+                let artist_id = st.get_id().to_string();
+                let release_type = st.get_release_type().to_string();
+                if artist_id.is_empty() {
+                    return;
+                }
+                let offset = artist_releases::loaded_count(&w);
+                st.set_load_more_loading(true);
+                let runtime = runtime.clone();
+                let weak2 = weak.clone();
+                let image_cache = image_cache.clone();
+                handle.spawn(async move {
+                    match artist::load_release_page(&runtime, &artist_id, &release_type, offset)
+                        .await
+                    {
+                        Ok((cards, has_more)) => {
+                            let image_cache = image_cache.clone();
+                            let _ = weak2.upgrade_in_event_loop(move |w| {
+                                let jobs = artist_releases::apply_page(&w, cards, has_more, false);
+                                artwork::spawn_loads(jobs, w.as_weak(), image_cache);
+                            });
+                        }
+                        Err(e) => {
+                            log::warn!("[qbz-slint] artist releases load-more failed: {e}");
+                            let _ = weak2.upgrade_in_event_loop(|w| {
+                                w.global::<ArtistReleasesState>().set_load_more_loading(false);
+                            });
+                        }
+                    }
+                });
+            });
+    }
+
+    // Dedicated discography page — sort change (persisted, shared with index).
+    {
+        let weak = window.as_weak();
+        window
+            .global::<ArtistReleasesActions>()
+            .on_set_sort(move |sort| {
+                if let Some(w) = weak.upgrade() {
+                    artist_releases::resort(&w, sort.as_str());
+                }
+            });
+    }
+
+    // Dedicated discography page — retry after a failed load.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<ArtistReleasesActions>()
+            .on_retry(move || {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let st = w.global::<ArtistReleasesState>();
+                let artist_id = st.get_id().to_string();
+                let name = st.get_name().to_string();
+                let release_type = st.get_release_type().to_string();
+                if artist_id.is_empty() {
+                    return;
+                }
+                navigate_artist_releases(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                    artist_id,
+                    name,
+                    release_type,
+                );
             });
     }
 
@@ -14907,12 +15214,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let handle = tokio_rt.handle().clone();
         let weak = window.as_weak();
+        let image_cache = image_cache.clone();
         window
             .global::<ArtworkActions>()
             .on_add_custom(move |kind, key| {
                 let kind = kind.to_string();
                 let key = key.to_string();
                 let weak = weak.clone();
+                let image_cache = image_cache.clone();
                 handle.spawn(async move {
                     let Some(file) = rfd::AsyncFileDialog::new()
                         .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
@@ -14925,14 +15234,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match kind.as_str() {
                         "artist" => {
                             custom_artwork::set_artist_image(&key, &path);
-                            let _ = weak.upgrade_in_event_loop(|w| {
+                            // Decode + apply immediately so the new image shows
+                            // without a reload — critical for artists with no
+                            // Qobuz portrait (e.g. Vicky Psarakis), where there
+                            // is no network artwork to fall back on.
+                            let decoded = artwork::fetch_and_decode_ref(
+                                &qbz_models::ArtworkRef::LocalFile(path.clone()),
+                                &image_cache,
+                                440,
+                            )
+                            .await;
+                            let _ = weak.upgrade_in_event_loop(move |w| {
                                 w.global::<ArtistState>().set_has_custom_image(true);
+                                if let Some((pixels, iw, ih)) = decoded {
+                                    artist::apply_artwork(&w, &pixels, iw, ih);
+                                }
                             });
                         }
                         "album" => {
                             custom_artwork::set_album_cover(&key, &path);
-                            let _ = weak.upgrade_in_event_loop(|w| {
+                            let decoded = artwork::fetch_and_decode_ref(
+                                &qbz_models::ArtworkRef::LocalFile(path.clone()),
+                                &image_cache,
+                                448,
+                            )
+                            .await;
+                            let _ = weak.upgrade_in_event_loop(move |w| {
                                 w.global::<AlbumState>().set_has_custom_cover(true);
+                                if let Some((pixels, iw, ih)) = decoded {
+                                    album::apply_artwork(&w, &pixels, iw, ih);
+                                }
                             });
                         }
                         _ => log::warn!(

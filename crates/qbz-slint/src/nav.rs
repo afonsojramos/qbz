@@ -127,6 +127,13 @@ pub enum NavEntry {
         id: String,
         name: String,
     },
+    /// ArtistReleasesView — the dedicated discography listing for one
+    /// release bucket, reached via "See discography" on the artist page.
+    ArtistReleases {
+        id: String,
+        name: String,
+        release_type: String,
+    },
     /// ArtistsByLocationView — opened by the Origin section's
     /// location link. Carries the full scene-discovery payload.
     Location {

@@ -49,6 +49,7 @@ import { DiscoverBrowseView } from "../discover/DiscoverBrowseView.slint";
 import { AlbumPageView } from "../album/AlbumPageView.slint";
 import { LocalAlbumView } from "../album/LocalAlbumView.slint";
 import { ArtistPageView } from "../artist/ArtistPageView.slint";
+import { ArtistReleasesView } from "../artist/ArtistReleasesView.slint";
 import { MusicianPageView } from "../musician/MusicianPageView.slint";
 import { LabelReleasesView } from "../label/LabelReleasesView.slint";
 import { LabelPageView } from "../label/LabelPageView.slint";
@@ -100,6 +101,7 @@ export component AppShell inherits Rectangle {
         || NavState.view == ContentView.favorites
         || NavState.view == ContentView.album
         || NavState.view == ContentView.artist
+        || NavState.view == ContentView.artist-releases
         || NavState.view == ContentView.musician
         || NavState.view == ContentView.label
         || NavState.view == ContentView.label-releases
@@ -286,6 +288,17 @@ export component AppShell inherits Rectangle {
                 if NavState.view == ContentView.artist && !OfflineState.offline: ArtistPageView {
                     open-album(id) => {
                         root.open-album(id);
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
+                }
+                if NavState.view == ContentView.artist-releases && !OfflineState.offline: ArtistReleasesView {
+                    open-album(id) => {
+                        root.open-album(id);
+                    }
+                    open-artist(id) => {
+                        root.open-artist(id);
                     }
                     media-action(kind, id, action) => {
                         root.media-action(kind, id, action);

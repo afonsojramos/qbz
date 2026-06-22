@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use qbz_models::{
+    ArtistStoryResponse,
     AssetOrigin, ExternalStreamAsset, StreamQualityInfo,
     Album, Artist, ArtistAlbums, CoreEvent, DiscoverAlbum, DiscoverData, DiscoverPlaylistsResponse,
     DiscoverResponse, FrontendAdapter, GenreInfo, LabelExploreResponse, LabelGetListResponse,
@@ -1664,6 +1665,22 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
 
         client
             .get_releases_grid(artist_id, release_type, limit, offset, sort)
+            .await
+            .map_err(CoreError::Api)
+    }
+
+    /// Get an artist's Magazine stories (editorial articles). Web client: offset=0 limit=2.
+    pub async fn get_artist_story(
+        &self,
+        artist_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Result<ArtistStoryResponse, CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+
+        client
+            .get_artist_story(artist_id, offset, limit)
             .await
             .map_err(CoreError::Api)
     }

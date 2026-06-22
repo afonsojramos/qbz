@@ -46,6 +46,18 @@ export struct BulkAction {
     needs-selection: bool,  // dimmed + disabled while nothing is selected
 }
 
+// One titled discography bucket on the artist page (Albums, EPs & Singles,
+// Live, …). Distinct from DiscoverSection so it can carry the raw server
+// release_type key, the per-section sort, and the load-more flag without
+// bleeding artist-only fields into Discover.
+export struct ArtistReleaseSection {
+    release-type: string,        // raw server key (album/epSingle/live/…)
+    title: string,
+    albums: [AlbumCardItem],
+    has-more: bool,              // gates the per-section "Load more" affordance
+    sort-by: string,             // default/newest/oldest/title-asc/title-desc
+}
+
 export struct DiscoverSection {
     title: string,
     // Discover endpoint path this section maps to (e.g. "/discover/newReleases").
@@ -709,7 +721,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, settings, search, musician, label, label-releases, award, award-albums, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder }
+export enum ContentView { home, album, artist, artist-releases, settings, search, musician, label, label-releases, award, award-albums, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder }
 
 // In-app toast (transient notification). Mirrors Tauri's toastStore:
 // a single toast at a time (a new one replaces the current), auto-hidden
@@ -2827,6 +2839,16 @@ export struct SimilarEntry {
     name: string,
 }
 
+// One Magazine/Stories teaser (from /artist/story) shown in the sidebar.
+export struct StoryItem {
+    title: string,
+    author: string,
+    excerpt: string,
+    url: string,        // https://play.qobuz.com/magazine/story/{id}
+    image-url: string,  // ready-to-use arc-cdn thumbnail URL
+    image: image,       // decoded by the artwork pipeline
+}
+
 export global ArtistState {
     in property <string> id;
     in property <string> name;
@@ -2851,13 +2873,23 @@ export global ArtistState {
     // Artwork-derived tint for the header fallback gradient.
     in property <color> header-color: #181820;
     in property <[TrackItem]> top-tracks: [];
+    // "Novedad más reciente" — the single latest-release highlight (last_release).
+    // `has-last-release` gates the block; nullable on the API (hidden for artists
+    // with no recent release, e.g. those with an empty last_release).
+    in property <bool> has-last-release: false;
+    in property <AlbumCardItem> last-release;
+    // "Appears On" (tracks_appears_on) — flat track section of guest appearances.
+    in property <[TrackItem]> appears-on: [];
+    // Magazine / Stories teasers (from /artist/story) — sidebar section.
+    in property <[StoryItem]> stories: [];
+    in property <bool> stories-loading: false;
     // Popular Tracks multi-select (track selection) mode + selected count —
     // mirrors AlbumState. in-out: the section toggle flips it from the UI;
     // Rust resets it on artist change.
     in-out property <bool> top-tracks-multi-select: false;
     in property <int> top-tracks-selected-count: 0;
     // Releases grouped into titled sections (Albums, EPs & Singles, ...).
-    in property <[DiscoverSection]> release-sections: [];
+    in property <[ArtistReleaseSection]> release-sections: [];
     // Labels collected from the artist's own album releases (deduped by
     // id, alphabetically sorted) — feed the Labels section of the
     // network sidebar.
@@ -2907,6 +2939,15 @@ export global ArtistActions {
     // Popular Tracks section "more" menu (id = "next-all" | "queue-all" |
     // "shuffle-all" | "playlist-all").
     callback top-tracks-menu-action(string);
+    // Change the persisted sort for one release bucket (release-type, sort).
+    // sort = default | newest | oldest | title-asc | title-desc.
+    callback set-section-sort(string, string);
+    // Load one more page of releases for a bucket (release-type). Capped to
+    // 4 pages on the index; the full list lives on the dedicated page.
+    callback load-more-section(string);
+    // Open the dedicated discography page pre-filtered to a release-type
+    // ("all" for the whole discography).
+    callback open-releases(string);
 }
 
 // Artist network sidebar — Origin / Labels / Similar / Relationships /
@@ -2978,6 +3019,10 @@ export global NetworkSidebarState {
     // Defaults to open — Rust overrides on startup from the persisted
     // value if any.
     in-out property <bool> open: true;
+    // Active sidebar tab: "network" (Artist Network) | "magazine" (Stories).
+    // Lives here (not ArtistState) so it survives sidebar close/reopen; reset
+    // to "network" on each new artist.
+    in-out property <string> active-tab: "network";
 
     // True until proven otherwise. Set to false when MB is disabled in
     // settings, or when the name → mbid resolution fails. Drives whether
@@ -3207,6 +3252,30 @@ export global AwardActions {
     // Listing: re-filter `visible` after `search-query` changed (UI thread).
     callback search(string /* query */);
     // Releases error branch: retry the failed load.
+    callback retry();
+}
+
+// Dedicated artist discography page (one release bucket, fully paginated)
+// reached via "See discography" on the artist page.
+export global ArtistReleasesState {
+    in property <string> id;            // artist id
+    in property <string> name;          // artist name (header)
+    in property <string> release-type;  // raw server key (album/epSingle/…)
+    in property <string> title;         // display title (header)
+    in property <[AlbumCardItem]> albums: [];
+    in property <bool> has-more: false;
+    in property <bool> loading: false;
+    in property <bool> load-more-loading: false;
+    in property <bool> load-error: false;
+    in-out property <string> sort-by: "default";
+}
+
+export global ArtistReleasesActions {
+    // Fetch the next page (infinite scroll / Load more).
+    callback load-more();
+    // Change the sort (default/newest/oldest/title-asc/title-desc).
+    callback set-sort(string);
+    // Retry after a failed load.
     callback retry();
 }
 

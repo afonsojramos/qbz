@@ -39,6 +39,7 @@ pub mod paths {
     pub const ARTIST_PAGE: &str = "/artist/page";
     pub const ARTIST_RELEASES_GRID: &str = "/artist/getReleasesGrid";
     pub const ARTIST_RELEASES_LIST: &str = "/artist/getReleasesList";
+    pub const ARTIST_STORY: &str = "/artist/story";
 
     // Playlist
     pub const PLAYLIST_GET: &str = "/playlist/get";

@@ -85,6 +85,10 @@ pub use types::{
     AwardPageData,
     AwardPageGenericList,
     // Artist page types
+    ArtistStoryResponse,
+    ArtistStoryItem,
+    ArtistStoryImage,
+    ArtistStoryAuthor,
     PageArtistAward,
     PageArtistBiography,
     PageArtistImages,

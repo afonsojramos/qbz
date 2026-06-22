@@ -2606,6 +2606,36 @@ impl QobuzClient {
         Ok(serde_json::from_value(response)?)
     }
 
+    /// Get artist Magazine stories (editorial articles about the artist).
+    /// REST header-auth only (no per-op signing). Web client calls offset=0 limit=2.
+    pub async fn get_artist_story(
+        &self,
+        artist_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Result<ArtistStoryResponse> {
+        let url = endpoints::build_url(paths::ARTIST_STORY);
+        let query = vec![
+            ("artist_id", artist_id.to_string()),
+            ("offset", offset.to_string()),
+            ("limit", limit.to_string()),
+        ];
+
+        log::debug!(
+            "[API] get_artist_story({}) offset={} limit={}",
+            artist_id,
+            offset,
+            limit
+        );
+        let response: serde_json::Value = self
+            .signed_get(&url, "artiststory", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .await?
+            .json()
+            .await?;
+
+        Ok(serde_json::from_value(response)?)
+    }
+
     // === CMAF streaming endpoints ===
 
     /// Ensure we have a valid CMAF session, renewing if expired.

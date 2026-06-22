@@ -76,6 +76,12 @@ pub enum ArtworkTarget {
     /// A release card in `ArtistState.release-sections[section_idx]
     /// .albums[album_idx]`.
     ArtistRelease { section_idx: usize, album_idx: usize },
+    /// The single "Novedad más reciente" highlight in `ArtistState.last-release`.
+    ArtistLastRelease,
+    /// A card in `ArtistReleasesState.albums[index]` (dedicated discography page).
+    ArtistReleasesAlbum { index: usize },
+    /// A Magazine story thumbnail in `ArtistState.stories[index]`.
+    ArtistStory { index: usize },
     /// A card in MusicianState.appearances[index].
     MusicianAppearance { index: usize },
     /// A card in LabelState.albums[index] (releases sub-view grid).
@@ -939,6 +945,25 @@ fn apply_artwork(
             };
             item.artwork = image;
             section.albums.set_row_data(album_idx, item);
+        }
+        ArtworkTarget::ArtistLastRelease => {
+            let mut item = window.global::<ArtistState>().get_last_release();
+            item.artwork = image;
+            window.global::<ArtistState>().set_last_release(item);
+        }
+        ArtworkTarget::ArtistReleasesAlbum { index } => {
+            let model = window.global::<crate::ArtistReleasesState>().get_albums();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ArtistStory { index } => {
+            let model = window.global::<ArtistState>().get_stories();
+            if let Some(mut item) = model.row_data(index) {
+                item.image = image;
+                model.set_row_data(index, item);
+            }
         }
         ArtworkTarget::MusicianAppearance { index } => {
             let model = window.global::<crate::MusicianState>().get_appearances();

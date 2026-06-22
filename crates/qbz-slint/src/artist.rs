@@ -4,13 +4,13 @@
 //! data on the worker thread, and applies it to the `ArtistState`
 //! global on the Slint event loop.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
 use qbz_models::{
-    PageArtistRelease, PageArtistResponse, PageArtistTrack, PageArtistTrackAlbum,
+    ArtistStoryItem, PageArtistRelease, PageArtistResponse, PageArtistTrack,
 };
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
@@ -18,9 +18,9 @@ use crate::album::TrackData;
 use crate::artwork::{ArtworkJob, ArtworkTarget};
 use crate::home::CardData;
 use crate::{
-    AlbumCardItem, TrackItem, AppWindow, ArtistState, DiscoverSection, DiscoveryArtist,
+    AlbumCardItem, TrackItem, AppWindow, ArtistReleaseSection, ArtistState, DiscoveryArtist,
     JumpNavTab, LabelEntry, MbOriginData, MbRelationship, MbRelationshipsData,
-    NetworkSidebarState, ShellState, SimilarEntry,
+    NetworkSidebarState, ShellState, SimilarEntry, StoryItem,
 };
 
 /// Plain, `Send` artist data produced on the worker thread.
@@ -35,6 +35,12 @@ pub struct ArtistData {
     pub bio_source: String,
     pub artwork_url: String,
     pub top_tracks: Vec<TrackData>,
+    /// "Novedad más reciente" — the single highlighted latest release
+    /// (`last_release` in /artist/page). None when the API omits it.
+    pub last_release: Option<CardData>,
+    /// "Appears On" (`tracks_appears_on`) — tracks where the artist guests,
+    /// rendered as a flat track section (NOT albums).
+    pub appears_on: Vec<TrackData>,
     /// Releases grouped into titled sections (Albums, EPs & Singles, ...).
     pub release_sections: Vec<ReleaseSection>,
     /// Labels collected from the artist's own album releases (deduped
@@ -58,8 +64,47 @@ pub struct SimilarArtistData {
 
 /// One titled group of artist releases.
 pub struct ReleaseSection {
+    /// Raw server `release_type` key (album/epSingle/live/…). Stable id
+    /// for jump-tabs, sort persistence (Phase 2) and "see discography".
+    pub release_type: String,
     pub title: String,
+    /// Server `has_more` for this bucket — gates the per-section load-more.
+    pub has_more: bool,
     pub cards: Vec<CardData>,
+}
+
+/// Official on-screen order of release buckets, with their display titles
+/// (webplayer-faithful). `release_type` keys come straight from the server.
+const RELEASE_SECTION_ORDER: &[(&str, &str)] = &[
+    ("album", "Albums"),
+    ("epSingle", "EPs & Singles"),
+    ("ep", "EPs & Singles"),
+    ("single", "EPs & Singles"),
+    ("live", "Live"),
+    ("compilation", "Compilations"),
+    ("download", "Purchase Only"),
+    ("composer", "Composer"),
+    ("other", "Other"),
+    ("awardedRelease", "Critics' Picks"),
+    ("next", "Upcoming"),
+];
+
+/// Display title for a release_type (the dedicated discography page header).
+pub fn release_type_title(release_type: &str) -> String {
+    RELEASE_SECTION_ORDER
+        .iter()
+        .find(|(rt, _)| *rt == release_type)
+        .map(|(_, title)| title.to_string())
+        .unwrap_or_else(|| title_case(release_type))
+}
+
+/// Title-case a raw release_type key for unknown buckets (fallback only).
+fn title_case(key: &str) -> String {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// Fetch and map an artist page by id.
@@ -81,8 +126,113 @@ where
     Ok(map_artist(page))
 }
 
+/// Fetch one more page of an artist's releases for a given bucket via
+/// `get_releases_grid` (the reused, already-wired endpoint). Returns the
+/// mapped cards + the server `has_more` flag.
+pub async fn load_release_page<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    artist_id: &str,
+    release_type: &str,
+    offset: u32,
+) -> Result<(Vec<CardData>, bool), String>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let id: u64 = artist_id
+        .parse()
+        .map_err(|_| format!("invalid artist id: {artist_id}"))?;
+    let resp = runtime
+        .core()
+        .get_releases_grid(id, release_type, RELEASE_PAGE_SIZE, offset, Some("release_date"))
+        .await
+        .map_err(|e| e.to_string())?;
+    let has_more = resp.has_more;
+    let cards = resp.items.into_iter().map(map_release).collect();
+    Ok((cards, has_more))
+}
+
+/// One Magazine/Stories teaser for the sidebar.
+pub struct StoryData {
+    pub title: String,
+    pub author: String,
+    pub excerpt: String,
+    pub url: String,
+    pub image_url: String,
+}
+
+fn map_story(item: ArtistStoryItem) -> StoryData {
+    let author = item
+        .authors
+        .and_then(|list| list.into_iter().next())
+        .map(|a| a.name)
+        .unwrap_or_default();
+    // `image` is a ready-to-use arc-cdn URL; fall back to the first `images[]`.
+    let image_url = item
+        .image
+        .or_else(|| {
+            item.images
+                .and_then(|list| list.into_iter().next())
+                .map(|img| img.url)
+        })
+        .unwrap_or_default();
+    StoryData {
+        url: format!("https://play.qobuz.com/magazine/story/{}", item.id),
+        title: item.title,
+        author,
+        excerpt: item.description_short.unwrap_or_default(),
+        image_url,
+    }
+}
+
+/// Fetch the artist's Magazine stories (limit 2, like the official client).
+/// Returns an empty list on any failure (the section just stays hidden).
+pub async fn load_stories<A>(runtime: &Arc<AppRuntime<A>>, artist_id: &str) -> Vec<StoryData>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let Ok(id) = artist_id.parse::<u64>() else {
+        return Vec::new();
+    };
+    match runtime.core().get_artist_story(id, 0, 2).await {
+        Ok(resp) => resp.items.into_iter().map(map_story).collect(),
+        Err(e) => {
+            log::warn!("[qbz-slint] artist story load failed: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Apply fetched stories to the sidebar Magazine tab. Returns artwork jobs
+/// for the thumbnails (caller spawns them). UI thread.
+pub fn apply_stories(window: &AppWindow, stories: Vec<StoryData>) -> Vec<ArtworkJob> {
+    let mut jobs = Vec::new();
+    let items: Vec<StoryItem> = stories
+        .into_iter()
+        .enumerate()
+        .map(|(index, s)| {
+            if !s.image_url.is_empty() {
+                jobs.push(ArtworkJob {
+                    target: ArtworkTarget::ArtistStory { index },
+                    url: s.image_url.clone(),
+                });
+            }
+            StoryItem {
+                title: s.title.into(),
+                author: s.author.into(),
+                excerpt: s.excerpt.into(),
+                url: s.url.into(),
+                image_url: s.image_url.into(),
+                image: slint::Image::default(),
+            }
+        })
+        .collect();
+    let st = window.global::<ArtistState>();
+    st.set_stories(ModelRc::new(VecModel::from(items)));
+    st.set_stories_loading(false);
+    jobs
+}
+
 fn map_artist(page: PageArtistResponse) -> ArtistData {
-    let main_artist_id = page.id;
     let name = page.name.display;
 
     // Biography: content (HTML-stripped) + source name (when present). The
@@ -125,38 +275,34 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
         .map(|(index, track)| map_track(index, track))
         .collect();
 
-    // Releases: bucket into 4 categories per Tauri's convertPageArtist:
-    //   album              → Discography
-    //   ep | single | epSingle → EPs & Singles
-    //   live               → Live Albums
-    //   compilation | boxset | download | other | _ → Others
-    // The "download" group items are re-categorized by their individual
-    // release_type because download is a distribution channel, not a
-    // content type. Foreign-artist releases are filtered out (only the
-    // main artist's own pieces stay) and IDs are deduped across groups
-    // so a release listed in multiple groups appears once.
-    let mut albums: Vec<CardData> = Vec::new();
-    let mut eps_singles: Vec<CardData> = Vec::new();
-    let mut live_albums: Vec<CardData> = Vec::new();
-    let mut others: Vec<CardData> = Vec::new();
+    // Releases: server-driven bucketing (the official webplayer is the
+    // source of truth). Each `releases[]` group is keyed by its own
+    // `type` (release_type) — we render EVERY non-empty bucket, in the
+    // official order, trusting the server's key. We never re-derive
+    // buckets by heuristic and never collapse them into a curated few.
+    // Foreign-artist releases (guest spots that surface inside a group)
+    // are filtered out, and ids are deduped across groups so a release
+    // listed in more than one group appears once. The `awardedRelease`
+    // bucket can appear twice in the array (a server quirk) — keying by
+    // release_type naturally folds the two into one section.
+    let mut bucket_cards: HashMap<String, Vec<CardData>> = HashMap::new();
+    let mut bucket_has_more: HashMap<String, bool> = HashMap::new();
     let mut seen_release_ids: HashSet<String> = HashSet::new();
     // Labels collected while iterating the artist's own album releases.
-    // Tauri's extractLabelsFromPageReleases: only group.type == "album"
-    // (not the bucket result after the download re-categorization),
-    // only own releases, dedupe by label id.
+    // Only group.type == "album", only own releases, dedupe by label id.
     let mut labels_by_id: BTreeMap<u64, String> = BTreeMap::new();
 
     for group in page.releases.into_iter().flatten() {
-        let group_bucket = map_release_type(&group.release_type);
-        let is_album_group = group.release_type == "album";
+        let release_type = group.release_type.clone();
+        let is_album_group = release_type == "album";
+        *bucket_has_more.entry(release_type.clone()).or_insert(false) |= group.has_more;
         for release in group.items.into_iter() {
-            // Foreign-artist filter — the page sometimes surfaces "appears
-            // on" entries inside release groups; those don't belong here.
-            if let Some(artist_ref) = release.artist.as_ref() {
-                if artist_ref.id != main_artist_id {
-                    continue;
-                }
-            }
+            // NO foreign-artist filter: the official webplayer renders every
+            // item the server placed in the bucket — including releases
+            // credited to the artist's band or where they only guest (e.g.
+            // Vicky Psarakis' albums are credited to "Sicksense"). The old
+            // `artist.id == page.id` filter dropped exactly those, hiding a
+            // real Albums section. Trust the server's bucketing (D3).
             if seen_release_ids.contains(&release.id) {
                 continue;
             }
@@ -171,23 +317,10 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
                 }
             }
 
-            let item_bucket = if group.release_type == "download" {
-                release
-                    .release_type
-                    .as_deref()
-                    .map(map_release_type)
-                    .unwrap_or(group_bucket)
-            } else {
-                group_bucket
-            };
-
-            let card = map_release(release);
-            match item_bucket {
-                ReleaseBucket::Albums => albums.push(card),
-                ReleaseBucket::Eps => eps_singles.push(card),
-                ReleaseBucket::Live => live_albums.push(card),
-                ReleaseBucket::Others => others.push(card),
-            }
+            bucket_cards
+                .entry(release_type.clone())
+                .or_default()
+                .push(map_release(release));
         }
     }
 
@@ -213,48 +346,58 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
         })
         .unwrap_or_default();
 
-    // Compilations come from tracks_appears_on — albums by other artists
-    // that include this artist. Dedupe by album id.
-    let mut compilations: Vec<CardData> = Vec::new();
-    let mut seen_compilation_albums: HashSet<String> = HashSet::new();
-    for track in page.tracks_appears_on.into_iter().flatten() {
-        let Some(album) = track.album else { continue };
-        if seen_compilation_albums.contains(&album.id) {
+    // "Novedad más reciente" — the single latest-release highlight.
+    let last_release = page.last_release.map(map_release);
+
+    // "Appears On" — tracks where the artist guests (tracks_appears_on).
+    // These are TRACKS, not albums; rendered as a flat track section.
+    let appears_on: Vec<TrackData> = page
+        .tracks_appears_on
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(index, track)| map_track(index, track))
+        .collect();
+
+    // Emit one section per non-empty bucket in the official on-screen
+    // order. Buckets the server adds in the future that aren't in this
+    // list are appended at the end (still rendered, just untitled-mapped).
+    let mut release_sections: Vec<ReleaseSection> = Vec::new();
+    for &(rt, title) in RELEASE_SECTION_ORDER {
+        // "download" ("Purchase Only") is intentionally hidden — drain it so
+        // it can't resurface in the leftovers pass, but emit no section.
+        if rt == "download" {
+            bucket_cards.remove(rt);
             continue;
         }
-        seen_compilation_albums.insert(album.id.clone());
-        compilations.push(map_compilation_album(album));
+        // `.remove` drains the bucket so the leftovers pass below can't
+        // re-emit an already-rendered type.
+        if let Some(cards) = bucket_cards.remove(rt) {
+            if cards.is_empty() {
+                continue;
+            }
+            release_sections.push(ReleaseSection {
+                release_type: rt.to_string(),
+                title: title.to_string(),
+                has_more: bucket_has_more.get(rt).copied().unwrap_or(false),
+                cards,
+            });
+        }
     }
-
-    let mut release_sections: Vec<ReleaseSection> = Vec::new();
-    if !albums.is_empty() {
+    // Any unknown bucket types the order list doesn't cover — append them
+    // last, titled from their raw key (rare; keeps D3 faithful).
+    let mut leftovers: Vec<(String, Vec<CardData>)> = bucket_cards
+        .into_iter()
+        .filter(|(_, cards)| !cards.is_empty())
+        .collect();
+    leftovers.sort_by(|a, b| a.0.cmp(&b.0));
+    for (rt, cards) in leftovers {
+        let has_more = bucket_has_more.get(&rt).copied().unwrap_or(false);
         release_sections.push(ReleaseSection {
-            title: "Discography".to_string(),
-            cards: albums,
-        });
-    }
-    if !eps_singles.is_empty() {
-        release_sections.push(ReleaseSection {
-            title: "EPs & Singles".to_string(),
-            cards: eps_singles,
-        });
-    }
-    if !live_albums.is_empty() {
-        release_sections.push(ReleaseSection {
-            title: "Live Albums".to_string(),
-            cards: live_albums,
-        });
-    }
-    if !compilations.is_empty() {
-        release_sections.push(ReleaseSection {
-            title: "Compilations".to_string(),
-            cards: compilations,
-        });
-    }
-    if !others.is_empty() {
-        release_sections.push(ReleaseSection {
-            title: "Others".to_string(),
-            cards: others,
+            title: title_case(&rt),
+            release_type: rt,
+            has_more,
+            cards,
         });
     }
 
@@ -266,33 +409,11 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
         bio_source,
         artwork_url,
         top_tracks,
+        last_release,
+        appears_on,
         release_sections,
         labels,
         similar_artists,
-    }
-}
-
-/// UI bucket a Qobuz release_type maps to. Mirrors Tauri's adapter so the
-/// section headings stay 1:1 with the WebKit build.
-#[derive(Debug, Clone, Copy)]
-enum ReleaseBucket {
-    Albums,
-    Eps,
-    Live,
-    Others,
-}
-
-/// Map a Qobuz release_type string to its UI bucket. Anything not in the
-/// curated three categories (album / ep* / live) lands in Others so the
-/// page never grows a long tail of one-off section titles.
-fn map_release_type(release_type: &str) -> ReleaseBucket {
-    match release_type {
-        "album" => ReleaseBucket::Albums,
-        "ep" | "single" | "epSingle" => ReleaseBucket::Eps,
-        "live" => ReleaseBucket::Live,
-        // compilation, boxset, download, other, and anything new the API
-        // adds in the future.
-        _ => ReleaseBucket::Others,
     }
 }
 
@@ -312,6 +433,14 @@ fn truncate_words(text: &str, max: usize) -> String {
 /// fills in once the images decode.
 pub fn artwork_jobs(data: &ArtistData) -> Vec<ArtworkJob> {
     let mut jobs = Vec::new();
+    if let Some(card) = data.last_release.as_ref() {
+        if !card.artwork_url.is_empty() {
+            jobs.push(ArtworkJob {
+                target: ArtworkTarget::ArtistLastRelease,
+                url: card.artwork_url.clone(),
+            });
+        }
+    }
     for (section_idx, section) in data.release_sections.iter().enumerate() {
         for (album_idx, card) in section.cards.iter().enumerate() {
             if !card.artwork_url.is_empty() {
@@ -326,31 +455,6 @@ pub fn artwork_jobs(data: &ArtistData) -> Vec<ArtworkJob> {
         }
     }
     jobs
-}
-
-/// Build a CardData for the Compilations section out of a track's album
-/// (tracks_appears_on entries — albums by other artists that feature the
-/// main artist). The PageArtistTrackAlbum payload is lighter than a full
-/// release (no year/dates), so the year stays empty.
-fn map_compilation_album(album: PageArtistTrackAlbum) -> CardData {
-    let artwork_url = album
-        .image
-        .and_then(|img| img.best().cloned())
-        .unwrap_or_default();
-    CardData {
-        id: album.id,
-        title: album.title,
-        artist: String::new(),
-        artist_id: String::new(),
-        genre: album.genre.map(|g| g.name).unwrap_or_default(),
-        year: String::new(),
-        quality_tier: String::new(),
-        quality_label: String::new(),
-        ribbon: String::new(),
-        ribbon_kind: String::new(),
-        artwork_url,
-        ..CardData::default()
-    }
 }
 
 fn map_track(index: usize, track: PageArtistTrack) -> TrackData {
@@ -408,6 +512,14 @@ fn map_release(release: PageArtistRelease) -> CardData {
         (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, sr),
         _ => String::new(),
     };
+    // Per-release press award → gold ribbon (the AlbumCard "press" ribbon
+    // is already styled). First award name wins.
+    let (ribbon, ribbon_kind) = release
+        .awards
+        .as_ref()
+        .and_then(|list| list.first())
+        .map(|award| (award.name.clone(), "press".to_string()))
+        .unwrap_or_default();
     CardData {
         id: release.id,
         title: release.title,
@@ -417,8 +529,8 @@ fn map_release(release: PageArtistRelease) -> CardData {
         year,
         quality_tier,
         quality_label,
-        ribbon: String::new(),
-        ribbon_kind: String::new(),
+        ribbon,
+        ribbon_kind,
         artwork_url,
         ..CardData::default()
     }
@@ -458,6 +570,7 @@ pub(crate) fn card_to_item(card: CardData) -> AlbumCardItem {
         artist: card.year.clone().into(),
         artist_id: "".into(),
         genre: card.genre.into(),
+        plain_year: card.year.clone().into(),
         year: card.year.into(),
         quality_tier: card.quality_tier.into(),
         quality_label: card.quality_label.into(),
@@ -475,8 +588,51 @@ pub(crate) fn card_to_item(card: CardData) -> AlbumCardItem {
 thread_local! {
     static FULL_TOP_TRACKS: std::cell::RefCell<Vec<TrackItem>> =
         std::cell::RefCell::new(Vec::new());
-    static FULL_RELEASE_SECTIONS: std::cell::RefCell<Vec<DiscoverSection>> =
+    static FULL_APPEARS_ON: std::cell::RefCell<Vec<TrackItem>> =
         std::cell::RefCell::new(Vec::new());
+    static FULL_RELEASE_SECTIONS: std::cell::RefCell<Vec<ArtistReleaseSection>> =
+        std::cell::RefCell::new(Vec::new());
+    // Per-release-type pages already loaded into the index (1 = the initial
+    // /artist/page bucket). The index caps at MAX_INDEX_PAGES; beyond that
+    // the dedicated discography page takes over.
+    static LOADED_PAGES: std::cell::RefCell<HashMap<String, u32>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Index-page load-more cap (the user asked EPs & Singles / Live to page
+/// up to 4). Page 1 is the embedded bucket; 3 more loads reach the cap.
+pub const MAX_INDEX_PAGES: u32 = 4;
+/// Items fetched per `get_releases_grid` load-more page.
+pub const RELEASE_PAGE_SIZE: u32 = 20;
+
+/// Build a Slint `TrackItem` from a controller `TrackData`, stamping
+/// favorite/cache status. Shared by Popular Tracks and Appears On (both
+/// flat cross-album lists — no disc headers, no per-row blacklist greyout).
+fn track_data_to_item(track: TrackData) -> TrackItem {
+    TrackItem {
+        is_blacklisted: false,
+        id: track.id.clone().into(),
+        number: track.number.into(),
+        title: track.title.into(),
+        artist: track.artist.into(),
+        album: "".into(),
+        duration: track.duration.into(),
+        quality_tier: track.quality_tier.into(),
+        quality_detail: track.quality_detail.into(),
+        explicit: track.explicit,
+        selected: false,
+        artwork_url: "".into(),
+        artwork: slint::Image::default(),
+        is_favorite: crate::fav_cache::is_favorite(&track.id),
+        artist_id: track.artist_id.into(),
+        album_id: track.album_id.into(),
+        removing: false,
+        cache_status: if crate::offline_cache::is_cached(&track.id) { 3 } else { 0 },
+        cache_progress: 0.0,
+        source: "qobuz".into(),
+        unlocking: false,
+        disc_header_number: 0,
+    }
 }
 
 /// Apply artist data to the `ArtistState` global. Runs on the Slint event loop.
@@ -490,51 +646,58 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
         .map(|s| (s.title.clone(), s.cards.len()))
         .collect();
 
+    let appears_on_count = data.appears_on.len();
+    let has_last_release = data.last_release.is_some();
+
     let top_tracks: Vec<TrackItem> = data
         .top_tracks
         .into_iter()
-        .map(|track| TrackItem {
-            // Out of Task 6 row-stamping scope: ArtistView gets the T9
-            // hidden-artist banner, not per-row greyout. Never stamped here.
-            is_blacklisted: false,
-            id: track.id.clone().into(),
-            number: track.number.into(),
-            title: track.title.into(),
-            artist: track.artist.into(),
-            album: "".into(),
-            duration: track.duration.into(),
-            quality_tier: track.quality_tier.into(),
-            quality_detail: track.quality_detail.into(),
-            explicit: track.explicit,
-            selected: false,
-            artwork_url: "".into(),
-            artwork: slint::Image::default(),
-            is_favorite: crate::fav_cache::is_favorite(&track.id),
-            artist_id: track.artist_id.into(),
-            album_id: track.album_id.into(),
-            removing: false,
-            cache_status: if crate::offline_cache::is_cached(&track.id) { 3 } else { 0 },
-            cache_progress: 0.0,
-            source: "qobuz".into(),
-            unlocking: false,
-            // Disc grouping is album-detail only; flat lists carry none.
-            disc_header_number: 0,
-        })
+        .map(track_data_to_item)
         .collect();
-    let release_sections: Vec<DiscoverSection> = data
+    let appears_on: Vec<TrackItem> = data
+        .appears_on
+        .into_iter()
+        .map(track_data_to_item)
+        .collect();
+    let last_release_item = data
+        .last_release
+        .map(card_to_item)
+        .unwrap_or_default();
+    let release_sections: Vec<ArtistReleaseSection> = data
         .release_sections
         .into_iter()
-        .map(|section| DiscoverSection {
-            title: section.title.into(),
-            // Artist release sections have no Discover full-list page.
-            endpoint: "".into(),
-            albums: ModelRc::new(VecModel::from(
-                section.cards.into_iter().map(card_to_item).collect::<Vec<_>>(),
-            )),
+        .map(|section| {
+            // Apply the persisted per-bucket sort up front so the first paint
+            // already honors the user's choice.
+            let sort = crate::artist_prefs::get_sort(&section.release_type);
+            let mut albums: Vec<AlbumCardItem> =
+                section.cards.into_iter().map(card_to_item).collect();
+            crate::album_map::sort_album_items(&mut albums, &sort);
+            ArtistReleaseSection {
+                release_type: section.release_type.into(),
+                title: section.title.into(),
+                albums: ModelRc::new(VecModel::from(albums)),
+                has_more: section.has_more,
+                sort_by: sort.into(),
+            }
         })
         .collect();
 
-    let jump_tabs = build_jump_tabs(top_tracks_count, &section_counts);
+    // Reset the per-bucket page counters to 1 (the embedded bucket).
+    LOADED_PAGES.with(|cell| {
+        let mut m = cell.borrow_mut();
+        m.clear();
+        for s in &release_sections {
+            m.insert(s.release_type.to_string(), 1);
+        }
+    });
+
+    let jump_tabs = build_jump_tabs(
+        top_tracks_count,
+        has_last_release,
+        &section_counts,
+        appears_on_count,
+    );
 
     let labels: Vec<LabelEntry> = data
         .labels
@@ -558,6 +721,9 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
     FULL_TOP_TRACKS.with(|cell| {
         *cell.borrow_mut() = top_tracks.clone();
     });
+    FULL_APPEARS_ON.with(|cell| {
+        *cell.borrow_mut() = appears_on.clone();
+    });
     FULL_RELEASE_SECTIONS.with(|cell| {
         *cell.borrow_mut() = release_sections.clone();
     });
@@ -574,6 +740,9 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
     state.set_bio_truncated(data.bio_truncated);
     state.set_bio_source(data.bio_source.into());
     state.set_top_tracks(ModelRc::new(VecModel::from(top_tracks)));
+    state.set_has_last_release(has_last_release);
+    state.set_last_release(last_release_item);
+    state.set_appears_on(ModelRc::new(VecModel::from(appears_on)));
     state.set_release_sections(ModelRc::new(VecModel::from(release_sections)));
     state.set_labels(ModelRc::new(VecModel::from(labels)));
     state.set_similar_artists(ModelRc::new(VecModel::from(similar_artists)));
@@ -590,7 +759,9 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
 /// estimates land the user inside the right section.
 fn build_jump_tabs(
     top_tracks_count: usize,
+    has_last_release: bool,
     sections: &[(String, usize)],
+    appears_on_count: usize,
 ) -> Vec<JumpNavTab> {
     // Layout constants — keep in sync with ArtistPageView.slint.
     const BODY_ROW_TOP_GUESS: f32 = 320.0;
@@ -603,6 +774,8 @@ fn build_jump_tabs(
     const POPULAR_HEADER_GAP: f32 = 10.0;
     const POPULAR_ROW: f32 = 52.0;
     const POPULAR_TAIL: f32 = 32.0;
+    // "Novedad más reciente" highlight block (header + one card row).
+    const LAST_RELEASE_BLOCK: f32 = 172.0;
 
     let mut tabs: Vec<JumpNavTab> = Vec::new();
     tabs.push(JumpNavTab {
@@ -623,13 +796,26 @@ fn build_jump_tabs(
             POPULAR_HEADER + POPULAR_HEADER_GAP + visible_rows * POPULAR_ROW + POPULAR_TAIL;
     }
 
+    // The latest-release highlight has no jump tab (it's a highlight, not a
+    // browsable section) but it shifts every section below it.
+    if has_last_release {
+        cursor += LAST_RELEASE_BLOCK;
+    }
+
     for (title, count) in sections {
+        // Route by display title → stable jump-tab id. Unknown titles still
+        // render as sections; they just don't get a jump tab.
         let id = match title.as_str() {
-            "Discography" => "discography",
+            "Albums" => "albums",
             "EPs & Singles" => "eps-singles",
-            "Live Albums" => "live-albums",
+            "Live" => "live",
             "Compilations" => "compilations",
-            "Others" => "others",
+            "Purchase Only" => "purchase-only",
+            "Composer" => "composer",
+            // "Other" is rendered LAST + collapsed (below Appears On), so it
+            // gets no jump tab and does not occupy main-flow height here.
+            "Critics' Picks" => "critics-picks",
+            "Upcoming" => "upcoming",
             _ => continue,
         };
         tabs.push(JumpNavTab {
@@ -642,6 +828,14 @@ fn build_jump_tabs(
             + RELEASE_HEADER
             + rows * RELEASE_ROW
             + (rows - 1.0).max(0.0) * RELEASE_ROW_GAP;
+    }
+
+    if appears_on_count > 0 {
+        tabs.push(JumpNavTab {
+            id: "appears-on".into(),
+            label: "Appears On".into(),
+            anchor_y: cursor,
+        });
     }
 
     tabs
@@ -664,7 +858,7 @@ pub fn filter_artist(window: &AppWindow, query: &str) {
             .cloned()
             .collect()
     });
-    let filtered_sections: Vec<DiscoverSection> = FULL_RELEASE_SECTIONS.with(|cell| {
+    let filtered_sections: Vec<ArtistReleaseSection> = FULL_RELEASE_SECTIONS.with(|cell| {
         cell.borrow()
             .iter()
             .filter_map(|section| {
@@ -679,17 +873,34 @@ pub fn filter_artist(window: &AppWindow, query: &str) {
                 if kept.is_empty() {
                     return None;
                 }
-                Some(DiscoverSection {
+                Some(ArtistReleaseSection {
+                    release_type: section.release_type.clone(),
                     title: section.title.clone(),
-                    endpoint: section.endpoint.clone(),
                     albums: ModelRc::new(VecModel::from(kept)),
+                    // No load-more while a search filter is active (it would
+                    // append unfiltered items); restore on empty query.
+                    has_more: if needle.is_empty() { section.has_more } else { false },
+                    sort_by: section.sort_by.clone(),
                 })
             })
             .collect()
     });
 
+    let filtered_appears: Vec<TrackItem> = FULL_APPEARS_ON.with(|cell| {
+        cell.borrow()
+            .iter()
+            .filter(|track| {
+                needle.is_empty()
+                    || track.title.as_str().to_lowercase().contains(&needle)
+                    || track.artist.as_str().to_lowercase().contains(&needle)
+            })
+            .cloned()
+            .collect()
+    });
+
     let state = window.global::<ArtistState>();
     state.set_top_tracks(ModelRc::new(VecModel::from(filtered_tracks)));
+    state.set_appears_on(ModelRc::new(VecModel::from(filtered_appears)));
     state.set_release_sections(ModelRc::new(VecModel::from(filtered_sections)));
 }
 
@@ -697,7 +908,13 @@ pub fn filter_artist(window: &AppWindow, query: &str) {
 pub fn reset_artist(window: &AppWindow) {
     let state = window.global::<ArtistState>();
     state.set_top_tracks(ModelRc::new(VecModel::from(Vec::<TrackItem>::new())));
-    state.set_release_sections(ModelRc::new(VecModel::from(Vec::<DiscoverSection>::new())));
+    state.set_appears_on(ModelRc::new(VecModel::from(Vec::<TrackItem>::new())));
+    state.set_has_last_release(false);
+    state.set_last_release(AlbumCardItem::default());
+    state.set_stories(ModelRc::new(VecModel::from(Vec::<StoryItem>::new())));
+    state.set_stories_loading(true);
+    state.set_release_sections(ModelRc::new(VecModel::from(Vec::<ArtistReleaseSection>::new())));
+    LOADED_PAGES.with(|cell| cell.borrow_mut().clear());
     state.set_labels(ModelRc::new(VecModel::from(Vec::<LabelEntry>::new())));
     state.set_similar_artists(ModelRc::new(VecModel::from(Vec::<SimilarEntry>::new())));
     state.set_jump_tabs(ModelRc::new(VecModel::from(Vec::<JumpNavTab>::new())));
@@ -710,6 +927,130 @@ pub fn reset_artist(window: &AppWindow) {
     state.set_top_tracks_selected_count(0);
     state.set_is_blacklisted(false);
     state.set_loading(true);
+}
+
+/// Re-sort one release bucket in place (operates on the LIVE model so loaded
+/// artwork is preserved) and persist the choice. `sort` = default | newest |
+/// oldest | title-asc | title-desc.
+pub fn resort_section(window: &AppWindow, release_type: &str, sort: &str) {
+    crate::artist_prefs::set_sort(release_type, sort);
+    let model = window.global::<ArtistState>().get_release_sections();
+    for i in 0..model.row_count() {
+        let Some(row) = model.row_data(i) else { continue };
+        if row.release_type.as_str() != release_type {
+            continue;
+        }
+        let mut albums: Vec<AlbumCardItem> = row.albums.iter().collect();
+        crate::album_map::sort_album_items(&mut albums, sort);
+        let new_row = ArtistReleaseSection {
+            albums: ModelRc::new(VecModel::from(albums)),
+            sort_by: sort.into(),
+            ..row
+        };
+        model.set_row_data(i, new_row);
+        break;
+    }
+    // Keep the FULL cache (in-page search source) in the same order.
+    FULL_RELEASE_SECTIONS.with(|cell| {
+        for s in cell.borrow_mut().iter_mut() {
+            if s.release_type.as_str() == release_type {
+                let mut albums: Vec<AlbumCardItem> = s.albums.iter().collect();
+                crate::album_map::sort_album_items(&mut albums, sort);
+                s.albums = ModelRc::new(VecModel::from(albums));
+                s.sort_by = sort.into();
+                break;
+            }
+        }
+    });
+}
+
+/// Current loaded item count for a bucket — the offset for the next page.
+pub fn section_loaded_count(window: &AppWindow, release_type: &str) -> usize {
+    let model = window.global::<ArtistState>().get_release_sections();
+    for i in 0..model.row_count() {
+        if let Some(row) = model.row_data(i) {
+            if row.release_type.as_str() == release_type {
+                return row.albums.row_count();
+            }
+        }
+    }
+    0
+}
+
+/// Whether a bucket may still load another page on the index (cap = 4).
+pub fn section_can_load_more(release_type: &str) -> bool {
+    LOADED_PAGES.with(|c| c.borrow().get(release_type).copied().unwrap_or(1)) < MAX_INDEX_PAGES
+}
+
+/// Append a freshly-fetched page to a bucket (dedupe by id, re-sort, update
+/// has_more honoring the 4-page cap). Returns artwork jobs for the NEW cards
+/// at their post-sort positions. Runs on the Slint event loop.
+pub fn append_release_page(
+    window: &AppWindow,
+    release_type: &str,
+    new_cards: Vec<CardData>,
+    server_has_more: bool,
+) -> Vec<ArtworkJob> {
+    let pages = LOADED_PAGES.with(|cell| {
+        let mut m = cell.borrow_mut();
+        let e = m.entry(release_type.to_string()).or_insert(1);
+        *e += 1;
+        *e
+    });
+    let mut jobs = Vec::new();
+    let model = window.global::<ArtistState>().get_release_sections();
+    for i in 0..model.row_count() {
+        let Some(row) = model.row_data(i) else { continue };
+        if row.release_type.as_str() != release_type {
+            continue;
+        }
+        let sort = row.sort_by.to_string();
+        let mut items: Vec<AlbumCardItem> = row.albums.iter().collect();
+        let mut seen: HashSet<String> = items.iter().map(|a| a.id.to_string()).collect();
+        let mut appended_ids: Vec<String> = Vec::new();
+        for card in new_cards {
+            let item = card_to_item(card);
+            let id = item.id.to_string();
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.insert(id.clone());
+            appended_ids.push(id);
+            items.push(item);
+        }
+        crate::album_map::sort_album_items(&mut items, &sort);
+        let has_more = server_has_more && pages < MAX_INDEX_PAGES && !appended_ids.is_empty();
+        for (idx, item) in items.iter().enumerate() {
+            if appended_ids.iter().any(|id| id == item.id.as_str())
+                && !item.artwork_url.as_str().is_empty()
+            {
+                jobs.push(ArtworkJob {
+                    target: ArtworkTarget::ArtistRelease {
+                        section_idx: i,
+                        album_idx: idx,
+                    },
+                    url: item.artwork_url.to_string(),
+                });
+            }
+        }
+        let new_row = ArtistReleaseSection {
+            albums: ModelRc::new(VecModel::from(items.clone())),
+            has_more,
+            ..row
+        };
+        model.set_row_data(i, new_row);
+        FULL_RELEASE_SECTIONS.with(|cell| {
+            for s in cell.borrow_mut().iter_mut() {
+                if s.release_type.as_str() == release_type {
+                    s.albums = ModelRc::new(VecModel::from(items.clone()));
+                    s.has_more = has_more;
+                    break;
+                }
+            }
+        });
+        break;
+    }
+    jobs
 }
 
 // ============== Popular Tracks multi-select (mirrors AlbumState) ==========
@@ -849,6 +1190,8 @@ pub fn reset_network_sidebar(window: &AppWindow) {
     let constrained = window.global::<ShellState>().get_content_constrained();
     let state = window.global::<NetworkSidebarState>();
     state.set_open(!constrained);
+    // Always (re)open a new artist on the Network tab.
+    state.set_active_tab("network".into());
     state.set_mb_available(true);
     state.set_mb_mbid("".into());
     state.set_origin_loading(false);

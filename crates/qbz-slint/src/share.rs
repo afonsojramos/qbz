@@ -18,6 +18,11 @@ pub fn qobuz_album_url(album_id: &str) -> String {
     format!("https://play.qobuz.com/album/{album_id}")
 }
 
+/// Qobuz web-player artist URL (header Share action).
+pub fn qobuz_artist_url(artist_id: &str) -> String {
+    format!("https://play.qobuz.com/artist/{artist_id}")
+}
+
 /// Copy `text` to the system clipboard. Runs on a blocking thread —
 /// clipboard backends (X11/Wayland) can block, and arboard keeps an
 /// owner thread alive so the contents persist after this returns.

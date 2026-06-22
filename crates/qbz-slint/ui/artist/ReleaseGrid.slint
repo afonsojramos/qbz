@@ -1,31 +1,48 @@
 // Wrapping grid of AlbumCards for the artist page's release sections
-// (Discography, EPs & Singles, Live Albums, Compilations, Others).
+// (Albums, EPs & Singles, Live, Compilations, …).
 //
-// The Tauri artist view lays these as grids — never as horizontally
-// paginated carousels — so a long discography wraps into rows and the
-// whole shape stays scannable. Pattern mirrors `discover/GridSection`:
-// absolute positioning inside a Rectangle whose height comes from the
-// row count, computed once per resize.
+// The discography lays these as grids — never as horizontally paginated
+// carousels — so a long discography wraps into rows and the whole shape
+// stays scannable. Pattern mirrors `discover/GridSection`: absolute
+// positioning inside a Rectangle whose height comes from the row count.
+//
+// Header carries a per-section sort + a "See discography" link to the
+// dedicated page. No item COUNT is shown — the bucket preview is partial
+// (has_more), so a count would mislead (e.g. "Live 7" when there are more).
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { DiscoverSection } from "../state.slint";
+import { ArtistReleaseSection } from "../state.slint";
 import { AlbumCard } from "../discover/AlbumCard.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
 
 export component ReleaseGrid inherits VerticalLayout {
-    in property <DiscoverSection> section;
+    in property <ArtistReleaseSection> section;
+    // Hide the title/sort/see-all header row — used by the collapsible
+    // "Other" section, which supplies its own header + collapse toggle.
+    in property <bool> hide-header: false;
     callback album-clicked(string);
     callback media-action(string, string, string);
+    callback set-section-sort(string /* release-type */, string /* sort */);
+    callback load-more-section(string /* release-type */);
+    callback open-releases(string /* release-type */);
 
     property <length> card-width: 200px;
     property <length> card-height: 246px;
     property <length> gap: 24px;
     property <int> count: root.section.albums.length;
+    // sort-by string -> QbzSelect index.
+    property <int> sort-index:
+        root.section.sort-by == "newest" ? 1 :
+        root.section.sort-by == "oldest" ? 2 :
+        root.section.sort-by == "title-asc" ? 3 :
+        root.section.sort-by == "title-desc" ? 4 : 0;
 
     spacing: 12px;
 
-    // --- Header: title + count -------------------------------------------
-    HorizontalLayout {
+    // --- Header: title + see-discography link + sort ---------------------
+    if !root.hide-header: HorizontalLayout {
+        spacing: 12px;
         Text {
             text: root.section.title;
             color: Theme.text-primary;
@@ -34,12 +51,42 @@ export component ReleaseGrid inherits VerticalLayout {
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
-        if root.count > 0: Text {
-            text: " " + root.count;
-            color: Theme.text-muted;
-            font-size: Typography.body;
-            font-weight: Typography.regular;
-            vertical-alignment: center;
+        Rectangle {
+            width: see-all-text.preferred-width;
+            height: 28px;
+            see-all-text := Text {
+                text: @tr("See discography");
+                color: see-all-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+            see-all-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.open-releases(root.section.release-type);
+                }
+            }
+        }
+        QbzSelect {
+            sm: true;
+            menu-width: 150px;
+            current-index: root.sort-index;
+            options: [
+                @tr("Default"),
+                @tr("Newest"),
+                @tr("Oldest"),
+                @tr("A–Z"),
+                @tr("Z–A"),
+            ];
+            selected(idx) => {
+                root.set-section-sort(
+                    root.section.release-type,
+                    idx == 1 ? "newest"
+                        : idx == 2 ? "oldest"
+                        : idx == 3 ? "title-asc"
+                        : idx == 4 ? "title-desc"
+                        : "default");
+            }
         }
     }
 
@@ -67,6 +114,28 @@ export component ReleaseGrid inherits VerticalLayout {
             }
             media-action(kind, id, action) => {
                 root.media-action(kind, id, action);
+            }
+        }
+    }
+
+    // --- Load more (per-section, capped to 4 pages on the index) ---------
+    if root.section.has-more: HorizontalLayout {
+        alignment: center;
+        Rectangle {
+            width: load-more-text.preferred-width + 24px;
+            height: 28px;
+            load-more-text := Text {
+                text: @tr("Load more");
+                color: load-more-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                font-size: 13px;
+                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+            }
+            load-more-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.load-more-section(root.section.release-type);
+                }
             }
         }
     }
