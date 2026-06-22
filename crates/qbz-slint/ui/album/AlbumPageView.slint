@@ -103,6 +103,47 @@ component SidebarHeading inherits Text {
     letter-spacing: 1px;
 }
 
+// One external-link brand icon in the album sidebar — the bare brand SVG
+// rendered with its native colors (no tint), no visible label; the name
+// shows in a hover tooltip (Feishin-style inline links).
+component BrandLink inherits Rectangle {
+    in property <image> icon;
+    in property <string> name;
+    callback clicked();
+
+    width: 30px;
+    height: 30px;
+    border-radius: Radius.sm;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+
+    Image {
+        source: root.icon;
+        width: 20px;
+        height: 20px;
+        image-fit: contain;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        opacity: ta.has-hover ? 1.0 : 0.92;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => {
+            if (self.has-hover && root.name != "") {
+                TooltipState.text = root.name;
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else if (!self.has-hover) {
+                TooltipState.show = false;
+            }
+        }
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 export component AlbumPageView inherits Rectangle {
     callback open-artist(string);
     callback media-action(string, string, string);
@@ -817,10 +858,10 @@ export component AlbumPageView inherits Rectangle {
                 // app — keep priority. In the rail, only the LABEL/AWARDS
                 // headings + the avatars show; names move to hover tooltips.
                 if AlbumState.label != "" || AlbumState.awards.length > 0 || AlbumState.show-external-links: VerticalLayout {
-                    // 160px (was 214px): the LABEL/AWARDS column was too wide
-                    // and the track TITLE — the most important column — paid
-                    // for it. Narrower here returns that width to the list.
-                    width: ShellState.content-constrained ? 56px : 160px;
+                    // 200px: wide enough for the LABEL/AWARDS/EXTERNAL LINKS
+                    // cards to breathe; collapses to a 56px icon rail when the
+                    // content area is space-constrained so the tracks keep room.
+                    width: ShellState.content-constrained ? 56px : 200px;
                     spacing: 24px;
                     alignment: start;
 
@@ -871,39 +912,59 @@ export component AlbumPageView inherits Rectangle {
                     }
 
                     // External links (Last.fm / Discogs / MusicBrainz),
-                    // Feishin-style. Same SidebarCard look + the collapse-to-
-                    // icon-rail behaviour the Sello/Premios groups use.
+                    // Feishin-style: bare brand SVG icons (native colors), no
+                    // visible label — names in hover tooltips. A row in the full
+                    // column; stacked + centered in the collapsed icon rail.
                     if AlbumState.show-external-links: VerticalLayout {
                         spacing: 8px;
                         SidebarHeading {
-                            text: @tr("External Links");
+                            text: @tr("EXTERNAL LINKS");
                             horizontal-alignment: ShellState.content-constrained ? center : left;
                         }
-                        if AlbumState.lastfm-url != "": SidebarCard {
-                            icon: @image-url("../assets/icons/external-link.svg");
-                            name: "Last.fm";
-                            compact: ShellState.content-constrained;
-                            avatar-bg: @linear-gradient(135deg, #d51007 0%, #f43f3f 100%);
-                            clicked => {
-                                AlbumActions.open-external-link(AlbumState.lastfm-url);
+                        if !ShellState.content-constrained: HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            if AlbumState.lastfm-url != "": BrandLink {
+                                icon: @image-url("../assets/icons/brand-lastfm.svg");
+                                name: "Last.fm";
+                                clicked => { AlbumActions.open-external-link(AlbumState.lastfm-url); }
+                            }
+                            if AlbumState.discogs-url != "": BrandLink {
+                                icon: @image-url("../assets/icons/brand-discogs.svg");
+                                name: "Discogs";
+                                clicked => { AlbumActions.open-external-link(AlbumState.discogs-url); }
+                            }
+                            if AlbumState.musicbrainz-url != "": BrandLink {
+                                icon: @image-url("../assets/icons/brand-musicbrainz.svg");
+                                name: "MusicBrainz";
+                                clicked => { AlbumActions.open-external-link(AlbumState.musicbrainz-url); }
                             }
                         }
-                        if AlbumState.discogs-url != "": SidebarCard {
-                            icon: @image-url("../assets/icons/external-link.svg");
-                            name: "Discogs";
-                            compact: ShellState.content-constrained;
-                            avatar-bg: @linear-gradient(135deg, #333333 0%, #555555 100%);
-                            clicked => {
-                                AlbumActions.open-external-link(AlbumState.discogs-url);
+                        if ShellState.content-constrained: VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                alignment: center;
+                                if AlbumState.lastfm-url != "": BrandLink {
+                                    icon: @image-url("../assets/icons/brand-lastfm.svg");
+                                    name: "Last.fm";
+                                    clicked => { AlbumActions.open-external-link(AlbumState.lastfm-url); }
+                                }
                             }
-                        }
-                        if AlbumState.musicbrainz-url != "": SidebarCard {
-                            icon: @image-url("../assets/icons/external-link.svg");
-                            name: "MusicBrainz";
-                            compact: ShellState.content-constrained;
-                            avatar-bg: @linear-gradient(135deg, #ba478f 0%, #eb743b 100%);
-                            clicked => {
-                                AlbumActions.open-external-link(AlbumState.musicbrainz-url);
+                            HorizontalLayout {
+                                alignment: center;
+                                if AlbumState.discogs-url != "": BrandLink {
+                                    icon: @image-url("../assets/icons/brand-discogs.svg");
+                                    name: "Discogs";
+                                    clicked => { AlbumActions.open-external-link(AlbumState.discogs-url); }
+                                }
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                if AlbumState.musicbrainz-url != "": BrandLink {
+                                    icon: @image-url("../assets/icons/brand-musicbrainz.svg");
+                                    name: "MusicBrainz";
+                                    clicked => { AlbumActions.open-external-link(AlbumState.musicbrainz-url); }
+                                }
                             }
                         }
                     }
