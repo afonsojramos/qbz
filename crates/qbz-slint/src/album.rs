@@ -12,7 +12,8 @@ use qbz_core::FrontendAdapter;
 use qbz_models::{Album, Track};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use crate::{AlbumState, TrackItem, AppWindow};
+use crate::artwork::{ArtworkJob, ArtworkTarget};
+use crate::{AlbumCardItem, AlbumState, AppWindow, DiscoverSection, TrackItem};
 
 thread_local! {
     /// The current album's full, unfiltered track list — kept so the
@@ -61,6 +62,9 @@ pub struct AlbumData {
     /// True when the album bundles a downloadable booklet/liner-notes PDF
     /// (Qobuz goodies) — gates the header booklet button.
     pub has_booklet: bool,
+    /// URL of the booklet PDF goody (the controller downloads + rasterizes it
+    /// on demand). Empty when the album bundles no booklet.
+    pub booklet_url: String,
     pub tracks: Vec<TrackData>,
     /// Raw catalog tracks, kept for the multi-select bulk actions.
     pub raw_tracks: Vec<Track>,
@@ -188,12 +192,33 @@ fn map_album(album: Album) -> AlbumData {
         .map(|a| (a.id.clone().unwrap_or_default(), a.name.clone()))
         .filter(|(_, n)| !n.is_empty())
         .collect();
-    // Booklet present when the album carries any goody with a usable URL.
-    let has_booklet = album
+    // Pick the booklet goody: prefer the PDF format id (21), else the first
+    // goody whose url/original_url ends in ".pdf". `original_url` (full-size)
+    // wins over the thumbnail `url`. `has_booklet` gates the header button on
+    // a usable URL — not merely the presence of a goody.
+    let booklet_url = album
         .goodies
         .as_deref()
-        .map(|goodies| goodies.iter().any(|g| !g.url.is_empty()))
-        .unwrap_or(false);
+        .and_then(|goodies| {
+            goodies
+                .iter()
+                .find(|g| g.file_format_id == Some(21))
+                .or_else(|| {
+                    goodies.iter().find(|g| {
+                        let ends_pdf = |s: &str| s.to_lowercase().ends_with(".pdf");
+                        ends_pdf(&g.original_url) || ends_pdf(&g.url)
+                    })
+                })
+        })
+        .map(|g| {
+            if !g.original_url.is_empty() {
+                g.original_url.clone()
+            } else {
+                g.url.clone()
+            }
+        })
+        .unwrap_or_default();
+    let has_booklet = !booklet_url.is_empty();
     let raw_tracks: Vec<Track> = album
         .tracks
         .map(|container| container.items)
@@ -218,9 +243,18 @@ fn map_album(album: Album) -> AlbumData {
         label_id,
         awards,
         has_booklet,
+        booklet_url,
         tracks,
         raw_tracks,
     }
+}
+
+/// Last.fm path segment: percent-encode, then render spaces as `+` (Last.fm's
+/// `/music/{artist}/{album}` paths use `+` for spaces, like Tauri's link
+/// builder). `urlencoding::encode` already emits `%20` for spaces, so swap
+/// them — the remaining percent-escapes (e.g. `/`, `?`) stay path-safe.
+fn lastfm_segment(text: &str) -> String {
+    urlencoding::encode(text).replace("%20", "+")
 }
 
 /// Truncate text to at most `max` characters, cutting back to the last
@@ -417,6 +451,40 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
     state.set_label_id(data.label_id.into());
     state.set_awards(ModelRc::new(VecModel::from(awards)));
     state.set_has_booklet(data.has_booklet);
+    // Stash the booklet goody URL for the reader controller; cleared on reset.
+    crate::booklet::set_current_url(&data.booklet_url);
+
+    // External-music-database links (Last.fm / Discogs / MusicBrainz), built
+    // from artist + title. apply_album is the Qobuz path (local albums load
+    // through LocalAlbumState), so is_local is always false here — gate on
+    // having both an artist and a title. Mirrors Tauri's AlbumExternalLinks.
+    let ext_artist = state.get_artist().to_string();
+    let ext_title = state.get_title().to_string();
+    let show_external = !ext_artist.is_empty() && !ext_title.is_empty();
+    if show_external {
+        let lastfm = format!(
+            "https://www.last.fm/music/{}/{}",
+            lastfm_segment(&ext_artist),
+            lastfm_segment(&ext_title),
+        );
+        // `{artist}+{album}` query (spaces as `+`, each part percent-encoded).
+        let query = format!(
+            "{}+{}",
+            urlencoding::encode(&ext_artist),
+            urlencoding::encode(&ext_title)
+        );
+        let discogs = format!("https://www.discogs.com/search/?q={query}&type=release");
+        let musicbrainz =
+            format!("https://musicbrainz.org/search?query={query}&type=release&method=indexed");
+        state.set_lastfm_url(lastfm.into());
+        state.set_discogs_url(discogs.into());
+        state.set_musicbrainz_url(musicbrainz.into());
+    } else {
+        state.set_lastfm_url("".into());
+        state.set_discogs_url("".into());
+        state.set_musicbrainz_url("".into());
+    }
+    state.set_show_external_links(show_external);
     // Fully cached = every track already has a ready (3) offline copy. Kept
     // live afterwards by set_row_cache_status as downloads complete.
     let album_fully_cached =
@@ -435,6 +503,159 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
     state.set_multi_select(false);
     state.set_selected_count(0);
     state.set_tracks(ModelRc::new(VecModel::from(tracks)));
+}
+
+// ==================== Polish carousels (more-from-artist / suggestions) =====
+
+/// "From the same artist" carousel data — other releases by this album's
+/// primary artist, with the current album removed. `Send` (plain cards).
+pub struct MoreFromArtist {
+    pub cards: Vec<crate::home::CardData>,
+    /// Whether the carousel should show (non-empty + not Various Artists).
+    pub show: bool,
+}
+
+/// Maximum cards in the "From the same artist" carousel.
+const MORE_FROM_ARTIST_MAX: usize = 16;
+
+/// Fetch + map other releases by `artist_id`, excluding `current_album_id`.
+/// Skipped (returns hidden) when the artist id is missing/unparseable or the
+/// artist is "Various Artists". Best-effort: a fetch error yields a hidden
+/// carousel, never an error to the caller.
+pub async fn load_more_from_artist<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    artist_id: &str,
+    artist_name: &str,
+    current_album_id: &str,
+) -> MoreFromArtist
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let hidden = MoreFromArtist {
+        cards: Vec::new(),
+        show: false,
+    };
+    if artist_name.eq_ignore_ascii_case("Various Artists") {
+        return hidden;
+    }
+    let Ok(id) = artist_id.parse::<u64>() else {
+        return hidden;
+    };
+    let resp = match runtime
+        .core()
+        .get_releases_grid(id, "album", 20, 0, Some("release_date"))
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[qbz-slint] more-from-artist load failed: {e}");
+            return hidden;
+        }
+    };
+    let cards: Vec<crate::home::CardData> = resp
+        .items
+        .into_iter()
+        .map(crate::artist::map_release)
+        .filter(|c| c.id != current_album_id)
+        .take(MORE_FROM_ARTIST_MAX)
+        .collect();
+    let show = !cards.is_empty();
+    MoreFromArtist { cards, show }
+}
+
+/// Apply the "From the same artist" carousel. Runs on the Slint event loop.
+/// Returns the artwork jobs for its cards.
+pub fn apply_more_from_artist(window: &AppWindow, data: MoreFromArtist) -> Vec<ArtworkJob> {
+    let items: Vec<AlbumCardItem> = data
+        .cards
+        .iter()
+        .cloned()
+        .map(crate::home::card_to_item)
+        .collect();
+    let jobs = data
+        .cards
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.artwork_url.is_empty())
+        .map(|(i, c)| ArtworkJob {
+            url: c.artwork_url.clone(),
+            target: ArtworkTarget::AlbumMoreFromArtist { index: i },
+        })
+        .collect();
+    let section = DiscoverSection {
+        title: "From the same artist".into(),
+        endpoint: "".into(),
+        albums: ModelRc::new(VecModel::from(items)),
+    };
+    let state = window.global::<AlbumState>();
+    state.set_more_from_artist(section);
+    state.set_show_more_from_artist(data.show);
+    jobs
+}
+
+/// "Listening suggestions" carousel data — albums similar to the open album
+/// (`/album/suggest`). `Send` (plain cards).
+pub struct Suggestions {
+    pub cards: Vec<crate::album_map::AlbumCard>,
+    pub show: bool,
+}
+
+/// Fetch + map listening suggestions for `album_id`. Best-effort: an error or
+/// an empty result yields a hidden carousel.
+pub async fn load_suggestions<A>(runtime: &Arc<AppRuntime<A>>, album_id: &str) -> Suggestions
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let resp = match runtime.core().get_album_suggest(album_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[qbz-slint] album suggestions load failed: {e}");
+            return Suggestions {
+                cards: Vec::new(),
+                show: false,
+            };
+        }
+    };
+    let cards: Vec<crate::album_map::AlbumCard> = resp
+        .albums
+        .map(|page| page.items)
+        .unwrap_or_default()
+        .into_iter()
+        .map(crate::album_map::map_album)
+        .filter(|c| c.id != album_id)
+        .collect();
+    let show = !cards.is_empty();
+    Suggestions { cards, show }
+}
+
+/// Apply the "Listening suggestions" carousel. Runs on the Slint event loop.
+/// Returns the artwork jobs for its cards.
+pub fn apply_suggestions(window: &AppWindow, data: Suggestions) -> Vec<ArtworkJob> {
+    let items: Vec<AlbumCardItem> = data
+        .cards
+        .iter()
+        .cloned()
+        .map(crate::album_map::to_item)
+        .collect();
+    let jobs = data
+        .cards
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.artwork_url.is_empty())
+        .map(|(i, c)| ArtworkJob {
+            url: c.artwork_url.clone(),
+            target: ArtworkTarget::AlbumSuggestion { index: i },
+        })
+        .collect();
+    let section = DiscoverSection {
+        title: "Listening suggestions".into(),
+        endpoint: "".into(),
+        albums: ModelRc::new(VecModel::from(items)),
+    };
+    let state = window.global::<AlbumState>();
+    state.set_suggestions_section(section);
+    state.set_show_suggestions(data.show);
+    jobs
 }
 
 /// Filter the visible track list by `query` (case-insensitive match on
@@ -471,6 +692,17 @@ pub fn reset_album(window: &AppWindow) {
     state.set_header_atmosphere(slint::Image::default());
     // Clear the booklet gate so the previous album's value doesn't linger.
     state.set_has_booklet(false);
+    crate::booklet::clear_current_url();
+    // Clear the polish carousels + external links so the previous album's
+    // values don't flash before the new loads land.
+    state.set_more_from_artist(DiscoverSection::default());
+    state.set_show_more_from_artist(false);
+    state.set_suggestions_section(DiscoverSection::default());
+    state.set_show_suggestions(false);
+    state.set_show_external_links(false);
+    state.set_lastfm_url("".into());
+    state.set_discogs_url("".into());
+    state.set_musicbrainz_url("".into());
     state.set_album_fully_cached(false);
     state.set_is_favorite(false);
     state.set_favorite_loading(false);

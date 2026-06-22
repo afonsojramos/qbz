@@ -28,6 +28,7 @@ members = [
     "qbz-mixtape",
     "qbz-playlist-import",
     "qbz-lyrics",
+    "qbz-booklet",
 ]
 
 [workspace.package]

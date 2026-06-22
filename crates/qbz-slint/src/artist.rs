@@ -486,7 +486,7 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackData {
     }
 }
 
-fn map_release(release: PageArtistRelease) -> CardData {
+pub(crate) fn map_release(release: PageArtistRelease) -> CardData {
     let artist = release
         .artist
         .map(|a| a.name.display)

@@ -25,6 +25,7 @@ import { CircleAction } from "../primitives/CircleAction.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { ImmersiveAtmosphere } from "../immersive/ImmersiveAtmosphere.slint";
+import { Carousel } from "../discover/Carousel.slint";
 
 // One label/award entry in the album sidebar — a round gradient avatar
 // and a name. In `compact` mode the name is dropped (the rail is an
@@ -459,7 +460,12 @@ export component AlbumPageView inherits Rectangle {
                         }
                         if AlbumState.has-booklet: VerticalLayout {
                             alignment: center;
-                            CircleAction { icon: @image-url("../assets/icons/book-open.svg"); }
+                            CircleAction {
+                                icon: @image-url("../assets/icons/book-open.svg");
+                                clicked => {
+                                    root.media-action("album", AlbumState.id, "booklet");
+                                }
+                            }
                         }
                         VerticalLayout {
                             alignment: center;
@@ -810,7 +816,7 @@ export component AlbumPageView inherits Rectangle {
                 // a right panel open), so the tracks — what matters in a music
                 // app — keep priority. In the rail, only the LABEL/AWARDS
                 // headings + the avatars show; names move to hover tooltips.
-                if AlbumState.label != "" || AlbumState.awards.length > 0: VerticalLayout {
+                if AlbumState.label != "" || AlbumState.awards.length > 0 || AlbumState.show-external-links: VerticalLayout {
                     // 160px (was 214px): the LABEL/AWARDS column was too wide
                     // and the track TITLE — the most important column — paid
                     // for it. Narrower here returns that width to the list.
@@ -863,6 +869,75 @@ export component AlbumPageView inherits Rectangle {
                             }
                         }
                     }
+
+                    // External links (Last.fm / Discogs / MusicBrainz),
+                    // Feishin-style. Same SidebarCard look + the collapse-to-
+                    // icon-rail behaviour the Sello/Premios groups use.
+                    if AlbumState.show-external-links: VerticalLayout {
+                        spacing: 8px;
+                        SidebarHeading {
+                            text: @tr("External Links");
+                            horizontal-alignment: ShellState.content-constrained ? center : left;
+                        }
+                        if AlbumState.lastfm-url != "": SidebarCard {
+                            icon: @image-url("../assets/icons/external-link.svg");
+                            name: "Last.fm";
+                            compact: ShellState.content-constrained;
+                            avatar-bg: @linear-gradient(135deg, #d51007 0%, #f43f3f 100%);
+                            clicked => {
+                                AlbumActions.open-external-link(AlbumState.lastfm-url);
+                            }
+                        }
+                        if AlbumState.discogs-url != "": SidebarCard {
+                            icon: @image-url("../assets/icons/external-link.svg");
+                            name: "Discogs";
+                            compact: ShellState.content-constrained;
+                            avatar-bg: @linear-gradient(135deg, #333333 0%, #555555 100%);
+                            clicked => {
+                                AlbumActions.open-external-link(AlbumState.discogs-url);
+                            }
+                        }
+                        if AlbumState.musicbrainz-url != "": SidebarCard {
+                            icon: @image-url("../assets/icons/external-link.svg");
+                            name: "MusicBrainz";
+                            compact: ShellState.content-constrained;
+                            avatar-bg: @linear-gradient(135deg, #ba478f 0%, #eb743b 100%);
+                            clicked => {
+                                AlbumActions.open-external-link(AlbumState.musicbrainz-url);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Bottom carousels (1:1 with the Qobuz webplayer) -------------
+            // "More from <artist>" with a View-all link to the artist's
+            // releases, then "Suggestions" — both full-width below the track
+            // list / sidebar row. Gated independently by the Rust controller.
+            if AlbumState.show-more-from-artist: Rectangle { height: 40px; }
+            if AlbumState.show-more-from-artist: Carousel {
+                section: AlbumState.more-from-artist;
+                show-view-all: true;
+                album-clicked(id) => {
+                    root.media-action("album", id, "open");
+                }
+                view-all-clicked => {
+                    root.media-action("artist", AlbumState.artist-id, "releases");
+                }
+                media-action(k, i, a) => {
+                    root.media-action(k, i, a);
+                }
+            }
+
+            if AlbumState.show-suggestions: Rectangle { height: 40px; }
+            if AlbumState.show-suggestions: Carousel {
+                section: AlbumState.suggestions-section;
+                show-view-all: false;
+                album-clicked(id) => {
+                    root.media-action("album", id, "open");
+                }
+                media-action(k, i, a) => {
+                    root.media-action(k, i, a);
                 }
             }
         }

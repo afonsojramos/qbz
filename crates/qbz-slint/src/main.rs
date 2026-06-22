@@ -25,6 +25,7 @@ mod artwork;
 mod auth;
 mod award;
 mod blacklist_manager;
+mod booklet;
 mod commands;
 mod custom_artwork;
 mod dates;
@@ -1084,6 +1085,9 @@ fn navigate_album(
         match album::load_album(&runtime, &album_id).await {
             Ok(data) => {
                 let artwork_url = data.artwork_url.clone();
+                // Carousel inputs, captured before `data` is moved into apply.
+                let carousel_artist_id = data.artist_id.clone();
+                let carousel_artist_name = data.artist.clone();
                 // A user-set custom cover (keyed by album id) wins and is the
                 // only image source for albums with no Qobuz cover. Same bug
                 // class as the artist portrait fix.
@@ -1092,6 +1096,38 @@ fn navigate_album(
                     album::apply_album(&w, data);
                     w.global::<AlbumState>().set_loading(false);
                 });
+
+                // Polish carousels — "From the same artist" + "Listening
+                // suggestions". Qobuz-only (this is the Qobuz album path; local
+                // albums load through navigate_local_album), best-effort: each
+                // failure hides its own carousel. Loaded after the album so the
+                // tracklist paints first.
+                {
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let image_cache = image_cache.clone();
+                    let album_id = album_id.clone();
+                    tokio::spawn(async move {
+                        let more = album::load_more_from_artist(
+                            &runtime,
+                            &carousel_artist_id,
+                            &carousel_artist_name,
+                            &album_id,
+                        )
+                        .await;
+                        let image_cache_more = image_cache.clone();
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            let jobs = album::apply_more_from_artist(&w, more);
+                            artwork::spawn_loads(jobs, w.as_weak(), image_cache_more);
+                        });
+
+                        let suggestions = album::load_suggestions(&runtime, &album_id).await;
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            let jobs = album::apply_suggestions(&w, suggestions);
+                            artwork::spawn_loads(jobs, w.as_weak(), image_cache);
+                        });
+                    });
+                }
                 if let Some(path) = custom_cover_path {
                     if let Some((pixels, width, height)) = artwork::fetch_and_decode_ref(
                         &qbz_models::ArtworkRef::LocalFile(path),
@@ -6812,6 +6848,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                 }
+                // Album booklet (digital liner-notes PDF) — opened from the
+                // album header booklet button. Downloads + rasterizes the goody
+                // PDF stashed by album::apply_album; the BookletState gate keeps
+                // it a no-op when the album bundles no booklet.
+                ("album", "booklet") => {
+                    crate::booklet::open(weak.clone(), handle.clone());
+                }
+                // "From the same artist" carousel "View all" — open the artist's
+                // full Albums discography page. `id` is the artist id; reuse the
+                // dedicated releases page (release_type "album").
+                ("artist", "releases") => {
+                    if !id.is_empty() {
+                        let name = weak
+                            .upgrade()
+                            .map(|w| w.global::<AlbumState>().get_artist().to_string())
+                            .unwrap_or_default();
+                        nav::record(nav::NavEntry::ArtistReleases {
+                            id: id.clone(),
+                            name: name.clone(),
+                            release_type: "album".to_string(),
+                        });
+                        navigate_artist_releases(
+                            runtime.clone(),
+                            weak.clone(),
+                            &handle,
+                            image_cache.clone(),
+                            id.clone(),
+                            name,
+                            "album".to_string(),
+                        );
+                        if let Some(w) = weak.upgrade() {
+                            update_nav_flags(&w);
+                        }
+                    }
+                }
                 ("album", "play") => {
                     // A Plex/local id is a metadata group key, not a Qobuz id —
                     // play it from the local/Plex cache (Home "Recently played",
@@ -9029,6 +9100,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             });
+    }
+
+    // Album external-database links (Last.fm / Discogs / MusicBrainz) — open
+    // the prebuilt url (AlbumState.*-url) in the system browser. Mirrors the
+    // ArtworkActions open-in-browser handler.
+    window
+        .global::<AlbumActions>()
+        .on_open_external_link(|url| {
+            if url.is_empty() {
+                return;
+            }
+            if let Err(e) = open::that(url.as_str()) {
+                log::error!("[qbz-slint] album external link open failed: {e}");
+            }
+        });
+
+    // Booklet reader controls (BookletActions) — paging / zoom / rotate
+    // re-rasterize the current page off-thread; close removes the temp PDF.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<BookletActions>()
+            .on_close(move || {
+                if let Some(w) = weak.upgrade() {
+                    crate::booklet::close(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<BookletActions>()
+            .on_next_page(move || crate::booklet::next_page(weak.clone(), handle.clone()));
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<BookletActions>()
+            .on_prev_page(move || crate::booklet::prev_page(weak.clone(), handle.clone()));
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<BookletActions>()
+            .on_zoom_in(move || crate::booklet::zoom_in(weak.clone(), handle.clone()));
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<BookletActions>()
+            .on_zoom_out(move || crate::booklet::zoom_out(weak.clone(), handle.clone()));
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<BookletActions>()
+            .on_fit_width(move || crate::booklet::fit_width(weak.clone(), handle.clone()));
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<BookletActions>()
+            .on_rotate(move || crate::booklet::rotate(weak.clone(), handle.clone()));
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<BookletActions>()
+            .on_download(move || crate::booklet::download(weak.clone(), handle.clone()));
     }
 
     // Artist in-page search — client-side filter over Popular Tracks

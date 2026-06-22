@@ -35,6 +35,7 @@ import { PlaylistImportModal } from "../primitives/PlaylistImportModal.slint";
 import { DacWizardModal } from "../primitives/DacWizardModal.slint";
 import { TrackInfoModal } from "../album/TrackInfoModal.slint";
 import { AlbumCreditsModal } from "../album/AlbumCreditsModal.slint";
+import { AlbumBookletModal } from "../album/AlbumBookletModal.slint";
 import { ImmersiveView } from "../immersive/ImmersiveView.slint";
 import { QconnectDevModal } from "QconnectDevModal.slint";
 import { CastPicker } from "CastPicker.slint";
@@ -616,6 +617,14 @@ export component AppShell inherits Rectangle {
         height: 100%;
     }
     AlbumCreditsModal {
+        width: 100%;
+        height: 100%;
+    }
+
+    // Album Booklet modal — in-app PDF reader (crate qbz-booklet feeds
+    // BookletState). Mounted right after the credits modal; self-gates on
+    // BookletState.open (ADR-009/010).
+    AlbumBookletModal {
         width: 100%;
         height: 100%;
     }

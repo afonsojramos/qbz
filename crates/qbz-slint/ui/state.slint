@@ -500,6 +500,25 @@ export global AlbumState {
     // Local source ("user" | "qobuz_download" | "plex" | ""). Gates the
     // tag-editor pencil (hidden for Plex; tag write isn't supported there).
     in property <string> source;
+    // ---- Bottom carousels (webplayer parity) + external links -----------
+    // "More from this artist" carousel ("Del mismo artista..." on the
+    // webplayer / "By the same artist" in Tauri). Populated after the album
+    // renders from /artist/getReleasesGrid. `endpoint` non-empty on the
+    // section shows the "View all" link (-> artist discography).
+    in property <DiscoverSection> more-from-artist;
+    in property <bool> show-more-from-artist: false;
+    // "Listening suggestions" carousel ("Sugerencias de escucha" on the
+    // webplayer) from /album/suggest. Album cards -> open album.
+    in property <DiscoverSection> suggestions-section;
+    in property <bool> show-suggestions: false;
+    // External links sidebar block (Last.fm / Discogs / MusicBrainz),
+    // Feishin-style. URLs are prebuilt by the controller from artist + title;
+    // each row opens its url via AlbumActions.open-external-link. Hidden for
+    // local-only albums (no Qobuz artist/title to search).
+    in property <bool> show-external-links: false;
+    in property <string> lastfm-url;
+    in property <string> discogs-url;
+    in property <string> musicbrainz-url;
 }
 
 // ---------------------------------------------------------------------------
@@ -692,6 +711,50 @@ export global AlbumActions {
     // scoped to that disc's tracks only (action = "play" | "shuffle" | "queue"
     // | "play-next"). The whole-album header buttons are unaffected.
     callback disc-action(int /* disc number */, string /* action */);
+    // Open an external link (Last.fm / Discogs / MusicBrainz) in the system
+    // browser. The url is prebuilt by the controller (AlbumState.*-url).
+    callback open-external-link(string /* url */);
+}
+
+// ---------------------------------------------------------------------------
+// Booklet (digital liner-notes PDF) reader — 1:1 port of Tauri's
+// BookletViewer.svelte. The Rust controller (crate::booklet) downloads the
+// album goody PDF, rasterizes pages via the qbz-booklet crate (MuPDF), and
+// pushes the decoded page image here. Mounted as a top overlay in AppShell
+// (ADR-009 z-index >= 3000).
+// ---------------------------------------------------------------------------
+
+export global BookletState {
+    // Modal open / lifecycle.
+    in-out property <bool> open: false;
+    // True while the PDF downloads or a page renders (spinner).
+    in property <bool> loading: false;
+    in property <bool> error: false;
+    in property <string> error-text;
+    // Album title for the modal header.
+    in property <string> title;
+    // The current rendered page image + its pixel size (for sizing/scroll).
+    in property <image> page-image;
+    in property <int> page-pixel-width: 0;
+    in property <int> page-pixel-height: 0;
+    // 1-based current page + total page count.
+    in property <int> current-page: 1;
+    in property <int> num-pages: 0;
+    // Zoom factor (1.0 = fit-width baseline) + cumulative rotation in degrees.
+    in property <float> zoom: 1.0;
+    in property <int> rotation: 0;
+}
+
+export global BookletActions {
+    callback close();
+    callback next-page();
+    callback prev-page();
+    callback zoom-in();
+    callback zoom-out();
+    callback fit-width();
+    callback rotate();
+    // Save the open booklet PDF to a user-chosen location.
+    callback download();
 }
 
 // Track drag-and-drop onto sidebar playlists (a star QBZ feature).
