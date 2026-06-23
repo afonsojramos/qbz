@@ -732,7 +732,7 @@ impl QueueController {
         self.handle.spawn(async move {
             // Offline = read-only hearts (spec 4.3).
             if crate::offline_mode::engine().is_offline() {
-                crate::toast::info_weak(&this.weak, "Not available offline");
+                crate::toast::info_weak(&this.weak, qbz_i18n::t("Not available offline"));
                 return;
             }
             let state = this.runtime.core().get_queue_state_full().await;

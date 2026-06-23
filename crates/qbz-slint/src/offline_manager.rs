@@ -167,7 +167,11 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
         .iter()
         .map(|(name, (albums_n, tracks_n))| OfflineArtist {
             name: name.clone().into(),
-            meta: format!("{} albums · {} tracks", albums_n, tracks_n).into(),
+            meta: qbz_i18n::t_args(
+                "{} albums · {} tracks",
+                &[&albums_n.to_string(), &tracks_n.to_string()],
+            )
+            .into(),
             selected: *name == f.selected_artist,
         })
         .collect();
@@ -224,7 +228,10 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
             track_id: String::new(),
             title: title.clone(),
             subtitle: artist.clone(),
-            meta: format!("{} tracks · {}", group.len(), human_size(album_size(group))),
+            meta: qbz_i18n::t_args(
+                "{} tracks · {}",
+                &[&group.len().to_string(), &human_size(album_size(group))],
+            ),
             status: album_status,
             progress: 0.0,
             cover_path,
@@ -251,11 +258,11 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
 
     let (limit_text, usage, limit_gb) = match limit {
         Some(l) if l > 0 => (
-            format!("· of {}", human_size(l)),
+            qbz_i18n::t_args("· of {}", &[&human_size(l)]),
             (total_size as f32 / l as f32).clamp(0.0, 1.0),
             (l / GB).max(1) as i32,
         ),
-        _ => ("· Unlimited".to_string(), 0.0, 5),
+        _ => (qbz_i18n::t("· Unlimited"), 0.0, 5),
     };
     let size_text = human_size(total_size);
 

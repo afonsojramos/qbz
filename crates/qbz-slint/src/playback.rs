@@ -340,9 +340,9 @@ async fn advance_to_playable(
     // offline wording (online, FileMissing is the only possible skip).
     let walk_toast = |skips: usize, missing_files: usize| {
         if missing_files == skips {
-            "Files not available — is the drive mounted?"
+            qbz_i18n::t("Files not available — is the drive mounted?")
         } else {
-            "No tracks available offline"
+            qbz_i18n::t("No tracks available offline")
         }
     };
     loop {
@@ -407,7 +407,7 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
                         );
                         crate::toast::show_weak(
                             weak,
-                            "Offline listening period expired — reconnect to verify your subscription",
+                            qbz_i18n::t("Offline listening period expired — reconnect to verify your subscription"),
                             crate::ToastKind::Warning,
                         );
                         return;
@@ -418,7 +418,7 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
                         );
                         crate::toast::show_weak(
                             weak,
-                            "Track not available offline",
+                            qbz_i18n::t("Track not available offline"),
                             crate::ToastKind::Warning,
                         );
                         return;
@@ -429,7 +429,7 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
                         );
                         crate::toast::show_weak(
                             weak,
-                            "File not available — is the drive mounted?",
+                            qbz_i18n::t("File not available — is the drive mounted?"),
                             crate::ToastKind::Warning,
                         );
                         return;
@@ -451,7 +451,7 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
             if let Some(qt) = runtime.core().current_track().await {
                 if let Err(e) = cast.cast_track(&qt).await {
                     log::warn!("[Cast] play new track {track_id} failed: {e}");
-                    crate::toast::show_weak(weak, "Failed to cast track", crate::ToastKind::Error);
+                    crate::toast::show_weak(weak, qbz_i18n::t("Failed to cast track"), crate::ToastKind::Error);
                 }
             }
             clear_loading(weak, track_id);
@@ -602,7 +602,7 @@ async fn play_local_file_audible(
         log::error!("[qbz-slint] local play: file not available at {path}");
         crate::toast::show_weak(
             weak,
-            "File not available — is the drive mounted?",
+            qbz_i18n::t("File not available — is the drive mounted?"),
             crate::ToastKind::Warning,
         );
         clear_loading(weak, row_id);
@@ -906,7 +906,7 @@ pub fn ephemeral_enqueue(
         let queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
         runtime.core().add_tracks(queue).await;
         refresh_sidebar(true);
-        crate::toast::success_weak(&weak, "Added to queue");
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
     });
 }
 
@@ -1791,7 +1791,7 @@ async fn fetch_album_for_play(
         Ok(album) => album,
         Err(e) => {
             log::error!("[qbz-slint] playback: get_album {album_id} failed: {e}");
-            crate::toast::error_weak(weak, "Couldn't load this album");
+            crate::toast::error_weak(weak, qbz_i18n::t("Couldn't load this album"));
             return None;
         }
     };
@@ -1815,7 +1815,7 @@ async fn fetch_album_for_play(
     // Genuinely empty album → keep the existing "no playable tracks" toast.
     if raw_tracks.is_empty() {
         log::warn!("[qbz-slint] playback: album {album_id} has no tracks");
-        crate::toast::error_weak(weak, "This album has no playable tracks");
+        crate::toast::error_weak(weak, qbz_i18n::t("This album has no playable tracks"));
         return None;
     }
 
@@ -1921,7 +1921,7 @@ async fn fetch_artist_top_for_play(
         Ok(page) => page,
         Err(e) => {
             log::error!("[qbz-slint] play-top: get_artist_page failed: {e}");
-            crate::toast::error_weak(weak, "Couldn't load this artist");
+            crate::toast::error_weak(weak, qbz_i18n::t("Couldn't load this artist"));
             return None;
         }
     };
@@ -1934,7 +1934,7 @@ async fn fetch_artist_top_for_play(
         .collect();
     if raw.is_empty() {
         log::warn!("[qbz-slint] play-top: artist {artist_id} has no top tracks");
-        crate::toast::error_weak(weak, "No top tracks available for this artist");
+        crate::toast::error_weak(weak, qbz_i18n::t("No top tracks available for this artist"));
         return None;
     }
     // Drop blacklisted top tracks (a featured/blacklisted performer can appear
@@ -2012,7 +2012,7 @@ pub fn enqueue_artist_top_selected(
             runtime.core().add_tracks(tracks).await;
         }
         refresh_sidebar(false);
-        crate::toast::success_weak(&weak, if next { "Playing next" } else { "Added to queue" });
+        crate::toast::success_weak(&weak, if next { qbz_i18n::t("Playing next") } else { qbz_i18n::t("Added to queue") });
     });
 }
 
@@ -2705,7 +2705,7 @@ pub fn enqueue_album(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
         }
         runtime.core().add_tracks(tracks).await;
         refresh_sidebar(false);
-        crate::toast::success_weak(&weak, "Added to queue");
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
     });
 }
 
@@ -2811,7 +2811,7 @@ pub fn enqueue_album_next(
             runtime.core().add_track_next(track).await;
         }
         refresh_sidebar(false);
-        crate::toast::success_weak(&weak, "Playing next");
+        crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
     });
 }
 
@@ -2856,7 +2856,7 @@ pub fn enqueue_track(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
             make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork);
         runtime.core().add_track(queue_track).await;
         refresh_sidebar(false);
-        crate::toast::success_weak(&weak, "Added to queue");
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
     });
 }
 
@@ -2906,7 +2906,7 @@ pub fn play_track_next(
             make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork);
         runtime.core().add_track_next(queue_track).await;
         refresh_sidebar(false);
-        crate::toast::success_weak(&weak, "Playing next");
+        crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
     });
 }
 
@@ -3032,7 +3032,7 @@ pub fn enqueue_playlist(
             runtime.core().add_tracks(tracks).await;
         }
         refresh_sidebar(false);
-        crate::toast::success_weak(&weak, if next { "Playing next" } else { "Added to queue" });
+        crate::toast::success_weak(&weak, if next { qbz_i18n::t("Playing next") } else { qbz_i18n::t("Added to queue") });
     });
 }
 
@@ -3156,7 +3156,7 @@ pub fn enqueue_queue_tracks(
             runtime.core().add_tracks(tracks).await;
         }
         refresh_sidebar(false);
-        crate::toast::success_weak(&weak, if next { "Playing next" } else { "Added to queue" });
+        crate::toast::success_weak(&weak, if next { qbz_i18n::t("Playing next") } else { qbz_i18n::t("Added to queue") });
     });
 }
 

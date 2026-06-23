@@ -102,7 +102,7 @@ pub fn row_sink(weak: slint::Weak<AppWindow>) -> CacheEventSink {
         CacheEvent::Completed { track_id, .. } => {
             mark_cached(track_id, true);
             push_status(&weak, track_id, 3, 1.0);
-            crate::toast::success_weak(&weak, "Cached for offline");
+            crate::toast::success_weak(&weak, qbz_i18n::t("Cached for offline"));
         }
         CacheEvent::Processed { .. } => {
             // Post-processing done; status already 'ready' from Completed.
@@ -110,7 +110,7 @@ pub fn row_sink(weak: slint::Weak<AppWindow>) -> CacheEventSink {
         CacheEvent::Failed { track_id, error } => {
             log::warn!("[qbz-slint] offline cache failed for {track_id}: {error}");
             push_status(&weak, track_id, 4, 0.0);
-            crate::toast::error_weak(&weak, "Offline caching failed");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Offline caching failed"));
         }
         CacheEvent::UnlockStart { track_id } => {
             push_unlocking(&weak, track_id, true);
@@ -166,14 +166,14 @@ pub fn cache_track(
 ) {
     handle.spawn(async move {
         let Some(off) = crate::offline::get().await else {
-            crate::toast::error_weak(&weak, "Log in to cache tracks offline");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Log in to cache tracks offline"));
             return;
         };
         let track = match runtime.core().get_track(id).await {
             Ok(t) => t,
             Err(e) => {
                 log::error!("[qbz-slint] cache: get_track {id} failed: {e}");
-                crate::toast::error_weak(&weak, "Couldn't load that track");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load that track"));
                 return;
             }
         };
@@ -193,7 +193,7 @@ pub fn cache_track(
                 log::warn!("[qbz-slint] cache limit reached: {e}");
                 crate::toast::error_weak(
                     &weak,
-                    "Offline cache is full — free space or raise the limit",
+                    qbz_i18n::t("Offline cache is full — free space or raise the limit"),
                 );
                 return;
             }
@@ -231,7 +231,7 @@ pub fn cache_tracks(
     }
     handle.spawn(async move {
         let Some(off) = crate::offline::get().await else {
-            crate::toast::error_weak(&weak, "Log in to cache tracks offline");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Log in to cache tracks offline"));
             return;
         };
         // Pre-flight once for the whole batch (mirrors Tauri).
@@ -246,7 +246,7 @@ pub fn cache_tracks(
                 log::warn!("[qbz-slint] batch cache limit reached: {e}");
                 crate::toast::error_weak(
                     &weak,
-                    "Offline cache is full — free space or raise the limit",
+                    qbz_i18n::t("Offline cache is full — free space or raise the limit"),
                 );
                 return;
             }
@@ -281,7 +281,12 @@ pub fn cache_tracks(
         }
         crate::toast::success_weak(
             &weak,
-            format!("Caching {count} track{} offline…", if count == 1 { "" } else { "s" }),
+            qbz_i18n::tf(
+                "Caching {} track offline…",
+                "Caching {} tracks offline…",
+                count as i64,
+                &[&count.to_string()],
+            ),
         );
     });
 }
@@ -299,7 +304,7 @@ pub fn cache_album(
             Ok(a) => a,
             Err(e) => {
                 log::error!("[qbz-slint] cache album {album_id} failed: {e}");
-                crate::toast::error_weak(&weak, "Couldn't load that album");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load that album"));
                 return;
             }
         };
@@ -309,7 +314,7 @@ pub fn cache_album(
             .map(|c| c.items.clone())
             .unwrap_or_default();
         if tracks.is_empty() {
-            crate::toast::error_weak(&weak, "This album has no playable tracks");
+            crate::toast::error_weak(&weak, qbz_i18n::t("This album has no playable tracks"));
             return;
         }
         cache_tracks(runtime, weak, inner, tracks);
@@ -329,13 +334,13 @@ pub fn cache_playlist(
             Ok(p) => p,
             Err(e) => {
                 log::error!("[qbz-slint] cache playlist {playlist_id} failed: {e}");
-                crate::toast::error_weak(&weak, "Couldn't load that playlist");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load that playlist"));
                 return;
             }
         };
         let tracks: Vec<qbz_models::Track> = pl.tracks.map(|c| c.items).unwrap_or_default();
         if tracks.is_empty() {
-            crate::toast::error_weak(&weak, "This playlist has no playable tracks");
+            crate::toast::error_weak(&weak, qbz_i18n::t("This playlist has no playable tracks"));
             return;
         }
         cache_tracks(runtime, weak, inner, tracks);
@@ -384,7 +389,7 @@ pub fn remove_album(
                 crate::set_row_cache_status(&w, &id.to_string(), 0, 0.0);
             }
         });
-        crate::toast::success_weak(&weak, "Removed album from offline");
+        crate::toast::success_weak(&weak, qbz_i18n::t("Removed album from offline"));
         crate::offline_manager::rebuild(weak.clone()).await;
     });
 }
@@ -506,13 +511,13 @@ pub fn clear_all(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
         };
         if let Err(e) = qbz_offline_cache::purge_all_cached_files(&off, &off.library_db).await {
             log::error!("[qbz-slint] clear offline cache failed: {e}");
-            crate::toast::error_weak(&weak, "Couldn't clear the offline cache");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't clear the offline cache"));
             return;
         }
         if let Ok(mut s) = cached_ids().lock() {
             s.clear();
         }
-        crate::toast::success_weak(&weak, "Offline cache cleared");
+        crate::toast::success_weak(&weak, qbz_i18n::t("Offline cache cleared"));
         crate::offline_manager::rebuild(weak.clone()).await;
     });
 }
@@ -586,7 +591,7 @@ async fn remove_cached_inner(weak: &slint::Weak<AppWindow>, id: u64, toast: bool
     mark_cached(id, false);
     push_status(weak, id, 0, 0.0);
     if toast {
-        crate::toast::success_weak(weak, "Removed from offline");
+        crate::toast::success_weak(weak, qbz_i18n::t("Removed from offline"));
     }
     crate::offline_manager::rebuild(weak.clone()).await;
 }
