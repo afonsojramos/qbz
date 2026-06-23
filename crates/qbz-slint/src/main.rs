@@ -4859,6 +4859,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.global::<AppearanceState>().set_startup_page_index(
         crate::ui_prefs::startup_page_index(&crate::ui_prefs::load().startup_page),
     );
+    // Language selector: seed the dropdown index from the persisted key (the raw
+    // user choice, "auto" -> index 0). The live translation was already applied
+    // before the window was created.
+    window.global::<AppearanceState>().set_language_index(
+        crate::ui_prefs::language_index(&crate::ui_prefs::load().language),
+    );
 
     // Theme: seed the dropdown list from the Rust registry, then restore the
     // persisted theme (slug is the source of truth; the dropdown index is
@@ -6909,6 +6915,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut prefs = crate::ui_prefs::load();
                 prefs.startup_page = crate::ui_prefs::startup_page_for_index(index).to_string();
                 crate::ui_prefs::save(&prefs);
+            }
+            "language" => {
+                // 0 = Auto, 1 = English, 2 = Español, 3 = Français, 4 = Deutsch,
+                // 5 = Português. Persist the RAW user choice ("auto" stays
+                // "auto"), but resolve "auto" to a concrete language before
+                // switching the live translations.
+                let chosen = crate::ui_prefs::language_for_index(index);
+                let mut prefs = crate::ui_prefs::load();
+                prefs.language = chosen.to_string();
+                crate::ui_prefs::save(&prefs);
+                let lang = if chosen == "auto" {
+                    qbz_i18n::resolve_auto()
+                } else {
+                    chosen
+                };
+                qbz_i18n::set_language(lang);
+                if let Err(e) = slint::select_bundled_translation(lang) {
+                    log::warn!(
+                        "[qbz-slint] select_bundled_translation('{lang}') failed: {e:?}"
+                    );
+                }
             }
             "theme" => {
                 // Slug is the source of truth: map the dropdown index -> stable
