@@ -100,7 +100,11 @@ export component AudioSettings inherits VerticalLayout {
         description: @tr("The DAC or sound device that receives audio.");
         HorizontalLayout {
             spacing: 8px;
-            alignment: center;
+            // Right-align the refresh + select so the row's trailing controls
+            // land flush on the same right edge as the single-control rows when
+            // the window widens out of responsive mode (was `center`, which left
+            // a floating right-hand gap).
+            alignment: end;
             // Refresh / release: frees a device QBZ is holding exclusively
             // (ALSA Direct) and re-enumerates, so a DAC that's invisible to
             // PipeWire — or one hot-plugged while QBZ ran — shows up without
