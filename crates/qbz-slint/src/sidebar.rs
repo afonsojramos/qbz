@@ -300,7 +300,12 @@ where
                 .get(&id)
                 .cloned()
                 .or_else(|| snapshot.map(|(name, _)| (name.clone(), String::new())))
-                .unwrap_or_else(|| (format!("Playlist ({count} local)"), String::new()));
+                .unwrap_or_else(|| {
+                    (
+                        qbz_i18n::t_args("Playlist ({} local)", &[&count.to_string()]),
+                        String::new(),
+                    )
+                });
             // Track count: the snapshot's point-in-time Qobuz total when
             // known (the "# of tracks" sort key), else the local count.
             let tracks_count = snapshot.and_then(|(_, tc)| *tc).unwrap_or(count);

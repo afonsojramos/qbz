@@ -189,7 +189,7 @@ pub fn copy_current_lyrics(weak: &slint::Weak<AppWindow>) {
         return;
     }
     crate::share::copy_to_clipboard(text);
-    crate::toast::success_weak(weak, "Lyrics copied");
+    crate::toast::success_weak(weak, qbz_i18n::t("Lyrics copied"));
 }
 
 /// Refresh the Settings cache row from the REAL per-user lyrics.db (F1
@@ -231,12 +231,12 @@ pub fn clear_cache(handle: &tokio::runtime::Handle, weak: slint::Weak<AppWindow>
     handle.spawn(async move {
         match service.clear_cache().await {
             Ok(()) => {
-                crate::toast::success_weak(&weak, "Lyrics cache cleared");
+                crate::toast::success_weak(&weak, qbz_i18n::t("Lyrics cache cleared"));
                 refresh_cache_stats(&handle_for_refresh, weak);
             }
             Err(e) => {
                 log::error!("[qbz-slint] lyrics cache clear failed: {e}");
-                crate::toast::error_weak(&weak, "Failed to clear lyrics cache");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Failed to clear lyrics cache"));
             }
         }
     });

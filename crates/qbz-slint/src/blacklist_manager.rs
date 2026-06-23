@@ -121,15 +121,15 @@ pub fn toggle_enabled(w: &AppWindow) {
         Ok(()) => {
             push(w);
             let msg = if new_state {
-                "Blacklist enabled"
+                qbz_i18n::t("Blacklist enabled")
             } else {
-                "Blacklist disabled"
+                qbz_i18n::t("Blacklist disabled")
             };
             crate::toast::info(w, msg);
         }
         Err(e) => {
             log::error!("[qbz-slint] blacklist toggle-enabled failed: {e}");
-            crate::toast::error(w, "Failed to toggle blacklist");
+            crate::toast::error(w, qbz_i18n::t("Failed to toggle blacklist"));
         }
     }
 }
@@ -141,15 +141,15 @@ pub fn remove(w: &AppWindow, artist_id: i32) {
         .into_iter()
         .find(|a| a.artist_id == artist_id as u64)
         .map(|a| a.artist_name)
-        .unwrap_or_else(|| "Artist".to_string());
+        .unwrap_or_else(|| qbz_i18n::t("Artist"));
     match crate::artist_blacklist::remove(artist_id as u64) {
         Ok(()) => {
             push(w);
-            crate::toast::success(w, format!("{name} removed from blacklist"));
+            crate::toast::success(w, qbz_i18n::t_args("{} removed from blacklist", &[&name]));
         }
         Err(e) => {
             log::error!("[qbz-slint] blacklist remove failed: {e}");
-            crate::toast::error(w, "Failed to remove artist");
+            crate::toast::error(w, qbz_i18n::t("Failed to remove artist"));
         }
     }
 }
@@ -160,11 +160,11 @@ pub fn clear_all(w: &AppWindow) {
     match crate::artist_blacklist::clear_all() {
         Ok(()) => {
             push(w);
-            crate::toast::success(w, format!("Removed {count} artists from blacklist"));
+            crate::toast::success(w, qbz_i18n::tf("Removed {} artist from blacklist", "Removed {} artists from blacklist", count as i64, &[&count.to_string()]));
         }
         Err(e) => {
             log::error!("[qbz-slint] blacklist clear-all failed: {e}");
-            crate::toast::error(w, "Failed to clear blacklist");
+            crate::toast::error(w, qbz_i18n::t("Failed to clear blacklist"));
         }
     }
 }

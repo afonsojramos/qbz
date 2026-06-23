@@ -167,28 +167,28 @@ async fn download_and_open(url: &str) -> Result<(PathBuf, u32), String> {
         .get(url)
         .send()
         .await
-        .map_err(|e| format!("Failed to fetch booklet: {e}"))?;
+        .map_err(|e| qbz_i18n::t_args("Failed to fetch booklet: {}", &[&e.to_string()]))?;
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| format!("Failed to read booklet: {e}"))?;
+        .map_err(|e| qbz_i18n::t_args("Failed to read booklet: {}", &[&e.to_string()]))?;
 
     let temp_dir = booklet_temp_dir();
     tokio::fs::create_dir_all(&temp_dir)
         .await
-        .map_err(|e| format!("Failed to create temp dir: {e}"))?;
+        .map_err(|e| qbz_i18n::t_args("Failed to create temp dir: {}", &[&e.to_string()]))?;
     let path = temp_dir.join(format!("{}.pdf", uuid::Uuid::new_v4()));
     tokio::fs::write(&path, &bytes)
         .await
-        .map_err(|e| format!("Failed to write booklet: {e}"))?;
+        .map_err(|e| qbz_i18n::t_args("Failed to write booklet: {}", &[&e.to_string()]))?;
 
     let info_path = path.clone();
     let info = tokio::task::spawn_blocking(move || qbz_booklet::open_info(&info_path))
         .await
-        .map_err(|e| format!("Booklet open task failed: {e}"))??;
+        .map_err(|e| qbz_i18n::t_args("Booklet open task failed: {}", &[&e.to_string()]))??;
     Ok((path, info.num_pages))
 }
 
@@ -269,7 +269,7 @@ fn render_page_rgba(
 ) -> Result<(Vec<u8>, u32, u32), String> {
     let rendered = qbz_booklet::render_page_png(path, page, dpi, rotation)?;
     let rgba = image::load_from_memory(&rendered.png)
-        .map_err(|e| format!("Failed to decode booklet page: {e}"))?
+        .map_err(|e| qbz_i18n::t_args("Failed to decode booklet page: {}", &[&e.to_string()]))?
         .to_rgba8();
     let (width, height) = rgba.dimensions();
     Ok((rgba.into_raw(), width, height))

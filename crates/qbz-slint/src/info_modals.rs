@@ -104,9 +104,9 @@ fn album_duration(secs: u32) -> String {
     let hours = secs / 3600;
     let minutes = (secs % 3600) / 60;
     if hours > 0 {
-        format!("{hours}h {minutes}m")
+        qbz_i18n::t_args("{} h {} min", &[&hours.to_string(), &minutes.to_string()])
     } else {
-        format!("{minutes}m")
+        qbz_i18n::t_args("{} min", &[&minutes.to_string()])
     }
 }
 
@@ -258,7 +258,7 @@ fn map_album_credits(album: Album) -> AlbumCreditsData {
             // so an absent duration shows "· 0m" rather than dropping it.
             let parts = vec![
                 g.name.clone(),
-                format!("{track_count} tracks"),
+                qbz_i18n::tf("{} track", "{} tracks", track_count as i64, &[&track_count.to_string()]),
                 album_duration(album.duration.unwrap_or(0)),
             ];
             parts.join(" · ")
@@ -280,7 +280,7 @@ fn map_album_credits(album: Album) -> AlbumCreditsData {
                     .roles
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| "Performer".to_string()),
+                    .unwrap_or_else(|| qbz_i18n::t("Performer")),
                 name: p.name,
             })
             .collect();
@@ -297,7 +297,7 @@ fn map_album_credits(album: Album) -> AlbumCreditsData {
                 .filter(|n| !n.is_empty())
                 .unwrap_or_else(|| {
                     if album_artist.is_empty() {
-                        "Unknown Artist".to_string()
+                        qbz_i18n::t("Unknown Artist")
                     } else {
                         album_artist.clone()
                     }
