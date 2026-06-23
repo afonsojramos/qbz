@@ -75,13 +75,15 @@ pub fn current_language() -> &'static str {
     LANGS[CURRENT.load(Ordering::Relaxed) as usize]
 }
 
-/// Resolve the desired language from the environment: `$LC_MESSAGES` then
-/// `$LANG`. The 2-letter prefix is mapped to a supported language; otherwise
-/// `"en"`. This does NOT mutate [`CURRENT`] — the caller decides.
+/// Resolve the desired language from the environment using POSIX precedence:
+/// `$LC_ALL` > `$LC_MESSAGES` > `$LANG`. The 2-letter prefix is mapped to a
+/// supported language; otherwise `"en"`. This does NOT mutate [`CURRENT`] —
+/// the caller decides.
 pub fn resolve_auto() -> &'static str {
-    let raw = std::env::var("LC_MESSAGES")
+    let raw = std::env::var("LC_ALL")
         .ok()
         .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("LC_MESSAGES").ok().filter(|s| !s.is_empty()))
         .or_else(|| std::env::var("LANG").ok())
         .unwrap_or_default();
 
@@ -228,6 +230,7 @@ mod tests {
     #[test]
     fn resolve_auto_maps_prefix() {
         let _g = LOCK.lock().unwrap();
+        std::env::remove_var("LC_ALL");
         std::env::remove_var("LC_MESSAGES");
         std::env::set_var("LANG", "fr_FR.UTF-8");
         assert_eq!(resolve_auto(), "fr");
@@ -236,6 +239,24 @@ mod tests {
         std::env::set_var("LC_MESSAGES", "de_DE.UTF-8");
         assert_eq!(resolve_auto(), "de");
         std::env::remove_var("LC_MESSAGES");
+        std::env::remove_var("LANG");
+    }
+
+    #[test]
+    fn resolve_auto_honors_lc_all_precedence() {
+        let _g = LOCK.lock().unwrap();
+        // LC_ALL wins over LC_MESSAGES and LANG (POSIX precedence).
+        std::env::set_var("LANG", "fr_FR.UTF-8");
+        std::env::set_var("LC_MESSAGES", "de_DE.UTF-8");
+        std::env::set_var("LC_ALL", "es_ES.UTF-8");
+        assert_eq!(resolve_auto(), "es");
+        // Empty LC_ALL is skipped, falling through to LC_MESSAGES.
+        std::env::set_var("LC_ALL", "");
+        assert_eq!(resolve_auto(), "de");
+        // No LC_ALL/LC_MESSAGES → LANG is used.
+        std::env::remove_var("LC_ALL");
+        std::env::remove_var("LC_MESSAGES");
+        assert_eq!(resolve_auto(), "fr");
         std::env::remove_var("LANG");
     }
 }
