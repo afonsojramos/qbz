@@ -160,6 +160,9 @@ export component QbzSelect inherits Rectangle {
     // focusability on the collapsed control.
     fs := FocusScope {
         enabled: root.enabled;
+        // See QbzPrimaryButton: declared after `ta`, hit-tested first;
+        // focus-on-click:false stops it eating the first press (two-click bug).
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
                 root.filter = "";

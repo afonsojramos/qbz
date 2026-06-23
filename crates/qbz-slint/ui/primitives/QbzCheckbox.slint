@@ -35,6 +35,9 @@ export component QbzCheckbox inherits Rectangle {
     // Keyboard activation: Enter/Space toggle the box, same as a click. The
     // TouchArea stays the pointer source; this only adds key activation + focus.
     fs := FocusScope {
+        // See QbzPrimaryButton: declared after `ta`, so Slint hit-tests it
+        // first; focus-on-click:false stops it eating the first press.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
                 root.checked = !root.checked;

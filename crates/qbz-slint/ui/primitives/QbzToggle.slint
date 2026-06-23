@@ -40,6 +40,9 @@ export component QbzToggle inherits Rectangle {
     // TouchArea stays the pointer source; this only adds key activation + focus.
     fs := FocusScope {
         enabled: root.enabled;
+        // See QbzPrimaryButton: declared after `ta`, hit-tested first;
+        // focus-on-click:false stops it eating the first press (two-click bug).
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
                 root.toggled(!root.checked);

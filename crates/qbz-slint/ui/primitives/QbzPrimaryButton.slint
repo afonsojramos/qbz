@@ -50,10 +50,18 @@ export component QbzPrimaryButton inherits Rectangle {
         }
     }
 
-    // Keyboard activation: Enter/Space fire the same click. The TouchArea above
-    // stays the pointer source; this only adds key activation + focusability.
+    // Keyboard activation: Enter/Space fire the same click. `focus-on-click:
+    // false` is LOAD-BEARING: Slint hit-tests siblings in REVERSE declaration
+    // order, so this FocusScope (declared after `ta`) is visited BEFORE the
+    // TouchArea. With the default focus-on-click:true an unfocused FocusScope
+    // eats the first Pressed just to grab keyboard focus, aborting the event
+    // before it reaches `ta` — THE "blue buttons need two clicks" bug. Disabling
+    // focus-on-click makes the FocusScope ignore the press (it stays Tab- and
+    // key-focusable for Enter/Space); the press then falls through to `ta` and
+    // the first click registers.
     fs := FocusScope {
         enabled: root.enabled;
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
                 root.clicked();

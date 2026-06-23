@@ -48,10 +48,14 @@ export component SecondaryButton inherits Rectangle {
         }
     }
 
-    // Keyboard activation: Enter/Space fire the same click. The TouchArea stays
-    // the pointer source; this only adds key activation + focusability.
+    // Keyboard activation: Enter/Space fire the same click. `focus-on-click:
+    // false` is LOAD-BEARING — see QbzPrimaryButton: Slint hit-tests siblings in
+    // reverse declaration order, so this FocusScope (after `ta`) would otherwise
+    // eat the first Pressed to grab focus, requiring a second click. Disabling
+    // click-focus lets the press fall through to `ta` (Tab/Enter/Space stay).
     fs := FocusScope {
         enabled: root.enabled;
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
                 root.clicked();
