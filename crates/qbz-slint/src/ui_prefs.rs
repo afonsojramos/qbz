@@ -37,6 +37,38 @@ pub const DEFAULT_STREAMING_QUALITY: &str = "hires_plus";
 /// Default now-playing bar layout key (`New`).
 pub const DEFAULT_NPB_MODE: &str = "new";
 
+/// Default UI language key. `"auto"` follows the OS locale (resolved at startup
+/// via `qbz_i18n::resolve_auto()`); otherwise one of `en` | `es` | `de` | `fr` |
+/// `pt`. Persists the raw user choice ("auto" stays "auto").
+pub const DEFAULT_LANGUAGE: &str = "auto";
+
+/// Map a language select index to its persisted key. The on-screen order in
+/// `AppearanceState.languages` is Auto / English / Español / Français / Deutsch
+/// / Português (0-5); any unknown index falls back to the default (`"auto"`).
+pub fn language_for_index(index: i32) -> &'static str {
+    match index {
+        1 => "en",
+        2 => "es",
+        3 => "fr",
+        4 => "de",
+        5 => "pt",
+        _ => DEFAULT_LANGUAGE,
+    }
+}
+
+/// Inverse of [`language_for_index`]: the select index for a persisted key,
+/// falling back to the default's index (0 = "auto").
+pub fn language_index(key: &str) -> i32 {
+    match key {
+        "en" => 1,
+        "es" => 2,
+        "fr" => 3,
+        "de" => 4,
+        "pt" => 5,
+        _ => 0,
+    }
+}
+
 /// Default album/artist header backdrop setting.
 pub const DEFAULT_ALBUM_HEADER_GRADIENT: bool = true;
 
@@ -184,6 +216,11 @@ pub struct UiPrefs {
     /// Maps to `ShellState.npb-mode` (0 / 1 / 2 / 3).
     #[serde(default = "default_npb_mode")]
     pub npb_mode: String,
+    /// UI language key: `"auto"` (follow the OS locale) or one of `en` | `es` |
+    /// `de` | `fr` | `pt`. Persists the raw user choice; "auto" is resolved to a
+    /// concrete language at startup via `qbz_i18n::resolve_auto()`.
+    #[serde(default = "default_language")]
+    pub language: String,
     /// Large-NPB dock visualizer on/off (the cover's top-right eye toggle).
     /// Persisted so a user who dislikes the spectrum keeps it off across runs.
     #[serde(default = "default_large_visualizer")]
@@ -311,6 +348,10 @@ fn default_npb_mode() -> String {
     DEFAULT_NPB_MODE.to_string()
 }
 
+fn default_language() -> String {
+    DEFAULT_LANGUAGE.to_string()
+}
+
 fn default_large_visualizer() -> bool {
     true
 }
@@ -347,6 +388,7 @@ impl Default for UiPrefs {
         Self {
             streaming_quality: default_streaming_quality(),
             npb_mode: default_npb_mode(),
+            language: default_language(),
             large_visualizer: default_large_visualizer(),
             large_spectrum_mode: default_large_spectrum_mode(),
             album_header_gradient: default_album_header_gradient(),

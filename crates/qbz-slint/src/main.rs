@@ -4725,6 +4725,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .select()?;
 
+    // UI language: resolve and apply the persisted language BEFORE the first
+    // window is created, so the first paint uses the right translations. The
+    // persisted key may be "auto" (follow the OS locale) — resolve that to a
+    // concrete language. set_language() drives our Rust-side `t`/dates helpers;
+    // select_bundled_translation() switches the Slint `@tr` bindings.
+    {
+        let persisted = crate::ui_prefs::load().language;
+        let lang = if persisted == "auto" {
+            qbz_i18n::resolve_auto()
+        } else {
+            qbz_i18n::set_language(&persisted);
+            qbz_i18n::current_language()
+        };
+        qbz_i18n::set_language(lang);
+        if let Err(e) = slint::select_bundled_translation(lang) {
+            log::warn!("[qbz-slint] select_bundled_translation('{lang}') failed: {e:?}");
+        }
+    }
+
     let window = AppWindow::new()?;
     install_browser_mouse_nav(&window);
     wire_window_controls(&window);

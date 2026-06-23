@@ -5895,6 +5895,7 @@ dependencies = [
  "qbz-cast",
  "qbz-core",
  "qbz-credentials",
+ "qbz-i18n",
  "qbz-integrations",
  "qbz-library",
  "qbz-lyrics",

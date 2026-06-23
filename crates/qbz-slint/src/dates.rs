@@ -11,11 +11,18 @@
 
 use chrono::{Locale, NaiveDate};
 
-/// UI language used to render date labels. Slint is English-only for now;
-/// this is the one hook to thread the persisted UI language through later
-/// (the app supports en / es / de / fr / pt).
+/// UI language used to render date labels. Maps the active runtime language
+/// (`qbz_i18n::current_language()`, set at startup and on live switch) to the
+/// matching `chrono` locale so month tokens localize with the rest of the UI.
+/// The app supports en / es / de / fr / pt; unknown values fall back to English.
 pub fn current_locale() -> Locale {
-    Locale::en_US
+    match qbz_i18n::current_language() {
+        "es" => Locale::es_ES,
+        "de" => Locale::de_DE,
+        "fr" => Locale::fr_FR,
+        "pt" => Locale::pt_PT,
+        _ => Locale::en_US,
+    }
 }
 
 /// Format a Qobuz release date string ("YYYY-MM-DD", possibly with a trailing
