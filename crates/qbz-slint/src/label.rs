@@ -198,7 +198,7 @@ pub fn derive_releases(window: &AppWindow) {
                 buckets.push(Vec::new());
                 sections.push(DiscoverSection {
                     title: if key.is_empty() {
-                        "Unknown".into()
+                        qbz_i18n::t("Unknown").into()
                     } else {
                         key.clone().into()
                     },
@@ -849,8 +849,8 @@ pub fn apply_label_page(window: &AppWindow, payload: LabelPagePayload) {
         payload.playlists.iter().map(playlist_to_item).collect();
     let artists: Vec<SlimItem> = payload.artists.iter().map(artist_to_item).collect();
     let more_labels: Vec<SlimItem> = payload.more_labels.iter().map(label_to_item).collect();
-    let releases = section("Releases", &payload.releases);
-    let critics = section("Critics' Picks", &payload.critics);
+    let releases = section(&qbz_i18n::t("Releases"), &payload.releases);
+    let critics = section(&qbz_i18n::t("Critics' Picks"), &payload.critics);
     let jump_tabs = build_label_jump_tabs(&payload);
 
     let state = window.global::<LabelState>();
@@ -887,7 +887,7 @@ fn build_label_jump_tabs(payload: &LabelPagePayload) -> Vec<JumpNavTab> {
     let mut tabs: Vec<JumpNavTab> = Vec::new();
     tabs.push(JumpNavTab {
         id: "about".into(),
-        label: "About".into(),
+        label: qbz_i18n::t("About").into(),
         anchor_y: 0.0,
     });
     let mut cursor = HEADER_GUESS;
@@ -895,7 +895,7 @@ fn build_label_jump_tabs(payload: &LabelPagePayload) -> Vec<JumpNavTab> {
     if !payload.top_tracks.is_empty() {
         tabs.push(JumpNavTab {
             id: "popular".into(),
-            label: "Popular Tracks".into(),
+            label: qbz_i18n::t("Popular Tracks").into(),
             anchor_y: cursor,
         });
         let rows = payload.top_tracks.len().min(5) as f32;
@@ -905,7 +905,7 @@ fn build_label_jump_tabs(payload: &LabelPagePayload) -> Vec<JumpNavTab> {
         if present {
             tabs.push(JumpNavTab {
                 id: id.into(),
-                label: label.into(),
+                label: qbz_i18n::t(label).into(),
                 anchor_y: *cursor,
             });
             *cursor += SECTION_SPACER + CAROUSEL;

@@ -130,12 +130,12 @@ pub fn tier_hires(bit_depth: Option<u32>, hires: bool) -> &'static str {
 /// payload provides a known one, else a track-count heuristic.
 fn release_type_label(release_type: Option<&str>, track_count: Option<u32>) -> String {
     match release_type {
-        Some("album") | Some("download") => "Album".to_string(),
-        Some("ep") | Some("epSingle") => "EP".to_string(),
-        Some("single") => "Single".to_string(),
-        Some("live") => "Live".to_string(),
-        Some("compilation") => "Compilation".to_string(),
-        _ => classify_release_type(track_count).to_string(),
+        Some("album") | Some("download") => qbz_i18n::t("Album"),
+        Some("ep") | Some("epSingle") => qbz_i18n::t("EP"),
+        Some("single") => qbz_i18n::t("Single"),
+        Some("live") => qbz_i18n::t("Live"),
+        Some("compilation") => qbz_i18n::t("Compilation"),
+        _ => qbz_i18n::t(classify_release_type(track_count)),
     }
 }
 

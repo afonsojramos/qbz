@@ -132,7 +132,9 @@ fn map_album(album: Album) -> AlbumData {
         .as_ref()
         .filter(|g| !g.name.is_empty())
         .map(|g| g.name.clone());
-    let tracks_str = album.tracks_count.map(|count| format!("{count} tracks"));
+    let tracks_str = album.tracks_count.map(|count| {
+        qbz_i18n::tf("{} track", "{} tracks", count as i64, &[&count.to_string()])
+    });
     let duration_str = album.duration.map(format_duration);
 
     let mut pre_parts: Vec<String> = Vec::new();
@@ -583,7 +585,7 @@ pub fn apply_more_from_artist(window: &AppWindow, data: MoreFromArtist) -> Vec<A
         })
         .collect();
     let section = DiscoverSection {
-        title: "From the same artist".into(),
+        title: qbz_i18n::t("From the same artist").into(),
         endpoint: "".into(),
         albums: ModelRc::new(VecModel::from(items)),
     };
@@ -648,7 +650,7 @@ pub fn apply_suggestions(window: &AppWindow, data: Suggestions) -> Vec<ArtworkJo
         })
         .collect();
     let section = DiscoverSection {
-        title: "Listening suggestions".into(),
+        title: qbz_i18n::t("Listening suggestions").into(),
         endpoint: "".into(),
         albums: ModelRc::new(VecModel::from(items)),
     };

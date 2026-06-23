@@ -94,7 +94,7 @@ pub fn release_type_title(release_type: &str) -> String {
     RELEASE_SECTION_ORDER
         .iter()
         .find(|(rt, _)| *rt == release_type)
-        .map(|(_, title)| title.to_string())
+        .map(|(_, title)| qbz_i18n::t(title))
         .unwrap_or_else(|| title_case(release_type))
 }
 
@@ -675,7 +675,9 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
             crate::album_map::sort_album_items(&mut albums, &sort);
             ArtistReleaseSection {
                 release_type: section.release_type.into(),
-                title: section.title.into(),
+                // `section.title` is the English bucket title (kept English in
+                // `map_artist` so jump-tab routing matches); translate for display.
+                title: qbz_i18n::t(&section.title).into(),
                 albums: ModelRc::new(VecModel::from(albums)),
                 has_more: section.has_more,
                 sort_by: sort.into(),
@@ -780,7 +782,7 @@ fn build_jump_tabs(
     let mut tabs: Vec<JumpNavTab> = Vec::new();
     tabs.push(JumpNavTab {
         id: "about".into(),
-        label: "About".into(),
+        label: qbz_i18n::t("About").into(),
         anchor_y: 0.0,
     });
 
@@ -788,7 +790,7 @@ fn build_jump_tabs(
     if top_tracks_count > 0 {
         tabs.push(JumpNavTab {
             id: "popular-tracks".into(),
-            label: "Popular Tracks".into(),
+            label: qbz_i18n::t("Popular Tracks").into(),
             anchor_y: cursor,
         });
         let visible_rows = top_tracks_count.min(5) as f32;
@@ -820,7 +822,9 @@ fn build_jump_tabs(
         };
         tabs.push(JumpNavTab {
             id: id.into(),
-            label: title.clone().into(),
+            // `title` is the English bucket title used for id routing above;
+            // translate only the displayed label.
+            label: qbz_i18n::t(title).into(),
             anchor_y: cursor,
         });
         let rows = (*count as f32 / RELEASE_COLS).ceil().max(1.0);
@@ -833,7 +837,7 @@ fn build_jump_tabs(
     if appears_on_count > 0 {
         tabs.push(JumpNavTab {
             id: "appears-on".into(),
-            label: "Appears On".into(),
+            label: qbz_i18n::t("Appears On").into(),
             anchor_y: cursor,
         });
     }
@@ -1640,13 +1644,19 @@ fn format_mb_date_short(date: &str) -> String {
     match parts.as_slice() {
         [y] => (*y).to_string(),
         [y, m] => match month(m) {
-            Some(name) => format!("{} {}", name, y),
+            // "{month} {year}" — translate the month name and the layout.
+            Some(name) => {
+                let name_tr = qbz_i18n::t(name);
+                qbz_i18n::t_args("{} {}", &[name_tr.as_str(), *y])
+            }
             None => date.to_string(),
         },
         [y, m, d] => match month(m) {
             Some(name) => {
                 let day = d.trim_start_matches('0');
-                format!("{} {}, {}", name, day, y)
+                let name_tr = qbz_i18n::t(name);
+                // "{month} {day}, {year}" — translate name + layout.
+                qbz_i18n::t_args("{} {}, {}", &[name_tr.as_str(), day, *y])
             }
             None => date.to_string(),
         },
