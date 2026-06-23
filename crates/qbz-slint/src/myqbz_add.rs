@@ -83,13 +83,14 @@ pub fn open(window: &AppWindow, items: Vec<AddItem>) {
 
     let first = &items[0];
     let header_title: String = if bulk {
-        format!("{} items", items.len())
+        qbz_i18n::tf("{} item", "{} items", items.len() as i64, &[&items.len().to_string()])
     } else {
         first.title.clone()
     };
     let header_subtitle: String = if bulk {
-        // "{first title} + N more" — hardcoded English suffix (1:1 with PSD).
-        format!("{} + {} more", first.title, items.len() - 1)
+        // "{first title} + N more" — 1:1 with PSD.
+        let more = (items.len() - 1).to_string();
+        qbz_i18n::t_args("{} + {} more", &[&first.title, &more])
     } else {
         first.subtitle.clone().unwrap_or_default()
     };
@@ -207,21 +208,17 @@ fn kind_icon(kind: CollectionKind) -> &'static str {
     }
 }
 
-fn kind_label(kind: CollectionKind) -> &'static str {
+fn kind_label(kind: CollectionKind) -> String {
     match kind {
-        CollectionKind::Mixtape => "MIXTAPE",
-        CollectionKind::Collection => "COLLECTION",
-        CollectionKind::ArtistCollection => "ARTIST",
+        CollectionKind::Mixtape => qbz_i18n::t("MIXTAPE"),
+        CollectionKind::Collection => qbz_i18n::t("COLLECTION"),
+        CollectionKind::ArtistCollection => qbz_i18n::t("ARTIST"),
     }
 }
 
 /// "N albums" / "1 album" (always "album(s)" regardless of item_type — 1:1 PSD).
 fn album_count_label(count: usize) -> String {
-    if count == 1 {
-        "1 album".to_string()
-    } else {
-        format!("{count} albums")
-    }
+    qbz_i18n::tf("{} album", "{} albums", count as i64, &[&count.to_string()])
 }
 
 /// Render loaded rows into `MyQbzAddState`, applying the active search filter.
@@ -316,14 +313,20 @@ pub fn add_items(collection_id: &str, items: &[AddItem]) -> AddOutcome {
 pub fn toast_outcome(window: &AppWindow, name: &str, outcome: &AddOutcome) {
     let msg = if outcome.added == 0 {
         // Nothing inserted -> everything was a duplicate ("Already in {name}").
-        format!("Already in {name}")
+        qbz_i18n::t_args("Already in {}", &[name])
     } else if outcome.skipped > 0 {
-        format!(
-            "Added {} to {name} ({} duplicate(s) skipped)",
-            outcome.added, outcome.skipped
+        let skipped_label = qbz_i18n::tf(
+            "{} duplicate skipped",
+            "{} duplicates skipped",
+            outcome.skipped as i64,
+            &[&outcome.skipped.to_string()],
+        );
+        qbz_i18n::t_args(
+            "Added {} to {} ({})",
+            &[&outcome.added.to_string(), name, &skipped_label],
         )
     } else {
-        format!("Added {} to {name}", outcome.added)
+        qbz_i18n::t_args("Added {} to {}", &[&outcome.added.to_string(), name])
     };
     let kind = if outcome.added == 0 {
         ToastKind::Info

@@ -89,7 +89,7 @@ pub fn rename(
         .await
         .unwrap_or_else(|e| Err(format!("rename task panicked: {e}")));
 
-        finish(&weak, &handle, &image_cache, id, result, None, "Failed to rename");
+        finish(&weak, &handle, &image_cache, id, result, None, qbz_i18n::t("Failed to rename"));
     });
 }
 
@@ -120,7 +120,7 @@ pub fn set_description(
         .await
         .unwrap_or_else(|e| Err(format!("description task panicked: {e}")));
 
-        finish(&weak, &handle, &image_cache, id, result, None, "Failed to save description");
+        finish(&weak, &handle, &image_cache, id, result, None, qbz_i18n::t("Failed to save description"));
     });
 }
 
@@ -149,7 +149,7 @@ pub fn toggle_play_mode(
         .await
         .unwrap_or_else(|e| Err(format!("play-mode task panicked: {e}")));
 
-        finish(&weak, &handle, &image_cache, id, result, None, "Failed to change play mode");
+        finish(&weak, &handle, &image_cache, id, result, None, qbz_i18n::t("Failed to change play mode"));
     });
 }
 
@@ -172,7 +172,7 @@ pub fn convert_kind(
         "mixtape" => CollectionKind::Collection,
         "collection" => CollectionKind::Mixtape,
         _ => {
-            crate::toast::error_weak(&weak, "Cannot convert this kind");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Cannot convert this kind"));
             return;
         }
     };
@@ -186,12 +186,12 @@ pub fn convert_kind(
 
         match result {
             Ok(()) => {
-                crate::toast::success_weak(&weak, "Converted");
+                crate::toast::success_weak(&weak, qbz_i18n::t("Converted"));
                 reload(&weak, &handle, &image_cache, id);
             }
             Err(_) => {
                 // The repo's only rejection here is the artist_collection guard.
-                crate::toast::error_weak(&weak, "Cannot convert this kind");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Cannot convert this kind"));
             }
         }
     });
@@ -234,7 +234,7 @@ pub fn delete(
                 }
                 Err(e) => {
                     log::warn!("[qbz-slint] myqbz_edit delete failed: {e}");
-                    crate::toast::error(&w, "Failed to delete");
+                    crate::toast::error(&w, qbz_i18n::t("Failed to delete"));
                 }
             }
         });
@@ -283,12 +283,15 @@ pub fn remove_selected(
                 let _ = weak.upgrade_in_event_loop(|w| {
                     crate::myqbz_detail::clear_selection(&w);
                 });
-                crate::toast::info_weak(&weak, format!("Removed {count}"));
+                crate::toast::info_weak(
+                    &weak,
+                    qbz_i18n::tf("Removed {} item", "Removed {} items", count as i64, &[&count.to_string()]),
+                );
                 reload(&weak, &handle, &image_cache, id);
             }
             Err(e) => {
                 log::warn!("[qbz-slint] myqbz_edit bulk-remove failed: {e}");
-                crate::toast::error_weak(&weak, "Failed to remove items");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Failed to remove items"));
             }
         }
     });
@@ -304,8 +307,8 @@ fn finish(
     image_cache: &ImageCache,
     id: String,
     result: Result<(), String>,
-    success_toast: Option<&'static str>,
-    err_msg: &'static str,
+    success_toast: Option<String>,
+    err_msg: String,
 ) {
     match result {
         Ok(()) => {

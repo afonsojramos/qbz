@@ -143,7 +143,7 @@ pub fn open(
 
     handle.spawn(async move {
         let Some(collection) = crate::myqbz_play::load_collection(&collection_id).await else {
-            close_with_error(&weak, "Couldn't load this collection");
+            close_with_error(&weak, qbz_i18n::t("Couldn't load this collection"));
             return;
         };
         // Always InOrder for DJ-mix (force_shuffle = false): the sampler does its
@@ -156,7 +156,7 @@ pub fn open(
                 // Nothing playable — close with a hint (mirrors the resolve-empty
                 // toast on the play paths).
                 close(&w);
-                crate::toast::error(&w, "This collection resolved to 0 playable tracks");
+                crate::toast::error(&w, qbz_i18n::t("This collection resolved to 0 playable tracks"));
             } else {
                 apply_options(&w, unique);
             }
@@ -165,7 +165,7 @@ pub fn open(
 }
 
 /// Close the modal (UI thread hop, callable from any thread).
-fn close_with_error(weak: &slint::Weak<AppWindow>, msg: &'static str) {
+fn close_with_error(weak: &slint::Weak<AppWindow>, msg: String) {
     let _ = weak.upgrade_in_event_loop(move |w| {
         close(&w);
         crate::toast::error(&w, msg);
@@ -207,7 +207,7 @@ pub fn shuffle(
 
     handle.spawn(async move {
         let Some(collection) = crate::myqbz_play::load_collection(&collection_id).await else {
-            close_with_error(&weak, "Couldn't load this collection");
+            close_with_error(&weak, qbz_i18n::t("Couldn't load this collection"));
             return;
         };
         // Resolve in-order (await completes BEFORE the RNG is created).
@@ -236,7 +236,10 @@ pub fn shuffle(
 
         // DJ-mix actualCount can be < requested (per-album cap) — surface it.
         if actual > 0 && actual < requested {
-            crate::toast::info_weak(&weak, format!("Playing {actual} of {requested}"));
+            crate::toast::info_weak(
+                &weak,
+                qbz_i18n::t_args("Playing {} of {}", &[&actual.to_string(), &requested.to_string()]),
+            );
         }
     });
 }

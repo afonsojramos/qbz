@@ -184,11 +184,11 @@ fn kind_str(kind: CollectionKind) -> &'static str {
 
 /// Eyebrow label (Tauri `kindLabel`): mixtapes.label / collections.artistLabel
 /// / collections.label, uppercased to match the grid card eyebrow.
-fn kind_label(kind: CollectionKind) -> &'static str {
+fn kind_label(kind: CollectionKind) -> String {
     match kind {
-        CollectionKind::Mixtape => "MIXTAPE",
-        CollectionKind::ArtistCollection => "ARTIST",
-        CollectionKind::Collection => "COLLECTION",
+        CollectionKind::Mixtape => qbz_i18n::t("MIXTAPE"),
+        CollectionKind::ArtistCollection => qbz_i18n::t("ARTIST"),
+        CollectionKind::Collection => qbz_i18n::t("COLLECTION"),
     }
 }
 
@@ -217,21 +217,17 @@ pub fn item_type_str(t: ItemType) -> &'static str {
 /// `mixtapes.albumCount` ICU plural — always "album(s)" regardless of
 /// item_type (1:1 with the PSD / the grid card meta).
 fn album_count_label(count: usize) -> String {
-    if count == 1 {
-        "1 album".to_string()
-    } else {
-        format!("{count} albums")
-    }
+    qbz_i18n::tf("{} album", "{} albums", count as i64, &[&count.to_string()])
 }
 
 /// Type-cell label, uppercase (spec 12 §6.3 col-3 `itemTypeLabel`). Release-type
 /// overrides (album rows showing EP/Single/…) are a later slice — albums render
 /// "ALBUM" here.
-fn type_label(t: ItemType) -> &'static str {
+fn type_label(t: ItemType) -> String {
     match t {
-        ItemType::Album => "ALBUM",
-        ItemType::Track => "TRACK",
-        ItemType::Playlist => "PLAYLIST",
+        ItemType::Album => qbz_i18n::t("ALBUM"),
+        ItemType::Track => qbz_i18n::t("TRACK"),
+        ItemType::Playlist => qbz_i18n::t("PLAYLIST"),
     }
 }
 

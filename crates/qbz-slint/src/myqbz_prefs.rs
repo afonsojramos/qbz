@@ -208,8 +208,8 @@ pub fn reseed_weak(weak: &slint::Weak<AppWindow>) {
 pub fn pick_icon(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
     handle.spawn(async move {
         let Some(file) = rfd::AsyncFileDialog::new()
-            .set_title("Choose a My QBZ icon")
-            .add_filter("Image", &["svg", "png", "jpg", "jpeg", "webp"])
+            .set_title(&qbz_i18n::t_args("Choose a {} icon", &[DEFAULT_LABEL]))
+            .add_filter(&qbz_i18n::t("Image"), &["svg", "png", "jpg", "jpeg", "webp"])
             .pick_file()
             .await
         else {

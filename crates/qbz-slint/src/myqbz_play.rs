@@ -252,7 +252,7 @@ pub(crate) async fn play_all_tracks(
     tracks: Vec<QueueTrack>,
 ) {
     if tracks.is_empty() {
-        crate::toast::error_weak(weak, "This collection resolved to 0 playable tracks");
+        crate::toast::error_weak(weak, qbz_i18n::t("This collection resolved to 0 playable tracks"));
         return;
     }
     let first_id = tracks[0].id;
@@ -280,7 +280,7 @@ pub fn play_all(
 ) {
     handle.spawn(async move {
         let Some(collection) = load_collection(&collection_id).await else {
-            crate::toast::error_weak(&weak, "Couldn't load this collection");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load this collection"));
             return;
         };
         let tracks = resolve_collection(&runtime, &collection, false).await;
@@ -304,7 +304,7 @@ pub fn shuffle(
 ) {
     handle.clone().spawn(async move {
         let Some(collection) = load_collection(&collection_id).await else {
-            crate::toast::error_weak(&weak, "Couldn't load this collection");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load this collection"));
             return;
         };
         let tracks = resolve_collection(&runtime, &collection, true).await;
@@ -396,7 +396,7 @@ pub fn item_action(
     };
     handle.spawn(async move {
         let Some(collection) = load_collection(&collection_id).await else {
-            crate::toast::error_weak(&weak, "Couldn't load this collection");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load this collection"));
             return;
         };
         let Some(item) = collection
@@ -413,7 +413,7 @@ pub fn item_action(
 
         let tracks = resolve_single_item(&runtime, &item).await;
         if tracks.is_empty() {
-            crate::toast::error_weak(&weak, "This item resolved to 0 playable tracks");
+            crate::toast::error_weak(&weak, qbz_i18n::t("This item resolved to 0 playable tracks"));
             return;
         }
 
@@ -433,12 +433,12 @@ pub fn item_action(
                     runtime.core().add_track_next(track).await;
                 }
                 refresh_sidebar(false);
-                crate::toast::success_weak(&weak, "Playing next");
+                crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
             }
             RowMode::AddToQueue => {
                 runtime.core().add_tracks(tracks).await;
                 refresh_sidebar(false);
-                crate::toast::success_weak(&weak, "Added to queue");
+                crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
             }
         }
     });
@@ -474,7 +474,7 @@ pub fn bulk_enqueue(
                 Some(c) => c.clone(),
                 None => {
                     log::warn!("[qbz-slint] myqbz_play: no Qobuz client; cannot bulk-enqueue");
-                    crate::toast::error_weak(&weak, "These items resolved to 0 playable tracks");
+                    crate::toast::error_weak(&weak, qbz_i18n::t("These items resolved to 0 playable tracks"));
                     return;
                 }
             }
@@ -506,7 +506,7 @@ pub fn bulk_enqueue(
         }
 
         if tracks.is_empty() {
-            crate::toast::error_weak(&weak, "These items resolved to 0 playable tracks");
+            crate::toast::error_weak(&weak, qbz_i18n::t("These items resolved to 0 playable tracks"));
             return;
         }
 
@@ -517,11 +517,11 @@ pub fn bulk_enqueue(
                 runtime.core().add_track_next(track).await;
             }
             refresh_sidebar(false);
-            crate::toast::success_weak(&weak, "Playing next");
+            crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
         } else {
             runtime.core().add_tracks(tracks).await;
             refresh_sidebar(false);
-            crate::toast::success_weak(&weak, "Added to queue");
+            crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
         }
     });
 }
@@ -627,7 +627,7 @@ pub fn play_inline_track(
     };
     handle.spawn(async move {
         let Some(collection) = load_collection(&collection_id).await else {
-            crate::toast::error_weak(&weak, "Couldn't load this collection");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load this collection"));
             return;
         };
         let Some(item) = collection
@@ -644,7 +644,7 @@ pub fn play_inline_track(
 
         let tracks = fetch_item_tracks(&runtime, &item).await;
         let Some(track) = tracks.into_iter().find(|t| t.id == track_id) else {
-            crate::toast::error_weak(&weak, "This track is no longer available");
+            crate::toast::error_weak(&weak, qbz_i18n::t("This track is no longer available"));
             return;
         };
 
@@ -658,12 +658,12 @@ pub fn play_inline_track(
             InlineTrackMode::PlayNext => {
                 runtime.core().add_track_next(track).await;
                 refresh_sidebar(false);
-                crate::toast::success_weak(&weak, "Playing next");
+                crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
             }
             InlineTrackMode::PlayLater => {
                 runtime.core().add_tracks(vec![track]).await;
                 refresh_sidebar(false);
-                crate::toast::success_weak(&weak, "Added to queue");
+                crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
             }
         }
     });

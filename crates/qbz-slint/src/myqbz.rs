@@ -252,22 +252,18 @@ fn kind_str(kind: CollectionKind) -> &'static str {
 }
 
 /// Eyebrow label, uppercase (Tauri `labelFor` / `mixtapes.label`).
-fn label_for(kind: CollectionKind) -> &'static str {
+fn label_for(kind: CollectionKind) -> String {
     match kind {
-        CollectionKind::Mixtape => "MIXTAPE",
-        CollectionKind::Collection => "COLLECTION",
-        CollectionKind::ArtistCollection => "ARTIST",
+        CollectionKind::Mixtape => qbz_i18n::t("MIXTAPE"),
+        CollectionKind::Collection => qbz_i18n::t("COLLECTION"),
+        CollectionKind::ArtistCollection => qbz_i18n::t("ARTIST"),
     }
 }
 
 /// `mixtapes.albumCount` ICU plural — "1 album" / "N albums". Always "album(s)"
 /// regardless of item_type (1:1 with the PSD).
 fn album_count_label(count: usize) -> String {
-    if count == 1 {
-        "1 album".to_string()
-    } else {
-        format!("{count} albums")
-    }
+    qbz_i18n::tf("{} album", "{} albums", count as i64, &[&count.to_string()])
 }
 
 /// Pre-downscale a Qobuz cover URL to a per-cell target size, mirroring the

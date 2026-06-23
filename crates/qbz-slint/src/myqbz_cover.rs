@@ -161,8 +161,8 @@ pub fn upload(
 ) {
     handle.clone().spawn(async move {
         let Some(file) = rfd::AsyncFileDialog::new()
-            .set_title("Choose a cover image")
-            .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+            .set_title(&qbz_i18n::t("Choose a cover image"))
+            .add_filter(&qbz_i18n::t("Image"), &["png", "jpg", "jpeg", "webp"])
             .pick_file()
             .await
         else {
@@ -177,12 +177,12 @@ pub fn upload(
 
         match result {
             Ok(_) => {
-                crate::toast::success_weak(&weak, "Cover updated");
+                crate::toast::success_weak(&weak, qbz_i18n::t("Cover updated"));
                 reload(weak.clone(), handle.clone(), image_cache.clone(), id);
             }
             Err(e) => {
                 log::warn!("[qbz-slint] myqbz_cover upload failed: {e}");
-                crate::toast::error_weak(&weak, "Failed to upload cover");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Failed to upload cover"));
             }
         }
     });
@@ -203,12 +203,12 @@ pub fn remove(
 
         match result {
             Ok(()) => {
-                crate::toast::success_weak(&weak, "Cover removed");
+                crate::toast::success_weak(&weak, qbz_i18n::t("Cover removed"));
                 reload(weak.clone(), handle.clone(), image_cache.clone(), id);
             }
             Err(e) => {
                 log::warn!("[qbz-slint] myqbz_cover remove failed: {e}");
-                crate::toast::error_weak(&weak, "Failed to remove cover");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Failed to remove cover"));
             }
         }
     });

@@ -729,11 +729,11 @@ pub fn install(
     // Default collection name if still empty.
     if state.get_collection_name().is_empty() {
         let base = if artist_name.is_empty() {
-            "Artist".to_string()
+            qbz_i18n::t("Artist")
         } else {
             artist_name.clone()
         };
-        state.set_collection_name(format!("{base} — Complete Discography").into());
+        state.set_collection_name(qbz_i18n::t_args("{} — Complete Discography", &[&base]).into());
     }
     // Keep the trimmed-empty gate in sync with whatever the name now holds
     // (the default name is non-empty; a pre-existing whitespace name stays
