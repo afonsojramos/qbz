@@ -29,6 +29,7 @@ members = [
     "qbz-playlist-import",
     "qbz-lyrics",
     "qbz-booklet",
+    "qbz-i18n",
 ]
 
 [workspace.package]
