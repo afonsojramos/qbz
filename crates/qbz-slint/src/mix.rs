@@ -27,13 +27,16 @@ use crate::{AppWindow, MixState, TrackItem};
 /// play can build the queue without re-fetching.
 static CURRENT_MIX: LazyLock<Mutex<Vec<Track>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
-pub fn mix_meta(kind: &str) -> (&'static str, &'static str) {
+pub fn mix_meta(kind: &str) -> (&'static str, String) {
     match kind {
-        "daily" => ("DailyQ", "Elevate your day with a customized selection of music."),
-        "weekly" => ("WeeklyQ", "A fresh mix every week."),
-        "fav" => ("FavQ", "A fresh shuffle from your personal library."),
-        "top" => ("TopQ", "From your most-played playlists."),
-        _ => ("Mix", ""),
+        "daily" => (
+            "DailyQ",
+            qbz_i18n::t("Elevate your day with a customized selection of music."),
+        ),
+        "weekly" => ("WeeklyQ", qbz_i18n::t("A fresh mix every week.")),
+        "fav" => ("FavQ", qbz_i18n::t("A fresh shuffle from your personal library.")),
+        "top" => ("TopQ", qbz_i18n::t("From your most-played playlists.")),
+        _ => ("Mix", String::new()),
     }
 }
 
@@ -322,9 +325,11 @@ fn total_duration(tracks: &[Track]) -> String {
     let secs: u64 = tracks.iter().map(|t| t.duration as u64).sum();
     let mins = secs / 60;
     if mins >= 60 {
-        format!("{} h {} min", mins / 60, mins % 60)
+        let h = (mins / 60).to_string();
+        let m = (mins % 60).to_string();
+        qbz_i18n::t_args("{} h {} min", &[&h, &m])
     } else {
-        format!("{} min", mins)
+        qbz_i18n::t_args("{} min", &[&mins.to_string()])
     }
 }
 

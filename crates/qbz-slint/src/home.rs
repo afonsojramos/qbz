@@ -188,39 +188,39 @@ where
     // Home set and the most-streamed slim grid below. Order mirrors
     // Tauri's DEFAULT_PREFS.editorPicks.
     let mut editor_sections = Vec::new();
-    push_section_ref(&mut editor_sections, DiscoverySectionId::NewReleases, "New Releases", "/discover/newReleases", &containers.new_releases);
-    push_section_ref(&mut editor_sections, DiscoverySectionId::Qobuzissimes, "Qobuzissimes", "/discover/qobuzissims", &containers.qobuzissims);
-    push_section_ref(&mut editor_sections, DiscoverySectionId::PressAwards, "Press Accolades", "/discover/pressAward", &containers.press_awards);
-    push_section_ref(&mut editor_sections, DiscoverySectionId::MostStreamed, "Most Streamed", "/discover/mostStreamed", &containers.most_streamed);
+    push_section_ref(&mut editor_sections, DiscoverySectionId::NewReleases, &qbz_i18n::t("New Releases"), "/discover/newReleases", &containers.new_releases);
+    push_section_ref(&mut editor_sections, DiscoverySectionId::Qobuzissimes, &qbz_i18n::t("Qobuzissimes"), "/discover/qobuzissims", &containers.qobuzissims);
+    push_section_ref(&mut editor_sections, DiscoverySectionId::PressAwards, &qbz_i18n::t("Press Accolades"), "/discover/pressAward", &containers.press_awards);
+    push_section_ref(&mut editor_sections, DiscoverySectionId::MostStreamed, &qbz_i18n::t("Most Streamed"), "/discover/mostStreamed", &containers.most_streamed);
     push_section_ref(
         &mut editor_sections,
         DiscoverySectionId::IdealDiscography,
-        "Ideal Discography",
+        &qbz_i18n::t("Ideal Discography"),
         "/discover/idealDiscography",
         &containers.ideal_discography,
     );
     push_section_ref(
         &mut editor_sections,
         DiscoverySectionId::EditorPicks,
-        "Albums of the Week",
+        &qbz_i18n::t("Albums of the Week"),
         "/discover/albumOfTheWeek",
         &containers.album_of_the_week,
     );
 
     let mut sections = Vec::new();
-    push_section(&mut sections, DiscoverySectionId::NewReleases, "New Releases", "/discover/newReleases", containers.new_releases);
-    push_section(&mut sections, DiscoverySectionId::PressAwards, "Press Accolades", "/discover/pressAward", containers.press_awards);
+    push_section(&mut sections, DiscoverySectionId::NewReleases, &qbz_i18n::t("New Releases"), "/discover/newReleases", containers.new_releases);
+    push_section(&mut sections, DiscoverySectionId::PressAwards, &qbz_i18n::t("Press Accolades"), "/discover/pressAward", containers.press_awards);
     push_section(
         &mut sections,
         DiscoverySectionId::IdealDiscography,
-        "Ideal Discography",
+        &qbz_i18n::t("Ideal Discography"),
         "/discover/idealDiscography",
         containers.ideal_discography,
     );
     push_section(
         &mut sections,
         DiscoverySectionId::EditorPicks,
-        "Albums of the Week",
+        &qbz_i18n::t("Albums of the Week"),
         "/discover/albumOfTheWeek",
         containers.album_of_the_week,
     );
@@ -231,7 +231,7 @@ where
     push_section(
         &mut sections,
         DiscoverySectionId::Qobuzissimes,
-        "Qobuzissimes",
+        &qbz_i18n::t("Qobuzissimes"),
         "/discover/qobuzissims",
         containers.qobuzissims,
     );
@@ -415,7 +415,7 @@ pub(crate) fn map_album(album: DiscoverAlbum) -> CardData {
         .unwrap_or_default()
         .to_string();
     let track_count = album.track_count.map(|n| n.to_string()).unwrap_or_default();
-    let release_type = classify_release_type(album.track_count).to_string();
+    let release_type = qbz_i18n::t(classify_release_type(album.track_count));
     CardData {
         id: album.id,
         title: album.title,

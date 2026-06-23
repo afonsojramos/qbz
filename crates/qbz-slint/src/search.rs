@@ -332,7 +332,7 @@ pub fn map_artist(artist: &Artist, following: bool) -> ArtistRow {
         id: artist.id.to_string(),
         name: artist.name.clone(),
         subtitle: match artist.albums_count {
-            Some(n) if n > 0 => format!("{n} albums"),
+            Some(n) if n > 0 => qbz_i18n::tf("{} album", "{} albums", n as i64, &[&n.to_string()]),
             _ => String::new(),
         },
         artwork_url: artist
@@ -348,10 +348,12 @@ pub fn map_playlist(playlist: Playlist) -> PlaylistRow {
     let cover_urls = playlist_cover_urls(&playlist);
     let mut subtitle = playlist.owner.name.clone();
     if playlist.tracks_count > 0 {
+        let count = playlist.tracks_count;
+        let tracks_label = qbz_i18n::tf("{} track", "{} tracks", count as i64, &[&count.to_string()]);
         if subtitle.is_empty() {
-            subtitle = format!("{} tracks", playlist.tracks_count);
+            subtitle = tracks_label;
         } else {
-            subtitle = format!("{}   •   {} tracks", subtitle, playlist.tracks_count);
+            subtitle = format!("{}   •   {}", subtitle, tracks_label);
         }
     }
     PlaylistRow {
@@ -573,10 +575,10 @@ pub fn map_search_all_to_cortinilla(
             });
         }
     };
-    push_section("Albums", "album", albums, results.albums.total);
-    push_section("Artists", "artist", artists, results.artists.total);
-    push_section("Tracks", "track", tracks, results.tracks.total);
-    push_section("Playlists", "playlist", playlists, results.playlists.total);
+    push_section(&qbz_i18n::t("Albums"), "album", albums, results.albums.total);
+    push_section(&qbz_i18n::t("Artists"), "artist", artists, results.artists.total);
+    push_section(&qbz_i18n::t("Tracks"), "track", tracks, results.tracks.total);
+    push_section(&qbz_i18n::t("Playlists"), "playlist", playlists, results.playlists.total);
 
     // Assign the flat selection index across the whole navigable list:
     // top-result = 0, then every section's rows in display order.
@@ -671,9 +673,9 @@ pub fn map_search_all_to_immersive(query: &str, results: &SearchAllResults) -> C
             });
         }
     };
-    push("Artists", "artist", artists, results.artists.total);
-    push("Albums", "album", albums, results.albums.total);
-    push("Playlists", "playlist", playlists, results.playlists.total);
+    push(&qbz_i18n::t("Artists"), "artist", artists, results.artists.total);
+    push(&qbz_i18n::t("Albums"), "album", albums, results.albums.total);
+    push(&qbz_i18n::t("Playlists"), "playlist", playlists, results.playlists.total);
 
     let mut data = CortinillaData {
         query: query.to_string(),
@@ -872,7 +874,7 @@ pub fn append_local_sections(
     let (album_rows, albums_more) = derive_local_album_rows(rows, caps.albums);
     if !album_rows.is_empty() {
         data.sections.push(CortSection {
-            title: "Albums on Local Library".to_string(),
+            title: qbz_i18n::t("Albums on Local Library"),
             kind: "local-album".to_string(),
             rows: album_rows,
             has_more: albums_more,
@@ -881,7 +883,7 @@ pub fn append_local_sections(
     let (artist_rows, artists_more) = derive_local_artist_rows(rows, caps.artists);
     if !artist_rows.is_empty() {
         data.sections.push(CortSection {
-            title: "Artists on Local Library".to_string(),
+            title: qbz_i18n::t("Artists on Local Library"),
             kind: "local-artist".to_string(),
             rows: artist_rows,
             has_more: artists_more,
@@ -895,7 +897,7 @@ pub fn append_local_sections(
     if !track_rows.is_empty() {
         let shown = track_rows.len();
         data.sections.push(CortSection {
-            title: "On Local Library".to_string(),
+            title: qbz_i18n::t("On Local Library"),
             kind: "local".to_string(),
             rows: track_rows,
             has_more: rows.len() > shown,
@@ -922,7 +924,7 @@ fn append_immersive_local_albums(
         return;
     }
     data.sections.push(CortSection {
-        title: "Albums on Local Library".to_string(),
+        title: qbz_i18n::t("Albums on Local Library"),
         kind: "local-album".to_string(),
         rows: album_rows,
         has_more,

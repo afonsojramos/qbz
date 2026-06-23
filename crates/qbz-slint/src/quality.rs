@@ -74,7 +74,7 @@ pub fn badge(
         "" | "mp3" => (t, String::new(), String::new()),
         "lossless" => {
             let f = format.trim().to_uppercase();
-            (t, f.clone(), format!("Lossless: {f}"))
+            (t, f.clone(), qbz_i18n::t_args("Lossless: {}", &[&f]))
         }
         _ => {
             let d = detail(bit_depth, sample_rate);

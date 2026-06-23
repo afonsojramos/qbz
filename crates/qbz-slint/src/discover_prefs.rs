@@ -112,9 +112,9 @@ pub fn render_kind(id: DiscoverySectionId) -> &'static str {
 /// title). When gettext lands this swaps to an MO lookup with NO `.slint` change.
 /// The keys are kept verbatim (with their real, mixed `home.*` / `discover.*` /
 /// `discovery.*` namespaces) so the lookup ports 1:1 when the pipeline arrives.
-pub fn label_for(id: DiscoverySectionId) -> &'static str {
+pub fn label_for(id: DiscoverySectionId) -> String {
     use DiscoverySectionId::*;
-    match id {
+    let en: &str = match id {
         NewReleases => "New Releases",            // home.newReleases
         PressAwards => "Press Accolades",         // home.pressAwards
         QobuzPlaylists => "Qobuz Playlists",      // home.qobuzPlaylists
@@ -134,7 +134,8 @@ pub fn label_for(id: DiscoverySectionId) -> &'static str {
         EssentialsByGenre => "Essentials by Genre", // discovery.essentialsByGenre
         ArtistsToFollow => "Artists to Follow",   // discovery.artistsToFollow
         ArtistSpotlight => "Artist Spotlight",    // discovery.artistSpotlight
-    }
+    };
+    qbz_i18n::t(en)
 }
 
 // ---------------------------------------------------------------------------

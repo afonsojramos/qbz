@@ -267,7 +267,13 @@ fn playlist_to_card(card: &PlaylistCard) -> SuggestionCard {
     SuggestionCard {
         kind: "playlist".into(),
         title: card.name.clone().into(),
-        subtitle: format!("{} tracks", card.track_count).into(),
+        subtitle: qbz_i18n::tf(
+            "{} track",
+            "{} tracks",
+            card.track_count as i64,
+            &[&card.track_count.to_string()],
+        )
+        .into(),
         cover_urls: ModelRc::new(VecModel::from(
             card.cover_urls
                 .iter()
@@ -291,7 +297,7 @@ fn playlist_to_card(card: &PlaylistCard) -> SuggestionCard {
 fn radio_card(payload: &SuggestionsPayload) -> SuggestionCard {
     SuggestionCard {
         kind: "radio".into(),
-        title: "Song Radio".into(),
+        title: qbz_i18n::t("Song Radio").into(),
         subtitle: payload.seed_track_name.clone().into(),
         cover_urls: ModelRc::new(VecModel::from(
             payload

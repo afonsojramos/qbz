@@ -613,7 +613,7 @@ fn apply_recent(
     let w = weak.clone();
     let _ = w.upgrade_in_event_loop(move |w| {
         let state = w.global::<ForYouState>();
-        state.set_recent_albums(section("Recently Played Albums", &albums));
+        state.set_recent_albums(section(&qbz_i18n::t("Recently Played Albums"), &albums));
         let slim: Vec<SlimItem> = tracks
             .iter()
             .map(|t| SlimItem {
@@ -636,7 +636,7 @@ fn apply_release_watch(weak: &slint::Weak<AppWindow>, cache: &ImageCache, cards:
     let w = weak.clone();
     let _ = w.upgrade_in_event_loop(move |w| {
         w.global::<ForYouState>()
-            .set_release_watch(section("Release Watch", &cards));
+            .set_release_watch(section(&qbz_i18n::t("Release Watch"), &cards));
     });
     crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
 }
@@ -666,7 +666,7 @@ fn apply_rediscover(weak: &slint::Weak<AppWindow>, cache: &ImageCache, cards: Ve
     let w = weak.clone();
     let _ = w.upgrade_in_event_loop(move |w| {
         w.global::<ForYouState>()
-            .set_rediscover(section("Rediscover Your Library", &cards));
+            .set_rediscover(section(&qbz_i18n::t("Rediscover Your Library"), &cards));
     });
     crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
 }
@@ -676,7 +676,7 @@ fn apply_favorite_albums(weak: &slint::Weak<AppWindow>, cache: &ImageCache, card
     let w = weak.clone();
     let _ = w.upgrade_in_event_loop(move |w| {
         w.global::<ForYouState>()
-            .set_favorite_albums(section("Favorite Albums", &cards));
+            .set_favorite_albums(section(&qbz_i18n::t("Favorite Albums"), &cards));
     });
     crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
 }
@@ -691,9 +691,9 @@ fn apply_more_from_library(
     // seed is the album the suggestions are seeded from. Falls back to the
     // plain "More From Your Library" when there is no seed (never titleless).
     let title = if seed_title.is_empty() {
-        "More From Your Library".to_string()
+        qbz_i18n::t("More From Your Library")
     } else {
-        format!("Similar to {seed_title}")
+        qbz_i18n::t_args("Similar to {}", &[&seed_title])
     };
     let jobs = album_jobs(&cards, |i| ArtworkTarget::ForYouMoreFromLibrary { index: i });
     let w = weak.clone();
