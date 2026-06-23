@@ -88,7 +88,7 @@ pub fn open(window: &AppWindow) {
     // Folder dropdown from the sidebar's folder list — the exact
     // create-playlist builder pattern: index 0 = "No folder" (id "").
     let folders = window.global::<SidebarState>().get_folders();
-    let mut opts: Vec<slint::SharedString> = vec!["No folder".into()];
+    let mut opts: Vec<slint::SharedString> = vec![qbz_i18n::t("No folder").into()];
     let mut ids: Vec<slint::SharedString> = vec!["".into()];
     for i in 0..folders.row_count() {
         if let Some(f) = folders.row_data(i) {

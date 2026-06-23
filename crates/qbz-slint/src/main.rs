@@ -14052,7 +14052,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Build the folder dropdown from the sidebar's folder
                     // list: index 0 = "No folder" (id ""), then each folder.
                     let folders = w.global::<SidebarState>().get_folders();
-                    let mut opts: Vec<slint::SharedString> = vec!["No folder".into()];
+                    let mut opts: Vec<slint::SharedString> = vec![qbz_i18n::t("No folder").into()];
                     let mut ids: Vec<slint::SharedString> = vec!["".into()];
                     for i in 0..folders.row_count() {
                         if let Some(f) = folders.row_data(i) {
