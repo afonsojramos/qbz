@@ -494,9 +494,11 @@ pub(crate) fn total_duration_label(rows: &[LoadedRow]) -> String {
         .sum();
     let mins = secs / 60;
     if mins >= 60 {
-        format!("{} h {} min", mins / 60, mins % 60)
+        let h = (mins / 60).to_string();
+        let m = (mins % 60).to_string();
+        qbz_i18n::t_args("{} h {} min", &[&h, &m])
     } else {
-        format!("{} min", mins)
+        qbz_i18n::t_args("{} min", &[&mins.to_string()])
     }
 }
 
@@ -1070,12 +1072,17 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
             .into(),
             number: "".into(),
             title: if *kind == "plex" {
-                "Unavailable Plex track"
+                qbz_i18n::t("Unavailable Plex track")
             } else {
-                "Unavailable track"
+                qbz_i18n::t("Unavailable track")
             }
             .into(),
-            artist: if *kind == "plex" { "Plex" } else { "Unknown source" }.into(),
+            artist: if *kind == "plex" {
+                "Plex".to_string()
+            } else {
+                qbz_i18n::t("Unknown source")
+            }
+            .into(),
             album: format!("ref {reference}").into(),
             duration: "".into(),
             quality_tier: "".into(),
@@ -1441,7 +1448,7 @@ fn apply_qobuz_offline(
     let state = window.global::<PlaylistState>();
     state.set_id(playlist_id.to_string().into());
     state.set_name(name.into());
-    state.set_owner("Available tracks only — offline".into());
+    state.set_owner(qbz_i18n::t("Available tracks only — offline").into());
     let description = crate::strip_html::strip_html(&description);
     state.set_description(description.clone().into());
     state.set_description_short(description.into());
@@ -1473,7 +1480,7 @@ fn apply_qobuz_offline(
 /// the QConnect push site reads it and skips the cloud), start at `start`.
 async fn play_stamped(runtime: &Runtime, weak: &slint::Weak<AppWindow>, tracks: Vec<QueueTrack>, start: usize) {
     if tracks.is_empty() {
-        crate::toast::error_weak(weak, "Nothing playable in this playlist right now");
+        crate::toast::error_weak(weak, qbz_i18n::t("Nothing playable in this playlist right now"));
         return;
     }
     let offline_only = CURRENT_META
@@ -1577,7 +1584,7 @@ pub fn enqueue_by_id(
 ) {
     handle.spawn(async move {
         let Some(data) = load(&runtime, &playlist_id).await else {
-            crate::toast::error_weak(&weak, "Couldn't load this playlist");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load this playlist"));
             return;
         };
         let tracks: Vec<QueueTrack> = data
@@ -1586,7 +1593,7 @@ pub fn enqueue_by_id(
             .filter_map(|r| row_queue_track(&r.item))
             .collect();
         if tracks.is_empty() {
-            crate::toast::error_weak(&weak, "Nothing playable in this playlist right now");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Nothing playable in this playlist right now"));
             return;
         }
         if play_next {
@@ -1600,7 +1607,14 @@ pub fn enqueue_by_id(
             runtime.core().set_queue_offline_only(true);
         }
         refresh_sidebar(false);
-        crate::toast::success_weak(&weak, if play_next { "Playing next" } else { "Added to queue" });
+        crate::toast::success_weak(
+            &weak,
+            if play_next {
+                qbz_i18n::t("Playing next")
+            } else {
+                qbz_i18n::t("Added to queue")
+            },
+        );
     });
 }
 
@@ -1794,7 +1808,7 @@ pub fn upload_to_qobuz(
             Err(_) => return,
         };
         let Some(header) = header else {
-            crate::toast::error_weak(&weak, "Couldn't load this playlist");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load this playlist"));
             return;
         };
         if header.offline_only {
@@ -1802,7 +1816,7 @@ pub fn upload_to_qobuz(
             return;
         }
         if crate::offline_mode::engine().is_offline() {
-            crate::toast::error_weak(&weak, "You're offline — try again when connected");
+            crate::toast::error_weak(&weak, qbz_i18n::t("You're offline — try again when connected"));
             return;
         }
 
@@ -1811,7 +1825,7 @@ pub fn upload_to_qobuz(
             Ok(p) => p,
             Err(e) => {
                 log::error!("[qbz-slint] upload to Qobuz: create failed: {e}");
-                crate::toast::error_weak(&weak, "Couldn't create the Qobuz playlist");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't create the Qobuz playlist"));
                 return;
             }
         };
@@ -1824,7 +1838,7 @@ pub fn upload_to_qobuz(
                 // Leave BOTH entities in place — the user can retry; deleting
                 // the local copy after a partial upload would lose data.
                 log::error!("[qbz-slint] upload to Qobuz: add tracks failed: {e}");
-                crate::toast::error_weak(&weak, "Upload incomplete — local playlist kept");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Upload incomplete — local playlist kept"));
                 return;
             }
         }
@@ -1877,7 +1891,7 @@ pub fn upload_to_qobuz(
             // The Qobuz playlist exists with its Qobuz tracks, but the
             // local/Plex sidecar rows didn't attach — keep the local entity.
             log::error!("[qbz-slint] upload to Qobuz: sidecar attach failed — local playlist kept");
-            crate::toast::error_weak(&weak, "Upload incomplete — local playlist kept");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Upload incomplete — local playlist kept"));
             let weak2 = weak.clone();
             let r2 = runtime.clone();
             let h2 = handle.clone();
@@ -1887,7 +1901,7 @@ pub fn upload_to_qobuz(
             return;
         }
 
-        crate::toast::success_weak(&weak, "Playlist uploaded to Qobuz");
+        crate::toast::success_weak(&weak, qbz_i18n::t("Playlist uploaded to Qobuz"));
         let weak2 = weak.clone();
         let r2 = runtime.clone();
         let h2 = handle.clone();

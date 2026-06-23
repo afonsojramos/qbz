@@ -389,7 +389,7 @@ pub fn derive_albums(window: &AppWindow) {
         let key = if group == "artist" {
             let a = item.artist.to_string();
             if a.is_empty() {
-                "Unknown".to_string()
+                qbz_i18n::t("Unknown")
             } else {
                 a
             }
@@ -1118,9 +1118,11 @@ pub fn load_more_tracks(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Ha
 fn fmt_album_duration(secs: u64) -> String {
     let mins = secs / 60;
     if mins >= 60 {
-        format!("{} h {} min", mins / 60, mins % 60)
+        let h = (mins / 60).to_string();
+        let m = (mins % 60).to_string();
+        qbz_i18n::t_args("{} h {} min", &[&h, &m])
     } else {
-        format!("{mins} min")
+        qbz_i18n::t_args("{} min", &[&mins.to_string()])
     }
 }
 
@@ -1322,13 +1324,14 @@ pub fn apply_album_version(window: &AppWindow, index: i32) {
             if tracks.iter().all(|t| artist_of(t) == name) {
                 name
             } else {
-                "Various Artists".to_string()
+                qbz_i18n::t("Various Artists")
             }
         }
         None => String::new(),
     };
     let total_secs: u64 = tracks.iter().map(|t| t.duration_secs).sum();
-    let info_line = format!("{} tracks · {}", tracks.len(), fmt_album_duration(total_secs));
+    let track_count = qbz_i18n::tf("{} track", "{} tracks", tracks.len() as i64, &[&tracks.len().to_string()]);
+    let info_line = format!("{} · {}", track_count, fmt_album_duration(total_secs));
     let (tier, detail) = match tracks.iter().max_by_key(|t| t.bit_depth.unwrap_or(0)) {
         Some(t) => {
             // Same shared classifier as the card + rows (badge), so the header
@@ -1827,7 +1830,7 @@ pub fn derive_folders(window: &AppWindow) {
         let key = if group == "artist" {
             let a = item.artist.to_string();
             if a.is_empty() {
-                "Unknown".to_string()
+                qbz_i18n::t("Unknown")
             } else {
                 a
             }
@@ -3361,9 +3364,11 @@ fn build_ephemeral_albums(tracks: &[qbz_library::LocalTrack]) -> (Vec<EphemeralA
                 .clone()
                 .unwrap_or_else(|| first.artist.clone());
             let count = group.len();
+            let track_count_label =
+                qbz_i18n::tf("{} track", "{} tracks", count as i64, &[&count.to_string()]);
             let meta = match first.year {
-                Some(y) if y > 0 => format!("{y} · {count} tracks"),
-                _ => format!("{count} tracks"),
+                Some(y) if y > 0 => format!("{y} · {track_count_label}"),
+                _ => track_count_label,
             };
             let tier = if first.format.to_string().eq_ignore_ascii_case("mp3") {
                 "mp3"
@@ -3427,7 +3432,7 @@ pub fn open_ephemeral(
 ) {
     handle.spawn(async move {
         let Some(dir) = rfd::AsyncFileDialog::new()
-            .set_title("Choose a folder to play")
+            .set_title(&qbz_i18n::t("Choose a folder to play"))
             .pick_folder()
             .await
         else {
@@ -3498,10 +3503,13 @@ async fn scan_ephemeral(
                 if skipped > 0 {
                     crate::toast::success_weak(
                         &weak,
-                        format!("Opened folder ({skipped} files skipped)"),
+                        qbz_i18n::t_args(
+                            "Opened folder ({} files skipped)",
+                            &[&skipped.to_string()],
+                        ),
                     );
                 } else {
-                    crate::toast::success_weak(&weak, "Folder opened");
+                    crate::toast::success_weak(&weak, qbz_i18n::t("Folder opened"));
                 }
             }
         }
@@ -3513,7 +3521,7 @@ async fn scan_ephemeral(
             crate::ephemeral::clear();
             crate::locallibrary_prefs::save_ephemeral_path(None);
             if from_picker {
-                crate::toast::error_weak(&weak, "Couldn't open that folder");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't open that folder"));
             }
         }
         Err(_) => {

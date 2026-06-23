@@ -184,29 +184,29 @@ pub fn save_tags(
 
     // Validate (UI thread; toast + abort, leave the modal open).
     if album_title.is_empty() {
-        crate::toast::error_weak(&weak, "Album title is required");
+        crate::toast::error_weak(&weak, qbz_i18n::t("Album title is required"));
         return;
     }
     if rows.iter().any(|r| r.title.trim().is_empty()) {
-        crate::toast::error_weak(&weak, "Every track needs a title");
+        crate::toast::error_weak(&weak, qbz_i18n::t("Every track needs a title"));
         return;
     }
     let year = match parse_year(&year_input) {
         Ok(y) => y,
         Err(()) => {
-            crate::toast::error_weak(&weak, "Year must be a number");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Year must be a number"));
             return;
         }
     };
     let album_dir = group_key.trim().to_string();
     if !Path::new(&album_dir).is_dir() {
-        crate::toast::error_weak(&weak, "Album folder not found on disk");
+        crate::toast::error_weak(&weak, qbz_i18n::t("Album folder not found on disk"));
         return;
     }
     if direct && rows.iter().any(|r| r.has_cue) {
         crate::toast::error_weak(
             &weak,
-            "Writing tags to files isn't supported for CUE albums; use sidecar mode",
+            qbz_i18n::t("Writing tags to files isn't supported for CUE albums; use sidecar mode"),
         );
         return;
     }
@@ -299,9 +299,9 @@ pub fn save_tags(
                 == Some("1");
             if !acked {
                 let ok = rfd::AsyncMessageDialog::new()
-                    .set_title("Write tags to audio files?")
+                    .set_title(&qbz_i18n::t("Write tags to audio files?"))
                     .set_description(
-                        "This modifies your audio files on disk and cannot be undone.",
+                        &qbz_i18n::t("This modifies your audio files on disk and cannot be undone."),
                     )
                     .set_buttons(rfd::MessageButtons::YesNo)
                     .show()
@@ -381,11 +381,11 @@ pub fn save_tags(
         });
 
         if ok {
-            crate::toast::success_weak(&weak, "Album metadata saved");
+            crate::toast::success_weak(&weak, qbz_i18n::t("Album metadata saved"));
             // Refresh the open album detail + reset browse models (D7).
             refresh_after_save(weak.clone(), handle2.clone(), image_cache.clone());
         } else {
-            crate::toast::error_weak(&weak, format!("Couldn't save metadata: {err_msg}"));
+            crate::toast::error_weak(&weak, qbz_i18n::t_args("Couldn't save metadata: {}", &[&err_msg]));
         }
         let _ = directory_path; // reserved (explicit directory plumbing, if added later)
     });
@@ -429,7 +429,7 @@ pub fn search_remote(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
     let artist = s.get_album_artist().trim().to_string();
     let provider = s.get_remote_provider_index();
     if title.is_empty() && artist.is_empty() {
-        crate::toast::error_weak(&weak, "Enter a title or artist to search");
+        crate::toast::error_weak(&weak, qbz_i18n::t("Enter a title or artist to search"));
         return;
     }
     let gen = REMOTE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
@@ -470,7 +470,7 @@ pub fn search_remote(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 }
                 Err(e) => {
                     s.set_show_remote_panel(false);
-                    crate::toast::error(&w, format!("Search failed: {e}"));
+                    crate::toast::error(&w, qbz_i18n::t_args("Search failed: {}", &[&e]));
                 }
             }
         });
@@ -554,16 +554,16 @@ pub fn apply_remote(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
                     if remote_n > 0 && remote_n != local_n {
                         crate::toast::warning(
                             &w,
-                            "Track count differs from the result; titles applied by position",
+                            qbz_i18n::t("Track count differs from the result; titles applied by position"),
                         );
                     }
                 }
                 Err(e) => {
                     let lower = e.to_lowercase();
                     if lower.contains("429") || lower.contains("rate") {
-                        crate::toast::error(&w, "Rate limited, try again shortly");
+                        crate::toast::error(&w, qbz_i18n::t("Rate limited, try again shortly"));
                     } else {
-                        crate::toast::error(&w, "Failed to fetch metadata");
+                        crate::toast::error(&w, qbz_i18n::t("Failed to fetch metadata"));
                     }
                 }
             }

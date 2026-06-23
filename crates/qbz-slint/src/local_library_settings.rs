@@ -54,14 +54,14 @@ fn display_name(f: &FolderData) -> String {
 /// Format a folder's `last_scan` (unix seconds, 0/None = never) for display.
 fn last_scan_label(ts: Option<i64>) -> String {
     match ts {
-        None | Some(0) => "Never".to_string(),
+        None | Some(0) => qbz_i18n::t("Never"),
         Some(secs) => chrono::DateTime::from_timestamp(secs, 0)
             .map(|dt| {
                 dt.with_timezone(&chrono::Local)
                     .format("%Y-%m-%d %H:%M")
                     .to_string()
             })
-            .unwrap_or_else(|| "Never".to_string()),
+            .unwrap_or_else(|| qbz_i18n::t("Never")),
     }
 }
 
@@ -142,7 +142,7 @@ pub fn load_folders(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
             let _ = weak2.upgrade_in_event_loop(|w| {
                 w.global::<LibraryFoldersState>().set_loading(false);
             });
-            crate::toast::error_weak(&weak2, "Couldn't load library folders");
+            crate::toast::error_weak(&weak2, qbz_i18n::t("Couldn't load library folders"));
             return;
         };
 
@@ -240,7 +240,7 @@ pub fn add_folder(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
     let h = handle.clone();
     handle.spawn(async move {
         let Some(dir) = rfd::AsyncFileDialog::new()
-            .set_title("Select music folder")
+            .set_title(&qbz_i18n::t("Select music folder"))
             .pick_folder()
             .await
         else {
@@ -266,11 +266,11 @@ pub fn add_folder(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
         .unwrap_or((false, false));
 
         if !added {
-            crate::toast::error_weak(&weak, "Couldn't add folder");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't add folder"));
             return;
         }
         if is_net {
-            crate::toast::success_weak(&weak, "Network folder detected");
+            crate::toast::success_weak(&weak, qbz_i18n::t("Network folder detected"));
         }
         load_folders(weak, h);
     });
@@ -310,7 +310,10 @@ pub fn remove_folders(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
         .flatten()
         .unwrap_or_default();
         crate::recently::prune_albums(&keys);
-        crate::toast::success_weak(&weak, format!("Removed {count} folder(s)"));
+        crate::toast::success_weak(
+            &weak,
+            qbz_i18n::tf("Removed {} folder", "Removed {} folders", count as i64, &[&count.to_string()]),
+        );
         load_folders(weak, h);
     });
 }
@@ -345,7 +348,11 @@ pub fn remove_folder(weak: Weak<AppWindow>, handle: tokio::runtime::Handle, id: 
         .flatten();
         let (n, keys) = result.unwrap_or((0, Vec::new()));
         crate::recently::prune_albums(&keys);
-        crate::toast::success_weak(&weak, format!("Removed \"{name}\" ({n} tracks)"));
+        let tracks_label = qbz_i18n::tf("{} track", "{} tracks", n as i64, &[&n.to_string()]);
+        crate::toast::success_weak(
+            &weak,
+            qbz_i18n::t_args("Removed \"{}\" ({})", &[&name, &tracks_label]),
+        );
         load_folders(weak, h);
     });
 }
@@ -451,7 +458,7 @@ pub fn save_folder_settings(
         .unwrap_or(false);
 
         if !ok {
-            crate::toast::error_weak(&weak, "Couldn't save folder settings");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't save folder settings"));
             return;
         }
         let _ = weak.upgrade_in_event_loop(|w| {
@@ -466,7 +473,7 @@ pub fn change_folder_path(weak: Weak<AppWindow>, handle: tokio::runtime::Handle,
     let h = handle.clone();
     handle.spawn(async move {
         let Some(dir) = rfd::AsyncFileDialog::new()
-            .set_title("Select music folder")
+            .set_title(&qbz_i18n::t("Select music folder"))
             .pick_folder()
             .await
         else {
@@ -481,7 +488,7 @@ pub fn change_folder_path(weak: Weak<AppWindow>, handle: tokio::runtime::Handle,
         .unwrap_or(false);
 
         if !ok {
-            crate::toast::error_weak(&weak, "Couldn't change folder location (path may already exist)");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't change folder location (path may already exist)"));
             return;
         }
         let np2 = new_path.clone();
@@ -489,7 +496,7 @@ pub fn change_folder_path(weak: Weak<AppWindow>, handle: tokio::runtime::Handle,
             let es = w.global::<LibFolderEditState>();
             if es.get_folder_id() as i64 == id {
                 es.set_path(np2.into());
-                es.set_last_scan_label("Never".into());
+                es.set_last_scan_label(qbz_i18n::t("Never").into());
             }
         });
         load_folders(weak, h);
@@ -508,7 +515,7 @@ pub fn cleanup_missing(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 return;
             }
             s.set_cleaning_missing(true);
-            s.set_cleanup_status("Scanning track paths...".into());
+            s.set_cleanup_status(qbz_i18n::t("Scanning track paths...").into());
         }
     }
     let h = handle.clone();
@@ -556,11 +563,18 @@ pub fn cleanup_missing(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
         .flatten();
 
         let (status, toast_ok) = match result {
-            Some((checked, removed)) if removed > 0 => {
-                (format!("Removed {removed} of {checked} tracks"), true)
-            }
-            Some((checked, _)) => (format!("Checked {checked} tracks - all OK"), true),
-            None => ("Cleanup failed".to_string(), false),
+            Some((checked, removed)) if removed > 0 => (
+                qbz_i18n::t_args(
+                    "Removed {} of {} tracks",
+                    &[&removed.to_string(), &checked.to_string()],
+                ),
+                true,
+            ),
+            Some((checked, _)) => (
+                qbz_i18n::t_args("Checked {} tracks - all OK", &[&checked.to_string()]),
+                true,
+            ),
+            None => (qbz_i18n::t("Cleanup failed"), false),
         };
 
         if let Some(w) = weak.upgrade() {
@@ -571,7 +585,7 @@ pub fn cleanup_missing(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
         if toast_ok {
             crate::toast::success_weak(&weak, status);
         } else {
-            crate::toast::error_weak(&weak, "Couldn't clean up missing files");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't clean up missing files"));
         }
 
         // Auto-clear the inline status after 3s.
@@ -591,9 +605,9 @@ pub fn clear_library(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
     let h = handle.clone();
     handle.spawn(async move {
         let step1 = rfd::AsyncMessageDialog::new()
-            .set_title("Clear library database?")
+            .set_title(&qbz_i18n::t("Clear library database?"))
             .set_description(
-                "This removes ALL indexed tracks from the database. Your audio files are NOT deleted. You will need to re-scan your folders afterward.",
+                &qbz_i18n::t("This removes ALL indexed tracks from the database. Your audio files are NOT deleted. You will need to re-scan your folders afterward."),
             )
             .set_buttons(rfd::MessageButtons::YesNo)
             .show()
@@ -602,8 +616,8 @@ pub fn clear_library(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
             return;
         }
         let step2 = rfd::AsyncMessageDialog::new()
-            .set_title("Are you absolutely sure?")
-            .set_description("This action cannot be undone.")
+            .set_title(&qbz_i18n::t("Are you absolutely sure?"))
+            .set_description(&qbz_i18n::t("This action cannot be undone."))
             .set_buttons(rfd::MessageButtons::YesNo)
             .show()
             .await;
@@ -626,9 +640,9 @@ pub fn clear_library(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
             crate::local_library::reset_browse_models(&w);
         });
         if ok {
-            crate::toast::success_weak(&weak, "Library database cleared");
+            crate::toast::success_weak(&weak, qbz_i18n::t("Library database cleared"));
         } else {
-            crate::toast::error_weak(&weak, "Couldn't clear the library database");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't clear the library database"));
         }
         load_folders(weak, h);
     });
@@ -725,7 +739,7 @@ fn run_scan(weak: Weak<AppWindow>, handle: tokio::runtime::Handle, ids: Option<V
                 Cleanup => {
                     let _ = weak_sink.upgrade_in_event_loop(|w| {
                         w.global::<LibraryScanState>()
-                            .set_current_file("Cleaning up missing files...".into());
+                            .set_current_file(qbz_i18n::t("Cleaning up missing files...").into());
                     });
                 }
                 Finished { status, errors } => {
@@ -749,11 +763,16 @@ fn run_scan(weak: Weak<AppWindow>, handle: tokio::runtime::Handle, ids: Option<V
                     match st {
                         2 if ec > 0 => crate::toast::success_weak(
                             &weak_sink,
-                            format!("Scan complete ({ec} file(s) skipped)"),
+                            qbz_i18n::tf(
+                                "Scan complete ({} file skipped)",
+                                "Scan complete ({} files skipped)",
+                                ec as i64,
+                                &[&ec.to_string()],
+                            ),
                         ),
-                        2 => crate::toast::success_weak(&weak_sink, "Scan complete"),
-                        3 => crate::toast::success_weak(&weak_sink, "Scan cancelled"),
-                        _ => crate::toast::error_weak(&weak_sink, "Scan failed"),
+                        2 => crate::toast::success_weak(&weak_sink, qbz_i18n::t("Scan complete")),
+                        3 => crate::toast::success_weak(&weak_sink, qbz_i18n::t("Scan cancelled")),
+                        _ => crate::toast::error_weak(&weak_sink, qbz_i18n::t("Scan failed")),
                     }
                 }
             }
@@ -777,7 +796,7 @@ fn run_scan(weak: Weak<AppWindow>, handle: tokio::runtime::Handle, ids: Option<V
 pub fn scan_all(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
     let empty = folders_lock().is_empty();
     if empty {
-        crate::toast::error_weak(&weak, "Add a folder before scanning");
+        crate::toast::error_weak(&weak, qbz_i18n::t("Add a folder before scanning"));
         return;
     }
     run_scan(weak, handle, None);
