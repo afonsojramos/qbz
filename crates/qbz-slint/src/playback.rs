@@ -68,6 +68,10 @@ pub fn apply_plex_quality_to_queue(updates: Vec<(String, Option<u32>, Option<f64
         let current_patched = runtime.core().patch_plex_queue_quality(&updates).await;
         if current_patched {
             refresh_now_playing_meta(&runtime, &weak).await;
+            // Keep the invariant: every refresh_now_playing_meta is paired with a
+            // sidebar repaint so QueueState.now-playing (quality badge included)
+            // never lags the bar. Same-track patch, so `false` (no fav pull).
+            refresh_sidebar(false);
         }
     });
 }
@@ -959,6 +963,11 @@ pub fn play_local_tracks(
             let _ = weak.upgrade_in_event_loop(move |w| {
                 w.global::<NowPlayingState>().set_shuffle(on);
             });
+            // `play_local_tracks_now` already refreshed the sidebar BEFORE this
+            // inline toggle, so the UP NEXT list is still in pre-shuffle order —
+            // re-pull it now that shuffle reordered the queue. `false` = no fav
+            // network pull.
+            refresh_sidebar(false);
         }
     });
 }
@@ -3292,6 +3301,13 @@ pub fn toggle_shuffle(
         let _ = weak.upgrade_in_event_loop(move |w| {
             w.global::<NowPlayingState>().set_shuffle(on);
         });
+        // The ONLY visible effect of a shuffle toggle is the reordered UP NEXT
+        // list (the current track stays current, so the NPB itself doesn't
+        // change). That list lives in QueueState.upcoming-page / coverflow-tracks
+        // and is pushed ONLY by the queue controller, so without this re-pull the
+        // button looked dead. `false` skips the network favorite re-pull (shuffle
+        // never changes favorites) — cheap and offline-safe.
+        refresh_sidebar(false);
     });
 }
 
@@ -3558,6 +3574,15 @@ pub fn start_poll_loop(
                 {
                     // Always refresh so title/art/meta match the live track.
                     refresh_now_playing_meta(&runtime, &weak).await;
+                    // Pair the sidebar NOW PLAYING repaint with the NPB repaint
+                    // UNCONDITIONALLY: the sidebar's QueueState.now-playing is a
+                    // persistent property that otherwise holds a prior queue's
+                    // track when the pointer was already aligned (moved==false,
+                    // e.g. a manual play that set the queue before the audio
+                    // surfaced the new id). `false` avoids a per-transition fav
+                    // network pull. record_recent/kick_prefetch stay moved-gated
+                    // below (they must not double-fire on a non-move).
+                    refresh_sidebar(false);
                     if moved {
                         log::info!(
                             "[qbz-slint] [GAPLESS] seamless transition {last_track_id} -> {track_id}"
