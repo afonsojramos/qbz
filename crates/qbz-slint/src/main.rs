@@ -181,6 +181,15 @@ fn init_shell_for_user(
     // when the user hasn't opted in.
     discord_rpc::init(runtime, &tokio::runtime::Handle::current());
 
+    // Restore the persisted player volume so audio starts at the saved level
+    // (the poll loop then mirrors it onto NowPlayingState for the slider).
+    playback::set_volume(
+        runtime.clone(),
+        weak.clone(),
+        tokio::runtime::Handle::current(),
+        crate::ui_prefs::load().volume,
+    );
+
     // Bind "My QBZ" nav branding (custom label + icon) to this user
     // (per-user myqbz_branding.json). Seeded into MyQbzBrandingState by the
     // caller so the sidebar row + Settings row reflect the persisted values.
@@ -4614,6 +4623,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let shell = window.global::<ShellState>();
         shell.set_npb_mode(restored_npb);
+        // Restore the persisted sidebar state (0 open / 1 mini / 2 closed) +
+        // section-nav placement before the shell renders.
+        shell.set_sidebar_state(restored_prefs.sidebar_state);
+        shell.set_nav_in_sidebar(restored_prefs.nav_in_sidebar);
         // Large dock toggles — restore the persisted visualizer state + spectrum
         // choice (default ON / Bars) before the shell renders.
         shell.set_large_visualizer_on(restored_prefs.large_visualizer);
@@ -8746,6 +8759,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             });
     }
+    // Persist sidebar state / section-nav placement / volume (drag-end only)
+    // to ui_prefs. These callbacks just touch the prefs file — no runtime.
+    {
+        let shell = window.global::<ShellState>();
+        shell.on_persist_sidebar_state(|state| {
+            let mut prefs = crate::ui_prefs::load();
+            prefs.sidebar_state = state;
+            crate::ui_prefs::save(&prefs);
+        });
+        shell.on_persist_nav(|enabled| {
+            let mut prefs = crate::ui_prefs::load();
+            prefs.nav_in_sidebar = enabled;
+            crate::ui_prefs::save(&prefs);
+        });
+        window.global::<NowPlayingState>().on_persist_volume(|fraction| {
+            let mut prefs = crate::ui_prefs::load();
+            prefs.volume = fraction.clamp(0.0, 1.0);
+            crate::ui_prefs::save(&prefs);
+        });
+    }
+
     {
         let runtime = app_runtime.clone();
         let weak = window.as_weak();

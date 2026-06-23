@@ -11,6 +11,9 @@ export component QbzSlider inherits Rectangle {
     in property <int> maximum: 10;
     in property <int> value: 0;
     callback changed(int);
+    // Fired once on pointer release (drag end) — for callers that want to
+    // commit/persist only the final value, not every intermediate `changed`.
+    callback released(int);
 
     width: 200px;
     height: 22px;
@@ -71,6 +74,9 @@ export component QbzSlider inherits Rectangle {
             if (e.kind == PointerEventKind.down
                 && root.value-from-x(self.mouse-x) != root.value) {
                 root.changed(root.value-from-x(self.mouse-x));
+            }
+            if (e.kind == PointerEventKind.up) {
+                root.released(root.value);
             }
         }
         // Continuous drag while held.

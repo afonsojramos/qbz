@@ -86,6 +86,14 @@ fn default_system_notifications() -> bool {
     true
 }
 
+fn default_nav_in_sidebar() -> bool {
+    true
+}
+
+fn default_volume() -> f32 {
+    1.0
+}
+
 /// Miniplayer default-view select index -> persisted key (mirrors the
 /// miniplayer's own reader in `miniplayer.rs`). 0 = "remember".
 pub fn mini_default_view_for_index(index: i32) -> &'static str {
@@ -173,6 +181,15 @@ pub struct UiPrefs {
     /// per-machine app preference — your Discord client is per-machine.)
     #[serde(default)]
     pub discord_rpc_enabled: bool,
+    /// Three-state sidebar: 0 open / 1 mini / 2 closed. Restored at startup.
+    #[serde(default)]
+    pub sidebar_state: i32,
+    /// Section navigation lives in the sidebar (vs the header). Default true.
+    #[serde(default = "default_nav_in_sidebar")]
+    pub nav_in_sidebar: bool,
+    /// Player volume, 0.0..=1.0. Restored at startup. Default full.
+    #[serde(default = "default_volume")]
+    pub volume: f32,
     /// Immersive in-view search action: `"disabled"` | `"replace"` | `"next"` |
     /// `"queue"`. Doubles as the enable switch (`"disabled"` keeps the field
     /// inert). See [`DEFAULT_IMMERSIVE_SEARCH_ACTION`].
@@ -281,6 +298,9 @@ impl Default for UiPrefs {
             intelligent_search: default_intelligent_search(),
             system_notifications: default_system_notifications(),
             discord_rpc_enabled: false,
+            sidebar_state: 0,
+            nav_in_sidebar: default_nav_in_sidebar(),
+            volume: default_volume(),
             immersive_search_action: default_immersive_search_action(),
             immersive_default_view: default_immersive_default_view(),
             immersive_last_view_mode: 0,

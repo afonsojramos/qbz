@@ -322,6 +322,7 @@ export component AppearanceSettings inherits VerticalLayout {
             checked: ShellState.nav-in-sidebar;
             toggled(v) => {
                 ShellState.nav-in-sidebar = v;
+                ShellState.persist-nav(v);
             }
         }
     }

@@ -847,6 +847,13 @@ export component PlayerBar inherits Rectangle {
                                 NowPlayingState.set-volume(v / 100.0);
                             }
                         }
+                        // Persist only the final value on drag-end (avoids a
+                        // ui_prefs write per drag tick).
+                        released(v) => {
+                            if (!root.vol-locked) {
+                                NowPlayingState.persist-volume(v / 100.0);
+                            }
+                        }
                     }
                 }
                 if AppearanceState.show-volume-steppers: VerticalLayout {
