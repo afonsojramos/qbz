@@ -261,8 +261,10 @@ export component PlayerBar inherits Rectangle {
                         root.media-action(kind, id, "open");
                     }
                     track-info() => {
-                        // Ephemeral tracks have no DB row → no track-info page.
-                        if (!NowPlayingState.is-ephemeral) {
+                        // Track info is a Qobuz-only feature — disable the
+                        // trigger for local / Plex / ephemeral tracks (no DB row
+                        // / no Qobuz metadata page).
+                        if (NowPlayingState.source == "qobuz") {
                             root.media-action("track", NowPlayingState.track-id, "track-info");
                         }
                     }
@@ -347,8 +349,10 @@ export component PlayerBar inherits Rectangle {
                         root.media-action(kind, id, "open");
                     }
                     track-info() => {
-                        // Ephemeral tracks have no DB row → no track-info page.
-                        if (!NowPlayingState.is-ephemeral) {
+                        // Track info is a Qobuz-only feature — disable the
+                        // trigger for local / Plex / ephemeral tracks (no DB row
+                        // / no Qobuz metadata page).
+                        if (NowPlayingState.source == "qobuz") {
                             root.media-action("track", NowPlayingState.track-id, "track-info");
                         }
                     }

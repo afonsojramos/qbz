@@ -1349,6 +1349,13 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     // Ephemeral tracks have no DB row → metadata-bound actions (favorite,
     // add-to-playlist, track-info) are gated off in the UI via this flag.
     let is_ephemeral = crate::ephemeral::is_ephemeral_id(track.id as i64);
+    // Normalized source for the UI ("qobuz" | "local" | "plex" | ...). Qobuz
+    // tracks coerce a None source to "qobuz"; local tracks to "local". Gates the
+    // Qobuz-only Track-info trigger.
+    let source = track
+        .source
+        .clone()
+        .unwrap_or_else(|| if track.is_local { "local" } else { "qobuz" }.to_string());
     let duration = track.duration_secs;
     // Plex-aware: a Plex track carries a raw `/library/...` thumb path that
     // must resolve to a tokenized `PlexThumb` (from current creds) so the
@@ -1517,6 +1524,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         np.set_artist_id(artist_id.into());
         np.set_track_id(track_id.into());
         np.set_is_ephemeral(is_ephemeral);
+        np.set_source(source.into());
         np.set_quality_tier(quality_tier.into());
         np.set_quality_detail(quality_detail.into());
         np.set_duration_secs(duration as i32);

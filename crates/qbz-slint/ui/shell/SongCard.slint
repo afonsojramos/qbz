@@ -319,10 +319,10 @@ export component SongCard inherits Rectangle {
                     overflow: elide;
                 }
                 tc-ta := TouchArea {
-                    mouse-cursor: (NowPlayingState.has-track && !NowPlayingState.is-ephemeral)
+                    mouse-cursor: (NowPlayingState.has-track && NowPlayingState.source == "qobuz")
                         ? pointer : default;
                     clicked => {
-                        if (NowPlayingState.has-track && !NowPlayingState.is-ephemeral) {
+                        if (NowPlayingState.has-track && NowPlayingState.source == "qobuz") {
                             root.track-info();
                         }
                     }
@@ -431,11 +431,11 @@ export component SongCard inherits Rectangle {
                 overflow: elide;
             }
             ttta := TouchArea {
-                mouse-cursor: (NowPlayingState.has-track && !NowPlayingState.is-ephemeral)
+                mouse-cursor: (NowPlayingState.has-track && NowPlayingState.source == "qobuz")
                     ? pointer : default;
                 clicked => {
                     // Ephemeral tracks have no track-info page.
-                    if (NowPlayingState.has-track && !NowPlayingState.is-ephemeral) {
+                    if (NowPlayingState.has-track && NowPlayingState.source == "qobuz") {
                         root.track-info();
                     }
                 }

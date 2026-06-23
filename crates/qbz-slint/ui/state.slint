@@ -3635,6 +3635,10 @@ export global NowPlayingState {
     // True when the playing track is from an ephemeral folder (synthetic id):
     // it has no DB row, so favorite / add-to-playlist / track-info are gated off.
     in property <bool> is-ephemeral: false;
+    // Playing track's source: "qobuz" | "local" | "plex" | "ephemeral". Track
+    // info is a Qobuz-only feature, so its trigger is gated on `source ==
+    // "qobuz"` (local/Plex/ephemeral tracks have no Qobuz metadata page).
+    in property <string> source;
     // Parental-warning / explicit flag for the playing track. Drives the
     // explicit badge in the miniplayer compact + artwork surfaces (Tauri parity).
     in property <bool> explicit: false;
