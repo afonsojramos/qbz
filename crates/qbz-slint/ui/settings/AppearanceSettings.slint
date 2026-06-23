@@ -515,22 +515,6 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
-    SettingRow {
-        unsupported: true;
-        label: @tr("Match system window chrome");
-        description: AppearanceState.hardware-accel-enabled
-            ? @tr("Round the window corners and add a subtle edge so QBZ blends with your desktop theme. Takes effect after restarting the app (the window is rebuilt transparent so the corners don't show white).")
-            : @tr("Available only with GPU acceleration.");
-        enabled: !root.tb-locked && AppearanceState.hardware-accel-enabled;
-        QbzToggle {
-            checked: AppearanceState.match-system-chrome && AppearanceState.hardware-accel-enabled;
-            enabled: !root.tb-locked && AppearanceState.hardware-accel-enabled;
-            toggled(v) => {
-                AppearanceState.match-system-chrome = v;
-                AppearanceState.appearance-bool("match-system-chrome", v);
-            }
-        }
-    }
     Rectangle { height: 12px; }
     Divider { }
     Rectangle { height: 12px; }
