@@ -255,13 +255,13 @@ pub fn create(
         item
     };
 
-    menu.addItem(&make_item("Play/Pause", TAG_PLAY_PAUSE));
-    menu.addItem(&make_item("Next Track", TAG_NEXT));
-    menu.addItem(&make_item("Previous Track", TAG_PREVIOUS));
+    menu.addItem(&make_item(&qbz_i18n::t("Play/Pause"), TAG_PLAY_PAUSE));
+    menu.addItem(&make_item(&qbz_i18n::t("Next Track"), TAG_NEXT));
+    menu.addItem(&make_item(&qbz_i18n::t("Previous Track"), TAG_PREVIOUS));
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    menu.addItem(&make_item("Show/Hide Window", TAG_SHOW_HIDE));
+    menu.addItem(&make_item(&qbz_i18n::t("Show/Hide Window"), TAG_SHOW_HIDE));
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    menu.addItem(&make_item("Quit QBZ", TAG_QUIT));
+    menu.addItem(&make_item(&qbz_i18n::t("Quit QBZ"), TAG_QUIT));
 
     // Build the status item and wire the icon.
     let status_bar = unsafe { NSStatusBar::systemStatusBar() };

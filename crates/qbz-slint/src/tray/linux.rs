@@ -208,20 +208,23 @@ impl Tray for QbzTray {
                 };
                 let mut lines: Vec<String> = Vec::with_capacity(3);
                 if !np.artist.is_empty() {
-                    lines.push(format!("by {}", np.artist));
+                    lines.push(qbz_i18n::t_args("by {}", &[np.artist.as_str()]));
                 }
                 if !np.album.is_empty() {
                     lines.push(np.album.clone());
                 }
                 lines.push(if self.is_playing {
-                    "Middle-click to pause".to_string()
+                    qbz_i18n::t("Middle-click to pause")
                 } else {
-                    "Middle-click to play".to_string()
+                    qbz_i18n::t("Middle-click to play")
                 });
-                lines.push("Scroll to adjust volume".to_string());
+                lines.push(qbz_i18n::t("Scroll to adjust volume"));
                 (header, lines.join("\n"))
             }
-            None => ("QBZ".to_string(), "Music Player\nNothing playing".to_string()),
+            None => (
+                "QBZ".to_string(),
+                qbz_i18n::t("Music Player\nNothing playing"),
+            ),
         };
         ToolTip {
             title,
@@ -267,13 +270,13 @@ impl Tray for QbzTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         vec![
             StandardItem {
-                label: "Play/Pause".into(),
+                label: qbz_i18n::t("Play/Pause").into(),
                 activate: Box::new(|this: &mut Self| this.play_pause()),
                 ..Default::default()
             }
             .into(),
             StandardItem {
-                label: "Next Track".into(),
+                label: qbz_i18n::t("Next Track").into(),
                 activate: Box::new(|this: &mut Self| {
                     super::dispatch_next(
                         this.runtime.clone(),
@@ -285,7 +288,7 @@ impl Tray for QbzTray {
             }
             .into(),
             StandardItem {
-                label: "Previous Track".into(),
+                label: qbz_i18n::t("Previous Track").into(),
                 activate: Box::new(|this: &mut Self| {
                     super::dispatch_previous(
                         this.runtime.clone(),
@@ -298,14 +301,14 @@ impl Tray for QbzTray {
             .into(),
             MenuItem::Separator,
             StandardItem {
-                label: "Show/Hide Window".into(),
+                label: qbz_i18n::t("Show/Hide Window").into(),
                 activate: Box::new(|this: &mut Self| super::toggle_window(&this.weak)),
                 ..Default::default()
             }
             .into(),
             MenuItem::Separator,
             StandardItem {
-                label: "Quit QBZ".into(),
+                label: qbz_i18n::t("Quit QBZ").into(),
                 activate: Box::new(|_this: &mut Self| super::quit()),
                 ..Default::default()
             }

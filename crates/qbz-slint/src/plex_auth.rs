@@ -301,7 +301,7 @@ pub fn load(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
         if track_count > 0 {
             set_status(
                 &weak3,
-                format!("Loaded {track_count} cached tracks"),
+                qbz_i18n::t_args("Loaded {} cached tracks", &[&track_count.to_string()]),
                 1,
             );
         }
@@ -435,7 +435,7 @@ pub fn generate_code(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 });
                 set_status(
                     &weak2,
-                    format!("Enter code {code_for_status} at the Plex sign-in page"),
+                    qbz_i18n::t_args("Enter code {} at the Plex sign-in page", &[&code_for_status.to_string()]),
                     1,
                 );
                 // Start the repeating poll on the event-loop thread.
@@ -456,8 +456,8 @@ pub fn generate_code(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 let _ = weak2.upgrade_in_event_loop(|w| {
                     w.global::<PlexSettingsState>().set_pin_busy(false);
                 });
-                set_status(&weak2, format!("Error: {e}"), 3);
-                crate::toast::error_weak(&weak2, "Plex link failed to start");
+                set_status(&weak2, qbz_i18n::t_args("Error: {}", &[&e.to_string()]), 3);
+                crate::toast::error_weak(&weak2, qbz_i18n::t("Plex link failed to start"));
             }
         }
     });
@@ -578,7 +578,7 @@ pub fn copy_code(weak: Weak<AppWindow>) {
         return;
     }
     crate::share::copy_to_clipboard(code);
-    crate::toast::success_weak(&weak, "Code copied");
+    crate::toast::success_weak(&weak, qbz_i18n::t("Code copied"));
 }
 
 /// `handlePlexPing`: capture machine_id + set connected status. Returns whether
@@ -602,11 +602,11 @@ async fn ping_inner(
                 .or(info.machine_identifier.clone())
                 .unwrap_or_else(|| "Plex".to_string());
             let version = info.version.clone().unwrap_or_else(|| "?".to_string());
-            set_status(&weak, format!("Connected to {server} (v{version})"), 2);
+            set_status(&weak, qbz_i18n::t_args("Connected to {} (v{})", &[&server, &version]), 2);
             true
         }
         Err(e) => {
-            set_status(&weak, format!("Error: {e}"), 3);
+            set_status(&weak, qbz_i18n::t_args("Error: {}", &[&e.to_string()]), 3);
             false
         }
     };
@@ -677,7 +677,7 @@ async fn load_sections_inner(
         {
             Ok(s) => s,
             Err(e) => {
-                set_status(&weak, format!("Error: {e}"), 3);
+                set_status(&weak, qbz_i18n::t_args("Error: {}", &[&e.to_string()]), 3);
                 let _ = weak.upgrade_in_event_loop(|w| {
                     w.global::<PlexSettingsState>().set_busy(false)
                 });
@@ -709,7 +709,7 @@ async fn load_sections_inner(
     plex_settings::set_selected_section_keys(&selected);
 
     let count = sections.len();
-    set_status(&weak, format!("{count} libraries found"), 1);
+    set_status(&weak, qbz_i18n::t_args("{} libraries found", &[&count.to_string()]), 1);
 
     // Push the section model (counts come from the sync reload below).
     let counts = {
@@ -826,7 +826,7 @@ async fn sync_selected_libraries(
         s.set_sections(items_model(items));
         s.set_busy(false);
     });
-    set_status(&weak, format!("{total} tracks loaded"), 2);
+    set_status(&weak, qbz_i18n::t_args("{} tracks loaded", &[&total.to_string()]), 2);
 }
 
 /// `runPlexAutoSetup`: ping → (on success) sections → sync.
@@ -917,9 +917,9 @@ fn read_sections(weak: &Weak<AppWindow>) -> Vec<PlexSectionItem> {
 pub fn disconnect(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
     handle.spawn(async move {
         let ok = rfd::AsyncMessageDialog::new()
-            .set_title("Disconnect from Plex?")
+            .set_title(qbz_i18n::t("Disconnect from Plex?"))
             .set_description(
-                "This signs out of Plex and clears the locally cached libraries and tracks.",
+                qbz_i18n::t("This signs out of Plex and clears the locally cached libraries and tracks."),
             )
             .set_buttons(rfd::MessageButtons::YesNo)
             .show()
@@ -943,7 +943,7 @@ pub fn disconnect(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
             s.set_sections(items_model(Vec::new()));
             refresh_gates(&w);
         });
-        set_status(&weak, "Disconnected".to_string(), 1);
+        set_status(&weak, qbz_i18n::t("Disconnected"), 1);
     });
 }
 
@@ -951,8 +951,8 @@ pub fn disconnect(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
 pub fn clear_cache(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
     handle.spawn(async move {
         let ok = rfd::AsyncMessageDialog::new()
-            .set_title("Clear Plex cache?")
-            .set_description("This removes cached Plex libraries and tracks. Your sign-in is kept.")
+            .set_title(qbz_i18n::t("Clear Plex cache?"))
+            .set_description(qbz_i18n::t("This removes cached Plex libraries and tracks. Your sign-in is kept."))
             .set_buttons(rfd::MessageButtons::YesNo)
             .show()
             .await;
@@ -977,9 +977,9 @@ pub fn clear_cache(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
             s.set_sections(items_model(cleared_items));
         });
         if cleared {
-            set_status(&weak, "Cache cleared".to_string(), 1);
+            set_status(&weak, qbz_i18n::t("Cache cleared"), 1);
         } else {
-            crate::toast::error_weak(&weak, "Couldn't clear the Plex cache");
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't clear the Plex cache"));
         }
     });
 }

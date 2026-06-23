@@ -95,7 +95,8 @@ pub fn apply(window: &AppWindow, playlists: Vec<PickPlaylist>) {
             id: p.id.into(),
             name: p.name.into(),
             tracks_line: if p.tracks > 0 {
-                format!("{} tracks", p.tracks).into()
+                qbz_i18n::tf("{} track", "{} tracks", p.tracks as i64, &[&p.tracks.to_string()])
+                    .into()
             } else {
                 "".into()
             },

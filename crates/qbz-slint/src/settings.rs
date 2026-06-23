@@ -299,13 +299,13 @@ fn device_is_bit_perfect(backend: AudioBackendType, device: &qbz_audio::AudioDev
 
 fn backend_label(t: AudioBackendType) -> String {
     match t {
-        AudioBackendType::PipeWire => "PipeWire",
-        AudioBackendType::Alsa => "ALSA",
-        AudioBackendType::Pulse => "PulseAudio",
-        AudioBackendType::SystemDefault => "System default",
-        AudioBackendType::Jack => "JACK",
+        // Brand/product names stay literal; only the prose entry is translated.
+        AudioBackendType::PipeWire => "PipeWire".to_string(),
+        AudioBackendType::Alsa => "ALSA".to_string(),
+        AudioBackendType::Pulse => "PulseAudio".to_string(),
+        AudioBackendType::SystemDefault => qbz_i18n::t("System default"),
+        AudioBackendType::Jack => "JACK".to_string(),
     }
-    .to_string()
 }
 
 /// One enumerated output device before grouping.
@@ -326,7 +326,7 @@ struct DeviceRow {
 fn enumerate_devices(backend: AudioBackendType) -> DeviceList {
     // The synthetic "System default" entry (empty id) always leads.
     let mut rows = vec![DeviceRow {
-        label: "System default".to_string(),
+        label: qbz_i18n::t("System default"),
         id: String::new(),
         bp: false,
     }];
@@ -392,7 +392,7 @@ fn group_alsa_devices(rows: Vec<DeviceRow>) -> DeviceList {
     for (section, row) in indexed {
         let header = if prev_section != Some(section) {
             prev_section = Some(section);
-            alsa_section_label(section).to_string()
+            qbz_i18n::t(alsa_section_label(section))
         } else {
             String::new()
         };
@@ -494,13 +494,13 @@ fn build_snapshot(
             .map(|q| q.label.to_string())
             .collect(),
         streaming_quality_index: ui_prefs::streaming_quality_index(streaming_quality_key) as i32,
-        sample_rates: MAX_SAMPLE_RATES.iter().map(|(l, _)| l.to_string()).collect(),
+        sample_rates: MAX_SAMPLE_RATES.iter().map(|(l, _)| qbz_i18n::t(l)).collect(),
         sample_rate_index: sample_rate_index as i32,
         // Index 0 is "Auto" (a resolve-and-set action, #470); the concrete
         // backends follow. backend_type is always persisted concrete, so the
         // current selection is its position shifted by 1 past the Auto entry —
         // the dropdown never rests on Auto.
-        backends: std::iter::once("Auto".to_string())
+        backends: std::iter::once(qbz_i18n::t("Auto"))
             .chain(backend_types.iter().map(|t| backend_label(*t)))
             .collect(),
         backend_index: backend_index as i32 + 1,
@@ -508,7 +508,7 @@ fn build_snapshot(
         device_bp: device_list.bp,
         device_groups: device_list.groups,
         device_index: device_index as i32,
-        alsa_plugins: ALSA_PLUGINS.iter().map(|(l, _)| l.to_string()).collect(),
+        alsa_plugins: ALSA_PLUGINS.iter().map(|(l, _)| qbz_i18n::t(l)).collect(),
         alsa_plugin_index: alsa_plugin_index as i32,
         limit_quality_to_device: audio.limit_quality_to_device,
         alsa_hardware_volume: audio.alsa_hardware_volume,
@@ -531,7 +531,7 @@ fn build_snapshot(
         streaming_only: audio.streaming_only,
         normalization: audio.normalization_enabled,
         buffer_seconds: audio.stream_buffer_seconds as i32,
-        retry_behaviors: RETRY_BEHAVIORS.iter().map(|(l, _)| l.to_string()).collect(),
+        retry_behaviors: RETRY_BEHAVIORS.iter().map(|(l, _)| qbz_i18n::t(l)).collect(),
         retry_behavior_index: retry_behavior_index as i32,
         output_backend_label: out_backend_label,
         output_mode_label: out_mode_label,

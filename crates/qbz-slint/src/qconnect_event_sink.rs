@@ -524,11 +524,11 @@ impl QconnectEventSink for SlintQconnectEventSink {
             }
             QconnectAppEvent::RendererUnreachable { renderer_id } => {
                 log::warn!("[QConnect] Renderer {renderer_id} unreachable");
-                crate::toast::error_weak(&self.window, "Qobuz Connect renderer unreachable");
+                crate::toast::error_weak(&self.window, qbz_i18n::t("Qobuz Connect renderer unreachable"));
             }
             QconnectAppEvent::RendererDisconnected { renderer_id } => {
                 log::warn!("[QConnect] Renderer {renderer_id} disconnected");
-                crate::toast::error_weak(&self.window, "Qobuz Connect renderer disconnected");
+                crate::toast::error_weak(&self.window, qbz_i18n::t("Qobuz Connect renderer disconnected"));
             }
             QconnectAppEvent::PlaybackError {
                 queue_item_id,
@@ -540,7 +540,7 @@ impl QconnectEventSink for SlintQconnectEventSink {
                 log::warn!(
                     "[QConnect] Playback error on queue_item {queue_item_id}: {error_type:?}"
                 );
-                crate::toast::error_weak(&self.window, "Track unavailable on Qobuz Connect");
+                crate::toast::error_weak(&self.window, qbz_i18n::t("Track unavailable on Qobuz Connect"));
             }
             QconnectAppEvent::ResyncComplete => {
                 log::info!("[QConnect] Post-reconnect resync complete");

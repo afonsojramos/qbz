@@ -166,7 +166,7 @@ pub fn begin_fetch(window: &AppWindow) -> Option<String> {
     state.set_current_track("".into());
     clear_summary(window);
     state.set_log(ModelRc::new(VecModel::from(Vec::<ImportLogEntry>::new())));
-    push_log(window, "Checking playlist link...".to_string(), "info");
+    push_log(window, qbz_i18n::t("Checking playlist link..."), "info");
     state.set_progress_visible(true);
     Some(url)
 }
@@ -185,7 +185,7 @@ pub fn apply_preview_ok(window: &AppWindow, url: &str, preview: ImportPlaylist) 
     }
     push_log(
         window,
-        format!("Found {} tracks from {}.", count, provider),
+        qbz_i18n::t_args("Found {} tracks from {}.", &[&count.to_string(), provider]),
         "success",
     );
     state.set_loading(false);
@@ -200,7 +200,7 @@ pub fn apply_preview_ok(window: &AppWindow, url: &str, preview: ImportPlaylist) 
 pub fn apply_preview_err(window: &AppWindow, err: &str) {
     let state = window.global::<PlaylistImportState>();
     state.set_error(err.into());
-    push_log(window, format!("Import failed: {}", err), "error");
+    push_log(window, qbz_i18n::t_args("Import failed: {}", &[err]), "error");
     state.set_loading(false);
 }
 
@@ -260,15 +260,15 @@ pub fn apply_event(window: &AppWindow, event: ImportEvent) {
     match event {
         ImportEvent::Phase(phase) => match phase {
             ImportPhase::Matching => {
-                push_log(window, "Searching Qobuz catalog...".to_string(), "info");
+                push_log(window, qbz_i18n::t("Searching Qobuz catalog..."), "info");
             }
             // Creating / Adding re-fire once per created part — log each,
             // as Tauri does.
             ImportPhase::Creating => {
-                push_log(window, "Creating playlist...".to_string(), "success");
+                push_log(window, qbz_i18n::t("Creating playlist..."), "success");
             }
             ImportPhase::Adding => {
-                push_log(window, "Adding tracks to playlist...".to_string(), "info");
+                push_log(window, qbz_i18n::t("Adding tracks to playlist..."), "info");
             }
         },
         ImportEvent::Progress(p) => {
@@ -282,17 +282,19 @@ pub fn apply_event(window: &AppWindow, event: ImportEvent) {
                 // Status line per phase — deliberate owner deviation from
                 // the Tauri modal, which reused the "Matching tracks…"
                 // string here (see qbz_playlist_import::sink::ImportPhase).
-                let line = format!("Adding tracks: {} / {}", p.current, p.total);
+                let line = qbz_i18n::t_args("Adding tracks: {} / {}", &[&p.current.to_string(), &p.total.to_string()]);
                 state.set_status_line(line.as_str().into());
                 // One log line per 50-track chunk event (chunk counts,
                 // not tracks) — Tauri logs every adding event.
                 push_log(window, line, "info");
             } else if p.total > 0 {
-                let line = format!(
+                let line = qbz_i18n::t_args(
                     "Matching tracks: {} / {} ({} found)",
-                    group_thousands(p.current),
-                    group_thousands(p.total),
-                    group_thousands(p.matched_so_far)
+                    &[
+                        &group_thousands(p.current),
+                        &group_thousands(p.total),
+                        &group_thousands(p.matched_so_far),
+                    ],
                 );
                 state.set_status_line(line.as_str().into());
                 // Matching is high-frequency (one event per track): log
@@ -329,9 +331,12 @@ pub fn apply_execute_ok(window: &AppWindow, summary: &ImportSummary) {
     state.set_import_completed(true);
     push_log(
         window,
-        format!(
+        qbz_i18n::t_args(
             "Imported {} of {} tracks into QBZ.",
-            summary.matched_tracks, summary.total_tracks
+            &[
+                &summary.matched_tracks.to_string(),
+                &summary.total_tracks.to_string(),
+            ],
         ),
         "success",
     );
@@ -339,23 +344,26 @@ pub fn apply_execute_ok(window: &AppWindow, summary: &ImportSummary) {
         if summary.parts_created > 1 {
             push_log(window, parts_line(summary.parts_created), "success");
         } else {
-            push_log(window, "Playlist created in Qobuz™.".to_string(), "success");
+            push_log(window, qbz_i18n::t("Playlist created in Qobuz™."), "success");
         }
     } else {
-        push_log(window, "No matching tracks found.".to_string(), "error");
+        push_log(window, qbz_i18n::t("No matching tracks found."), "error");
     }
     // Summary block (pre-formatted; "" = hidden). `playlist_name` is the
     // name the playlist was created under — rename included (deliberate
     // owner fix vs the Tauri original, see qbz_playlist_import::importer).
-    state.set_summary_playlist(format!("Playlist: {}", summary.playlist_name).into());
+    state.set_summary_playlist(qbz_i18n::t_args("Playlist: {}", &[&summary.playlist_name]).into());
     state.set_summary_matched(
-        format!(
+        qbz_i18n::t_args(
             "Tracks matched: {} / {}",
-            summary.matched_tracks, summary.total_tracks
+            &[
+                &summary.matched_tracks.to_string(),
+                &summary.total_tracks.to_string(),
+            ],
         )
         .into(),
     );
-    state.set_summary_skipped(format!("Skipped: {}", summary.skipped_tracks).into());
+    state.set_summary_skipped(qbz_i18n::t_args("Skipped: {}", &[&summary.skipped_tracks.to_string()]).into());
     state.set_summary_parts(if summary.parts_created > 1 {
         parts_line(summary.parts_created).into()
     } else {
@@ -374,7 +382,7 @@ pub fn apply_execute_ok(window: &AppWindow, summary: &ImportSummary) {
 pub fn apply_execute_err(window: &AppWindow, err: &str) {
     let state = window.global::<PlaylistImportState>();
     state.set_error(err.into());
-    push_log(window, format!("Import failed: {}", err), "error");
+    push_log(window, qbz_i18n::t_args("Import failed: {}", &[err]), "error");
     state.set_has_progress(false);
     state.set_status_line("".into());
     state.set_current_track("".into());
@@ -441,7 +449,7 @@ fn clear_summary(window: &AppWindow) {
 /// "Split into {count} playlists (Qobuz 2000-track limit)" — used as both
 /// a log line and the summary parts line, as in Tauri.
 fn parts_line(count: u32) -> String {
-    format!("Split into {} playlists (Qobuz 2000-track limit)", count)
+    qbz_i18n::t_args("Split into {} playlists (Qobuz 2000-track limit)", &[&count.to_string()])
 }
 
 /// Display names for the "Found N tracks from {provider}." log (Svelte

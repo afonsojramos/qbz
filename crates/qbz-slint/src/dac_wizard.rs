@@ -48,7 +48,7 @@ pub fn open_immediate(window: &AppWindow) {
     );
 
     st.set_health_ok(false);
-    st.set_health_summary("Checking your audio stack…".into());
+    st.set_health_summary(qbz_i18n::t("Checking your audio stack…").into());
     st.set_remediations(ModelRc::new(VecModel::from(Vec::<RemediationRow>::new())));
 }
 
@@ -99,13 +99,14 @@ fn recompute(window: &AppWindow) {
         let r = remediations(health, distro, init);
         st.set_health_ok(health.is_ready());
         st.set_health_summary(if health.is_ready() {
-            "Your audio stack is ready for bit-perfect playback.".into()
+            qbz_i18n::t("Your audio stack is ready for bit-perfect playback.").into()
         } else {
             let n = r.len();
-            format!(
-                "{} item{} need attention before bit-perfect playback will work.",
-                n,
-                if n == 1 { "" } else { "s" }
+            qbz_i18n::tf(
+                "{} item needs attention before bit-perfect playback will work.",
+                "{} items need attention before bit-perfect playback will work.",
+                n as i64,
+                &[&n.to_string()],
             )
             .into()
         });
@@ -136,7 +137,7 @@ fn remediations(h: AudioStackHealth, d: Distro, init: InitSystem) -> Vec<(String
             return Vec::new();
         }
         return vec![(
-            "Enable PipeWire in your NixOS configuration".to_string(),
+            qbz_i18n::t("Enable PipeWire in your NixOS configuration"),
             NIXOS_PIPEWIRE_BLOCK.to_string(),
         )];
     }
@@ -145,7 +146,7 @@ fn remediations(h: AudioStackHealth, d: Distro, init: InitSystem) -> Vec<(String
     let mut needs_restart = false;
     if !h.has_pw_dump {
         out.push((
-            "Install the PipeWire tools (pw-dump)".to_string(),
+            qbz_i18n::t("Install the PipeWire tools (pw-dump)"),
             install(d, pkg_pw_tools(d)),
         ));
         needs_restart = true;
@@ -153,21 +154,21 @@ fn remediations(h: AudioStackHealth, d: Distro, init: InitSystem) -> Vec<(String
     if !h.cpal_sees_pipewire {
         // THE Ubuntu no-list / no-playback bug: the ALSA->PipeWire bridge PCM.
         out.push((
-            "Install the ALSA bridge so playback can reach PipeWire".to_string(),
+            qbz_i18n::t("Install the ALSA bridge so playback can reach PipeWire"),
             install(d, "pipewire-alsa"),
         ));
         needs_restart = true;
     }
     if !h.has_pactl {
         out.push((
-            "Install the Pulse compatibility tools (optional fallback)".to_string(),
+            qbz_i18n::t("Install the Pulse compatibility tools (optional fallback)"),
             install(d, pkg_pulse(d)),
         ));
         needs_restart = true;
     }
     if !h.any_devices {
         out.push((
-            "No sinks detected — reinstall the ALSA UCM profiles, then reboot".to_string(),
+            qbz_i18n::t("No sinks detected — reinstall the ALSA UCM profiles, then reboot"),
             install_reinstall(d, "alsa-ucm-conf"),
         ));
     }
@@ -176,7 +177,7 @@ fn remediations(h: AudioStackHealth, d: Distro, init: InitSystem) -> Vec<(String
     // distro — Gentoo+systemd and Gentoo+OpenRC must differ).
     if !h.wireplumber_active || needs_restart {
         out.push((
-            "(Re)start the PipeWire audio services".to_string(),
+            qbz_i18n::t("(Re)start the PipeWire audio services"),
             restart_cmd(init).to_string(),
         ));
     }
@@ -259,17 +260,17 @@ const NIXOS_PIPEWIRE_BLOCK: &str = "# /etc/nixos/configuration.nix:\n\
 fn reference_commands(d: Distro, init: InitSystem) -> Vec<(String, String)> {
     if d == Distro::NixOS {
         return vec![(
-            "Enable PipeWire in your NixOS configuration".to_string(),
+            qbz_i18n::t("Enable PipeWire in your NixOS configuration"),
             NIXOS_PIPEWIRE_BLOCK.to_string(),
         )];
     }
     vec![
         (
-            "Install the PipeWire audio stack".to_string(),
+            qbz_i18n::t("Install the PipeWire audio stack"),
             install(d, full_stack_pkgs(d)),
         ),
         (
-            "(Re)start the PipeWire audio services".to_string(),
+            qbz_i18n::t("(Re)start the PipeWire audio services"),
             restart_cmd(init).to_string(),
         ),
     ]
@@ -508,7 +509,7 @@ pub fn begin_test(window: &AppWindow) {
     let st = window.global::<DacWizardState>();
     st.set_test_playing(true);
     st.set_test_rate_matched(false);
-    st.set_test_requested_label("Starting…".into());
+    st.set_test_requested_label(qbz_i18n::t("Starting…").into());
     st.set_test_negotiated_label("".into());
 }
 
@@ -524,7 +525,7 @@ pub fn queue_empty_notice(window: &AppWindow) {
     st.set_test_rate_matched(false);
     st.set_test_negotiated_label("".into());
     st.set_test_requested_label(
-        "Your queue is empty — add some tracks first, or press Play test.".into(),
+        qbz_i18n::t("Your queue is empty — add some tracks first, or press Play test.").into(),
     );
 }
 
@@ -537,14 +538,13 @@ pub fn apply_poll(
 ) {
     let st = window.global::<DacWizardState>();
     st.set_test_requested_label(if requested_rate > 0 {
-        format!(
+        qbz_i18n::t_args(
             "QBZ requesting {} · {}-bit",
-            khz(requested_rate),
-            requested_bits
+            &[&khz(requested_rate), &requested_bits.to_string()],
         )
         .into()
     } else {
-        "Nothing playing".into()
+        qbz_i18n::t("Nothing playing").into()
     });
     match negotiated {
         Some(n) => {
@@ -552,13 +552,17 @@ pub fn apply_poll(
             // (e.g. S32_LE = 24-bit in a 32-bit frame) + channels. This is the
             // bit-perfect proof — exactly what the hardware is clocked at.
             st.set_test_negotiated_label(
-                format!("DAC: {} · {} · {} ch", khz(n.sample_rate), n.format, n.channels).into(),
+                qbz_i18n::t_args(
+                    "DAC: {} · {} · {} ch",
+                    &[&khz(n.sample_rate), &n.format, &n.channels.to_string()],
+                )
+                .into(),
             );
             // Truth signal: the DAC's real clock matches what QBZ asked for.
             st.set_test_rate_matched(requested_rate > 0 && n.sample_rate == requested_rate);
         }
         None => {
-            st.set_test_negotiated_label("Waiting for the DAC to start playing…".into());
+            st.set_test_negotiated_label(qbz_i18n::t("Waiting for the DAC to start playing…").into());
             st.set_test_rate_matched(false);
         }
     }

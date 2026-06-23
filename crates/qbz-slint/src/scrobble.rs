@@ -208,7 +208,7 @@ pub fn lastfm_connect(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 }
                 set_status(
                     &weak,
-                    "Authorize QBZ in your browser, then click \"Finish\"".to_string(),
+                    qbz_i18n::t("Authorize QBZ in your browser, then click \"Finish\""),
                     1,
                 );
             }
@@ -216,8 +216,8 @@ pub fn lastfm_connect(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 let _ = weak.upgrade_in_event_loop(|w| {
                     w.global::<ScrobbleState>().set_lastfm_busy(false);
                 });
-                set_status(&weak, format!("Error: {e}"), 3);
-                crate::toast::error_weak(&weak, "Last.fm sign-in failed to start");
+                set_status(&weak, qbz_i18n::t_args("Error: {}", &[&e.to_string()]), 3);
+                crate::toast::error_weak(&weak, qbz_i18n::t("Last.fm sign-in failed to start"));
             }
         }
     });
@@ -243,7 +243,7 @@ pub fn lastfm_open_auth_url(weak: Weak<AppWindow>) {
 pub fn lastfm_confirm(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
     let token = LASTFM_PENDING_TOKEN.lock().ok().and_then(|g| g.clone());
     let Some(token) = token else {
-        set_status(&weak, "Start the sign-in first".to_string(), 3);
+        set_status(&weak, qbz_i18n::t("Start the sign-in first"), 3);
         return;
     };
     let _ = weak.upgrade_in_event_loop(|w| w.global::<ScrobbleState>().set_lastfm_busy(true));
@@ -269,7 +269,7 @@ pub fn lastfm_confirm(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
                     s.set_lastfm_username(username.into());
                     s.set_lastfm_auth_url("".into());
                 });
-                set_status(&weak, format!("Connected as {}", session.name), 2);
+                set_status(&weak, qbz_i18n::t_args("Connected as {}", &[session.name.as_str()]), 2);
             }
             Err(e) => {
                 let _ = weak.upgrade_in_event_loop(|w| {
@@ -277,7 +277,7 @@ pub fn lastfm_confirm(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 });
                 set_status(
                     &weak,
-                    format!("Error: {e} (did you authorize in the browser?)"),
+                    qbz_i18n::t_args("Error: {} (did you authorize in the browser?)", &[&e.to_string()]),
                     3,
                 );
             }
@@ -297,7 +297,7 @@ pub fn lastfm_disconnect(weak: Weak<AppWindow>) {
         s.set_lastfm_auth_url("".into());
         s.set_lastfm_busy(false);
     });
-    set_status(&weak, "Last.fm disconnected".to_string(), 1);
+    set_status(&weak, qbz_i18n::t("Last.fm disconnected"), 1);
 }
 
 // --- ListenBrainz ------------------------------------------------------------
@@ -315,7 +315,7 @@ pub fn listenbrainz_enable_toggle(weak: Weak<AppWindow>, enabled: bool) {
 pub fn listenbrainz_set_token(weak: Weak<AppWindow>, handle: tokio::runtime::Handle, token: String) {
     let token = token.trim().to_string();
     if token.is_empty() {
-        set_status(&weak, "Paste your ListenBrainz user token first".to_string(), 3);
+        set_status(&weak, qbz_i18n::t("Paste your ListenBrainz user token first"), 3);
         return;
     }
     let _ = weak.upgrade_in_event_loop(|w| {
@@ -349,13 +349,13 @@ pub fn listenbrainz_set_token(weak: Weak<AppWindow>, handle: tokio::runtime::Han
                     s.set_listenbrainz_username(username.into());
                     s.set_listenbrainz_token_input("".into());
                 });
-                set_status(&weak, format!("Connected as {}", info.user_name), 2);
+                set_status(&weak, qbz_i18n::t_args("Connected as {}", &[info.user_name.as_str()]), 2);
             }
             Err(e) => {
                 let _ = weak.upgrade_in_event_loop(|w| {
                     w.global::<ScrobbleState>().set_listenbrainz_busy(false);
                 });
-                set_status(&weak, format!("Error: {e}"), 3);
+                set_status(&weak, qbz_i18n::t_args("Error: {}", &[&e.to_string()]), 3);
             }
         }
     });
@@ -381,7 +381,7 @@ pub fn listenbrainz_disconnect(weak: Weak<AppWindow>) {
         s.set_listenbrainz_token_input("".into());
         s.set_listenbrainz_busy(false);
     });
-    set_status(&weak, "ListenBrainz disconnected".to_string(), 1);
+    set_status(&weak, qbz_i18n::t("ListenBrainz disconnected"), 1);
 }
 
 // ============================================================================

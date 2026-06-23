@@ -493,7 +493,7 @@ impl SlintQconnectService {
         // force-disconnect watcher (`spawn_offline_force_disconnect`).
         if crate::offline_mode::engine().is_offline() {
             log::info!("[QConnect] connect() refused: offline mode active (D5)");
-            crate::toast::error_weak(&self.window, "Qobuz Connect is unavailable while offline");
+            crate::toast::error_weak(&self.window, qbz_i18n::t("Qobuz Connect is unavailable while offline"));
             return Err("Qobuz Connect is unavailable while offline".to_string());
         }
 
@@ -741,7 +741,7 @@ impl SlintQconnectService {
         });
         if !all_eligible {
             log::info!("[QConnect] Local queue has non-Qobuz tracks; not casting to Connect");
-            crate::toast::error_weak(&self.window, "Mixed queue — not cast to Qobuz Connect");
+            crate::toast::error_weak(&self.window, qbz_i18n::t("Mixed queue — not cast to Qobuz Connect"));
             dev_push_event(&self.window, "-> queue push REFUSED (mixed/non-Qobuz)".to_string());
             // Remember it so we don't re-toast on every track tick within this queue.
             *self.last_pushed_queue_ids.lock().await = Some(ordered_ids);
@@ -839,7 +839,7 @@ impl SlintQconnectService {
         });
         if !all_eligible {
             log::info!("[QConnect] Local queue has non-Qobuz tracks; not casting to Connect");
-            crate::toast::error_weak(&self.window, "Mixed queue — not cast to Qobuz Connect");
+            crate::toast::error_weak(&self.window, qbz_i18n::t("Mixed queue — not cast to Qobuz Connect"));
             dev_push_event(&self.window, "-> queue push REFUSED (mixed/non-Qobuz)".to_string());
             // Remember it so the poll loop's sync doesn't re-toast this queue.
             *self.last_pushed_queue_ids.lock().await = Some(ordered_ids);
@@ -917,7 +917,7 @@ impl SlintQconnectService {
             log::info!(
                 "[QConnect] play_next_on_peer: track {track_id} not Qobuz-castable; refusing"
             );
-            crate::toast::error_weak(&self.window, "Track not castable to Qobuz Connect");
+            crate::toast::error_weak(&self.window, qbz_i18n::t("Track not castable to Qobuz Connect"));
             dev_push_event(
                 &self.window,
                 format!("-> play_next REFUSED (non-Qobuz track {track_id})"),
@@ -989,7 +989,7 @@ impl SlintQconnectService {
             log::info!(
                 "[QConnect] add_to_queue_on_peer: track {track_id} not Qobuz-castable; refusing"
             );
-            crate::toast::error_weak(&self.window, "Track not castable to Qobuz Connect");
+            crate::toast::error_weak(&self.window, qbz_i18n::t("Track not castable to Qobuz Connect"));
             dev_push_event(
                 &self.window,
                 format!("-> add_to_queue REFUSED (non-Qobuz track {track_id})"),
@@ -1051,7 +1051,7 @@ impl SlintQconnectService {
             log::info!(
                 "[QConnect] add_to_queue_batch_on_peer: track {bad_id} not Qobuz-castable; refusing whole batch"
             );
-            crate::toast::error_weak(&self.window, "Some tracks can't be cast to Qobuz Connect");
+            crate::toast::error_weak(&self.window, qbz_i18n::t("Some tracks can't be cast to Qobuz Connect"));
             dev_push_event(
                 &self.window,
                 format!(
@@ -1113,7 +1113,7 @@ impl SlintQconnectService {
             log::info!(
                 "[QConnect] play_next_batch_on_peer: track {bad_id} not Qobuz-castable; refusing whole batch"
             );
-            crate::toast::error_weak(&self.window, "Some tracks can't be cast to Qobuz Connect");
+            crate::toast::error_weak(&self.window, qbz_i18n::t("Some tracks can't be cast to Qobuz Connect"));
             dev_push_event(
                 &self.window,
                 format!(

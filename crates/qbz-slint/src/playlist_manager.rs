@@ -237,7 +237,7 @@ where
             let name = crate::sidebar::playlist_name_desc(id)
                 .map(|(name, _)| name)
                 .or_else(|| snapshot.map(|(name, _)| name.clone()))
-                .unwrap_or_else(|| format!("Playlist ({count} local)"));
+                .unwrap_or_else(|| qbz_i18n::t_args("Playlist ({} local)", &[&count.to_string()]));
             playlists.push(PmPlaylist {
                 id,
                 name,
@@ -443,9 +443,9 @@ fn format_duration(seconds: u32) -> String {
     let hours = seconds / 3600;
     let mins = (seconds % 3600) / 60;
     if hours > 0 {
-        format!("{hours}h {mins}m")
+        qbz_i18n::t_args("{} h {} min", &[&hours.to_string(), &mins.to_string()])
     } else {
-        format!("{mins}m")
+        qbz_i18n::t_args("{} min", &[&mins.to_string()])
     }
 }
 
@@ -477,14 +477,14 @@ fn playlist_item(p: &PmPlaylist) -> PmPlaylistItem {
         "some_local"
     };
     let local_line = if p.local_count > 0 {
-        format!("({} local)", p.local_count)
+        qbz_i18n::t_args("({} local)", &[&p.local_count.to_string()])
     } else {
         String::new()
     };
     PmPlaylistItem {
         id: p.id.to_string().into(),
         name: p.name.clone().into(),
-        tracks_line: format!("{} tracks", p.total_count()).into(),
+        tracks_line: { let n = p.total_count(); qbz_i18n::tf("{} track", "{} tracks", n as i64, &[&n.to_string()]).into() },
         duration_line: format_duration(p.duration).into(),
         local_line: local_line.into(),
         local_count: p.local_count as i32,
@@ -512,7 +512,7 @@ fn local_playlist_item(p: &PmLocalPlaylist) -> PmPlaylistItem {
     PmPlaylistItem {
         id: p.id.clone().into(),
         name: p.name.clone().into(),
-        tracks_line: format!("{} tracks", p.track_count).into(),
+        tracks_line: qbz_i18n::tf("{} track", "{} tracks", p.track_count as i64, &[&p.track_count.to_string()]).into(),
         duration_line: "".into(),
         local_line: "".into(),
         local_count: 0,
