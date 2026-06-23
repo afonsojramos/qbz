@@ -326,18 +326,17 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
-    // "My QBZ" nav branding — rename + change-icon, re-homed from the Tauri
-    // sidebar context-menu modal (DQ3). The label input commits on edit
-    // (blank coerces to "My QBZ" in Rust); the icon picker / reset persist a
-    // custom image path. The sidebar "My QBZ" row reflects both live.
+    // "My QBZ" nav branding — RENAME ONLY (DQ3, owner decision: no custom icon).
+    // The icon is fixed to QBZ's monochrome (tray) glyph. The label input
+    // commits on edit (blank coerces to "My QBZ" in Rust); the reset button
+    // clears the name back to the default. The icon-change backend (pick-icon /
+    // reset-icon / custom-icon) stays in Rust but is no longer surfaced.
     SettingRow {
         label: @tr("My QBZ");
-        description: @tr("Rename the My QBZ hub and pick a custom icon. Leave the name blank to restore the default.");
+        description: @tr("Rename the My QBZ hub. Leave the name blank (or hit reset) to restore the default.");
         HorizontalLayout {
             spacing: 8px;
-            // Icon preview — the user image as-is (custom) or the default
-            // branded glyph tinted to text colour (matches the picker preview
-            // being a raw image, not the sidebar's accent mask).
+            // Fixed icon preview — QBZ's monochrome glyph, tinted to text.
             Rectangle {
                 width: 34px;
                 height: 34px;
@@ -345,14 +344,8 @@ export component AppearanceSettings inherits VerticalLayout {
                 border-width: 1px;
                 border-color: Theme.border-subtle;
                 background: Theme.surface-elevated;
-                if MyQbzBrandingState.has-custom-icon: Image {
-                    source: MyQbzBrandingState.custom-icon;
-                    image-fit: contain;
-                    width: 22px;
-                    height: 22px;
-                }
-                if !MyQbzBrandingState.has-custom-icon: QbzIcon {
-                    source: @image-url("../assets/icons/my-qbz.svg");
+                QbzIcon {
+                    source: @image-url("../assets/icons/qbz-symbolic.svg");
                     width: 18px;
                     height: 18px;
                     tint: Theme.text-secondary;
@@ -370,16 +363,29 @@ export component AppearanceSettings inherits VerticalLayout {
                     }
                 }
             }
-            SecondaryButton {
-                label: @tr("Change icon...");
-                clicked => {
-                    MyQbzBrandingState.pick-icon();
-                }
-            }
-            SecondaryButton {
-                label: @tr("Reset");
-                clicked => {
-                    MyQbzBrandingState.reset-icon();
+            // Reset name — a square glyph button (matches the Output-device
+            // refresh button), clears the custom name to the default.
+            VerticalLayout {
+                alignment: center;
+                reset-name := Rectangle {
+                    width: 34px;
+                    height: 34px;
+                    border-radius: Radius.sm;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+                    background: reset-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+                    QbzIcon {
+                        width: 16px;
+                        height: 16px;
+                        source: @image-url("../assets/icons/rotate-ccw.svg");
+                        tint: reset-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                    }
+                    reset-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            MyQbzBrandingState.set-label("");
+                        }
+                    }
                 }
             }
         }

@@ -695,14 +695,13 @@ export component Sidebar inherits Rectangle {
             SidebarNavRow {
                 tab-index: 3;
                 // Label + icon are user-customizable (Settings > Appearance).
-                // The icon is the custom user image when set (rendered raw) or
-                // the default branded glyph (tinted). The label coerces back to
-                // "My QBZ" on the Rust side when cleared.
-                icon: MyQbzBrandingState.has-custom-icon
-                    ? MyQbzBrandingState.custom-icon
-                    : @image-url("../assets/icons/my-qbz.svg");
+                // Fixed icon: QBZ's monochrome (tray) glyph, tinted like the
+                // other nav icons. Custom-icon was removed (owner decision); only
+                // the label is user-editable (it coerces back to "My QBZ" on the
+                // Rust side when cleared).
+                icon: @image-url("../assets/icons/qbz-symbolic.svg");
                 label: MyQbzBrandingState.label;
-                raw-icon: MyQbzBrandingState.has-custom-icon;
+                raw-icon: false;
                 items: [
                     { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette.svg"), has-glyph: true, route: "myqbz-mixtapes" },
                     { label: @tr("Collections"), icon: @image-url("../assets/icons/collection.svg"), has-glyph: true, route: "myqbz-collections" },
