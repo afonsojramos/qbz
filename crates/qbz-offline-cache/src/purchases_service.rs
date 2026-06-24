@@ -266,6 +266,107 @@ pub fn apply_download_flags(
     }
 }
 
+/// Build the detail-view `PurchaseAlbum` from a full catalog `Album` plus the
+/// purchases listing, then annotate it with the local download flags (§3.3
+/// command #5 `v2_purchases_get_album`, `legacy_compat.rs:2846-2951`). Pure — no
+/// I/O; the caller fetches the `Album` + `PurchaseResponse` and reads the
+/// registry, then hands the derived `downloaded_ids` + `format_map` here, mirroring
+/// the controller-thin pattern of `apply_download_flags`.
+///
+/// Mapping rules (verbatim from command #5):
+///   * the nested track list comes from `album.tracks.items` mapped to
+///     `PurchaseTrack` — the `version`/subtitle is DROPPED (purchases have no
+///     `version` field, §4.6); `performer` defaults when the catalog track has
+///     none; per-track `purchased_at` is the album-level meta value;
+///   * `downloadable = purchase_meta.map(|m| m.downloadable).unwrap_or(true)`
+///     (defaults TRUE when the album is not found in the purchases listing);
+///   * `purchased_at = purchase_meta.and_then(|m| m.purchased_at)`;
+///   * the synthesized tracks page is `offset=0, limit=len, total=len`;
+///   * after the registry annotation: per-track
+///     `downloaded = downloaded_ids.contains(track.id)`,
+///     `downloaded_format_ids = format_map.get(track.id).cloned().unwrap_or_default()`,
+///     and album `downloaded = !tracks.is_empty() && all track ids ∈ downloaded_ids`.
+///
+/// `purchase_meta` is found by `purchases.albums.items[i].id == album.id`.
+pub fn build_purchase_album(
+    album: &Album,
+    purchases: &PurchaseResponse,
+    downloaded_ids: &HashSet<i64>,
+    format_map: &HashMap<i64, Vec<u32>>,
+) -> PurchaseAlbum {
+    let purchase_meta = purchases
+        .albums
+        .items
+        .iter()
+        .find(|item| item.id == album.id);
+
+    let mut tracks_items: Vec<PurchaseTrack> = album
+        .tracks
+        .as_ref()
+        .map(|tracks| {
+            tracks
+                .items
+                .iter()
+                .map(|track| PurchaseTrack {
+                    id: track.id,
+                    title: track.title.clone(),
+                    track_number: track.track_number,
+                    media_number: track.media_number,
+                    duration: track.duration,
+                    performer: track.performer.clone().unwrap_or_default(),
+                    album: track.album.clone(),
+                    hires: track.hires,
+                    maximum_sampling_rate: track.maximum_sampling_rate,
+                    maximum_bit_depth: track.maximum_bit_depth,
+                    streamable: track.streamable,
+                    // Server-derived; set below from the registry.
+                    downloaded: false,
+                    downloaded_format_ids: Vec::new(),
+                    purchased_at: purchase_meta.and_then(|item| item.purchased_at),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Per-track registry annotation (frontend OVERRIDES backend, §3.4).
+    for track in &mut tracks_items {
+        let tid = track.id as i64;
+        track.downloaded = downloaded_ids.contains(&tid);
+        track.downloaded_format_ids = format_map.get(&tid).cloned().unwrap_or_default();
+    }
+    // Album downloaded = non-empty AND every nested track id is in the registry
+    // (the all-tracks-present rule; empty set → false).
+    let album_downloaded = !tracks_items.is_empty()
+        && tracks_items
+            .iter()
+            .all(|track| downloaded_ids.contains(&(track.id as i64)));
+
+    let track_len = tracks_items.len() as u32;
+    PurchaseAlbum {
+        id: album.id.clone(),
+        title: album.title.clone(),
+        artist: album.artist.clone(),
+        image: album.image.clone(),
+        release_date_original: album.release_date_original.clone(),
+        label: album.label.clone(),
+        genre: album.genre.clone(),
+        tracks_count: album.tracks_count,
+        duration: album.duration,
+        hires: album.hires,
+        maximum_sampling_rate: album.maximum_sampling_rate,
+        maximum_bit_depth: album.maximum_bit_depth,
+        downloadable: purchase_meta.map(|item| item.downloadable).unwrap_or(true),
+        downloaded: album_downloaded,
+        purchased_at: purchase_meta.and_then(|item| item.purchased_at),
+        tracks: Some(SearchResultsPage {
+            items: tracks_items,
+            total: track_len,
+            offset: 0,
+            limit: track_len,
+        }),
+    }
+}
+
 /// Pick the on-disk file extension for a purchased track from the RESPONSE
 /// stream's `format_id` / `mime_type` (§7.1.5, ported byte-for-byte from
 /// `v2_purchase_extension` `legacy_compat.rs:2553-2559`):
@@ -856,6 +957,112 @@ mod tests {
         assert!(!resp.tracks.items[0].downloaded);
         assert!(resp.tracks.items[0].downloaded_format_ids.is_empty());
         assert!(!resp.albums.items[0].downloaded);
+    }
+
+    // ── Slice 9: build_purchase_album (detail mapping) ───────────────────
+
+    // A catalog `Album` with N nested tracks + the meta fields the mapping
+    // reads. JSON-built (Album has no Default), tracks carry id/title/number so
+    // the per-track mapping + registry annotation can be asserted.
+    fn catalog_album(id: &str, downloadable: bool, track_ids: &[u64]) -> Album {
+        let items: Vec<String> = track_ids
+            .iter()
+            .enumerate()
+            .map(|(i, tid)| {
+                format!(
+                    r#"{{"id":{tid},"title":"T{tid}","track_number":{n},"streamable":true}}"#,
+                    n = i + 1
+                )
+            })
+            .collect();
+        let json = format!(
+            r#"{{"id":"{id}","title":"Detail","artist":{{"id":3,"name":"Some Artist"}},
+                 "downloadable":{downloadable},
+                 "tracks":{{"items":[{tracks}],"total":{total}}}}}"#,
+            tracks = items.join(","),
+            total = track_ids.len()
+        );
+        serde_json::from_str(&json).expect("catalog Album JSON deserializes")
+    }
+
+    #[test]
+    fn build_detail_maps_tracks_and_synthesizes_page_counts() {
+        let album = catalog_album("alb1", true, &[10, 20, 30]);
+        // purchases listing carries the album meta (downloadable + purchased_at).
+        let mut meta = album_id("alb1");
+        meta.downloadable = true;
+        meta.purchased_at = Some(1_700_000_000);
+        let purchases = response(vec![meta], vec![]);
+
+        let detail =
+            build_purchase_album(&album, &purchases, &dl_ids(&[]), &HashMap::new());
+
+        assert_eq!(detail.id, "alb1");
+        assert!(detail.downloadable);
+        assert_eq!(detail.purchased_at, Some(1_700_000_000));
+        let tracks = detail.tracks.expect("nested tracks present");
+        assert_eq!(tracks.items.len(), 3);
+        // synthesized page: offset 0, limit = total = len.
+        assert_eq!(tracks.offset, 0);
+        assert_eq!(tracks.total, 3);
+        assert_eq!(tracks.limit, 3);
+        // per-track purchased_at copies the album-level meta.
+        assert!(tracks.items.iter().all(|t| t.purchased_at == Some(1_700_000_000)));
+    }
+
+    #[test]
+    fn build_detail_downloadable_defaults_true_when_album_not_in_listing() {
+        // No matching purchase meta → downloadable defaults TRUE, purchased_at None.
+        let album = catalog_album("missing", false, &[1]);
+        let purchases = response(vec![album_id("other")], vec![]);
+        let detail =
+            build_purchase_album(&album, &purchases, &dl_ids(&[]), &HashMap::new());
+        // The catalog `downloadable:false` is IGNORED — the value comes from the
+        // purchase meta (absent → unwrap_or(true)).
+        assert!(detail.downloadable);
+        assert_eq!(detail.purchased_at, None);
+    }
+
+    #[test]
+    fn build_detail_annotates_per_track_and_album_downloaded() {
+        let album = catalog_album("alb1", true, &[10, 20]);
+        let purchases = response(vec![album_id("alb1")], vec![]);
+        let mut format_map: HashMap<i64, Vec<u32>> = HashMap::new();
+        format_map.insert(10, vec![7]);
+
+        // Both nested track ids owned → album downloaded; per-track flags set.
+        let detail =
+            build_purchase_album(&album, &purchases, &dl_ids(&[10, 20]), &format_map);
+        assert!(detail.downloaded);
+        let tracks = detail.tracks.unwrap();
+        assert!(tracks.items[0].downloaded);
+        assert_eq!(tracks.items[0].downloaded_format_ids, vec![7]);
+        assert!(tracks.items[1].downloaded);
+        assert!(tracks.items[1].downloaded_format_ids.is_empty());
+    }
+
+    #[test]
+    fn build_detail_album_not_downloaded_when_partially_owned() {
+        let album = catalog_album("alb1", true, &[10, 20]);
+        let purchases = response(vec![album_id("alb1")], vec![]);
+        // Only one of two nested tracks owned → album NOT downloaded (all-rule).
+        let detail =
+            build_purchase_album(&album, &purchases, &dl_ids(&[10]), &HashMap::new());
+        assert!(!detail.downloaded);
+        let tracks = detail.tracks.unwrap();
+        assert!(tracks.items[0].downloaded);
+        assert!(!tracks.items[1].downloaded);
+    }
+
+    #[test]
+    fn build_detail_empty_track_album_is_not_downloaded() {
+        // No nested tracks → empty-set rule → album downloaded = false.
+        let album = catalog_album("alb1", true, &[]);
+        let purchases = response(vec![album_id("alb1")], vec![]);
+        let detail =
+            build_purchase_album(&album, &purchases, &dl_ids(&[]), &HashMap::new());
+        assert!(!detail.downloaded);
+        assert_eq!(detail.tracks.unwrap().items.len(), 0);
     }
 
     // ── Slice 5: purchase_extension ──────────────────────────────────────
