@@ -127,6 +127,11 @@ pub enum NavEntry {
         id: String,
         name: String,
     },
+    /// PurchasesView — the My-Purchases library surface (opt-in feature). The
+    /// in-view toolbar state (tab/search/filter/sort/group) is session-scoped
+    /// in the controller + persisted prefs, so the entry carries no payload.
+    /// (The `purchase-album` detail entry lands in Slice 11.)
+    Purchases,
     /// ArtistReleasesView — the dedicated discography listing for one
     /// release bucket, reached via "See discography" on the artist page.
     ArtistReleases {

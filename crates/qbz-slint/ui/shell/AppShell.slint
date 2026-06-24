@@ -56,6 +56,7 @@ import { LabelReleasesView } from "../label/LabelReleasesView.slint";
 import { LabelPageView } from "../label/LabelPageView.slint";
 import { AwardView } from "../award/AwardView.slint";
 import { AwardAlbumsView } from "../award/AwardAlbumsView.slint";
+import { PurchasesView } from "../purchases/PurchasesView.slint";
 import { ArtistsByLocationView } from "../location/ArtistsByLocationView.slint";
 import { FavoritesView } from "../favorites/FavoritesView.slint";
 import { FavoritesOfflineRail } from "../favorites/FavoritesOfflineRail.slint";
@@ -108,6 +109,7 @@ export component AppShell inherits Rectangle {
         || NavState.view == ContentView.label-releases
         || NavState.view == ContentView.award
         || NavState.view == ContentView.award-albums
+        || NavState.view == ContentView.purchases
         || NavState.view == ContentView.location
         || NavState.view == ContentView.mix
         // Playlist: LOCAL playlists and the offline sidecar rendering of a
@@ -368,6 +370,17 @@ export component AppShell inherits Rectangle {
                     }
                     open-artist(id) => {
                         root.open-artist(id);
+                    }
+                }
+                if NavState.view == ContentView.purchases && !OfflineState.offline: PurchasesView {
+                    open-album(id) => {
+                        root.open-album(id);
+                    }
+                    open-artist(id) => {
+                        root.open-artist(id);
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
                     }
                 }
                 if NavState.view == ContentView.playlist-manager: PlaylistManagerView { }

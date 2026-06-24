@@ -202,6 +202,13 @@ pub enum ArtworkTarget {
     /// A row thumbnail in the immersive Suggestions recommended-tracks list
     /// (`SuggestionsState.tracks[idx]`).
     SuggestionTrackCover { idx: usize },
+    /// A cover of `PurchasesState.albums-full[index]` (the stable artwork-target
+    /// full set). The apply arm writes here, then dual-sets by id into the
+    /// rendered flat + grouped models (which a filter/sort/group re-derives).
+    PurchaseAlbum { index: usize },
+    /// A thumbnail of `PurchasesState.tracks-full[index]` (artwork-target full
+    /// set). Dual-set by id into the rendered flat + grouped track models.
+    PurchaseTrack { index: usize },
 }
 
 impl ArtworkTarget {
@@ -1088,6 +1095,26 @@ fn apply_artwork(
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::PurchaseAlbum { index } => {
+            let model = window.global::<crate::PurchasesState>().get_albums_full();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image.clone();
+                let id = item.id.to_string();
+                model.set_row_data(index, item);
+                // Also reach the rendered flat + grouped models (re-derived by a
+                // filter/sort/group, so they don't share `albums-full`).
+                crate::purchases::set_album_artwork(window, &id, image);
+            }
+        }
+        ArtworkTarget::PurchaseTrack { index } => {
+            let model = window.global::<crate::PurchasesState>().get_tracks_full();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image.clone();
+                let id = item.id.to_string();
+                model.set_row_data(index, item);
+                crate::purchases::set_track_artwork(window, &id, image);
             }
         }
         ArtworkTarget::LocalAlbumCard { index, gen } => {

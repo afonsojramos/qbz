@@ -38,7 +38,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use qbz_app::shell::AppRuntime;
-use qbz_models::{PurchaseAlbum, PurchaseTrack};
+use qbz_models::{PurchaseAlbum, PurchaseFormatOption, PurchaseTrack};
 use qbz_offline_cache::purchases_service;
 
 use crate::adapter::SlintAdapter;
@@ -288,6 +288,71 @@ pub async fn load_purchases_by_tab(
     Ok(payload)
 }
 
+/// `searchPurchases(query)` (Svelte `handleSearchInput`, §2.1.7): fetch ALL
+/// purchases (both types) then filter by the query (title / artist / album).
+/// Returns BOTH the album + track lists (the search path sets both arrays).
+/// Errors map per §3.6 (network-ish → `purchases.loadFailed`, else raw).
+pub async fn search_purchases(
+    runtime: &Runtime,
+    query: &str,
+) -> Result<(Vec<PurchaseAlbum>, Vec<PurchaseTrack>), String> {
+    let client_lock = runtime.core().client();
+    let client = {
+        let guard = client_lock.read().await;
+        guard.as_ref().cloned()
+    };
+    let Some(client) = client else {
+        return Err("purchases.loadFailed".to_string());
+    };
+    let response = match purchases_service::get_user_purchases_all(&client).await {
+        Ok(r) => r,
+        Err(e) => {
+            let wrapped = format!("Failed to fetch purchases: {e}");
+            return Err(map_load_error(&wrapped));
+        }
+    };
+    let filtered = purchases_service::filter_purchase_response(response, query.trim());
+    Ok((filtered.albums.items, filtered.tracks.items))
+}
+
+/// `getFormats(albumId)` (§2.1.13 / command #6): fetch the album then synthesize
+/// its ≤4 downloadable format options.
+///
+/// 1:1 FIDELITY (§2.1.13): the Svelte per-track download flow distinguishes TWO
+/// failure modes that produce DIFFERENT toasts. `getFormats` is `await`ed inside
+/// the `try`, so:
+///   * it RESOLVES with `[]` (a genuinely-empty but successful fetch) →
+///     `purchases.errors.noFormats` ("No downloadable formats available");
+///   * it THROWS (network error / no session) → `catch` →
+///     `purchases.errors.downloadFailed`.
+/// To preserve that split this returns a `Result`: `Ok(vec)` for a SUCCESSFUL
+/// fetch (the vec may be empty), and `Err(message)` for a FETCH FAILURE (no
+/// client or a `get_album` error). The caller maps `Ok(empty)` → `noFormats` and
+/// `Err(_)` → `downloadFailed`. Collapsing a fetch failure into an empty vec
+/// (the old behavior) misroutes a network error to the `noFormats` toast.
+pub async fn get_album_formats(
+    runtime: &Runtime,
+    album_id: &str,
+) -> Result<Vec<PurchaseFormatOption>, String> {
+    let client_lock = runtime.core().client();
+    let client = {
+        let guard = client_lock.read().await;
+        guard.as_ref().cloned()
+    };
+    let Some(client) = client else {
+        // No session = the Svelte `getFormats` throw path (an unauthenticated
+        // fetch rejects) → `downloadFailed`, NOT `noFormats`.
+        return Err("No Qobuz session".to_string());
+    };
+    match client.get_album(album_id).await {
+        Ok(album) => Ok(purchases_service::synth_formats(&album)),
+        Err(e) => {
+            log::warn!("[Purchases] get_album_formats({album_id}) failed: {e}");
+            Err(e.to_string())
+        }
+    }
+}
+
 /// §2.1.6 total backfill: prefer the metadata (ids-call) total; if that is 0
 /// fall back to the response page total, then to the loaded item count.
 fn resolve_tab_total(metadata_total: u32, response_total: u32, loaded_len: usize) -> u32 {
@@ -404,6 +469,12 @@ pub struct PurchaseDownloadStore {
     /// `albumId → abort?` (Svelte module-level `abortFlags`, NOT in the store
     /// itself — cooperative cancellation checked BETWEEN tracks).
     abort_flags: HashMap<String, bool>,
+    /// `trackId → resolved formats` for the OPEN per-track format picker. Caches
+    /// the `getFormats` result so `pick-format` resolves the chosen option's
+    /// label WITHOUT a second `get_album` round-trip (the Svelte original keeps
+    /// the formats in component state). One entry at a time in practice (the
+    /// picker is modal); cleared when the picker is consumed.
+    picker_formats: HashMap<u64, Vec<PurchaseFormatOption>>,
 }
 
 impl PurchaseDownloadStore {
@@ -614,6 +685,30 @@ pub fn album_download_state(album_id: &str) -> Option<AlbumDownloadState> {
 /// `getAlbumDownloadFormatId(albumId)` reader.
 pub fn get_album_download_format_id(album_id: &str) -> Option<u32> {
     with_store(|s| s.album_format_id(album_id))
+}
+
+/// Cache the resolved format options for an OPEN per-track picker (keyed by
+/// `trackId`). `pick-format` reads these back so the chosen option's label is
+/// resolved without re-fetching the album (the Svelte original keeps the
+/// formats in component state).
+pub fn cache_picker_formats(track_id: u64, formats: Vec<PurchaseFormatOption>) {
+    with_store(|s| {
+        s.picker_formats.insert(track_id, formats);
+    });
+}
+
+/// Consume the cached picker formats for a track (removes the entry). Returns
+/// `None` if the picker cache was never seeded (e.g. picker opened before this
+/// slice cached it) — the caller then falls back to a fresh `get_album` fetch.
+pub fn take_picker_formats(track_id: u64) -> Option<Vec<PurchaseFormatOption>> {
+    with_store(|s| s.picker_formats.remove(&track_id))
+}
+
+/// Drop a cached picker entry without consuming it (picker closed/cancelled).
+pub fn clear_picker_formats(track_id: u64) {
+    with_store(|s| {
+        s.picker_formats.remove(&track_id);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -933,9 +1028,8 @@ async fn execute_album_download(
     if let Err(e) = done {
         log::error!("[Purchases] album-download thread join failed: {e}");
     }
-    // Slices 8/9 re-project the store onto the UI; nudge a refresh here once the
-    // appliers exist. For now the weak handle is retained for that wiring.
-    let _ = weak;
+    // Re-project the finished album statuses onto any visible list/detail rows.
+    nudge_ui_refresh(&weak);
 }
 
 /// `startTrackDownload(albumId, trackId, formatId, destination, qualityDir)`
@@ -959,11 +1053,14 @@ pub fn start_track_download(
         }
         // MERGE — never seed fresh (§A.7).
         with_store(|s| s.merge_single_track_start(&album_id, track_id, format_id));
+        // Nudge the list-row projection to show `downloading` immediately.
+        nudge_ui_refresh(&weak);
 
         let Some(client) = snapshot_client(&runtime).await else {
             with_store(|s| {
                 s.merge_single_track_finish(&album_id, track_id, TrackDownloadStatus::Failed)
             });
+            nudge_ui_refresh(&weak);
             return;
         };
 
@@ -1015,7 +1112,20 @@ pub fn start_track_download(
         if let Err(e) = done {
             log::error!("[Purchases] track-download thread join failed: {e}");
         }
-        let _ = weak;
+        // Project the finished status (complete/failed) onto the list rows.
+        nudge_ui_refresh(&weak);
+    });
+}
+
+/// Refresh the PurchasesView list-row download projection from the store. A
+/// no-op when the window is gone (download still completes; the registry holds
+/// the record for the next open). Used by the download actions to surface live
+/// per-track status changes without a refetch.
+fn nudge_ui_refresh(weak: &slint::Weak<AppWindow>) {
+    let _ = weak.upgrade_in_event_loop(|w| {
+        // Only re-derive while the purchases view is the relevant surface; a
+        // re-derive elsewhere is harmless (it just rebuilds hidden models).
+        refresh_track_statuses(&w);
     });
 }
 
@@ -1093,6 +1203,886 @@ pub fn handle_add_to_library(
         // pick up the gold badge in LocalLibrary.
         crate::local_library_settings::scan_folder(weak.clone(), scan_handle, folder_id);
     });
+}
+
+// ============================================================================
+// Slice 8 — PurchasesView UI layer
+//
+// The list-surface chrome lives in `ui/purchases/PurchasesView.slint`; this
+// section is the Rust half: the per-tab data cache (so the UI can re-derive
+// filter/sort/group + search without a refetch), the byte-for-byte port of the
+// Svelte filter/sort/group functions + formatters, and the event-loop appliers
+// that project the cache → `PurchasesState` (`ModelRc<VecModel<…>>` built here,
+// never off the event loop). Mirrors `PurchasesView.svelte` §2.1.
+//
+// SEND BOUNDARY: every fn that touches `slint::Image`/`ModelRc` takes
+// `&AppWindow` and runs on the event loop (called via `upgrade_in_event_loop`).
+// The cache holds only `Send` wire structs.
+// ============================================================================
+
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
+
+use crate::{
+    PurchaseAlbumGroup, PurchaseAlbumItem, PurchaseFormatItem, PurchaseTrackGroup, PurchaseTrackItem,
+    PurchasesState,
+};
+
+/// `'all' | 'hires' | 'cd' | 'lossy'` quality filter (Svelte `QualityFilter`).
+/// Parsed from the persisted/`PurchasesState` string; unknown → `All`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QualityFilter {
+    All,
+    Hires,
+    Cd,
+    Lossy,
+}
+
+impl QualityFilter {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "hires" => QualityFilter::Hires,
+            "cd" => QualityFilter::Cd,
+            "lossy" => QualityFilter::Lossy,
+            _ => QualityFilter::All,
+        }
+    }
+}
+
+/// The toolbar/filter state snapshot the appliers read off `PurchasesState`.
+/// (Read once per derive so the pure fns stay free of any Slint dependency.)
+#[derive(Debug, Clone)]
+pub struct ToolbarState {
+    pub album_grouping_enabled: bool,
+    pub album_group_mode: String,
+    pub album_sort_by: String,
+    pub album_sort_direction: String,
+    pub track_grouping_enabled: bool,
+    pub track_group_mode: String,
+    pub filter_hide_unavailable: bool,
+    pub filter_quality: QualityFilter,
+    pub filter_hide_downloaded: bool,
+}
+
+/// Per-tab data cache (process-wide, survives navigation like the download
+/// store). Holds the RAW wire items so a filter/sort/group/search change
+/// re-derives in Rust without a refetch — the Svelte `$derived` equivalent.
+#[derive(Debug, Default)]
+struct UiCache {
+    albums_raw: Vec<PurchaseAlbum>,
+    tracks_raw: Vec<PurchaseTrack>,
+    albums_loaded: bool,
+    tracks_loaded: bool,
+    metadata: PurchasesMetadata,
+    total_albums: u32,
+    total_tracks: u32,
+    /// Search active = the last applied query was non-empty.
+    search_active: bool,
+    /// Monotonic search token — the debounce drops a stale fire.
+    search_seq: u64,
+}
+
+fn ui_cache() -> &'static Mutex<UiCache> {
+    static CACHE: OnceLock<Mutex<UiCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(UiCache::default()))
+}
+
+fn with_ui_cache<R>(f: impl FnOnce(&mut UiCache) -> R) -> R {
+    let mut guard = ui_cache().lock().unwrap_or_else(|e| e.into_inner());
+    f(&mut guard)
+}
+
+/// Reset all per-user purchases state (logout / account switch). Clears the
+/// per-tab UI cache (raw albums/tracks + totals + metadata) AND the per-album
+/// download-status store, so the next account never sees the previous user's
+/// purchased items or in-flight download statuses. The appliers re-seed both.
+pub fn reset_ui_cache() {
+    with_ui_cache(|c| *c = UiCache::default());
+    with_store(|s| *s = PurchaseDownloadStore::default());
+}
+
+// ---------------------------------------------------------------------------
+// Formatters (source-of-truth §2.1.5 / §2.2.8 / Addendum A.6).
+// ---------------------------------------------------------------------------
+
+/// `formatQualityLabel(bitDepth?, samplingRate?)` (Svelte `:181-184`): `''` if
+/// EITHER is missing, else `"{bd}/{sr} kHz"`. Used for the GRID card quality.
+fn format_quality_label(bit_depth: Option<u32>, sampling_rate: Option<f64>) -> String {
+    match (bit_depth, sampling_rate) {
+        (Some(bd), Some(sr)) => format!("{bd}/{} kHz", fmt_rate(sr)),
+        _ => String::new(),
+    }
+}
+
+/// `formatQuality(hires, bd, sr)` (qobuzAdapters `:82`): `"{bd}bit/{sr}kHz"`
+/// only when `hires && bd && sr`, else the literal `"CD Quality"`. Used for the
+/// album-LIST-row quality column (the list passes `hires = (bd ?? 16) > 16`).
+fn format_quality(hires: bool, bit_depth: Option<u32>, sampling_rate: Option<f64>) -> String {
+    match (hires, bit_depth, sampling_rate) {
+        (true, Some(bd), Some(sr)) => format!("{bd}bit/{}kHz", fmt_rate(sr)),
+        _ => "CD Quality".to_string(),
+    }
+}
+
+/// The BARE track-row quality (§A.6): `"{bd}/{sr}"` only when BOTH present, no
+/// `kHz`, no `formatQuality`. `''` otherwise.
+fn bare_quality(bit_depth: Option<u32>, sampling_rate: Option<f64>) -> String {
+    match (bit_depth, sampling_rate) {
+        (Some(bd), Some(sr)) => format!("{bd}/{}", fmt_rate(sr)),
+        _ => String::new(),
+    }
+}
+
+/// Render a sampling rate the way JS template-literal does: an integer prints
+/// with no decimals (`96`), a fractional with its decimals (`44.1`). Qobuz
+/// passes kHz already (e.g. `96.0` / `44.1`).
+fn fmt_rate(sr: f64) -> String {
+    if (sr.fract()).abs() < f64::EPSILON {
+        format!("{}", sr as i64)
+    } else {
+        // Trim a trailing zero JS would not print (44.10 → 44.1). `{}` on f64
+        // already prints the shortest round-trip form, matching JS number→string.
+        format!("{sr}")
+    }
+}
+
+/// `formatDuration(seconds)` (qobuzAdapters `:25`): `"{m}:{ss}"` zero-padded
+/// seconds.
+fn format_duration(seconds: u32) -> String {
+    let mins = seconds / 60;
+    let secs = seconds % 60;
+    format!("{mins}:{secs:02}")
+}
+
+/// `formatPurchaseDate(ts)` SHORT-month variant (Svelte `:168-179`): `''` when
+/// no ts; else a localized `"MMM D, YYYY"` (short month). The Svelte version
+/// uses `toLocaleDateString(..., {year,month:'short',day:'numeric'})`; we render
+/// the same fixed structure with a localized abbreviated month (the project's
+/// shared `dates` convention), which matches in en/es/de/fr/pt.
+fn format_purchase_date(ts: Option<i64>) -> String {
+    let Some(ts) = ts else {
+        return String::new();
+    };
+    if ts <= 0 {
+        // JS `if (!ts) return ''` — 0 is falsy. Negative epoch never occurs for
+        // a purchase; treat <= 0 as no date.
+        return String::new();
+    }
+    use chrono::TimeZone;
+    match chrono::Local.timestamp_opt(ts, 0) {
+        chrono::offset::LocalResult::Single(dt) => dt
+            .format_localized("%b %-d, %Y", crate::dates::current_locale())
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Filter / sort / group (source-of-truth §2.1.5 — ported byte-for-byte).
+// ---------------------------------------------------------------------------
+
+/// `matchesQualityFilter(hires, bitDepth?, samplingRate?)` (Svelte `:188-194`).
+fn matches_quality_filter(
+    filter: QualityFilter,
+    hires: bool,
+    bit_depth: Option<u32>,
+    sampling_rate: Option<f64>,
+) -> bool {
+    match filter {
+        QualityFilter::All => true,
+        QualityFilter::Hires => hires,
+        // `!hires && (bitDepth === 16 || (!bitDepth && !samplingRate))`
+        QualityFilter::Cd => {
+            !hires
+                && (bit_depth == Some(16)
+                    || (bit_depth.is_none() && sampling_rate.is_none()))
+        }
+        // `!bitDepth || bitDepth < 16`
+        QualityFilter::Lossy => bit_depth.is_none() || bit_depth.unwrap() < 16,
+    }
+}
+
+/// `applyAlbumFilters(list)` (Svelte `:196-202`) — order matters: hide
+/// unavailable → quality → hide downloaded.
+fn apply_album_filters<'a>(
+    ts: &ToolbarState,
+    list: &'a [PurchaseAlbum],
+) -> Vec<&'a PurchaseAlbum> {
+    list.iter()
+        .filter(|a| !ts.filter_hide_unavailable || a.downloadable)
+        .filter(|a| {
+            ts.filter_quality == QualityFilter::All
+                || matches_quality_filter(
+                    ts.filter_quality,
+                    a.hires,
+                    a.maximum_bit_depth,
+                    a.maximum_sampling_rate,
+                )
+        })
+        .filter(|a| !ts.filter_hide_downloaded || !a.downloaded)
+        .collect()
+}
+
+/// `applyTrackFilters(list)` (Svelte `:204-209`): hide-downloaded then quality.
+/// Tracks have NO hide-unavailable filter (availability is albums-only).
+fn apply_track_filters<'a>(
+    ts: &ToolbarState,
+    list: &'a [PurchaseTrack],
+) -> Vec<&'a PurchaseTrack> {
+    list.iter()
+        .filter(|t| !ts.filter_hide_downloaded || !t.downloaded)
+        .filter(|t| {
+            ts.filter_quality == QualityFilter::All
+                || matches_quality_filter(
+                    ts.filter_quality,
+                    t.hires,
+                    t.maximum_bit_depth,
+                    t.maximum_sampling_rate,
+                )
+        })
+        .collect()
+}
+
+/// `sortAlbums(list)` (Svelte `:211-…`): copy then sort, `dir = asc?1:-1`.
+/// Tracks are filtered but NEVER sorted (Svelte `:142`).
+fn sort_albums<'a>(ts: &ToolbarState, mut list: Vec<&'a PurchaseAlbum>) -> Vec<&'a PurchaseAlbum> {
+    let dir: i64 = if ts.album_sort_direction == "asc" { 1 } else { -1 };
+    match ts.album_sort_by.as_str() {
+        "artist" => list.sort_by(|a, b| {
+            let ord = a.artist.name.cmp(&b.artist.name);
+            apply_dir(ord, dir)
+        }),
+        "album" => list.sort_by(|a, b| {
+            let ord = a.title.cmp(&b.title);
+            apply_dir(ord, dir)
+        }),
+        "quality" => list.sort_by(|a, b| {
+            // `(a.sr||0)-(b.sr||0) || (a.bd||0)-(b.bd||0)`
+            let asr = a.maximum_sampling_rate.unwrap_or(0.0);
+            let bsr = b.maximum_sampling_rate.unwrap_or(0.0);
+            let primary = asr.partial_cmp(&bsr).unwrap_or(std::cmp::Ordering::Equal);
+            let ord = if primary != std::cmp::Ordering::Equal {
+                primary
+            } else {
+                a.maximum_bit_depth
+                    .unwrap_or(0)
+                    .cmp(&b.maximum_bit_depth.unwrap_or(0))
+            };
+            apply_dir(ord, dir)
+        }),
+        // "date" (default): `(a.purchased_at||0) - (b.purchased_at||0)`.
+        _ => list.sort_by(|a, b| {
+            let ord = a.purchased_at.unwrap_or(0).cmp(&b.purchased_at.unwrap_or(0));
+            apply_dir(ord, dir)
+        }),
+    }
+    list
+}
+
+fn apply_dir(ord: std::cmp::Ordering, dir: i64) -> std::cmp::Ordering {
+    if dir < 0 {
+        ord.reverse()
+    } else {
+        ord
+    }
+}
+
+/// `selectAlbumSort(value)` (Svelte `:169-171`): same key → flip direction;
+/// else set the key and `direction = (value==='date' ? 'desc' : 'asc')`.
+/// Returns the `(sort_by, direction)` pair to push back onto `PurchasesState`.
+pub fn next_album_sort(current_by: &str, current_dir: &str, value: &str) -> (String, String) {
+    if current_by == value {
+        let flipped = if current_dir == "asc" { "desc" } else { "asc" };
+        (value.to_string(), flipped.to_string())
+    } else {
+        let dir = if value == "date" { "desc" } else { "asc" };
+        (value.to_string(), dir.to_string())
+    }
+}
+
+/// `alphaGroupKey(str)` (Svelte `:173`): first char uppercased; `/[A-Z]/` →
+/// that letter, else `'#'`.
+fn alpha_group_key(s: &str) -> String {
+    match s.chars().next() {
+        Some(c) => {
+            let up = c.to_uppercase().next().unwrap_or(c);
+            if up.is_ascii_uppercase() {
+                up.to_string()
+            } else {
+                "#".to_string()
+            }
+        }
+        None => "#".to_string(),
+    }
+}
+
+/// Insert one purchased album group `(key, title, item)`; groups end sorted by
+/// `key.localeCompare`. Used by both alpha and artist album grouping.
+fn group_albums(ts: &ToolbarState, list: &[&PurchaseAlbum]) -> Vec<(String, Vec<PurchaseAlbumItem>)> {
+    let mut buckets: HashMap<String, Vec<PurchaseAlbumItem>> = HashMap::new();
+    for a in list {
+        let key = if ts.album_group_mode == "artist" {
+            a.artist.name.clone()
+        } else {
+            alpha_group_key(&a.title)
+        };
+        buckets.entry(key).or_default().push(album_item(a));
+    }
+    sorted_groups(buckets)
+}
+
+/// `groupTracks(list)` (Svelte `:178-179`): key = name→alphaGroupKey(title) /
+/// artist→performer.name / album→album?.title || 'Unknown'.
+fn group_tracks(ts: &ToolbarState, list: &[&PurchaseTrack]) -> Vec<(String, Vec<PurchaseTrackItem>)> {
+    let mut buckets: HashMap<String, Vec<PurchaseTrackItem>> = HashMap::new();
+    for t in list {
+        let key = match ts.track_group_mode.as_str() {
+            "album" => t
+                .album
+                .as_ref()
+                .map(|al| al.title.clone())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "Unknown".to_string()),
+            "name" => alpha_group_key(&t.title),
+            // default "artist".
+            _ => t.performer.name.clone(),
+        };
+        buckets.entry(key).or_default().push(track_item(t));
+    }
+    sorted_groups(buckets)
+}
+
+/// Sort grouped buckets by `key.localeCompare` (lexicographic), returning
+/// `(key, items)` pairs.
+fn sorted_groups<T>(buckets: HashMap<String, Vec<T>>) -> Vec<(String, Vec<T>)> {
+    let mut groups: Vec<(String, Vec<T>)> = buckets.into_iter().collect();
+    groups.sort_by(|a, b| a.0.cmp(&b.0));
+    groups
+}
+
+// ---------------------------------------------------------------------------
+// Wire → Slint item mapping.
+// ---------------------------------------------------------------------------
+
+/// Map a `PurchaseAlbum` → the `PurchaseAlbumItem` Slint struct. `quality-label`
+/// = the grid kHz form; `quality-list` = the list `formatQuality` form (the
+/// list passes `hires = (bd ?? 16) > 16`). `purchase-date` = SHORT month.
+fn album_item(a: &PurchaseAlbum) -> PurchaseAlbumItem {
+    // List quality uses `(bit ?? 16) > 16` for the hires flag (Svelte `:906`).
+    let list_hires = a.maximum_bit_depth.unwrap_or(16) > 16;
+    PurchaseAlbumItem {
+        id: a.id.clone().into(),
+        title: a.title.clone().into(),
+        artist: a.artist.name.clone().into(),
+        artist_id: if a.artist.id != 0 {
+            a.artist.id.to_string().into()
+        } else {
+            slint::SharedString::new()
+        },
+        artwork_url: a.image.smallest().cloned().unwrap_or_default().into(),
+        artwork: slint::Image::default(),
+        quality_label: format_quality_label(a.maximum_bit_depth, a.maximum_sampling_rate).into(),
+        quality_list: format_quality(list_hires, a.maximum_bit_depth, a.maximum_sampling_rate)
+            .into(),
+        purchase_date: format_purchase_date(a.purchased_at).into(),
+        downloadable: a.downloadable,
+        downloaded: a.downloaded,
+    }
+}
+
+/// Map a `PurchaseTrack` → the `PurchaseTrackItem` Slint struct. Quality is the
+/// BARE `{bit}/{rate}` (§A.6). `dl-status` is the flattened download-store
+/// status for the row's 4-state control.
+fn track_item(t: &PurchaseTrack) -> PurchaseTrackItem {
+    let statuses = all_track_statuses();
+    let dl_status = statuses
+        .get(&t.id)
+        .map(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+    let (album_title, album_id, album_img) = match &t.album {
+        Some(al) => (
+            al.title.clone(),
+            al.id.clone(),
+            al.image.smallest().cloned().unwrap_or_default(),
+        ),
+        None => (String::new(), String::new(), String::new()),
+    };
+    PurchaseTrackItem {
+        id: t.id.to_string().into(),
+        // Purchased tracks have NO version field → formatTrackTitle == title.
+        title: t.title.clone().into(),
+        artist: t.performer.name.clone().into(),
+        artist_id: if t.performer.id != 0 {
+            t.performer.id.to_string().into()
+        } else {
+            slint::SharedString::new()
+        },
+        album_title: album_title.into(),
+        album_id: album_id.into(),
+        artwork_url: album_img.into(),
+        artwork: slint::Image::default(),
+        quality: bare_quality(t.maximum_bit_depth, t.maximum_sampling_rate).into(),
+        duration: format_duration(t.duration).into(),
+        purchase_date: format_purchase_date(t.purchased_at).into(),
+        streamable: t.streamable,
+        downloaded: t.downloaded,
+        dl_status: dl_status.into(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment (frontend OVERRIDES backend `downloaded`, §2.1.6).
+// ---------------------------------------------------------------------------
+
+/// `enrichWithDownloadStatus` for the LIST view (Svelte `:182-187`):
+///   * track: `downloaded = dlIds.has(track.id)`;
+///   * album: `downloaded = albumTrackIds.length>0 && every(id ∈ dlIds)` where
+///     `albumTrackIds = album.tracks?.items?.map(t=>t.id)`. List-mode albums
+///     from `get_by_type('albums')` carry NO nested tracks → empty →
+///     `downloaded` stays false (replicated verbatim — the frontend OVERRIDES
+///     the backend's value here).
+fn enrich_albums(albums: &mut [PurchaseAlbum], dl_ids: &HashSet<u64>) {
+    for album in albums {
+        let nested: Vec<u64> = album
+            .tracks
+            .as_ref()
+            .map(|page| page.items.iter().map(|t| t.id).collect())
+            .unwrap_or_default();
+        album.downloaded = !nested.is_empty() && nested.iter().all(|id| dl_ids.contains(id));
+    }
+}
+
+fn enrich_tracks(tracks: &mut [PurchaseTrack], dl_ids: &HashSet<u64>) {
+    for track in tracks {
+        track.downloaded = dl_ids.contains(&track.id);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar-state snapshot from PurchasesState (event loop).
+// ---------------------------------------------------------------------------
+
+fn read_toolbar(window: &AppWindow) -> ToolbarState {
+    let s = window.global::<PurchasesState>();
+    ToolbarState {
+        album_grouping_enabled: s.get_album_grouping_enabled(),
+        album_group_mode: s.get_album_group_mode().to_string(),
+        album_sort_by: s.get_album_sort_by().to_string(),
+        album_sort_direction: s.get_album_sort_direction().to_string(),
+        track_grouping_enabled: s.get_track_grouping_enabled(),
+        track_group_mode: s.get_track_group_mode().to_string(),
+        filter_hide_unavailable: s.get_filter_hide_unavailable(),
+        filter_quality: QualityFilter::from_str(&s.get_filter_quality()),
+        filter_hide_downloaded: s.get_filter_hide_downloaded(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Appliers (event loop) — project the cache → PurchasesState.
+// ---------------------------------------------------------------------------
+
+/// Re-derive the rendered models + counts + derived flags from the cache and
+/// the current toolbar state, and push them onto `PurchasesState`. Called after
+/// a load (Slices 8 apply) and after every toolbar/filter/search/sort/group
+/// change (the Svelte `$derived` re-run). Runs on the event loop.
+pub fn derive_purchases(window: &AppWindow) {
+    let ts = read_toolbar(window);
+    let (albums_raw, tracks_raw, total_albums, total_tracks, search_active) = with_ui_cache(|c| {
+        (
+            c.albums_raw.clone(),
+            c.tracks_raw.clone(),
+            c.total_albums,
+            c.total_tracks,
+            c.search_active,
+        )
+    });
+
+    let s = window.global::<PurchasesState>();
+
+    // hasActiveFilters / activeFilterCount (Svelte `:139-140`).
+    let hide_un = ts.filter_hide_unavailable;
+    let quality_on = ts.filter_quality != QualityFilter::All;
+    let hide_dl = ts.filter_hide_downloaded;
+    let has_active_filters = hide_un || quality_on || hide_dl;
+    let active_filter_count =
+        (hide_un as i32) + (quality_on as i32) + (hide_dl as i32);
+    s.set_has_active_filters(has_active_filters);
+    s.set_active_filter_count(active_filter_count);
+    s.set_search_active(search_active);
+
+    // ── Albums ──
+    let filtered_albums = sort_albums(&ts, apply_album_filters(&ts, &albums_raw));
+    let album_filtered_len = filtered_albums.len() as i32;
+    // albumTabCount (Svelte `:144`): server total unless search OR filters
+    // active → filtered length.
+    let album_tab_count = if search_active || has_active_filters {
+        album_filtered_len
+    } else if total_albums != 0 {
+        total_albums as i32
+    } else {
+        album_filtered_len
+    };
+    s.set_album_tab_count(album_tab_count);
+
+    if ts.album_grouping_enabled {
+        let groups = group_albums(&ts, &filtered_albums);
+        let group_models: Vec<PurchaseAlbumGroup> = groups
+            .into_iter()
+            .map(|(key, items)| PurchaseAlbumGroup {
+                key: key.clone().into(),
+                title: key.into(),
+                albums: ModelRc::new(VecModel::from(items)),
+            })
+            .collect();
+        s.set_albums_grouped(ModelRc::new(VecModel::from(group_models)));
+        s.set_albums(ModelRc::new(VecModel::from(Vec::<PurchaseAlbumItem>::new())));
+    } else {
+        let items: Vec<PurchaseAlbumItem> = filtered_albums.iter().map(|a| album_item(a)).collect();
+        s.set_albums(ModelRc::new(VecModel::from(items)));
+        s.set_albums_grouped(ModelRc::new(VecModel::from(Vec::<PurchaseAlbumGroup>::new())));
+    }
+
+    // ── Tracks (filtered, NEVER sorted) ──
+    let filtered_tracks = apply_track_filters(&ts, &tracks_raw);
+    let track_filtered_len = filtered_tracks.len() as i32;
+    let track_tab_count = if search_active || has_active_filters {
+        track_filtered_len
+    } else if total_tracks != 0 {
+        total_tracks as i32
+    } else {
+        track_filtered_len
+    };
+    s.set_track_tab_count(track_tab_count);
+
+    if ts.track_grouping_enabled {
+        let groups = group_tracks(&ts, &filtered_tracks);
+        let group_models: Vec<PurchaseTrackGroup> = groups
+            .into_iter()
+            .map(|(key, items)| PurchaseTrackGroup {
+                key: key.clone().into(),
+                title: key.into(),
+                tracks: ModelRc::new(VecModel::from(items)),
+            })
+            .collect();
+        s.set_tracks_grouped(ModelRc::new(VecModel::from(group_models)));
+        s.set_tracks(ModelRc::new(VecModel::from(Vec::<PurchaseTrackItem>::new())));
+    } else {
+        let items: Vec<PurchaseTrackItem> = filtered_tracks.iter().map(|t| track_item(t)).collect();
+        s.set_tracks(ModelRc::new(VecModel::from(items)));
+        s.set_tracks_grouped(ModelRc::new(VecModel::from(Vec::<PurchaseTrackGroup>::new())));
+    }
+}
+
+/// Apply a tab-load payload to the cache + state, then derive. Enriches the raw
+/// items with the registry dlIds (frontend overrides backend `downloaded`) and
+/// seeds the stable `albums-full`/`tracks-full` artwork-target models. Runs on
+/// the event loop. `search_overwrote` marks BOTH tabs loaded (the search path).
+pub fn apply_purchases_tab(
+    window: &AppWindow,
+    tab: PurchaseTab,
+    mut payload: PurchasesTabPayload,
+    metadata: &PurchasesMetadata,
+    search_overwrote: bool,
+) {
+    let dl_ids = metadata.downloaded_track_ids.clone();
+    match tab {
+        PurchaseTab::Albums => {
+            enrich_albums(&mut payload.tab_albums, &dl_ids);
+        }
+        PurchaseTab::Tracks => {
+            enrich_tracks(&mut payload.tab_tracks, &dl_ids);
+        }
+    }
+
+    with_ui_cache(|c| {
+        c.metadata = metadata.clone();
+        // Totals from metadata; backfilled by the payload total.
+        c.total_albums = if metadata.total_albums != 0 {
+            metadata.total_albums
+        } else {
+            c.total_albums
+        };
+        c.total_tracks = if metadata.total_tracks != 0 {
+            metadata.total_tracks
+        } else {
+            c.total_tracks
+        };
+        match tab {
+            PurchaseTab::Albums => {
+                c.albums_raw = payload.tab_albums.clone();
+                c.albums_loaded = true;
+                if c.total_albums == 0 {
+                    c.total_albums = payload.total;
+                }
+            }
+            PurchaseTab::Tracks => {
+                c.tracks_raw = payload.tab_tracks.clone();
+                c.tracks_loaded = true;
+                if c.total_tracks == 0 {
+                    c.total_tracks = payload.total;
+                }
+            }
+        }
+        // The search path sets BOTH arrays + BOTH loaded flags (Svelte
+        // `handleSearchInput`); a non-search load assigns only the active tab.
+        if search_overwrote {
+            match tab {
+                PurchaseTab::Albums => c.tracks_loaded = true,
+                PurchaseTab::Tracks => c.albums_loaded = true,
+            }
+        }
+    });
+
+    let s = window.global::<PurchasesState>();
+    s.set_loading(false);
+    s.set_load_error(slint::SharedString::new());
+
+    // Seed the stable artwork-target full models for the loaded tab.
+    match tab {
+        PurchaseTab::Albums => {
+            let full: Vec<PurchaseAlbumItem> =
+                payload.tab_albums.iter().map(album_item).collect();
+            s.set_albums_full(ModelRc::new(VecModel::from(full)));
+        }
+        PurchaseTab::Tracks => {
+            let full: Vec<PurchaseTrackItem> =
+                payload.tab_tracks.iter().map(track_item).collect();
+            s.set_tracks_full(ModelRc::new(VecModel::from(full)));
+        }
+    }
+
+    derive_purchases(window);
+}
+
+/// Apply a SEARCH result to the cache + state (Svelte `handleSearchInput`,
+/// §2.1.7): sets BOTH the album + track raw arrays AND BOTH loaded flags,
+/// enriches both with dlIds, seeds BOTH full artwork models, marks search
+/// active, then derives. Event loop.
+pub fn apply_purchases_search(
+    window: &AppWindow,
+    mut albums: Vec<PurchaseAlbum>,
+    mut tracks: Vec<PurchaseTrack>,
+    metadata: &PurchasesMetadata,
+) {
+    let dl_ids = metadata.downloaded_track_ids.clone();
+    enrich_albums(&mut albums, &dl_ids);
+    enrich_tracks(&mut tracks, &dl_ids);
+
+    with_ui_cache(|c| {
+        c.metadata = metadata.clone();
+        c.albums_raw = albums.clone();
+        c.tracks_raw = tracks.clone();
+        // Search sets BOTH loaded flags (the stale-other-tab quirk on a later
+        // clearSearch is intentional — §2.1.7).
+        c.albums_loaded = true;
+        c.tracks_loaded = true;
+        c.search_active = true;
+    });
+
+    let s = window.global::<PurchasesState>();
+    s.set_loading(false);
+    s.set_load_error(slint::SharedString::new());
+    let full_albums: Vec<PurchaseAlbumItem> = albums.iter().map(album_item).collect();
+    let full_tracks: Vec<PurchaseTrackItem> = tracks.iter().map(track_item).collect();
+    s.set_albums_full(ModelRc::new(VecModel::from(full_albums)));
+    s.set_tracks_full(ModelRc::new(VecModel::from(full_tracks)));
+
+    derive_purchases(window);
+}
+
+/// Artwork jobs for BOTH tabs (the search path loads both). Event-loop-free
+/// (reads the cache).
+pub fn artwork_jobs_for_both() -> Vec<crate::artwork::ArtworkJob> {
+    let mut jobs = artwork_jobs_for_tab(PurchaseTab::Albums);
+    jobs.extend(artwork_jobs_for_tab(PurchaseTab::Tracks));
+    jobs
+}
+
+/// Mark loading + clear the error (called before a tab fetch). Event loop.
+pub fn set_loading(window: &AppWindow) {
+    let s = window.global::<PurchasesState>();
+    s.set_loading(true);
+    s.set_load_error(slint::SharedString::new());
+}
+
+/// Clear the loading flag + error (cache-hit path: the tab is already loaded,
+/// so we skip straight to a re-derive without a spinner). Event loop.
+pub fn set_loading_done(window: &AppWindow) {
+    let s = window.global::<PurchasesState>();
+    s.set_loading(false);
+    s.set_load_error(slint::SharedString::new());
+}
+
+/// Surface a load error (already mapped to its display string). Event loop.
+pub fn set_load_error(window: &AppWindow, message: &str) {
+    let s = window.global::<PurchasesState>();
+    s.set_loading(false);
+    s.set_load_error(message.into());
+}
+
+/// Refresh ONLY the per-track `dl-status` projection after a download-store
+/// change (so a download's progress/complete shows live without a refetch).
+/// Re-derives from the cache (which re-reads `all_track_statuses`). Event loop.
+pub fn refresh_track_statuses(window: &AppWindow) {
+    derive_purchases(window);
+}
+
+// ---------------------------------------------------------------------------
+// Cache gating helpers (lazy-load decision lives in the controller).
+// ---------------------------------------------------------------------------
+
+/// Whether the given tab is already cached (no refetch on switch-back). Mirrors
+/// `loadPurchasesByTab`'s early-return guard.
+pub fn tab_cached(tab: PurchaseTab) -> bool {
+    with_ui_cache(|c| match tab {
+        PurchaseTab::Albums => c.albums_loaded,
+        PurchaseTab::Tracks => c.tracks_loaded,
+    })
+}
+
+/// Set the active search state (non-empty query) in the cache. `clearSearch`
+/// resets it to false; a non-empty applied query sets it true.
+pub fn set_search_active(active: bool) {
+    with_ui_cache(|c| c.search_active = active);
+}
+
+/// Bump + return the search debounce token. A fire whose token != the latest is
+/// dropped (the 300ms debounce — the Svelte `clearTimeout` equivalent).
+pub fn next_search_seq() -> u64 {
+    with_ui_cache(|c| {
+        c.search_seq = c.search_seq.wrapping_add(1);
+        c.search_seq
+    })
+}
+
+/// Whether `seq` is still the latest issued search token.
+pub fn search_seq_current(seq: u64) -> bool {
+    with_ui_cache(|c| c.search_seq == seq)
+}
+
+// ---------------------------------------------------------------------------
+// Artwork jobs + dual-set (id-keyed) into the rendered models.
+// ---------------------------------------------------------------------------
+
+/// Build artwork jobs for the loaded tab's FULL model (stable index targets).
+pub fn artwork_jobs_for_tab(tab: PurchaseTab) -> Vec<crate::artwork::ArtworkJob> {
+    let mut jobs = Vec::new();
+    with_ui_cache(|c| match tab {
+        PurchaseTab::Albums => {
+            for (i, a) in c.albums_raw.iter().enumerate() {
+                if let Some(url) = a.image.smallest() {
+                    if !url.is_empty() {
+                        jobs.push(crate::artwork::ArtworkJob {
+                            url: url.clone(),
+                            target: crate::artwork::ArtworkTarget::PurchaseAlbum { index: i },
+                        });
+                    }
+                }
+            }
+        }
+        PurchaseTab::Tracks => {
+            for (i, t) in c.tracks_raw.iter().enumerate() {
+                if let Some(al) = &t.album {
+                    if let Some(url) = al.image.smallest() {
+                        if !url.is_empty() {
+                            jobs.push(crate::artwork::ArtworkJob {
+                                url: url.clone(),
+                                target: crate::artwork::ArtworkTarget::PurchaseTrack { index: i },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    });
+    jobs
+}
+
+/// Dual-set a decoded album cover by id into the rendered flat + grouped models
+/// (the favorites pattern: a sort/filter/group makes them NOT share the full
+/// model). Event loop.
+pub fn set_album_artwork(window: &AppWindow, id: &str, image: slint::Image) {
+    let s = window.global::<PurchasesState>();
+    // Flat.
+    let flat = s.get_albums();
+    for i in 0..flat.row_count() {
+        if let Some(mut item) = flat.row_data(i) {
+            if item.id == id {
+                item.artwork = image.clone();
+                flat.set_row_data(i, item);
+            }
+        }
+    }
+    // Grouped sections.
+    let groups = s.get_albums_grouped();
+    for g in 0..groups.row_count() {
+        if let Some(group) = groups.row_data(g) {
+            let inner = group.albums.clone();
+            for i in 0..inner.row_count() {
+                if let Some(mut item) = inner.row_data(i) {
+                    if item.id == id {
+                        item.artwork = image.clone();
+                        inner.set_row_data(i, item);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Dual-set a decoded track thumbnail by id into the rendered flat + grouped
+/// track models. Event loop.
+pub fn set_track_artwork(window: &AppWindow, id: &str, image: slint::Image) {
+    let s = window.global::<PurchasesState>();
+    let flat = s.get_tracks();
+    for i in 0..flat.row_count() {
+        if let Some(mut item) = flat.row_data(i) {
+            if item.id == id {
+                item.artwork = image.clone();
+                flat.set_row_data(i, item);
+            }
+        }
+    }
+    let groups = s.get_tracks_grouped();
+    for g in 0..groups.row_count() {
+        if let Some(group) = groups.row_data(g) {
+            let inner = group.tracks.clone();
+            for i in 0..inner.row_count() {
+                if let Some(mut item) = inner.row_data(i) {
+                    if item.id == id {
+                        item.artwork = image.clone();
+                        inner.set_row_data(i, item);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-track download flow (tracks tab) — format fetch + picker decision.
+// ---------------------------------------------------------------------------
+
+/// Build the format-picker option items for the popup (`fmt.label` + the
+/// `{bd}/{sr}` detail when both present). Mirrors §2.1.13.
+pub fn format_picker_items(formats: &[PurchaseFormatOption]) -> Vec<PurchaseFormatItem> {
+    formats
+        .iter()
+        .map(|f| PurchaseFormatItem {
+            id: f.id as i32,
+            label: f.label.clone().into(),
+            detail: match (f.bit_depth, f.sampling_rate) {
+                (Some(bd), Some(sr)) => format!("{bd}/{}", fmt_rate(sr)).into(),
+                _ => slint::SharedString::new(),
+            },
+        })
+        .collect()
+}
+
+/// Look up a purchased track in the cache by its (stringified) id — the
+/// tracks-tab download flow needs `track.album.id` + the raw record.
+pub fn find_track(track_id: u64) -> Option<PurchaseTrack> {
+    with_ui_cache(|c| c.tracks_raw.iter().find(|t| t.id == track_id).cloned())
 }
 
 #[cfg(test)]
@@ -1479,5 +2469,203 @@ mod tests {
     fn quality_dir_feeds_download_subfolder() {
         // Cross-check with the Slice-6 derivation used before every download.
         assert_eq!(quality_dir("FLAC 24/192"), "FLAC 24-192");
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 8 — filter / sort / group / formatter pure-fn tests (the
+    // byte-for-byte ports of the Svelte $derived functions, §2.1.5).
+    // ------------------------------------------------------------------
+
+    fn album(
+        title: &str,
+        artist: &str,
+        bd: Option<u32>,
+        sr: Option<f64>,
+        hires: bool,
+        downloadable: bool,
+        purchased_at: Option<i64>,
+    ) -> PurchaseAlbum {
+        PurchaseAlbum {
+            title: title.to_string(),
+            artist: qbz_models::Artist {
+                name: artist.to_string(),
+                ..Default::default()
+            },
+            maximum_bit_depth: bd,
+            maximum_sampling_rate: sr,
+            hires,
+            downloadable,
+            purchased_at,
+            ..Default::default()
+        }
+    }
+
+    fn track(title: &str, bd: Option<u32>, sr: Option<f64>, hires: bool) -> PurchaseTrack {
+        PurchaseTrack {
+            title: title.to_string(),
+            maximum_bit_depth: bd,
+            maximum_sampling_rate: sr,
+            hires,
+            ..Default::default()
+        }
+    }
+
+    fn ts_default() -> ToolbarState {
+        ToolbarState {
+            album_grouping_enabled: false,
+            album_group_mode: "alpha".into(),
+            album_sort_by: "date".into(),
+            album_sort_direction: "desc".into(),
+            track_grouping_enabled: false,
+            track_group_mode: "artist".into(),
+            filter_hide_unavailable: false,
+            filter_quality: QualityFilter::All,
+            filter_hide_downloaded: false,
+        }
+    }
+
+    #[test]
+    fn quality_filter_matches_svelte() {
+        // all → always true
+        assert!(matches_quality_filter(QualityFilter::All, false, None, None));
+        // hires → the hires flag
+        assert!(matches_quality_filter(QualityFilter::Hires, true, Some(24), Some(96.0)));
+        assert!(!matches_quality_filter(QualityFilter::Hires, false, Some(16), Some(44.1)));
+        // cd → !hires && (bd==16 || (no bd && no sr))
+        assert!(matches_quality_filter(QualityFilter::Cd, false, Some(16), Some(44.1)));
+        assert!(matches_quality_filter(QualityFilter::Cd, false, None, None));
+        assert!(!matches_quality_filter(QualityFilter::Cd, false, Some(24), Some(96.0)));
+        assert!(!matches_quality_filter(QualityFilter::Cd, true, Some(16), Some(44.1)));
+        // lossy → !bd || bd < 16
+        assert!(matches_quality_filter(QualityFilter::Lossy, false, None, None));
+        assert!(matches_quality_filter(QualityFilter::Lossy, false, Some(8), None));
+        assert!(!matches_quality_filter(QualityFilter::Lossy, false, Some(16), None));
+    }
+
+    #[test]
+    fn album_filters_apply_in_order() {
+        let list = vec![
+            album("A", "X", Some(24), Some(96.0), true, true, Some(3)),  // hires, avail
+            album("B", "Y", Some(16), Some(44.1), false, false, Some(2)), // cd, UNAVAIL
+            album("C", "Z", Some(8), None, false, true, Some(1)),        // lossy, avail
+        ];
+        let mut ts = ts_default();
+        // hide unavailable drops B
+        ts.filter_hide_unavailable = true;
+        let r = apply_album_filters(&ts, &list);
+        assert_eq!(r.len(), 2);
+        assert!(r.iter().all(|a| a.downloadable));
+        // quality=hires keeps only A
+        ts.filter_quality = QualityFilter::Hires;
+        let r = apply_album_filters(&ts, &list);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].title, "A");
+    }
+
+    #[test]
+    fn tracks_filtered_not_sorted_and_no_unavailable_filter() {
+        let list = vec![
+            track("b", Some(24), Some(96.0), true),
+            track("a", Some(8), None, false),
+        ];
+        let mut ts = ts_default();
+        ts.filter_quality = QualityFilter::Lossy;
+        let r = apply_track_filters(&ts, &list);
+        // lossy keeps the 8-bit track only; order preserved (no sort).
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].title, "a");
+    }
+
+    #[test]
+    fn sort_albums_date_desc_default_artist_asc() {
+        let list = vec![
+            album("A", "Zeta", None, None, false, true, Some(1)),
+            album("B", "Alpha", None, None, false, true, Some(3)),
+            album("C", "Mu", None, None, false, true, Some(2)),
+        ];
+        let mut ts = ts_default();
+        // date DESC (default): newest (3) first.
+        let r = sort_albums(&ts, list.iter().collect());
+        assert_eq!(r.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), vec!["B", "C", "A"]);
+        // artist ASC.
+        ts.album_sort_by = "artist".into();
+        ts.album_sort_direction = "asc".into();
+        let r = sort_albums(&ts, list.iter().collect());
+        assert_eq!(r.iter().map(|a| a.artist.name.as_str()).collect::<Vec<_>>(), vec!["Alpha", "Mu", "Zeta"]);
+    }
+
+    #[test]
+    fn select_album_sort_toggles_and_defaults() {
+        // same key → flip direction.
+        assert_eq!(next_album_sort("date", "desc", "date"), ("date".into(), "asc".into()));
+        assert_eq!(next_album_sort("date", "asc", "date"), ("date".into(), "desc".into()));
+        // new key date → desc; other keys → asc.
+        assert_eq!(next_album_sort("artist", "asc", "date"), ("date".into(), "desc".into()));
+        assert_eq!(next_album_sort("date", "desc", "artist"), ("artist".into(), "asc".into()));
+        assert_eq!(next_album_sort("date", "desc", "quality"), ("quality".into(), "asc".into()));
+    }
+
+    #[test]
+    fn alpha_group_key_letter_or_hash() {
+        assert_eq!(alpha_group_key("apple"), "A");
+        // A non-ASCII first letter uppercases to a non-ASCII char, which is NOT
+        // `is_ascii_uppercase` → bucket '#' (matches the JS `/[A-Z]/` test).
+        assert_eq!(alpha_group_key("Éclair"), "#");
+        assert_eq!(alpha_group_key("123"), "#");
+        assert_eq!(alpha_group_key(""), "#");
+        assert_eq!(alpha_group_key("zoo"), "Z");
+    }
+
+    #[test]
+    fn formatters_match_svelte() {
+        // grid card label: "{bd}/{sr} kHz" or "" if either missing.
+        assert_eq!(format_quality_label(Some(24), Some(96.0)), "24/96 kHz");
+        assert_eq!(format_quality_label(Some(16), Some(44.1)), "16/44.1 kHz");
+        assert_eq!(format_quality_label(None, Some(96.0)), "");
+        assert_eq!(format_quality_label(Some(24), None), "");
+        // album-list quality: hires → "{bd}bit/{sr}kHz", else "CD Quality".
+        assert_eq!(format_quality(true, Some(24), Some(96.0)), "24bit/96kHz");
+        assert_eq!(format_quality(false, Some(16), Some(44.1)), "CD Quality");
+        assert_eq!(format_quality(true, None, Some(96.0)), "CD Quality");
+        // BARE track-row quality (§A.6): "{bd}/{sr}" no kHz, "" if either missing.
+        assert_eq!(bare_quality(Some(24), Some(96.0)), "24/96");
+        assert_eq!(bare_quality(Some(24), Some(44.1)), "24/44.1");
+        assert_eq!(bare_quality(None, Some(96.0)), "");
+        assert_eq!(bare_quality(Some(24), None), "");
+        // duration m:ss.
+        assert_eq!(format_duration(0), "0:00");
+        assert_eq!(format_duration(65), "1:05");
+        assert_eq!(format_duration(3723), "62:03");
+    }
+
+    #[test]
+    fn enrich_album_downloaded_requires_all_nested_in_dlids() {
+        use qbz_models::SearchResultsPage;
+        let mut a = PurchaseAlbum {
+            title: "Album".into(),
+            tracks: Some(SearchResultsPage {
+                items: vec![track_with_id(1), track_with_id(2)],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        a.downloaded = false;
+        let mut dl: HashSet<u64> = HashSet::new();
+        dl.insert(1);
+        // partial → not downloaded (frontend OVERRIDES backend).
+        enrich_albums(std::slice::from_mut(&mut a), &dl);
+        assert!(!a.downloaded);
+        // all present → downloaded.
+        dl.insert(2);
+        enrich_albums(std::slice::from_mut(&mut a), &dl);
+        assert!(a.downloaded);
+        // no nested tracks (list-mode album) → never downloaded even if dlIds full.
+        let mut b = PurchaseAlbum { tracks: None, ..Default::default() };
+        enrich_albums(std::slice::from_mut(&mut b), &dl);
+        assert!(!b.downloaded);
+    }
+
+    fn track_with_id(id: u64) -> PurchaseTrack {
+        PurchaseTrack { id, ..Default::default() }
     }
 }
