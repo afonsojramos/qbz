@@ -1,4 +1,5 @@
-//! Purchases controller (Slint) — Slice 3: data-loading shells.
+//! Purchases controller (Slint) — Slices 3 + 6: data-loading shells +
+//! registry/qualityDir wiring.
 //!
 //! Mirrors Tauri's `PurchasesView.svelte` data-loading flow
 //! (`source-of-truth §2.1.6`), ported to the shared service. No `tauri::State`
@@ -18,13 +19,22 @@
 //!     (`get_user_purchases_all_typed`) with §3.6 error mapping and total
 //!     backfill.
 //!
+//! Slice 6 adds the controller-side registry/qualityDir wiring used by the
+//! download path (Slice 7) and the download-flag annotation (Slice 4):
+//!
+//!   * `get_downloaded_purchase_formats` → `HashMap<track_id → Vec<format_id>>`
+//!     (the Tauri command #1 `format_map`; source for `downloaded_format_ids` +
+//!     format-scoped completion gating);
+//!   * `quality_dir(label)` → the `/`→`-`, `.trim()` derivation (§7.5) applied
+//!     before every download invoke.
+//!
 //! Download-flag enrichment (`enrichWithDownloadStatus`) is Slice 4; the
 //! download state machine + actions are Slice 7; the UI apply is Slices 8/9.
 //! These load fns therefore return PLAIN, `Send` payload structs (no
 //! `slint::Image` / `ModelRc`) so they may be built off the event loop and held
 //! across `.await`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
@@ -95,6 +105,62 @@ pub async fn get_downloaded_track_ids() -> HashSet<u64> {
     })
     .await
     .unwrap_or_default()
+}
+
+/// Read the per-track downloaded FORMAT ids from the local registry as a
+/// `HashMap<track_id → Vec<format_id>>`. Mirrors Tauri command #1's
+/// `format_map` (`legacy_compat.rs:2704-2742`, source-of-truth §3.3 #1): the
+/// command reads `db.get_downloaded_purchase_formats()` → `Vec<(track_id i64,
+/// format_id i64)>` and derives both the `downloaded_ids` HashSet (already
+/// provided by [`get_downloaded_track_ids`]) and a `format_map: HashMap<i64,
+/// Vec<u32>>`. This is the source for the per-track `downloaded_format_ids`
+/// annotation + the format-scoped completion gating (Slice 7).
+///
+/// Each `(track_id, format_id)` pair is folded into the map (ids cast to the
+/// frontend's `u64`/`u32` widths). Unlike the track-ids reader, the registry's
+/// `get_downloaded_purchase_formats` does NOT stale-prune (§7.7) — it returns
+/// every persisted pair as-is, matching Tauri.
+///
+/// On a DB error or no active user → an empty map (the Tauri command surfaces a
+/// "No active session" error, but the metadata load tolerates that the same way
+/// the dlIds path does — the controller falls back to empty rather than failing
+/// the whole view).
+///
+/// Runs the blocking DB op on a `spawn_blocking` worker, consistent with the
+/// rest of the controller's DB access.
+pub async fn get_downloaded_purchase_formats() -> HashMap<u64, Vec<u32>> {
+    tokio::task::spawn_blocking(|| {
+        crate::library_db::with_db(|db| Ok(db.get_downloaded_purchase_formats()?))
+            .map(|pairs| {
+                let mut map: HashMap<u64, Vec<u32>> = HashMap::new();
+                for (track_id, format_id) in pairs {
+                    map.entry(track_id as u64).or_default().push(format_id as u32);
+                }
+                map
+            })
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// §7.5 / §8.2 `qualityDir` derivation (FRONTEND, port-critical). Mirrors the
+/// Svelte `qualityDir = format.label.replace(/\//g, '-').trim()` used in BOTH
+/// views (`executeTrackDownload` + `qualityFolderName`, source-of-truth lines
+/// 314 / 1196-1199): replace EVERY `/` with `-`, then trim surrounding
+/// whitespace. The result becomes a literal subfolder segment appended to the
+/// album folder (with a leading space) inside `target_path`.
+///
+/// FIDELITY: JS `String.prototype.replace(/\//g, …)` is GLOBAL — all slashes
+/// are replaced. Rust `str::replace` is likewise global, so `"24/192"` →
+/// `"24-192"` 1:1. (The §8.2 checkbox writes `replace('/', '-')` shorthand, but
+/// §7.5 + line 314 confirm the live regex is the global `/\//g`; the global
+/// form is the correct port — a label with two slashes must lose both.) The
+/// `.trim()` matches the JS `.trim()` exactly (leading/trailing ASCII+Unicode
+/// whitespace). No other normalization is applied — the raw label drives the
+/// folder name, just like Tauri.
+pub fn quality_dir(label: &str) -> String {
+    label.replace('/', "-").trim().to_string()
 }
 
 /// The one-shot metadata load (Svelte `loadPurchasesMetadata`, §2.1.6):
@@ -258,6 +324,25 @@ mod tests {
     fn tab_as_str_maps_wire_strings() {
         assert_eq!(PurchaseTab::Albums.as_str(), "albums");
         assert_eq!(PurchaseTab::Tracks.as_str(), "tracks");
+    }
+
+    #[test]
+    fn quality_dir_replaces_slash_and_trims() {
+        // The canonical hi-res label: `/` → `-` (the load-bearing transform).
+        assert_eq!(quality_dir("24/192"), "24-192");
+        assert_eq!(quality_dir("16/44.1"), "16-44.1");
+        // GLOBAL replace (JS `/\//g`): a label with two slashes loses BOTH.
+        assert_eq!(quality_dir("a/b/c"), "a-b-c");
+        // `.trim()` strips surrounding whitespace (matches JS `.trim()`),
+        // including the leading/trailing space some labels carry.
+        assert_eq!(quality_dir("  24/192  "), "24-192");
+        assert_eq!(quality_dir("Hi-Res"), "Hi-Res");
+        // No slash, no surrounding space → identity.
+        assert_eq!(quality_dir("CD Quality"), "CD Quality");
+        // Empty/whitespace-only → empty (a single-track download with a blank
+        // qualityDir produces no subfolder segment, matching the JS `?? ''`).
+        assert_eq!(quality_dir(""), "");
+        assert_eq!(quality_dir("   "), "");
     }
 
     #[test]
