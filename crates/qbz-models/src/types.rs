@@ -786,12 +786,130 @@ pub struct SearchResults {
     pub playlists: Option<SearchResultsPage<Playlist>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResultsPage<T> {
     pub items: Vec<T>,
     pub total: u32,
     pub offset: u32,
     pub limit: u32,
+}
+
+// ============ Purchases API Models ============
+//
+// Ported field-for-field from `src-tauri/src/api/models.rs:546-628`. These are
+// the wire shapes returned by the Qobuz `/purchase/*` endpoints. The lenient
+// deserializers live in `crate::purchase_serde` (see that module's docs for the
+// per-field coercion rules).
+
+/// Response from `/purchase/getUserPurchases` (commands #1/#3/#4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PurchaseResponse {
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page")]
+    pub albums: SearchResultsPage<PurchaseAlbum>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page")]
+    pub tracks: SearchResultsPage<PurchaseTrack>,
+}
+
+/// Response from `/purchase/getUserPurchasesIds` (command #2). Items are OPAQUE
+/// JSON — the UI reads only `.total` from each page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PurchaseIdsResponse {
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page")]
+    pub albums: SearchResultsPage<serde_json::Value>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page")]
+    pub tracks: SearchResultsPage<serde_json::Value>,
+}
+
+/// A purchased album. `downloadable` defaults TRUE; `downloaded` is NOT from
+/// Qobuz — it is server-computed from the local registry. `purchased_at` is
+/// unix epoch seconds. Nested `tracks` is populated only on the album-detail /
+/// by-type-albums paths.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PurchaseAlbum {
+    #[serde(
+        default,
+        deserialize_with = "crate::purchase_serde::deserialize_string_id"
+    )]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artist: Artist,
+    #[serde(default)]
+    pub image: ImageSet,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub release_date_original: Option<String>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub label: Option<Label>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub genre: Option<Genre>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub tracks_count: Option<u32>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub duration: Option<u32>,
+    #[serde(default)]
+    pub hires: bool,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub maximum_sampling_rate: Option<f64>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub maximum_bit_depth: Option<u32>,
+    #[serde(default = "crate::purchase_serde::serde_true")]
+    pub downloadable: bool,
+    #[serde(default)]
+    pub downloaded: bool,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub purchased_at: Option<i64>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub tracks: Option<SearchResultsPage<PurchaseTrack>>,
+}
+
+/// A purchased track. NOTE: there is intentionally **no `version` field** — the
+/// purchases path never carries the track subtitle/edition (see source-of-truth
+/// §4.6). `streamable` defaults TRUE; `downloaded`/`downloaded_format_ids` are
+/// server-computed from the local registry; `media_number` is the disc number
+/// used for disc-grouping. `purchased_at` is unix epoch seconds.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PurchaseTrack {
+    #[serde(default, deserialize_with = "crate::purchase_serde::deserialize_u64_id")]
+    pub id: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub track_number: u32,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub media_number: Option<u32>,
+    #[serde(default)]
+    pub duration: u32,
+    #[serde(default)]
+    pub performer: Artist,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub album: Option<AlbumSummary>,
+    #[serde(default)]
+    pub hires: bool,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub maximum_sampling_rate: Option<f64>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub maximum_bit_depth: Option<u32>,
+    #[serde(default = "crate::purchase_serde::serde_true")]
+    pub streamable: bool,
+    #[serde(default)]
+    pub downloaded: bool,
+    #[serde(default)]
+    pub downloaded_format_ids: Vec<u32>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub purchased_at: Option<i64>,
+}
+
+/// A downloadable format option synthesized client-side from an `Album`
+/// (command #6). `id` feeds `getFileUrl`'s `format_id`; `label` (with `/`→`-`)
+/// becomes the `qualityDir` subfolder. The synthesis table lives in the
+/// orchestration service (Slice 4); this struct is just the wire/UI shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PurchaseFormatOption {
+    pub id: u32,
+    pub label: String,
+    pub bit_depth: Option<u32>,
+    pub sampling_rate: Option<f64>,
 }
 
 /// Response from `/album/suggest` — albums similar to a seed album.
