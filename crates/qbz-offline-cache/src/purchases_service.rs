@@ -9,11 +9,20 @@
 //! Slice 3 scope: the pagination-glue helpers around the client's
 //! `get_user_purchases_*` methods, and the pure `filter_purchase_response`
 //! search filter (`v2_filter_purchase_response`, ported from
-//! `src-tauri/src/commands_v2/legacy_compat.rs:2627`). Format synthesis
-//! (Slice 4), download-flag annotation (Slice 4) and the single-track download
-//! primitive (Slice 5) are added in later slices.
+//! `src-tauri/src/commands_v2/legacy_compat.rs:2627`).
+//!
+//! Slice 4 scope (pure, no I/O): `synth_formats` (the §4.9 client-side
+//! format-synthesis table, ported from `v2_purchases_get_formats`
+//! `legacy_compat.rs:2953`) and `apply_download_flags` (the §3.4 download-flag
+//! annotation, ported from `v2_apply_purchase_download_flags`
+//! `legacy_compat.rs:2594`). The single-track download primitive (Slice 5) is
+//! added later.
 
-use qbz_models::{PurchaseAlbum, PurchaseResponse, PurchaseTrack, SearchResultsPage};
+use std::collections::{HashMap, HashSet};
+
+use qbz_models::{
+    Album, PurchaseAlbum, PurchaseFormatOption, PurchaseResponse, PurchaseTrack, SearchResultsPage,
+};
 use qbz_qobuz::QobuzClient;
 use qbz_qobuz::Result as QobuzResult;
 
@@ -136,6 +145,111 @@ pub fn filter_purchase_response(response: PurchaseResponse, query: &str) -> Purc
             limit: response.tracks.limit,
             items: tracks,
         },
+    }
+}
+
+/// Synthesize the downloadable format options for a purchased album,
+/// client-side from `/album/get` (command #6 `v2_purchases_get_formats`,
+/// `legacy_compat.rs:2953-3001`). There is NO Qobuz formats endpoint — the
+/// options are derived purely from `album.hires` + `album.maximum_sampling_rate`.
+///
+/// Order is load-bearing (it IS the dropdown order; the frontend default-selects
+/// `formats[0]`, so the highest available quality is the default):
+///   * id **27** `[FLAC][24-bit,192kHz]` — only if `hires && max_sr > 96.0`.
+///   * id **7**  `[FLAC][24-bit,96kHz]`  — only if `hires`.
+///   * id **6**  `[FLAC][16-bit,44.1kHz]` — always.
+///   * id **5**  `[MP3][320kbps]`         — always.
+///
+/// The ids feed `getFileUrl`'s `format_id`; the `label` (with `/`→`-`) becomes
+/// the `qualityDir` subfolder, so both ids AND label strings are reproduced
+/// EXACTLY (port idéntico — these are not cosmetic).
+pub fn synth_formats(album: &Album) -> Vec<PurchaseFormatOption> {
+    let mut formats = Vec::new();
+
+    if album.hires && album.maximum_sampling_rate.unwrap_or(0.0) > 96.0 {
+        formats.push(PurchaseFormatOption {
+            id: 27,
+            label: "[FLAC][24-bit,192kHz]".to_string(),
+            bit_depth: Some(24),
+            sampling_rate: Some(192.0),
+        });
+    }
+
+    if album.hires {
+        formats.push(PurchaseFormatOption {
+            id: 7,
+            label: "[FLAC][24-bit,96kHz]".to_string(),
+            bit_depth: Some(24),
+            sampling_rate: Some(96.0),
+        });
+    }
+
+    formats.push(PurchaseFormatOption {
+        id: 6,
+        label: "[FLAC][16-bit,44.1kHz]".to_string(),
+        bit_depth: Some(16),
+        sampling_rate: Some(44.1),
+    });
+
+    formats.push(PurchaseFormatOption {
+        id: 5,
+        label: "[MP3][320kbps]".to_string(),
+        bit_depth: None,
+        sampling_rate: None,
+    });
+
+    formats
+}
+
+/// Annotate a `PurchaseResponse` in-place with frontend-computed download flags
+/// (§3.4 `v2_apply_purchase_download_flags`, `legacy_compat.rs:2594-2625`, used
+/// by commands #1 / #4). Pure — no I/O. The frontend OVERRIDES any backend
+/// `downloaded` value here.
+///
+/// Per track:
+///   * `downloaded = downloaded_ids.contains(track.id)`;
+///   * `downloaded_format_ids = format_map.get(track.id).cloned().unwrap_or_default()`.
+///
+/// Per album (the all-mode / by-type path where albums and tracks are sibling
+/// pages): collect the ids of `response.tracks.items` whose
+/// `track.album.id == album.id`; then
+/// `album.downloaded = !ids.is_empty() && all ids ∈ downloaded_ids`.
+/// An album with NO matching tracks in this response → `downloaded = false`
+/// (the empty-set rule; partial-page albums may flip to not-downloaded — this
+/// is the documented page-mode gotcha and is replicated verbatim).
+///
+/// `downloaded_ids`/`format_map` are keyed by `i64` (registry track ids); track
+/// ids are `u64` and compared via `track.id as i64`, exactly as the source.
+pub fn apply_download_flags(
+    response: &mut PurchaseResponse,
+    downloaded_ids: &HashSet<i64>,
+    format_map: &HashMap<i64, Vec<u32>>,
+) {
+    for track in &mut response.tracks.items {
+        let tid = track.id as i64;
+        track.downloaded = downloaded_ids.contains(&tid);
+        track.downloaded_format_ids = format_map.get(&tid).cloned().unwrap_or_default();
+    }
+
+    for album in &mut response.albums.items {
+        let album_track_ids: Vec<i64> = response
+            .tracks
+            .items
+            .iter()
+            .filter(|track| {
+                track
+                    .album
+                    .as_ref()
+                    .map(|album_ref| album_ref.id == album.id)
+                    .unwrap_or(false)
+            })
+            .map(|track| track.id as i64)
+            .collect();
+
+        album.downloaded = !album_track_ids.is_empty()
+            && album_track_ids
+                .iter()
+                .all(|track_id| downloaded_ids.contains(track_id));
     }
 }
 
@@ -264,5 +378,154 @@ mod tests {
         assert!(out.tracks.items.is_empty());
         assert_eq!(out.albums.total, 0);
         assert_eq!(out.tracks.total, 0);
+    }
+
+    // ── Slice 4: synth_formats ───────────────────────────────────────────
+
+    // `Album` has no `Default`; build the minimal shape from JSON (relying on
+    // the serde defaults / Option fields) so we never reach into qbz-models.
+    fn album_with(hires: bool, max_sr: Option<f64>) -> Album {
+        let json = match max_sr {
+            Some(sr) => format!(r#"{{"hires":{hires},"maximum_sampling_rate":{sr}}}"#),
+            None => format!(r#"{{"hires":{hires}}}"#),
+        };
+        serde_json::from_str(&json).expect("minimal Album JSON deserializes")
+    }
+
+    #[test]
+    fn synth_formats_24_192_yields_four_options_in_order() {
+        // hires + max_sr > 96 → all four, highest first, index 0 = the 192k default.
+        let fmts = synth_formats(&album_with(true, Some(192.0)));
+        assert_eq!(fmts.len(), 4);
+        let ids: Vec<u32> = fmts.iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec![27, 7, 6, 5]);
+        // Exact labels are load-bearing (feed qualityDir + the dropdown).
+        assert_eq!(fmts[0].label, "[FLAC][24-bit,192kHz]");
+        assert_eq!(fmts[1].label, "[FLAC][24-bit,96kHz]");
+        assert_eq!(fmts[2].label, "[FLAC][16-bit,44.1kHz]");
+        assert_eq!(fmts[3].label, "[MP3][320kbps]");
+        // bit_depth / sampling_rate carried verbatim.
+        assert_eq!((fmts[0].bit_depth, fmts[0].sampling_rate), (Some(24), Some(192.0)));
+        assert_eq!((fmts[1].bit_depth, fmts[1].sampling_rate), (Some(24), Some(96.0)));
+        assert_eq!((fmts[2].bit_depth, fmts[2].sampling_rate), (Some(16), Some(44.1)));
+        assert_eq!((fmts[3].bit_depth, fmts[3].sampling_rate), (None, None));
+        // default-select is index 0 (highest available).
+        assert_eq!(fmts[0].id, 27);
+    }
+
+    #[test]
+    fn synth_formats_24_96_drops_192_option() {
+        // hires but max_sr exactly 96 (not > 96) → no id 27.
+        let fmts = synth_formats(&album_with(true, Some(96.0)));
+        let ids: Vec<u32> = fmts.iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec![7, 6, 5]);
+        assert_eq!(fmts[0].id, 7);
+    }
+
+    #[test]
+    fn synth_formats_hires_with_no_sampling_rate_drops_192() {
+        // max_sr None → unwrap_or(0.0) → not > 96 → no id 27, but hires keeps id 7.
+        let fmts = synth_formats(&album_with(true, None));
+        let ids: Vec<u32> = fmts.iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec![7, 6, 5]);
+    }
+
+    #[test]
+    fn synth_formats_non_hires_yields_only_cd_and_mp3() {
+        // Not hires → only the always-present 6 + 5; max_sr is irrelevant.
+        let fmts = synth_formats(&album_with(false, Some(192.0)));
+        let ids: Vec<u32> = fmts.iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec![6, 5]);
+        assert_eq!(fmts[0].id, 6);
+    }
+
+    // ── Slice 4: apply_download_flags ────────────────────────────────────
+
+    fn album_id(id: &str) -> PurchaseAlbum {
+        PurchaseAlbum {
+            id: id.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn track_for_album(id: u64, album_id: &str) -> PurchaseTrack {
+        PurchaseTrack {
+            id,
+            album: Some(AlbumSummary {
+                id: album_id.to_string(),
+                title: String::new(),
+                image: Default::default(),
+                label: None,
+                genre: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn dl_ids(ids: &[i64]) -> HashSet<i64> {
+        ids.iter().copied().collect()
+    }
+
+    #[test]
+    fn apply_flags_marks_track_downloaded_and_records_format_ids() {
+        let mut resp = response(vec![], vec![track_for_album(10, "a1"), track_for_album(20, "a1")]);
+        let downloaded = dl_ids(&[10]);
+        let mut format_map: HashMap<i64, Vec<u32>> = HashMap::new();
+        format_map.insert(10, vec![27, 6]);
+
+        apply_download_flags(&mut resp, &downloaded, &format_map);
+
+        assert!(resp.tracks.items[0].downloaded);
+        assert_eq!(resp.tracks.items[0].downloaded_format_ids, vec![27, 6]);
+        // track not in dlIds → not downloaded, empty format ids.
+        assert!(!resp.tracks.items[1].downloaded);
+        assert!(resp.tracks.items[1].downloaded_format_ids.is_empty());
+    }
+
+    #[test]
+    fn apply_flags_album_downloaded_when_all_nested_track_ids_present() {
+        // Every track whose album.id == "a1" is in dlIds → album downloaded.
+        let mut resp = response(
+            vec![album_id("a1")],
+            vec![track_for_album(10, "a1"), track_for_album(20, "a1")],
+        );
+        apply_download_flags(&mut resp, &dl_ids(&[10, 20]), &HashMap::new());
+        assert!(resp.albums.items[0].downloaded);
+    }
+
+    #[test]
+    fn apply_flags_album_not_downloaded_when_partially_owned() {
+        // One of the two album tracks missing from dlIds → album NOT downloaded.
+        let mut resp = response(
+            vec![album_id("a1")],
+            vec![track_for_album(10, "a1"), track_for_album(20, "a1")],
+        );
+        apply_download_flags(&mut resp, &dl_ids(&[10]), &HashMap::new());
+        assert!(!resp.albums.items[0].downloaded);
+    }
+
+    #[test]
+    fn apply_flags_album_with_no_matching_tracks_is_not_downloaded() {
+        // No tracks reference this album (empty set rule) → false, never panic.
+        let mut resp = response(vec![album_id("a1")], vec![track_for_album(10, "other")]);
+        apply_download_flags(&mut resp, &dl_ids(&[10]), &HashMap::new());
+        assert!(!resp.albums.items[0].downloaded);
+    }
+
+    #[test]
+    fn apply_flags_frontend_overrides_stale_backend_downloaded() {
+        // Backend wrongly set downloaded=true; frontend recomputes to false.
+        let mut track = track_for_album(10, "a1");
+        track.downloaded = true;
+        track.downloaded_format_ids = vec![99];
+        let mut backend_true_album = album_id("a1");
+        backend_true_album.downloaded = true;
+
+        let mut resp = response(vec![backend_true_album], vec![track]);
+        // dlIds empty → both must be overridden to false / cleared.
+        apply_download_flags(&mut resp, &dl_ids(&[]), &HashMap::new());
+        assert!(!resp.tracks.items[0].downloaded);
+        assert!(resp.tracks.items[0].downloaded_format_ids.is_empty());
+        assert!(!resp.albums.items[0].downloaded);
     }
 }
