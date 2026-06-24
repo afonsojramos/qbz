@@ -757,7 +757,16 @@ export component Sidebar inherits Rectangle {
             // destination (no tab dropdown). HIDDEN entirely while offline (the
             // surface needs the Qobuz session). Active for both the list view
             // and the per-album detail view (§5.3 / §8.6 gating).
-            if AppearanceState.show-purchases && !OfflineState.offline: SidebarDirectRow {
+            // Titlebar-placement (§5.8 truth table): the sidebar hosts the entry
+            // iff `S && !(T && TB)` — when the user enables "Purchases in title
+            // bar" (`nav-tb-purchases`) AND the custom title bar is actually
+            // shown, the entry MOVES to the header (HeaderBar.slint) and is
+            // hidden here. `TB = showTitleBar` = custom titlebar present
+            // (mirrors AppearanceSettings `tb-locked`, inverted).
+            if AppearanceState.show-purchases && !OfflineState.offline
+                && !(AppearanceState.nav-tb-purchases
+                    && !AppearanceState.hide-title-bar
+                    && !AppearanceState.use-system-title-bar): SidebarDirectRow {
                 icon: @image-url("../assets/icons/shopping-bag.svg");
                 label: @tr("Purchases");
                 active: NavState.view == ContentView.purchases

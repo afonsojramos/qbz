@@ -244,6 +244,18 @@ pub struct UiPrefs {
     /// per-machine app preference — your Discord client is per-machine.)
     #[serde(default)]
     pub discord_rpc_enabled: bool,
+    /// Show the opt-in "Purchases" navigation entry (sidebar / header). Default
+    /// OFF — the whole DRM-free Purchases feature is hidden until the user
+    /// enables it (mirrors Tauri `showPurchases`, default `false`). Re-seeded
+    /// into `AppearanceState.show-purchases` at startup; persisted on toggle.
+    #[serde(default)]
+    pub show_purchases: bool,
+    /// Place the Purchases nav entry in the custom title bar instead of the
+    /// sidebar. Default OFF (mirrors Tauri `purchasesInTitlebar`, default
+    /// `false`). Only meaningful when the custom title bar is shown; the toggle
+    /// is disabled in Settings when the title bar is hidden / system-native.
+    #[serde(default)]
+    pub nav_tb_purchases: bool,
     /// Three-state sidebar: 0 open / 1 mini / 2 closed. Restored at startup.
     #[serde(default)]
     pub sidebar_state: i32,
@@ -395,6 +407,8 @@ impl Default for UiPrefs {
             intelligent_search: default_intelligent_search(),
             system_notifications: default_system_notifications(),
             discord_rpc_enabled: false,
+            show_purchases: false,
+            nav_tb_purchases: false,
             sidebar_state: 0,
             nav_in_sidebar: default_nav_in_sidebar(),
             volume: default_volume(),

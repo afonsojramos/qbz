@@ -828,7 +828,14 @@ export component HeaderBar inherits Rectangle {
             }
             // Purchases — opt-in (default OFF). DIRECT tab (no dropdown), active
             // for both the list + per-album detail views. HIDDEN while offline.
-            if AppearanceState.show-purchases && !OfflineState.offline: VerticalLayout {
+            // Titlebar-placement (§5.8 truth table): the title bar hosts the
+            // entry iff `S && T && TB` — only when the user enabled "Purchases
+            // in title bar" (`nav-tb-purchases`) AND the custom title bar is
+            // actually shown. Otherwise it stays in the sidebar (Sidebar.slint).
+            if AppearanceState.show-purchases && !OfflineState.offline
+                && AppearanceState.nav-tb-purchases
+                && !AppearanceState.hide-title-bar
+                && !AppearanceState.use-system-title-bar: VerticalLayout {
                 alignment: center;
                 NavTab {
                     icon: @image-url("../assets/icons/shopping-bag.svg");
@@ -908,7 +915,12 @@ export component HeaderBar inherits Rectangle {
                 }
             }
             // Purchases — opt-in (default OFF). DIRECT button. HIDDEN offline.
-            if AppearanceState.show-purchases && !OfflineState.offline: VerticalLayout {
+            // Titlebar-placement (§5.8 truth table): shown in the header iff
+            // `S && T && TB` — same gate as the full-nav tab above.
+            if AppearanceState.show-purchases && !OfflineState.offline
+                && AppearanceState.nav-tb-purchases
+                && !AppearanceState.hide-title-bar
+                && !AppearanceState.use-system-title-bar: VerticalLayout {
                 alignment: center;
                 CompactDirectBtn {
                     icon: @image-url("../assets/icons/shopping-bag.svg");

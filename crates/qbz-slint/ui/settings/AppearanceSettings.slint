@@ -607,7 +607,6 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
     SettingRow {
-        unsupported: true;
         label: @tr("Show Purchases");
         description: @tr("Show the Purchases section in the sidebar for browsing and downloading your purchased music");
         QbzToggle {
@@ -615,6 +614,23 @@ export component AppearanceSettings inherits VerticalLayout {
             toggled(v) => {
                 AppearanceState.show-purchases = v;
                 AppearanceState.appearance-bool("show-purchases", v);
+            }
+        }
+    }
+    // Purchases title-bar placement — moves the Purchases nav entry into the
+    // custom title bar instead of the sidebar (mirrors Tauri `purchasesInTitlebar`,
+    // default OFF). Disabled when the custom title bar is hidden or the system
+    // title bar is in use (no custom title bar to place it in).
+    SettingRow {
+        label: @tr("Purchases in title bar");
+        description: @tr("Place the Purchases entry in the custom title bar instead of the sidebar");
+        enabled: !root.tb-locked;
+        QbzToggle {
+            checked: AppearanceState.nav-tb-purchases;
+            enabled: !root.tb-locked;
+            toggled(v) => {
+                AppearanceState.nav-tb-purchases = v;
+                AppearanceState.appearance-bool("nav-tb-purchases", v);
             }
         }
     }

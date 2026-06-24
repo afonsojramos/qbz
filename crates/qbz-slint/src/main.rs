@@ -5154,6 +5154,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window
         .global::<AppearanceState>()
         .set_intelligent_search(crate::ui_prefs::load().intelligent_search);
+    // Purchases opt-in nav visibility + title-bar placement (both default OFF).
+    // Seeded here from the persisted prefs so the sidebar / header entries
+    // reflect the user's choice on startup (the Slint equivalent of Tauri's
+    // rehydrate-after-login: ui_prefs is read once the session/window is up).
+    {
+        let prefs = crate::ui_prefs::load();
+        let appearance = window.global::<AppearanceState>();
+        appearance.set_show_purchases(prefs.show_purchases);
+        appearance.set_nav_tb_purchases(prefs.nav_tb_purchases);
+    }
     window.global::<AppearanceState>().set_immersive_search_action_index(
         crate::ui_prefs::immersive_search_action_index(
             &crate::ui_prefs::load().immersive_search_action,
@@ -7218,6 +7228,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "tray-minimize-to-tray" => tray_settings::set_minimize_to_tray(value),
             "tray-close-to-tray" => tray_settings::set_close_to_tray(value),
             "tray-mac-hide-dock" => tray_settings::set_mac_hide_dock(value),
+            "show-purchases" => {
+                // Opt-in Purchases nav visibility (default OFF). The bound
+                // `AppearanceState.show-purchases` property was already flipped
+                // by the toggle, so the sidebar / header entries update live;
+                // here we only persist the choice so it survives restart.
+                let mut prefs = crate::ui_prefs::load();
+                prefs.show_purchases = value;
+                crate::ui_prefs::save(&prefs);
+            }
+            "nav-tb-purchases" => {
+                // Purchases title-bar placement (default OFF). Persist only —
+                // the live flag is already on `AppearanceState.nav-tb-purchases`.
+                let mut prefs = crate::ui_prefs::load();
+                prefs.nav_tb_purchases = value;
+                crate::ui_prefs::save(&prefs);
+            }
             other => log::debug!("[qbz-slint] unhandled appearance-bool '{other}'"),
         });
         let theme_weak = window.as_weak();
