@@ -22,7 +22,8 @@ use crate::adapter::SlintAdapter;
 use crate::queue::QueueController;
 use crate::{
     AlbumState, AppWindow, ArtistState, ContentView, FavoritesState, ImmersiveState, LabelState,
-    NavState, NowPlayingState, PlaylistState, SearchState, TrackItem,
+    NavState, NowPlayingState, PlaylistState, PurchaseDetailState, PurchasesState, SearchState,
+    TrackItem,
 };
 
 /// The Queue sidebar controller, published once the shell is up so the
@@ -1375,6 +1376,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     let album = track.album.clone();
     let album_id = track.album_id.clone().unwrap_or_default();
     let artist_id = track.artist_id.map(|id| id.to_string()).unwrap_or_default();
+    let track_id_num = track.id;
     let track_id = track.id.to_string();
     // Ephemeral tracks have no DB row → metadata-bound actions (favorite,
     // add-to-playlist, track-info) are gated off in the UI via this flag.
@@ -1553,6 +1555,9 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         np.set_album_id(album_id.into());
         np.set_artist_id(artist_id.into());
         np.set_track_id(track_id.into());
+        // Mirror the active track + playing flag onto the Purchases globals so a
+        // purchase track-row highlights/animates when it is the now-playing one.
+        mirror_now_playing_to_purchases(&w, track_id_num, true);
         np.set_is_ephemeral(is_ephemeral);
         np.set_source(source.into());
         np.set_quality_tier(quality_tier.into());
@@ -1581,6 +1586,30 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
 
     load_now_playing_artwork(weak.clone(), bar_artwork);
     load_now_playing_artwork_large(weak.clone(), preview_artwork);
+}
+
+/// Mirror the now-playing track id + active flag onto the two Purchases globals
+/// (`PurchasesState` + `PurchaseDetailState`), which drive the purchase
+/// track-row highlight (`active`) and the playing-bars (`playing`). Unlike the
+/// album/favorites views (which bind directly to `NowPlayingState`), the
+/// Purchases views were built with their own `active-track-id` / `playback-active`
+/// `in` properties, so Rust must push the values. Matches Svelte, where both
+/// views receive `activeTrackId={currentTrack?.id}` + `isPlaybackActive={isPlaying}`
+/// (+page.svelte:6970-6984). Event-loop only (`w` is already upgraded).
+fn mirror_now_playing_to_purchases(w: &AppWindow, track_id: u64, is_playing: bool) {
+    // active-track-id is compared against the row's string id; 0 → "" (no row
+    // highlighted), matching the Svelte `null` active id.
+    let id_str: slint::SharedString = if track_id == 0 {
+        slint::SharedString::new()
+    } else {
+        track_id.to_string().into()
+    };
+    let purchases = w.global::<PurchasesState>();
+    purchases.set_active_track_id(id_str.clone());
+    purchases.set_playback_active(is_playing);
+    let detail = w.global::<PurchaseDetailState>();
+    detail.set_active_track_id(id_str);
+    detail.set_playback_active(is_playing);
 }
 
 /// Record the playback CONTEXT — the source the queue was launched from — on
@@ -3753,6 +3782,11 @@ pub fn start_poll_loop(
                 np.set_remaining(remaining.into());
                 np.set_playing(is_playing);
                 np.set_volume(volume.clamp(0.0, 1.0));
+                // Keep the Purchases globals in step with play/pause + the live
+                // track id every tick (the meta-apply seeds them on a track
+                // change; this follows pause/resume + the engine's own id flips).
+                // track_id 0 (idle) → "" active id (no row highlighted).
+                mirror_now_playing_to_purchases(&w, track_id, is_playing);
                 // REQ-1 fan-out: mirror to the miniplayer window (no-op when
                 // the mini is closed). Single tick, no second poll loop.
                 crate::miniplayer::mirror_tick(&w);

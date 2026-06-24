@@ -11121,13 +11121,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
-        // play-track — single-track play with NO queue mutation (Slice 10
-        // finalizes the routing; here it goes through the standard media-action
-        // path emitted by the view).
+        // play-track — per-track row play (§A.2): plays the SINGLE clicked track
+        // with NO surrounding album queue and NO playback-context seeding —
+        // asymmetric with Play-album (§A.1, which DOES build a full queue). This
+        // does NOT route through `media_action("track", …, "play")` /
+        // `play_track_in_context` (which would build a queue from the visible
+        // tracklist); it goes straight to the single-track primitive
+        // `play_track_now`, which streams the catalog track (NOT the downloaded
+        // file). Mirrors Svelte `handleDisplayTrackPlay` (+page.svelte:4016-4045).
+        let runtime = app_runtime.clone();
         let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
         window.global::<PurchasesActions>().on_play_track(move |id| {
-            let Some(w) = weak.upgrade() else { return };
-            w.invoke_media_action("track".into(), id, "play".into());
+            let Ok(track_id) = id.parse::<u64>() else { return };
+            playback::play_track_now(
+                runtime.clone(),
+                weak.clone(),
+                handle.clone(),
+                track_id,
+            );
         });
     }
     {
@@ -11307,9 +11319,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
-        // play-album — Play-album routing (Slice 10 finalizes A.1; here it goes
-        // through the standard album-play media-action emitted by the shell, NOT
-        // a purchase command, NOT the downloaded file).
+        // play-album — Play-album routing (§A.1): plays via the REGULAR album
+        // path, NOT a purchase command and NOT the downloaded local file. The
+        // standard `media_action("album", id, "play")` arm routes a Qobuz album
+        // id (a purchase album id is always numeric, never a local key) to
+        // `playback::play_album`, which fetches the album through the regular
+        // `get_album` core call, builds the FULL backend queue, replaces it at
+        // index 0, and starts track 0 — the SAME path every other album surface
+        // uses. Mirrors Svelte `playAlbumById` (+page.svelte:2404-2450, which
+        // calls the 12th `v2_get_album` command + replacePlaybackQueue + playTrack).
         let weak = window.as_weak();
         window.global::<PurchaseDetailActions>().on_play_album(move || {
             let Some(w) = weak.upgrade() else { return };
@@ -11321,14 +11339,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
-        // play-track(id) — per-track single-track play (Slice 10 finalizes A.2;
-        // standard media-action path, no queue mutation).
+        // play-track(id) — per-track single-track play (§A.2): SINGLE track, NO
+        // album queue, NO playback-context seeding (asymmetric with Play-album,
+        // §A.1). Routes straight to `play_track_now` (single-track primitive,
+        // streams the catalog track — NOT the downloaded file), NOT through
+        // `media_action("track", …, "play")` / `play_track_in_context` (which
+        // would build a queue from the visible tracklist). Mirrors Svelte
+        // `handleDisplayTrackPlay` (+page.svelte:4016-4045).
+        let runtime = app_runtime.clone();
         let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
         window
             .global::<PurchaseDetailActions>()
             .on_play_track(move |id| {
-                let Some(w) = weak.upgrade() else { return };
-                w.invoke_media_action("track".into(), id, "play".into());
+                let Ok(track_id) = id.parse::<u64>() else { return };
+                playback::play_track_now(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    track_id,
+                );
             });
     }
     {

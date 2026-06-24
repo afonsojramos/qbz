@@ -1655,8 +1655,8 @@ fn track_item(t: &PurchaseTrack) -> PurchaseTrackItem {
     };
     PurchaseTrackItem {
         id: t.id.to_string().into(),
-        // Purchased tracks have NO version field → formatTrackTitle == title.
-        title: t.title.clone().into(),
+        // Purchased tracks have NO version field → formatTrackTitle == title.trim().
+        title: t.title.trim().into(),
         artist: t.performer.name.clone().into(),
         artist_id: if t.performer.id != 0 {
             t.performer.id.to_string().into()
@@ -2486,7 +2486,9 @@ fn build_detail_rows(
             id: t.id.to_string().into(),
             track_number: t.track_number as i32,
             // Purchased tracks have NO version → formatTrackTitle == title.
-            title: t.title.clone().into(),
+            // `formatTrackTitle` trims the title (utils/trackTitle.ts), so trim
+            // here too for 1:1 parity.
+            title: t.title.trim().into(),
             performer: t.performer.name.clone().into(),
             show_performer,
             duration: format_duration(t.duration).into(),
