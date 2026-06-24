@@ -4450,6 +4450,109 @@ export global PurchasesActions {
     callback retry();
 }
 
+// ── Purchase detail / download view (source-of-truth §2.2) ──────────────────
+
+// One row in the detail track table. Mirrors the bespoke Tauri detail row
+// (§2.2.5): bare "{bit}/{rate}" quality (§A.6), a 4-state download control, and
+// disc grouping. `disc-header-number` > 0 marks the FIRST track of a disc on a
+// multi-disc album so a "Disc N" divider renders above it (the AlbumPageView
+// disc-header-number mechanism); 0 otherwise (single-disc → flat).
+//
+// `dl-status` is the format-scoped per-track status ("" | downloading |
+// complete | failed) from `track_status_scoped`. `is-downloaded` is the row's
+// derived green-check state (server `downloaded_format_ids` for the selected
+// format OR a store `complete`). `show-download` gates whether ANY download
+// control renders (album downloadable OR already downloaded, §2.2.5).
+export struct PurchaseDetailTrack {
+    id: string,
+    track-number: int,
+    title: string,
+    performer: string,           // shown on a 2nd line when ≠ album artist
+    show-performer: bool,
+    duration: string,            // "m:ss"
+    quality: string,             // BARE "{bit}/{rate}" (§A.6); "" if either missing
+    streamable: bool,
+    dl-status: string,           // "" | downloading | complete | failed (format-scoped)
+    is-downloaded: bool,         // green redownload check
+    show-download: bool,         // album.downloadable || is-downloaded
+    disc-header-number: int,     // > 0 → "Disc N" header above this row (multi-disc)
+}
+
+export global PurchaseDetailState {
+    // Bound album id. The view watches this and fires `load` on change so a
+    // navigation between two different purchase albums RE-FETCHES (§A.3); the
+    // controller seeds it before navigating. Empty → nothing to render.
+    in-out property <string> album-id: "";
+    // Content state. `load-error` is the RAW error string (NOT i18n-mapped,
+    // unlike the list view — §2.2.4 / §8.4).
+    in property <bool> loading: true;
+    in property <string> load-error: "";
+    in property <bool> loaded: false;
+    // Header.
+    in property <string> title: "";
+    in property <string> artist: "";
+    in property <string> artist-id: "";       // "" → artist is plain text (no link)
+    in property <string> artwork-url: "";
+    in property <image> artwork;
+    in property <bool> downloadable: true;     // !downloadable → header overlay + no actions
+    in property <string> purchased-on: "";     // LONG-month "November 6, 2025" ("" hides)
+    in property <string> label-name: "";       // "" hides the "· label" segment
+    in property <string> genre-name: "";       // "" hides the "· genre" segment
+    in property <string> quality: "";          // formatQuality "24bit/96kHz" | "CD Quality"
+    in property <int> total-tracks: 0;
+    in property <string> total-duration: "";   // "{h}h {m}m" | "{m}m"
+    // Format dropdown. `format-labels` are the backend fmt.label strings (NOT
+    // an i18n key); `format-index` is the currently-selected option (default 0).
+    in property <[string]> format-labels: [];
+    in property <int> format-index: 0;
+    in property <bool> has-formats: false;
+    // Download progress (source-of-truth §2.2.1 / §A.4). `all-complete` IS
+    // format-scoped; `completed-count` / `progress-percent` / `was-cancelled`
+    // are NOT (count ALL statuses regardless of selected format).
+    in property <bool> is-downloading-all: false;
+    in property <bool> all-complete: false;    // format-scoped
+    in property <bool> was-cancelled: false;   // NOT format-scoped
+    in property <int> completed-count: 0;      // NOT format-scoped
+    in property <float> progress-percent: 0;   // completed/total*100, NOT format-scoped
+    // Whether the progress section renders at all (downloadingAll || allComplete
+    // || wasCancelled) — precomputed in Rust to keep the .slint declarative.
+    in property <bool> show-progress: false;
+    // Add-to-Library block (only when all-complete && a destination is set).
+    in property <bool> show-add-to-library: false;
+    in property <bool> adding-to-library: false;
+    // Download-all circle gating: disabled while downloading-all OR no format.
+    in property <bool> can-download-all: false;
+    // Whether the Play-album circle renders (onAlbumPlay present — always true
+    // in Slint since play routing exists; kept as a flag for parity).
+    in property <bool> show-play: true;
+    // Active/playing track for row highlight + playing-bars.
+    in property <string> active-track-id: "";
+    in property <bool> playback-active: false;
+    // The disc-grouped track rows (already flattened with disc-header markers in
+    // Rust). The view iterates this once.
+    in property <[PurchaseDetailTrack]> tracks: [];
+}
+
+export global PurchaseDetailActions {
+    // Reactive reload: the view fires this whenever the bound `album-id`
+    // changes (and on first mount) so a fresh load runs (§A.3).
+    callback load(string /* album id */);
+    // Header / navigation.
+    callback open-artist(string /* artist id */);
+    callback play-album();                       // Play-album circle (§A.1, routing in Slice 10)
+    callback play-track(string /* track id */);  // per-track row play (§A.2)
+    // Format dropdown — a new option chosen (index into format-labels).
+    callback select-format(int /* index */);
+    // Download-all circle → folder picker → startAlbumDownload.
+    callback download-all();
+    // Per-track download → folder picker → startTrackDownload.
+    callback download-track(string /* track id */);
+    // Progress section cancel button.
+    callback cancel-download();
+    // Add-to-Library block button.
+    callback add-to-library();
+}
+
 // A Qobuz mix detail page (DailyQ / WeeklyQ / FavQ / TopQ), opened
 // from the For You Qobuz Mixes tiles. Populated by crate::mix. Rows
 // reuse the shared SearchTrackRow (with show-album), so the track

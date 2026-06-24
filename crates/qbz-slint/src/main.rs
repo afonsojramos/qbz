@@ -2367,6 +2367,55 @@ fn execute_track_download(
     });
 }
 
+/// Open the PurchaseDetailView for `album_id`. Seeds the bound id on
+/// `PurchaseDetailState`, resets the previous album's content (so an
+/// album→album jump never flashes stale data), and switches the view. The
+/// actual fetch is fired by the view's `changed album-id => load(id)` handler
+/// (§A.3 reactive reload) — `load_purchase_detail` runs that load. The
+/// conditional-mount guard in AppShell requires the non-empty id we set here.
+fn navigate_purchase_detail(weak: slint::Weak<AppWindow>, album_id: &str) {
+    let album_id = album_id.to_string();
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        purchases::reset_detail(&w);
+        w.global::<PurchaseDetailState>().set_album_id(album_id.into());
+        w.global::<NavState>().set_view(ContentView::PurchaseAlbum);
+    });
+}
+
+/// Fetch + apply the detail album (Svelte `loadAlbum`, §2.2.2). Sets the
+/// loading shell, loads the `PurchaseAlbum` + formats via the controller, then
+/// applies + spawns the header-cover artwork. On error surfaces the RAW string
+/// (NOT i18n-mapped, unlike the list view — §2.2.4). Re-entrant safe: a newer
+/// `album-id` change supersedes an in-flight load by reseeding the cache.
+fn load_purchase_detail(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+    album_id: String,
+) {
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            purchases::set_detail_loading(&w);
+        });
+        match purchases::load_purchase_album(&runtime, &album_id).await {
+            Ok(payload) => {
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    purchases::apply_detail(&w, payload);
+                });
+                let jobs = purchases::detail_artwork_jobs();
+                artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+            }
+            Err(e) => {
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    // RAW error (NOT i18n-mapped, §2.2.4).
+                    purchases::set_detail_error(&w, &e);
+                });
+            }
+        }
+    });
+}
+
 /// Open Library > Favorites on `tab` and lazy-load that tab's data.
 /// Switching the active tab also routes here so each tab fetches on
 /// first view (Tauri's loadTabIfNeeded).
@@ -5592,6 +5641,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             });
+        });
+    }
+
+    // Open a purchase album DETAIL view (from a Purchases grid/list card).
+    // Seeds the bound id + switches the view; the view's `changed album-id`
+    // handler fires the fetch (§A.3). Slice 11 layers nav-history + persistence.
+    {
+        let weak = window.as_weak();
+        window.on_open_purchase_album(move |album_id| {
+            navigate_purchase_detail(weak.clone(), album_id.as_str());
         });
     }
 
@@ -11214,6 +11273,213 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 false,
             );
         });
+    }
+
+    // ── PurchaseDetailView actions (Slice 9 — detail surface) ───────────────
+    {
+        // load(album-id) — the reactive-reload seam (§A.3). Fired by the view's
+        // `changed album-id` handler + first mount. Fetches the detail album +
+        // formats and applies them (RAW error on failure).
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<PurchaseDetailActions>()
+            .on_load(move |album_id| {
+                load_purchase_detail(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    image_cache.clone(),
+                    album_id.to_string(),
+                );
+            });
+    }
+    {
+        // open-artist(id) — reuse the global open-artist path.
+        let weak = window.as_weak();
+        window
+            .global::<PurchaseDetailActions>()
+            .on_open_artist(move |id| {
+                let Some(w) = weak.upgrade() else { return };
+                w.invoke_open_artist(id);
+            });
+    }
+    {
+        // play-album — Play-album routing (Slice 10 finalizes A.1; here it goes
+        // through the standard album-play media-action emitted by the shell, NOT
+        // a purchase command, NOT the downloaded file).
+        let weak = window.as_weak();
+        window.global::<PurchaseDetailActions>().on_play_album(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let album_id = purchases::detail_album_id();
+            if album_id.is_empty() {
+                return;
+            }
+            w.invoke_media_action("album".into(), album_id.into(), "play".into());
+        });
+    }
+    {
+        // play-track(id) — per-track single-track play (Slice 10 finalizes A.2;
+        // standard media-action path, no queue mutation).
+        let weak = window.as_weak();
+        window
+            .global::<PurchaseDetailActions>()
+            .on_play_track(move |id| {
+                let Some(w) = weak.upgrade() else { return };
+                w.invoke_media_action("track".into(), id, "play".into());
+            });
+    }
+    {
+        // select-format(index) — update the selected format id + re-derive (a
+        // format change re-scopes per-track completion + the dropdown label).
+        let weak = window.as_weak();
+        window
+            .global::<PurchaseDetailActions>()
+            .on_select_format(move |index| {
+                let Some(w) = weak.upgrade() else { return };
+                purchases::select_detail_format(index.max(0) as usize);
+                purchases::derive_detail(&w);
+            });
+    }
+    {
+        // download-all — folder pick → startAlbumDownload (§2.2.7 'all' branch).
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PurchaseDetailActions>()
+            .on_download_all(move || {
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle2 = handle.clone();
+                // Guard (Svelte §2.2.7): no album or no selected format → return.
+                let album_id = purchases::detail_album_id();
+                let Some(fmt_id) = purchases::detail_selected_format_id() else {
+                    return;
+                };
+                let Some(fmt_label) = purchases::detail_selected_format_label() else {
+                    return;
+                };
+                let track_ids = purchases::detail_track_ids();
+                if album_id.is_empty() {
+                    return;
+                }
+                handle.spawn(async move {
+                    let Some(dest) = purchases::pick_download_folder().await else {
+                        return;
+                    };
+                    let quality_dir = purchases::quality_dir(&fmt_label);
+                    purchases::start_album_download(
+                        runtime,
+                        weak.clone(),
+                        handle2,
+                        album_id,
+                        track_ids,
+                        fmt_id,
+                        dest,
+                        quality_dir,
+                    );
+                    // Project the seeded progress immediately.
+                    let _ = weak.upgrade_in_event_loop(|w| {
+                        purchases::refresh_detail_download(&w);
+                    });
+                });
+            });
+    }
+    {
+        // download-track(id) — folder pick → startTrackDownload (§2.2.7 trackId
+        // branch). Single-track MERGE into the album state (§A.7).
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PurchaseDetailActions>()
+            .on_download_track(move |track_id_s| {
+                let Ok(track_id) = track_id_s.parse::<u64>() else { return };
+                let album_id = purchases::detail_album_id();
+                let Some(fmt_id) = purchases::detail_selected_format_id() else {
+                    return;
+                };
+                let Some(fmt_label) = purchases::detail_selected_format_label() else {
+                    return;
+                };
+                if album_id.is_empty() {
+                    return;
+                }
+                let runtime = runtime.clone();
+                let weak = weak.clone();
+                let handle2 = handle.clone();
+                handle.spawn(async move {
+                    let Some(dest) = purchases::pick_download_folder().await else {
+                        return;
+                    };
+                    let quality_dir = purchases::quality_dir(&fmt_label);
+                    purchases::start_track_download(
+                        runtime,
+                        weak.clone(),
+                        handle2,
+                        album_id,
+                        track_id,
+                        fmt_id,
+                        dest,
+                        quality_dir,
+                    );
+                    let _ = weak.upgrade_in_event_loop(|w| {
+                        purchases::refresh_detail_download(&w);
+                    });
+                });
+            });
+    }
+    {
+        // cancel-download — set the abort flag (the running track finishes; the
+        // rest become cancelled between tracks) + re-derive the progress.
+        let weak = window.as_weak();
+        window
+            .global::<PurchaseDetailActions>()
+            .on_cancel_download(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let album_id = purchases::detail_album_id();
+                if album_id.is_empty() {
+                    return;
+                }
+                purchases::cancel_album_download(&album_id);
+                purchases::refresh_detail_download(&w);
+            });
+    }
+    {
+        // add-to-library — the ONLY non-purchase backend write (§2.2.6). Reads
+        // the rewritten album-folder destination from the store, fires the
+        // add-folder + scan, clears the download state, then re-derives.
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PurchaseDetailActions>()
+            .on_add_to_library(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let album_id = purchases::detail_album_id();
+                let Some(destination) = purchases::detail_destination() else {
+                    return;
+                };
+                if album_id.is_empty() {
+                    return;
+                }
+                // Show the spinner; `handle_add_to_library` holds it true across
+                // the whole async add and clears it (plus re-derives the detail)
+                // on EVERY exit path — so the spinner stays visible for the real
+                // duration of the add (Svelte keeps `addingToLibrary` true across
+                // the await), and on success the cleared download state hides the
+                // progress + Add-to-Library blocks while on failure only the
+                // spinner drops. No premature next-tick clear here.
+                purchases::set_detail_adding_to_library(&w, true);
+                purchases::handle_add_to_library(
+                    weak.clone(),
+                    handle.clone(),
+                    album_id,
+                    destination,
+                );
+            });
     }
 
     // Immersive Suggestions panel actions (Checkpoint D — split-panel == 2).

@@ -8,7 +8,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions, VisualizerState } from "../state.slint";
+import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions, VisualizerState, PurchaseDetailState } from "../state.slint";
 import { Sidebar } from "Sidebar.slint";
 import { SidebarNowPlayingDock } from "SidebarNowPlayingDock.slint";
 import { HeaderBar } from "HeaderBar.slint";
@@ -57,6 +57,7 @@ import { LabelPageView } from "../label/LabelPageView.slint";
 import { AwardView } from "../award/AwardView.slint";
 import { AwardAlbumsView } from "../award/AwardAlbumsView.slint";
 import { PurchasesView } from "../purchases/PurchasesView.slint";
+import { PurchaseDetailView } from "../purchases/PurchaseDetailView.slint";
 import { ArtistsByLocationView } from "../location/ArtistsByLocationView.slint";
 import { FavoritesView } from "../favorites/FavoritesView.slint";
 import { FavoritesOfflineRail } from "../favorites/FavoritesOfflineRail.slint";
@@ -78,6 +79,7 @@ import { Cortinilla } from "../search/Cortinilla.slint";
 export component AppShell inherits Rectangle {
     callback open-album(string);
     callback open-artist(string);
+    callback open-purchase-album(string);
     callback media-action(string, string, string);
     callback header-menu-navigate(string);
     callback discover-view-all(string, string);
@@ -110,6 +112,7 @@ export component AppShell inherits Rectangle {
         || NavState.view == ContentView.award
         || NavState.view == ContentView.award-albums
         || NavState.view == ContentView.purchases
+        || NavState.view == ContentView.purchase-album
         || NavState.view == ContentView.location
         || NavState.view == ContentView.mix
         // Playlist: LOCAL playlists and the offline sidecar rendering of a
@@ -373,8 +376,10 @@ export component AppShell inherits Rectangle {
                     }
                 }
                 if NavState.view == ContentView.purchases && !OfflineState.offline: PurchasesView {
+                    // A grid/list card click opens the purchase DETAIL view
+                    // (Slice 11 adds nav-history + persistence on top).
                     open-album(id) => {
-                        root.open-album(id);
+                        root.open-purchase-album(id);
                     }
                     open-artist(id) => {
                         root.open-artist(id);
@@ -383,6 +388,12 @@ export component AppShell inherits Rectangle {
                         root.media-action(kind, id, action);
                     }
                 }
+                // Detail mounts ONLY with a non-empty selected id (ADR-010
+                // conditional-mount guard; the controller seeds the id before
+                // navigating, and the view's `changed album-id` fires the load).
+                if NavState.view == ContentView.purchase-album
+                    && !OfflineState.offline
+                    && PurchaseDetailState.album-id != "": PurchaseDetailView { }
                 if NavState.view == ContentView.playlist-manager: PlaylistManagerView { }
                 if NavState.view == ContentView.mixtapes: MixtapesView { }
                 if NavState.view == ContentView.collections: CollectionsView { }

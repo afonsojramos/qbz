@@ -1123,9 +1123,26 @@ pub fn start_track_download(
 /// per-track status changes without a refetch.
 fn nudge_ui_refresh(weak: &slint::Weak<AppWindow>) {
     let _ = weak.upgrade_in_event_loop(|w| {
-        // Only re-derive while the purchases view is the relevant surface; a
-        // re-derive elsewhere is harmless (it just rebuilds hidden models).
+        // Re-derive the PurchasesView LIST projection (per-track dl-status on the
+        // visible rows). A re-derive elsewhere is harmless (it rebuilds hidden
+        // models).
         refresh_track_statuses(&w);
+        // ALSO re-derive the detail screen so the progress section, per-track
+        // 4-state, completed-count, was-cancelled, all-complete, and the
+        // Add-to-Library block update LIVE during/after a running download
+        // (matches Svelte's reactive `$derived` re-run on every store change,
+        // PurchaseAlbumDetailView.svelte :44-52/:203-209/:317-349/:388-461).
+        // Gated on the detail view being the active surface — `derive_detail`
+        // reads the persisted detail cache (the currently-loaded album), so a
+        // re-derive while another view is up would rebuild the hidden detail
+        // models from stale-but-irrelevant cache; gating keeps it cheap and
+        // correct. The four main.rs action handlers seed the detail once
+        // synchronously; this routes the async download-lifecycle nudges
+        // (execute_album_download :1032, start_track_download :1057/:1063/:1116)
+        // to keep it refreshed thereafter.
+        if w.global::<NavState>().get_view() == ContentView::PurchaseAlbum {
+            derive_detail(&w);
+        }
     });
 }
 
@@ -1152,6 +1169,16 @@ pub async fn pick_download_folder() -> Option<String> {
 ///   4. fire-and-forget scan of the new folder (`scan_folder`, errors swallowed
 ///      — the Svelte `.catch(() => {})`).
 /// On add-folder failure → error toast `purchases.addToLibraryError`.
+///
+/// The spinner (`adding_to_library`) is set true by the caller BEFORE this fires
+/// and is held true across the whole async add (matching Svelte's `addingToLibrary`
+/// staying true across the await, PurchaseAlbumDetailView.svelte :56-71). This fn
+/// owns clearing it: on EVERY exit path it schedules an event-loop callback that
+/// drops the spinner AND re-derives the detail — so on success the cleared download
+/// state hides the progress + Add-to-Library blocks (Svelte's reactive `$derived`),
+/// and on failure the spinner drops while the block stays in place. (Replaces the
+/// old next-tick `upgrade_in_event_loop` in main.rs that flashed the spinner off
+/// before the async add finished and re-derived against stale state.)
 pub fn handle_add_to_library(
     weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
@@ -1160,8 +1187,22 @@ pub fn handle_add_to_library(
 ) {
     let scan_handle = handle.clone();
     handle.spawn(async move {
+        // Drop the spinner + re-derive the detail on the event loop. Called on
+        // every exit path (skip-if-remote / add-failure / success) so the
+        // spinner never gets stuck and the (possibly cleared) download state is
+        // reflected. On success the state is already cleared → the derive hides
+        // the progress + Add-to-Library blocks; on failure nothing was cleared →
+        // the block stays, only the spinner drops.
+        let finish = |weak: slint::Weak<AppWindow>| {
+            let _ = weak.upgrade_in_event_loop(|w| {
+                set_detail_adding_to_library(&w, false);
+                refresh_detail_download(&w);
+            });
+        };
+
         // skip-if-remote: no library writes while controlling a remote renderer.
         if is_controlling_remote().await {
+            finish(weak.clone());
             return;
         }
 
@@ -1185,8 +1226,10 @@ pub fn handle_add_to_library(
         .flatten();
 
         let Some(folder_id) = folder_id else {
-            // (error) add-folder failed → error toast, leave state intact.
+            // (error) add-folder failed → error toast, leave state intact (the
+            // Add-to-Library block stays); `finish` drops only the spinner.
             crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't add to library"));
+            finish(weak.clone());
             return;
         };
 
@@ -1202,6 +1245,9 @@ pub fn handle_add_to_library(
         // album folder, so the files tag `source='qobuz_purchase'` (§7.8) and
         // pick up the gold badge in LocalLibrary.
         crate::local_library_settings::scan_folder(weak.clone(), scan_handle, folder_id);
+
+        // (5) drop the spinner + re-derive (cleared state → blocks vanish).
+        finish(weak.clone());
     });
 }
 
@@ -1223,8 +1269,8 @@ pub fn handle_add_to_library(
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::{
-    PurchaseAlbumGroup, PurchaseAlbumItem, PurchaseFormatItem, PurchaseTrackGroup, PurchaseTrackItem,
-    PurchasesState,
+    ContentView, NavState, PurchaseAlbumGroup, PurchaseAlbumItem, PurchaseDetailState,
+    PurchaseDetailTrack, PurchaseFormatItem, PurchaseTrackGroup, PurchaseTrackItem, PurchasesState,
 };
 
 /// `'all' | 'hires' | 'cd' | 'lossy'` quality filter (Svelte `QualityFilter`).
@@ -2083,6 +2129,476 @@ pub fn format_picker_items(formats: &[PurchaseFormatOption]) -> Vec<PurchaseForm
 /// tracks-tab download flow needs `track.album.id` + the raw record.
 pub fn find_track(track_id: u64) -> Option<PurchaseTrack> {
     with_ui_cache(|c| c.tracks_raw.iter().find(|t| t.id == track_id).cloned())
+}
+
+// ============================================================================
+// Slice 9 — PurchaseDetailView (detail + download screen)
+//
+// The detail-surface chrome lives in `ui/purchases/PurchaseDetailView.slint`;
+// this section is the Rust half: the load fn (mirrors Tauri command #5 via the
+// shared `purchases_service::build_purchase_album`), the detail UI cache (so
+// format changes + download-status nudges re-project the rows/progress without
+// a refetch), and the event-loop appliers that project the cache + the
+// download store → `PurchaseDetailState`.
+//
+// SEND BOUNDARY: load fns return PLAIN `Send` payloads (no Slint types); the
+// appliers build `ModelRc`/`Image` only on the event loop.
+//
+// Mirrors `PurchaseAlbumDetailView.svelte` §2.2. The download state machine,
+// folder picker, and the download actions are reused from Slice 7 (they live
+// above and survive navigation in the process-wide store).
+// ============================================================================
+
+/// A `Send` snapshot of one purchased album for the detail view: the header
+/// fields + the synthesized format options + the nested tracks. No Slint types
+/// — built off the event loop, cached, then applied.
+#[derive(Debug, Clone, Default)]
+pub struct PurchaseDetailPayload {
+    pub album: PurchaseAlbum,
+    pub formats: Vec<PurchaseFormatOption>,
+}
+
+/// Detail UI cache: the loaded album + its formats + the currently-selected
+/// format id, so a format-dropdown change or a download-status nudge can
+/// re-project the rows/progress WITHOUT a refetch (the Svelte component keeps
+/// these in `$state`). Survives navigation only transiently — a fresh
+/// `load_purchase_album` reseeds it (and `reset_detail` clears it).
+#[derive(Debug, Default)]
+struct DetailCache {
+    album_id: String,
+    album: Option<PurchaseAlbum>,
+    formats: Vec<PurchaseFormatOption>,
+    /// The currently-selected format id (default `formats[0].id` after load).
+    selected_format_id: Option<u32>,
+}
+
+fn detail_cache() -> &'static Mutex<DetailCache> {
+    static CACHE: OnceLock<Mutex<DetailCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(DetailCache::default()))
+}
+
+fn with_detail_cache<R>(f: impl FnOnce(&mut DetailCache) -> R) -> R {
+    let mut guard = detail_cache().lock().unwrap_or_else(|e| e.into_inner());
+    f(&mut guard)
+}
+
+/// `getSelectedFormatLabel` / `handleFormatChange` glue: set the selected
+/// format id from a dropdown INDEX into the cached `formats`. Returns the
+/// chosen format id (so the caller can re-derive). A no-op (returns the current
+/// selection) for an out-of-range index.
+pub fn select_detail_format(index: usize) -> Option<u32> {
+    with_detail_cache(|c| {
+        if let Some(fmt) = c.formats.get(index) {
+            c.selected_format_id = Some(fmt.id);
+        }
+        c.selected_format_id
+    })
+}
+
+/// The currently-selected detail format id (for the download actions:
+/// `promptForFolder` reads `selectedFormatId` + `qualityFolderName`).
+pub fn detail_selected_format_id() -> Option<u32> {
+    with_detail_cache(|c| c.selected_format_id)
+}
+
+/// The cached detail album id (the actions need it to key the download store).
+pub fn detail_album_id() -> String {
+    with_detail_cache(|c| c.album_id.clone())
+}
+
+/// The label of the currently-selected format (for the `qualityDir`
+/// derivation in the download actions; `qualityFolderName(selectedFormatId)`).
+pub fn detail_selected_format_label() -> Option<String> {
+    with_detail_cache(|c| {
+        let sel = c.selected_format_id?;
+        c.formats
+            .iter()
+            .find(|f| f.id == sel)
+            .map(|f| f.label.clone())
+    })
+}
+
+/// The track ids of the cached detail album, in order (for `download-all` →
+/// `startAlbumDownload(albumId, album.tracks.items.map(t=>t.id), ...)`).
+pub fn detail_track_ids() -> Vec<u64> {
+    with_detail_cache(|c| {
+        c.album
+            .as_ref()
+            .and_then(|a| a.tracks.as_ref())
+            .map(|page| page.items.iter().map(|t| t.id).collect())
+            .unwrap_or_default()
+    })
+}
+
+/// The cached detail album's download destination (after the rewrite) — read
+/// from the download store for the Add-to-Library handler.
+pub fn detail_destination() -> Option<String> {
+    let album_id = detail_album_id();
+    album_download_state(&album_id).and_then(|s| s.destination)
+}
+
+/// Load the detail album (Svelte `loadAlbum`, §2.2.2 + command #5). Fetches the
+/// full catalog `Album` (the regular `get_album` path) AND the user's purchases
+/// listing (for the `downloadable`/`purchased_at` meta), reads the local
+/// registry for download flags, builds the `PurchaseAlbum` via the shared
+/// `build_purchase_album` service, and synthesizes the formats. Returns a
+/// `Send` payload (no Slint types) or a RAW error string (the detail view shows
+/// the raw error, NOT i18n-mapped — §2.2.4).
+pub async fn load_purchase_album(
+    runtime: &Runtime,
+    album_id: &str,
+) -> Result<PurchaseDetailPayload, String> {
+    let Some(client) = snapshot_client(runtime).await else {
+        // No session = the Svelte unauthenticated fetch rejects → raw error.
+        return Err("No Qobuz session".to_string());
+    };
+
+    // Full catalog album (the regular album path — same call command #5 uses).
+    let album = client
+        .get_album(album_id)
+        .await
+        .map_err(|e| format!("Failed to fetch album {album_id}: {e}"))?;
+    // The purchases listing carries the per-album `downloadable`/`purchased_at`.
+    let purchases = purchases_service::get_user_purchases_all(&client)
+        .await
+        .map_err(|e| format!("Failed to fetch purchases: {e}"))?;
+
+    // Registry: downloaded ids + the requested-format map (command #5's DB read).
+    let (downloaded_ids, format_map) = read_registry_for_detail().await;
+
+    let purchase_album =
+        purchases_service::build_purchase_album(&album, &purchases, &downloaded_ids, &format_map);
+    let formats = purchases_service::synth_formats(&album);
+
+    Ok(PurchaseDetailPayload {
+        album: purchase_album,
+        formats,
+    })
+}
+
+/// Read the local registry for the detail annotation: the downloaded track ids
+/// (`HashSet<i64>`) + the `track_id → Vec<format_id>` map. Mirrors command #5's
+/// `get_downloaded_purchase_formats` read. Empty on a DB error / no user.
+async fn read_registry_for_detail() -> (HashSet<i64>, HashMap<i64, Vec<u32>>) {
+    let formats = get_downloaded_purchase_formats().await; // track_id(u64) → Vec<format_id(u32)>
+    let mut ids: HashSet<i64> = HashSet::new();
+    let mut map: HashMap<i64, Vec<u32>> = HashMap::new();
+    for (track_id, fmt_ids) in formats {
+        ids.insert(track_id as i64);
+        map.insert(track_id as i64, fmt_ids);
+    }
+    (ids, map)
+}
+
+/// Apply a freshly-loaded detail payload to `PurchaseDetailState` (event loop).
+/// Seeds the cache, default-selects `formats[0]`, then projects the header +
+/// the track rows via [`derive_detail`].
+pub fn apply_detail(window: &AppWindow, payload: PurchaseDetailPayload) {
+    let selected = payload.formats.first().map(|f| f.id);
+    with_detail_cache(|c| {
+        c.album_id = payload.album.id.clone();
+        c.album = Some(payload.album.clone());
+        c.formats = payload.formats.clone();
+        c.selected_format_id = selected;
+    });
+
+    let s = window.global::<PurchaseDetailState>();
+    s.set_loading(false);
+    s.set_load_error(slint::SharedString::new());
+    s.set_loaded(true);
+
+    // Seed the FULL artwork-target cover model: the header cover is written by
+    // the artwork pipeline into `PurchaseDetailState.artwork` (single image).
+    // (No list/grid here — just the one 224×224 cover.)
+    derive_detail(window);
+}
+
+/// Re-project the detail header + format dropdown + progress + track rows from
+/// the cache and the download store onto `PurchaseDetailState`. Called after a
+/// load, after a format-dropdown change, and after each download-status nudge
+/// (the Svelte `$derived` re-run). Runs on the event loop.
+pub fn derive_detail(window: &AppWindow) {
+    let (album, formats, selected) = with_detail_cache(|c| {
+        (c.album.clone(), c.formats.clone(), c.selected_format_id)
+    });
+    let Some(album) = album else {
+        return;
+    };
+    let s = window.global::<PurchaseDetailState>();
+
+    // ── Header ────────────────────────────────────────────────────────────
+    s.set_title(album.title.clone().into());
+    s.set_artist(album.artist.name.clone().into());
+    s.set_artist_id(if album.artist.id != 0 {
+        album.artist.id.to_string().into()
+    } else {
+        slint::SharedString::new()
+    });
+    s.set_downloadable(album.downloadable);
+    // LONG-month purchased-on (§2.2.4; the detail uses the long month, unlike
+    // the list's short month).
+    s.set_purchased_on(format_purchase_date_long(album.purchased_at).into());
+    s.set_label_name(
+        album
+            .label
+            .as_ref()
+            .map(|l| l.name.clone())
+            .unwrap_or_default()
+            .into(),
+    );
+    s.set_genre_name(
+        album
+            .genre
+            .as_ref()
+            .map(|g| g.name.clone())
+            .unwrap_or_default()
+            .into(),
+    );
+    // Header quality (§2.2.4): `formatQuality((bit ?? 16) > 16, bit, rate)`.
+    let header_hires = album.maximum_bit_depth.unwrap_or(16) > 16;
+    s.set_quality(
+        format_quality(header_hires, album.maximum_bit_depth, album.maximum_sampling_rate).into(),
+    );
+
+    let tracks = album
+        .tracks
+        .as_ref()
+        .map(|p| p.items.as_slice())
+        .unwrap_or(&[]);
+    let total_tracks = tracks.len() as i32;
+    s.set_total_tracks(total_tracks);
+    let total_secs: u32 = tracks.iter().map(|t| t.duration).sum();
+    s.set_total_duration(format_total_duration(total_secs).into());
+
+    // ── Format dropdown ───────────────────────────────────────────────────
+    let labels: Vec<slint::SharedString> =
+        formats.iter().map(|f| f.label.clone().into()).collect();
+    s.set_format_labels(ModelRc::new(VecModel::from(labels)));
+    let format_index = selected
+        .and_then(|sel| formats.iter().position(|f| f.id == sel))
+        .unwrap_or(0) as i32;
+    s.set_format_index(format_index);
+    s.set_has_formats(!formats.is_empty());
+
+    // ── Download state (from the process-wide store) ──────────────────────
+    let dl_state = album_download_state(&album.id);
+    let statuses = dl_state
+        .as_ref()
+        .map(|st| st.track_statuses.clone())
+        .unwrap_or_default();
+    let is_downloading_all = dl_state.as_ref().map(|st| st.is_downloading_all).unwrap_or(false);
+    // allComplete IS format-scoped (Svelte `:388`).
+    let all_complete = album_all_complete_for_format(&album.id, selected);
+    // completedCount / wasCancelled / progress-fill are NOT format-scoped
+    // (§A.4) — count ALL statuses in the raw map regardless of selected format.
+    let completed_count = statuses
+        .values()
+        .filter(|st| **st == TrackDownloadStatus::Complete)
+        .count() as i32;
+    let any_cancelled = statuses
+        .values()
+        .any(|st| *st == TrackDownloadStatus::Cancelled);
+    // wasCancelled = !isDownloadingAll && !allComplete && some cancelled.
+    let was_cancelled = !is_downloading_all && !all_complete && any_cancelled;
+    let progress_percent = if total_tracks > 0 {
+        (completed_count as f32 / total_tracks as f32) * 100.0
+    } else {
+        0.0
+    };
+    s.set_is_downloading_all(is_downloading_all);
+    s.set_all_complete(all_complete);
+    s.set_was_cancelled(was_cancelled);
+    s.set_completed_count(completed_count);
+    s.set_progress_percent(progress_percent);
+    // Progress section renders iff downloadingAll || allComplete || wasCancelled.
+    s.set_show_progress(is_downloading_all || all_complete || was_cancelled);
+
+    // Download-all gating: disabled while downloading-all OR no selected format.
+    s.set_can_download_all(!is_downloading_all && selected.is_some());
+
+    // Add-to-Library block: only when allComplete (format-scoped) && a
+    // destination is set in the store (§2.2.4).
+    let destination = dl_state.as_ref().and_then(|st| st.destination.clone());
+    s.set_show_add_to_library(all_complete && destination.is_some());
+
+    // ── Track rows (disc-grouped) ─────────────────────────────────────────
+    let rows = build_detail_rows(&album, selected);
+    s.set_tracks(ModelRc::new(VecModel::from(rows)));
+}
+
+/// Build the disc-grouped detail track rows (§2.2.4 `groupByDisc` + §2.2.5 row).
+/// Disc number = `media_number ?? 1`; multi-disc iff > 1 distinct discs. The
+/// first row of each disc on a multi-disc album carries `disc_header_number =
+/// disc`; otherwise 0 (single-disc → flat). Per-track status is FORMAT-SCOPED
+/// (`track_status_scoped`); `is_downloaded = isDownloadedForFormat ||
+/// status==Complete`; `show_download = downloadable || is_downloaded`.
+fn build_detail_rows(
+    album: &PurchaseAlbum,
+    selected_format_id: Option<u32>,
+) -> Vec<PurchaseDetailTrack> {
+    let tracks = album
+        .tracks
+        .as_ref()
+        .map(|p| p.items.as_slice())
+        .unwrap_or(&[]);
+
+    // Disc grouping: preserve item order, group by media_number ?? 1.
+    // `isMultiDisc` = more than one distinct disc number.
+    let mut distinct_discs: Vec<u32> = Vec::new();
+    for t in tracks {
+        let disc = t.media_number.unwrap_or(1);
+        if !distinct_discs.contains(&disc) {
+            distinct_discs.push(disc);
+        }
+    }
+    let is_multi_disc = distinct_discs.len() > 1;
+
+    let mut rows: Vec<PurchaseDetailTrack> = Vec::with_capacity(tracks.len());
+    let mut last_disc: Option<u32> = None;
+    for t in tracks {
+        let disc = t.media_number.unwrap_or(1);
+        // First row of a disc on a multi-disc album → header marker.
+        let disc_header = if is_multi_disc && last_disc != Some(disc) {
+            disc as i32
+        } else {
+            0
+        };
+        last_disc = Some(disc);
+
+        // FORMAT-SCOPED per-track status (§2.2.3): suppresses `complete` when
+        // viewing a different format than the one downloaded.
+        let scoped = track_status_scoped(&album.id, t.id, selected_format_id);
+        let dl_status = scoped.map(|s| s.as_str()).unwrap_or("").to_string();
+        // isDownloadedForFormat (server `downloaded_format_ids`) OR a store
+        // `complete` (§2.2.5).
+        let downloaded_for_format =
+            is_downloaded_for_format(&t.downloaded_format_ids, selected_format_id);
+        let is_downloaded =
+            downloaded_for_format || scoped == Some(TrackDownloadStatus::Complete);
+        // show-download (§2.2.5): album.downloadable OR already downloaded.
+        let show_download = album.downloadable || is_downloaded;
+
+        // Second-line performer when ≠ album artist (§2.2.5).
+        let show_performer =
+            !t.performer.name.is_empty() && t.performer.name != album.artist.name;
+
+        rows.push(PurchaseDetailTrack {
+            id: t.id.to_string().into(),
+            track_number: t.track_number as i32,
+            // Purchased tracks have NO version → formatTrackTitle == title.
+            title: t.title.clone().into(),
+            performer: t.performer.name.clone().into(),
+            show_performer,
+            duration: format_duration(t.duration).into(),
+            quality: bare_quality(t.maximum_bit_depth, t.maximum_sampling_rate).into(),
+            streamable: t.streamable,
+            dl_status: dl_status.into(),
+            is_downloaded,
+            show_download,
+            disc_header_number: disc_header,
+        });
+    }
+    rows
+}
+
+/// Artwork jobs for the detail header cover (the single 224×224 album cover).
+/// Reads the cache; event-loop-free.
+pub fn detail_artwork_jobs() -> Vec<crate::artwork::ArtworkJob> {
+    with_detail_cache(|c| {
+        c.album
+            .as_ref()
+            .and_then(|a| a.image.best().cloned())
+            .filter(|u| !u.is_empty())
+            .map(|url| {
+                vec![crate::artwork::ArtworkJob {
+                    url,
+                    target: crate::artwork::ArtworkTarget::PurchaseDetailCover,
+                }]
+            })
+            .unwrap_or_default()
+    })
+}
+
+/// Set loading on the detail state (before a fetch). Event loop.
+pub fn set_detail_loading(window: &AppWindow) {
+    let s = window.global::<PurchaseDetailState>();
+    s.set_loading(true);
+    s.set_load_error(slint::SharedString::new());
+    s.set_loaded(false);
+}
+
+/// Surface a RAW detail error (NOT i18n-mapped, §2.2.4). Event loop.
+pub fn set_detail_error(window: &AppWindow, message: &str) {
+    let s = window.global::<PurchaseDetailState>();
+    s.set_loading(false);
+    s.set_loaded(false);
+    s.set_load_error(message.into());
+}
+
+/// Set the `adding-to-library` spinner flag. Event loop.
+pub fn set_detail_adding_to_library(window: &AppWindow, adding: bool) {
+    window
+        .global::<PurchaseDetailState>()
+        .set_adding_to_library(adding);
+}
+
+/// Reset the detail view + cache before loading a new album (an album→album
+/// jump must not flash the previous album's header/tracks). Clears the cache
+/// and resets the state to its loading shell. Does NOT touch the download store
+/// (that survives navigation by design). Event loop.
+pub fn reset_detail(window: &AppWindow) {
+    with_detail_cache(|c| *c = DetailCache::default());
+    let s = window.global::<PurchaseDetailState>();
+    s.set_loading(true);
+    s.set_loaded(false);
+    s.set_load_error(slint::SharedString::new());
+    s.set_title(slint::SharedString::new());
+    s.set_artist(slint::SharedString::new());
+    s.set_artwork(slint::Image::default());
+    s.set_tracks(ModelRc::new(VecModel::<PurchaseDetailTrack>::default()));
+    s.set_format_labels(ModelRc::new(VecModel::<slint::SharedString>::default()));
+    s.set_has_formats(false);
+    s.set_show_progress(false);
+    s.set_show_add_to_library(false);
+}
+
+/// Re-derive the detail download projection (progress + per-track statuses)
+/// from the store. The download actions call this (via the weak window) to
+/// surface live status changes without a refetch. Event loop.
+pub fn refresh_detail_download(window: &AppWindow) {
+    derive_detail(window);
+}
+
+/// `formatTotalDuration(seconds)` (§2.2.8): `"{h}h {m}m"` when hours > 0, else
+/// `"{m}m"`.
+fn format_total_duration(seconds: u32) -> String {
+    let hrs = seconds / 3600;
+    let mins = (seconds % 3600) / 60;
+    if hrs > 0 {
+        format!("{hrs}h {mins}m")
+    } else {
+        format!("{mins}m")
+    }
+}
+
+/// `formatPurchaseDate(ts)` LONG-month variant (Svelte detail `:417`): `''`
+/// when no ts; else a localized `"MMMMM D, YYYY"` (FULL month name). The list
+/// view uses the SHORT-month [`format_purchase_date`]; the detail uses the long
+/// month — replicate the asymmetry verbatim.
+fn format_purchase_date_long(ts: Option<i64>) -> String {
+    let Some(ts) = ts else {
+        return String::new();
+    };
+    if ts <= 0 {
+        return String::new();
+    }
+    use chrono::TimeZone;
+    match chrono::Local.timestamp_opt(ts, 0) {
+        chrono::offset::LocalResult::Single(dt) => dt
+            .format_localized("%B %-d, %Y", crate::dates::current_locale())
+            .to_string(),
+        _ => String::new(),
+    }
 }
 
 #[cfg(test)]

@@ -209,6 +209,9 @@ pub enum ArtworkTarget {
     /// A thumbnail of `PurchasesState.tracks-full[index]` (artwork-target full
     /// set). Dual-set by id into the rendered flat + grouped track models.
     PurchaseTrack { index: usize },
+    /// The 224×224 header cover of the PurchaseDetailView (single image written
+    /// to `PurchaseDetailState.artwork`).
+    PurchaseDetailCover,
 }
 
 impl ArtworkTarget {
@@ -1116,6 +1119,11 @@ fn apply_artwork(
                 model.set_row_data(index, item);
                 crate::purchases::set_track_artwork(window, &id, image);
             }
+        }
+        ArtworkTarget::PurchaseDetailCover => {
+            window
+                .global::<crate::PurchaseDetailState>()
+                .set_artwork(image);
         }
         ArtworkTarget::LocalAlbumCard { index, gen } => {
             // Drop the cover if a reload superseded the set it belongs to.
