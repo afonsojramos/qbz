@@ -16,7 +16,7 @@ import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SidebarPlaylistCollage } from "../primitives/SidebarPlaylistCollage.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
-import { ShellState, SidebarState, SidebarActions, SidebarEntry, DragState, HeaderMenuState, NavMenuEntry, SidebarFolderPopupState, SidebarTooltipState, MyQbzBrandingState, OfflineState } from "../state.slint";
+import { ShellState, SidebarState, SidebarActions, SidebarEntry, DragState, HeaderMenuState, NavMenuEntry, SidebarFolderPopupState, SidebarTooltipState, MyQbzBrandingState, OfflineState, NavState, ContentView, AppearanceState } from "../state.slint";
 import { ScrollView, LineEdit } from "std-widgets.slint";
 
 // A single context-menu item row.
@@ -628,6 +628,52 @@ component SidebarNavRow inherits Rectangle {
     }
 }
 
+// A DIRECT sidebar nav row (no dropdown flyout) — used by Purchases, which is
+// a single destination (§5.3 NavigationItem), not a section with tabs. Clicking
+// navigates straight to the route; the active highlight reflects the current
+// view (paints surface-hover + primary text/icon, like the section rows do
+// while their flyout is open).
+component SidebarDirectRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 34px;
+    border-radius: 6px;
+    background: (nav-ta.has-hover || root.active) ? Theme.surface-hover : transparent;
+
+    HorizontalLayout {
+        padding-left: ShellState.sidebar-mini ? 0px : 8px;
+        padding-right: ShellState.sidebar-mini ? 0px : 8px;
+        spacing: 10px;
+        alignment: ShellState.sidebar-mini ? center : start;
+        VerticalLayout {
+            alignment: center;
+            QbzIcon {
+                source: root.icon;
+                width: 16px;
+                height: 16px;
+                tint: (nav-ta.has-hover || root.active) ? Theme.text-primary : Theme.text-secondary;
+            }
+        }
+        if !ShellState.sidebar-mini: Text {
+            text: root.label;
+            color: (nav-ta.has-hover || root.active) ? Theme.text-primary : Theme.text-secondary;
+            font-size: 13px;
+            font-weight: 500;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+    nav-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 export component Sidebar inherits Rectangle {
     // Fired when a sidebar section-nav row is clicked — wired in AppShell to
     // the same route handler the header dropdowns use.
@@ -706,6 +752,19 @@ export component Sidebar inherits Rectangle {
                     { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette.svg"), has-glyph: true, route: "myqbz-mixtapes" },
                     { label: @tr("Collections"), icon: @image-url("../assets/icons/collection.svg"), has-glyph: true, route: "myqbz-collections" },
                 ];
+            }
+            // Purchases — opt-in (Settings > Appearance, default OFF). A DIRECT
+            // destination (no tab dropdown). HIDDEN entirely while offline (the
+            // surface needs the Qobuz session). Active for both the list view
+            // and the per-album detail view (§5.3 / §8.6 gating).
+            if AppearanceState.show-purchases && !OfflineState.offline: SidebarDirectRow {
+                icon: @image-url("../assets/icons/shopping-bag.svg");
+                label: @tr("Purchases");
+                active: NavState.view == ContentView.purchases
+                    || NavState.view == ContentView.purchase-album;
+                clicked => {
+                    root.navigate("purchases");
+                }
             }
         }
         if ShellState.nav-in-sidebar: Rectangle {

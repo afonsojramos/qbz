@@ -130,8 +130,15 @@ pub enum NavEntry {
     /// PurchasesView — the My-Purchases library surface (opt-in feature). The
     /// in-view toolbar state (tab/search/filter/sort/group) is session-scoped
     /// in the controller + persisted prefs, so the entry carries no payload.
-    /// (The `purchase-album` detail entry lands in Slice 11.)
     Purchases,
+    /// PurchaseAlbumDetailView — the per-album purchase detail / download
+    /// surface, reached by clicking a purchase grid/list card. The string is
+    /// the purchase album id. Mirrors `Album` — the in-detail toolbar/format/
+    /// download state is session-scoped (the download store survives navigation
+    /// on the controller), so the entry carries only the id. Conditional-mount:
+    /// the view only mounts with a non-empty selected id (ADR-010); §A.3
+    /// reactive-reload re-fetches whenever this id changes.
+    PurchaseDetail(String),
     /// ArtistReleasesView — the dedicated discography listing for one
     /// release bucket, reached via "See discography" on the artist page.
     ArtistReleases {
@@ -376,6 +383,31 @@ mod tests {
             Some(NavEntry::Search("metallica".into()))
         );
         assert_eq!(nav_of(go_back()), Some(NavEntry::Home));
+    }
+
+    #[test]
+    fn purchases_and_detail_round_trip_history() {
+        reset();
+        // Purchases list → detail album A → detail album B.
+        record(NavEntry::Purchases);
+        record(NavEntry::PurchaseDetail("A".into()));
+        record(NavEntry::PurchaseDetail("B".into()));
+        // Back walks B → A → list → Home; forward returns to A then B.
+        assert_eq!(
+            nav_of(go_back()),
+            Some(NavEntry::PurchaseDetail("A".into()))
+        );
+        assert_eq!(nav_of(go_back()), Some(NavEntry::Purchases));
+        assert_eq!(nav_of(go_back()), Some(NavEntry::Home));
+        assert_eq!(nav_of(go_forward()), Some(NavEntry::Purchases));
+        assert_eq!(
+            nav_of(go_forward()),
+            Some(NavEntry::PurchaseDetail("A".into()))
+        );
+        assert_eq!(
+            nav_of(go_forward()),
+            Some(NavEntry::PurchaseDetail("B".into()))
+        );
     }
 
     #[test]

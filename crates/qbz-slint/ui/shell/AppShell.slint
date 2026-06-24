@@ -187,6 +187,9 @@ export component AppShell inherits Rectangle {
             recovery-login => {
                 root.recovery-login();
             }
+            navigate(route) => {
+                root.header-menu-navigate(route);
+            }
         }
 
         HorizontalLayout {

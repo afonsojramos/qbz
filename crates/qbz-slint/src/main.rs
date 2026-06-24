@@ -442,6 +442,10 @@ async fn enter_shell(
                 }),
                 "mixtapes" => Some(nav::NavEntry::Mixtapes),
                 "collections" => Some(nav::NavEntry::Collections),
+                // Purchases restores at startup (id-free top-level surface).
+                // `purchase-album` is never persisted (id-gated, not in
+                // safe_view_key), so it never reaches here.
+                "purchases" => Some(nav::NavEntry::Purchases),
                 // "home" / unknown → keep the Home already loaded above.
                 _ => None,
             };
@@ -962,6 +966,11 @@ fn safe_view_key(view: ContentView) -> Option<&'static str> {
         ContentView::LocalLibrary => Some("local-library"),
         ContentView::Mixtapes => Some("mixtapes"),
         ContentView::Collections => Some("collections"),
+        // Purchases is session-restore-safe (id-free top-level surface — §8.6).
+        // The `purchase-album` detail view carries a context id that may be
+        // stale on restart, so it is NOT restorable (returns None below),
+        // matching how Album/Artist detail views are handled here.
+        ContentView::Purchases => Some("purchases"),
         _ => None,
     }
 }
@@ -1740,6 +1749,7 @@ fn scope_for(entry: &nav::NavEntry) -> String {
         nav::NavEntry::Award { .. } => "award".into(),
         nav::NavEntry::AwardAlbums { .. } => "award-albums".into(),
         nav::NavEntry::Purchases => "purchases".into(),
+        nav::NavEntry::PurchaseDetail(_) => "purchase-album".into(),
         nav::NavEntry::ArtistReleases { .. } => "artist-releases".into(),
         nav::NavEntry::Location { .. } => "location".into(),
     }
@@ -1862,6 +1872,13 @@ fn apply_entry(
         }
         nav::NavEntry::Purchases => {
             navigate_purchases(runtime.clone(), weak.clone(), handle, image_cache.clone());
+        }
+        nav::NavEntry::PurchaseDetail(id) => {
+            // Seed the bound id + switch the view; the detail view's
+            // `changed album-id` handler fires the fresh fetch (§A.3 reactive
+            // reload), so back/forward between two purchase albums never shows
+            // stale data. The conditional-mount guard requires the non-empty id.
+            navigate_purchase_detail(weak.clone(), &id);
         }
         nav::NavEntry::ArtistReleases {
             id,
@@ -5645,12 +5662,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Open a purchase album DETAIL view (from a Purchases grid/list card).
-    // Seeds the bound id + switches the view; the view's `changed album-id`
-    // handler fires the fetch (§A.3). Slice 11 layers nav-history + persistence.
+    // Records the back/forward history entry, seeds the bound id + switches the
+    // view; the view's `changed album-id` handler fires the fetch (§A.3
+    // reactive reload). Mirrors `on_open_album`'s record + navigate +
+    // update_nav_flags shape (§5.2 `handlePurchaseAlbumClick`).
     {
         let weak = window.as_weak();
         window.on_open_purchase_album(move |album_id| {
-            navigate_purchase_detail(weak.clone(), album_id.as_str());
+            let id = album_id.to_string();
+            nav::record(nav::NavEntry::PurchaseDetail(id.clone()));
+            navigate_purchase_detail(weak.clone(), &id);
+            if let Some(w) = weak.upgrade() {
+                update_nav_flags(&w);
+            }
         });
     }
 
@@ -12423,6 +12447,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = weak.upgrade() {
                     w.global::<NavState>().set_view(ContentView::Home);
                 }
+                return;
+            }
+            // Purchases — the opt-in My-Purchases surface. Direct nav item (no
+            // tab dropdown): record history + navigate (loads the active tab) +
+            // update_nav_flags, mirroring the My QBZ / Favorites per-route
+            // pattern. Active highlight for both `purchases`/`purchase-album`
+            // is computed view-side off NavState.view (§5.3).
+            if route == "purchases" {
+                nav::record(nav::NavEntry::Purchases);
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
+                navigate_purchases(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                );
                 return;
             }
             // My QBZ — Mixtapes / Collections index grids (read-only slice).

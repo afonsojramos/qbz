@@ -14,7 +14,7 @@ import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions, SearchState, SidebarPlaylistsPopupState, OfflineState, SettingsState, OfflineModeActions } from "../state.slint";
+import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions, SearchState, SidebarPlaylistsPopupState, OfflineState, SettingsState, OfflineModeActions, AppearanceState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SecondaryButton } from "../primitives/SecondaryButton.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
@@ -246,6 +246,33 @@ component CompactNavBtn inherits Rectangle {
                 HeaderMenuState.trigger-hovered = false;
             }
         }
+    }
+}
+
+// Compact DIRECT nav button (icon-only, no dropdown) — used by Purchases while
+// the sidebar is fully closed. Active highlight reflects the current view.
+component CompactDirectBtn inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active: false;
+    callback clicked();
+
+    width: 30px;
+    height: 30px;
+    border-radius: Radius.sm;
+    background: root.active ? Theme.surface-elevated
+        : cd-ta.has-hover ? Theme.surface-hover : transparent;
+
+    QbzIcon {
+        source: root.icon;
+        width: 16px;
+        height: 16px;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        tint: root.active ? Theme.text-primary : Theme.text-secondary;
+    }
+    cd-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
     }
 }
 
@@ -516,6 +543,9 @@ export component HeaderBar inherits Rectangle {
     // Forwarded up to AppShell — the badge flyout's "Sign in" (saved-token
     // re-login during an unauthenticated offline session).
     callback recovery-login();
+    // Direct route navigation (Purchases header tab) — funnels into the same
+    // `header-menu-navigate` route handler the dropdown menus use.
+    callback navigate(string /* route */);
 
     height: Layout.header-height;
     background: Theme.surface-card;
@@ -796,6 +826,21 @@ export component HeaderBar inherits Rectangle {
                     ];
                 }
             }
+            // Purchases — opt-in (default OFF). DIRECT tab (no dropdown), active
+            // for both the list + per-album detail views. HIDDEN while offline.
+            if AppearanceState.show-purchases && !OfflineState.offline: VerticalLayout {
+                alignment: center;
+                NavTab {
+                    icon: @image-url("../assets/icons/shopping-bag.svg");
+                    label: @tr("Purchases");
+                    show-icon: root.show-tab-icons;
+                    active: NavState.view == ContentView.purchases
+                        || NavState.view == ContentView.purchase-album;
+                    clicked => {
+                        root.navigate("purchases");
+                    }
+                }
+            }
         }
         // Compact section nav — only while the sidebar is fully closed
         // (Cerrado), so Discover / Library / Local Library / My QBZ stay
@@ -860,6 +905,18 @@ export component HeaderBar inherits Rectangle {
                         { label: @tr("Collections"), icon: @image-url("../assets/icons/library-big.svg"), has-glyph: true, route: "myqbz-collections" },
                         { label: @tr("Mixtapes"), icon: @image-url("../assets/icons/cassette-tape.svg"), has-glyph: true, route: "myqbz-mixtapes" },
                     ];
+                }
+            }
+            // Purchases — opt-in (default OFF). DIRECT button. HIDDEN offline.
+            if AppearanceState.show-purchases && !OfflineState.offline: VerticalLayout {
+                alignment: center;
+                CompactDirectBtn {
+                    icon: @image-url("../assets/icons/shopping-bag.svg");
+                    active: NavState.view == ContentView.purchases
+                        || NavState.view == ContentView.purchase-album;
+                    clicked => {
+                        root.navigate("purchases");
+                    }
                 }
             }
             // Thin separator, then the playlists flyout button (no sidebar list
