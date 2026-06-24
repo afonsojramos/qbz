@@ -160,7 +160,7 @@ impl QobuzClient {
     /// the offline gate governs services, not sign-in. Without the exemption
     /// a closed gate (induced offline, or a stale offline session) refuses
     /// the very login that would resolve it.
-    fn http(&self) -> Result<&Client> {
+    pub(crate) fn http(&self) -> Result<&Client> {
         if crate::offline_gate::is_offline() {
             return Err(ApiError::OfflineMode);
         }
@@ -168,7 +168,7 @@ impl QobuzClient {
     }
 
     /// Get validated secret (validates on first use)
-    async fn secret(&self) -> Result<String> {
+    pub(crate) async fn secret(&self) -> Result<String> {
         // Check if we already have a validated secret
         if let Some(secret) = self.validated_secret.read().await.clone() {
             return Ok(secret);
@@ -463,7 +463,7 @@ impl QobuzClient {
     }
 
     /// Build headers that REQUIRE authentication. Fails if not logged in.
-    async fn authenticated_headers(&self) -> Result<reqwest::header::HeaderMap> {
+    pub(crate) async fn authenticated_headers(&self) -> Result<reqwest::header::HeaderMap> {
         use reqwest::header::{HeaderMap, HeaderValue};
         let mut headers = HeaderMap::new();
 

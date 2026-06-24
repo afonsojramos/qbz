@@ -64,6 +64,13 @@ pub mod paths {
     // (source: x20/b.java Retrofit interface).
     pub const FAVORITE_GET_NEW_RELEASES: &str = "/favorite/getNewReleases";
 
+    // Purchase (DRM-free purchases library)
+    pub const PURCHASE_GET_USER_PURCHASES: &str = "/purchase/getUserPurchases";
+    // NOT in the OpenAPI spec — code is the source of truth for its
+    // {albums:{items,total,offset,limit}, tracks:{...}} envelope. The UI reads
+    // only `.total` per type.
+    pub const PURCHASE_GET_USER_PURCHASES_IDS: &str = "/purchase/getUserPurchasesIds";
+
     // Label (v9.7.0.3 API — /label/get removed, use /label/getAlbums
     // + /label/page for the same coverage).
     pub const LABEL_PAGE: &str = "/label/page";
