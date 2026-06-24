@@ -7,6 +7,153 @@ msgstr ""
 "Language: de\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
+msgid "System Colors"
+msgstr "Systemfarben"
+
+msgid "Wallpaper Sync"
+msgstr "Wallpaper Sync"
+
+msgid "Custom Image"
+msgstr "Eigenes Bild"
+
+msgid "Auto"
+msgstr "Automatisch"
+
+msgid "Disabled"
+msgstr "Deaktiviert"
+
+msgid "Replace current queue"
+msgstr ""
+
+msgid "Play next"
+msgstr ""
+
+msgid "Add to queue"
+msgstr "Zur Warteschlange"
+
+msgid "Remember last"
+msgstr ""
+
+msgid "Album Reactive"
+msgstr "Album-Reaktiv"
+
+msgid "Static"
+msgstr "Statisch"
+
+msgid "Coverflow"
+msgstr "Coverflow"
+
+msgid "Spectrum"
+msgstr ""
+
+msgid "Lyrics"
+msgstr "Songtexte"
+
+msgid "Queue"
+msgstr "Warteschlange"
+
+msgid "Auto (opposite to window controls)"
+msgstr "Automatisch (gegenuber den Fenstersteuerungen)"
+
+msgid "Left"
+msgstr "Links"
+
+msgid "Right"
+msgstr "Rechts"
+
+msgid "Rectangular"
+msgstr "Rechteckig"
+
+msgid "Full-height rounded"
+msgstr ""
+
+msgid "Circular"
+msgstr "Kreisförmig"
+
+msgid "Square"
+msgstr "Quadratisch"
+
+msgid "Small"
+msgstr "Klein"
+
+msgid "Normal"
+msgstr "Normal"
+
+msgid "Large"
+msgstr "Groß"
+
+msgid "Default"
+msgstr "Standard"
+
+msgid "Monochrome"
+msgstr "Monochrom"
+
+msgid "Custom"
+msgstr "Benutzerdefiniert"
+
+msgid "Remember last used"
+msgstr "Letzte Ansicht merken"
+
+msgid "Micro"
+msgstr "Mikro"
+
+msgid "Compact"
+msgstr "Kompakt"
+
+msgid "Artwork"
+msgstr "Kunstwerk"
+
+msgid "Home"
+msgstr "Start"
+
+msgid "Where you left off"
+msgstr "Wo du aufgehört hast"
+
+msgid "Mono light"
+msgstr "Mono hell"
+
+msgid "Mono dark"
+msgstr "Mono dunkel"
+
+msgid "Color"
+msgstr "Farbe"
+
+msgid "Vinyl"
+msgstr "Vinyl"
+
+msgid "Visualizer"
+msgstr "Visualizer"
+
+msgid "Neon Flow"
+msgstr "Neon-Fluss"
+
+msgid "Tunnel"
+msgstr "Tunnel"
+
+msgid "Comet"
+msgstr "Komet"
+
+msgid "Split: Lyrics"
+msgstr "Geteilt: Liedtexte"
+
+msgid "Split: Track Info"
+msgstr "Geteilt: Titelinfo"
+
+msgid "Split: Suggestions"
+msgstr "Geteilt: Vorschläge"
+
+msgid "Split: Queue"
+msgstr "Geteilt: Warteschlange"
+
+msgid "Full"
+msgstr "Voll"
+
+msgid "Lite"
+msgstr "Leicht"
+
+msgid "Off"
+msgstr "Aus"
+
 msgid "versions"
 msgstr ""
 
@@ -54,12 +201,6 @@ msgstr ""
 
 msgid "Select all"
 msgstr "Alle auswählen"
-
-msgid "Play next"
-msgstr ""
-
-msgid "Add to queue"
-msgstr "Zur Warteschlange"
 
 msgid "Add to playlist"
 msgstr ""
@@ -111,9 +252,6 @@ msgstr ""
 
 msgid "Label"
 msgstr "Label"
-
-msgid "Default"
-msgstr "Standard"
 
 msgid "Newest"
 msgstr "Neueste"
@@ -322,39 +460,6 @@ msgstr ""
 msgid "No results found."
 msgstr ""
 
-msgid "Spotlight"
-msgstr "Spotlight"
-
-msgid "Shine a light on one of your favourite artists."
-msgstr "Rücke einen deiner Lieblingskünstler ins Rampenlicht."
-
-msgid "ARTIST"
-msgstr "KÜNSTLER"
-
-msgid "Top tracks"
-msgstr "Top-Titel"
-
-msgid "By {}"
-msgstr ""
-
-msgid "Qobuz Radio Station"
-msgstr "Qobuz Radio Station"
-
-msgid "Radio Stations"
-msgstr "Radiosender"
-
-msgid "Recently Played Tracks"
-msgstr "Zuletzt gespielte Titel"
-
-msgid "Your Top Artists"
-msgstr "Deine Top-Künstler"
-
-msgid "Artists to Follow"
-msgstr "Künstler zum Folgen"
-
-msgid "Home"
-msgstr "Start"
-
 msgid "Editor's Picks"
 msgstr "Redaktionsauswahl"
 
@@ -372,6 +477,9 @@ msgstr "Zuletzt gespielte Alben"
 
 msgid "Albums you play will appear here."
 msgstr ""
+
+msgid "Recently Played Tracks"
+msgstr "Zuletzt gespielte Titel"
 
 msgid "Tracks you play will appear here."
 msgstr ""
@@ -399,6 +507,39 @@ msgstr ""
 
 msgid "Reset to defaults"
 msgstr "Auf Standard zurücksetzen"
+
+msgid "Radio Stations"
+msgstr "Radiosender"
+
+msgid "RADIO"
+msgstr "RADIO"
+
+msgid "Your Top Artists"
+msgstr "Deine Top-Künstler"
+
+msgid "Artists to Follow"
+msgstr "Künstler zum Folgen"
+
+msgid "Spotlight"
+msgstr "Spotlight"
+
+msgid "Shine a light on one of your favourite artists."
+msgstr "Rücke einen deiner Lieblingskünstler ins Rampenlicht."
+
+msgid "ARTIST"
+msgstr "KÜNSTLER"
+
+msgid "Top tracks"
+msgstr "Top-Titel"
+
+msgid "By {}"
+msgstr ""
+
+msgid "TOP TRACKS"
+msgstr "TOP TRACKS"
+
+msgid "Qobuz Radio Station"
+msgstr "Qobuz Radio Station"
 
 msgid "Available offline"
 msgstr ""
@@ -721,6 +862,14 @@ msgstr ""
 msgid "Open Settings"
 msgstr ""
 
+msgid "Offline Cache"
+msgstr ""
+
+msgid "{} track"
+msgid_plural "{} tracks"
+msgstr[0] ""
+msgstr[1] ""
+
 msgid "Sort: A-Z"
 msgstr ""
 
@@ -786,9 +935,6 @@ msgstr "Abspielanzahl"
 
 msgid "Track Count"
 msgstr ""
-
-msgid "Custom"
-msgstr "Benutzerdefiniert"
 
 msgid "Name A-Z"
 msgstr ""
@@ -876,9 +1022,6 @@ msgstr "Ordnernamen eingeben"
 
 msgid "Icon"
 msgstr "Icon"
-
-msgid "Color"
-msgstr "Farbe"
 
 msgid "Hide from sidebar"
 msgstr "Aus Seitenleiste ausblenden"
@@ -1455,9 +1598,6 @@ msgstr ""
 
 msgid "STATUS"
 msgstr ""
-
-msgid "Disabled"
-msgstr "Deaktiviert"
 
 msgid "Unavailable"
 msgstr "Nicht verfügbar"
@@ -2161,9 +2301,6 @@ msgstr ""
 msgid "Remove all after"
 msgstr ""
 
-msgid "Queue"
-msgstr "Warteschlange"
-
 msgid "History"
 msgstr "Verlauf"
 
@@ -2238,9 +2375,6 @@ msgstr "Großbuchstaben"
 
 msgid "Dimming"
 msgstr "Abblenden"
-
-msgid "Off"
-msgstr "Aus"
 
 msgid "Soft"
 msgstr "Leicht"
@@ -2353,20 +2487,11 @@ msgstr ""
 msgid "Classic"
 msgstr ""
 
-msgid "Small"
-msgstr "Klein"
-
-msgid "Large"
-msgstr "Groß"
-
 msgid "Miniplayer"
 msgstr ""
 
 msgid "Immersive"
 msgstr "Immersiv"
-
-msgid "Lyrics"
-msgstr "Songtexte"
 
 msgid "Unmute"
 msgstr "Stummschaltung aufheben"
@@ -2545,27 +2670,6 @@ msgstr "Alle Typen"
 msgid "Artist Collections"
 msgstr "Artist Collections"
 
-msgid "Use auto-detected"
-msgstr "Auto-erkannten verwenden"
-
-msgid "alternate"
-msgstr "Alternative"
-
-msgid "compilation"
-msgstr "Compilation"
-
-msgid "BUILD ARTIST COLLECTION"
-msgstr ""
-
-msgid "ORDER BY"
-msgstr ""
-
-msgid "Loading..."
-msgstr "Lädt..."
-
-msgid "ALBUM"
-msgstr ""
-
 msgid "Remove from collection"
 msgstr ""
 
@@ -2629,6 +2733,50 @@ msgstr ""
 msgid "No mixtapes or collections yet."
 msgstr ""
 
+msgid "EP"
+msgstr "EP"
+
+msgid "Single"
+msgstr "Single"
+
+msgid "Live"
+msgstr "Live"
+
+msgid "Compilation"
+msgstr "Compilation"
+
+msgid "Use auto-detected"
+msgstr "Auto-erkannten verwenden"
+
+msgid "alternate"
+msgstr "Alternative"
+
+msgid "compilation"
+msgstr "Compilation"
+
+msgid "BUILD ARTIST COLLECTION"
+msgstr ""
+
+msgid "ORDER BY"
+msgstr ""
+
+msgid "Release date"
+msgstr "Veröffentlichungsdatum"
+
+msgid "Manual"
+msgstr "Manuell"
+
+msgid "Loading..."
+msgstr "Lädt..."
+
+msgid "ALBUM"
+msgstr ""
+
+msgid "{} of {} album selected"
+msgid_plural "{} of {} albums selected"
+msgstr[0] ""
+msgstr[1] ""
+
 msgid "Now Playing"
 msgstr "Aktuell abgespielt"
 
@@ -2653,23 +2801,8 @@ msgstr "Immersiv-Modus beenden"
 msgid "FOCUS"
 msgstr ""
 
-msgid "Album Reactive"
-msgstr "Album-Reaktiv"
-
-msgid "Static"
-msgstr "Statisch"
-
-msgid "Coverflow"
-msgstr "Coverflow"
-
-msgid "Spectrum"
-msgstr ""
-
 msgid "Plasma"
 msgstr ""
-
-msgid "Tunnel"
-msgstr "Tunnel"
 
 msgid "Aurora"
 msgstr "Aurora"
@@ -2724,11 +2857,6 @@ msgid_plural "{} items need attention before bit-perfect playback will work."
 msgstr[0] ""
 msgstr[1] ""
 
-msgid "{} track"
-msgid_plural "{} tracks"
-msgstr[0] ""
-msgstr[1] ""
-
 msgid "Removed {} artist from blacklist"
 msgid_plural "Removed {} artists from blacklist"
 msgstr[0] ""
@@ -2775,6 +2903,30 @@ msgstr ""
 msgid "({} local)"
 msgstr ""
 
+msgid "176.4 kHz"
+msgstr ""
+
+msgid "192 kHz"
+msgstr ""
+
+msgid "352.8 kHz"
+msgstr ""
+
+msgid "384 kHz"
+msgstr ""
+
+msgid "44.1 kHz"
+msgstr ""
+
+msgid "48 kHz"
+msgstr ""
+
+msgid "88.2 kHz"
+msgstr ""
+
+msgid "96 kHz"
+msgstr ""
+
 msgid "A fresh mix every week."
 msgstr ""
 
@@ -2814,19 +2966,37 @@ msgstr ""
 msgid "Already in {}"
 msgstr ""
 
+msgid "Always skip track"
+msgstr "Immer Titel ueberspringen"
+
+msgid "Always try lowest quality"
+msgstr "Immer niedrigste Qualitaet versuchen"
+
+msgid "April"
+msgstr ""
+
 msgid "Are you absolutely sure?"
+msgstr ""
+
+msgid "Artist Spotlight"
 msgstr ""
 
 msgid "Artists on Local Library"
 msgstr ""
 
+msgid "Ask me"
+msgstr "Mich fragen"
+
+msgid "August"
+msgstr ""
+
 msgid "Authorize QBZ in your browser, then click \"Finish\""
 msgstr ""
 
-msgid "Auto"
-msgstr "Automatisch"
-
 msgid "Available tracks only — offline"
+msgstr ""
+
+msgid "Bit-perfect (Hardware / Digital)"
 msgstr ""
 
 msgid "Blacklist disabled"
@@ -2883,13 +3053,16 @@ msgstr ""
 msgid "Code copied"
 msgstr ""
 
-msgid "Compilation"
-msgstr "Compilation"
+msgid "Compilations"
+msgstr "Kompilationen"
 
 msgid "Connected as {}"
 msgstr ""
 
 msgid "Connected to {} (v{})"
+msgstr ""
+
+msgid "Continue Listening"
 msgstr ""
 
 msgid "Converted"
@@ -2964,11 +3137,17 @@ msgstr "Kritiker-Auswahl"
 msgid "DAC: {} · {} · {} ch"
 msgstr ""
 
+msgid "December"
+msgstr ""
+
+msgid "Defaults"
+msgstr ""
+
 msgid "Disconnect from Plex?"
 msgstr ""
 
-msgid "EP"
-msgstr "EP"
+msgid "EPs & Singles"
+msgstr "EPs & Singles"
 
 msgid "Enable PipeWire in your NixOS configuration"
 msgstr ""
@@ -2983,6 +3162,9 @@ msgid "Error: {}"
 msgstr ""
 
 msgid "Error: {} (did you authorize in the browser?)"
+msgstr ""
+
+msgid "Essentials by Genre"
 msgstr ""
 
 msgid "Every track needs a title"
@@ -3045,6 +3227,9 @@ msgstr ""
 msgid "Favorite Albums"
 msgstr ""
 
+msgid "February"
+msgstr ""
+
 msgid "File not available — is the drive mounted?"
 msgstr ""
 
@@ -3087,6 +3272,15 @@ msgstr ""
 msgid "Install the Pulse compatibility tools (optional fallback)"
 msgstr ""
 
+msgid "January"
+msgstr ""
+
+msgid "July"
+msgstr ""
+
+msgid "June"
+msgstr ""
+
 msgid "Last.fm disconnected"
 msgstr ""
 
@@ -3101,9 +3295,6 @@ msgstr ""
 
 msgid "Listening suggestions"
 msgstr ""
-
-msgid "Live"
-msgstr "Live"
 
 msgid "Loaded {} cached tracks"
 msgstr ""
@@ -3123,7 +3314,13 @@ msgstr "Liedtext kopiert"
 msgid "MIXTAPE"
 msgstr "MIXTAPE"
 
+msgid "March"
+msgstr ""
+
 msgid "Matching tracks: {} / {} ({} found)"
+msgstr ""
+
+msgid "May"
 msgstr ""
 
 msgid "Middle-click to pause"
@@ -3137,6 +3334,9 @@ msgstr ""
 
 msgid "More From Your Library"
 msgstr "Mehr aus Favoriten"
+
+msgid "More Labels"
+msgstr ""
 
 msgid "Most Streamed"
 msgstr ""
@@ -3156,6 +3356,9 @@ msgstr "Neuerscheinungen"
 msgid "Next Track"
 msgstr "Nächster Titel"
 
+msgid "No limit"
+msgstr ""
+
 msgid "No matching tracks found."
 msgstr ""
 
@@ -3174,6 +3377,12 @@ msgstr ""
 msgid "Nothing playable in this playlist right now"
 msgstr ""
 
+msgid "November"
+msgstr ""
+
+msgid "October"
+msgstr ""
+
 msgid "Offline cache cleared"
 msgstr ""
 
@@ -3190,6 +3399,9 @@ msgid "On Local Library"
 msgstr ""
 
 msgid "Opened folder ({} files skipped)"
+msgstr ""
+
+msgid "Other Outputs"
 msgstr ""
 
 msgid "PLAYLIST"
@@ -3222,11 +3434,17 @@ msgstr ""
 msgid "Plex link failed to start"
 msgstr ""
 
+msgid "Plugin Hardware"
+msgstr ""
+
 msgid "Press Accolades"
 msgstr "Presseauszeichnungen"
 
 msgid "Previous Track"
 msgstr "Vorheriger Titel"
+
+msgid "Purchase Only"
+msgstr ""
 
 msgid "QBZ requesting {} · {}-bit"
 msgstr ""
@@ -3248,6 +3466,9 @@ msgstr ""
 
 msgid "Rate limited, try again shortly"
 msgstr ""
+
+msgid "Recently Played"
+msgstr "Kürzlich gespielt"
 
 msgid "Rediscover Your Library"
 msgstr ""
@@ -3291,14 +3512,14 @@ msgstr "Qobuz-Katalog durchsuchen..."
 msgid "Select music folder"
 msgstr ""
 
+msgid "September"
+msgstr ""
+
 msgid "Show/Hide Window"
 msgstr ""
 
 msgid "Similar to {}"
 msgstr ""
-
-msgid "Single"
-msgstr "Single"
 
 msgid "Skipped: {}"
 msgstr ""
@@ -3387,6 +3608,9 @@ msgstr ""
 msgid "Unknown source"
 msgstr ""
 
+msgid "Upcoming"
+msgstr ""
+
 msgid "Upload incomplete — local playlist kept"
 msgstr ""
 
@@ -3415,6 +3639,15 @@ msgid "Your queue is empty — add some tracks first, or press Play test."
 msgstr ""
 
 msgid "by {}"
+msgstr ""
+
+msgid "hw (Direct Hardware)"
+msgstr ""
+
+msgid "pcm (Most compatible)"
+msgstr ""
+
+msgid "plughw (Auto-convert)"
 msgstr ""
 
 msgid "{} + {} more"
