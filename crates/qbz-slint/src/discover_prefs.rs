@@ -112,30 +112,32 @@ pub fn render_kind(id: DiscoverySectionId) -> &'static str {
 /// title). When gettext lands this swaps to an MO lookup with NO `.slint` change.
 /// The keys are kept verbatim (with their real, mixed `home.*` / `discover.*` /
 /// `discovery.*` namespaces) so the lookup ports 1:1 when the pipeline arrives.
-pub fn label_for(id: DiscoverySectionId) -> String {
+pub fn label_for(id: DiscoverySectionId) -> &'static str {
     use DiscoverySectionId::*;
-    let en: &str = match id {
-        NewReleases => "New Releases",            // home.newReleases
-        PressAwards => "Press Accolades",         // home.pressAwards
-        QobuzPlaylists => "Qobuz Playlists",      // home.qobuzPlaylists
-        RecentlyPlayedAlbums => "Recently Played", // home.recentlyPlayed
-        ContinueListening => "Continue Listening", // home.continueListening
-        IdealDiscography => "Ideal Discography",  // discover.idealDiscography
-        MostStreamed => "Most Streamed",          // home.mostStreamed
-        ReleaseWatch => "Release Watch",          // home.releaseWatch
-        EditorPicks => "Albums of the Week",      // home.editorPicks
-        Qobuzissimes => "Qobuzissimes",           // home.qobuzissimes
-        TopArtists => "Your Top Artists",         // home.yourTopArtists
-        FavoriteAlbums => "Favorite Albums",      // home.favoriteAlbums
-        QobuzMixes => "Qobuz Mixes",              // home.qobuzMixes
-        RadioStations => "Radio Stations",        // home.radioStations
-        SimilarAlbums => "More From Your Library", // discovery.similarAlbums
-        RediscoverLibrary => "Rediscover Your Library", // discovery.rediscoverLibrary
-        EssentialsByGenre => "Essentials by Genre", // discovery.essentialsByGenre
-        ArtistsToFollow => "Artists to Follow",   // discovery.artistsToFollow
-        ArtistSpotlight => "Artist Spotlight",    // discovery.artistSpotlight
-    };
-    qbz_i18n::t(en)
+    // Returns the `mark`ed English literal so the extractor registers the
+    // msgid here; the single `t(...)` lookup happens at the consumer
+    // (`push_config_rows`). This translates each label exactly once.
+    match id {
+        NewReleases => qbz_i18n::mark("New Releases"), // home.newReleases
+        PressAwards => qbz_i18n::mark("Press Accolades"), // home.pressAwards
+        QobuzPlaylists => qbz_i18n::mark("Qobuz Playlists"), // home.qobuzPlaylists
+        RecentlyPlayedAlbums => qbz_i18n::mark("Recently Played"), // home.recentlyPlayed
+        ContinueListening => qbz_i18n::mark("Continue Listening"), // home.continueListening
+        IdealDiscography => qbz_i18n::mark("Ideal Discography"), // discover.idealDiscography
+        MostStreamed => qbz_i18n::mark("Most Streamed"), // home.mostStreamed
+        ReleaseWatch => qbz_i18n::mark("Release Watch"), // home.releaseWatch
+        EditorPicks => qbz_i18n::mark("Albums of the Week"), // home.editorPicks
+        Qobuzissimes => qbz_i18n::mark("Qobuzissimes"), // home.qobuzissimes
+        TopArtists => qbz_i18n::mark("Your Top Artists"), // home.yourTopArtists
+        FavoriteAlbums => qbz_i18n::mark("Favorite Albums"), // home.favoriteAlbums
+        QobuzMixes => qbz_i18n::mark("Qobuz Mixes"), // home.qobuzMixes
+        RadioStations => qbz_i18n::mark("Radio Stations"), // home.radioStations
+        SimilarAlbums => qbz_i18n::mark("More From Your Library"), // discovery.similarAlbums
+        RediscoverLibrary => qbz_i18n::mark("Rediscover Your Library"), // discovery.rediscoverLibrary
+        EssentialsByGenre => qbz_i18n::mark("Essentials by Genre"), // discovery.essentialsByGenre
+        ArtistsToFollow => qbz_i18n::mark("Artists to Follow"), // discovery.artistsToFollow
+        ArtistSpotlight => qbz_i18n::mark("Artist Spotlight"), // discovery.artistSpotlight
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +205,7 @@ pub fn push_config_rows(window: &AppWindow, prefs: &DiscoverPrefs, tab: Discover
         .iter()
         .map(|p| ConfigRow {
             id: SharedString::from(p.id.as_str()),
-            label: SharedString::from(label_for(p.id)),
+            label: SharedString::from(qbz_i18n::t(label_for(p.id))),
             enabled: p.enabled,
         })
         .collect();

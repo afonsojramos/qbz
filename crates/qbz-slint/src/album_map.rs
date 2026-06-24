@@ -169,10 +169,12 @@ fn album_artist(album: &Album) -> (String, String) {
 /// release_type. Mirrors home.rs's Discover heuristic
 /// (<=3 = Single, <=6 = EP, else Album).
 pub fn classify_release_type(track_count: Option<u32>) -> &'static str {
+    // Marked at the definition so the extractor sees the English literals; the
+    // call sites (`album_map`/`home`) translate the marked value with `t(...)`.
     match track_count {
-        Some(n) if n <= 3 => "Single",
-        Some(n) if n <= 6 => "EP",
-        _ => "Album",
+        Some(n) if n <= 3 => qbz_i18n::mark("Single"),
+        Some(n) if n <= 6 => qbz_i18n::mark("EP"),
+        _ => qbz_i18n::mark("Album"),
     }
 }
 

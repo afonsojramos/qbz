@@ -32,31 +32,33 @@ use crate::{AppWindow, NowPlayingState, SettingsState};
 
 /// Maximum-sample-rate dropdown options. Index 0 is "No limit" (`None`).
 /// Backs `device_max_sample_rate`.
+// Labels in these tables are `mark`ed so the extractor registers the English
+// literals; they are translated once with `t(l)` where the snapshot is built.
 const MAX_SAMPLE_RATES: &[(&str, Option<u32>)] = &[
-    ("No limit", None),
-    ("44.1 kHz", Some(44_100)),
-    ("48 kHz", Some(48_000)),
-    ("88.2 kHz", Some(88_200)),
-    ("96 kHz", Some(96_000)),
-    ("176.4 kHz", Some(176_400)),
-    ("192 kHz", Some(192_000)),
-    ("352.8 kHz", Some(352_800)),
-    ("384 kHz", Some(384_000)),
+    (qbz_i18n::mark("No limit"), None),
+    (qbz_i18n::mark("44.1 kHz"), Some(44_100)),
+    (qbz_i18n::mark("48 kHz"), Some(48_000)),
+    (qbz_i18n::mark("88.2 kHz"), Some(88_200)),
+    (qbz_i18n::mark("96 kHz"), Some(96_000)),
+    (qbz_i18n::mark("176.4 kHz"), Some(176_400)),
+    (qbz_i18n::mark("192 kHz"), Some(192_000)),
+    (qbz_i18n::mark("352.8 kHz"), Some(352_800)),
+    (qbz_i18n::mark("384 kHz"), Some(384_000)),
 ];
 
 /// ALSA-plugin dropdown options.
 const ALSA_PLUGINS: &[(&str, AlsaPlugin)] = &[
-    ("hw (Direct Hardware)", AlsaPlugin::Hw),
-    ("plughw (Auto-convert)", AlsaPlugin::PlugHw),
-    ("pcm (Most compatible)", AlsaPlugin::Pcm),
+    (qbz_i18n::mark("hw (Direct Hardware)"), AlsaPlugin::Hw),
+    (qbz_i18n::mark("plughw (Auto-convert)"), AlsaPlugin::PlugHw),
+    (qbz_i18n::mark("pcm (Most compatible)"), AlsaPlugin::Pcm),
 ];
 
 /// "When quality retries fail" dropdown options. The value is the
 /// `quality_fallback_behavior` DB string.
 const RETRY_BEHAVIORS: &[(&str, &str)] = &[
-    ("Ask me", "ask"),
-    ("Always try lowest quality", "always_fallback"),
-    ("Always skip track", "always_skip"),
+    (qbz_i18n::mark("Ask me"), "ask"),
+    (qbz_i18n::mark("Always try lowest quality"), "always_fallback"),
+    (qbz_i18n::mark("Always skip track"), "always_skip"),
 ];
 
 /// What a persisted audio change requires of the live `Player`.
@@ -269,11 +271,13 @@ fn alsa_section(id: &str, is_default: bool, label: &str) -> AlsaSection {
 
 /// The display label for an ALSA section header.
 fn alsa_section_label(section: AlsaSection) -> &'static str {
+    // Marked at the definition so the extractor registers the English literals;
+    // the single `t(...)` happens at the `group_alsa_devices` call site.
     match section {
-        AlsaSection::Defaults => "Defaults",
-        AlsaSection::BitPerfect => "Bit-perfect (Hardware / Digital)",
-        AlsaSection::PluginHw => "Plugin Hardware",
-        AlsaSection::Other => "Other Outputs",
+        AlsaSection::Defaults => qbz_i18n::mark("Defaults"),
+        AlsaSection::BitPerfect => qbz_i18n::mark("Bit-perfect (Hardware / Digital)"),
+        AlsaSection::PluginHw => qbz_i18n::mark("Plugin Hardware"),
+        AlsaSection::Other => qbz_i18n::mark("Other Outputs"),
     }
 }
 

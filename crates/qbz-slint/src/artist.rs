@@ -75,18 +75,21 @@ pub struct ReleaseSection {
 
 /// Official on-screen order of release buckets, with their display titles
 /// (webplayer-faithful). `release_type` keys come straight from the server.
+// Display titles are `mark`ed so the extractor registers the English literals;
+// they are translated once with `t(...)` at the consumer sites (the section
+// header, the jump-tab label, and `release_type_title`).
 const RELEASE_SECTION_ORDER: &[(&str, &str)] = &[
-    ("album", "Albums"),
-    ("epSingle", "EPs & Singles"),
-    ("ep", "EPs & Singles"),
-    ("single", "EPs & Singles"),
-    ("live", "Live"),
-    ("compilation", "Compilations"),
-    ("download", "Purchase Only"),
-    ("composer", "Composer"),
-    ("other", "Other"),
-    ("awardedRelease", "Critics' Picks"),
-    ("next", "Upcoming"),
+    ("album", qbz_i18n::mark("Albums")),
+    ("epSingle", qbz_i18n::mark("EPs & Singles")),
+    ("ep", qbz_i18n::mark("EPs & Singles")),
+    ("single", qbz_i18n::mark("EPs & Singles")),
+    ("live", qbz_i18n::mark("Live")),
+    ("compilation", qbz_i18n::mark("Compilations")),
+    ("download", qbz_i18n::mark("Purchase Only")),
+    ("composer", qbz_i18n::mark("Composer")),
+    ("other", qbz_i18n::mark("Other")),
+    ("awardedRelease", qbz_i18n::mark("Critics' Picks")),
+    ("next", qbz_i18n::mark("Upcoming")),
 ];
 
 /// Display title for a release_type (the dedicated discography page header).
@@ -1624,20 +1627,22 @@ pub fn apply_mb_relationships(window: &AppWindow, data: MbRelationshipsRowData) 
 /// formatMbDate_v2 output when the locale is en-US.
 fn format_mb_date_short(date: &str) -> String {
     let parts: Vec<&str> = date.split('-').collect();
+    // Month names are `mark`ed so the extractor registers the English literals;
+    // they are translated once with `t(name)` at the format arms below.
     let month = |m: &str| -> Option<&'static str> {
         Some(match m {
-            "01" => "January",
-            "02" => "February",
-            "03" => "March",
-            "04" => "April",
-            "05" => "May",
-            "06" => "June",
-            "07" => "July",
-            "08" => "August",
-            "09" => "September",
-            "10" => "October",
-            "11" => "November",
-            "12" => "December",
+            "01" => qbz_i18n::mark("January"),
+            "02" => qbz_i18n::mark("February"),
+            "03" => qbz_i18n::mark("March"),
+            "04" => qbz_i18n::mark("April"),
+            "05" => qbz_i18n::mark("May"),
+            "06" => qbz_i18n::mark("June"),
+            "07" => qbz_i18n::mark("July"),
+            "08" => qbz_i18n::mark("August"),
+            "09" => qbz_i18n::mark("September"),
+            "10" => qbz_i18n::mark("October"),
+            "11" => qbz_i18n::mark("November"),
+            "12" => qbz_i18n::mark("December"),
             _ => return None,
         })
     };

@@ -99,6 +99,13 @@ pub fn resolve_auto() -> &'static str {
     }
 }
 
+/// Marks a string literal for catalog extraction at its DEFINITION site without
+/// translating here. Pair with a later `t(value)` that does the lookup. The
+/// extractor scans `mark("...")`; runtime returns the literal unchanged.
+pub const fn mark(s: &'static str) -> &'static str {
+    s
+}
+
 /// Translate `msgid` (singular) in the current language.
 /// Falls back to the English `msgid` itself when untranslated.
 pub fn t(msgid: &str) -> String {
@@ -183,6 +190,13 @@ mod tests {
         set_language("zz");
         assert_eq!(current_language(), "fr");
         set_language("en");
+    }
+
+    #[test]
+    fn mark_returns_literal_unchanged() {
+        // `mark` is a no-op at runtime; it only exists for static extraction.
+        assert_eq!(mark("Album"), "Album");
+        assert_eq!(t(mark("Album")), t("Album"));
     }
 
     #[test]

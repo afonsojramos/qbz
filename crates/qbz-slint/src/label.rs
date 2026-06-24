@@ -911,11 +911,13 @@ fn build_label_jump_tabs(payload: &LabelPagePayload) -> Vec<JumpNavTab> {
             *cursor += SECTION_SPACER + CAROUSEL;
         }
     };
-    push_carousel(&mut tabs, "releases", "Releases", !payload.releases.is_empty(), &mut cursor);
-    push_carousel(&mut tabs, "critics", "Critics' Picks", !payload.critics.is_empty(), &mut cursor);
-    push_carousel(&mut tabs, "playlists", "Playlists", !payload.playlists.is_empty(), &mut cursor);
-    push_carousel(&mut tabs, "artists", "Artists", !payload.artists.is_empty(), &mut cursor);
-    push_carousel(&mut tabs, "labels", "More Labels", !payload.more_labels.is_empty(), &mut cursor);
+    // Labels are `mark`ed so the extractor registers the English literals; the
+    // closure translates them once with `t(label)`.
+    push_carousel(&mut tabs, "releases", qbz_i18n::mark("Releases"), !payload.releases.is_empty(), &mut cursor);
+    push_carousel(&mut tabs, "critics", qbz_i18n::mark("Critics' Picks"), !payload.critics.is_empty(), &mut cursor);
+    push_carousel(&mut tabs, "playlists", qbz_i18n::mark("Playlists"), !payload.playlists.is_empty(), &mut cursor);
+    push_carousel(&mut tabs, "artists", qbz_i18n::mark("Artists"), !payload.artists.is_empty(), &mut cursor);
+    push_carousel(&mut tabs, "labels", qbz_i18n::mark("More Labels"), !payload.more_labels.is_empty(), &mut cursor);
     tabs
 }
 
