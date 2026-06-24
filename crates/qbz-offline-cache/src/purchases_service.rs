@@ -15,16 +15,29 @@
 //! format-synthesis table, ported from `v2_purchases_get_formats`
 //! `legacy_compat.rs:2953`) and `apply_download_flags` (the §3.4 download-flag
 //! annotation, ported from `v2_apply_purchase_download_flags`
-//! `legacy_compat.rs:2594`). The single-track download primitive (Slice 5) is
-//! added later.
+//! `legacy_compat.rs:2594`).
+//!
+//! Slice 5 scope: the single-track download primitive
+//! `download_purchase_track` (the canonical getFileUrl → CDN → `.part`→rename →
+//! registry pipeline, ported from `v2_download_purchase_track_impl`
+//! `legacy_compat.rs:2651` PLUS the registry write that `v2_purchases_download_track`
+//! `legacy_compat.rs:3013` performs after it), and the pure path/extension
+//! helpers `target_path` (§7.3 `v2_purchase_target_path`) and
+//! `purchase_extension` (§7.1.5 `v2_purchase_extension`). The album loop, cancel,
+//! and per-track progress live in the `qbz-slint` controller (Slice 7), not here
+//! — this crate only exposes the single-track primitive.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
+use qbz_library::LibraryDatabase;
 use qbz_models::{
     Album, PurchaseAlbum, PurchaseFormatOption, PurchaseResponse, PurchaseTrack, SearchResultsPage,
 };
 use qbz_qobuz::QobuzClient;
 use qbz_qobuz::Result as QobuzResult;
+
+use crate::metadata::sanitize_filename;
 
 /// Fetch ONE purchases page, typed by purchase kind (`"albums"` / `"tracks"`,
 /// or `None` for both). Thin pass-through to the client's
@@ -251,6 +264,224 @@ pub fn apply_download_flags(
                 .iter()
                 .all(|track_id| downloaded_ids.contains(track_id));
     }
+}
+
+/// Pick the on-disk file extension for a purchased track from the RESPONSE
+/// stream's `format_id` / `mime_type` (§7.1.5, ported byte-for-byte from
+/// `v2_purchase_extension` `legacy_compat.rs:2553-2559`):
+///   * `"mp3"` if the served `format_id == 5` OR the served `mime_type`
+///     contains `"mpeg"`;
+///   * `"flac"` otherwise.
+///
+/// IMPORTANT (Addendum B.2): the extension keys off the RESPONSE's served
+/// format, NOT the requested one. If Qobuz downgrades (e.g. you asked for 27 but
+/// it serves an MP3), the file gets the served extension while the registry
+/// records the REQUESTED `format_id` (see `download_purchase_track`). Do NOT
+/// reconcile the two — the Tauri app does not.
+pub fn purchase_extension(format_id: u32, mime_type: &str) -> &'static str {
+    if format_id == 5 || mime_type.contains("mpeg") {
+        "mp3"
+    } else {
+        "flac"
+    }
+}
+
+/// Build the deterministic on-disk target path for a purchased track
+/// (§7.3, ported byte-for-byte from `v2_purchase_target_path`
+/// `legacy_compat.rs:2561-2592`):
+///   `{destination}/{artist_dir}/{album_dir}/{file_name}`
+/// where
+///   * `artist_dir = sanitize_filename(artist_name)`;
+///   * `album_dir = sanitize_filename(album_title)` and, if `quality_dir` is
+///     non-empty, `format!("{album_clean} {sanitize(quality_dir)}")` (a single
+///     space joins them — this is the `"Album [FLAC][24-bit,96kHz]"` folder);
+///   * `file_name = "{NN} - {title_clean}.{ext}"` (`NN` = zero-padded `{:02}`)
+///     when `track_number > 0`, else `"{title_clean}.{ext}"`.
+///
+/// All three segments are run through the SHARED `sanitize_filename` (§7.4) so
+/// the path matches what the library scan + Add-to-Library expect (the `[`/`]`
+/// in the quality label become `-`, brackets collapse). The caller passes the
+/// already-`'/'→'-'`-transformed `quality_dir` (§7.5 `qualityDir` derivation);
+/// the re-sanitize here is idempotent for `/` and additionally strips brackets.
+pub fn target_path(
+    destination: &str,
+    artist_name: &str,
+    album_title: &str,
+    quality_dir: &str,
+    track_number: u32,
+    track_title: &str,
+    ext: &str,
+) -> PathBuf {
+    let artist_dir = sanitize_filename(artist_name);
+    let album_clean = sanitize_filename(album_title);
+    let title_clean = sanitize_filename(track_title);
+
+    let file_name = if track_number > 0 {
+        format!("{:02} - {}.{}", track_number, title_clean, ext)
+    } else {
+        format!("{}.{}", title_clean, ext)
+    };
+
+    // Embed quality in album folder name: "Album [FLAC][24-bit,96kHz]".
+    let album_dir = if !quality_dir.is_empty() {
+        let quality_clean = sanitize_filename(quality_dir);
+        format!("{} {}", album_clean, quality_clean)
+    } else {
+        album_clean
+    };
+
+    PathBuf::from(destination)
+        .join(artist_dir)
+        .join(album_dir)
+        .join(file_name)
+}
+
+/// I/O tail of the single-track download: given the already-fetched audio
+/// `data` and the resolved track/stream metadata, derive the extension from the
+/// RESPONSE format, build the target path, `create_dir_all`, write the `.part`
+/// file, `fs::rename` to final, then write the registry row with the REQUESTED
+/// `format_id`. Returns the final on-disk path string.
+///
+/// Split out from `download_purchase_track` purely so the filesystem +
+/// registry ordering (Addendum B.1/B.2/B.3) is unit-testable without a live
+/// HTTP client. The behavior is the EXACT concatenation of
+/// `v2_download_purchase_track_impl`'s write tail (`legacy_compat.rs:2681-2701`)
+/// and `v2_purchases_download_track`'s registry write (`:3019`).
+///
+/// Ordering & failure semantics (Addendum B.1 — replicated verbatim):
+///   1. write `target.with_extension("{ext}.part")` → `2. fs::rename` to final
+///      → `3. mark_purchase_downloaded`.
+///   If the file write/rename SUCCEEDS but the registry write FAILS, this
+///   returns `Err` with the file LEFT ON DISK (orphaned, no registry row). Do
+///   NOT roll back the file or treat the registry failure as success.
+///
+/// No collision preflight (Addendum B.3): `.part`→`fs::rename` overwrites any
+/// pre-existing final file or stale `.part` silently.
+#[allow(clippy::too_many_arguments)]
+fn write_and_register_track(
+    db: &LibraryDatabase,
+    track_id: u64,
+    requested_format_id: u32,
+    data: &[u8],
+    artist_name: &str,
+    album_title: &str,
+    quality_dir: &str,
+    track_number: u32,
+    track_title: &str,
+    response_format_id: u32,
+    response_mime_type: &str,
+    destination: &str,
+) -> Result<String, String> {
+    // Addendum B.2: extension derives from the RESPONSE's served format.
+    let extension = purchase_extension(response_format_id, response_mime_type);
+    let target = target_path(
+        destination,
+        artist_name,
+        album_title,
+        quality_dir,
+        track_number,
+        track_title,
+        extension,
+    );
+
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create destination folder: {}", e))?;
+    }
+
+    // Addendum B.3: write `.part`, then rename — no overwrite preflight.
+    let temp_path = target.with_extension(format!("{}.part", extension));
+    std::fs::write(&temp_path, data).map_err(|e| format!("Failed to write temporary file: {}", e))?;
+    std::fs::rename(&temp_path, &target).map_err(|e| format!("Failed to finalize file: {}", e))?;
+
+    let file_path = target.to_string_lossy().to_string();
+
+    // Addendum B.1/B.2: registry write AFTER the file is on disk, with the
+    // REQUESTED format_id (album_id None for single-track downloads). A registry
+    // failure here returns Err while the file stays on disk (orphaned).
+    db.mark_purchase_downloaded(
+        track_id as i64,
+        None,
+        &file_path,
+        requested_format_id as i64,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(file_path)
+}
+
+/// The single canonical single-track download primitive (Slice 5).
+///
+/// Ported from `v2_download_purchase_track_impl` (`legacy_compat.rs:2651-2702`)
+/// combined with the registry write of `v2_purchases_download_track`
+/// (`:3013-3022`). Sequence:
+///   1. `client.get_track(track_id)` → metadata. Error → `"Failed to fetch track
+///      {id}: {e}"`.
+///   2. `client.get_track_file_url_by_format(track_id, format_id)` → SIGNED
+///      `StreamUrl` (intent=stream). Error → `"Failed to get download URL for
+///      track {id}: {e}"`. (In the reference the client lock is dropped here; in
+///      this crate the caller holds the `QobuzClient` by `&`, so there is no lock
+///      to drop — the read guard is released by the controller before the
+///      multi-minute CDN fetch. No behavioral divergence in the bytes path.)
+///   3. `QobuzClient::download_audio(&stream.url)` → `Vec<u8>` (HTTP/1.1-only, no
+///      total timeout — see `qbz-qobuz`).
+///   4. Resolve names: artist = `track.performer.name` else `"Unknown Artist"`;
+///      album = `track.album.title` else `"Singles"`.
+///   5. Extension from RESPONSE `stream.format_id`/`mime_type` (B.2); path via
+///      `target_path`; `.part`→rename; registry write with REQUESTED `format_id`.
+///
+/// `quality_dir` is the UI-selected format label with `'/'→'-'` already applied
+/// (§7.5); it becomes the album-folder quality suffix AND the registry's quality
+/// dimension is the REQUESTED format (B.2). Returns the final on-disk path (the
+/// controller uses the FIRST track's returned path to rewrite the album-download
+/// destination to the album folder — Slice 7).
+///
+/// Addendum B.5: only `stream.url` / `stream.format_id` / `stream.mime_type` are
+/// consumed; `stream.restrictions` is IGNORED (no restriction-based blocking).
+pub async fn download_purchase_track(
+    client: &QobuzClient,
+    db: &LibraryDatabase,
+    track_id: u64,
+    format_id: u32,
+    destination: &str,
+    quality_dir: &str,
+) -> Result<String, String> {
+    let track = client
+        .get_track(track_id)
+        .await
+        .map_err(|e| format!("Failed to fetch track {}: {}", track_id, e))?;
+    let stream = client
+        .get_track_file_url_by_format(track_id, format_id)
+        .await
+        .map_err(|e| format!("Failed to get download URL for track {}: {}", track_id, e))?;
+
+    let data = QobuzClient::download_audio(&stream.url).await?;
+
+    let artist_name = track
+        .performer
+        .as_ref()
+        .map(|artist| artist.name.clone())
+        .unwrap_or_else(|| "Unknown Artist".to_string());
+    let album_title = track
+        .album
+        .as_ref()
+        .map(|album| album.title.clone())
+        .unwrap_or_else(|| "Singles".to_string());
+
+    write_and_register_track(
+        db,
+        track_id,
+        format_id,
+        &data,
+        &artist_name,
+        &album_title,
+        quality_dir,
+        track.track_number,
+        &track.title,
+        stream.format_id,
+        &stream.mime_type,
+        destination,
+    )
 }
 
 #[cfg(test)]
@@ -527,5 +758,207 @@ mod tests {
         assert!(!resp.tracks.items[0].downloaded);
         assert!(resp.tracks.items[0].downloaded_format_ids.is_empty());
         assert!(!resp.albums.items[0].downloaded);
+    }
+
+    // ── Slice 5: purchase_extension ──────────────────────────────────────
+
+    #[test]
+    fn purchase_extension_mp3_when_format_id_5() {
+        // RESPONSE format_id 5 → mp3 regardless of mime.
+        assert_eq!(purchase_extension(5, "audio/flac"), "mp3");
+    }
+
+    #[test]
+    fn purchase_extension_mp3_when_mime_contains_mpeg() {
+        // mime contains "mpeg" → mp3 even if the served id is a FLAC id.
+        assert_eq!(purchase_extension(27, "audio/mpeg"), "mp3");
+    }
+
+    #[test]
+    fn purchase_extension_flac_otherwise() {
+        assert_eq!(purchase_extension(27, "audio/flac"), "flac");
+        assert_eq!(purchase_extension(7, ""), "flac");
+        assert_eq!(purchase_extension(6, "application/octet-stream"), "flac");
+    }
+
+    // ── Slice 5: target_path ─────────────────────────────────────────────
+
+    #[test]
+    fn target_path_full_template_with_quality_and_track_number() {
+        // {dest}/{artist}/{album [quality]}/{NN - title.ext}; quality joined by a
+        // single space; sanitize strips the `[`/`]` brackets to `-` and collapses.
+        let p = target_path(
+            "/music",
+            "Miles Davis",
+            "Kind of Blue",
+            "[FLAC][24-bit,96kHz]",
+            3,
+            "So What",
+            "flac",
+        );
+        // sanitize: "[FLAC][24-bit,96kHz]" → brackets→`-`, collapsed/trimmed.
+        let expected = PathBuf::from("/music")
+            .join("Miles Davis")
+            .join(format!("Kind of Blue {}", sanitize_filename("[FLAC][24-bit,96kHz]")))
+            .join("03 - So What.flac");
+        assert_eq!(p, expected);
+        // zero-padding is two digits.
+        assert!(p.to_string_lossy().contains("/03 - So What.flac"));
+    }
+
+    #[test]
+    fn target_path_no_quality_dir_uses_bare_album_folder() {
+        let p = target_path("/d", "Artist", "Album", "", 1, "Title", "flac");
+        assert_eq!(p, PathBuf::from("/d").join("Artist").join("Album").join("01 - Title.flac"));
+    }
+
+    #[test]
+    fn target_path_zero_track_number_drops_number_prefix() {
+        let p = target_path("/d", "Artist", "Album", "", 0, "Title", "mp3");
+        assert_eq!(p, PathBuf::from("/d").join("Artist").join("Album").join("Title.mp3"));
+    }
+
+    #[test]
+    fn target_path_unknown_artist_and_singles_fallbacks_sanitize() {
+        // The "Unknown Artist"/"Singles" fallbacks are applied by the caller;
+        // here verify they round-trip through sanitize unchanged (ASCII alnum +
+        // spaces survive).
+        let p = target_path("/d", "Unknown Artist", "Singles", "", 0, "Loose Track", "flac");
+        assert_eq!(
+            p,
+            PathBuf::from("/d").join("Unknown Artist").join("Singles").join("Loose Track.flac")
+        );
+    }
+
+    // ── Slice 5: write_and_register_track (filesystem + registry I/O) ─────
+
+    fn open_temp_db(dir: &std::path::Path) -> LibraryDatabase {
+        LibraryDatabase::open(&dir.join("library.db")).expect("open temp library db")
+    }
+
+    #[test]
+    fn write_and_register_writes_part_then_renames_and_records_requested_format() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = open_temp_db(tmp.path());
+        let dest = tmp.path().join("downloads");
+        let data = b"FLACfakebytes".to_vec();
+
+        // Requested format 27 (192k FLAC); RESPONSE downgraded to id 6 FLAC.
+        let path = write_and_register_track(
+            &db,
+            /*track_id*/ 4242,
+            /*requested_format_id*/ 27,
+            &data,
+            "Miles Davis",
+            "Kind of Blue",
+            /*quality_dir*/ "[FLAC][24-bit,192kHz]",
+            /*track_number*/ 5,
+            "So What",
+            /*response_format_id*/ 6,
+            /*response_mime_type*/ "audio/flac",
+            dest.to_str().unwrap(),
+        )
+        .expect("write+register succeeds");
+
+        // Final file exists with the RESPONSE-derived extension (flac), the `.part`
+        // is gone, and the path embeds the REQUESTED-quality folder.
+        let final_path = PathBuf::from(&path);
+        assert!(final_path.exists(), "final file must exist");
+        assert!(final_path.to_string_lossy().ends_with("05 - So What.flac"));
+        assert!(!final_path.with_extension("flac.part").exists(), "`.part` removed after rename");
+        assert_eq!(std::fs::read(&final_path).unwrap(), data);
+
+        // Registry recorded the REQUESTED format (27), NOT the served 6 (B.2).
+        let formats = db.get_downloaded_purchase_formats().unwrap();
+        assert!(formats.contains(&(4242, 27)), "registry keys off REQUESTED format: {formats:?}");
+        assert!(!formats.iter().any(|&(tid, fid)| tid == 4242 && fid == 6));
+    }
+
+    #[test]
+    fn write_and_register_response_mp3_uses_mp3_extension() {
+        // B.2: extension follows the RESPONSE (served id 5 → mp3) even though the
+        // requested format was a FLAC id; registry still records the requested id.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = open_temp_db(tmp.path());
+        let dest = tmp.path().join("dl");
+
+        let path = write_and_register_track(
+            &db,
+            1,
+            /*requested*/ 7,
+            b"x",
+            "A",
+            "B",
+            "",
+            1,
+            "T",
+            /*response*/ 5,
+            "audio/mpeg",
+            dest.to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(path.ends_with("01 - T.mp3"), "served mp3 → .mp3 extension: {path}");
+        let formats = db.get_downloaded_purchase_formats().unwrap();
+        assert!(formats.contains(&(1, 7)), "requested format 7 recorded: {formats:?}");
+    }
+
+    #[test]
+    fn write_and_register_silently_overwrites_existing_final_file() {
+        // B.3: no collision preflight — a pre-existing final file is replaced
+        // without prompt or `(1)` disambiguation.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = open_temp_db(tmp.path());
+        let dest = tmp.path().join("dl");
+
+        let first = write_and_register_track(
+            &db, 9, 6, b"old", "A", "Alb", "", 2, "Song", 6, "audio/flac", dest.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&first).unwrap(), b"old");
+
+        // Second write to the SAME deterministic path with new bytes overwrites.
+        let second = write_and_register_track(
+            &db, 9, 6, b"new", "A", "Alb", "", 2, "Song", 6, "audio/flac", dest.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(first, second, "same deterministic target path");
+        assert_eq!(std::fs::read(&second).unwrap(), b"new", "silent overwrite");
+    }
+
+    #[test]
+    fn write_and_register_registry_failure_leaves_file_orphaned() {
+        // B.1: write file → rename → registry; if the registry write FAILS after a
+        // successful file write, return Err with the file LEFT ON DISK (orphaned).
+        //
+        // Inject a real registry failure WITHOUT touching `qbz-library`'s API: open
+        // a normal DB, then DROP the `downloaded_purchases` table via a SECOND
+        // connection to the same file. The held `LibraryDatabase` connection then
+        // sees "no such table" on its INSERT → registry write fails, while the
+        // filesystem write (to a separate destination dir) still succeeds.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("library.db");
+        let db = LibraryDatabase::open(&db_path).unwrap();
+
+        // Drop the registry table out from under the open connection.
+        {
+            let saboteur = rusqlite::Connection::open(&db_path).unwrap();
+            saboteur
+                .execute_batch("PRAGMA journal_mode=WAL; DROP TABLE downloaded_purchases;")
+                .unwrap();
+            // Checkpoint so the held connection observes the drop.
+            let _ = saboteur.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        }
+
+        let dest = tmp.path().join("downloads");
+        let res = write_and_register_track(
+            &db, 77, 6, b"bytes", "A", "Alb", "", 1, "Song", 6, "audio/flac", dest.to_str().unwrap(),
+        );
+
+        // Registry INSERT failed (no such table) → Err.
+        assert!(res.is_err(), "registry write failure must surface as Err: {res:?}");
+        // ...but the file write happened BEFORE the registry write → orphaned file.
+        let orphan = dest.join("A").join("Alb").join("01 - Song.flac");
+        assert!(orphan.exists(), "file left on disk after registry failure (orphaned, B.1)");
+        assert!(!orphan.with_extension("flac.part").exists(), "`.part` already renamed away");
     }
 }
