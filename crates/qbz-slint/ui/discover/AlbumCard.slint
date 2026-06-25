@@ -13,7 +13,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
-import { AlbumCardItem, NavState } from "../state.slint";
+import { AlbumCardItem, NavState, TooltipState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadge } from "../primitives/QualityBadge.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
@@ -255,20 +255,46 @@ export component AlbumCard inherits Rectangle {
                 width: 24px;
                 height: 24px;
                 border-radius: 4px;
-                background: root.album.source == "qobuz_download" ? transparent : #000000b3;
+                // `qobuz_purchase` → §8.7 gold chip: dark-amber translucent fill +
+                // gold 1px border (the visual that distinguishes a purchased album
+                // in the local library; the glyph is GOLD-tinted below).
+                background: root.album.source == "qobuz_purchase" ? #1e1400d9
+                    : (root.album.source == "qobuz_download" ? transparent : #000000b3);
+                border-width: root.album.source == "qobuz_purchase" ? 1px : 0px;
+                border-color: #eab30880;
                 Image {
                     source: root.album.source == "plex"
                         ? @image-url("../assets/icons/plex-logo.svg")
-                        : (root.album.source == "qobuz_download"
+                        : (root.album.source == "qobuz_download" || root.album.source == "qobuz_purchase"
                             ? @image-url("../assets/icons/qobuz-logo-filled.svg")
                             : @image-url("../assets/icons/hard-drive.svg"));
-                    colorize: root.album.source == "local" ? #ffffff : transparent;
+                    colorize: root.album.source == "qobuz_purchase" ? #eab308
+                        : (root.album.source == "local" ? #ffffff : transparent);
                     width: root.album.source == "plex" ? 16px
-                        : (root.album.source == "qobuz_download" ? 22px : 14px);
+                        : (root.album.source == "qobuz_download" ? 22px
+                            : (root.album.source == "qobuz_purchase" ? 18px : 14px));
                     height: self.width;
                     x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
                     y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
                     image-fit: contain;
+                }
+                // §8.7: the gold purchase badge carries a hover tooltip
+                // `library.qobuzPurchaseIndicator` ("Purchased from Qobuz"),
+                // mirroring Tauri's SourceBadge `title=` on the qobuz_purchase
+                // chip. Bare hover TouchArea drives the shared TooltipState;
+                // wired ONLY for qobuz_purchase (the download/plex/local badges
+                // have no source tooltip — matching the Tauri baseline).
+                if root.album.source == "qobuz_purchase": TouchArea {
+                    changed has-hover => {
+                        if (self.has-hover) {
+                            TooltipState.text = @tr("Purchased from Qobuz");
+                            TooltipState.anchor-x = self.absolute-position.x + self.width / 2;
+                            TooltipState.anchor-y = self.absolute-position.y;
+                            TooltipState.show = true;
+                        } else {
+                            TooltipState.show = false;
+                        }
+                    }
                 }
             }
 

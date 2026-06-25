@@ -25,14 +25,16 @@ component SourceIcon inherits Image {
     width: 14px;
     height: 14px;
     image-fit: contain;
-    source: root.kind == "qobuz_download"
+    source: (root.kind == "qobuz_download" || root.kind == "qobuz_purchase")
         ? @image-url("../assets/icons/qobuz-logo-filled.svg")
         : (root.kind == "plex"
             ? @image-url("../assets/icons/plex-logo.svg")
             : @image-url("../assets/icons/hard-drive.svg"));
-    colorize: (root.kind == "qobuz_download" || root.kind == "plex")
-        ? transparent
-        : Theme.text-secondary;
+    // `qobuz_purchase` → GOLD-tinted Qobuz mark (§8.7 purchase badge).
+    colorize: root.kind == "qobuz_purchase" ? #eab308
+        : ((root.kind == "qobuz_download" || root.kind == "plex")
+            ? transparent
+            : Theme.text-secondary);
 }
 
 // Version picker — selected display + dropdown, both with the source icon.

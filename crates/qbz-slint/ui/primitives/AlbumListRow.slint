@@ -275,10 +275,12 @@ export component AlbumListRow inherits Rectangle {
             if root.album.source != "": Image {
                 source: root.album.source == "plex"
                     ? @image-url("../assets/icons/plex-logo.svg")
-                    : (root.album.source == "qobuz" || root.album.source == "qobuz_download"
+                    : (root.album.source == "qobuz" || root.album.source == "qobuz_download" || root.album.source == "qobuz_purchase"
                         ? @image-url("../assets/icons/qobuz-logo-filled.svg")
                         : @image-url("../assets/icons/hard-drive.svg"));
-                colorize: root.album.source == "local" ? Theme.text-muted : transparent;
+                // `qobuz_purchase` → GOLD-tinted Qobuz mark (§8.7 purchase badge).
+                colorize: root.album.source == "qobuz_purchase" ? #eab308
+                    : (root.album.source == "local" ? Theme.text-muted : transparent);
                 width: root.album.source == "local" ? 15px : 16px;
                 height: self.width;
                 x: 0;

@@ -656,10 +656,12 @@ export component TrackRow inherits Rectangle {
                 Image {
                     source: root.track.source == "plex"
                         ? @image-url("../assets/icons/plex-logo.svg")
-                        : (root.track.source == "qobuz"
+                        : (root.track.source == "qobuz" || root.track.source == "qobuz_purchase"
                             ? @image-url("../assets/icons/qobuz-logo-filled.svg")
                             : @image-url("../assets/icons/hard-drive.svg"));
-                    colorize: root.track.source == "local" ? Theme.text-muted : transparent;
+                    // `qobuz_purchase` → GOLD-tinted Qobuz mark (§8.7 purchase badge).
+                    colorize: root.track.source == "qobuz_purchase" ? #eab308
+                        : (root.track.source == "local" ? Theme.text-muted : transparent);
                     width: root.track.source == "local" ? 15px : 16px;
                     height: self.width;
                     x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;

@@ -3957,3 +3957,95 @@ msgstr "· Unbegrenzt"
 
 msgid "· of {}"
 msgstr "· von {}"
+
+# --- Purchases (Slice 13) ---
+
+msgid "My Purchases"
+msgstr "Meine Einkäufe"
+
+msgid "Purchases are downloaded as DRM-free files. Availability depends on your Qobuz region."
+msgstr "Einkäufe werden als DRM-freie Dateien heruntergeladen. Die Verfügbarkeit hängt von deiner Qobuz-Region ab."
+
+msgid "Search purchases…"
+msgstr "Einkäufe durchsuchen…"
+
+msgid "No purchases yet"
+msgstr "Noch keine Einkäufe"
+
+msgid "No purchased tracks yet"
+msgstr "Noch keine gekauften Titel"
+
+msgid "Filters"
+msgstr "Filter"
+
+msgid "Availability"
+msgstr "Verfügbarkeit"
+
+msgid "Hide unavailable"
+msgstr "Nicht verfügbare ausblenden"
+
+msgid "CD Quality"
+msgstr "CD-Qualität"
+
+msgid "MP3"
+msgstr "MP3"
+
+msgid "Downloads"
+msgstr "Downloads"
+
+msgid "Hide downloaded"
+msgstr "Heruntergeladene auf diesem Computer ausblenden"
+
+msgid "Group: A–Z"
+msgstr "Gruppe: A-Z"
+
+msgid "Sort: Date"
+msgstr "Sortieren: Datum"
+
+msgid "Sort: Artist"
+msgstr "Sortieren: Künstler"
+
+msgid "Sort: Album"
+msgstr "Sortieren: Album"
+
+msgid "Sort: Quality"
+msgstr "Sortieren: Qualität"
+
+msgid "Date"
+msgstr "Datum"
+
+msgid "Download all"
+msgstr "Alles herunterladen"
+
+msgid "Download complete"
+msgstr "Download abgeschlossen"
+
+msgid "Download cancelled ({}/{})"
+msgstr "Download abgebrochen ({}/{})"
+
+msgid "Downloading {}/{}..."
+msgstr "Herunterladen {}/{}..."
+
+msgid "Select format"
+msgstr "Format auswählen"
+
+msgid "Purchased on"
+msgstr "Gekauft am"
+
+msgid "Add these downloaded tracks to your local library."
+msgstr "Diese heruntergeladenen Titel zur lokalen Bibliothek hinzufügen."
+
+msgid "{} tracks"
+msgstr "{} Titel"
+
+msgid "Choose folder"
+msgstr "Ordner wählen"
+
+msgid "Couldn't add to library"
+msgstr "Konnte nicht zur Bibliothek hinzugefügt werden"
+
+msgid "Added to library"
+msgstr "Zur Bibliothek hinzugefügt"
+
+msgid "Purchased from Qobuz"
+msgstr "Qobuz-Kauf"

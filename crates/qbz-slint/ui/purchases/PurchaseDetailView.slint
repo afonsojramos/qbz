@@ -507,9 +507,12 @@ export component PurchaseDetailView inherits Rectangle {
                         }
                         if !PurchaseDetailState.all-complete
                             && PurchaseDetailState.was-cancelled: Text {
-                            text: @tr("Download cancelled") + " ("
-                                + PurchaseDetailState.completed-count + "/"
-                                + PurchaseDetailState.total-tracks + ")";
+                            // `purchases.downloadCancelled` {completed}{total} —
+                            // single @tr placeholder form so the Slice-13 catalog
+                            // backs it (NOT concatenated @tr fragments; §8.5).
+                            text: @tr("Download cancelled ({}/{})",
+                                PurchaseDetailState.completed-count,
+                                PurchaseDetailState.total-tracks);
                             color: Theme.text-secondary;
                             font-size: Typography.legal;
                             vertical-alignment: center;
@@ -520,9 +523,12 @@ export component PurchaseDetailView inherits Rectangle {
                             && !PurchaseDetailState.was-cancelled: LoadingSpinner { size: 14px; }
                         if !PurchaseDetailState.all-complete
                             && !PurchaseDetailState.was-cancelled: Text {
-                            text: @tr("Downloading") + " "
-                                + PurchaseDetailState.completed-count + "/"
-                                + PurchaseDetailState.total-tracks;
+                            // `purchases.downloadProgress` {current}{total} —
+                            // single @tr placeholder form (NOT concatenated @tr
+                            // fragments; §8.5). Trailing "..." matches Tauri source.
+                            text: @tr("Downloading {}/{}...",
+                                PurchaseDetailState.completed-count,
+                                PurchaseDetailState.total-tracks);
                             color: Theme.text-secondary;
                             font-size: Typography.legal;
                             vertical-alignment: center;
