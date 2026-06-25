@@ -23,6 +23,7 @@ members = [
     "qconnect-transport-ws",
     "qconnect-app",
     "qbz-ui",
+    "qbz-dac-wizard",
     "qbz",
     "qbz-credentials",
     "qbz-media-controls",

@@ -40,7 +40,7 @@ mod favorites;
 mod favorites_prefs;
 mod foryou;
 mod genre_filter;
-mod dac_wizard;
+use qbz_dac_wizard as dac_wizard;
 mod home;
 mod immersive;
 mod info_modals;

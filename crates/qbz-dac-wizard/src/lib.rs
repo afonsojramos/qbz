@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use qbz_audio::{AudioStackHealth, Distro, InitSystem};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use crate::{AppWindow, DacCandidateRow, DacConfigRow, DacWizardState, RemediationRow};
+use qbz_ui::{AppWindow, DacCandidateRow, DacConfigRow, DacWizardState, RemediationRow};
 
 // Last probe result, so a distro override recomputes commands without
 // re-shelling on every dropdown change.

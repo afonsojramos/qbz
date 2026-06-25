@@ -5531,6 +5531,7 @@ dependencies = [
  "qbz-cast",
  "qbz-core",
  "qbz-credentials",
+ "qbz-dac-wizard",
  "qbz-i18n",
  "qbz-integrations",
  "qbz-library",
@@ -5698,6 +5699,17 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tokio",
+]
+
+[[package]]
+name = "qbz-dac-wizard"
+version = "0.1.0"
+dependencies = [
+ "qbz-audio",
+ "qbz-i18n",
+ "qbz-models",
+ "qbz-ui",
+ "slint",
 ]
 
 [[package]]
