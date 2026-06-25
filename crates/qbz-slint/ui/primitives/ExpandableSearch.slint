@@ -9,6 +9,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "QbzIcon.slint";
+import { UiFocusState } from "../focus-state.slint";
 
 export component ExpandableSearch inherits Rectangle {
     in property <string> placeholder: @tr("Search…");
@@ -112,6 +113,7 @@ export component ExpandableSearch inherits Rectangle {
                     vertical-alignment: center;
                     single-line: true;
                     text <=> root.query;
+                    changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                     edited => {
                         root.edited(self.text);
                     }

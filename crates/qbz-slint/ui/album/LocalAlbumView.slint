@@ -7,7 +7,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { LocalAlbumState, LocalAlbumActions, LocalAlbumVersion, NowPlayingState, NavState, DragState } from "../state.slint";
+import { LocalAlbumState, LocalAlbumActions, LocalAlbumVersion, NowPlayingState, NavState, DragState, UiFocusState } from "../state.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
@@ -410,6 +410,7 @@ export component LocalAlbumView inherits Rectangle {
                                         font-size: 13px;
                                         vertical-alignment: center;
                                         single-line: true;
+                                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                         edited => {
                                             LocalAlbumActions.search(self.text);
                                         }

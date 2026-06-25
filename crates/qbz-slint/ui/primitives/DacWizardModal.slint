@@ -11,7 +11,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { DacWizardState, DacWizardActions, NowPlayingState } from "../state.slint";
+import { DacWizardState, DacWizardActions, NowPlayingState, UiFocusState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { QbzPrimaryButton } from "QbzPrimaryButton.slint";
 import { SecondaryButton } from "SecondaryButton.slint";
@@ -442,6 +442,7 @@ export component DacWizardModal inherits Rectangle {
                                                 vertical-alignment: center;
                                                 single-line: true;
                                                 text <=> DacWizardState.manual-node-name;
+                                                changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                                 edited => {
                                                     DacWizardActions.validate-manual(self.text);
                                                 }

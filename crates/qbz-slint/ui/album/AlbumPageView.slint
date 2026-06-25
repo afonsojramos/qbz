@@ -9,7 +9,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
-import { AlbumState, AlbumActions, ArtworkActions, NavState, ContentView, DragState, NowPlayingState, ShellState, TooltipState, AppearanceState } from "../state.slint";
+import { AlbumState, AlbumActions, ArtworkActions, NavState, ContentView, DragState, NowPlayingState, ShellState, TooltipState, AppearanceState, UiFocusState } from "../state.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
@@ -644,6 +644,7 @@ export component AlbumPageView inherits Rectangle {
                                             font-size: 13px;
                                             vertical-alignment: center;
                                             single-line: true;
+                                            changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                             edited => {
                                                 AlbumActions.search(self.text);
                                             }

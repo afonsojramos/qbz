@@ -30,6 +30,7 @@ members = [
     "qbz-lyrics",
     "qbz-booklet",
     "qbz-i18n",
+    "qbz-music-link",
 ]
 
 [workspace.package]

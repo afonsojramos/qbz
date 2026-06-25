@@ -13,7 +13,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { OfflineManagerState, OfflineManagerActions, OfflineRow, OfflineArtist } from "../state.slint";
-import { NavState, TooltipState } from "../state.slint";
+import { NavState, TooltipState, UiFocusState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -241,6 +241,7 @@ export component OfflineManagerView inherits Rectangle {
                                 font-size: Typography.body;
                                 input-type: number;
                                 text: OfflineManagerState.limit-gb;
+                                changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                 accepted => {
                                     OfflineManagerActions.set-limit(self.text.to-float());
                                 }

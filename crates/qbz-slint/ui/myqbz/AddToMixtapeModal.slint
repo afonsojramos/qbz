@@ -18,7 +18,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { MyQbzAddState, MyQbzAddActions, MyQbzAddRow } from "../state.slint";
+import { MyQbzAddState, MyQbzAddActions, MyQbzAddRow, UiFocusState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { QbzPrimaryButton } from "../primitives/QbzPrimaryButton.slint";
@@ -331,6 +331,7 @@ export component AddToMixtapeModal inherits Rectangle {
                                             vertical-alignment: center;
                                             single-line: true;
                                             text <=> MyQbzAddState.search;
+                                            changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                             edited => {
                                                 MyQbzAddActions.search-changed(self.text);
                                             }
@@ -467,6 +468,7 @@ export component AddToMixtapeModal inherits Rectangle {
                                         single-line: true;
                                         enabled: !MyQbzAddState.create-busy;
                                         text <=> MyQbzAddState.create-name;
+                                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                         accepted => {
                                             if (root.can-create) {
                                                 MyQbzAddActions.create-and-add();

@@ -44,6 +44,7 @@ slint = { version = "=1.16.1", default-features = false, features = [
 # pinned to the exact version Slint resolves (1.16.1) — i-slint-backend-winit
 # does not follow semver, and a mismatch makes with_winit_window() return None.
 i-slint-backend-winit = "=1.16.1"
+qbz-music-link = { path = "../qbz-music-link" }
 log = { workspace = true }
 env_logger = "0.11"
 tokio = { workspace = true }

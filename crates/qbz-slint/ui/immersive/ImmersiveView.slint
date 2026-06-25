@@ -5,7 +5,7 @@
 import { Radius } from "../foundation/radius.slint";
 import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { NowPlayingState, VisualizerState, ImmersiveState, ImmersiveSearchActions, ImmersiveActions, SettingsState, LyricsState, QueueState, TrackInfoActions, SuggestionsActions, WindowControlActions, ShellState } from "../state.slint";
+import { NowPlayingState, VisualizerState, ImmersiveState, ImmersiveSearchActions, ImmersiveActions, SettingsState, LyricsState, QueueState, TrackInfoActions, SuggestionsActions, WindowControlActions, ShellState, UiFocusState } from "../state.slint";
 import { ImmersiveSearchCortinilla } from "ImmersiveSearchCortinilla.slint";
 import { ImmersiveAtmosphere } from "ImmersiveAtmosphere.slint";
 import { AlbumReactivePanel } from "AlbumReactivePanel.slint";
@@ -839,6 +839,7 @@ component ImmersiveSearchPlaceholder inherits Rectangle {
             // route focus back to the scope; `forward-focus: input` immediately
             // hands the cursor back here, so typing is unaffected.
             changed has-focus => {
+                UiFocusState.text-input-focused = self.has-focus;
                 if (self.has-focus) {
                     search-scope.focus();
                     if (self.text != "") {

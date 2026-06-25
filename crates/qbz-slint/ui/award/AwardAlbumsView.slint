@@ -22,7 +22,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { AwardState, AwardActions, NavState, ShellState } from "../state.slint";
+import { AwardState, AwardActions, NavState, ShellState, UiFocusState } from "../state.slint";
 import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
@@ -63,6 +63,7 @@ component AwardSearch inherits Rectangle {
                 vertical-alignment: center;
                 single-line: true;
                 text <=> AwardState.search-query;
+                changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                 edited => {
                     AwardActions.search(self.text);
                 }

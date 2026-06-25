@@ -10,7 +10,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { DiscoverBrowseState, DiscoverBrowseActions, GenreFilterState, GenreFilterActions, NavState, ShellState } from "../state.slint";
+import { DiscoverBrowseState, DiscoverBrowseActions, GenreFilterState, GenreFilterActions, NavState, ShellState, UiFocusState } from "../state.slint";
 import { AlbumCollectionView } from "AlbumCollectionView.slint";
 import { GenreFilterPopup } from "GenreFilterPopup.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -53,6 +53,7 @@ component BrowseSearch inherits Rectangle {
                 vertical-alignment: center;
                 single-line: true;
                 text <=> DiscoverBrowseState.search-query;
+                changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                 edited => {
                     DiscoverBrowseActions.search-changed();
                 }

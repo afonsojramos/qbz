@@ -19,6 +19,7 @@ import {
     PmPlaylistItem,
     PmTreeRow,
     NavState,
+    UiFocusState,
 } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -63,6 +64,7 @@ component PmSearch inherits Rectangle {
                 vertical-alignment: center;
                 single-line: true;
                 text <=> PlaylistManagerState.search-query;
+                changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                 edited => {
                     PlaylistManagerActions.search-changed(self.text);
                 }

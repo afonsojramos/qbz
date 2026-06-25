@@ -21,7 +21,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "QbzIcon.slint";
-import { TextUtil } from "../state.slint";
+import { TextUtil, UiFocusState } from "../state.slint";
 
 // "BP" marker for bit-perfect-capable options. Plain accent text, no
 // background — the QBZ UI never uses pill-style chips.
@@ -235,6 +235,7 @@ export component QbzSelect inherits Rectangle {
                                 vertical-alignment: center;
                                 single-line: true;
                                 text <=> root.filter;
+                                changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                             }
                             Text {
                                 visible: search-input.text == "";

@@ -14,7 +14,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { DiscoBuilderState, DiscoBuilderActions, DiscoGroup, DiscoCandidate } from "../state.slint";
+import { DiscoBuilderState, DiscoBuilderActions, DiscoGroup, DiscoCandidate, UiFocusState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { QbzPrimaryButton } from "../primitives/QbzPrimaryButton.slint";
@@ -513,6 +513,7 @@ export component DiscographyBuilderView inherits Rectangle {
                                 vertical-alignment: center;
                                 single-line: true;
                                 text: DiscoBuilderState.collection-name;
+                                changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                 edited => {
                                     DiscoBuilderActions.name-changed(self.text);
                                 }

@@ -14,7 +14,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { PlaylistPickerState, PlaylistPickerActions, PlaylistPickItem } from "../state.slint";
+import { PlaylistPickerState, PlaylistPickerActions, PlaylistPickItem, UiFocusState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { LoadingSpinner } from "LoadingSpinner.slint";
 import { QbzPrimaryButton } from "QbzPrimaryButton.slint";
@@ -333,6 +333,7 @@ export component PlaylistPickerModal inherits Rectangle {
                                                 keys.on-enter();
                                             }
                                             changed has-focus => {
+                                                UiFocusState.text-input-focused = self.has-focus;
                                                 // Tauri: list opens on focus.
                                                 if (self.has-focus) {
                                                     keys.dropdown-open = true;
@@ -423,6 +424,7 @@ export component PlaylistPickerModal inherits Rectangle {
                                             single-line: true;
                                             enabled: !PlaylistPickerState.creating;
                                             text <=> PlaylistPickerState.create-name;
+                                            changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                             accepted => {
                                                 if (PlaylistPickerState.create-name != ""
                                                     && !PlaylistPickerState.creating) {

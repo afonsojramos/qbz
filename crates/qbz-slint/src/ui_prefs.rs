@@ -9,6 +9,7 @@
 //! The store is intentionally minimal — read-modify-write the whole file
 //! on every set. The file is tiny and writes are rare (a settings change).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -323,6 +324,14 @@ pub struct UiPrefs {
     #[serde(default = "default_theme")]
     pub theme: String,
 
+    // ---- Keyboard shortcuts (hotkeys) ----------------------------------
+    /// User keybinding overrides: action id → shortcut string. Only actions
+    /// the user re-bound away from their default are stored (mirrors Tauri's
+    /// `qbz_keybindings` localStorage overrides). A missing entry means the
+    /// action uses its compiled default (see `crate::keybindings::ACTIONS`).
+    #[serde(default)]
+    pub keybindings: BTreeMap<String, String>,
+
     // ---- Miniplayer ----------------------------------------------------
     /// Last miniplayer surface: 0 micro · 1 compact · 2 artwork · 3 queue · 4 lyrics.
     #[serde(default = "default_mini_surface")]
@@ -450,6 +459,7 @@ impl Default for UiPrefs {
             immersive_last_mode: 0,
             immersive_last_split_panel: 0,
             theme: default_theme(),
+            keybindings: BTreeMap::new(),
             mini_surface: default_mini_surface(),
             mini_width: default_mini_width(),
             mini_height: default_mini_height(),

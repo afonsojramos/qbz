@@ -14,7 +14,7 @@ import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions, SearchState, SidebarPlaylistsPopupState, OfflineState, SettingsState, OfflineModeActions, AppearanceState } from "../state.slint";
+import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions, SearchState, SidebarPlaylistsPopupState, OfflineState, SettingsState, OfflineModeActions, AppearanceState, KeyboardShortcutsState, LinkResolverState, UiFocusState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SecondaryButton } from "../primitives/SecondaryButton.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
@@ -677,6 +677,9 @@ export component HeaderBar inherits Rectangle {
                 // focus-out (e.g. Tab away) is dismissed via Escape /
                 // click-outside, matching the menu overlays.
                 changed has-focus => {
+                    // Hotkey guard: while the search field has focus, the global
+                    // key dispatcher must ignore single-key shortcuts.
+                    UiFocusState.text-input-focused = self.has-focus;
                     if (self.has-focus) {
                         // A direct click focuses the TextInput, NOT the wrapping
                         // FocusScope — and then the scope's key-pressed (the
@@ -1033,8 +1036,25 @@ export component HeaderBar inherits Rectangle {
                     }
                 }
                 MenuItem {
+                    icon: @image-url("../assets/icons/link.svg");
+                    label: @tr("Open Qobuz Link");
+                    clicked => {
+                        menu.close();
+                        LinkResolverState.url = "";
+                        LinkResolverState.platform = "";
+                        LinkResolverState.error = "";
+                        LinkResolverState.playlist-detected = false;
+                        LinkResolverState.resolving = false;
+                        LinkResolverState.open = true;
+                    }
+                }
+                MenuItem {
                     icon: @image-url("../assets/icons/keyboard.svg");
                     label: @tr("Keyboard Shortcuts");
+                    clicked => {
+                        menu.close();
+                        KeyboardShortcutsState.open = true;
+                    }
                 }
                 MenuItem {
                     icon: @image-url("../assets/icons/book-open.svg");

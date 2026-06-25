@@ -23,7 +23,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { PlaylistImportState, PlaylistImportActions, OfflineState } from "../state.slint";
+import { PlaylistImportState, PlaylistImportActions, OfflineState, UiFocusState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { QbzSelect } from "QbzSelect.slint";
 import { LoadingSpinner } from "LoadingSpinner.slint";
@@ -208,6 +208,7 @@ export component PlaylistImportModal inherits Rectangle {
                                             single-line: true;
                                             enabled: !PlaylistImportState.loading;
                                             text <=> PlaylistImportState.url;
+                                            changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                             edited => {
                                                 PlaylistImportActions.url-edited(self.text);
                                             }
@@ -329,6 +330,7 @@ export component PlaylistImportModal inherits Rectangle {
                                                     enabled: !PlaylistImportState.loading
                                                         && !PlaylistImportState.import-completed;
                                                     text <=> PlaylistImportState.custom-name;
+                                                    changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                                     edited => {
                                                         PlaylistImportActions.name-edited(self.text);
                                                     }

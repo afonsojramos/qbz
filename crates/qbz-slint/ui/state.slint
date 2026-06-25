@@ -6,6 +6,12 @@
 import { JumpNavTab } from "primitives/JumpNavBar.slint";
 export { JumpNavTab }
 
+// Re-export the hotkey text-input guard from its leaf file so existing
+// `import { UiFocusState } from "state.slint"` sites keep working, while
+// low-level primitives import it directly from "focus-state.slint" (avoids a
+// recursive import — state.slint imports JumpNavBar's JumpNavTab).
+export { UiFocusState } from "focus-state.slint";
+
 export struct AlbumCardItem {
     id: string,
     title: string,
@@ -4908,3 +4914,87 @@ export global DacWizardActions {
     callback gen-configs();          // build the per-DAC copy-paste config (Slice 10)
     callback toggle-config(int);     // collapse/expand one DAC's config accordion
 }
+
+// ============================================================================
+// Keyboard shortcuts (hotkeys) — port of the Tauri keybindings system.
+// ============================================================================
+
+// One action row, prebuilt in Rust (crate::keybindings) with its display
+// shortcut already formatted ("Ctrl + →"). Shared by the read-only cheatsheet
+// and the editable customize editor.
+export struct KeybindingRow {
+    id: string,            // stable action id, e.g. "playback.toggle"
+    label: string,         // localized action label
+    shortcut: string,      // formatted display, e.g. "Ctrl + →" / "Space"
+    modified: bool,        // differs from the default binding
+    contextual: bool,      // only fires in a context (immersive / mini)
+}
+
+// A category group (Playback / Navigation / Interface / Immersive / Mini Player)
+// with its localized header label and its ordered rows.
+export struct KeybindingCategoryGroup {
+    label: string,         // localized category header
+    rows: [KeybindingRow],
+}
+
+export global KeybindingsState {
+    // Ordered category groups, rebuilt in Rust whenever a binding changes.
+    in property <[KeybindingCategoryGroup]> groups: [];
+    // Count of actions whose binding differs from default ("N modified").
+    in property <int> modified-count: 0;
+
+    // --- Customize editor capture state -------------------------------------
+    // Action id currently being recorded ("" = not recording). The winit key
+    // handler reads this; while non-empty it captures the next combo instead
+    // of dispatching a hotkey.
+    in-out property <string> recording-id: "";
+    // Live formatted display of the combo being pressed while recording.
+    in property <string> pending-display: "";
+    // Localized label of the action that already owns the pressed combo
+    // ("" = no conflict). When set, the capture is NOT applied.
+    in property <string> conflict-label: "";
+}
+
+export global KeybindingsActions {
+    callback start-record(string);  // begin capturing for an action id
+    callback cancel-record();       // stop capturing (Escape / click-away)
+    callback reset-one(string);     // reset one action to its default
+    callback reset-all();           // reset every action to defaults
+}
+
+// Open flags for the two keybindings modals. The cheatsheet (read-only, `?`)
+// and the editable customize editor. Self-gated mounts in AppShell (ADR-010).
+export global KeyboardShortcutsState {
+    in-out property <bool> open: false;           // read-only cheatsheet
+    in-out property <bool> customize-open: false; // editable customize editor
+}
+
+// ============================================================================
+// Open Qobuz Link (Ctrl+L) — cross-platform link resolver modal.
+// ============================================================================
+
+export global LinkResolverState {
+    in-out property <bool> open: false;
+    // Two-way bound to the input field.
+    in-out property <string> url: "";
+    // Detected platform id for the leading icon: "qobuz" | "spotify" | "apple"
+    // | "tidal" | "deezer" | "songlink" | "" (none/unknown). Set by Rust on
+    // url-changed; reset to "" from the hamburger menu on open (hence in-out).
+    in-out property <string> platform: "";
+    in-out property <bool> resolving: false;
+    // Localized error message ("" = none).
+    in-out property <string> error: "";
+    // Playlist banner: the link is a playlist → offer the Playlist Importer.
+    in-out property <bool> playlist-detected: false;
+    in property <string> playlist-provider: "";
+}
+
+export global LinkResolverActions {
+    callback submit(string);        // resolve + navigate
+    callback close();
+    callback url-changed(string);   // live platform detection for the icon
+    callback open-importer();       // playlist banner → open Playlist Importer
+}
+
+// UiFocusState (the hotkey text-input guard) lives in the leaf file
+// `focus-state.slint` and is re-exported at the top of this file.

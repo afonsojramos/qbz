@@ -40,6 +40,9 @@ import { ImmersiveView } from "../immersive/ImmersiveView.slint";
 import { QconnectDevModal } from "QconnectDevModal.slint";
 import { CastPicker } from "CastPicker.slint";
 import { DiscoverConfigModal } from "../discover/DiscoverConfigModal.slint";
+import { KeyboardShortcutsModal } from "KeyboardShortcutsModal.slint";
+import { CustomizeShortcutsModal } from "CustomizeShortcutsModal.slint";
+import { LinkResolverModal } from "LinkResolverModal.slint";
 import { DragGhost } from "../primitives/DragGhost.slint";
 import { Toast } from "../primitives/Toast.slint";
 import { NowPlayingBar } from "NowPlayingBar.slint";
@@ -674,6 +677,23 @@ export component AppShell inherits Rectangle {
 
     // Cast (Chromecast / DLNA) device picker.
     CastPicker {
+        width: 100%;
+        height: 100%;
+    }
+
+    // Keyboard shortcuts: read-only cheatsheet (`?`) + editable customize
+    // editor. Self-gate on KeyboardShortcutsState.open / .customize-open.
+    KeyboardShortcutsModal {
+        width: 100%;
+        height: 100%;
+    }
+    CustomizeShortcutsModal {
+        width: 100%;
+        height: 100%;
+    }
+
+    // "Open Qobuz Link" (Ctrl+L) cross-platform link resolver.
+    LinkResolverModal {
         width: 100%;
         height: 100%;
     }

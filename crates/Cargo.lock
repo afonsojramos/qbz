@@ -5752,6 +5752,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-music-link"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "log",
+ "qbz-models",
+ "qbz-qobuz",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "qbz-offline-cache"
 version = "0.1.0"
 dependencies = [
@@ -5902,6 +5917,7 @@ dependencies = [
  "qbz-media-controls",
  "qbz-mixtape",
  "qbz-models",
+ "qbz-music-link",
  "qbz-offline-cache",
  "qbz-player",
  "qbz-playlist-import",

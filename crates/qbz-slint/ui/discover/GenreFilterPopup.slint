@@ -7,7 +7,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { GenreFilterState, GenreFilterActions, GenreChip, GenreTreeRow } from "../state.slint";
+import { GenreFilterState, GenreFilterActions, GenreChip, GenreTreeRow, UiFocusState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 
@@ -297,6 +297,7 @@ export component GenreFilterPopup inherits Rectangle {
                             vertical-alignment: center;
                             single-line: true;
                             text <=> GenreFilterState.search-query;
+                            changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                             edited => {
                                 GenreFilterActions.search(self.text);
                             }

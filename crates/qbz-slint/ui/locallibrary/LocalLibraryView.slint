@@ -31,6 +31,7 @@ import { TrackRow } from "../primitives/TrackRow.slint";
 import { ToggleButton } from "../primitives/ToggleButton.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { TooltipState } from "../state.slint";
+import { UiFocusState } from "../state.slint";
 import { SegmentedTabBar, SegTab } from "../primitives/SegmentedTabBar.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -1616,6 +1617,7 @@ export component LocalLibraryView inherits Rectangle {
                                                 vertical-alignment: center;
                                                 single-line: true;
                                                 text <=> LocalLibraryState.folders-tree-search;
+                                                changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                                 edited => {
                                                     LocalLibraryActions.folders-tree-search(self.text);
                                                 }
@@ -1866,6 +1868,7 @@ export component LocalLibraryView inherits Rectangle {
                                                                 vertical-alignment: center;
                                                                 single-line: true;
                                                                 text <=> LocalLibraryState.folder-detail-search;
+                                                                changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                                                                 edited => {
                                                                     LocalLibraryActions.folder-detail-search(self.text);
                                                                 }

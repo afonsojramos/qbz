@@ -29,6 +29,7 @@ import {
     PurchaseAlbumGroup,
     PurchaseTrackGroup,
     PurchaseFormatItem,
+    UiFocusState,
 } from "../state.slint";
 
 // ── A toolbar dropdown button (group / sort) — the favorites toolbar look ──
@@ -730,6 +731,7 @@ component SearchBox inherits Rectangle {
                     vertical-alignment: center;
                     single-line: true;
                     text <=> PurchasesState.search-query;
+                    changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                     edited => {
                         PurchasesActions.search(self.text);
                     }

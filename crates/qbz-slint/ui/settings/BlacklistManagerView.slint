@@ -21,7 +21,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { BlacklistState, BlacklistActions } from "../state.slint";
+import { BlacklistState, BlacklistActions, UiFocusState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -260,6 +260,7 @@ export component BlacklistManagerView inherits Rectangle {
                             color: Theme.text-primary;
                             font-size: Typography.legal;
                             text: BlacklistState.search-query;
+                            changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                             // Search-as-you-type: every edit re-pushes the
                             // controller-filtered rows. No debounce (Tauri parity).
                             edited => {

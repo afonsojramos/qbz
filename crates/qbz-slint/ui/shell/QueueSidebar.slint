@@ -16,7 +16,7 @@ import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
-import { ShellState, QueueState, QueueItem, NowPlayingState } from "../state.slint";
+import { ShellState, QueueState, QueueItem, NowPlayingState, UiFocusState } from "../state.slint";
 
 // Close button — mirrors the X control used by LyricsSidebar.
 component CloseButton inherits Rectangle {
@@ -815,6 +815,7 @@ export component QueueSidebar inherits Rectangle {
                             vertical-alignment: center;
                             single-line: true;
                             text: QueueState.search-query;
+                            changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                             edited => {
                                 QueueState.search-query = self.text;
                                 QueueState.search-changed();

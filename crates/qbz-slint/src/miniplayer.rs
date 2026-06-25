@@ -58,6 +58,12 @@ pub fn is_creating_mini() -> bool {
     CREATING_MINI.with(|f| *f.borrow())
 }
 
+/// Whether the miniplayer window is currently shown (the main window hidden).
+/// Read by the hotkey dispatcher to toggle the mini on Shift+M.
+pub fn is_open() -> bool {
+    OPEN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// The lyrics sync engine (lyrics_sync.rs) only runs while the MAIN window's
 /// lyrics panel is open. When the mini shows its lyrics surface, trigger the
 /// fetch and open the (hidden) main panel so the karaoke advances; remember we
@@ -395,6 +401,25 @@ fn install_winit(mini: &MiniPlayerWindow) {
                 WindowEvent::CursorLeft { .. } => {
                     if let Some(w) = weak.upgrade() {
                         w.global::<MiniPlayerState>().set_window_hovered(false);
+                    }
+                }
+                // Keyboard shortcuts on the mini window: surface keys (1-5),
+                // Shift+M / Escape to exit, shared transport. Respects the
+                // user's custom bindings (crate::keybindings).
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    let m = modifiers.state();
+                    crate::keybindings::set_mods(
+                        m.control_key() || m.super_key(),
+                        m.alt_key(),
+                        m.shift_key(),
+                    );
+                }
+                WindowEvent::KeyboardInput { event: key_event, .. }
+                    if key_event.state
+                        == i_slint_backend_winit::winit::event::ElementState::Pressed =>
+                {
+                    if let Some(w) = weak.upgrade() {
+                        return crate::keybindings::dispatch_mini(&w, &key_event.logical_key);
                     }
                 }
                 WindowEvent::Resized(size) => {

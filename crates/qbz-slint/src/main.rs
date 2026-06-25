@@ -42,7 +42,9 @@ mod dac_wizard;
 mod home;
 mod immersive;
 mod info_modals;
+mod keybindings;
 mod label;
+mod link_resolver;
 mod miniplayer;
 mod location_view;
 mod mix;
@@ -714,6 +716,66 @@ fn update_nav_flags(window: &AppWindow) {
     state.set_can_forward(nav::can_forward());
 }
 
+/// Navigate to the entity a resolved "Open Qobuz Link" points at. Albums /
+/// artists / playlists open their detail view directly; a track is fetched to
+/// resolve its album, then that album opens (mirrors the Tauri behavior).
+fn apply_resolved_link(
+    link: qbz_music_link::ResolvedLink,
+    runtime: &Arc<AppRuntime<SlintAdapter>>,
+    weak: &slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: &artwork::ImageCache,
+) {
+    use qbz_music_link::ResolvedLink;
+    match link {
+        ResolvedLink::OpenAlbum(id) => {
+            navigate_album(runtime.clone(), weak.clone(), handle, image_cache.clone(), id);
+        }
+        ResolvedLink::OpenArtist(id) => {
+            navigate_artist(
+                runtime.clone(),
+                weak.clone(),
+                handle,
+                image_cache.clone(),
+                id.to_string(),
+            );
+        }
+        ResolvedLink::OpenPlaylist(id) => {
+            navigate_playlist(
+                runtime.clone(),
+                weak.clone(),
+                handle,
+                image_cache.clone(),
+                id.to_string(),
+            );
+        }
+        ResolvedLink::OpenTrack(id) => {
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let handle = handle.clone();
+            let image_cache = image_cache.clone();
+            handle.clone().spawn(async move {
+                match runtime.core().get_track(id).await {
+                    Ok(track) => {
+                        if let Some(album_id) = track.album.as_ref().map(|a| a.id.clone()) {
+                            navigate_album(
+                                runtime.clone(),
+                                weak.clone(),
+                                &handle,
+                                image_cache.clone(),
+                                album_id,
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("[qbz-slint] open-link: get_track failed: {e}");
+                    }
+                }
+            });
+        }
+    }
+}
+
 /// Capture browser mouse buttons before Slint routes them to the topmost
 /// TouchArea, and mirror the cursor position into `ShellState` for passive
 /// hover chrome that must not install a TouchArea over interactive content.
@@ -772,41 +834,74 @@ fn install_browser_mouse_nav(window: &AppWindow) {
             // the FocusScope. Two surfaces share this hook: the IMMERSIVE dropdown
             // takes priority when immersive is open + its search is open (it sits
             // on top of everything), otherwise the MAIN header cortinilla.
+            // Track modifier state for the keybindings dispatcher (winit
+            // delivers modifiers separately from key presses).
+            WindowEvent::ModifiersChanged(modifiers) => {
+                let m = modifiers.state();
+                crate::keybindings::set_mods(
+                    m.control_key() || m.super_key(),
+                    m.alt_key(),
+                    m.shift_key(),
+                );
+                EventResult::Propagate
+            }
             WindowEvent::KeyboardInput { event: key_event, .. }
                 if key_event.state == ElementState::Pressed =>
             {
                 let Some(window) = weak.upgrade() else {
                     return EventResult::Propagate;
                 };
+
+                // (A) Customize-shortcuts editor capture: while recording, the
+                // next combo is captured as a binding instead of dispatched.
+                let recording = window.global::<KeybindingsState>().get_recording_id();
+                if !recording.is_empty() {
+                    return crate::keybindings::handle_capture(
+                        &window,
+                        recording.as_str(),
+                        &key_event.logical_key,
+                    );
+                }
+
+                // (B) Steal Up/Down ONLY while a search dropdown is open, BEFORE
+                // the search input's cursor can eat the first press (lets the
+                // very first ArrowDown move selection from the input INTO the
+                // dropdown). Immersive takes priority when its search is open.
                 let immersive_search_open = window.global::<ImmersiveState>().get_open()
                     && window.global::<ImmersiveState>().get_search_open();
                 let main_cortinilla_open =
                     window.global::<SearchState>().get_cortinilla_open();
-                if !immersive_search_open && !main_cortinilla_open {
+                if immersive_search_open || main_cortinilla_open {
+                    let move_selection = |delta: i32| {
+                        if immersive_search_open {
+                            window
+                                .global::<ImmersiveSearchActions>()
+                                .invoke_move_selection(delta);
+                        } else {
+                            window
+                                .global::<SearchActions>()
+                                .invoke_cortinilla_move_selection(delta);
+                        }
+                    };
+                    return match &key_event.logical_key {
+                        Key::Named(NamedKey::ArrowDown) => {
+                            move_selection(1);
+                            EventResult::PreventDefault
+                        }
+                        Key::Named(NamedKey::ArrowUp) => {
+                            move_selection(-1);
+                            EventResult::PreventDefault
+                        }
+                        _ => EventResult::Propagate,
+                    };
+                }
+
+                // (C) Global hotkeys — never while typing in a text field
+                // (mirrors the Tauri `isInputTarget` guard).
+                if window.global::<UiFocusState>().get_text_input_focused() {
                     return EventResult::Propagate;
                 }
-                let move_selection = |delta: i32| {
-                    if immersive_search_open {
-                        window
-                            .global::<ImmersiveSearchActions>()
-                            .invoke_move_selection(delta);
-                    } else {
-                        window
-                            .global::<SearchActions>()
-                            .invoke_cortinilla_move_selection(delta);
-                    }
-                };
-                match &key_event.logical_key {
-                    Key::Named(NamedKey::ArrowDown) => {
-                        move_selection(1);
-                        EventResult::PreventDefault
-                    }
-                    Key::Named(NamedKey::ArrowUp) => {
-                        move_selection(-1);
-                        EventResult::PreventDefault
-                    }
-                    _ => EventResult::Propagate,
-                }
+                crate::keybindings::dispatch(&window, &key_event.logical_key)
             }
             // Persist main-window geometry so the next launch restores it
             // (mirrors miniplayer.rs). The startup restore clamps to the
@@ -6967,6 +7062,97 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 w.global::<NavState>().set_view(ContentView::Settings);
                 update_nav_flags(&w);
             }
+        });
+    }
+
+    // Keyboard shortcuts (hotkeys): seed the cheatsheet/editor model + wire the
+    // customize-editor capture callbacks. The global key dispatch itself lives
+    // in `install_browser_mouse_nav`'s winit handler.
+    keybindings::wire(&window);
+
+    // "Open Qobuz Link" (Ctrl+L) — the cross-platform link resolver modal.
+    {
+        let weak = window.as_weak();
+        window
+            .global::<LinkResolverActions>()
+            .on_url_changed(move |url| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<LinkResolverState>()
+                        .set_platform(link_resolver::detect_platform(&url).into());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<LinkResolverActions>().on_close(move || {
+            if let Some(w) = weak.upgrade() {
+                w.global::<LinkResolverState>().set_open(false);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<LinkResolverActions>()
+            .on_open_importer(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<LinkResolverState>().set_open(false);
+                    w.global::<PlaylistImportState>().set_open(true);
+                }
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.global::<LinkResolverActions>().on_submit(move |url| {
+            let url = url.trim().to_string();
+            if url.is_empty() {
+                return;
+            }
+            if let Some(w) = weak.upgrade() {
+                let s = w.global::<LinkResolverState>();
+                s.set_resolving(true);
+                s.set_error("".into());
+                s.set_playlist_detected(false);
+            }
+            let runtime = runtime.clone();
+            let weak = weak.clone();
+            let handle = handle.clone();
+            let image_cache = image_cache.clone();
+            handle.clone().spawn(async move {
+                let result = link_resolver::resolve(runtime.clone(), url).await;
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    let s = w.global::<LinkResolverState>();
+                    s.set_resolving(false);
+                    match result {
+                        Ok(qbz_music_link::MusicLinkResult::Resolved { link, .. }) => {
+                            s.set_open(false);
+                            apply_resolved_link(
+                                link,
+                                &runtime,
+                                &w.as_weak(),
+                                &handle,
+                                &image_cache,
+                            );
+                        }
+                        Ok(qbz_music_link::MusicLinkResult::PlaylistDetected { provider }) => {
+                            s.set_playlist_detected(true);
+                            s.set_playlist_provider(provider.into());
+                        }
+                        Ok(qbz_music_link::MusicLinkResult::NotOnQobuz { .. }) => {
+                            s.set_error(
+                                qbz_i18n::t("This content is not available on Qobuz").into(),
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!("[qbz-slint] open-link resolve failed: {e}");
+                            s.set_error(qbz_i18n::t("Could not resolve that link").into());
+                        }
+                    }
+                });
+            });
         });
     }
     {

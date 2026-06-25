@@ -17,6 +17,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "QbzIcon.slint";
+import { UiFocusState } from "../focus-state.slint";
 
 export struct JumpNavTab {
     id: string,
@@ -191,6 +192,7 @@ export component JumpNavBar inherits Rectangle {
                             vertical-alignment: center;
                             single-line: true;
                             text <=> root.search-text;
+                            changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                             edited => {
                                 root.search-text-edited(self.text);
                             }
