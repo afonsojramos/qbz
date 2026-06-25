@@ -39,10 +39,13 @@ jobs:
             /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift \
             /usr/local/lib/node_modules || true
           sudo docker image prune --all --force || true
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          # The runner already ships an active /swapfile; add MORE swap on a
+          # fresh path as a cushion for the qbz-slint rustc peak. Guarded so a
+          # swap hiccup never fails the job (memory wasn't the blocker).
+          ( sudo fallocate -l 8G /swap_extra \
+            && sudo chmod 600 /swap_extra \
+            && sudo mkswap /swap_extra \
+            && sudo swapon /swap_extra ) || echo "extra swap skipped (non-fatal)"
           echo "::group::after"; df -h /; free -h; echo "::endgroup::"
 
       - name: System dependencies
