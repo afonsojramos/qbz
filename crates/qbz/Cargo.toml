@@ -1,5 +1,5 @@
 [package]
-name = "qbz-slint"
+name = "qbz"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Slint functional MVP shell for QBZ (private branch only)"
 
 [[bin]]
-name = "qbz-slint"
+name = "qbz"
 path = "src/main.rs"
 
 [dependencies]
@@ -45,6 +45,7 @@ slint = { version = "=1.16.1", default-features = false, features = [
 # does not follow semver, and a mismatch makes with_winit_window() return None.
 i-slint-backend-winit = "=1.16.1"
 qbz-music-link = { path = "../qbz-music-link" }
+qbz-ui = { path = "../qbz-ui" }
 log = { workspace = true }
 env_logger = "0.11"
 tokio = { workspace = true }
@@ -144,5 +145,3 @@ objc2-app-kit = { version = "0.2", default-features = false, features = [
     "NSEvent",
 ] }
 
-[build-dependencies]
-slint-build = "1.16"

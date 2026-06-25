@@ -23,4 +23,4 @@
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
 export RUSTFLAGS="-C target-feature=+aes,+ssse3 -C link-arg=-fuse-ld=mold -C debuginfo=0 -Z threads=${THREADS:-16}"
-exec cargo +nightly run --manifest-path crates/Cargo.toml -p qbz-slint "$@"
+exec cargo +nightly run --manifest-path crates/Cargo.toml -p qbz "$@"

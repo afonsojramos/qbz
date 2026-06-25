@@ -67,13 +67,13 @@ if [[ "${CAPPED}" == 1 ]] && command -v cargo-capped >/dev/null 2>&1; then
   export BUILD_MEM_MAX="${cap}M"
   export BUILD_MEM_HIGH="$(( cap - 2000 ))M"
   echo "[slint-run] cgroup cap: high=${BUILD_MEM_HIGH} max=${BUILD_MEM_MAX}"
-  cargo-capped cargo +nightly build --release --manifest-path crates/Cargo.toml -p qbz-slint
+  cargo-capped cargo +nightly build --release --manifest-path crates/Cargo.toml -p qbz
 else
-  cargo +nightly build --release --manifest-path crates/Cargo.toml -p qbz-slint
+  cargo +nightly build --release --manifest-path crates/Cargo.toml -p qbz
 fi
 
 [[ "${NORUN:-0}" == 1 ]] && { echo "[slint-run] build done (NORUN set)."; exit 0; }
 
 # exec the binary directly — no `cargo run`, so no CARGO_* env / cargo context,
 # so the monitor shows `qbz-slint`.
-exec crates/target/release/qbz-slint "$@"
+exec crates/target/release/qbz "$@"

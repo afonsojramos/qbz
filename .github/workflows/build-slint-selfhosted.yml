@@ -41,14 +41,14 @@ jobs:
 
       - name: Strip + report size
         run: |
-          BIN=crates/target/release/qbz-slint
+          BIN=crates/target/release/qbz
           echo "unstripped:"; ls -lh "$BIN" | awk '{print $5}'
-          cp "$BIN" qbz-slint-linux-x86_64
-          strip qbz-slint-linux-x86_64 || true
-          echo "stripped:"; ls -lh qbz-slint-linux-x86_64 | awk '{print $5}'
+          cp "$BIN" qbz-linux-x86_64
+          strip qbz-linux-x86_64 || true
+          echo "stripped:"; ls -lh qbz-linux-x86_64 | awk '{print $5}'
 
       - uses: actions/upload-artifact@v4
         with:
-          name: qbz-slint-linux-x86_64
-          path: qbz-slint-linux-x86_64
+          name: qbz-linux-x86_64
+          path: qbz-linux-x86_64
           if-no-files-found: error

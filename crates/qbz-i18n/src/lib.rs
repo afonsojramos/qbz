@@ -18,11 +18,11 @@ const LANGS: [&str; 5] = ["en", "es", "de", "fr", "pt"];
 
 /// Embedded `.po` sources. Path is relative to this file
 /// (`crates/qbz-i18n/src/lib.rs`): `../` = `qbz-i18n/`, `../../` = `crates/`.
-const PO_EN: &str = include_str!("../../qbz-slint/translations/en/LC_MESSAGES/qbz-slint.po");
-const PO_ES: &str = include_str!("../../qbz-slint/translations/es/LC_MESSAGES/qbz-slint.po");
-const PO_DE: &str = include_str!("../../qbz-slint/translations/de/LC_MESSAGES/qbz-slint.po");
-const PO_FR: &str = include_str!("../../qbz-slint/translations/fr/LC_MESSAGES/qbz-slint.po");
-const PO_PT: &str = include_str!("../../qbz-slint/translations/pt/LC_MESSAGES/qbz-slint.po");
+const PO_EN: &str = include_str!("../../qbz-ui/translations/en/LC_MESSAGES/qbz-ui.po");
+const PO_ES: &str = include_str!("../../qbz-ui/translations/es/LC_MESSAGES/qbz-ui.po");
+const PO_DE: &str = include_str!("../../qbz-ui/translations/de/LC_MESSAGES/qbz-ui.po");
+const PO_FR: &str = include_str!("../../qbz-ui/translations/fr/LC_MESSAGES/qbz-ui.po");
+const PO_PT: &str = include_str!("../../qbz-ui/translations/pt/LC_MESSAGES/qbz-ui.po");
 
 /// Current language index (0=en, 1=es, 2=de, 3=fr, 4=pt). Defaults to en.
 static CURRENT: AtomicU8 = AtomicU8::new(0);

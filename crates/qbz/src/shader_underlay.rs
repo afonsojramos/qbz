@@ -80,9 +80,9 @@ struct RenderState {
 /// scene = one `include_str!` here + one entry in the picker (state/UI). All
 /// must declare the SAME `Uniforms` block (group0/binding0) as plasma.wgsl.
 const SHADER_SOURCES: &[&str] = &[
-    include_str!("../ui/shaders/plasma.wgsl"),
-    include_str!("../ui/shaders/tunnel.wgsl"),
-    include_str!("../ui/shaders/aurora.wgsl"),
+    include_str!("../../qbz-ui/ui/shaders/plasma.wgsl"),
+    include_str!("../../qbz-ui/ui/shaders/tunnel.wgsl"),
+    include_str!("../../qbz-ui/ui/shaders/aurora.wgsl"),
 ];
 
 thread_local! {

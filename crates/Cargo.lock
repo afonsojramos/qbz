@@ -5507,6 +5507,61 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a041e753da8b807c9255f28de81879c78c876392ff2469cde94799b2896b9d"
 
 [[package]]
+name = "qbz"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "async-trait",
+ "chrono",
+ "dirs 5.0.1",
+ "env_logger",
+ "futures-util",
+ "i-slint-backend-winit",
+ "image",
+ "ksni",
+ "log",
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
+ "open",
+ "qbz-app",
+ "qbz-audio",
+ "qbz-booklet",
+ "qbz-cache",
+ "qbz-cast",
+ "qbz-core",
+ "qbz-credentials",
+ "qbz-i18n",
+ "qbz-integrations",
+ "qbz-library",
+ "qbz-lyrics",
+ "qbz-media-controls",
+ "qbz-mixtape",
+ "qbz-models",
+ "qbz-music-link",
+ "qbz-offline-cache",
+ "qbz-player",
+ "qbz-playlist-import",
+ "qbz-plex",
+ "qbz-qobuz",
+ "qbz-theme",
+ "qbz-ui",
+ "qconnect-app",
+ "qconnect-transport-ws",
+ "rand 0.10.1",
+ "reqwest",
+ "rfd",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "slint",
+ "swash",
+ "tokio",
+ "urlencoding",
+ "uuid 1.22.0",
+]
+
+[[package]]
 name = "qbz-app"
 version = "0.1.0"
 dependencies = [
@@ -5886,65 +5941,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "qbz-slint"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "async-trait",
- "chrono",
- "dirs 5.0.1",
- "env_logger",
- "futures-util",
- "i-slint-backend-winit",
- "image",
- "ksni",
- "log",
- "objc2 0.5.2",
- "objc2-app-kit 0.2.2",
- "objc2-foundation 0.2.2",
- "open",
- "qbz-app",
- "qbz-audio",
- "qbz-booklet",
- "qbz-cache",
- "qbz-cast",
- "qbz-core",
- "qbz-credentials",
- "qbz-i18n",
- "qbz-integrations",
- "qbz-library",
- "qbz-lyrics",
- "qbz-media-controls",
- "qbz-mixtape",
- "qbz-models",
- "qbz-music-link",
- "qbz-offline-cache",
- "qbz-player",
- "qbz-playlist-import",
- "qbz-plex",
- "qbz-qobuz",
- "qbz-theme",
- "qconnect-app",
- "qconnect-transport-ws",
- "rand 0.10.1",
- "reqwest",
- "rfd",
- "rusqlite",
- "serde",
- "serde_json",
- "slint",
- "slint-build",
- "swash",
- "tokio",
- "urlencoding",
- "uuid 1.22.0",
-]
-
-[[package]]
 name = "qbz-theme"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "qbz-ui"
+version = "0.1.0"
+dependencies = [
+ "slint",
+ "slint-build",
 ]
 
 [[package]]

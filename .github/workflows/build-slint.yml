@@ -72,12 +72,12 @@ jobs:
           CARGO_PROFILE_RELEASE_OPT_LEVEL: '2'
           RUSTFLAGS: '-C target-feature=+aes,+ssse3 -C link-arg=-fuse-ld=mold -Z threads=1'
         run: |
-          cargo +nightly build --release --manifest-path crates/Cargo.toml -p qbz-slint
-          echo "::group::result"; ls -lh crates/target/release/qbz-slint; df -h /; free -h; echo "::endgroup::"
+          cargo +nightly build --release --manifest-path crates/Cargo.toml -p qbz
+          echo "::group::result"; ls -lh crates/target/release/qbz; df -h /; free -h; echo "::endgroup::"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: qbz-slint-linux-x86_64
-          path: crates/target/release/qbz-slint
+          name: qbz-linux-x86_64
+          path: crates/target/release/qbz
           if-no-files-found: error

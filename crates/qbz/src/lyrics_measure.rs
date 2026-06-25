@@ -70,7 +70,7 @@ struct LoadedFont {
 /// the Inter bold used for the "System"/default family. `include_bytes!` paths
 /// are relative to THIS source file (`crates/qbz-slint/src/`).
 static FONT_SYSTEM_INTER_BOLD: &[u8] =
-    include_bytes!("../ui/assets/fonts/Inter_18pt-Bold.ttf");
+    include_bytes!("../../qbz-ui/ui/assets/fonts/Inter_18pt-Bold.ttf");
 static FONT_LINE_SEED_JP: &[u8] =
     include_bytes!("../../../static/fonts/LINESeedJP-Regular.ttf");
 static FONT_MONTSERRAT: &[u8] =

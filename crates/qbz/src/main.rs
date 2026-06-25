@@ -5,14 +5,16 @@
 //! (`qbz-nix-docs/qbz-adr/qbz_slint_functional_poc_adr.md`).
 //!
 //! Lives only on the private `slint-mvp` branch (ADR-007). The Slint UI
-//! tree is compiled from `ui/app.slint` by `build.rs`; `include_modules!`
-//! pulls in the generated Rust bindings.
+//! tree is compiled in the `qbz-ui` library crate (its `build.rs` runs
+//! `slint-build` on `ui/app.slint`); this binary re-exports all generated
+//! types at the crate root so existing `crate::AppWindow` / `crate::*State`
+//! references resolve unchanged.
 //!
 //! Status: foundation tokens, login screen, app shell, functional
 //! system-browser OAuth, saved-session restore, and a real Discover /
 //! Home view fed by the Qobuz discover index with cached artwork.
 
-slint::include_modules!();
+pub use qbz_ui::*;
 
 mod adapter;
 mod album;

@@ -59,7 +59,7 @@ if [[ "$FAST" == true ]]; then
   # DEBUG: opt-level 0 skips the heavy LLVM passes; -C debuginfo=0 means less to
   # generate and link. Unoptimised — never trust runtime behaviour from this.
   export RUSTFLAGS="${RUSTFLAGS} -C debuginfo=0"
-  exec cargo +nightly run --manifest-path crates/Cargo.toml -p qbz-slint "$@"
+  exec cargo +nightly run --manifest-path crates/Cargo.toml -p qbz "$@"
 else
-  exec cargo +nightly run --release --manifest-path crates/Cargo.toml -p qbz-slint "$@"
+  exec cargo +nightly run --release --manifest-path crates/Cargo.toml -p qbz "$@"
 fi
