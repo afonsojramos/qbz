@@ -794,6 +794,9 @@ component SortRow inherits MenuRow {
 // Shared filter panel (albums variant adds the Availability section).
 component FilterPanel inherits Rectangle {
     in property <bool> show-availability: true;
+    // ADR-009: lift the anchored filter panel above sibling toolbar controls so
+    // it never renders behind them regardless of declaration order.
+    z: 3000;
     width: 280px;
     height: panel.preferred-height;
     background: Theme.surface-card;
@@ -1457,6 +1460,7 @@ export component PurchasesView inherits Rectangle {
     if PurchasesState.picker-track-id != "": Rectangle {
         // Backdrop.
         TouchArea {
+            z: 3000;
             width: root.width;
             height: root.height;
             clicked => { PurchasesActions.close-format-picker(); }
@@ -1485,6 +1489,7 @@ export component PurchasesView inherits Rectangle {
         // `dl-slot.absolute-position - <flickable>.absolute-position` (scroll-
         // safe) at the call site (line ~600) rather than patching the math here.
         Rectangle {
+            z: 3001;
             x: Math.max(8px, (PurchasesState.picker-anchor-x - root.absolute-position.x) - self.width);
             y: (PurchasesState.picker-anchor-y - root.absolute-position.y) + 4px;
             width: 240px;

@@ -5164,6 +5164,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         appearance.set_show_purchases(prefs.show_purchases);
         appearance.set_nav_tb_purchases(prefs.nav_tb_purchases);
     }
+    // Purchases per-machine filter prefs + region-notice state. Seeded here so
+    // filter selections survive restart and the region notice does not reappear
+    // every launch (mirrors the show-purchases seed above; the Slint equivalent
+    // of Tauri's per-user persisted purchase filters). The region notice is
+    // shown UNTIL dismissed, so its visibility is the inverse of the "seen" flag.
+    {
+        let prefs = crate::ui_prefs::load();
+        let purchases = window.global::<PurchasesState>();
+        purchases.set_filter_hide_unavailable(prefs.purchases_hide_unavailable);
+        purchases.set_filter_hide_downloaded(prefs.purchases_hide_downloaded);
+        purchases.set_filter_quality(prefs.purchases_quality_filter.clone().into());
+        purchases.set_show_region_notice(!prefs.purchases_region_notice_seen);
+    }
     window.global::<AppearanceState>().set_immersive_search_action_index(
         crate::ui_prefs::immersive_search_action_index(
             &crate::ui_prefs::load().immersive_search_action,
@@ -11101,13 +11114,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
-        // Filter panel setters (each persists in Slice 12; here: state + derive).
+        // Filter panel setters. State + derive + persist the per-machine pref so
+        // the selection survives restart (mirrors on_appearance_bool).
         let weak = window.as_weak();
         window
             .global::<PurchasesActions>()
             .on_set_filter_hide_unavailable(move |v| {
                 let Some(w) = weak.upgrade() else { return };
                 w.global::<PurchasesState>().set_filter_hide_unavailable(v);
+                let mut prefs = crate::ui_prefs::load();
+                prefs.purchases_hide_unavailable = v;
+                crate::ui_prefs::save(&prefs);
                 purchases::derive_purchases(&w);
             });
     }
@@ -11115,7 +11132,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         window.global::<PurchasesActions>().on_set_filter_quality(move |q| {
             let Some(w) = weak.upgrade() else { return };
-            w.global::<PurchasesState>().set_filter_quality(q);
+            w.global::<PurchasesState>().set_filter_quality(q.clone());
+            let mut prefs = crate::ui_prefs::load();
+            prefs.purchases_quality_filter = q.to_string();
+            crate::ui_prefs::save(&prefs);
             purchases::derive_purchases(&w);
         });
     }
@@ -11126,6 +11146,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_set_filter_hide_downloaded(move |v| {
                 let Some(w) = weak.upgrade() else { return };
                 w.global::<PurchasesState>().set_filter_hide_downloaded(v);
+                let mut prefs = crate::ui_prefs::load();
+                prefs.purchases_hide_downloaded = v;
+                crate::ui_prefs::save(&prefs);
                 purchases::derive_purchases(&w);
             });
     }
@@ -11137,6 +11160,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             s.set_filter_hide_unavailable(false);
             s.set_filter_quality("all".into());
             s.set_filter_hide_downloaded(false);
+            // Persist the reset so cleared filters survive restart.
+            let mut prefs = crate::ui_prefs::load();
+            prefs.purchases_hide_unavailable = false;
+            prefs.purchases_hide_downloaded = false;
+            prefs.purchases_quality_filter = "all".to_string();
+            crate::ui_prefs::save(&prefs);
             purchases::derive_purchases(&w);
         });
     }
@@ -11151,11 +11180,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
-        // Region notice dismiss — persisted in Slice 12; here: hide it.
+        // Region notice dismiss — hide it AND persist the "seen" flag so it does
+        // not reappear on the next launch (mirrors Tauri's
+        // setUserItem('qbz-purchases-region-notice-seen', 'true')).
         let weak = window.as_weak();
         window.global::<PurchasesActions>().on_dismiss_region_notice(move || {
             let Some(w) = weak.upgrade() else { return };
             w.global::<PurchasesState>().set_show_region_notice(false);
+            let mut prefs = crate::ui_prefs::load();
+            prefs.purchases_region_notice_seen = true;
+            crate::ui_prefs::save(&prefs);
         });
     }
     {

@@ -4032,3 +4032,15 @@ msgstr "Agregado a la biblioteca"
 
 msgid "Purchased from Qobuz"
 msgstr "Compra de Qobuz"
+
+msgid "Couldn't load purchases. Check your connection."
+msgstr "No se pudieron cargar las compras. Revisa tu conexión."
+
+msgid "This track has no album to download"
+msgstr "Esta pista no tiene álbum para descargar"
+
+msgid "Failed to start download. Please try again."
+msgstr "No se pudo iniciar la descarga. Inténtalo de nuevo."
+
+msgid "No downloadable formats available"
+msgstr "No hay formatos disponibles para descargar"
