@@ -15,9 +15,13 @@ name: Build Slint (linux)
 # Build-only for now (no signing/bundling).
 
 on:
+  # Manual trigger is available on ANY branch (pick the ref in the Actions UI).
   workflow_dispatch:
+  # Auto-build ONLY on main. Feature branches (slint-mvp etc.) do NOT auto-fire —
+  # that would burn minutes on every push (and the qbz_ui build is expensive);
+  # use the manual workflow_dispatch on those branches instead.
   push:
-    branches: [slint-mvp]
+    branches: [main]
     paths:
       - 'crates/**'
       - '.github/workflows/build-slint.yml'
