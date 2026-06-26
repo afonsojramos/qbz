@@ -1,0 +1,153 @@
+name: Release Snap (Slint, all-hosted)
+
+# All-hosted Snap pipeline for the native (Slint) qbz. NOTHING runs on the dev
+# box, so the lack of systemd/snapd there does not matter:
+#   job 1 (build-binary): a 16 GB Ubuntu runner compiles the qbz binary using
+#     the same MIN-tier + 18 GB swap recipe as build-slint.yml (the ~30 GB
+#     qbz_ui peak fits in 16 GB RAM + swap), and uploads it as an artifact.
+#   job 2 (snap): a second Ubuntu runner (which HAS snapd) downloads that
+#     prebuilt binary and packages it with `plugin: dump` (NO compilation, runs
+#     in seconds), then publishes to the Snap Store.
+# So the heavy compile is on a free public runner, and the snap packaging is on
+# a runner that has snapd — neither needs your OpenRC box.
+#
+# NOTE: build-binary duplicates build-slint.yml's build. When the release
+# pipeline is unified (build-once -> fan out to deb/rpm/appimage/snap/flatpak),
+# this job becomes a `download-artifact` of the shared binary instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to package (e.g. v1.2.16). Defaults to the pushed tag."
+        required: false
+        type: string
+      channel:
+        description: "Snap Store channel"
+        required: false
+        default: edge
+        type: choice
+        options: [edge, beta, candidate, stable]
+  push:
+    tags:
+      - "v*"
+
+# A tag never builds twice; distinct tags never cancel each other. Never abort a
+# half-published release.
+concurrency:
+  group: release-snap-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-binary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk + swap (sized for the ~30 GB qbz_ui peak)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift \
+            /usr/local/lib/node_modules || true
+          sudo docker image prune --all --force || true
+          ( sudo fallocate -l 18G /swap_extra \
+            && sudo chmod 600 /swap_extra \
+            && sudo mkswap /swap_extra \
+            && sudo swapon /swap_extra ) || echo "extra swap skipped (non-fatal)"
+          free -h; df -h /
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake clang libclang-dev mold nasm \
+            libasound2-dev libjack-jackd2-dev \
+            libfontconfig1-dev libfreetype-dev \
+            libxkbcommon-dev libwayland-dev libxcb1-dev \
+            libgl1-mesa-dev libegl1-mesa-dev \
+            libdbus-1-dev libssl-dev \
+            libharfbuzz-dev libjbig2dec0-dev libopenjp2-7-dev \
+            libjpeg-dev zlib1g-dev libgumbo-dev
+
+      - name: Rust toolchain (pinned dated nightly)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-23
+
+      - name: Cargo cache (Swatinem/rust-cache)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates -> target
+          shared-key: slint-linux
+          cache-on-failure: true
+          # share the SAME cache as build-slint.yml (same shared-key) so the
+          # heavy qbz_ui rlib is reused across both workflows.
+          save-if: false
+
+      - name: Build qbz (memory-tuned MIN tier, swap-backed)
+        env:
+          CARGO_INCREMENTAL: '0'
+          CARGO_BUILD_JOBS: '1'
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '256'
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: '2'
+          RUSTFLAGS: '-C target-feature=+aes,+ssse3 -C link-arg=-fuse-ld=mold -Z threads=1'
+        run: |
+          cargo build --release --manifest-path crates/Cargo.toml -p qbz
+          strip crates/target/release/qbz || true
+          ls -lh crates/target/release/qbz
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qbz-bin-amd64
+          path: crates/target/release/qbz
+          if-no-files-found: error
+
+  snap:
+    needs: build-binary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download prebuilt binary
+        uses: actions/download-artifact@v4
+        with:
+          name: qbz-bin-amd64
+          path: dl
+
+      - name: Stage snap payload (binary + desktop + icon) and recipe
+        run: |
+          set -eux
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VER="${TAG#v}"
+          mkdir -p snap-payload
+          install -m755 dl/qbz snap-payload/qbz
+          cp packaging/snap/snap/gui/qbz.desktop snap-payload/qbz.desktop
+          cp packaging/snap/snap/gui/qbz.png     snap-payload/qbz.png
+          # Place the dump recipe where snapcraft looks for it, and stamp version.
+          mkdir -p snap
+          cp packaging/snap-slint/snapcraft.yaml snap/snapcraft.yaml
+          sed -i "s/^version:.*/version: '${VER}'/" snap/snapcraft.yaml
+          echo "Built snap version: ${VER}"
+          cat snap/snapcraft.yaml | head -20
+
+      - name: Build the snap (no compilation — dump of the prebuilt binary)
+        id: build
+        uses: snapcore/action-build@v1
+
+      - name: Upload .snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qbz-snap-amd64
+          path: ${{ steps.build.outputs.snap }}
+          if-no-files-found: error
+
+      - name: Publish to the Snap Store
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.build.outputs.snap }}
+          release: ${{ github.event.inputs.channel || 'edge' }}
