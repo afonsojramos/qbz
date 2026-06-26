@@ -25,6 +25,7 @@ members = [
     "qbz-ui",
     "qbz-dac-wizard",
     "qbz-text-utils",
+    "qbz-slint-common",
     "qbz",
     "qbz-credentials",
     "qbz-media-controls",

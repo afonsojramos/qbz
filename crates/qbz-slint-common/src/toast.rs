@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use slint::{ComponentHandle, Timer, TimerMode, Weak};
 
-use crate::{AppWindow, ToastKind, ToastState};
+use qbz_ui::{AppWindow, ToastKind, ToastState};
 
 thread_local! {
     // Single reusable auto-hide timer. Reused (stop + start) so a fresh

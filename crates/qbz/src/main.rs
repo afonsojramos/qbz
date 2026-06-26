@@ -113,7 +113,7 @@ mod share;
 mod sidebar;
 mod suggestions;
 mod theme;
-mod toast;
+pub use qbz_slint_common::toast;
 mod tray;
 mod tray_settings;
 mod ui_prefs;

@@ -5545,6 +5545,7 @@ dependencies = [
  "qbz-playlist-import",
  "qbz-plex",
  "qbz-qobuz",
+ "qbz-slint-common",
  "qbz-text-utils",
  "qbz-theme",
  "qbz-ui",
@@ -5951,6 +5952,14 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "uuid 1.22.0",
+]
+
+[[package]]
+name = "qbz-slint-common"
+version = "0.1.0"
+dependencies = [
+ "qbz-ui",
+ "slint",
 ]
 
 [[package]]
