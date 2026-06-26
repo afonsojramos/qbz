@@ -147,3 +147,34 @@ objc2-app-kit = { version = "0.2", default-features = false, features = [
     "NSEvent",
 ] }
 
+
+# ---- Distribution packaging (cargo-deb / cargo-generate-rpm) ----
+# Build-once -> strip -> package. ldd-detected deps come via $auto; the
+# GPU/Wayland/D-Bus stack is dlopen'd at runtime (NOT visible to ldd) so it is
+# listed explicitly. Validated 2026-06 in a 16 GB Ubuntu 24.04 VM (deb 37 MB).
+[package.metadata.deb]
+maintainer = "vicrodh <noreply@qbz.lol>"
+copyright = "2026 QBZ, MIT"
+section = "sound"
+priority = "optional"
+extended-description = "Native Qobuz client for Linux with bit-perfect hi-res audio, DAC passthrough and PipeWire/ALSA integration. Native (Slint) build, no web runtime."
+depends = "$auto, libvulkan1, libegl1, libgl1, libwayland-client0, libwayland-egl1, libxkbcommon0, libdbus-1-3, mesa-vulkan-drivers"
+assets = [
+    ["target/release/qbz", "usr/bin/", "755"],
+    ["packaging/qbz.desktop", "usr/share/applications/qbz.desktop", "644"],
+    ["packaging/qbz.png", "usr/share/icons/hicolor/256x256/apps/qbz.png", "644"],
+]
+
+[package.metadata.generate-rpm]
+auto-req = "auto"
+assets = [
+    { source = "target/release/qbz", dest = "/usr/bin/qbz", mode = "755" },
+    { source = "packaging/qbz.desktop", dest = "/usr/share/applications/qbz.desktop", mode = "644" },
+    { source = "packaging/qbz.png", dest = "/usr/share/icons/hicolor/256x256/apps/qbz.png", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+alsa-lib = "*"
+vulkan-loader = "*"
+libxkbcommon = "*"
+dbus-libs = "*"
