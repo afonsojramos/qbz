@@ -24,6 +24,7 @@ members = [
     "qconnect-app",
     "qbz-ui",
     "qbz-dac-wizard",
+    "qbz-text-utils",
     "qbz",
     "qbz-credentials",
     "qbz-media-controls",

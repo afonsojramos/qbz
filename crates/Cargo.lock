@@ -5545,6 +5545,7 @@ dependencies = [
  "qbz-playlist-import",
  "qbz-plex",
  "qbz-qobuz",
+ "qbz-text-utils",
  "qbz-theme",
  "qbz-ui",
  "qconnect-app",
@@ -5950,6 +5951,14 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "uuid 1.22.0",
+]
+
+[[package]]
+name = "qbz-text-utils"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "qbz-i18n",
 ]
 
 [[package]]
