@@ -281,11 +281,32 @@ fn spawn(
             tokio::join!(b_common, b_recent, b_albums, b_fresh, b_explore, b_jams, b_deep);
         }
 
-        // 3. Store the built result for instant future opens (48h TTL).
+        // 3. Store the built result for instant future opens (48h TTL). GUARD
+        // against poisoning the cache with a TRANSIENT ListenBrainz failure
+        // (rate-limit / network / token-not-yet-restored): if LB is connected
+        // but EVERY LB-sourced row (Weekly Exploration/Jams + Fresh Releases)
+        // came back empty, skip the write so the next open re-fetches —
+        // otherwise the empty result would hide those rows for the full 48h.
+        // (Owner-reported: the Weeklys showed once, then vanished on restart.)
         if let Some(cache_mutex) = inputs.cache {
-            let json = collector.lock().ok().and_then(|g| serde_json::to_string(&*g).ok());
-            if let (Ok(guard), Some(json)) = (cache_mutex.lock(), json) {
-                guard.put_results(&source_key, &json);
+            let lb_all_empty = collector
+                .lock()
+                .map(|g| {
+                    g.weekly_exploration.is_empty()
+                        && g.weekly_jams.is_empty()
+                        && g.fresh_releases.is_empty()
+                })
+                .unwrap_or(true);
+            if inputs.listenbrainz.is_some() && lb_all_empty {
+                log::warn!(
+                    "[reco] ListenBrainz connected but all LB rows empty — skipping \
+                     the results-cache write (likely transient; next open re-fetches)"
+                );
+            } else {
+                let json = collector.lock().ok().and_then(|g| serde_json::to_string(&*g).ok());
+                if let (Ok(guard), Some(json)) = (cache_mutex.lock(), json) {
+                    guard.put_results(&source_key, &json);
+                }
             }
         }
 
