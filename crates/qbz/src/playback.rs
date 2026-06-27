@@ -2653,6 +2653,13 @@ pub fn play_tracks(
     let first_id = queue[start].id;
     handle.spawn(async move {
         runtime.core().set_queue(queue, Some(start)).await;
+        // QConnect: when WE are the active renderer, push the new queue to the
+        // peers immediately (self-gates to a no-op when not connected or a peer
+        // owns playback). Covers infinite-play refills + album/radio plays so a
+        // controller's UI reflects the freshly-built queue.
+        if let Some(svc) = crate::qconnect_service::service() {
+            svc.sync_local_queue_if_changed().await;
+        }
         after_track_change(&runtime, &weak, first_id).await;
         refresh_sidebar(true);
     });
@@ -2669,6 +2676,24 @@ fn play_radio_response(
     play_tracks(runtime, weak, handle, tracks, 0)
 }
 
+/// The Qobuz `/radio/*` endpoints return MINIMAL track objects (no performer /
+/// album), so the queue rows would show no artist. Re-fetch full metadata by id
+/// (order-preserving via `get_tracks_batch`), falling back to the originals if
+/// the batch fails or is empty.
+async fn enrich_radio_tracks(
+    runtime: &Runtime,
+    tracks: Vec<qbz_models::Track>,
+) -> Vec<qbz_models::Track> {
+    let ids: Vec<u64> = tracks.iter().map(|t| t.id).collect();
+    if ids.is_empty() {
+        return tracks;
+    }
+    match runtime.core().get_tracks_batch(&ids).await {
+        Ok(full) if !full.is_empty() => full,
+        _ => tracks,
+    }
+}
+
 /// Start a Qobuz artist radio (`/radio/artist`). The simpler alternative to
 /// the smart pool builder: wired to ArtistView's "Qobuz Radio" choice, while
 /// the "QBZ Radio" choice and the plain `("artist","radio")` action use the
@@ -2682,7 +2707,7 @@ pub fn play_artist_radio(
     handle.spawn(async move {
         match runtime.core().get_radio_artist(&artist_id).await {
             Ok(resp) => {
-                let tracks = resp.tracks.items;
+                let tracks = enrich_radio_tracks(&runtime, resp.tracks.items).await;
                 if !play_radio_response(runtime, weak, tracks) {
                     log::warn!("[qbz-slint] artist radio {artist_id} returned no tracks");
                 }
@@ -2726,7 +2751,7 @@ pub fn play_track_radio(
     handle.spawn(async move {
         match runtime.core().get_radio_track(&track_id).await {
             Ok(resp) => {
-                let tracks = resp.tracks.items;
+                let tracks = enrich_radio_tracks(&runtime, resp.tracks.items).await;
                 if !play_radio_response(runtime, weak, tracks) {
                     log::warn!("[qbz-slint] track radio {track_id} returned no tracks");
                 }
@@ -2786,7 +2811,7 @@ pub fn play_album_radio(
     handle.spawn(async move {
         match runtime.core().get_radio_album(&album_id).await {
             Ok(resp) => {
-                let tracks = resp.tracks.items;
+                let tracks = enrich_radio_tracks(&runtime, resp.tracks.items).await;
                 if !play_radio_response(runtime, weak, tracks) {
                     log::warn!("[qbz-slint] album radio {album_id} returned no tracks");
                 }
