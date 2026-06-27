@@ -9,7 +9,9 @@
 //! relationship weight via the vector store) per the epic's decision D3.
 
 mod sparse_vector;
+mod store;
 mod weights;
 
 pub use sparse_vector::SparseVector;
+pub use store::{ArtistVectorStore, SimilarArtist, VECTOR_TTL_SECS};
 pub use weights::RelationshipWeights;

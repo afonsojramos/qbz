@@ -7,3 +7,5 @@ description = "Frontend-agnostic artist-vector recommendation engine for QBZ (po
 
 [dependencies]
 serde = { workspace = true }
+rusqlite = { version = "0.31", features = ["bundled"] }
+log = { workspace = true }
