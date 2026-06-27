@@ -9072,10 +9072,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         w.global::<PlaylistState>().set_is_favorite(new_fav);
                         let weak2 = weak.clone();
                         handle.spawn_blocking(move || {
+                            // with_db flattens the inner Result to Option<()>
+                            // (None = no db OR the write failed) -> revert the
+                            // optimistic heart on failure.
                             let ok = crate::library_db::with_db(|db| {
                                 db.set_playlist_favorite(pid_u64, new_fav)
                             });
-                            if !matches!(ok, Some(Ok(()))) {
+                            if ok.is_none() {
                                 log::error!("[qbz-slint] toggle playlist favorite failed");
                                 let _ = weak2.upgrade_in_event_loop(move |w| {
                                     w.global::<PlaylistState>().set_is_favorite(was_fav);
