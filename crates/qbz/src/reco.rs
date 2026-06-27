@@ -180,6 +180,39 @@ pub fn log_playlist_add(playlist_id: Option<u64>, track_ids: Vec<u64>) {
 }
 
 // ---------------------------------------------------------------------------
+// Surfaces (W7/W8)
+// ---------------------------------------------------------------------------
+
+/// Forgotten-favorite album ids (favorited, not played within `recency_days`).
+/// `None` when reco is disabled or the read fails — the caller falls back to
+/// its local heuristic so the Rediscover row never empties on a cold store.
+pub fn forgotten_favorite_album_ids(limit: u32, recency_days: u32) -> Option<Vec<String>> {
+    let guard = RECO.lock().ok()?;
+    let store = guard.as_ref()?;
+    store
+        .get_forgotten_favorite_album_ids(limit, recency_days)
+        .ok()
+}
+
+/// Backfill genres `(album_id, genre_id, genre_name)` onto reco events +
+/// album-meta once albums are resolved. Best-effort, blocking SQLite — call
+/// from `spawn_blocking`. Plays carry no genre, so this is what feeds
+/// `get_top_genres`; idempotent (only fills still-NULL event genres).
+pub fn backfill_album_genres(entries: Vec<(String, u64, String)>) {
+    if entries.is_empty() {
+        return;
+    }
+    if let Ok(guard) = RECO.lock() {
+        if let Some(store) = guard.as_ref() {
+            for (album_id, genre_id, genre_name) in entries {
+                let _ = store.update_genre_for_album(&album_id, genre_id);
+                let _ = store.set_album_genre_name(&album_id, &genre_name);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Training (W5)
 // ---------------------------------------------------------------------------
 

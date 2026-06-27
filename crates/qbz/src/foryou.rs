@@ -420,11 +420,21 @@ fn top_artist_slims(fav_artists: &[Artist]) -> Vec<ArtistSlim> {
         .collect()
 }
 
-/// Rediscover — favorite albums not in the recent play-history.
-fn build_rediscover(fav_albums: &[Album], recent_ids: &HashSet<String>) -> Vec<AlbumCard> {
+/// Rediscover — favorite albums the user hasn't returned to lately. Prefers the
+/// reco store's "forgotten favorites" (favorited, not played in 30d, from the
+/// Tauri-shared events.db) when warm; falls back to "not in the local recents
+/// cache" when reco is cold so the row never empties.
+fn build_rediscover(
+    fav_albums: &[Album],
+    recent_ids: &HashSet<String>,
+    forgotten: Option<&HashSet<String>>,
+) -> Vec<AlbumCard> {
     fav_albums
         .iter()
-        .filter(|a| !recent_ids.contains(&a.id))
+        .filter(|a| match forgotten {
+            Some(set) => set.contains(&a.id),
+            None => !recent_ids.contains(&a.id),
+        })
         .take(18)
         .cloned()
         .map(map_album)
@@ -854,7 +864,34 @@ pub fn spawn_for_you<A>(
             Box::pin(async move {
                 let fav_albums = fetch_fav_albums(&runtime).await;
                 apply_favorite_albums(&weak, &cache, build_favorite_albums(&fav_albums));
-                apply_rediscover(&weak, &cache, build_rediscover(&fav_albums, &recent_ids));
+                // reco: backfill genres for the resolved favorite albums so the
+                // engine's top-genres has data (plays alone carry no genre).
+                let genre_entries: Vec<(String, u64, String)> = fav_albums
+                    .iter()
+                    .filter_map(|a| {
+                        a.genre
+                            .as_ref()
+                            .filter(|g| g.id > 0)
+                            .map(|g| (a.id.clone(), g.id, g.name.clone()))
+                    })
+                    .collect();
+                if !genre_entries.is_empty() {
+                    tokio::task::spawn_blocking(move || {
+                        crate::reco::backfill_album_genres(genre_entries)
+                    });
+                }
+                // reco: prefer the reco "forgotten favorites" set when the store
+                // is warm (shared events.db); fall back to the local recents
+                // heuristic when cold so the Rediscover row never empties.
+                let forgotten: Option<HashSet<String>> =
+                    crate::reco::forgotten_favorite_album_ids(60, 30)
+                        .filter(|ids| !ids.is_empty())
+                        .map(|ids| ids.into_iter().collect());
+                apply_rediscover(
+                    &weak,
+                    &cache,
+                    build_rediscover(&fav_albums, &recent_ids, forgotten.as_ref()),
+                );
                 apply_radio(&weak, &cache, build_radio(&recent_album_list, &fav_albums));
 
                 // Only the no-recent-history case needs the favorite-album seed;
