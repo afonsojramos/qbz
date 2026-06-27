@@ -26,7 +26,7 @@ const PLAYLIST_CAP: usize = 30;
 const VALIDATE_CONCURRENCY: usize = 6;
 const ARTIST_SEEDS: usize = 6;
 const SIMILAR_PER_SEED: u32 = 12;
-const KNOWN_ARTISTS_PER_BUILD: usize = 8;
+const KNOWN_ARTISTS_PER_BUILD: usize = 50;
 
 type Cache<'a> = Option<&'a Mutex<RecoCache>>;
 
@@ -262,9 +262,12 @@ pub async fn build_rec_albums(inputs: &RecoInputs<'_>, history: &ExtHistory) -> 
     let Some(lf) = &inputs.lastfm else {
         return Vec::new();
     };
+    // Lifetime top artists (not 1-month) for VOLUME: Recommended Albums shows
+    // one album per artist, so we need many distinct artists to clear >=20
+    // after Qobuz-catalog validation (the recent-taste rows cover 1-month).
     let artists: Vec<String> = lf
         .client
-        .get_top_artists(&lf.username, "1month", 10)
+        .get_top_artists(&lf.username, "overall", 60)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -300,9 +303,12 @@ pub async fn build_rec_albums(inputs: &RecoInputs<'_>, history: &ExtHistory) -> 
                 score: al.playcount as f32,
                 subtitle: format!("From {} — you haven't heard this one", artist),
             });
+            // One album per artist (owner request): take this artist's top
+            // not-yet-heard album and move on, so the row spans >=20 artists.
+            break;
         }
     }
-    candidates.truncate(50);
+    candidates.truncate(60);
     let pool = validate_album_pool(inputs.catalog, inputs.cache, candidates).await;
     rotate_take(pool, inputs.rotation_seed, DISPLAY_CAP)
 }
