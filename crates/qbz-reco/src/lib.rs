@@ -11,9 +11,13 @@
 mod builder;
 mod sparse_vector;
 mod store;
+mod suggestions;
 mod weights;
 
 pub use builder::{ArtistVectorBuilder, BuildResult};
 pub use sparse_vector::SparseVector;
 pub use store::{ArtistVectorStore, SimilarArtist, VECTOR_TTL_SECS};
+pub use suggestions::{
+    extract_artist_mbids, SuggestedTrack, SuggestionConfig, SuggestionResult, SuggestionsEngine,
+};
 pub use weights::RelationshipWeights;

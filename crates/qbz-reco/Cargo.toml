@@ -10,5 +10,7 @@ serde = { workspace = true }
 rusqlite = { version = "0.31", features = ["bundled"] }
 log = { workspace = true }
 tokio = { workspace = true }
+rand = { workspace = true }
+qbz-models = { path = "../qbz-models" }
 qbz-qobuz = { path = "../qbz-qobuz" }
 qbz-integrations = { path = "../qbz-integrations" }

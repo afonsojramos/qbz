@@ -5823,7 +5823,9 @@ version = "0.1.0"
 dependencies = [
  "log",
  "qbz-integrations",
+ "qbz-models",
  "qbz-qobuz",
+ "rand 0.10.1",
  "rusqlite",
  "serde",
  "tokio",
