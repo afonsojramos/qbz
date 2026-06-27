@@ -1507,6 +1507,30 @@ fn navigate_artist(
                 });
                 artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
 
+                // Seed the follow heart: pull the user's followed artists (also
+                // refreshes the in-memory cache the toggle reads), then reflect
+                // whether THIS artist is followed.
+                {
+                    let runtime_fav = runtime.clone();
+                    let weak_fav = weak.clone();
+                    let aid_fav = artist_id.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ids) = runtime_fav.core().favorite_artist_ids().await {
+                            let is_fav = aid_fav
+                                .parse::<u64>()
+                                .map(|a| ids.contains(&a))
+                                .unwrap_or(false);
+                            crate::fav_cache::set_all_artists(ids);
+                            let _ = weak_fav.upgrade_in_event_loop(move |w| {
+                                let ast = w.global::<ArtistState>();
+                                if ast.get_id().as_str() == aid_fav.as_str() {
+                                    ast.set_is_following(is_fav);
+                                }
+                            });
+                        }
+                    });
+                }
+
                 // Magazine / Stories — fetch the editorial teasers in
                 // parallel; the sidebar section stays hidden if there are none.
                 {
@@ -8672,28 +8696,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     id.clone(),
                 ),
                 ("artist", "follow") => {
-                    let runtime = runtime.clone();
-                    let weak = weak.clone();
-                    let artist_id = id.clone();
-                    handle.spawn(async move {
-                        match runtime.core().add_favorite("artist", &artist_id).await {
-                            Ok(()) => {
-                                // reco: log the artist favorite (add-only follow
-                                // arm). Qobuz artist id -> u64.
-                                if let Ok(aid) = artist_id.parse::<u64>() {
-                                    tokio::task::spawn_blocking(move || {
-                                        crate::reco::log_favorite_artist(aid)
+                    // Toggle the artist follow (= Qobuz artist favorite). State
+                    // source = the in-memory artist fav cache (seeded by search +
+                    // the artist page). Optimistic flip on the cache + every
+                    // visible surface (search cards + the ArtistView heart),
+                    // revert on network failure.
+                    if let (Some(w), Ok(aid)) = (weak.upgrade(), id.parse::<u64>()) {
+                        let following = crate::fav_cache::is_artist_favorite(aid);
+                        let make = !following;
+                        crate::fav_cache::set_artist(aid, make);
+                        search::mark_artist_followed(&w, &id, make);
+                        let ast = w.global::<ArtistState>();
+                        if ast.get_id().as_str() == id.as_str() {
+                            ast.set_is_following(make);
+                        }
+                        let runtime = runtime.clone();
+                        let weak = weak.clone();
+                        let artist_id = id.clone();
+                        handle.spawn(async move {
+                            let res = if make {
+                                runtime.core().add_favorite("artist", &artist_id).await
+                            } else {
+                                runtime.core().remove_favorite("artist", &artist_id).await
+                            };
+                            match res {
+                                Ok(()) => {
+                                    // reco: log the favorite only on ADD.
+                                    if make {
+                                        tokio::task::spawn_blocking(move || {
+                                            crate::reco::log_favorite_artist(aid)
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "[qbz-slint] toggle follow artist failed: {e}"
+                                    );
+                                    crate::fav_cache::set_artist(aid, following);
+                                    let _ = weak.upgrade_in_event_loop(move |w| {
+                                        search::mark_artist_followed(&w, &artist_id, following);
+                                        let ast = w.global::<ArtistState>();
+                                        if ast.get_id().as_str() == artist_id.as_str() {
+                                            ast.set_is_following(following);
+                                        }
                                     });
                                 }
-                                let _ = weak.upgrade_in_event_loop(move |w| {
-                                    search::mark_artist_followed(&w, &artist_id, true);
-                                });
                             }
-                            Err(e) => {
-                                log::error!("[qbz-slint] follow artist failed: {e}");
-                            }
-                        }
-                    });
+                        });
+                    }
                 }
                 // === Label landing actions ===============================
                 ("label", "follow") => {

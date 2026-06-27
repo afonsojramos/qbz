@@ -36,6 +36,13 @@ static FAV_ALBUMS: LazyLock<RwLock<HashSet<String>>> =
 static FAV_AWARDS: LazyLock<RwLock<HashSet<String>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
 
+/// Process-wide set of the user's followed ARTIST ids (u64). IN-MEMORY ONLY
+/// (no per-user disk store): the search + artist-page surfaces re-seed it from
+/// `favorite_artist_ids` on load, so the follow heart toggle always has the
+/// current state without a per-click network hit.
+static FAV_ARTISTS: LazyLock<RwLock<HashSet<u64>>> =
+    LazyLock::new(|| RwLock::new(HashSet::new()));
+
 /// Per-user persistent ID store. `None` until a session (online or offline)
 /// is activated; pure in-memory behavior in that window.
 static STORE: Mutex<Option<FavoritesCacheStore>> = Mutex::new(None);
@@ -112,6 +119,9 @@ pub fn teardown() {
         guard.clear();
     }
     if let Ok(mut guard) = FAV_AWARDS.write() {
+        guard.clear();
+    }
+    if let Ok(mut guard) = FAV_ARTISTS.write() {
         guard.clear();
     }
 }
@@ -231,6 +241,34 @@ pub fn set_album(album_id: &str, favorite: bool) {
             if let Err(e) = res {
                 log::warn!("[qbz-slint] favorites cache album disk update failed: {e}");
             }
+        }
+    }
+}
+
+// ==================== Followed (favorite) artists ====================
+
+/// True when the artist id is in the user's followed-artist set.
+pub fn is_artist_favorite(artist_id: u64) -> bool {
+    FAV_ARTISTS
+        .read()
+        .map(|g| g.contains(&artist_id))
+        .unwrap_or(false)
+}
+
+/// Replace the followed-artist set with a freshly-fetched id list (in-memory).
+pub fn set_all_artists(ids: HashSet<u64>) {
+    if let Ok(mut guard) = FAV_ARTISTS.write() {
+        *guard = ids;
+    }
+}
+
+/// Insert / remove a single artist id (optimistic follow toggle).
+pub fn set_artist(artist_id: u64, favorite: bool) {
+    if let Ok(mut guard) = FAV_ARTISTS.write() {
+        if favorite {
+            guard.insert(artist_id);
+        } else {
+            guard.remove(&artist_id);
         }
     }
 }

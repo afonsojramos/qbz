@@ -379,8 +379,9 @@ export component ArtistPageView inherits Rectangle {
                         spacing: 12px;
                         CircleAction {
                             icon: @image-url("../assets/icons/heart.svg");
+                            active: ArtistState.is-following;
                             clicked => {
-                                root.media-action("artist", "", "favorite");
+                                root.media-action("artist", ArtistState.id, "follow");
                             }
                         }
                         // Radio with dropdown — QBZ radio (local engine)

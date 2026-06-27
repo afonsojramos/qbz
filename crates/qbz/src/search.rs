@@ -1039,6 +1039,8 @@ where
     );
     let results = results.map_err(|e| e.to_string())?;
     let favs = favs.unwrap_or_default();
+    // Seed the in-memory artist fav cache so the follow toggle has current state.
+    crate::fav_cache::set_all_artists(favs.clone());
     Ok(map_search_all(query, results, &favs))
 }
 
