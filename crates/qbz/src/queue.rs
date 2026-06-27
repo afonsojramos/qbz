@@ -22,8 +22,13 @@ use slint::{ComponentHandle, Model};
 use crate::adapter::SlintAdapter;
 use crate::{AppWindow, ImmersiveState, QueueItem, QueueState};
 
-/// Upcoming tracks shown per paginator page — matches the Tauri sidebar.
-pub const PAGE_SIZE: usize = 40;
+/// Up-next "page" size. Set effectively unbounded so the queue renders the
+/// WHOLE up-next as ONE scrollable list (a growing list, like the immersive +
+/// miniplayer queues) instead of 40-row pages — this dissolves the cross-page
+/// drag limitation: a dragged row can now reach any slot in one list. Kept as a
+/// single large "page" so the pagination + reorder index math stays uniform;
+/// the paginator UI auto-hides at `page_count == 1` (QueueSidebar.slint:624).
+pub const PAGE_SIZE: usize = 100_000;
 
 type Runtime = Arc<qbz_app::shell::AppRuntime<SlintAdapter>>;
 
@@ -998,24 +1003,27 @@ mod tests {
 
     #[test]
     fn paginate_spans_multiple_pages() {
-        // 95 items, 40 per page -> 3 pages (40 / 40 / 15).
-        let total = 95;
+        // Two full pages + a short tail -> 3 pages. PAGE_SIZE-relative so the
+        // multi-page math is validated regardless of the configured page size
+        // (which is now effectively unbounded for the growing-list queue).
+        let total = PAGE_SIZE * 2 + 15;
         let p0 = paginate(total, 0);
         assert_eq!(p0.page_count, 3);
-        assert_eq!((p0.start, p0.end), (0, 40));
+        assert_eq!((p0.start, p0.end), (0, PAGE_SIZE));
         let p1 = paginate(total, 1);
-        assert_eq!((p1.start, p1.end), (40, 80));
+        assert_eq!((p1.start, p1.end), (PAGE_SIZE, PAGE_SIZE * 2));
         let p2 = paginate(total, 2);
-        assert_eq!((p2.start, p2.end), (80, 95));
+        assert_eq!((p2.start, p2.end), (PAGE_SIZE * 2, total));
     }
 
     #[test]
     fn paginate_clamps_overshot_page() {
         // Requesting page 9 of a 2-page list clamps to the last page.
-        let b = paginate(50, 9);
+        let total = PAGE_SIZE + 10;
+        let b = paginate(total, 9);
         assert_eq!(b.page_count, 2);
         assert_eq!(b.page, 1);
-        assert_eq!((b.start, b.end), (40, 50));
+        assert_eq!((b.start, b.end), (PAGE_SIZE, total));
     }
 
     #[test]
