@@ -14398,7 +14398,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             })
                             .await
                             .unwrap_or(0);
-                            // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                            // reco: local refs are not Qobuz catalog ids — not
+                            // logged (same source gate as local plays).
                             toast_added_tracks(&weak, added, tname);
                         });
                         return;
@@ -14418,12 +14419,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let weak = weak.clone();
                     let tname = target_name.clone();
                     handle.spawn(async move {
+                        // reco: keep the full Qobuz ids before they move into
+                        // the add closure (local-playlist target = no Qobuz pid).
+                        let reco_ids = ids.clone();
                         let added = tokio::task::spawn_blocking(move || {
                             local_playlist::add_qobuz_tracks_blocking(&target, &ids)
                         })
                         .await
                         .unwrap_or(0);
-                        // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                        tokio::task::spawn_blocking(move || {
+                            crate::reco::log_playlist_add(None, reco_ids)
+                        });
                         toast_added_tracks(&weak, added, tname);
                     });
                     return;
@@ -14475,7 +14481,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             })
                         })
                         .await;
-                        // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                        // reco: local refs are not Qobuz catalog ids — not
+                        // logged (same source gate as local plays).
                         toast_added_tracks(&weak, refs_count, tname);
                         // E12: the open detail re-merges so the rows show
                         // up immediately.
@@ -14545,7 +14552,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             {
                                 log::error!("[qbz-slint] add to playlist failed: {e}");
                             } else {
-                                // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                                // reco: log the full requested Qobuz ids.
+                                let reco_ids = ids.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    crate::reco::log_playlist_add(Some(pid), reco_ids)
+                                });
                                 toast_added_tracks(&weak, n, tname);
                             }
                         }
@@ -14561,7 +14572,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             {
                                 log::error!("[qbz-slint] add to playlist failed: {e}");
                             } else {
-                                // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                                // reco: log the full requested Qobuz ids.
+                                let reco_ids = ids.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    crate::reco::log_playlist_add(Some(pid), reco_ids)
+                                });
                                 toast_added_tracks(&weak, n, tname);
                             }
                         }
@@ -14639,6 +14654,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // modal's offline branch.
                     let local_refs = refs.clone();
                     let local_qobuz = qobuz_ids.clone();
+                    // reco: the full Qobuz ids (empty when adding local refs).
+                    let reco_qobuz: Vec<u64> = if is_local { Vec::new() } else { qobuz_ids.clone() };
                     handle.spawn(async move {
                         let created = tokio::task::spawn_blocking({
                             let nm = nm.clone();
@@ -14666,7 +14683,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .await
                             .unwrap_or(0);
                         }
-                        // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                        // reco: log the new playlist's Qobuz tracks (new local
+                        // playlist = no Qobuz pid; empty when local refs).
+                        if created.is_some() {
+                            let reco_ids = reco_qobuz;
+                            tokio::task::spawn_blocking(move || {
+                                crate::reco::log_playlist_add(None, reco_ids)
+                            });
+                        }
                         let r2 = runtime.clone();
                         let h2 = handle2.clone();
                         let weak2 = weak.clone();
@@ -14709,8 +14733,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         "[qbz-slint] create-and-add: add failed: {e}"
                                     );
                                 }
+                                // reco: log the new playlist's Qobuz tracks.
+                                let reco_ids = qobuz_ids.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    crate::reco::log_playlist_add(Some(pid), reco_ids)
+                                });
                             }
-                            // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
                             let r2 = runtime.clone();
                             let h2 = handle2.clone();
                             let weak2 = weak.clone();
@@ -14796,7 +14824,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         log::error!("[qbz-slint] dup add-all failed: {e}");
                     } else {
-                        // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                        // reco: log the full requested Qobuz ids (add-all).
+                        let reco_ids = all_ids.clone();
+                        tokio::task::spawn_blocking(move || {
+                            crate::reco::log_playlist_add(Some(pid), reco_ids)
+                        });
                         toast_added_tracks(&weak, n, name);
                     }
                     let _ = weak.upgrade_in_event_loop(|w| {
@@ -14818,6 +14850,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 };
                 let (pid, all_ids, dup_ids, name) = stash;
+                // reco: keep the FULL requested ids before the dedup consumes
+                // them (Tauri logs the full request, not the inserted subset).
+                let reco_all = all_ids.clone();
                 // Add only the non-duplicate ids (all \ duplicates). If nothing
                 // is left, just close.
                 let to_add: Vec<u64> =
@@ -14839,7 +14874,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         log::error!("[qbz-slint] dup add-new-only failed: {e}");
                     } else {
-                        // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
+                        // reco: log the FULL requested ids (Tauri parity), not
+                        // just the non-duplicate subset that was inserted.
+                        let reco_ids = reco_all;
+                        tokio::task::spawn_blocking(move || {
+                            crate::reco::log_playlist_add(Some(pid), reco_ids)
+                        });
                         toast_added_tracks(&weak, n, name);
                     }
                     let _ = weak.upgrade_in_event_loop(|w| {
@@ -16102,8 +16142,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await;
                     match res {
                         Ok(summary) => {
-                            // TODO(reco-v1): log playlist_add reco events here once the reco engine is extracted to a shared crate (golden-rule v1).
-                            // NOTE: Tauri's importer never logged reco — adding it here is parity-plus, one event per matched track on import success.
+                            // reco: NOT logged. The importer is a bulk external
+                            // import (Spotify/Apple/...), not a per-track taste
+                            // action, and Tauri never logged it — left unlogged
+                            // for parity. (Re-evaluate if the owner wants it.)
                             // Assign every created part to the chosen folder
                             // (local DB) BEFORE the sidebar reload — mirrors
                             // the create-playlist precedent above.
