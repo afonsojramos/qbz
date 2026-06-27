@@ -8247,6 +8247,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle.clone(),
                     id.clone(),
                 ),
+                // "QBZ Radio" track variant: the internal smart pool builder
+                // (fetches the track to seed its performer) vs the plain Qobuz
+                // /radio/track above.
+                ("track", "create-radio-qbz") => playback::play_smart_track_radio(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id.clone(),
+                ),
                 ("track", "add-to-playlist") => {
                     // Open the global picker for this track + load the
                     // user's playlists. SOURCE-TYPED routing first: this
@@ -8589,6 +8598,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // (the Qobuz /radio/artist endpoint remains available
                 // via playback::play_artist_radio for an alternative).
                 ("artist", "radio") => playback::play_smart_artist_radio(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id.clone(),
+                ),
+                // ArtistView's radio dropdown: "QBZ Radio" = the internal
+                // smart pool builder (richer); "Qobuz Radio" = the plain
+                // Qobuz /radio/artist endpoint. (Both id-carrying, unlike the
+                // legacy empty-id placeholders.)
+                ("artist", "radio-qbz") => playback::play_smart_artist_radio(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id.clone(),
+                ),
+                ("artist", "radio-qobuz") => playback::play_artist_radio(
                     runtime.clone(),
                     weak.clone(),
                     handle.clone(),

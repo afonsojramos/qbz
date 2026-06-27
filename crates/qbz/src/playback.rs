@@ -2616,11 +2616,10 @@ fn play_radio_response(
     play_tracks(runtime, weak, handle, tracks, 0)
 }
 
-/// Start a Qobuz artist radio (`/radio/artist`). Kept as the simpler
-/// alternative to the smart pool builder; the artist "radio" action
-/// uses the smart builder, this remains available for an explicit
-/// "Qobuz radio" choice.
-#[allow(dead_code)]
+/// Start a Qobuz artist radio (`/radio/artist`). The simpler alternative to
+/// the smart pool builder: wired to ArtistView's "Qobuz Radio" choice, while
+/// the "QBZ Radio" choice and the plain `("artist","radio")` action use the
+/// smart builder.
 pub fn play_artist_radio(
     runtime: Runtime,
     weak: slint::Weak<AppWindow>,
@@ -2630,7 +2629,7 @@ pub fn play_artist_radio(
     handle.spawn(async move {
         match runtime.core().get_radio_artist(&artist_id).await {
             Ok(resp) => {
-                let tracks = resp.tracks.map(|p| p.items).unwrap_or_default();
+                let tracks = resp.tracks.items;
                 if !play_radio_response(runtime, weak, tracks) {
                     log::warn!("[qbz-slint] artist radio {artist_id} returned no tracks");
                 }
@@ -2674,12 +2673,52 @@ pub fn play_track_radio(
     handle.spawn(async move {
         match runtime.core().get_radio_track(&track_id).await {
             Ok(resp) => {
-                let tracks = resp.tracks.map(|p| p.items).unwrap_or_default();
+                let tracks = resp.tracks.items;
                 if !play_radio_response(runtime, weak, tracks) {
                     log::warn!("[qbz-slint] track radio {track_id} returned no tracks");
                 }
             }
             Err(e) => log::error!("[qbz-slint] track radio {track_id} failed: {e}"),
+        }
+    });
+}
+
+/// Start a smart track radio via the local qbz-radio pool builder (richer than
+/// the plain Qobuz `/radio/track`). The track-row menu only carries the track
+/// id, so fetch the track first to seed the builder with its performer.
+pub fn play_smart_track_radio(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    track_id: String,
+) {
+    handle.spawn(async move {
+        let Ok(tid) = track_id.parse::<u64>() else {
+            log::warn!("[qbz-slint] smart track radio: bad track id {track_id}");
+            return;
+        };
+        let track = match runtime.core().get_track(tid).await {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("[qbz-slint] smart track radio: get_track {tid} failed: {e}");
+                return;
+            }
+        };
+        let Some(aid) = track.performer.as_ref().map(|a| a.id) else {
+            log::warn!("[qbz-slint] smart track radio: track {tid} has no performer");
+            return;
+        };
+        match runtime
+            .core()
+            .create_smart_track_radio(tid, aid, track.title.clone())
+            .await
+        {
+            Ok(tracks) => {
+                if !play_radio_response(runtime, weak, tracks) {
+                    log::warn!("[qbz-slint] smart track radio {tid} returned no tracks");
+                }
+            }
+            Err(e) => log::error!("[qbz-slint] smart track radio {tid} failed: {e}"),
         }
     });
 }
@@ -2694,7 +2733,7 @@ pub fn play_album_radio(
     handle.spawn(async move {
         match runtime.core().get_radio_album(&album_id).await {
             Ok(resp) => {
-                let tracks = resp.tracks.map(|p| p.items).unwrap_or_default();
+                let tracks = resp.tracks.items;
                 if !play_radio_response(runtime, weak, tracks) {
                     log::warn!("[qbz-slint] album radio {album_id} returned no tracks");
                 }

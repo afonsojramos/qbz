@@ -57,6 +57,62 @@ where
     }))
 }
 
+/// Deserialize a `SearchResultsPage<T>`, salvaging items field-by-field and
+/// defaulting any missing `total`/`offset`/`limit` (the Qobuz `/radio/*` pages
+/// OMIT `total`). Unlike [`lenient_page`] — which returns an EMPTY page on any
+/// parse failure and would silently drop every radio track — this PRESERVES the
+/// items. Ported verbatim from `src-tauri/src/api/models.rs:42-91`.
+pub fn lenient_page_flexible<'de, D, T>(deserializer: D) -> Result<SearchResultsPage<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(SearchResultsPage {
+            items: Vec::new(),
+            total: 0,
+            offset: 0,
+            limit: 0,
+        });
+    }
+
+    let items: Vec<T> = value
+        .get("items")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| serde_json::from_value::<T>(item.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let limit = value
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(items.len() as u32);
+
+    let offset = value
+        .get("offset")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(0);
+
+    let total = value
+        .get("total")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(items.len() as u32);
+
+    Ok(SearchResultsPage {
+        items,
+        total,
+        offset,
+        limit,
+    })
+}
+
 /// JSON String OR Number → `String`; anything else → `""`. Used for
 /// `PurchaseAlbum.id`.
 pub fn deserialize_string_id<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -240,5 +296,41 @@ mod tests {
         assert_eq!(track.title, "No Version");
         // `streamable` defaults TRUE even on the bare track shape.
         assert!(track.streamable);
+    }
+
+    #[test]
+    fn radio_response_tolerates_missing_total() {
+        use crate::types::RadioResponse;
+        // Qobuz `/radio/album` + `/radio/track` return a `tracks` page that
+        // OMITS `total` (and sometimes offset/limit). The strict derive used to
+        // abort with "missing field `total`"; lenient_page_flexible must default
+        // it to the item count and PRESERVE the tracks (not drop them).
+        const RADIO: &str = r#"{
+            "type": "album",
+            "title": "Album Radio",
+            "tracks": {
+                "items": [
+                    { "id": 111, "title": "One" },
+                    { "id": 222, "title": "Two" }
+                ]
+            }
+        }"#;
+        let resp: RadioResponse = serde_json::from_str(RADIO)
+            .expect("radio response with missing total must deserialize");
+        assert_eq!(resp.tracks.items.len(), 2);
+        assert_eq!(resp.tracks.items[0].id, 111);
+        // `total` defaulted to the item count.
+        assert_eq!(resp.tracks.total, 2);
+    }
+
+    #[test]
+    fn radio_response_absent_tracks_is_empty() {
+        use crate::types::RadioResponse;
+        // `tracks` key entirely absent → field-level #[serde(default)] → empty
+        // page (requires `Track: Default`, added alongside this fix).
+        let resp: RadioResponse = serde_json::from_str(r#"{ "type": "album" }"#)
+            .expect("radio without tracks deserializes");
+        assert_eq!(resp.tracks.items.len(), 0);
+        assert_eq!(resp.tracks.total, 0);
     }
 }

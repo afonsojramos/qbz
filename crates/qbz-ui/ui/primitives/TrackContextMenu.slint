@@ -62,8 +62,8 @@ export component TrackContextMenu inherits PopupWindow {
     width: 224px;
     // Nav-only (blacklisted): only Go to album / Go to artist / Track info.
     // Otherwise: 3 transient + optional favorite/mixtape/add-to-playlist/remove
-    // + optional go-to pair + the Qobuz block (3 fixed + 1-or-2 offline
-    // entries + optional track info).
+    // + optional go-to pair + the Qobuz block (4 fixed: QBZ radio, Qobuz
+    // radio, 2 shares; + 1-or-2 offline entries + optional track info).
     height: (root.nav-only
         ? ((root.go-album-action ? 1 : 0)
             + (root.go-artist-action ? 1 : 0)
@@ -76,7 +76,7 @@ export component TrackContextMenu inherits PopupWindow {
             + (root.go-album-action ? 1 : 0)
             + (root.go-artist-action ? 1 : 0)
             + (root.qobuz-actions
-                ? 3 + (root.cache-status == 3 ? 2 : 1) + (root.track-info-action ? 1 : 0)
+                ? 4 + (root.cache-status == 3 ? 2 : 1) + (root.track-info-action ? 1 : 0)
                 : 0))) * 30px;
 
     ContextMenu {
@@ -103,7 +103,14 @@ export component TrackContextMenu inherits PopupWindow {
         }
         if root.qobuz-actions && !root.nav-only: ContextMenuItem {
             icon: @image-url("../assets/icons/radio.svg");
-            label: @tr("Create radio");
+            label: @tr("Create QBZ radio");
+            clicked => {
+                root.media-action("track", root.track-id, "create-radio-qbz");
+            }
+        }
+        if root.qobuz-actions && !root.nav-only: ContextMenuItem {
+            icon: @image-url("../assets/icons/radio.svg");
+            label: @tr("Create Qobuz radio");
             clicked => {
                 root.media-action("track", root.track-id, "create-radio");
             }

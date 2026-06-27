@@ -403,16 +403,16 @@ export component ArtistPageView inherits Rectangle {
                                 ContextMenu {
                                     ContextMenuItem {
                                         icon: @image-url("../assets/icons/radio.svg");
-                                        label: "QBZ Radio";
+                                        label: @tr("QBZ Radio");
                                         clicked => {
-                                            root.media-action("artist", "", "radio-qbz");
+                                            root.media-action("artist", ArtistState.id, "radio-qbz");
                                         }
                                     }
                                     ContextMenuItem {
                                         icon: @image-url("../assets/icons/radio.svg");
-                                        label: "Qobuz Radio";
+                                        label: @tr("Qobuz Radio");
                                         clicked => {
-                                            root.media-action("artist", "", "radio-qobuz");
+                                            root.media-action("artist", ArtistState.id, "radio-qobuz");
                                         }
                                     }
                                 }

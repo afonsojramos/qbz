@@ -297,7 +297,7 @@ impl ImageSet {
 // ============ Core Media Types ============
 
 /// Track model
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Track {
     #[serde(default)]
     pub id: u64,
@@ -928,8 +928,8 @@ pub struct RadioResponse {
     pub radio_type: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
-    #[serde(default)]
-    pub tracks: Option<SearchResultsPage<Track>>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page_flexible")]
+    pub tracks: SearchResultsPage<Track>,
 }
 
 /// One entry of the Qobuz `most_popular` block in a combined search.
