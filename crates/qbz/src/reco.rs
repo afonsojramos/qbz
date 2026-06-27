@@ -194,6 +194,24 @@ pub fn forgotten_favorite_album_ids(limit: u32, recency_days: u32) -> Option<Vec
         .ok()
 }
 
+/// The reco-scored favorite album ids in taste order (highest first) when the
+/// store is warm (trained); `None` when reco is cold/disabled so the caller
+/// keeps its original ordering. Bounded by `limit`.
+pub fn scored_favorite_album_ids(limit: u32) -> Option<Vec<String>> {
+    let limits = HomeSeedLimits {
+        recent_albums: 0,
+        continue_tracks: 0,
+        top_artists: 0,
+        favorites: limit,
+    };
+    let seeds = home_seeds(limits)?;
+    if seeds.favorite_album_ids.is_empty() {
+        None
+    } else {
+        Some(seeds.favorite_album_ids)
+    }
+}
+
 /// Backfill genres `(album_id, genre_id, genre_name)` onto reco events +
 /// album-meta once albums are resolved. Best-effort, blocking SQLite — call
 /// from `spawn_blocking`. Plays carry no genre, so this is what feeds

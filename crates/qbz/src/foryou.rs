@@ -444,6 +444,19 @@ fn build_rediscover(
 /// Favorite Albums — the user's favorited albums, capped at 18, in favorite
 /// order (matches Tauri's home-resolved favoriteAlbums sliced 18; unfiltered,
 /// unlike Rediscover).
+/// Reorder resolved albums so the reco-scored favorites lead (taste order),
+/// keeping unscored albums in their original relative order. `scored` is the
+/// reco favorite-album id order; `None`/empty leaves the input untouched, so a
+/// cold reco store never reorders (no regression).
+fn order_by_score(mut albums: Vec<Album>, scored: Option<&[String]>) -> Vec<Album> {
+    if let Some(order) = scored {
+        if !order.is_empty() {
+            albums.sort_by_key(|a| order.iter().position(|id| id == &a.id).unwrap_or(usize::MAX));
+        }
+    }
+    albums
+}
+
 fn build_favorite_albums(fav_albums: &[Album]) -> Vec<AlbumCard> {
     fav_albums.iter().take(18).cloned().map(map_album).collect()
 }
@@ -863,6 +876,10 @@ pub fn spawn_for_you<A>(
             let recent_ids = recent_ids.clone();
             Box::pin(async move {
                 let fav_albums = fetch_fav_albums(&runtime).await;
+                // reco: lead with the highest-scored favorites (trained taste
+                // order) when the store is warm; cold -> original Qobuz order.
+                let scored_fav = crate::reco::scored_favorite_album_ids(80);
+                let fav_albums = order_by_score(fav_albums, scored_fav.as_deref());
                 apply_favorite_albums(&weak, &cache, build_favorite_albums(&fav_albums));
                 // reco: backfill genres for the resolved favorite albums so the
                 // engine's top-genres has data (plays alone carry no genre).
