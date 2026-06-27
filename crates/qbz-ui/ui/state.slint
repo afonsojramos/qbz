@@ -338,8 +338,10 @@ export global ExternalRecoState {
     // True when no external source is connected: the editorial fallback
     // (top-albums + top-artists) shows instead of the personalized rows.
     in property <bool> editorial-fallback: false;
-    // Recommended artists (Last.fm similar, not heard). subtitle = "Similar to…".
-    in property <[SlimItem]> rec-artists: [];
+    // Recommended artists from your COMMON taste (overall top -> similar).
+    in property <[SlimItem]> rec-artists-common: [];
+    // Recommended artists from your RECENT taste (1-month top -> similar).
+    in property <[SlimItem]> rec-artists-recent: [];
     // Recommended albums (Last.fm artist top-albums, not scrobbled).
     in property <DiscoverSection> rec-albums;
     // Fresh releases (ListenBrainz, from artists you follow).

@@ -21,7 +21,8 @@ export component ExternalRecoView inherits VerticalLayout {
     callback play-track(string);
 
     property <bool> any-content:
-        ExternalRecoState.rec-artists.length > 0
+        ExternalRecoState.rec-artists-common.length > 0
+        || ExternalRecoState.rec-artists-recent.length > 0
         || ExternalRecoState.rec-albums.albums.length > 0
         || ExternalRecoState.fresh-releases.albums.length > 0
         || ExternalRecoState.weekly-exploration.length > 0
@@ -35,10 +36,22 @@ export component ExternalRecoView inherits VerticalLayout {
 
     if ExternalRecoState.loading && !root.any-content: HomeSkeleton { }
 
-    // Recommended Artists (Last.fm similar, not heard) — with "Similar to…".
-    if ExternalRecoState.rec-artists.length > 0: ArtistCarousel {
-        title: @tr("Recommended Artists");
-        artists: ExternalRecoState.rec-artists;
+    // More like the artists you love (COMMON taste — overall top).
+    if ExternalRecoState.rec-artists-common.length > 0: ArtistCarousel {
+        title: @tr("More like the artists you love");
+        artists: ExternalRecoState.rec-artists-common;
+        artist-clicked(id) => {
+            root.open-artist(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
+        }
+    }
+
+    // Based on what you've been into lately (RECENT taste — 1-month top).
+    if ExternalRecoState.rec-artists-recent.length > 0: ArtistCarousel {
+        title: @tr("Based on what you've been into lately");
+        artists: ExternalRecoState.rec-artists-recent;
         artist-clicked(id) => {
             root.open-artist(id);
         }

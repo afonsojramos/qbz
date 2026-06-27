@@ -87,8 +87,17 @@ pub async fn gather_history(inputs: &RecoInputs<'_>) -> ExtHistory {
 
 // ── Per-row builders (progressive: the frontend paints each as it resolves) ──
 
-pub async fn build_rec_artists(inputs: &RecoInputs<'_>, history: &ExtHistory) -> Vec<ArtistReco> {
-    carousels::build_rec_artists(inputs, history).await
+pub async fn build_rec_artists_common(
+    inputs: &RecoInputs<'_>,
+    history: &ExtHistory,
+) -> Vec<ArtistReco> {
+    carousels::build_rec_artists_common(inputs, history).await
+}
+pub async fn build_rec_artists_recent(
+    inputs: &RecoInputs<'_>,
+    history: &ExtHistory,
+) -> Vec<ArtistReco> {
+    carousels::build_rec_artists_recent(inputs, history).await
 }
 pub async fn build_rec_albums(inputs: &RecoInputs<'_>, history: &ExtHistory) -> Vec<AlbumReco> {
     carousels::build_rec_albums(inputs, history).await
@@ -122,8 +131,17 @@ pub async fn build_external_carousels(inputs: RecoInputs<'_>) -> ExternalCarouse
         };
     }
     let history = gather_history(&inputs).await;
-    let (rec_artists, rec_albums, fresh_releases, weekly_exploration, weekly_jams, deep_cut_albums) = tokio::join!(
-        build_rec_artists(&inputs, &history),
+    let (
+        rec_artists_common,
+        rec_artists_recent,
+        rec_albums,
+        fresh_releases,
+        weekly_exploration,
+        weekly_jams,
+        deep_cut_albums,
+    ) = tokio::join!(
+        build_rec_artists_common(&inputs, &history),
+        build_rec_artists_recent(&inputs, &history),
         build_rec_albums(&inputs, &history),
         build_fresh_releases(&inputs),
         build_weekly_exploration(&inputs),
@@ -132,7 +150,8 @@ pub async fn build_external_carousels(inputs: RecoInputs<'_>) -> ExternalCarouse
     );
     ExternalCarousels {
         editorial_fallback: false,
-        rec_artists,
+        rec_artists_common,
+        rec_artists_recent,
         rec_albums,
         fresh_releases,
         weekly_exploration,

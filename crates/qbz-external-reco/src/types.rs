@@ -98,12 +98,14 @@ pub struct TrackReco {
 ///
 /// Empty vecs self-hide their row in the view, so partial population is always
 /// safe — the controller paints each row independently as it resolves.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExternalCarousels {
     /// No connected external source -> editorial fallback regime.
     pub editorial_fallback: bool,
-    /// Recommended artists (Last.fm similar, not heard).
-    pub rec_artists: Vec<ArtistReco>,
+    /// Recommended artists from your COMMON taste (overall top -> similar, not heard).
+    pub rec_artists_common: Vec<ArtistReco>,
+    /// Recommended artists from your RECENT taste (1-month top -> similar, not heard).
+    pub rec_artists_recent: Vec<ArtistReco>,
     /// Recommended albums (Last.fm artist top-albums, not scrobbled).
     pub rec_albums: Vec<AlbumReco>,
     /// Fresh releases (ListenBrainz, from artists you follow).

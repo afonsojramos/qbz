@@ -17,9 +17,9 @@ use async_trait::async_trait;
 use qbz_app::shell::AppRuntime;
 use qbz_external_reco::{
     build_deep_cut_albums, build_editorial, build_fresh_releases, build_rec_albums,
-    build_rec_artists, build_weekly_exploration, build_weekly_jams, gather_history, is_cold_start,
-    AlbumReco, ArtistReco, LastFmHandle, ListenBrainzHandle, LocalHistory, RecoCache, RecoCatalog,
-    RecoInputs, TrackReco,
+    build_rec_artists_common, build_rec_artists_recent, build_weekly_exploration, build_weekly_jams,
+    gather_history, is_cold_start, AlbumReco, ArtistReco, ExternalCarousels, LastFmHandle,
+    ListenBrainzHandle, LocalHistory, RecoCache, RecoCatalog, RecoInputs, TrackReco,
 };
 use qbz_integrations::{LastFmClient, ListenBrainzClient, MusicBrainzClient};
 use qbz_models::{Album, Artist, Track};
@@ -193,53 +193,133 @@ fn spawn(
             rotation_seed: rotation_seed(),
         };
 
+        let source_key = format!(
+            "results:lf={}:lb={}",
+            inputs.lastfm.is_some(),
+            inputs.listenbrainz.is_some()
+        );
+
+        // 1. Results cache: paint INSTANTLY if a fresh (<48h) build is cached.
+        if let Some(cache_mutex) = inputs.cache {
+            let cached = cache_mutex.lock().ok().and_then(|g| g.get_results(&source_key));
+            if let Some(json) = cached {
+                if let Ok(result) = serde_json::from_str::<ExternalCarousels>(&json) {
+                    apply_all(&weak, &image_cache, result);
+                    latch_loaded(&weak);
+                    return;
+                }
+            }
+        }
+
+        // 2. Cache miss / stale: tell the user we're working, then build.
+        crate::toast::info_weak(&weak, qbz_i18n::t("Generating recommendations…"));
+
+        let collector: Arc<Mutex<ExternalCarousels>> = Arc::new(Mutex::new(ExternalCarousels::default()));
+
         if is_cold_start(&inputs) {
             let (albums, artists) = build_editorial(&inputs).await;
+            if let Ok(mut g) = collector.lock() {
+                g.editorial_fallback = true;
+                g.top_albums = albums.clone();
+                g.top_artists = artists.clone();
+            }
             apply_albums(&weak, &image_cache, albums, AlbumRow::TopAlbums);
             apply_artists(&weak, &image_cache, artists, ArtistRow::TopArtists);
         } else {
             let history = gather_history(&inputs).await;
-            // Progressive: each branch paints its row the moment it resolves.
-            let b_artists = async {
-                let r = build_rec_artists(&inputs, &history).await;
-                apply_artists(&weak, &image_cache, r, ArtistRow::RecArtists);
+            let col = &collector;
+            // Progressive: each branch paints its row AND collects it for the cache.
+            let b_common = async {
+                let r = build_rec_artists_common(&inputs, &history).await;
+                if let Ok(mut g) = col.lock() {
+                    g.rec_artists_common = r.clone();
+                }
+                apply_artists(&weak, &image_cache, r, ArtistRow::RecArtistsCommon);
+            };
+            let b_recent = async {
+                let r = build_rec_artists_recent(&inputs, &history).await;
+                if let Ok(mut g) = col.lock() {
+                    g.rec_artists_recent = r.clone();
+                }
+                apply_artists(&weak, &image_cache, r, ArtistRow::RecArtistsRecent);
             };
             let b_albums = async {
                 let r = build_rec_albums(&inputs, &history).await;
+                if let Ok(mut g) = col.lock() {
+                    g.rec_albums = r.clone();
+                }
                 apply_albums(&weak, &image_cache, r, AlbumRow::RecAlbums);
             };
             let b_fresh = async {
                 let r = build_fresh_releases(&inputs).await;
+                if let Ok(mut g) = col.lock() {
+                    g.fresh_releases = r.clone();
+                }
                 apply_albums(&weak, &image_cache, r, AlbumRow::FreshReleases);
             };
             let b_explore = async {
                 let r = build_weekly_exploration(&inputs).await;
+                if let Ok(mut g) = col.lock() {
+                    g.weekly_exploration = r.clone();
+                }
                 apply_tracks(&weak, &image_cache, r, TrackRow::WeeklyExploration);
             };
             let b_jams = async {
                 let r = build_weekly_jams(&inputs).await;
+                if let Ok(mut g) = col.lock() {
+                    g.weekly_jams = r.clone();
+                }
                 apply_tracks(&weak, &image_cache, r, TrackRow::WeeklyJams);
             };
             let b_deep = async {
                 let r = build_deep_cut_albums(&inputs).await;
+                if let Ok(mut g) = col.lock() {
+                    g.deep_cut_albums = r.clone();
+                }
                 apply_albums(&weak, &image_cache, r, AlbumRow::DeepCuts);
             };
-            tokio::join!(b_artists, b_albums, b_fresh, b_explore, b_jams, b_deep);
+            tokio::join!(b_common, b_recent, b_albums, b_fresh, b_explore, b_jams, b_deep);
         }
 
-        let _ = weak.upgrade_in_event_loop(|w| {
-            let s = w.global::<ExternalRecoState>();
-            s.set_loading(false);
-            s.set_loaded(true);
-        });
+        // 3. Store the built result for instant future opens (48h TTL).
+        if let Some(cache_mutex) = inputs.cache {
+            let json = collector.lock().ok().and_then(|g| serde_json::to_string(&*g).ok());
+            if let (Ok(guard), Some(json)) = (cache_mutex.lock(), json) {
+                guard.put_results(&source_key, &json);
+            }
+        }
+
+        latch_loaded(&weak);
     });
+}
+
+fn latch_loaded(weak: &slint::Weak<AppWindow>) {
+    let _ = weak.upgrade_in_event_loop(|w| {
+        let s = w.global::<ExternalRecoState>();
+        s.set_loading(false);
+        s.set_loaded(true);
+    });
+}
+
+/// Paint every row from a cached result (empty rows self-hide).
+fn apply_all(weak: &slint::Weak<AppWindow>, cache: &ImageCache, r: ExternalCarousels) {
+    apply_artists(weak, cache, r.rec_artists_common, ArtistRow::RecArtistsCommon);
+    apply_artists(weak, cache, r.rec_artists_recent, ArtistRow::RecArtistsRecent);
+    apply_albums(weak, cache, r.rec_albums, AlbumRow::RecAlbums);
+    apply_albums(weak, cache, r.fresh_releases, AlbumRow::FreshReleases);
+    apply_tracks(weak, cache, r.weekly_exploration, TrackRow::WeeklyExploration);
+    apply_tracks(weak, cache, r.weekly_jams, TrackRow::WeeklyJams);
+    apply_albums(weak, cache, r.deep_cut_albums, AlbumRow::DeepCuts);
+    apply_albums(weak, cache, r.top_albums, AlbumRow::TopAlbums);
+    apply_artists(weak, cache, r.top_artists, ArtistRow::TopArtists);
 }
 
 // ── Per-row apply (models built on the UI thread; slint::Image is !Send) ────
 
 #[derive(Clone, Copy)]
 enum ArtistRow {
-    RecArtists,
+    RecArtistsCommon,
+    RecArtistsRecent,
     TopArtists,
 }
 #[derive(Clone, Copy)]
@@ -308,7 +388,8 @@ fn apply_artists(
         .map(|(i, a)| ArtworkJob {
             url: a.image_url.clone(),
             target: match which {
-                ArtistRow::RecArtists => ArtworkTarget::ExtRecoRecArtist { index: i },
+                ArtistRow::RecArtistsCommon => ArtworkTarget::ExtRecoRecArtistCommon { index: i },
+                ArtistRow::RecArtistsRecent => ArtworkTarget::ExtRecoRecArtistRecent { index: i },
                 ArtistRow::TopArtists => ArtworkTarget::ExtRecoTopArtist { index: i },
             },
         })
@@ -320,7 +401,8 @@ fn apply_artists(
         ));
         let s = w.global::<ExternalRecoState>();
         match which {
-            ArtistRow::RecArtists => s.set_rec_artists(model),
+            ArtistRow::RecArtistsCommon => s.set_rec_artists_common(model),
+            ArtistRow::RecArtistsRecent => s.set_rec_artists_recent(model),
             ArtistRow::TopArtists => s.set_top_artists(model),
         }
     });

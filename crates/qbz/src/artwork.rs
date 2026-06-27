@@ -164,7 +164,8 @@ pub enum ArtworkTarget {
     /// A card in ForYouState.rediscover.albums[index].
     ForYouRediscover { index: usize },
     /// 4th-tab "Recommendations" rows (external-reco engine).
-    ExtRecoRecArtist { index: usize },
+    ExtRecoRecArtistCommon { index: usize },
+    ExtRecoRecArtistRecent { index: usize },
     ExtRecoTopArtist { index: usize },
     ExtRecoRecAlbum { index: usize },
     ExtRecoFreshAlbum { index: usize },
@@ -1293,8 +1294,15 @@ fn apply_artwork(
                 model.set_row_data(index, item);
             }
         }
-        ArtworkTarget::ExtRecoRecArtist { index } => {
-            let model = window.global::<crate::ExternalRecoState>().get_rec_artists();
+        ArtworkTarget::ExtRecoRecArtistCommon { index } => {
+            let model = window.global::<crate::ExternalRecoState>().get_rec_artists_common();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ExtRecoRecArtistRecent { index } => {
+            let model = window.global::<crate::ExternalRecoState>().get_rec_artists_recent();
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);

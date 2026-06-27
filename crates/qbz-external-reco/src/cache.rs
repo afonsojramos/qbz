@@ -14,6 +14,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const FOUND_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 /// TTL for negative (not-on-Qobuz) entries — 7 days.
 const MISS_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+/// TTL for the cached BUILT result rows — 48 hours (fast opens + rotation: the
+/// tab paints instantly from cache within the window, and rebuilds every 48h so
+/// the content is never "eternally the same").
+const RESULTS_TTL_SECS: i64 = 48 * 60 * 60;
 
 /// A cache lookup outcome.
 pub enum CacheLookup {
@@ -47,7 +51,12 @@ impl RecoCache {
                 fetched_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_reco_qobuz_cache_fetched
-                ON reco_qobuz_cache(fetched_at);",
+                ON reco_qobuz_cache(fetched_at);
+            CREATE TABLE IF NOT EXISTS reco_results (
+                key TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                built_at INTEGER NOT NULL
+            );",
         )
         .map_err(|e| format!("Failed to init reco cache schema: {}", e))?;
         Ok(Self { conn })
@@ -98,6 +107,32 @@ impl RecoCache {
             "INSERT OR REPLACE INTO reco_qobuz_cache (key, kind, qobuz_id, found, fetched_at)
              VALUES (?, ?, ?, ?, ?)",
             params![key, kind, qobuz_id, found, Self::now()],
+        );
+    }
+
+    /// Get the cached BUILT result rows (JSON of `ExternalCarousels`) for `key`,
+    /// IF still within the 48h TTL. `None` -> the caller must rebuild.
+    pub fn get_results(&self, key: &str) -> Option<String> {
+        let row: Option<(String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT data, built_at FROM reco_results WHERE key = ?",
+                params![key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .unwrap_or(None);
+        match row {
+            Some((data, built_at)) if Self::now() - built_at <= RESULTS_TTL_SECS => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Store the built result rows (JSON) for `key`, stamped now.
+    pub fn put_results(&self, key: &str, data: &str) {
+        let _ = self.conn.execute(
+            "INSERT OR REPLACE INTO reco_results (key, data, built_at) VALUES (?, ?, ?)",
+            params![key, data, Self::now()],
         );
     }
 
