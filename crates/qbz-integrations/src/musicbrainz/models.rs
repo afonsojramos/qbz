@@ -82,6 +82,14 @@ pub struct RecordingResult {
     pub releases: Option<Vec<ReleaseRef>>,
 }
 
+/// Response from the single-recording lookup `/recording/{mbid}?inc=isrcs`.
+#[derive(Debug, Deserialize)]
+pub struct RecordingLookupResponse {
+    pub id: String,
+    pub title: Option<String>,
+    pub isrcs: Option<Vec<String>>,
+}
+
 /// Artist credit entry
 #[derive(Debug, Deserialize)]
 pub struct ArtistCredit {

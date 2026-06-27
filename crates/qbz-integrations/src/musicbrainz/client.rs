@@ -354,6 +354,25 @@ impl MusicBrainzClient {
             .collect())
     }
 
+    /// MBID -> ISRCs bridge. Looks up a recording's ISRCs (the strong key for Qobuz matching).
+    /// GET {base}/recording/{recording_mbid}?inc=isrcs&fmt=json
+    /// Returns the ISRC list, or an EMPTY vec on any non-success/parse failure (a missing ISRC is normal, not an error).
+    pub async fn get_recording_isrcs(&self, recording_mbid: &str) -> IntegrationResult<Vec<String>> {
+        self.check_enabled().await?;
+        self.rate_limiter.wait().await;
+        let base = self.base_url().await;
+        let url = format!("{}/recording/{}?inc=isrcs&fmt=json", base, recording_mbid);
+        let response = self.client.get(&url).send().await?;
+        if !response.status().is_success() {
+            return Ok(Vec::new());
+        }
+        let parsed: RecordingLookupResponse = match response.json().await {
+            Ok(p) => p,
+            Err(_) => return Ok(Vec::new()),
+        };
+        Ok(parsed.isrcs.unwrap_or_default())
+    }
+
     /// Search artists by tag (genre)
     pub async fn search_artists_by_tag(
         &self,

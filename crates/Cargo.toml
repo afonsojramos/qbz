@@ -35,6 +35,7 @@ members = [
     "qbz-i18n",
     "qbz-music-link",
     "qbz-reco",
+    "qbz-external-reco",
 ]
 
 [workspace.package]

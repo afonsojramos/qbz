@@ -60,3 +60,48 @@ pub struct LastFmSimilarArtist {
     /// MusicBrainz ID if available
     pub mbid: Option<String>,
 }
+
+/// A user's top artist from Last.fm's user.getTopArtists
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LastFmArtist {
+    /// Artist name
+    pub name: String,
+    /// MusicBrainz ID if available
+    pub mbid: Option<String>,
+    /// Number of times the user has played this artist
+    pub playcount: u64,
+    /// Largest available image URL, if any
+    pub image: Option<String>,
+}
+
+/// A track from Last.fm user methods (top / loved / recent tracks)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LastFmTrack {
+    /// Track name
+    pub name: String,
+    /// Artist name
+    pub artist: String,
+    /// Artist MusicBrainz ID if available
+    pub artist_mbid: Option<String>,
+    /// Track MusicBrainz ID if available
+    pub mbid: Option<String>,
+    /// Album name if available
+    pub album: Option<String>,
+    /// Largest available image URL, if any
+    pub image: Option<String>,
+    /// Unix timestamp of the scrobble / love, if available
+    pub uts: Option<i64>,
+}
+
+/// A similar track from Last.fm's track.getSimilar
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LastFmSimilarTrack {
+    /// Track name
+    pub name: String,
+    /// Artist name
+    pub artist: String,
+    /// MusicBrainz ID if available
+    pub mbid: Option<String>,
+    /// Raw match weight (NOT normalized to 0..1)
+    pub match_score: f64,
+}
