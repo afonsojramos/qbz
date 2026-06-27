@@ -9,5 +9,7 @@
 //! relationship weight via the vector store) per the epic's decision D3.
 
 mod sparse_vector;
+mod weights;
 
 pub use sparse_vector::SparseVector;
+pub use weights::RelationshipWeights;
