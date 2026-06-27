@@ -3172,6 +3172,35 @@ pub fn enqueue_playlist(
 
 /// Append (or insert-next) a batch of already-fetched tracks to the queue
 /// without re-fetching them. Used by the favorites bulk bar.
+/// Resolve a list of Qobuz track ids (order-preserving) and enqueue them at the
+/// end of the queue (or play-next). Backs the external-reco Weekly rows'
+/// "add to queue" button (P7). Toasts the outcome.
+pub fn enqueue_track_ids(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    ids: Vec<u64>,
+    next: bool,
+) {
+    if ids.is_empty() {
+        return;
+    }
+    handle.spawn(async move {
+        match runtime.core().get_tracks_batch(&ids).await {
+            Ok(tracks) if !tracks.is_empty() => {
+                let n = tracks.len();
+                enqueue_tracks(runtime, tokio::runtime::Handle::current(), tracks, next);
+                crate::toast::success_weak(&weak, format!("Added {n} tracks to queue"));
+            }
+            Ok(_) => crate::toast::error_weak(&weak, "No tracks to add"),
+            Err(e) => {
+                log::error!("[qbz-slint] enqueue_track_ids: get_tracks_batch failed: {e}");
+                crate::toast::error_weak(&weak, "Failed to add tracks");
+            }
+        }
+    });
+}
+
 pub fn enqueue_tracks(
     runtime: Runtime,
     handle: tokio::runtime::Handle,

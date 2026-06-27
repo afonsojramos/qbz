@@ -90,6 +90,10 @@ export component ExternalRecoView inherits VerticalLayout {
     if ExternalRecoState.weekly-exploration.length > 0: SlimCarousel {
         title: @tr("Weekly Exploration");
         items: ExternalRecoState.weekly-exploration;
+        show-list-actions: true;
+        list-action(action) => {
+            root.media-action("ext-reco-list", "weekly-exploration", action);
+        }
         item-clicked(id) => {
             root.play-track(id);
         }
@@ -99,6 +103,10 @@ export component ExternalRecoView inherits VerticalLayout {
     if ExternalRecoState.weekly-jams.length > 0: SlimCarousel {
         title: @tr("Weekly Jams");
         items: ExternalRecoState.weekly-jams;
+        show-list-actions: true;
+        list-action(action) => {
+            root.media-action("ext-reco-list", "weekly-jams", action);
+        }
         item-clicked(id) => {
             root.play-track(id);
         }

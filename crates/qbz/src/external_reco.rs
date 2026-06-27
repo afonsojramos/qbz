@@ -23,7 +23,7 @@ use qbz_external_reco::{
 };
 use qbz_integrations::{LastFmClient, ListenBrainzClient, MusicBrainzClient};
 use qbz_models::{Album, Artist, Track};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::adapter::SlintAdapter;
 use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
@@ -333,6 +333,22 @@ enum AlbumRow {
 enum TrackRow {
     WeeklyExploration,
     WeeklyJams,
+}
+
+/// Read the backing Qobuz track ids of one external-reco Weekly TRACK row
+/// (Weekly Exploration / Weekly Jams) for the P7 title-adjacent buttons.
+/// Returns the whole backing list (not just the 24 visible), in row order.
+pub fn list_track_ids(window: &AppWindow, section: &str) -> Vec<u64> {
+    let s = window.global::<ExternalRecoState>();
+    let model = match section {
+        "weekly-exploration" => s.get_weekly_exploration(),
+        "weekly-jams" => s.get_weekly_jams(),
+        _ => return Vec::new(),
+    };
+    model
+        .iter()
+        .filter_map(|it| it.id.as_str().parse::<u64>().ok())
+        .collect()
 }
 
 fn slim_from_artist(a: &ArtistReco) -> SlimItem {

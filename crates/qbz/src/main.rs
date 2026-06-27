@@ -8278,6 +8278,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle.clone(),
                     id.clone(),
                 ),
+                // External-reco Weekly rows (P7): the title-adjacent buttons.
+                // `id` carries the section key ("weekly-exploration"/"weekly-jams").
+                ("ext-reco-list", "queue") => {
+                    if let Some(w) = weak.upgrade() {
+                        let ids = external_reco::list_track_ids(&w, &id);
+                        playback::enqueue_track_ids(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            ids,
+                            false,
+                        );
+                    }
+                }
+                ("ext-reco-list", "create-playlist") => {
+                    if let Some(w) = weak.upgrade() {
+                        let ids = external_reco::list_track_ids(&w, &id);
+                        if !ids.is_empty() {
+                            let ids_str: Vec<String> =
+                                ids.iter().map(|i| i.to_string()).collect();
+                            playlist_picker::open_for_ids(
+                                &w,
+                                runtime.clone(),
+                                &handle,
+                                ids_str,
+                                false,
+                            );
+                        }
+                    }
+                }
                 ("track", "add-to-playlist") => {
                     // Open the global picker for this track + load the
                     // user's playlists. SOURCE-TYPED routing first: this
