@@ -867,6 +867,10 @@ pub async fn handle_bool(
         "show-context-icon" => {
             with_playback(&ctx.playback, |s| s.set_show_context_icon(value)).map(|_| Apply::None)
         }
+        "show-recommendations" => {
+            crate::discover_prefs::set_show_recommendations(value);
+            Ok(Apply::None)
+        }
         "persist-session" => {
             let r = with_playback(&ctx.playback, |s| s.set_persist_session(value))
                 .map(|_| Apply::None);

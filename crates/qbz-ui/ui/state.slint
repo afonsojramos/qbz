@@ -2714,6 +2714,9 @@ export global SettingsState {
     in-out property <bool> resume-position: false;
     in-out property <bool> gapless: true;
     in-out property <bool> stream-uncached: false;
+    // Discover — opt-out: show the external "Recommendations" tab. Default on.
+    // Seeded from persisted discover prefs at session start (crate::discover_prefs).
+    in-out property <bool> show-recommendations: true;
     in-out property <bool> streaming-only: false;
     // Volume normalization (loudness leveling). Applied in the shared player
     // and bypassed automatically when bit-perfect is active. Surfaced in the

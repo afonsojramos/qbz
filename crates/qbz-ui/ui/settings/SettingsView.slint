@@ -246,7 +246,11 @@ export component SettingsView inherits Rectangle {
                     }
                     if !SettingsState.loading && SettingsState.section == 4: LocalLibrarySettings { }
                     if !SettingsState.loading && SettingsState.section == 7: ContentFilteringSettings { }
-                    if !SettingsState.loading && SettingsState.section == 6: IntegrationsSettings { }
+                    if !SettingsState.loading && SettingsState.section == 6: IntegrationsSettings {
+                        settings-bool(k, v) => {
+                            root.settings-bool(k, v);
+                        }
+                    }
                     if !SettingsState.loading && SettingsState.section == 5: DeveloperSettings { }
                 }
             }

@@ -8,7 +8,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { ScrobbleState, ScrobbleActions, DiscordState } from "../state.slint";
+import { ScrobbleState, ScrobbleActions, DiscordState, SettingsState } from "../state.slint";
 import { SettingRow } from "SettingRow.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
@@ -62,8 +62,28 @@ component SecondaryButton inherits Rectangle {
 export component IntegrationsSettings inherits VerticalLayout {
     spacing: 4px;
 
+    // Bubbles a persisted bool toggle up to SettingsView -> Rust handle_bool.
+    callback settings-bool(string, bool);
+
     init => {
         ScrobbleActions.load();
+    }
+
+    // ===================================================================
+    // RECOMMENDATIONS — opt-out for the external Discover "Recommendations"
+    // tab. The description nudges connecting the sources that feed it.
+    // ===================================================================
+    GroupHeader { text: @tr("RECOMMENDATIONS"); }
+    SettingRow {
+        label: @tr("Show Recommendations in Discover");
+        description: @tr("A personalized Discover tab built from your listening. For the best results connect Last.fm and ListenBrainz below — MusicBrainz is used automatically to match releases.");
+        QbzToggle {
+            checked: SettingsState.show-recommendations;
+            toggled(v) => {
+                SettingsState.show-recommendations = v;
+                root.settings-bool("show-recommendations", v);
+            }
+        }
     }
 
     // ===================================================================

@@ -27,7 +27,7 @@ use qbz_app::settings::discover_prefs::{
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::artwork::{ImageCache, spawn_loads};
-use crate::{AppWindow, ConfigRow, DiscoverSection, DiscoverState, SectionDescriptor};
+use crate::{AppWindow, ConfigRow, DiscoverSection, DiscoverState, SectionDescriptor, SettingsState};
 
 /// Per-user persistent store. `None` outside an active session.
 static STORE: Mutex<Option<DiscoverPrefsStore>> = Mutex::new(None);
@@ -75,6 +75,16 @@ fn persist() {
             log::error!("[qbz-slint] discover prefs save failed: {e}");
         }
     }
+}
+
+/// Opt-out toggle for the Discover "Recommendations" tab (Settings > Integrations).
+/// The Slint `SettingsState.show-recommendations` global is updated by the toggle
+/// itself; this writes the choice through to the persisted prefs.
+pub fn set_show_recommendations(value: bool) {
+    if let Some(p) = PREFS.lock().unwrap().as_mut() {
+        p.show_recommendations = value;
+    }
+    persist();
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +232,9 @@ pub fn push_config_rows(window: &AppWindow, prefs: &DiscoverPrefs, tab: Discover
 /// the first `apply_home`. Mirrors `myqbz_prefs::seed`.
 pub fn seed(window: &AppWindow) {
     let prefs = current();
+    window
+        .global::<SettingsState>()
+        .set_show_recommendations(prefs.show_recommendations);
     push_descriptors(window, &prefs);
 }
 

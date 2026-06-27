@@ -8,7 +8,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { HomeState, HomeActions, DiscoverState, DiscoverActions, GenreFilterState, GenreFilterActions, NavState, ContentView, ShellState } from "../state.slint";
+import { HomeState, HomeActions, DiscoverState, DiscoverActions, GenreFilterState, GenreFilterActions, NavState, ContentView, ShellState, SettingsState } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
 import { PlaylistCarousel } from "PlaylistCarousel.slint";
@@ -211,7 +211,7 @@ export component HomeView inherits Rectangle {
                             active: HomeState.active-tab == "forYou";
                             clicked => { HomeActions.select-tab("forYou"); }
                         }
-                        Tab {
+                        if SettingsState.show-recommendations: Tab {
                             label: @tr("Recommendations");
                             active: HomeState.active-tab == "recommendations";
                             clicked => { HomeActions.select-tab("recommendations"); }

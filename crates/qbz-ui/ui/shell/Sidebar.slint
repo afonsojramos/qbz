@@ -16,7 +16,7 @@ import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SidebarPlaylistCollage } from "../primitives/SidebarPlaylistCollage.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
-import { ShellState, SidebarState, SidebarActions, SidebarEntry, DragState, HeaderMenuState, NavMenuEntry, SidebarFolderPopupState, SidebarTooltipState, MyQbzBrandingState, OfflineState, NavState, ContentView, AppearanceState } from "../state.slint";
+import { ShellState, SidebarState, SidebarActions, SidebarEntry, DragState, HeaderMenuState, NavMenuEntry, SidebarFolderPopupState, SidebarTooltipState, MyQbzBrandingState, OfflineState, NavState, ContentView, AppearanceState, SettingsState } from "../state.slint";
 import { ScrollView, LineEdit } from "std-widgets.slint";
 
 // A single context-menu item row.
@@ -703,7 +703,22 @@ export component Sidebar inherits Rectangle {
             spacing: 2px;
             // Qobuz-only section — HIDDEN entirely while offline (Local
             // Library and My QBZ below stay; ADR-010 `if` at the mount site).
-            if !OfflineState.offline: SidebarNavRow {
+            // Discover. Two mounts because Slint can't infer [NavMenuEntry] from
+            // a ternary of array literals: one WITH the opt-in Recommendations
+            // entry, one without, gated by the opt-out setting.
+            if !OfflineState.offline && SettingsState.show-recommendations: SidebarNavRow {
+                tab-index: 0;
+                icon: @image-url("../assets/icons/compass.svg");
+                label: @tr("Discover");
+                home-item: 0;
+                items: [
+                    { label: @tr("Home"), has-glyph: false, route: "discover-home" },
+                    { label: @tr("Editor's Picks"), has-glyph: false, route: "discover-editorPicks" },
+                    { label: @tr("For You"), has-glyph: false, route: "discover-forYou" },
+                    { label: @tr("Recommendations"), has-glyph: false, route: "discover-recommendations" },
+                ];
+            }
+            if !OfflineState.offline && !SettingsState.show-recommendations: SidebarNavRow {
                 tab-index: 0;
                 icon: @image-url("../assets/icons/compass.svg");
                 label: @tr("Discover");

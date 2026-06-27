@@ -768,7 +768,27 @@ export component HeaderBar inherits Rectangle {
             Rectangle { width: 6px; }
             // Qobuz-only — HIDDEN entirely while offline (ADR-010 `if` at
             // the mount site, not rendered-disabled).
-            if !OfflineState.offline: VerticalLayout {
+            // Discover. Two mounts (Slint can't infer [NavMenuEntry] from a
+            // ternary of array literals): WITH the opt-in Recommendations entry,
+            // or without, gated by the opt-out setting.
+            if !OfflineState.offline && SettingsState.show-recommendations: VerticalLayout {
+                alignment: center;
+                NavTabWithMenu {
+                    tab-index: 0;
+                    icon: @image-url("../assets/icons/compass.svg");
+                    label: @tr("Discover");
+                    active: true;
+                    show-icon: root.show-tab-icons;
+                    home-item: 0;
+                    items: [
+                        { label: @tr("Home"), has-glyph: false, route: "discover-home" },
+                        { label: @tr("Editor's Picks"), has-glyph: false, route: "discover-editorPicks" },
+                        { label: @tr("For You"), has-glyph: false, route: "discover-forYou" },
+                        { label: @tr("Recommendations"), has-glyph: false, route: "discover-recommendations" },
+                    ];
+                }
+            }
+            if !OfflineState.offline && !SettingsState.show-recommendations: VerticalLayout {
                 alignment: center;
                 NavTabWithMenu {
                     tab-index: 0;
@@ -861,7 +881,25 @@ export component HeaderBar inherits Rectangle {
             Rectangle { width: 6px; }
             // Qobuz-only — HIDDEN entirely while offline (ADR-010 `if` at
             // the mount site, not rendered-disabled).
-            if !OfflineState.offline: VerticalLayout {
+            // Discover. Two mounts (Slint can't infer [NavMenuEntry] from a
+            // ternary of array literals): WITH the opt-in Recommendations entry,
+            // or without, gated by the opt-out setting.
+            if !OfflineState.offline && SettingsState.show-recommendations: VerticalLayout {
+                alignment: center;
+                CompactNavBtn {
+                    tab-index: 0;
+                    title: @tr("Discover");
+                    icon: @image-url("../assets/icons/compass.svg");
+                    home-item: 0;
+                    items: [
+                        { label: @tr("Home"), has-glyph: false, route: "discover-home" },
+                        { label: @tr("Editor's Picks"), has-glyph: false, route: "discover-editorPicks" },
+                        { label: @tr("For You"), has-glyph: false, route: "discover-forYou" },
+                        { label: @tr("Recommendations"), has-glyph: false, route: "discover-recommendations" },
+                    ];
+                }
+            }
+            if !OfflineState.offline && !SettingsState.show-recommendations: VerticalLayout {
                 alignment: center;
                 CompactNavBtn {
                     tab-index: 0;

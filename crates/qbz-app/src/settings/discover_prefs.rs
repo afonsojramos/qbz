@@ -157,6 +157,8 @@ pub struct DiscoverPrefs {
     pub home: Vec<SectionPref>,
     pub editor_picks: Vec<SectionPref>,
     pub for_you: Vec<SectionPref>,
+    /// Opt-out: show the external "Recommendations" tab in Discover. Default on.
+    pub show_recommendations: bool,
 }
 
 /// The exact `DEFAULT_PREFS` from `sectionPrefs.ts`.
@@ -204,6 +206,7 @@ pub fn default_prefs() -> DiscoverPrefs {
             pref(ArtistsToFollow, true),
             pref(ArtistSpotlight, true),
         ],
+        show_recommendations: true,
     }
 }
 
@@ -295,6 +298,7 @@ impl DiscoverPrefs {
             "home": arr(&self.home),
             "editorPicks": arr(&self.editor_picks),
             "forYou": arr(&self.for_you),
+            "showRecommendations": self.show_recommendations,
         })
     }
 
@@ -313,6 +317,8 @@ impl DiscoverPrefs {
                 home: reconcile_list(Some(arr), &defaults.home),
                 editor_picks: defaults.editor_picks,
                 for_you: defaults.for_you,
+                // Legacy V1 (home-only array) predates the flag -> default on.
+                show_recommendations: true,
             }
         } else if value.is_object() {
             let get = |key: &str| value.get(key).and_then(|v| v.as_array());
@@ -320,6 +326,11 @@ impl DiscoverPrefs {
                 home: reconcile_list(get("home"), &defaults.home),
                 editor_picks: reconcile_list(get("editorPicks"), &defaults.editor_picks),
                 for_you: reconcile_list(get("forYou"), &defaults.for_you),
+                // Missing key (older persisted blob) -> default on.
+                show_recommendations: value
+                    .get("showRecommendations")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
             }
         } else {
             defaults
