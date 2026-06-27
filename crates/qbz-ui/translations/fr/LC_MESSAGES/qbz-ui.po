@@ -4076,3 +4076,54 @@ msgstr "Actualiser les suggestions"
 
 msgid "Not interested"
 msgstr "Pas intéressé"
+
+# Slint polish batch (radio / playlist follow-copy / MusicBrainz / reco)
+msgid "QBZ Radio"
+msgstr "Radio QBZ"
+
+msgid "Qobuz Radio"
+msgstr "Radio Qobuz"
+
+msgid "Create QBZ radio"
+msgstr "Créer une radio QBZ"
+
+msgid "Create Qobuz radio"
+msgstr "Créer une radio Qobuz"
+
+msgid "Follow on Qobuz"
+msgstr "Suivre sur Qobuz"
+
+msgid "Following on Qobuz"
+msgstr "Suivi sur Qobuz"
+
+msgid "Copy to your library"
+msgstr "Copier dans votre bibliothèque"
+
+msgid "METADATA"
+msgstr "MÉTADONNÉES"
+
+msgid "MusicBrainz"
+msgstr "MusicBrainz"
+
+msgid "Enable artist relationships and enhanced metadata from MusicBrainz. No telemetry — it only matches releases to enrich artist pages and playlist song suggestions. Turn off to disable those sections."
+msgstr "Activez les relations entre artistes et les métadonnées enrichies de MusicBrainz. Aucune télémétrie — l'option associe uniquement les sorties pour enrichir les pages d'artistes et les suggestions de titres des playlists. Désactivez-la pour masquer ces sections."
+
+msgid "No tracks to add"
+msgstr "Aucun titre à ajouter"
+
+msgid "Failed to add tracks"
+msgstr "Échec de l'ajout des titres"
+
+msgid "Copied to your library"
+msgstr "Copié dans votre bibliothèque"
+
+msgid "Failed to copy playlist"
+msgstr "Échec de la copie de la playlist"
+
+msgid "Playlist has no tracks to copy"
+msgstr "La playlist n'a aucun titre à copier"
+
+msgid "Added {} track to queue"
+msgid_plural "Added {} tracks to queue"
+msgstr[0] "{} titre ajouté à la file d'attente"
+msgstr[1] "{} titres ajoutés à la file d'attente"

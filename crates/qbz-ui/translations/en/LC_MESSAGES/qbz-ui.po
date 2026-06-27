@@ -6,3 +6,54 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Language: en\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+# Slint polish batch (radio / playlist follow-copy / MusicBrainz / reco)
+msgid "QBZ Radio"
+msgstr "QBZ Radio"
+
+msgid "Qobuz Radio"
+msgstr "Qobuz Radio"
+
+msgid "Create QBZ radio"
+msgstr "Create QBZ radio"
+
+msgid "Create Qobuz radio"
+msgstr "Create Qobuz radio"
+
+msgid "Follow on Qobuz"
+msgstr "Follow on Qobuz"
+
+msgid "Following on Qobuz"
+msgstr "Following on Qobuz"
+
+msgid "Copy to your library"
+msgstr "Copy to your library"
+
+msgid "METADATA"
+msgstr "METADATA"
+
+msgid "MusicBrainz"
+msgstr "MusicBrainz"
+
+msgid "Enable artist relationships and enhanced metadata from MusicBrainz. No telemetry — it only matches releases to enrich artist pages and playlist song suggestions. Turn off to disable those sections."
+msgstr "Enable artist relationships and enhanced metadata from MusicBrainz. No telemetry — it only matches releases to enrich artist pages and playlist song suggestions. Turn off to disable those sections."
+
+msgid "No tracks to add"
+msgstr "No tracks to add"
+
+msgid "Failed to add tracks"
+msgstr "Failed to add tracks"
+
+msgid "Copied to your library"
+msgstr "Copied to your library"
+
+msgid "Failed to copy playlist"
+msgstr "Failed to copy playlist"
+
+msgid "Playlist has no tracks to copy"
+msgstr "Playlist has no tracks to copy"
+
+msgid "Added {} track to queue"
+msgid_plural "Added {} tracks to queue"
+msgstr[0] "Added {} track to queue"
+msgstr[1] "Added {} tracks to queue"

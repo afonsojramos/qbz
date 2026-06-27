@@ -9157,7 +9157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 Ok(p) => p,
                                 Err(e) => {
                                     log::error!("[qbz-slint] copy playlist: get source failed: {e}");
-                                    crate::toast::error_weak(&weak2, "Failed to copy playlist");
+                                    crate::toast::error_weak(&weak2, qbz_i18n::t("Failed to copy playlist"));
                                     return;
                                 }
                             };
@@ -9167,7 +9167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .map(|t| t.items.iter().map(|track| track.id).collect())
                                 .unwrap_or_default();
                             if track_ids.is_empty() {
-                                crate::toast::error_weak(&weak2, "Playlist has no tracks to copy");
+                                crate::toast::error_weak(&weak2, qbz_i18n::t("Playlist has no tracks to copy"));
                                 return;
                             }
                             let attribution = format!(
@@ -9186,7 +9186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 Ok(p) => p,
                                 Err(e) => {
                                     log::error!("[qbz-slint] copy playlist: create failed: {e}");
-                                    crate::toast::error_weak(&weak2, "Failed to copy playlist");
+                                    crate::toast::error_weak(&weak2, qbz_i18n::t("Failed to copy playlist"));
                                     return;
                                 }
                             };
@@ -9211,7 +9211,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             let _ = weak2.upgrade_in_event_loop(move |w| {
                                 w.global::<PlaylistState>().set_is_copied(true);
-                                crate::toast::success(&w, "Copied to your library");
+                                crate::toast::success(&w, qbz_i18n::t("Copied to your library"));
                             });
                             crate::playback::refresh_sidebar(true);
                         });

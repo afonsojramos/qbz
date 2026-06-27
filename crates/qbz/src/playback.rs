@@ -3190,12 +3190,20 @@ pub fn enqueue_track_ids(
             Ok(tracks) if !tracks.is_empty() => {
                 let n = tracks.len();
                 enqueue_tracks(runtime, tokio::runtime::Handle::current(), tracks, next);
-                crate::toast::success_weak(&weak, format!("Added {n} tracks to queue"));
+                crate::toast::success_weak(
+                    &weak,
+                    qbz_i18n::tf(
+                        "Added {} track to queue",
+                        "Added {} tracks to queue",
+                        n as i64,
+                        &[&n.to_string()],
+                    ),
+                );
             }
-            Ok(_) => crate::toast::error_weak(&weak, "No tracks to add"),
+            Ok(_) => crate::toast::error_weak(&weak, qbz_i18n::t("No tracks to add")),
             Err(e) => {
                 log::error!("[qbz-slint] enqueue_track_ids: get_tracks_batch failed: {e}");
-                crate::toast::error_weak(&weak, "Failed to add tracks");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Failed to add tracks"));
             }
         }
     });
