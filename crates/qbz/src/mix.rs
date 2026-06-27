@@ -15,6 +15,7 @@
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
 
+use qbz_app::settings::reco_store::HomeSeedLimits;
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
 use qbz_models::{Track, TrackToAnalyse};
@@ -56,12 +57,42 @@ fn pick_spread(ids: &[u64], n: usize) -> Vec<u64> {
 /// recents-only seed is frequently empty for local-heavy users, so favorites
 /// guarantee a non-empty seed.
 ///
-/// NOTE (Slice b3): this body will be swapped to the shared reco-store
-/// home-seeds; the call site and the rest of the mix path stay unchanged.
+/// Reco-backed (Slice b3): the reco store's scored continue-listening +
+/// favorite track seeds, which reflect the trained taste model. Falls back to
+/// the local recents + favorites derivation when reco is cold/disabled so the
+/// mix never goes empty. The call site and the rest of the mix path are
+/// unchanged.
 async fn mix_listened_seed_ids<A>(runtime: &AppRuntime<A>) -> Vec<u64>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
+    // Prefer reco's scored seeds. Use generous per-bucket limits (the home
+    // rows use a smaller default) so the mix has enough material.
+    let limits = HomeSeedLimits {
+        recent_albums: 0,
+        continue_tracks: 80,
+        top_artists: 0,
+        favorites: 80,
+    };
+    if let Some(seeds) = crate::reco::home_seeds(limits) {
+        let mut out: Vec<u64> = Vec::new();
+        let mut seen: HashSet<u64> = HashSet::new();
+        for id in seeds
+            .continue_listening_track_ids
+            .into_iter()
+            .chain(seeds.favorite_track_ids)
+        {
+            if seen.insert(id) {
+                out.push(id);
+            }
+        }
+        if !out.is_empty() {
+            out.truncate(120);
+            return out;
+        }
+    }
+    // Fallback: recent QOBUZ plays + Qobuz favorites (local/plex/ephemeral
+    // recents carry non-Qobuz ids and are excluded).
     let mut seeds: Vec<u64> = crate::recently::load()
         .into_iter()
         .filter(|t| !matches!(t.source.as_str(), "local" | "plex" | "ephemeral"))

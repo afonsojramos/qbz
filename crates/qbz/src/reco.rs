@@ -49,7 +49,6 @@ pub fn teardown() {
 /// Read the home/Discover ID seeds. `None` when reco is disabled (no session)
 /// or the read fails — callers fall back to their existing local source so a
 /// cold reco store never empties a surface.
-#[allow(dead_code)] // wired by W6/W9 (mix seeds + For You / Discover Home re-source)
 pub fn home_seeds(limits: HomeSeedLimits) -> Option<HomeSeeds> {
     let guard = RECO.lock().ok()?;
     let store = guard.as_ref()?;
