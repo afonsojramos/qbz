@@ -789,6 +789,16 @@ impl QueueController {
         });
     }
 
+    /// Whether `InfiniteRadio` autoplay is currently on (the queue auto-refills
+    /// with a smart radio when it runs out). Reads the same playback preference
+    /// the toggle and the sidebar flag use.
+    pub fn is_infinite_play(&self) -> bool {
+        self.playback
+            .get_preferences()
+            .map(|p| p.autoplay_mode == AutoplayMode::InfiniteRadio)
+            .unwrap_or(false)
+    }
+
     /// Open the Add-to-Playlist picker seeded with the queue's tracks
     /// (current + upcoming, de-duplicated, in play order). The picker's inline
     /// "Create new playlist" row turns the queue into a named playlist; picking

@@ -388,6 +388,59 @@ async fn advance_to_playable(
     }
 }
 
+/// When the queue is exhausted and `InfiniteRadio` autoplay is on, build a
+/// smart artist radio seeded by the just-finished track and start it,
+/// replacing the spent queue. Returns `true` if a radio was started.
+///
+/// Tauri appends the radio then retries `next()`; that can't be ported 1:1
+/// because `QueueManager::next()` nulls `current_index` at the queue edge, so a
+/// retry replays the old queue from index 1 rather than the radio. Starting the
+/// radio fresh via `play_tracks` reaches Tauri's *intended* behavior and chains
+/// correctly — each radio's end re-seeds the next, giving true infinite play.
+async fn try_infinite_refill(
+    runtime: &Runtime,
+    weak: &slint::Weak<AppWindow>,
+    seed_track_id: u64,
+) -> bool {
+    let Some(controller) = QUEUE_CONTROLLER.get() else {
+        return false;
+    };
+    if !controller.is_infinite_play() || seed_track_id == 0 {
+        return false;
+    }
+    let artist_id = match runtime.core().get_track(seed_track_id).await {
+        Ok(track) => match track.performer.as_ref().map(|p| p.id) {
+            Some(id) => id,
+            None => {
+                log::warn!(
+                    "[qbz-slint] infinite radio: seed track {seed_track_id} has no performer"
+                );
+                return false;
+            }
+        },
+        Err(e) => {
+            log::warn!("[qbz-slint] infinite radio: get_track {seed_track_id} failed: {e}");
+            return false;
+        }
+    };
+    match runtime.core().create_smart_artist_radio(artist_id).await {
+        // play_tracks replaces the spent queue and starts the radio; it already
+        // drops blacklisted tracks, so its `false` means nothing playable.
+        Ok(tracks) if !tracks.is_empty() => play_tracks(
+            runtime.clone(),
+            weak.clone(),
+            tokio::runtime::Handle::current(),
+            tracks,
+            0,
+        ),
+        Ok(_) => false,
+        Err(e) => {
+            log::warn!("[qbz-slint] infinite radio: build failed: {e}");
+            false
+        }
+    }
+}
+
 /// Run the audible step for `track_id`: grab the Qobuz client and call
 /// the player's self-contained `play_track`. Errors are logged, not
 /// surfaced — the poll loop keeps the UI consistent regardless.
@@ -3937,6 +3990,14 @@ pub fn start_poll_loop(
             // skipped (bounded — see `advance_to_playable`); exhaustion
             // lands in the queue-finished arm below.
             if track_ended {
+                // Seed for InfiniteRadio: the track that just ended is still the
+                // current one (advance hasn't moved the cursor yet).
+                let ended_track_id = runtime
+                    .core()
+                    .current_track()
+                    .await
+                    .map(|t| t.id)
+                    .unwrap_or(0);
                 last_track_id = 0;
                 was_playing = false;
                 seen_position = 0;
@@ -3945,6 +4006,9 @@ pub fn start_poll_loop(
                     let next_id = track.id;
                     after_track_change(&runtime, &weak, next_id).await;
                     refresh_sidebar(true);
+                } else if try_infinite_refill(&runtime, &weak, ended_track_id).await {
+                    // InfiniteRadio started a fresh smart radio (play_tracks
+                    // replaced the queue and refreshes the sidebar itself).
                 } else {
                     log::info!("[qbz-slint] playback: queue finished");
                     // Nothing more will play — force-clear any lingering spinner.

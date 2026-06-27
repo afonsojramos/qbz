@@ -277,8 +277,8 @@ component ImmersivePlayerBar inherits Rectangle {
         x: 120px;
         y: 22px;
         icon: @image-url("../assets/icons/infinity.svg");
-        active: false;
-        enabled: false;
+        active: QueueState.infinite-play;
+        clicked => { QueueState.toggle-infinite-play(); }
     }
 
     // Playback group: positioned from the play disc so play is exactly centered.
