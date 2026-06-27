@@ -5822,8 +5822,11 @@ name = "qbz-reco"
 version = "0.1.0"
 dependencies = [
  "log",
+ "qbz-integrations",
+ "qbz-qobuz",
  "rusqlite",
  "serde",
+ "tokio",
 ]
 
 [[package]]

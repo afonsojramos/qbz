@@ -9,3 +9,6 @@ description = "Frontend-agnostic artist-vector recommendation engine for QBZ (po
 serde = { workspace = true }
 rusqlite = { version = "0.31", features = ["bundled"] }
 log = { workspace = true }
+tokio = { workspace = true }
+qbz-qobuz = { path = "../qbz-qobuz" }
+qbz-integrations = { path = "../qbz-integrations" }
