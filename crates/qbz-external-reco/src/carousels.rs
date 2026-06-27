@@ -16,7 +16,9 @@ use crate::types::{
     AlbumCandidate, AlbumReco, ArtistCandidate, ArtistReco, ExtHistory, RecoSource, TrackCandidate,
     TrackReco,
 };
-use crate::validate::{build_album_reco, validate_album, validate_artist, validate_track};
+use crate::validate::{
+    build_album_reco, is_full_album, is_slop, validate_album, validate_artist, validate_track,
+};
 use crate::{RecoCatalog, RecoInputs};
 
 const DISPLAY_CAP: usize = 20;
@@ -287,7 +289,7 @@ pub async fn build_rec_albums(inputs: &RecoInputs<'_>, history: &ExtHistory) -> 
     for (artist, albums) in per_artist {
         for al in albums {
             let k = album_key(&al.artist, &al.name);
-            if history.album_keys.contains(&k) || !seen.insert(k) {
+            if history.album_keys.contains(&k) || is_slop(&al.artist, &al.name) || !seen.insert(k) {
                 continue;
             }
             candidates.push(AlbumCandidate {
@@ -314,7 +316,11 @@ pub async fn build_fresh_releases(inputs: &RecoInputs<'_>) -> Vec<AlbumReco> {
     let releases = lb.client.get_fresh_releases(&lb.username, 30).await.unwrap_or_default();
     let candidates: Vec<AlbumCandidate> = releases
         .into_iter()
-        .filter(|r| !r.release_name.is_empty() && !r.artist_credit_name.is_empty())
+        .filter(|r| {
+            !r.release_name.is_empty()
+                && !r.artist_credit_name.is_empty()
+                && !is_slop(&r.artist_credit_name, &r.release_name)
+        })
         .take(50)
         .map(|r| AlbumCandidate {
             artist: r.artist_credit_name,
@@ -398,6 +404,8 @@ pub async fn build_deep_cut_albums(inputs: &RecoInputs<'_>) -> Vec<AlbumReco> {
     for albums in per_artist {
         for album in albums.into_iter().skip(2) {
             if album.id.is_empty()
+                || !is_full_album(&album)
+                || is_slop(&album.artist.name, &album.title)
                 || inputs.local.played_album_ids.contains(&album.id)
                 || !seen.insert(album.id.clone())
             {

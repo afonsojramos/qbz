@@ -23,8 +23,12 @@ export component ArtistCard inherits Rectangle {
     // kind ("artist" | "label"), id, action ("follow").
     callback media-action(string, string, string);
 
+    // Overridable: with the optional "Similar to…" subtitle + a Follow chip the
+    // content runs ~250px, so Discover Recommendations passes a taller value;
+    // the default 220 keeps artist-search / Top Artists unchanged.
+    in property <length> card-height: 220px;
     width: 160px;
-    height: 220px;
+    height: root.card-height;
     border-radius: 12px;
     background: ta.has-hover ? Theme.surface-elevated : Theme.surface-card;
     animate background { duration: 150ms; }

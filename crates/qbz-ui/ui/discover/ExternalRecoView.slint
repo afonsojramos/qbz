@@ -40,6 +40,7 @@ export component ExternalRecoView inherits VerticalLayout {
     if ExternalRecoState.rec-artists-common.length > 0: ArtistCarousel {
         title: @tr("More like the artists you love");
         artists: ExternalRecoState.rec-artists-common;
+        card-height: 256px;
         artist-clicked(id) => {
             root.open-artist(id);
         }
@@ -52,6 +53,7 @@ export component ExternalRecoView inherits VerticalLayout {
     if ExternalRecoState.rec-artists-recent.length > 0: ArtistCarousel {
         title: @tr("Based on what you've been into lately");
         artists: ExternalRecoState.rec-artists-recent;
+        card-height: 256px;
         artist-clicked(id) => {
             root.open-artist(id);
         }
@@ -63,6 +65,7 @@ export component ExternalRecoView inherits VerticalLayout {
     // Recommended Albums (Last.fm artist top-albums, not scrobbled).
     if ExternalRecoState.rec-albums.albums.length > 0: Carousel {
         section: ExternalRecoState.rec-albums;
+        card-height: 266px;
         album-clicked(id) => {
             root.open-album(id);
         }
@@ -74,6 +77,7 @@ export component ExternalRecoView inherits VerticalLayout {
     // Fresh Releases (ListenBrainz, from artists you follow).
     if ExternalRecoState.fresh-releases.albums.length > 0: Carousel {
         section: ExternalRecoState.fresh-releases;
+        card-height: 266px;
         album-clicked(id) => {
             root.open-album(id);
         }
@@ -103,6 +107,7 @@ export component ExternalRecoView inherits VerticalLayout {
     // Deep cuts from artists you know (Qobuz catalog albums).
     if ExternalRecoState.deep-cut-albums.albums.length > 0: Carousel {
         section: ExternalRecoState.deep-cut-albums;
+        card-height: 266px;
         album-clicked(id) => {
             root.open-album(id);
         }
@@ -114,6 +119,7 @@ export component ExternalRecoView inherits VerticalLayout {
     // Cold-start fallback — Qobuz editorial top albums.
     if ExternalRecoState.top-albums.albums.length > 0: Carousel {
         section: ExternalRecoState.top-albums;
+        card-height: 266px;
         album-clicked(id) => {
             root.open-album(id);
         }
@@ -126,6 +132,7 @@ export component ExternalRecoView inherits VerticalLayout {
     if ExternalRecoState.top-artists.length > 0: ArtistCarousel {
         title: @tr("Popular artists on Qobuz");
         artists: ExternalRecoState.top-artists;
+        card-height: 256px;
         artist-clicked(id) => {
             root.open-artist(id);
         }

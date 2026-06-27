@@ -74,7 +74,9 @@ export component ArtistCarousel inherits VerticalLayout {
     callback view-all-clicked();
 
     property <length> card-width: 160px;
-    property <length> card-height: 220px;
+    // Overridable so a host view (Discover Recommendations, whose cards carry a
+    // "Similar to…" subtitle) can give the row a taller viewport + card.
+    in property <length> card-height: 220px;
     property <length> gap: 16px;
 
     property <int> count: root.artists.length;
@@ -145,6 +147,7 @@ export component ArtistCarousel inherits VerticalLayout {
                 spacing: root.gap;
                 for artist in root.artists: ArtistCard {
                     artist: artist;
+                    card-height: root.card-height;
                     follow-mode: root.card-follow-mode;
                     follow-kind: root.card-follow-kind;
                     clicked(id) => {

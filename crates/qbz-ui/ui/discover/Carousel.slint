@@ -74,7 +74,9 @@ export component Carousel inherits VerticalLayout {
     callback view-all-clicked();
 
     property <length> card-width: 200px;
-    property <length> card-height: 246px;
+    // Overridable so a host view (Discover Recommendations) can give the row a
+    // taller viewport + card when the default 246 clips the meta line.
+    in property <length> card-height: 246px;
     property <length> gap: 32px;
 
     property <int> count: root.section.albums.length;
@@ -155,6 +157,7 @@ export component Carousel inherits VerticalLayout {
                 spacing: root.gap;
                 for album in root.section.albums: AlbumCard {
                     album: album;
+                    card-height: root.card-height;
                     clicked(id) => {
                         root.album-clicked(id);
                     }
