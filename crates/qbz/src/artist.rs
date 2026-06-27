@@ -20,7 +20,7 @@ use crate::home::CardData;
 use crate::{
     AlbumCardItem, TrackItem, AppWindow, ArtistReleaseSection, ArtistState, DiscoveryArtist,
     JumpNavTab, LabelEntry, MbOriginData, MbRelationship, MbRelationshipsData,
-    NetworkSidebarState, ShellState, SimilarEntry, StoryItem,
+    NetworkSidebarState, SettingsState, ShellState, SimilarEntry, StoryItem,
 };
 
 /// Plain, `Send` artist data produced on the worker thread.
@@ -1195,11 +1195,18 @@ pub fn reset_network_sidebar(window: &AppWindow) {
     // (the same signal AlbumView + the ArtistPageView `net-cramped`
     // handlers use). Constrained => keep collapsed.
     let constrained = window.global::<ShellState>().get_content_constrained();
+    // MusicBrainz opt-out: when MB is off the Network tab (relationships /
+    // discovery / origin) has nothing to show, so mark it unavailable and open
+    // on the MB-independent Magazine/Stories tab instead of an empty Network
+    // tab. The internal core guards (load_mb_metadata, musicbrainz_*) stay as
+    // belt-and-suspenders.
+    let mb_on = window.global::<SettingsState>().get_musicbrainz_enabled();
     let state = window.global::<NetworkSidebarState>();
     state.set_open(!constrained);
-    // Always (re)open a new artist on the Network tab.
-    state.set_active_tab("network".into());
-    state.set_mb_available(true);
+    // (Re)open a new artist on the Network tab when MB is on, else Magazine.
+    let default_tab = if mb_on { "network" } else { "magazine" };
+    state.set_active_tab(default_tab.into());
+    state.set_mb_available(mb_on);
     state.set_mb_mbid("".into());
     state.set_origin_loading(false);
     state.set_origin(MbOriginData::default());

@@ -235,6 +235,12 @@ pub fn seed(window: &AppWindow) {
     window
         .global::<SettingsState>()
         .set_show_recommendations(prefs.show_recommendations);
+    // MusicBrainz opt-out lives in ui_prefs (not the discover prefs store).
+    // Seed it here so both SettingsState seed sites (main.rs:320/554) populate
+    // the toggle that gates the artist sidebar + playlist suggestions.
+    window
+        .global::<SettingsState>()
+        .set_musicbrainz_enabled(crate::ui_prefs::load().musicbrainz_enabled);
     push_descriptors(window, &prefs);
 }
 

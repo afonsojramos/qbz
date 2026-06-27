@@ -6,7 +6,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { PlaylistState, PlaylistActions, DragState, NavState, OfflineState, BulkAction } from "../state.slint";
+import { PlaylistState, PlaylistActions, DragState, NavState, OfflineState, BulkAction, SettingsState } from "../state.slint";
 import { PlaylistSuggestionsState, PlaylistSuggestionsActions, PlaylistSuggestionRow, TooltipState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
@@ -680,7 +680,8 @@ export component PlaylistView inherits Rectangle {
                         // auto-computes — large playlists shouldn't pay for it).
                         if PlaylistState.is-owner && !PlaylistState.is-local
                             && PlaylistState.track-count > 0
-                            && PlaylistState.track-count < 2000: VerticalLayout {
+                            && PlaylistState.track-count < 2000
+                            && SettingsState.musicbrainz-enabled: VerticalLayout {
                             horizontal-stretch: 0;
                             alignment: center;
                             CircleAction {

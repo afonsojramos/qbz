@@ -119,6 +119,10 @@ fn default_system_notifications() -> bool {
     true
 }
 
+fn default_musicbrainz_enabled() -> bool {
+    true
+}
+
 fn default_nav_in_sidebar() -> bool {
     true
 }
@@ -240,6 +244,12 @@ pub struct UiPrefs {
     /// Default ON (the notify backend ships default-on; this is the user gate).
     #[serde(default = "default_system_notifications")]
     pub system_notifications: bool,
+    /// Whether MusicBrainz metadata enrichment is enabled (opt-out, default ON).
+    /// Drives the core client's enabled flag at startup and gates the artist
+    /// Network/Scene sidebar + playlist Suggested-Songs. Serde-default means an
+    /// older prefs file without the field deserializes to ON (zero migration).
+    #[serde(default = "default_musicbrainz_enabled")]
+    pub musicbrainz_enabled: bool,
     /// Discord Rich Presence "now listening" opt-in. Default OFF — external
     /// integrations are opt-in. (Tauri scoped this per Qobuz user; here it is a
     /// per-machine app preference — your Discord client is per-machine.)
@@ -441,6 +451,7 @@ impl Default for UiPrefs {
             album_header_gradient: default_album_header_gradient(),
             intelligent_search: default_intelligent_search(),
             system_notifications: default_system_notifications(),
+            musicbrainz_enabled: default_musicbrainz_enabled(),
             discord_rpc_enabled: false,
             show_purchases: false,
             nav_tb_purchases: false,

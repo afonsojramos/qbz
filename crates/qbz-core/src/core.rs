@@ -2571,11 +2571,20 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         name: &str,
         role: &str,
     ) -> Result<ResolvedMusician, CoreError> {
-        let resolved_artist = self
-            .musicbrainz
-            .resolve_artist(name)
-            .await
-            .map_err(|e| CoreError::Internal(e.to_string()))?;
+        // MusicBrainz opt-out / unavailable: a disabled or failed resolve is NOT
+        // fatal here — fall through to the Qobuz exact-name / appears-on fallback
+        // below so the musician page still degrades cleanly when MB is off. (Was
+        // `?`, which propagated the disabled-client Err before the Qobuz fallback
+        // and left the musician page blank/stuck when MB is disabled.)
+        let resolved_artist = match self.musicbrainz.resolve_artist(name).await {
+            Ok(found) => found,
+            Err(e) => {
+                log::debug!(
+                    "musicbrainz_resolve_musician: MB resolve unavailable for {name:?}: {e}"
+                );
+                None
+            }
+        };
 
         let normalized_target = name.trim().to_lowercase();
         let artist_results = self.search_artists(name, 10, 0, None).await?;

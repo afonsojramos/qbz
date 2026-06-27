@@ -27,7 +27,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::adapter::SlintAdapter;
 use crate::artwork::{ArtworkJob, ArtworkTarget};
-use crate::{AppWindow, PlaylistSuggestionRow, PlaylistSuggestionsState, PlaylistState};
+use crate::{AppWindow, PlaylistSuggestionRow, PlaylistSuggestionsState, PlaylistState, SettingsState};
 
 type Runtime = std::sync::Arc<AppRuntime<SlintAdapter>>;
 type Handle = tokio::runtime::Handle;
@@ -431,6 +431,20 @@ fn maybe_auto_expand(runtime: Runtime, weak: Weak, handle: Handle) {
 /// Launch suggestions for the open playlist: gather the seed artists + excludes
 /// off the loaded Qobuz tracks, then fetch the first pool page. UI thread.
 pub fn activate(window: &AppWindow, runtime: Runtime, handle: Handle) {
+    // MusicBrainz opt-out: the suggestion engine resolves each seed artist via
+    // MusicBrainz, so with MB off it can only ever return an empty pool. Skip the
+    // fetch entirely and present the closed/empty state. The wand CTA is also
+    // hidden in PlaylistView.slint when MB is off, so this is belt-and-suspenders.
+    if !window.global::<SettingsState>().get_musicbrainz_enabled() {
+        let state = window.global::<PlaylistSuggestionsState>();
+        state.set_activated(false);
+        state.set_loading(false);
+        state.set_loading_more(false);
+        state.set_is_empty(true);
+        state.set_rows(ModelRc::new(VecModel::from(Vec::<PlaylistSuggestionRow>::new())));
+        return;
+    }
+
     let playlist_id = window
         .global::<PlaylistState>()
         .get_id()

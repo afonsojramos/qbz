@@ -5439,6 +5439,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // MusicBrainz opt-out seed — drive the core client's enabled flag from the
+    // persisted UI pref (default ON). Without this the client stays hardcoded ON
+    // and the Settings toggle can't turn it off. main() is sync, so spawn on the
+    // runtime; this runs before the first artist / playlist-suggestions load.
+    {
+        let runtime = app_runtime.clone();
+        tokio_rt.spawn(async move {
+            let mb_on = crate::ui_prefs::load().musicbrainz_enabled;
+            runtime.core().musicbrainz_set_enabled(mb_on).await;
+        });
+    }
+
     // Shared QBZ image cache for album artwork; trim it on startup.
     let image_cache = artwork::open_cache();
     artwork::spawn_evict(image_cache.clone());

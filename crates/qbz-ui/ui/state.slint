@@ -2723,6 +2723,11 @@ export global SettingsState {
     // Discover — opt-out: show the external "Recommendations" tab. Default on.
     // Seeded from persisted discover prefs at session start (crate::discover_prefs).
     in-out property <bool> show-recommendations: true;
+    // MusicBrainz metadata — opt-out (default on). Drives the core client's
+    // enabled flag, the artist Network/Scene sidebar (mb-available), and the
+    // playlist Suggested-Songs CTA. Seeded from ui_prefs at session start
+    // (crate::discover_prefs::seed); persisted via the "musicbrainz" key.
+    in-out property <bool> musicbrainz-enabled: true;
     in-out property <bool> streaming-only: false;
     // Volume normalization (loudness leveling). Applied in the shared player
     // and bypassed automatically when bit-perfect is active. Surfaced in the

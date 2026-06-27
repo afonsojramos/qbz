@@ -87,6 +87,25 @@ export component IntegrationsSettings inherits VerticalLayout {
     }
 
     // ===================================================================
+    // METADATA — MusicBrainz opt-out (default on). Enriches artist pages
+    // (relationships, origin/scene) and playlist song suggestions. No telemetry.
+    // ===================================================================
+    Rectangle { height: 12px; }
+    GroupHeader { text: @tr("METADATA"); }
+    Rectangle { height: 4px; }
+    SettingRow {
+        label: @tr("MusicBrainz");
+        description: @tr("Enable artist relationships and enhanced metadata from MusicBrainz. No telemetry — it only matches releases to enrich artist pages and playlist song suggestions. Turn off to disable those sections.");
+        QbzToggle {
+            checked: SettingsState.musicbrainz-enabled;
+            toggled(v) => {
+                SettingsState.musicbrainz-enabled = v;
+                root.settings-bool("musicbrainz", v);
+            }
+        }
+    }
+
+    // ===================================================================
     // SCROBBLERS — master header: title + master toggle + collapse chevron.
     // Body renders only when `enabled && !ui-collapsed`.
     // ===================================================================

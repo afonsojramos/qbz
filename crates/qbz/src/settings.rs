@@ -871,6 +871,17 @@ pub async fn handle_bool(
             crate::discover_prefs::set_show_recommendations(value);
             Ok(Apply::None)
         }
+        "musicbrainz" => {
+            // Opt-out toggle (default ON). Persist to ui_prefs (Option B,
+            // mirrors system_notifications) and drive the core client's
+            // in-memory enabled flag so the artist Network/Scene sidebar and
+            // playlist Suggested-Songs gate immediately.
+            let mut prefs = crate::ui_prefs::load();
+            prefs.musicbrainz_enabled = value;
+            crate::ui_prefs::save(&prefs);
+            runtime.core().musicbrainz_set_enabled(value).await;
+            Ok(Apply::None)
+        }
         "persist-session" => {
             let r = with_playback(&ctx.playback, |s| s.set_persist_session(value))
                 .map(|_| Apply::None);
