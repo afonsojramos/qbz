@@ -1,5 +1,7 @@
 //! Data types for the external-recommendations engine.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 /// Which source produced a recommendation row item.
@@ -13,16 +15,28 @@ pub enum RecoSource {
     Editorial,
 }
 
-/// A raw artist candidate before Qobuz validation.
+// ── Raw candidates (pre Qobuz validation) ──────────────────────────────────
+
 #[derive(Debug, Clone)]
 pub struct ArtistCandidate {
     pub name: String,
     pub source: RecoSource,
-    /// Source-normalized similarity score in 0..1.
     pub score: f32,
+    /// "Similar to X, Y, Z" line, built from the seeds that surfaced this artist.
+    pub subtitle: String,
 }
 
-/// A raw track candidate before Qobuz validation.
+#[derive(Debug, Clone)]
+pub struct AlbumCandidate {
+    pub artist: String,
+    pub title: String,
+    pub upc: Option<String>,
+    pub source: RecoSource,
+    pub score: f32,
+    /// "Similar to …" / "You've scrobbled {artist} before" line.
+    pub subtitle: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct TrackCandidate {
     pub artist: String,
@@ -32,9 +46,10 @@ pub struct TrackCandidate {
     pub isrc: Option<String>,
     pub recording_mbid: Option<String>,
     pub source: RecoSource,
-    /// Source-normalized similarity score in 0..1.
     pub score: f32,
 }
+
+// ── Resolved rows (validated to Qobuz) ─────────────────────────────────────
 
 /// A resolved artist row (validated to a Qobuz artist).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,7 +57,31 @@ pub struct ArtistReco {
     pub qobuz_artist_id: u64,
     pub name: String,
     pub image_url: String,
+    /// "Similar to X, Y, Z".
+    #[serde(default)]
+    pub subtitle: String,
     pub source: RecoSource,
+}
+
+/// A resolved album row (validated to a Qobuz album).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumReco {
+    pub qobuz_album_id: String,
+    pub title: String,
+    pub artist: String,
+    pub artist_id: String,
+    pub year: String,
+    pub quality_tier: String,
+    pub quality_label: String,
+    pub artwork_url: String,
+    #[serde(default)]
+    pub subtitle: String,
+    #[serde(default = "default_source")]
+    pub source: RecoSource,
+}
+
+fn default_source() -> RecoSource {
+    RecoSource::Editorial
 }
 
 /// A resolved track row (validated to / sourced from a Qobuz track).
@@ -55,49 +94,51 @@ pub struct TrackReco {
     pub source: RecoSource,
 }
 
-/// One album row for the cold-start editorial fallback.
-#[derive(Debug, Clone)]
-pub struct AlbumReco {
-    pub qobuz_album_id: String,
-    pub title: String,
-    pub artist: String,
-    pub artist_id: String,
-    pub year: String,
-    pub quality_tier: String,
-    pub quality_label: String,
-    pub artwork_url: String,
-}
-
 /// The full external-recommendations result for the Discover section.
 ///
-/// At runtime exactly one regime is populated: `editorial_fallback == true`
-/// fills `top_albums`/`top_artists` (cold start, no connected external source),
-/// otherwise the four personalized carousels are filled. Empty vecs self-hide
-/// their row in the view, so partial population is always safe.
+/// Empty vecs self-hide their row in the view, so partial population is always
+/// safe — the controller paints each row independently as it resolves.
 #[derive(Debug, Clone, Default)]
 pub struct ExternalCarousels {
-    /// No external integration connected -> editorial fallback regime.
+    /// No connected external source -> editorial fallback regime.
     pub editorial_fallback: bool,
-    /// C1 — "Similar artists you haven't heard".
-    pub similar_artists: Vec<ArtistReco>,
-    /// C2 — "Similar tracks you haven't heard".
-    pub similar_tracks: Vec<TrackReco>,
-    /// C3 — "Listened but not recently".
-    pub rediscover_tracks: Vec<TrackReco>,
-    /// C4 — "From artists you know but not scrobbled" (deep cuts).
-    pub deep_cut_tracks: Vec<TrackReco>,
+    /// Recommended artists (Last.fm similar, not heard).
+    pub rec_artists: Vec<ArtistReco>,
+    /// Recommended albums (Last.fm artist top-albums, not scrobbled).
+    pub rec_albums: Vec<AlbumReco>,
+    /// Fresh releases (ListenBrainz, from artists you follow).
+    pub fresh_releases: Vec<AlbumReco>,
+    /// Weekly Exploration (ListenBrainz discovery playlist) tracks.
+    pub weekly_exploration: Vec<TrackReco>,
+    /// Weekly Jams (ListenBrainz familiar playlist) tracks.
+    pub weekly_jams: Vec<TrackReco>,
+    /// Deep-cut albums from artists you know.
+    pub deep_cut_albums: Vec<AlbumReco>,
     /// Cold-start fallback: Qobuz editorial top albums.
     pub top_albums: Vec<AlbumReco>,
     /// Cold-start fallback: Qobuz editorial top artists.
     pub top_artists: Vec<ArtistReco>,
 }
 
-/// Local listening signal derived from the per-user `reco_events` store (all ids
-/// are Qobuz ids; the play log is Qobuz-source-gated).
+/// Local listening signal from the per-user `reco_events` store (Qobuz ids).
 #[derive(Debug, Clone, Default)]
 pub struct LocalHistory {
     /// Artists the user already knows (played > threshold or favorited).
-    pub known_artist_ids: std::collections::HashSet<u64>,
-    /// Tracks played in-app (the local "already heard" set).
-    pub played_track_ids: std::collections::HashSet<u64>,
+    pub known_artist_ids: HashSet<u64>,
+    /// Tracks played in-app.
+    pub played_track_ids: HashSet<u64>,
+    /// Albums played in-app (the local "already heard albums" set).
+    pub played_album_ids: HashSet<String>,
+}
+
+/// External listening signal (normalized) for the "not heard / not scrobbled"
+/// filters. Gathered ONCE per build and shared across the per-row builders.
+#[derive(Debug, Clone, Default)]
+pub struct ExtHistory {
+    /// Normalized artist names the user has listened to (Last.fm + LB).
+    pub artist_names: HashSet<String>,
+    /// Normalized "artist|title" track keys (scrobbled set).
+    pub track_keys: HashSet<String>,
+    /// Normalized "artist|album" keys (scrobbled-album set).
+    pub album_keys: HashSet<String>,
 }

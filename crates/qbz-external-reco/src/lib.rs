@@ -1,23 +1,18 @@
 //! Frontend-agnostic external-recommendations engine for Discover (ADR-006).
 //!
-//! Blends up to three sources — the in-house artist-vector engine (`qbz-reco`,
-//! deferred/placeholder), Last.fm, and ListenBrainz — into the Discover
-//! "External Recommendations" carousels, validating every candidate against the
-//! Qobuz catalog before it is shown (the app can only play Qobuz content).
+//! Blends Last.fm + ListenBrainz into the Discover "Recommendations" tab,
+//! validating every candidate against the Qobuz catalog before display (the app
+//! can only play Qobuz content). Lineup (owner-directed 2026-06-27):
+//!   - Recommended Artists (Last.fm similar of your recent top, not heard).
+//!   - Recommended Albums (Last.fm artist top-albums, not scrobbled).
+//!   - Fresh Releases (ListenBrainz, from artists you follow).
+//!   - Weekly Exploration / Weekly Jams (ListenBrainz curated playlists).
+//!   - Deep-cut albums from artists you know.
+//!   - Cold-start fallback: Qobuz editorial top albums + artists.
 //!
-//! Owner design (2026-06-26/27):
-//!   - C1 "Similar artists you haven't heard" + C2 "Similar tracks you haven't
-//!     heard" = pure discovery, **blended** across all connected sources.
-//!   - C3 "Listened but not recently" = re-discovery (Last.fm long-term tops).
-//!   - C4 "From artists you know but not scrobbled" = deep cuts (Qobuz catalog
-//!     of known artists, minus the external scrobble set).
-//!   - Each carousel caps at 20 with daily rotation over a larger pool.
-//!   - NEVER hide: with no connected external source it falls back to Qobuz
-//!     editorial top albums + artists (already Qobuz-native, zero validation).
-//!
-//! The crate depends only on frontend-agnostic crates (`qbz-integrations`,
-//! `qbz-models`). The Qobuz catalog is reached via the [`RecoCatalog`] trait,
-//! which the frontend implements over its own core.
+//! The per-row builders are public so the frontend can paint each row the moment
+//! it resolves (progressive load). The "heard" filters compare against the LOCAL
+//! reco-store history + a light Last.fm/LB top-set (not a full history sweep).
 
 pub mod cache;
 pub mod matching;
@@ -33,56 +28,117 @@ use qbz_models::{Album, Artist, Track};
 
 pub use cache::RecoCache;
 pub use types::{
-    AlbumReco, ArtistReco, ExternalCarousels, LocalHistory, RecoSource, TrackReco,
+    AlbumReco, ArtistReco, ExternalCarousels, ExtHistory, LocalHistory, RecoSource, TrackReco,
 };
 
 /// The Qobuz catalog operations the engine needs. Implemented by the frontend
-/// over its own `QbzCore`. Every method swallows errors to an empty result —
-/// "no data" must never be an error to the engine.
+/// over its own `QbzCore`. Every method swallows errors to an empty result.
 #[async_trait::async_trait]
 pub trait RecoCatalog: Send + Sync {
-    /// Free-text Qobuz track search (also used for ISRC-as-query).
     async fn search_tracks(&self, query: &str, limit: usize) -> Vec<Track>;
-    /// Qobuz artist search (for validating a recommended artist name).
     async fn search_artists(&self, query: &str, limit: usize) -> Vec<Artist>;
-    /// An artist's top tracks (the deep-cut candidate source for C4).
+    /// Free-text Qobuz album search (for validating a recommended album).
+    async fn search_albums(&self, query: &str, limit: usize) -> Vec<Album>;
     async fn artist_top_tracks(&self, artist_id: u64, limit: usize) -> Vec<Track>;
+    /// An artist's albums (the deep-cut candidate source).
+    async fn artist_albums(&self, artist_id: u64, limit: usize) -> Vec<Album>;
     /// Editorial featured albums by kind ("most-streamed" | "new-releases" | …).
     async fn featured_albums(&self, kind: &str, limit: usize) -> Vec<Album>;
-    /// Full artist by id (cold-start top-artist portraits).
     async fn get_artist(&self, artist_id: u64) -> Option<Artist>;
 }
 
-/// A connected Last.fm account: the public username + a ready client.
 pub struct LastFmHandle<'a> {
     pub username: String,
     pub client: &'a LastFmClient,
 }
 
-/// A connected ListenBrainz account: the public username + a ready client.
 pub struct ListenBrainzHandle<'a> {
     pub username: String,
     pub client: &'a ListenBrainzClient,
 }
 
-/// All the inputs `build_external_carousels` needs. Borrowed so the frontend
-/// owns the clients/cache and the engine stays allocation-light.
 pub struct RecoInputs<'a> {
     pub lastfm: Option<LastFmHandle<'a>>,
     pub listenbrainz: Option<ListenBrainzHandle<'a>>,
     pub musicbrainz: &'a MusicBrainzClient,
     pub catalog: &'a dyn RecoCatalog,
-    /// Optional resolution cache (per-user SQLite). `None` disables caching.
     pub cache: Option<&'a Mutex<RecoCache>>,
-    /// Local listening signal from the `reco_events` store.
     pub local: LocalHistory,
     /// Daily rotation offset (e.g. days since the Unix epoch).
     pub rotation_seed: u64,
 }
 
-/// Build the Discover "External Recommendations" carousels. Cheap to call
-/// repeatedly thanks to the resolution cache; the frontend should still throttle
-/// rebuilds (e.g. once per session) to bound external-API load.
+impl RecoInputs<'_> {
+    /// Whether any external source is connected.
+    pub fn has_external(&self) -> bool {
+        self.lastfm.is_some() || self.listenbrainz.is_some()
+    }
+}
+
+/// True when no external source is connected -> editorial fallback regime.
+pub fn is_cold_start(inputs: &RecoInputs<'_>) -> bool {
+    !inputs.has_external()
+}
+
+/// Gather the external "heard" history ONCE (shared across all row builders).
+pub async fn gather_history(inputs: &RecoInputs<'_>) -> ExtHistory {
+    carousels::gather_history(inputs).await
+}
+
+// ── Per-row builders (progressive: the frontend paints each as it resolves) ──
+
+pub async fn build_rec_artists(inputs: &RecoInputs<'_>, history: &ExtHistory) -> Vec<ArtistReco> {
+    carousels::build_rec_artists(inputs, history).await
+}
+pub async fn build_rec_albums(inputs: &RecoInputs<'_>, history: &ExtHistory) -> Vec<AlbumReco> {
+    carousels::build_rec_albums(inputs, history).await
+}
+pub async fn build_fresh_releases(inputs: &RecoInputs<'_>) -> Vec<AlbumReco> {
+    carousels::build_fresh_releases(inputs).await
+}
+pub async fn build_weekly_exploration(inputs: &RecoInputs<'_>) -> Vec<TrackReco> {
+    carousels::build_weekly(inputs, "weekly-exploration").await
+}
+pub async fn build_weekly_jams(inputs: &RecoInputs<'_>) -> Vec<TrackReco> {
+    carousels::build_weekly(inputs, "weekly-jams").await
+}
+pub async fn build_deep_cut_albums(inputs: &RecoInputs<'_>) -> Vec<AlbumReco> {
+    carousels::build_deep_cut_albums(inputs).await
+}
+/// Cold-start editorial (top albums + artists).
+pub async fn build_editorial(inputs: &RecoInputs<'_>) -> (Vec<AlbumReco>, Vec<ArtistReco>) {
+    carousels::build_editorial(inputs).await
+}
+
+/// Convenience: build the whole set at once (non-progressive callers / tests).
 pub async fn build_external_carousels(inputs: RecoInputs<'_>) -> ExternalCarousels {
-    carousels::build(inputs).await
+    if is_cold_start(&inputs) {
+        let (top_albums, top_artists) = build_editorial(&inputs).await;
+        return ExternalCarousels {
+            editorial_fallback: true,
+            top_albums,
+            top_artists,
+            ..Default::default()
+        };
+    }
+    let history = gather_history(&inputs).await;
+    let (rec_artists, rec_albums, fresh_releases, weekly_exploration, weekly_jams, deep_cut_albums) = tokio::join!(
+        build_rec_artists(&inputs, &history),
+        build_rec_albums(&inputs, &history),
+        build_fresh_releases(&inputs),
+        build_weekly_exploration(&inputs),
+        build_weekly_jams(&inputs),
+        build_deep_cut_albums(&inputs),
+    );
+    ExternalCarousels {
+        editorial_fallback: false,
+        rec_artists,
+        rec_albums,
+        fresh_releases,
+        weekly_exploration,
+        weekly_jams,
+        deep_cut_albums,
+        top_albums: Vec::new(),
+        top_artists: Vec::new(),
+    }
 }

@@ -80,6 +80,17 @@ export component ArtistCard inherits Rectangle {
             overflow: elide;
         }
 
+        // Optional "Similar to X, Y" line (external-reco "Recommended Artists").
+        // Empty for every other usage (search / Top Artists / To Follow) -> hidden.
+        if root.artist.subtitle != "": Text {
+            text: root.artist.subtitle;
+            width: 128px;
+            color: Theme.text-muted;
+            font-size: 11px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+
         // Rectangular Follow / Following chip (ADR-008 — no pills). See
         // `follow-mode`: "auto" shows it only when not yet following,
         // "toggle" always shows it (and reflects the state), "none" hides it.

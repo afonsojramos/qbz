@@ -74,6 +74,23 @@ pub struct LastFmArtist {
     pub image: Option<String>,
 }
 
+/// An album from Last.fm's artist.getTopAlbums / user.getTopAlbums
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LastFmAlbum {
+    /// Album name
+    pub name: String,
+    /// Artist name
+    pub artist: String,
+    /// Artist MusicBrainz ID if available
+    pub artist_mbid: Option<String>,
+    /// Album MusicBrainz ID if available
+    pub mbid: Option<String>,
+    /// Largest available image URL, if any
+    pub image: Option<String>,
+    /// Playcount (global for artist.getTopAlbums, the user's for user.getTopAlbums)
+    pub playcount: u64,
+}
+
 /// A track from Last.fm user methods (top / loved / recent tracks)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LastFmTrack {

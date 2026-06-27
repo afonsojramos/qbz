@@ -163,18 +163,15 @@ pub enum ArtworkTarget {
     ForYouMoreFromLibrary { index: usize },
     /// A card in ForYouState.rediscover.albums[index].
     ForYouRediscover { index: usize },
-    /// A tile in ExternalRecoState.similar-artists[index] (4th tab).
-    ExtRecoSimilarArtist { index: usize },
-    /// A row in ExternalRecoState.similar-tracks[index].
-    ExtRecoSimilarTrack { index: usize },
-    /// A row in ExternalRecoState.rediscover-tracks[index].
-    ExtRecoRediscoverTrack { index: usize },
-    /// A row in ExternalRecoState.deep-cut-tracks[index].
-    ExtRecoDeepCutTrack { index: usize },
-    /// A card in ExternalRecoState.top-albums.albums[index] (cold-start).
-    ExtRecoTopAlbum { index: usize },
-    /// A tile in ExternalRecoState.top-artists[index] (cold-start).
+    /// 4th-tab "Recommendations" rows (external-reco engine).
+    ExtRecoRecArtist { index: usize },
     ExtRecoTopArtist { index: usize },
+    ExtRecoRecAlbum { index: usize },
+    ExtRecoFreshAlbum { index: usize },
+    ExtRecoDeepAlbum { index: usize },
+    ExtRecoTopAlbum { index: usize },
+    ExtRecoWeeklyExploration { index: usize },
+    ExtRecoWeeklyJams { index: usize },
     /// A card in ForYouState.favorite-albums.albums[index].
     ForYouFavoriteAlbum { index: usize },
     /// The Spotlight artist portrait.
@@ -1296,29 +1293,36 @@ fn apply_artwork(
                 model.set_row_data(index, item);
             }
         }
-        ArtworkTarget::ExtRecoSimilarArtist { index } => {
-            let model = window.global::<crate::ExternalRecoState>().get_similar_artists();
+        ArtworkTarget::ExtRecoRecArtist { index } => {
+            let model = window.global::<crate::ExternalRecoState>().get_rec_artists();
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);
             }
         }
-        ArtworkTarget::ExtRecoSimilarTrack { index } => {
-            let model = window.global::<crate::ExternalRecoState>().get_similar_tracks();
+        ArtworkTarget::ExtRecoTopArtist { index } => {
+            let model = window.global::<crate::ExternalRecoState>().get_top_artists();
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);
             }
         }
-        ArtworkTarget::ExtRecoRediscoverTrack { index } => {
-            let model = window.global::<crate::ExternalRecoState>().get_rediscover_tracks();
+        ArtworkTarget::ExtRecoRecAlbum { index } => {
+            let model = window.global::<crate::ExternalRecoState>().get_rec_albums().albums;
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);
             }
         }
-        ArtworkTarget::ExtRecoDeepCutTrack { index } => {
-            let model = window.global::<crate::ExternalRecoState>().get_deep_cut_tracks();
+        ArtworkTarget::ExtRecoFreshAlbum { index } => {
+            let model = window.global::<crate::ExternalRecoState>().get_fresh_releases().albums;
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ExtRecoDeepAlbum { index } => {
+            let model = window.global::<crate::ExternalRecoState>().get_deep_cut_albums().albums;
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);
@@ -1331,8 +1335,15 @@ fn apply_artwork(
                 model.set_row_data(index, item);
             }
         }
-        ArtworkTarget::ExtRecoTopArtist { index } => {
-            let model = window.global::<crate::ExternalRecoState>().get_top_artists();
+        ArtworkTarget::ExtRecoWeeklyExploration { index } => {
+            let model = window.global::<crate::ExternalRecoState>().get_weekly_exploration();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ExtRecoWeeklyJams { index } => {
+            let model = window.global::<crate::ExternalRecoState>().get_weekly_jams();
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);
