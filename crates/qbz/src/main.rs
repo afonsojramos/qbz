@@ -2850,6 +2850,7 @@ fn navigate_playlist(
             // plex rows = tokenized Plex thumbs.
             let (http_jobs, local_jobs, plex_jobs) = playlist::artwork_jobs(&data);
             let pid = data.id.clone();
+            let owner_id = data.owner_id;
             // Seed the INTERNAL favorite heart from the library db (the open
             // handler otherwise only sets is_owner, so the heart was always
             // un-filled on open).
@@ -2860,9 +2861,18 @@ fn navigate_playlist(
             });
             let _ = weak.upgrade_in_event_loop(move |w| {
                 playlist::apply(&w, data);
-                let owned = sidebar::contains(&w, &pid);
+                // Ownership = the playlist's Qobuz owner IS the current user
+                // (Tauri parity: owner.id == current user id). A merely
+                // FOLLOWED/subscribed playlist is in my sidebar list but NOT
+                // owned, so `sidebar::contains` alone is the wrong signal (it is
+                // true for followed ones too). Owned => Delete; followed (in my
+                // list but not owned) => the Follow/Unfollow toggle.
+                let me = crate::library_db::current_user_id();
+                let owned = me.is_some_and(|uid| uid == owner_id);
+                let following = !owned && sidebar::contains(&w, &pid);
                 let st = w.global::<PlaylistState>();
                 st.set_is_owner(owned);
+                st.set_is_following(following);
                 st.set_is_favorite(fav);
             });
             if !http_jobs.is_empty() {
@@ -15584,6 +15594,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_delete(move || {
                 let Some(w) = weak.upgrade() else { return; };
                 let id = w.global::<EditPlaylistState>().get_id().to_string();
+                log::info!(
+                    "[playlist-delete] requested: id='{id}' is_local={}",
+                    local_playlist::is_local_id(&id)
+                );
                 // LOCAL playlist — delete the library.db entity (cascades
                 // its membership rows), then back + sidebar reload.
                 if local_playlist::is_local_id(&id) {
@@ -15593,11 +15607,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let handle = handle.clone();
                     handle.clone().spawn(async move {
                         let lid = id.clone();
+                        let nav_id = id.clone();
                         let ok = tokio::task::spawn_blocking(move || {
                             local_playlist::delete_blocking(&lid)
                         })
                         .await
                         .unwrap_or(false);
+                        log::info!("[playlist-delete] local delete result -> {ok}");
                         let r2 = runtime.clone();
                         let w2 = weak.clone();
                         let h2 = handle.clone();
@@ -15606,32 +15622,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if ok {
                                 w.global::<EditPlaylistState>().set_open(false);
                                 load_sidebar_playlists(r2, w2, &h2);
-                                w.global::<NavState>().invoke_request_back();
+                                // §3: only step back when viewing THIS playlist's
+                                // detail; otherwise stay on the invoking surface
+                                // (the sidebar refresh above drops the row).
+                                let on_detail = w.global::<NavState>().get_view() == ContentView::Playlist
+                                    && w.global::<PlaylistState>().get_id().to_string() == nav_id;
+                                if on_detail {
+                                    w.global::<NavState>().invoke_request_back();
+                                }
                             }
                         });
                     });
                     return;
                 }
-                let Ok(pid) = id.parse::<u64>() else { return; };
+                let Ok(pid) = id.parse::<u64>() else {
+                    log::warn!("[playlist-delete] non-numeric Qobuz id '{id}' — aborting");
+                    return;
+                };
                 w.global::<EditPlaylistState>().set_busy(true);
                 let runtime = runtime.clone();
                 let weak = weak.clone();
                 let handle = handle.clone();
+                let id_for_nav = id.clone();
                 handle.clone().spawn(async move {
-                    match runtime.core().delete_playlist(pid).await {
+                    // Re-derive ownership server-side — the modal opens from
+                    // surfaces (sidebar context menu / manager) that don't carry
+                    // the owner flag, so never trust the UI here. OWNED => delete;
+                    // FOLLOWED/subscribed (not owned) => unsubscribe. Qobuz's
+                    // playlist/delete returns 200 but NO-OPS on a playlist you
+                    // don't own (the "deleted ok but it stays" bug), so a followed
+                    // playlist MUST go through unsubscribe.
+                    let me = crate::library_db::current_user_id();
+                    let owned = match runtime.core().get_playlist(pid).await {
+                        Ok(p) => me.is_some_and(|uid| uid == p.owner.id),
+                        Err(e) => {
+                            log::warn!(
+                                "[playlist-delete] {pid} owner check failed ({e}); treating as not-owned"
+                            );
+                            false
+                        }
+                    };
+                    let res = if owned {
+                        log::info!("[playlist-delete] {pid} OWNED -> delete");
+                        runtime.core().delete_playlist(pid).await
+                    } else {
+                        log::info!("[playlist-delete] {pid} FOLLOWED -> unsubscribe");
+                        runtime.core().unsubscribe_playlist(pid).await
+                    };
+                    match res {
                         Ok(()) => {
+                            log::info!("[playlist-delete] {pid} removed ok (owned={owned})");
                             let r2 = runtime.clone();
                             let w2 = weak.clone();
                             let h2 = handle.clone();
+                            let nav_id = id_for_nav.clone();
                             let _ = weak.upgrade_in_event_loop(move |w| {
                                 w.global::<EditPlaylistState>().set_busy(false);
                                 w.global::<EditPlaylistState>().set_open(false);
                                 load_sidebar_playlists(r2, w2, &h2);
-                                w.global::<NavState>().invoke_request_back();
+                                // §3: only step back when viewing THIS playlist's
+                                // detail; else stay on the invoking surface (the
+                                // sidebar refresh above drops the row).
+                                let on_detail = w.global::<NavState>().get_view() == ContentView::Playlist
+                                    && w.global::<PlaylistState>().get_id().to_string() == nav_id;
+                                if on_detail {
+                                    w.global::<NavState>().invoke_request_back();
+                                }
                             });
                         }
                         Err(e) => {
-                            log::error!("[qbz-slint] delete playlist failed: {e}");
+                            log::error!("[qbz-slint] remove playlist failed: {e}");
                             let _ = weak.upgrade_in_event_loop(|w| {
                                 w.global::<EditPlaylistState>().set_busy(false);
                             });

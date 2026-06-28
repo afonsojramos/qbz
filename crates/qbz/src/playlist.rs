@@ -333,6 +333,9 @@ pub struct PlaylistData {
     pub id: String,
     pub name: String,
     pub owner: String,
+    /// Qobuz owner id — compared against the current user id to decide
+    /// ownership (owned => deletable; not owned => followed/subscribed).
+    pub owner_id: u64,
     pub description: String,
     pub description_short: String,
     pub cover_url: String,
@@ -464,6 +467,7 @@ where
     Some(PlaylistData {
         id: pl.id.to_string(),
         name: pl.name,
+        owner_id: pl.owner.id,
         owner: pl.owner.name,
         description: description.clone(),
         description_short: truncate_words(&description, 160),
@@ -598,6 +602,14 @@ pub fn reset(window: &AppWindow) {
     state.set_is_local(false);
     state.set_offline_only(false);
     state.set_offline_subset(false);
+    // Ownership / follow / copied flags also reset per navigation; the load
+    // path (main.rs) re-derives is-owner / is-following from the playlist owner
+    // id vs the current user. Clearing here prevents the previous playlist's
+    // state from leaking while the next loads (e.g. a followed playlist briefly
+    // showing Delete instead of Unfollow).
+    state.set_is_owner(false);
+    state.set_is_following(false);
+    state.set_is_copied(false);
     state.set_loading(true);
 }
 
