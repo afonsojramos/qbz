@@ -2859,6 +2859,12 @@ fn navigate_playlist(
                     .unwrap_or_default()
                     .contains(&id)
             });
+            // Hide the Copy button if this Qobuz playlist was already copied
+            // into the library (its SOURCE id is recorded). Mirrors Tauri's
+            // user-scoped `qbz_copied_playlists` localStorage set.
+            let copied = pid.parse::<u64>().ok().is_some_and(|id| {
+                crate::library_db::with_db(|db| db.is_playlist_copied(id)).unwrap_or(false)
+            });
             let _ = weak.upgrade_in_event_loop(move |w| {
                 playlist::apply(&w, data);
                 // Ownership = the playlist's Qobuz owner IS the current user
@@ -2874,6 +2880,7 @@ fn navigate_playlist(
                 st.set_is_owner(owned);
                 st.set_is_following(following);
                 st.set_is_favorite(fav);
+                st.set_is_copied(copied);
             });
             if !http_jobs.is_empty() {
                 artwork::spawn_loads(http_jobs, weak.clone(), image_cache.clone());
@@ -9219,6 +9226,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 })
                                 .await;
                             }
+                            // Persist the SOURCE playlist id as "copied" so its
+                            // detail view hides the Copy button on later opens
+                            // (mirrors Tauri's user-scoped `qbz_copied_playlists`).
+                            let _ = tokio::task::spawn_blocking(move || {
+                                crate::library_db::with_db(|db| db.mark_playlist_copied(pid_u64));
+                            })
+                            .await;
                             let _ = weak2.upgrade_in_event_loop(move |w| {
                                 w.global::<PlaylistState>().set_is_copied(true);
                                 crate::toast::success(&w, qbz_i18n::t("Copied to your library"));

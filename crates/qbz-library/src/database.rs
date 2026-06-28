@@ -152,6 +152,14 @@ impl LibraryDatabase {
                 updated_at INTEGER NOT NULL
             );
 
+            -- Qobuz playlists the user has COPIED into their library (mirrors
+            -- Tauri's user-scoped `qbz_copied_playlists`): stores the SOURCE
+            -- playlist id so its detail view hides the Copy button on reopen.
+            CREATE TABLE IF NOT EXISTS copied_playlists (
+                qobuz_playlist_id INTEGER PRIMARY KEY,
+                copied_at INTEGER NOT NULL
+            );
+
             -- Local tracks added to playlists (mixed with remote Qobuz tracks)
             CREATE TABLE IF NOT EXISTS playlist_local_tracks (
                 id INTEGER PRIMARY KEY,
@@ -3537,6 +3545,40 @@ impl LibraryDatabase {
         ids.collect::<Result<Vec<_>, _>>().map_err(|e| {
             LibraryError::Database(format!("Failed to collect favorite playlist IDs: {}", e))
         })
+    }
+
+    /// Record that a Qobuz playlist (by its SOURCE id) was copied into the
+    /// user's library. Idempotent — re-copying the same source is a no-op.
+    pub fn mark_playlist_copied(&self, qobuz_playlist_id: u64) -> Result<(), LibraryError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO copied_playlists (qobuz_playlist_id, copied_at) VALUES (?1, ?2)",
+                params![qobuz_playlist_id as i64, now],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to mark playlist copied: {}", e))
+            })?;
+        Ok(())
+    }
+
+    /// Whether a Qobuz playlist (by its SOURCE id) has already been copied into
+    /// the user's library — used to hide the Copy button on its detail view.
+    pub fn is_playlist_copied(&self, qobuz_playlist_id: u64) -> Result<bool, LibraryError> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM copied_playlists WHERE qobuz_playlist_id = ?1",
+                params![qobuz_playlist_id as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to check copied playlist: {}", e))
+            })?;
+        Ok(count > 0)
     }
 
     /// Update position for a playlist
