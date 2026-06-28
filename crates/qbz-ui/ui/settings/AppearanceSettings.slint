@@ -66,6 +66,9 @@ component SecondaryButton inherits Rectangle {
 }
 
 // A collapsible sub-section header (Immersive Panels / Animation Frame Rate).
+// Hidden: its only users were the IMMERSIVE block (now commented out). Kept
+// commented for re-enable alongside that block; do NOT delete.
+/*
 component CollapsibleHeader inherits Rectangle {
     in property <string> title;
     in property <string> summary;
@@ -110,6 +113,7 @@ component CollapsibleHeader inherits Rectangle {
         }
     }
 }
+*/
 
 export component AppearanceSettings inherits VerticalLayout {
     spacing: 4px;
@@ -252,7 +256,6 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("TYPOGRAPHY & LANGUAGE"); }
 
     SettingRow {
-        unsupported: true;
         label: @tr("Language");
         QbzSelect {
             menu-width: 200px;
@@ -264,6 +267,9 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
+    // UI Scale — hidden per owner request (only the global scale factor works
+    // for now). Code kept commented for re-enable; do NOT delete.
+    /*
     SettingRow {
         unsupported: true;
         label: @tr("UI Scale");
@@ -277,6 +283,7 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
+    */
 
     SettingRow {
         label: @tr("Immersive search");
@@ -456,7 +463,6 @@ export component AppearanceSettings inherits VerticalLayout {
     GroupHeader { text: @tr("WINDOW TITLE"); }
 
     SettingRow {
-        unsupported: true;
         label: @tr("Show track in window title");
         QbzToggle {
             checked: AppearanceState.window-title-show;
@@ -466,6 +472,12 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
+
+    // Title-template row + the TITLE BAR and WINDOW CONTROLS blocks — hidden per
+    // owner request. The window title now uses a fixed format (see
+    // AppWindow.title in app.slint); the custom titlebar is the only chrome mode
+    // shipping for now. Code kept commented for re-enable; do NOT delete.
+    /*
     if AppearanceState.window-title-show: SettingRow {
         unsupported: true;
         label: @tr("Title template");
@@ -561,6 +573,7 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
+    */
 
     Rectangle { height: 12px; }
     Divider { }
@@ -707,6 +720,9 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
 
+    // IMMERSIVE block — hidden per owner request. Code kept commented for
+    // re-enable; do NOT delete.
+    /*
     Rectangle { height: 12px; }
     Divider { }
     Rectangle { height: 12px; }
@@ -764,6 +780,7 @@ export component AppearanceSettings inherits VerticalLayout {
         font-size: 12px;
         wrap: word-wrap;
     }
+    */
 
     Rectangle { height: 40px; }
 }

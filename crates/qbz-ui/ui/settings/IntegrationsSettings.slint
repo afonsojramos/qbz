@@ -115,41 +115,41 @@ export component IntegrationsSettings inherits VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
             spacing: 2px;
-            HorizontalLayout {
-                spacing: 8px;
-                GroupHeader { text: @tr("SCROBBLERS"); vertical-alignment: center; }
-                if ScrobbleState.enabled: VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 20px;
-                        height: 20px;
-                        border-radius: Radius.sm;
-                        background: chev-ta.has-hover ? Theme.surface-hover : transparent;
-                        QbzIcon {
-                            source: ScrobbleState.ui-collapsed
-                                ? @image-url("../assets/icons/chevron-right.svg")
-                                : @image-url("../assets/icons/chevron-down.svg");
-                            width: 14px;
-                            height: 14px;
-                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                            tint: Theme.text-secondary;
-                        }
-                        chev-ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                ScrobbleState.ui-collapsed = !ScrobbleState.ui-collapsed;
-                                ScrobbleActions.collapse-toggle(ScrobbleState.ui-collapsed);
-                            }
-                        }
-                    }
-                }
-            }
+            GroupHeader { text: @tr("SCROBBLERS"); vertical-alignment: center; }
             Text {
                 text: @tr("Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks.");
                 color: Theme.text-muted;
                 font-size: 12px;
                 wrap: word-wrap;
+            }
+        }
+        // Collapse chevron — moved to row level so it is vertically centered
+        // with the master toggle (it used to be inline with the title and sat
+        // too high), and enlarged (28px hit-box / 18px glyph).
+        if ScrobbleState.enabled: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: Radius.sm;
+                background: chev-ta.has-hover ? Theme.surface-hover : transparent;
+                QbzIcon {
+                    source: ScrobbleState.ui-collapsed
+                        ? @image-url("../assets/icons/chevron-right.svg")
+                        : @image-url("../assets/icons/chevron-down.svg");
+                    width: 18px;
+                    height: 18px;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                    tint: Theme.text-secondary;
+                }
+                chev-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        ScrobbleState.ui-collapsed = !ScrobbleState.ui-collapsed;
+                        ScrobbleActions.collapse-toggle(ScrobbleState.ui-collapsed);
+                    }
+                }
             }
         }
         VerticalLayout {

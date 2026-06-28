@@ -17,7 +17,7 @@ import { SplashScreen } from "splash/SplashScreen.slint";
 import { LoginScreen } from "login/LoginScreen.slint";
 import { AppShell } from "shell/AppShell.slint";
 import { Toast } from "primitives/Toast.slint";
-import { ShellState, MiniPlayerState } from "state.slint";
+import { ShellState, MiniPlayerState, NowPlayingState, AppearanceState } from "state.slint";
 import { MiniShell } from "miniplayer/MiniShell.slint";
 
 // Re-export the theming globals so the Rust layer can push palettes (Theme.c /
@@ -33,7 +33,12 @@ export { HomeState, HomeActions, DiscoverState, DiscoverActions, SectionDescript
 export enum AppScreen { splash, login, shell }
 
 export component AppWindow inherits Window {
-    title: "QBZ";
+    // "Show track in window title" (Appearance settings): when enabled and a
+    // track is loaded, the OS window title becomes "{track} - {artist} | qbz";
+    // otherwise the plain app name. Reactive — updates on every track change.
+    title: AppearanceState.window-title-show && NowPlayingState.has-track
+        ? NowPlayingState.title + " - " + NowPlayingState.artist + " | qbz"
+        : "QBZ";
     preferred-width: 1180px;
     preferred-height: 760px;
     min-width: 940px;
