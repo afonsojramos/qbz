@@ -4,9 +4,9 @@
 // without duplicating popups.
 //
 // `play-circle`   = New filled disc vs Classic plain glyph.
-// `classic-actions` = New keeps the grouped "+" add menu; Classic swaps it for
-//                     an inline one-click add-to-playlist + a favorite toggle
-//                     (filled-heart state), 1:1 with the Tauri Classic transport.
+// `classic-actions` = both New and Classic use the grouped "+" add flyout;
+//                     Classic ADDS an inline favorite toggle (filled-heart state)
+//                     next to it so the favorite state stays visible at a glance.
 // The track-info "(i)" lives in the song card, not here.
 //
 // Reads NowPlayingState + QueueState directly; bubbles add/menu actions through
@@ -111,8 +111,9 @@ export component TransportControls inherits HorizontalLayout {
         }
     }
 
-    // New: "+" — grouped add menu.
-    if !root.classic-actions: VerticalLayout {
+    // "+" — grouped add menu. Both New AND Classic open this same flyout (Classic
+    // used to fire a one-click add-to-playlist; owner wants the flyout instead).
+    VerticalLayout {
         alignment: center;
         Rectangle {
             width: 32px;
@@ -181,19 +182,8 @@ export component TransportControls inherits HorizontalLayout {
         }
     }
 
-    // Classic: inline add-to-playlist (one click) — 1:1 with Tauri.
-    if root.classic-actions: VerticalLayout {
-        alignment: center;
-        IconButton {
-            icon: @image-url("../assets/icons/plus.svg");
-            icon-size: 16px;
-            tooltip: @tr("Add to playlist");
-            enabled: NowPlayingState.has-track;
-            clicked => {
-                root.media-action("track", NowPlayingState.track-id, "add-to-playlist");
-            }
-        }
-    }
+    // Classic keeps the inline favorite toggle (filled-heart state) next to the
+    // shared "+" flyout, so the favorite state stays visible at a glance.
     // Classic: inline favorite toggle with filled-heart state — 1:1 with Tauri.
     if root.classic-actions: VerticalLayout {
         alignment: center;
