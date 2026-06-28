@@ -110,17 +110,26 @@ async fn resolve_track_live(
     catalog: &dyn RecoCatalog,
     mb: &MusicBrainzClient,
     cand: &TrackCandidate,
+    skip_mb: bool,
 ) -> Option<TrackReco> {
     if let Some(isrc) = cand.isrc.as_deref().filter(|s| !s.is_empty()) {
         if let Some(track) = find_by_isrc(catalog, isrc).await {
             return Some(build_track_reco(&track, cand.source));
         }
     }
-    if let Some(mbid) = cand.recording_mbid.as_deref().filter(|s| !s.is_empty()) {
-        let isrcs = mb.get_recording_isrcs(mbid).await.unwrap_or_default();
-        for isrc in isrcs {
-            if let Some(track) = find_by_isrc(catalog, &isrc).await {
-                return Some(build_track_reco(&track, cand.source));
+    // The MusicBrainz recording->ISRC lookup is gated behind a SERIAL 1.1s/req
+    // rate limiter; for a 50-track weekly playlist (×2 rows) that is ~110s of
+    // pure waiting, so the row never paints in practice. `skip_mb` bypasses it
+    // and relies on the fuzzy Qobuz search below — reliable for the mainstream
+    // tracks these playlists contain. (This is THE reason the Weekly rows did
+    // not appear while Fresh Releases — album-based, no MusicBrainz — did.)
+    if !skip_mb {
+        if let Some(mbid) = cand.recording_mbid.as_deref().filter(|s| !s.is_empty()) {
+            let isrcs = mb.get_recording_isrcs(mbid).await.unwrap_or_default();
+            for isrc in isrcs {
+                if let Some(track) = find_by_isrc(catalog, &isrc).await {
+                    return Some(build_track_reco(&track, cand.source));
+                }
             }
         }
     }
@@ -140,11 +149,23 @@ async fn resolve_track_live(
     }
 }
 
+/// Resolve a track candidate to a Qobuz track.
+///
+/// `skip_negative`: when true, the per-track NEGATIVE cache is ignored on BOTH
+/// read and write. This is for ListenBrainz weekly playlists, whose resolution
+/// runs under heavy concurrent first-build load: a transient throttle/timeout
+/// returns `None`, and persisting that as a 7-day negative would lock the track
+/// (and so the whole weekly row) out long after the hiccup passed — the exact
+/// mechanism that made Weekly Exploration/Jams "vanish". POSITIVE hits are still
+/// cached (cheap re-resolution), and the resolved set is cached per-week by the
+/// caller.
 pub async fn validate_track(
     catalog: &dyn RecoCatalog,
     mb: &MusicBrainzClient,
     cache: Cache<'_>,
     cand: &TrackCandidate,
+    skip_negative: bool,
+    skip_mb: bool,
 ) -> Option<TrackReco> {
     let key = track_cache_key(cand);
     if let Some(c) = cache {
@@ -156,17 +177,21 @@ pub async fn validate_track(
                         return Some(reco);
                     }
                 }
-                CacheLookup::Negative => return None,
-                CacheLookup::Miss => {}
+                // A cached negative is authoritative only when we trust negatives.
+                CacheLookup::Negative if !skip_negative => return None,
+                _ => {}
             }
         }
     }
-    let reco = resolve_track_live(catalog, mb, cand).await;
+    let reco = resolve_track_live(catalog, mb, cand, skip_mb).await;
     if let Some(c) = cache {
         if let Ok(guard) = c.lock() {
             match &reco {
                 Some(r) => guard.put(&key, "track", Some(&serde_json::to_string(r).unwrap_or_default())),
-                None => guard.put(&key, "track", None),
+                // Only persist a negative when negatives are trusted (NOT for
+                // weeklies — a transient miss must not stick for 7 days).
+                None if !skip_negative => guard.put(&key, "track", None),
+                None => {}
             }
         }
     }

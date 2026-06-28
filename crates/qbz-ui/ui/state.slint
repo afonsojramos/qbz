@@ -335,6 +335,20 @@ export global ForYouState {
 export global ExternalRecoState {
     in property <bool> loading: false;
     in-out property <bool> loaded: false;
+    // Per-row "still loading" flags. The controller sets the rows it is about
+    // to build true at spawn and clears each as its builder resolves, so a SLOW
+    // row (the Weekly ListenBrainz playlists resolve a few seconds after the
+    // fast rows) shows its own skeleton instead of silently missing — the UI now
+    // signals "more is still loading" during the progressive paint.
+    in property <bool> pending-rec-artists-common: false;
+    in property <bool> pending-rec-artists-recent: false;
+    in property <bool> pending-rec-albums: false;
+    in property <bool> pending-fresh-releases: false;
+    in property <bool> pending-weekly-exploration: false;
+    in property <bool> pending-weekly-jams: false;
+    in property <bool> pending-deep-cut-albums: false;
+    in property <bool> pending-top-albums: false;
+    in property <bool> pending-top-artists: false;
     // True when no external source is connected: the editorial fallback
     // (top-albums + top-artists) shows instead of the personalized rows.
     in property <bool> editorial-fallback: false;

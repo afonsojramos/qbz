@@ -35,8 +35,12 @@ pub fn init_for_user(base_dir: &Path) {
     if let Ok(mut g) = CACHE_DIR.lock() {
         *g = Some(base_dir.to_path_buf());
     }
-    if let Ok(cache) = RecoCache::open_at(base_dir) {
-        let _ = cache.cleanup_expired();
+    match RecoCache::open_at(base_dir) {
+        Ok(cache) => {
+            let _ = cache.cleanup_expired();
+            log::info!("[reco] cache initialized at {}", base_dir.display());
+        }
+        Err(e) => log::warn!("[reco] cache open failed at {}: {e}", base_dir.display()),
     }
 }
 
@@ -176,12 +180,20 @@ fn spawn(
         let catalog = CoreRecoCatalog {
             runtime: runtime.clone(),
         };
-        let cache = CACHE_DIR
-            .lock()
-            .ok()
-            .and_then(|g| g.clone())
-            .and_then(|dir| RecoCache::open_at(&dir).ok())
-            .map(Mutex::new);
+        let cache_dir = CACHE_DIR.lock().ok().and_then(|g| g.clone());
+        let cache = match &cache_dir {
+            Some(dir) => match RecoCache::open_at(dir) {
+                Ok(c) => Some(Mutex::new(c)),
+                Err(e) => {
+                    log::warn!("[reco] spawn: cache open failed ({e}) — running uncached");
+                    None
+                }
+            },
+            None => {
+                log::warn!("[reco] spawn: cache dir not set (init_for_user not run?) — running uncached");
+                None
+            }
+        };
 
         let inputs = RecoInputs {
             lastfm,
@@ -198,13 +210,36 @@ fn spawn(
             inputs.lastfm.is_some(),
             inputs.listenbrainz.is_some()
         );
+        log::info!(
+            "[reco] spawn: lastfm={} listenbrainz={} source_key={source_key}",
+            inputs.lastfm.is_some(),
+            inputs.listenbrainz.is_some()
+        );
 
-        // 1. Results cache: paint INSTANTLY if a fresh (<48h) build is cached.
+        // 1. Results cache: paint the NON-weekly rows INSTANTLY if a fresh
+        // (<48h) build is cached. The Weekly Exploration/Jams rows are NOT
+        // trusted from this blob — they follow ListenBrainz's own weekly cadence
+        // and have their own per-week cache, so we ALWAYS (re)build them via
+        // build_and_apply_weeklies (cheap on a weekly-cache hit). This is what
+        // stops a single transient empty build from hiding them for 48h.
         if let Some(cache_mutex) = inputs.cache {
             let cached = cache_mutex.lock().ok().and_then(|g| g.get_results(&source_key));
             if let Some(json) = cached {
                 if let Ok(result) = serde_json::from_str::<ExternalCarousels>(&json) {
                     apply_all(&weak, &image_cache, result);
+                    // The non-weekly rows painted instantly from the blob; the
+                    // two Weekly rows rebuild from their own per-week cache, so
+                    // show their skeletons until build_and_apply_weeklies fills
+                    // them (instant on a weekly-cache hit).
+                    if inputs.listenbrainz.is_some() {
+                        let w = weak.clone();
+                        let _ = w.upgrade_in_event_loop(|w| {
+                            let s = w.global::<ExternalRecoState>();
+                            s.set_pending_weekly_exploration(true);
+                            s.set_pending_weekly_jams(true);
+                        });
+                    }
+                    build_and_apply_weeklies(&inputs, &weak, &image_cache).await;
                     latch_loaded(&weak);
                     return;
                 }
@@ -214,9 +249,20 @@ fn spawn(
         // 2. Cache miss / stale: tell the user we're working, then build.
         crate::toast::info_weak(&weak, qbz_i18n::t("Generating recommendations…"));
 
+        // Show per-row skeletons for the rows we're about to build, so the slow
+        // rows (Weekly) read as "still loading" rather than absent during the
+        // progressive paint. Each builder clears its own flag as it resolves.
+        let cold_start = is_cold_start(&inputs);
+        {
+            let w = weak.clone();
+            let _ = w.upgrade_in_event_loop(move |w| {
+                set_pending(&w, cold_start);
+            });
+        }
+
         let collector: Arc<Mutex<ExternalCarousels>> = Arc::new(Mutex::new(ExternalCarousels::default()));
 
-        if is_cold_start(&inputs) {
+        if cold_start {
             let (albums, artists) = build_editorial(&inputs).await;
             if let Ok(mut g) = collector.lock() {
                 g.editorial_fallback = true;
@@ -319,20 +365,75 @@ fn latch_loaded(weak: &slint::Weak<AppWindow>) {
         let s = w.global::<ExternalRecoState>();
         s.set_loading(false);
         s.set_loaded(true);
+        // Defensive: every builder clears its own pending flag as it resolves;
+        // this guarantees no skeleton can stick after the whole build settles.
+        clear_all_pending(&w);
     });
 }
 
-/// Paint every row from a cached result (empty rows self-hide).
+/// Mark the rows the controller is about to build as pending, so their per-row
+/// skeletons show immediately while the builders run.
+fn set_pending(w: &AppWindow, cold_start: bool) {
+    let s = w.global::<ExternalRecoState>();
+    if cold_start {
+        s.set_pending_top_albums(true);
+        s.set_pending_top_artists(true);
+    } else {
+        s.set_pending_rec_artists_common(true);
+        s.set_pending_rec_artists_recent(true);
+        s.set_pending_rec_albums(true);
+        s.set_pending_fresh_releases(true);
+        s.set_pending_weekly_exploration(true);
+        s.set_pending_weekly_jams(true);
+        s.set_pending_deep_cut_albums(true);
+    }
+}
+
+fn clear_all_pending(w: &AppWindow) {
+    let s = w.global::<ExternalRecoState>();
+    s.set_pending_rec_artists_common(false);
+    s.set_pending_rec_artists_recent(false);
+    s.set_pending_rec_albums(false);
+    s.set_pending_fresh_releases(false);
+    s.set_pending_weekly_exploration(false);
+    s.set_pending_weekly_jams(false);
+    s.set_pending_deep_cut_albums(false);
+    s.set_pending_top_albums(false);
+    s.set_pending_top_artists(false);
+}
+
+/// Paint the NON-weekly rows from a cached 48h blob (empty rows self-hide). The
+/// two Weekly rows are intentionally NOT painted here — they are (re)built from
+/// their own per-week cache by `build_and_apply_weeklies`, so the blob can never
+/// pin a stale/empty weekly for the 48h window.
 fn apply_all(weak: &slint::Weak<AppWindow>, cache: &ImageCache, r: ExternalCarousels) {
     apply_artists(weak, cache, r.rec_artists_common, ArtistRow::RecArtistsCommon);
     apply_artists(weak, cache, r.rec_artists_recent, ArtistRow::RecArtistsRecent);
     apply_albums(weak, cache, r.rec_albums, AlbumRow::RecAlbums);
     apply_albums(weak, cache, r.fresh_releases, AlbumRow::FreshReleases);
-    apply_tracks(weak, cache, r.weekly_exploration, TrackRow::WeeklyExploration);
-    apply_tracks(weak, cache, r.weekly_jams, TrackRow::WeeklyJams);
     apply_albums(weak, cache, r.deep_cut_albums, AlbumRow::DeepCuts);
     apply_albums(weak, cache, r.top_albums, AlbumRow::TopAlbums);
     apply_artists(weak, cache, r.top_artists, ArtistRow::TopArtists);
+}
+
+/// Build + paint the two Weekly rows from their own per-week cache (cheap on a
+/// hit; one ListenBrainz `createdfor` call + a SQLite read). Used on the
+/// instant-paint path so the weeklies follow ListenBrainz's weekly cadence
+/// independently of the 48h results blob. The full-build path paints them via
+/// its own `b_explore`/`b_jams` branches, which call the same cache-backed
+/// builders.
+async fn build_and_apply_weeklies(
+    inputs: &RecoInputs<'_>,
+    weak: &slint::Weak<AppWindow>,
+    image_cache: &ImageCache,
+) {
+    if inputs.listenbrainz.is_none() {
+        return;
+    }
+    let (explore, jams) =
+        tokio::join!(build_weekly_exploration(inputs), build_weekly_jams(inputs));
+    apply_tracks(weak, image_cache, explore, TrackRow::WeeklyExploration);
+    apply_tracks(weak, image_cache, jams, TrackRow::WeeklyJams);
 }
 
 // ── Per-row apply (models built on the UI thread; slint::Image is !Send) ────
@@ -438,9 +539,18 @@ fn apply_artists(
         ));
         let s = w.global::<ExternalRecoState>();
         match which {
-            ArtistRow::RecArtistsCommon => s.set_rec_artists_common(model),
-            ArtistRow::RecArtistsRecent => s.set_rec_artists_recent(model),
-            ArtistRow::TopArtists => s.set_top_artists(model),
+            ArtistRow::RecArtistsCommon => {
+                s.set_rec_artists_common(model);
+                s.set_pending_rec_artists_common(false);
+            }
+            ArtistRow::RecArtistsRecent => {
+                s.set_rec_artists_recent(model);
+                s.set_pending_rec_artists_recent(false);
+            }
+            ArtistRow::TopArtists => {
+                s.set_top_artists(model);
+                s.set_pending_top_artists(false);
+            }
         }
     });
     crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
@@ -471,8 +581,14 @@ fn apply_tracks(
         ));
         let s = w.global::<ExternalRecoState>();
         match which {
-            TrackRow::WeeklyExploration => s.set_weekly_exploration(model),
-            TrackRow::WeeklyJams => s.set_weekly_jams(model),
+            TrackRow::WeeklyExploration => {
+                s.set_weekly_exploration(model);
+                s.set_pending_weekly_exploration(false);
+            }
+            TrackRow::WeeklyJams => {
+                s.set_weekly_jams(model);
+                s.set_pending_weekly_jams(false);
+            }
         }
     });
     crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
@@ -519,10 +635,22 @@ fn apply_albums(
         };
         let s = w.global::<ExternalRecoState>();
         match which {
-            AlbumRow::RecAlbums => s.set_rec_albums(section),
-            AlbumRow::FreshReleases => s.set_fresh_releases(section),
-            AlbumRow::DeepCuts => s.set_deep_cut_albums(section),
-            AlbumRow::TopAlbums => s.set_top_albums(section),
+            AlbumRow::RecAlbums => {
+                s.set_rec_albums(section);
+                s.set_pending_rec_albums(false);
+            }
+            AlbumRow::FreshReleases => {
+                s.set_fresh_releases(section);
+                s.set_pending_fresh_releases(false);
+            }
+            AlbumRow::DeepCuts => {
+                s.set_deep_cut_albums(section);
+                s.set_pending_deep_cut_albums(false);
+            }
+            AlbumRow::TopAlbums => {
+                s.set_top_albums(section);
+                s.set_pending_top_albums(false);
+            }
         }
     });
     crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());

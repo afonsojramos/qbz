@@ -92,10 +92,12 @@ async fn validate_track_pool(
     mb: &qbz_integrations::MusicBrainzClient,
     cache: Cache<'_>,
     cands: Vec<TrackCandidate>,
+    skip_negative: bool,
+    skip_mb: bool,
 ) -> Vec<TrackReco> {
-    let resolved: Vec<Option<TrackReco>> = stream::iter(
-        cands.into_iter().map(|cand| async move { validate_track(catalog, mb, cache, &cand).await }),
-    )
+    let resolved: Vec<Option<TrackReco>> = stream::iter(cands.into_iter().map(|cand| async move {
+        validate_track(catalog, mb, cache, &cand, skip_negative, skip_mb).await
+    }))
     .buffered(VALIDATE_CONCURRENCY)
     .collect()
     .await;
@@ -345,30 +347,81 @@ pub async fn build_fresh_releases(inputs: &RecoInputs<'_>) -> Vec<AlbumReco> {
 }
 
 // ── Weekly playlists (ListenBrainz curated: exploration / jams) ─────────────
+//
+// These have their OWN ListenBrainz cadence: a brand-new playlist (new mbid +
+// date) every Monday. They are cached per-week, keyed by the playlist mbid, and
+// are DELIBERATELY decoupled from the shared 48h results blob — bundling them in
+// it is what made them vanish (a transient empty build got cached for 48h, and
+// the 7d per-track negative cache compounded it across rebuilds). See cache.rs.
+
+/// Last resort when the current week can't be built (no playlist returned, or a
+/// transient empty resolve): the most recent successfully-cached week, so the
+/// row shows something instead of disappearing.
+fn cached_weekly_fallback(cache: Cache<'_>, source_patch: &str) -> Vec<TrackReco> {
+    cache
+        .and_then(|c| c.lock().ok().and_then(|g| g.get_latest_weekly_for_patch(source_patch)))
+        .and_then(|json| serde_json::from_str::<Vec<TrackReco>>(&json).ok())
+        .unwrap_or_default()
+}
 
 pub async fn build_weekly(inputs: &RecoInputs<'_>, source_patch: &str) -> Vec<TrackReco> {
     let Some(lb) = &inputs.listenbrainz else {
+        log::info!("[reco] weekly '{source_patch}': ListenBrainz not connected — skipping");
         return Vec::new();
     };
+
+    // Discover the current week's playlist for this patch (one cheap call).
     let playlists = lb
         .client
         .get_created_for_playlists(&lb.username, 50)
         .await
         .unwrap_or_default();
+    let matching = playlists
+        .iter()
+        .filter(|p| p.source_patch.as_deref() == Some(source_patch))
+        .count();
+    log::info!(
+        "[reco] weekly '{source_patch}': {} created-for playlists from ListenBrainz, {matching} match the patch",
+        playlists.len()
+    );
     // Newest playlist matching the source_patch (created_at desc).
     let chosen = playlists
         .into_iter()
         .filter(|p| p.source_patch.as_deref() == Some(source_patch))
         .max_by(|a, b| a.created_at.cmp(&b.created_at));
     let Some(meta) = chosen else {
-        return Vec::new();
+        log::warn!(
+            "[reco] weekly '{source_patch}': ListenBrainz returned no matching playlist \
+             (rate-limit / not generated yet) — serving last cached week"
+        );
+        return cached_weekly_fallback(inputs.cache, source_patch);
     };
-    let tracks = lb
+    let week = meta.created_at.as_deref().unwrap_or("?");
+
+    // Week-keyed cache: the mbid changes every Monday, so a new week is a natural
+    // miss and the current week is served instantly (no Qobuz/MusicBrainz round-trips).
+    let cache_key = format!("{}:{}", source_patch, meta.playlist_mbid);
+    if let Some(c) = inputs.cache {
+        if let Some(json) = c.lock().ok().and_then(|g| g.get_weekly(&cache_key)) {
+            if let Ok(tracks) = serde_json::from_str::<Vec<TrackReco>>(&json) {
+                if !tracks.is_empty() {
+                    log::info!(
+                        "[reco] weekly '{source_patch}': cache hit — {} tracks (week {week})",
+                        tracks.len()
+                    );
+                    return tracks;
+                }
+            }
+        }
+    }
+
+    // Cache miss for this week: fetch + resolve to Qobuz.
+    let raw = lb
         .client
         .get_playlist_tracks(&meta.playlist_mbid)
         .await
         .unwrap_or_default();
-    let candidates: Vec<TrackCandidate> = tracks
+    let candidates: Vec<TrackCandidate> = raw
         .into_iter()
         .filter(|t| !t.title.is_empty() && !t.artist_name.is_empty())
         .map(|t| TrackCandidate {
@@ -382,9 +435,48 @@ pub async fn build_weekly(inputs: &RecoInputs<'_>, source_patch: &str) -> Vec<Tr
             score: 0.0,
         })
         .collect();
-    let pool =
-        validate_track_pool(inputs.catalog, inputs.musicbrainz, inputs.cache, candidates).await;
-    pool.into_iter().take(PLAYLIST_CAP).collect()
+    let cand_count = candidates.len();
+    log::info!(
+        "[reco] weekly '{source_patch}': fetched {cand_count} tracks (week {week}, mbid {}); resolving to Qobuz…",
+        meta.playlist_mbid
+    );
+
+    // skip_negative=true: a transient throttle on these tracks must NOT stick as
+    // a 7-day negative (that locked the rows empty across rebuilds).
+    // skip_mb=true: bypass the serial 1.1s/req MusicBrainz ISRC lookup (~110s
+    // for 100 tracks) and resolve via fuzzy Qobuz search — fast and reliable
+    // for these mainstream playlists. This is the fix for "the row never paints".
+    let pool = validate_track_pool(
+        inputs.catalog,
+        inputs.musicbrainz,
+        inputs.cache,
+        candidates,
+        true,
+        true,
+    )
+    .await;
+    let resolved: Vec<TrackReco> = pool.into_iter().take(PLAYLIST_CAP).collect();
+    log::info!(
+        "[reco] weekly '{source_patch}': resolved {} / {cand_count} tracks to Qobuz (week {week}, mbid {})",
+        resolved.len(),
+        meta.playlist_mbid
+    );
+
+    if !resolved.is_empty() {
+        // Persist the resolved set for this week (only when non-empty).
+        if let Some(c) = inputs.cache {
+            if let (Ok(g), Ok(json)) = (c.lock(), serde_json::to_string(&resolved)) {
+                g.put_weekly(&cache_key, source_patch, &json);
+            }
+        }
+        return resolved;
+    }
+
+    // Resolved empty this build (transient) — show last cached week, not nothing.
+    log::warn!(
+        "[reco] weekly '{source_patch}': resolved 0 tracks this build — serving last cached week"
+    );
+    cached_weekly_fallback(inputs.cache, source_patch)
 }
 
 // ── Deep-cut albums from artists you know (Qobuz catalog, not heard) ────────

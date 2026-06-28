@@ -114,6 +114,12 @@ where
         // after init (off-thread) so the seeds reflect this session's events.
         crate::reco::init_for_user(&dir);
         crate::reco::train_async();
+        // External-recommendations resolution + per-week Weekly cache (4th
+        // Discover tab). MUST init here on the ONLINE path too — it was only
+        // wired into the offline entry, so online the reco cache was never
+        // bound: every open re-resolved from scratch and the Weekly per-week
+        // cache never persisted (that is why the Weekly rows kept vanishing).
+        crate::external_reco::init_for_user(&dir);
         // Playlist Suggested Songs: open the per-user artist-vector store on
         // the core (the suggestions engine reads/writes it).
         if let Ok(store) = qbz_reco::ArtistVectorStore::open_at(&dir) {
@@ -240,6 +246,10 @@ where
                 // session's events.
                 crate::reco::init_for_user(&dir);
                 crate::reco::train_async();
+                // External-recommendations resolution + per-week Weekly cache
+                // (online-path parity — see login_via_system_browser; without
+                // it the reco cache is never bound online).
+                crate::external_reco::init_for_user(&dir);
                 // Playlist Suggested Songs: open the per-user artist-vector
                 // store on the core (the suggestions engine reads/writes it).
                 if let Ok(store) = qbz_reco::ArtistVectorStore::open_at(&dir) {
