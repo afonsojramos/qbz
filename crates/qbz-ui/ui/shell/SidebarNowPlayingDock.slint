@@ -110,7 +110,13 @@ export component SidebarNowPlayingDock inherits Rectangle {
 
     VerticalLayout {
         padding-top: 9px;
-        spacing: 10px;
+        // Lift the cover 2px off the window bottom (it was flush) and take those
+        // 2px out of the cover<->spectrum gap (10 -> 8), so the dock height is
+        // unchanged (9 + spectrum + 8 + art + 2 == 9 + spectrum + 10 + art). The
+        // bottom pad applies only while the spectrum is shown — otherwise the
+        // off-state height would no longer match ShellState.large-dock-height.
+        spacing: 8px;
+        padding-bottom: ShellState.large-visualizer-on ? 2px : 0px;
 
         // ---- Spectrum band (only while the visualizer is ON) --------------
         if ShellState.large-visualizer-on: spectrum := Rectangle {
