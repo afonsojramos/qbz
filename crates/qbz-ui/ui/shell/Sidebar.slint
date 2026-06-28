@@ -883,7 +883,9 @@ export component Sidebar inherits Rectangle {
             // Sort + actions context menu. Anchored under the "..."
             // button. Sort options mirror Tauri exactly.
             sort-menu := PopupWindow {
-                x: parent.width - 210px;
+                // Open to the RIGHT of the "..." button (overlay into the content
+                // area) instead of leftward over the playlists — owner request.
+                x: parent.width - 40px;
                 y: 26px;
                 width: 200px;
                 Rectangle {
