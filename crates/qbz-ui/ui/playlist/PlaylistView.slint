@@ -1141,7 +1141,18 @@ export component PlaylistView inherits Rectangle {
                     }
                 }
 
-                Rectangle { height: 12px; }
+                // Back-to-top FAB clearance: reserve the floating button's
+                // footprint (44px button + 24px bottom margin + a small gap) at
+                // the content's end so the last track rows — and the docked
+                // Suggested Songs — scroll clear of the FAB instead of sitting
+                // under it. Reserved as a CONSTANT (not gated on the FAB's own
+                // `viewport-y < -visible-height`) on purpose: a height switched
+                // on that condition would feed a layout binding loop (this
+                // height -> track-list height -> visible-height -> FAB condition
+                // -> this height) and would also jank the docked section on
+                // scroll. Invisible on short lists (their bottom is already
+                // empty); only shows where content actually reaches the FAB.
+                Rectangle { height: 80px; }
             }
     }
 
