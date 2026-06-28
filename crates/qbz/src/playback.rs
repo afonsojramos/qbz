@@ -1307,9 +1307,14 @@ fn load_now_playing_artwork_large(weak: slint::Weak<AppWindow>, art: qbz_models:
             imm.set_glow_color(crate::immersive::glow_color(&pixels, w, h));
             let (spec_primary, spec_secondary) =
                 crate::immersive::spectrum_colors(&pixels, w, h);
+            let spec_accent = crate::immersive::lyrics_accent_color(&pixels, w, h);
             imm.set_spectrum_primary(spec_primary);
             imm.set_spectrum_secondary(spec_secondary);
-            imm.set_lyrics_accent(crate::immersive::lyrics_accent_color(&pixels, w, h));
+            imm.set_lyrics_accent(spec_accent);
+            // Feed the same album-art triad to the wgpu shader underlay so the
+            // immersive shaders (Plasma/Tunnel/Aurora) are album-colored instead
+            // of hardcoded. Pushed on track change; read on every shader frame.
+            crate::shader_underlay::set_palette(spec_primary, spec_secondary, spec_accent);
         });
     });
 }

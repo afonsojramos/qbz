@@ -17,6 +17,7 @@ import { ImmersiveQueuePanel } from "ImmersiveQueuePanel.slint";
 import { ImmersiveTrackInfo } from "ImmersiveTrackInfo.slint";
 import { ImmersiveTrackInfoPanel } from "ImmersiveTrackInfoPanel.slint";
 import { ImmersiveSuggestionsPanel } from "ImmersiveSuggestionsPanel.slint";
+import { ImmersiveSongCard } from "ImmersiveSongCard.slint";
 import { LyricsLinesView } from "../shell/LyricsLinesView.slint";
 
 component GhostButton inherits Rectangle {
@@ -1461,6 +1462,14 @@ export component ImmersiveView inherits Rectangle {
             }
             }
         }
+    }
+
+    // Immersive song card — minimal metadata (1:1 of the Tauri ImmersiveSongCard),
+    // shown bottom-right ONLY over the shader backgrounds (Plasma/Tunnel/Aurora);
+    // the focus panels render their own metadata. Always-on (not chrome-faded).
+    if ImmersiveState.shader-mode > 0 && NowPlayingState.has-track: ImmersiveSongCard {
+        x: root.width - self.width - 24px;
+        y: root.height - self.height - 24px;
     }
 
     // (3) Auto-hide compact player.

@@ -34,19 +34,70 @@ const TEX_W: u32 = 1280;
 const TEX_H: u32 = 720;
 const TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// Mirrors the WGSL `Uniforms` struct (ui/shaders/plasma.wgsl). `#[repr(C)]` +
-/// explicit padding keeps it vec4-aligned (32 bytes) for std140 uniform layout.
+/// Mirrors the WGSL `Uniforms` struct in all three `ui/shaders/*.wgsl`. Plain
+/// `f32` / `[f32;4]` (align 4) with manual field ordering so the byte offsets
+/// match the WGSL std140 layout exactly (every `vec4` lands on a 16-byte
+/// boundary; the `res_x`/`res_y` pair is read as a `vec2`), with no vec types or
+/// bytemuck needed. 144 bytes = 9×vec4. Offset table:
+/// qbz-nix-docs/immersive-shaders-2026-06-28/00-analysis-and-design-spec.md §2.2.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Uniforms {
-    time: f32,
-    energy0: f32,
-    transient: f32,
-    _pad0: f32,
-    res_x: f32,
-    res_y: f32,
-    _pad1: f32,
-    _pad2: f32,
+    time: f32,           //   0
+    phase: f32,          //   4  audio-reactive forward-motion clock (host accumulator)
+    beat: f32,           //   8  onset envelope (~0.88 decay) — the "punch"
+    level: f32,          //  12  instantaneous overall level = mean(energy bands)
+    res_x: f32,          //  16  } WGSL reads these two as `resolution: vec2<f32>`
+    res_y: f32,          //  20  }
+    level_smooth: f32,   //  24  slow EMA of level (breathing / inertia)
+    transient: f32,      //  28  fast transient (*0.85) — kept for the legacy bodies
+    energy_lo: [f32; 4], //  32  sub, bass, mid, presence
+    energy_hi: [f32; 4], //  48  air, 0, 0, 0
+    bands_lo: [f32; 4],  //  64  log bars 0..3
+    bands_hi: [f32; 4],  //  80  log bars 4..7
+    primary: [f32; 4],   //  96  album-art palette (rgb, a = 1)
+    secondary: [f32; 4], // 112
+    accent: [f32; 4],    // 128
+} // size_of == 144, align 4
+
+// Drift guard: WGSL is compiled at runtime (naga), so cargo cannot catch a
+// Rust/WGSL layout mismatch. This catches the Rust side; the WGSL side is the
+// manual offset table in the spec (and the Slice-0 canary — the unchanged
+// shaders must look identical).
+const _: () = assert!(core::mem::size_of::<Uniforms>() == 144);
+
+/// Per-frame audio drivers handed to [`render_frame`] from the 30 fps drain.
+/// `time` and resolution come from the render state; the album-art palette is
+/// pushed separately via [`set_palette`] (it changes on track change, not per
+/// tick). Energy bands and log bands are ALREADY smoothed upstream (qbz-audio)
+/// — pass them raw, do not EMA again.
+pub struct FrameAudio {
+    pub level: f32,
+    pub level_smooth: f32,
+    pub beat: f32,
+    pub phase: f32,
+    pub transient: f32,
+    pub energy: [f32; 5], // sub, bass, mid, presence, air
+    pub bands: [f32; 8],  // 8 log FFT bands (paired from the 16 bars)
+}
+
+/// Album-art palette triad, normalized rgb (0..1, a = 1). Lives in its own
+/// thread-local so a track's colors can be pushed before the render pipeline
+/// exists (`set_palette` may run before `setup()`), and read on every frame.
+#[derive(Clone, Copy)]
+struct Palette {
+    primary: [f32; 4],
+    secondary: [f32; 4],
+    accent: [f32; 4],
+}
+impl Palette {
+    /// Matches the `ImmersiveState` defaults #00dcc8 / #9632ff / #3fd9c8 so a
+    /// shader opened before album art resolves still gets sensible colors.
+    const DEFAULT: Palette = Palette {
+        primary: [0.0, 0.862_745, 0.784_314, 1.0],
+        secondary: [0.588_235, 0.196_078, 1.0, 1.0],
+        accent: [0.247_059, 0.850_980, 0.784_314, 1.0],
+    };
 }
 
 /// View `Uniforms` as raw bytes for `Queue::write_buffer`. Sound: `Uniforms` is
@@ -65,14 +116,20 @@ struct RenderState {
     device: wgpu::Device,
     queue: wgpu::Queue,
     /// One render pipeline per shader scene, indexed by `mode - 1`:
-    ///   pipelines[0] = plasma  (mode 1)
+    ///   pipelines[0] = plasma  (mode 1) — feedback fluid, samples `history`
     ///   pipelines[1] = tunnel  (mode 2)
     ///   pipelines[2] = aurora  (mode 3)
-    /// All share the same bind group / uniform buffer / vertex setup; only the
-    /// fragment shader differs. `render_frame(mode, ..)` picks one by index.
+    /// All share one pipeline layout + bind group (uniform + history texture +
+    /// sampler); tunnel/aurora ignore bindings 1/2 (a shader using a SUBSET of
+    /// the layout is valid). `render_frame` picks the pipeline by index and, for
+    /// plasma, copies the frame into `history`.
     pipelines: Vec<wgpu::RenderPipeline>,
     uniform_buf: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    /// Persistent feedback accumulator for the plasma fluid (Direction A). The
+    /// plasma shader samples it (binding 1); each plasma frame is copied into it
+    /// after the pass, so the next frame advects the previous one.
+    history: wgpu::Texture,
     start: std::time::Instant,
 }
 
@@ -87,24 +144,47 @@ const SHADER_SOURCES: &[&str] = &[
 
 thread_local! {
     static STATE: RefCell<Option<RenderState>> = const { RefCell::new(None) };
+    static PALETTE: RefCell<Palette> = const { RefCell::new(Palette::DEFAULT) };
 }
 
 /// Build the persistent pipeline from Slint's device/queue. Called once at
 /// `RenderingSetup`. Idempotent-ish: a second call rebuilds (cheap; only happens
 /// if the rendering surface is torn down and re-created).
 pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
+    // One bind group layout shared by all three pipelines: the uniform buffer
+    // (binding 0) plus the feedback history texture (binding 1) + its sampler
+    // (binding 2). Only the plasma fluid samples 1/2; tunnel/aurora declare just
+    // binding 0 (a pipeline whose shader uses a SUBSET of the layout is valid).
     let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("qbz-shader-bgl"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
             },
-            count: None,
-        }],
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
     });
 
     let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -114,13 +194,78 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         mapped_at_creation: false,
     });
 
+    // Bilinear sampler + persistent history texture for the plasma feedback loop.
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("qbz-shader-feedback-sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
+    });
+    let history = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("qbz-shader-history"),
+        size: wgpu::Extent3d {
+            width: TEX_W,
+            height: TEX_H,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: TEX_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let history_view = history.create_view(&wgpu::TextureViewDescriptor::default());
+    // Clear the accumulator once so the first plasma frame samples black, not
+    // uninitialized GPU memory.
+    {
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("qbz-shader-history-clear"),
+        });
+        {
+            let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("qbz-shader-history-clear-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &history_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        queue.submit(Some(enc.finish()));
+    }
+
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("qbz-shader-bg"),
         layout: &bgl,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: uniform_buf.as_entire_binding(),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&history_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -177,6 +322,7 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
             pipelines,
             uniform_buf,
             bind_group,
+            history,
             start: std::time::Instant::now(),
         });
     });
@@ -189,12 +335,33 @@ pub fn teardown() {
     log::info!("[shader] wgpu underlay torn down");
 }
 
+/// Push the album-art palette triad. Called on track change (playback.rs), not
+/// per frame, from the UI thread. Stored in a thread-local independent of the
+/// render pipeline so it survives if pushed before `setup()`.
+pub fn set_palette(primary: slint::Color, secondary: slint::Color, accent: slint::Color) {
+    fn norm(c: slint::Color) -> [f32; 4] {
+        [
+            c.red() as f32 / 255.0,
+            c.green() as f32 / 255.0,
+            c.blue() as f32 / 255.0,
+            1.0,
+        ]
+    }
+    PALETTE.with(|p| {
+        *p.borrow_mut() = Palette {
+            primary: norm(primary),
+            secondary: norm(secondary),
+            accent: norm(accent),
+        };
+    });
+}
+
 /// Render one frame of scene `mode` into a fresh texture and return it as a
 /// Slint `Image`. `mode` is the `ImmersiveState.shader-mode` value (1 = plasma,
 /// 2 = tunnel, 3 = aurora); the pipeline index is `mode - 1`. Returns `None`
 /// before `setup()` has run, for `mode <= 0`, or for an out-of-range mode
 /// (defensive — the UI never sends one). Driven at 30 fps from visualizer.rs.
-pub fn render_frame(mode: i32, energy0: f32, transient: f32) -> Option<Image> {
+pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
     if mode <= 0 {
         return None;
     }
@@ -208,15 +375,23 @@ pub fn render_frame(mode: i32, energy0: f32, transient: f32) -> Option<Image> {
         let idx = (mode - 1) as usize;
         let pipeline = st.pipelines.get(idx).or_else(|| st.pipelines.first())?;
 
+        let pal = PALETTE.with(|p| *p.borrow());
         let uniforms = Uniforms {
             time: st.start.elapsed().as_secs_f32(),
-            energy0,
-            transient,
-            _pad0: 0.0,
+            phase: a.phase,
+            beat: a.beat,
+            level: a.level,
             res_x: TEX_W as f32,
             res_y: TEX_H as f32,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            level_smooth: a.level_smooth,
+            transient: a.transient,
+            energy_lo: [a.energy[0], a.energy[1], a.energy[2], a.energy[3]],
+            energy_hi: [a.energy[4], 0.0, 0.0, 0.0],
+            bands_lo: [a.bands[0], a.bands[1], a.bands[2], a.bands[3]],
+            bands_hi: [a.bands[4], a.bands[5], a.bands[6], a.bands[7]],
+            primary: pal.primary,
+            secondary: pal.secondary,
+            accent: pal.accent,
         };
         st.queue
             .write_buffer(&st.uniform_buf, 0, uniforms_bytes(&uniforms));
@@ -234,7 +409,9 @@ pub fn render_frame(mode: i32, energy0: f32, transient: f32) -> Option<Image> {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: TEX_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -266,6 +443,29 @@ pub fn render_frame(mode: i32, energy0: f32, transient: f32) -> Option<Image> {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &st.bind_group, &[]);
             pass.draw(0..3, 0..1);
+        }
+        // Plasma fluid (mode 1) feeds back: copy this frame into the history
+        // accumulator so the next frame advects it. Tunnel/aurora skip this.
+        if mode == 1 {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &st.history,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: TEX_W,
+                    height: TEX_H,
+                    depth_or_array_layers: 1,
+                },
+            );
         }
         st.queue.submit(Some(encoder.finish()));
 

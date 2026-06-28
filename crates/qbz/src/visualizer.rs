@@ -102,12 +102,18 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
     // ~30 fps drain on the UI thread: copy the latest frames into the models.
     let weak = window.as_weak();
     let timer = slint::Timer::default();
-    // WGPU UNDERLAY SPIKE: latest sub-bass + transient kept across ticks so the
-    // shader animates smoothly (its own time accumulator) and only *reacts* at
-    // 30 fps. `last_tr` decays each tick so a one-frame transient produces a
-    // visible multi-frame flash (matching how SpectrumPanel decays it).
-    let mut last_e0 = 0.0f32;
+    // Latest audio kept across ticks so the shaders animate smoothly (their own
+    // `time` accumulator) and only *react* at 30 fps. `last_tr`/`last_beat` decay
+    // each tick (a one-frame transient -> a multi-frame flash); `last_phase` is
+    // the audio-reactive forward-motion clock. Bands/energy are passed RAW
+    // (already smoothed upstream in qbz-audio); only `last_level_smooth` is a new
+    // slow EMA — do not double-smooth.
     let mut last_tr = 0.0f32;
+    let mut last_energy = [0.0f32; 5];
+    let mut last_bars16 = [0.0f32; 16];
+    let mut last_level_smooth = 0.0f32;
+    let mut last_beat = 0.0f32;
+    let mut last_phase = 0.0f32;
     timer.start(
         slint::TimerMode::Repeated,
         std::time::Duration::from_millis(33),
@@ -116,12 +122,13 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
                 for (i, v) in b.iter().enumerate() {
                     bars.set_row_data(i, *v);
                 }
+                last_bars16 = b;
             }
             if let Some(b) = cells.energy.lock().unwrap().take() {
                 for (i, v) in b.iter().enumerate() {
                     energy.set_row_data(i, *v);
                 }
-                last_e0 = b[0];
+                last_energy = b;
             }
             if let Some(b) = cells.spectral.lock().unwrap().take() {
                 for (i, v) in b.iter().enumerate() {
@@ -138,6 +145,7 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
                     w.global::<VisualizerState>().set_transient(x);
                 }
                 last_tr = x.max(last_tr);
+                last_beat = x.max(last_beat);
             }
 
             // WGPU UNDERLAY SPIKE: render one GPU shader frame into the wgpu
@@ -146,11 +154,40 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
             // device/queue were captured by the rendering notifier (main.rs);
             // render_frame is a no-op until that fires.
             last_tr *= 0.85;
+            last_beat *= 0.88;
             if let Some(w) = weak.upgrade() {
                 let imm = w.global::<ImmersiveState>();
                 let m = imm.get_shader_mode();
                 if m > 0 {
-                    if let Some(img) = crate::shader_underlay::render_frame(m, last_e0, last_tr) {
+                    // Derive the enriched audio pack from the latched cells.
+                    let mut bands8 = [0.0f32; 8];
+                    for i in 0..8 {
+                        bands8[i] = (last_bars16[2 * i] + last_bars16[2 * i + 1]) * 0.5;
+                    }
+                    let level = (last_energy[0]
+                        + last_energy[1]
+                        + last_energy[2]
+                        + last_energy[3]
+                        + last_energy[4])
+                        * 0.2;
+                    last_level_smooth = last_level_smooth * 0.96 + level * 0.04;
+                    // Forward-motion clock: host-side (rate is audio-dependent),
+                    // wrapped at an integer so fract()-based ring patterns stay
+                    // continuous across the wrap.
+                    last_phase += 0.012 + level * 0.02 + last_beat * 0.02;
+                    if last_phase >= 4096.0 {
+                        last_phase -= 4096.0;
+                    }
+                    let audio = crate::shader_underlay::FrameAudio {
+                        level,
+                        level_smooth: last_level_smooth,
+                        beat: last_beat,
+                        phase: last_phase,
+                        transient: last_tr,
+                        energy: last_energy,
+                        bands: bands8,
+                    };
+                    if let Some(img) = crate::shader_underlay::render_frame(m, &audio) {
                         imm.set_shader_texture(img);
                     }
                 }

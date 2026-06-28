@@ -1,0 +1,119 @@
+// Immersive song card — a 1:1 port of the Tauri `ImmersiveSongCard.svelte`.
+//
+// A MINIMAL bottom-right metadata card shown over the shader backgrounds
+// (Plasma / Tunnel / Aurora): title + explicit + album·artist + quality badge,
+// with the cover thumb on the RIGHT. NO transport / seek / heart — those live in
+// the ImmersivePlayerBar. Reads NowPlayingState directly (no props, no new state,
+// non-interactive), matching the Svelte source.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Typography } from "../foundation/typography.slint";
+import { NowPlayingState } from "../state.slint";
+import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
+
+export component ImmersiveSongCard inherits Rectangle {
+    // Content-sized: the card hugs its content (the parent pins it bottom-right).
+    width: row.preferred-width;
+    height: row.preferred-height;
+
+    row := HorizontalLayout {
+        spacing: 12px;
+
+        // Meta column (LEFT), right-aligned, capped at 400px (then elide).
+        Rectangle {
+            width: Math.min(meta.preferred-width, 400px);
+            height: meta.preferred-height;
+
+            meta := VerticalLayout {
+                width: 100%;
+                height: 100%;
+                spacing: 3px;
+
+                // Title (+ inline explicit chip), right-aligned, eliding.
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: NowPlayingState.title;
+                        color: Theme.text-primary;
+                        font-size: 15px;
+                        font-weight: Typography.semibold;
+                        overflow: elide;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    // Explicit "E" chip — 1:1 with TrackRow's badge.
+                    if NowPlayingState.explicit: Rectangle {
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 3px;
+                        background: Theme.surface-elevated;
+                        Text {
+                            text: "E";
+                            color: Theme.text-muted;
+                            font-size: 9px;
+                            font-weight: Typography.semibold;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Subline: album (italic) · artist, right-aligned, the album
+                // eliding first so the line never overflows the card.
+                HorizontalLayout {
+                    spacing: 4px;
+                    if NowPlayingState.album != "": Text {
+                        horizontal-stretch: 1;
+                        text: NowPlayingState.album;
+                        color: #ffffff80;
+                        font-size: 12px;
+                        font-italic: true;
+                        overflow: elide;
+                        horizontal-alignment: right;
+                    }
+                    if NowPlayingState.album != "" && NowPlayingState.artist != "": Text {
+                        text: "·";
+                        color: #ffffff66;
+                        font-size: 12px;
+                    }
+                    if NowPlayingState.artist != "": Text {
+                        horizontal-stretch: NowPlayingState.album != "" ? 0 : 1;
+                        text: NowPlayingState.artist;
+                        color: #ffffff99;
+                        font-size: 12px;
+                        overflow: elide;
+                        horizontal-alignment: right;
+                    }
+                }
+
+                // Quality badge (full mode), right-aligned.
+                HorizontalLayout {
+                    alignment: end;
+                    QualityBadgeFull {
+                        tier: NowPlayingState.quality-tier;
+                        detail: NowPlayingState.quality-detail;
+                        show-icon: true;
+                    }
+                }
+            }
+        }
+
+        // Cover thumb (RIGHT) — 72x72, rounded, drop-shadowed.
+        Rectangle {
+            width: 72px;
+            height: 72px;
+            border-radius: 6px;
+            clip: true;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000080;
+            drop-shadow-offset-y: 4px;
+            Image {
+                width: 100%;
+                height: 100%;
+                source: NowPlayingState.artwork;
+                image-fit: cover;
+            }
+        }
+    }
+}
