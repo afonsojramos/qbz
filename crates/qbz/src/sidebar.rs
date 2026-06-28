@@ -716,12 +716,6 @@ pub fn set_active(window: &AppWindow, id: &str) {
     window.global::<SidebarState>().set_active_id(id.into());
 }
 
-/// Whether `id` is one of the user's own playlists — used to gate
-/// playlist editing.
-pub fn contains(window: &AppWindow, id: &str) -> bool {
-    use slint::Model;
-    let entries = window.global::<SidebarState>().get_entries();
-    entries
-        .iter()
-        .any(|e| e.kind == "playlist" && e.id == id)
-}
+// (removed `contains` — playlist ownership/follow is now decided by the Qobuz
+// owner id vs the current user + get_user_playlists membership, not by sidebar
+// presence, which is only a CONSEQUENCE of following. See main.rs playlist load.)

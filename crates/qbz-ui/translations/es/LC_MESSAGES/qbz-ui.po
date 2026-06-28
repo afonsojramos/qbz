@@ -4111,3 +4111,6 @@ msgid "Added {} track to queue"
 msgid_plural "Added {} tracks to queue"
 msgstr[0] "Se agregó {} pista a la cola"
 msgstr[1] "Se agregaron {} pistas a la cola"
+
+msgid "Unfollow on Qobuz"
+msgstr "Dejar de seguir en Qobuz"

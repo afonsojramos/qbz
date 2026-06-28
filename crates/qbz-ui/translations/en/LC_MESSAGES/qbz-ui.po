@@ -57,3 +57,6 @@ msgid "Added {} track to queue"
 msgid_plural "Added {} tracks to queue"
 msgstr[0] "Added {} track to queue"
 msgstr[1] "Added {} tracks to queue"
+
+msgid "Unfollow on Qobuz"
+msgstr "Unfollow on Qobuz"

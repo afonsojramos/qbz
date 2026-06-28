@@ -2865,17 +2865,31 @@ fn navigate_playlist(
             let copied = pid.parse::<u64>().ok().is_some_and(|id| {
                 crate::library_db::with_db(|db| db.is_playlist_copied(id)).unwrap_or(false)
             });
+            // Ownership = the playlist's Qobuz owner IS the current user (Tauri
+            // parity: owner.id == current user id). FOLLOWED = it is in MY Qobuz
+            // library (get_user_playlists) but I don't own it. Being in the
+            // sidebar is a CONSEQUENCE of following, NOT the determinant (a
+            // followed playlist may live in a folder, or not be rendered there
+            // at all), so the authoritative source is get_user_playlists — the
+            // same list the Favorites > Playlists > Followed tab is built from.
+            // Owned => Delete; followed => the Follow/Unfollow toggle. The fetch
+            // only runs for a non-owned playlist (your own ones skip it).
+            let me = crate::library_db::current_user_id();
+            let owned = me.is_some_and(|uid| uid == owner_id);
+            let following = if owned || me.is_none() {
+                false
+            } else if let Ok(pid_u) = pid.parse::<u64>() {
+                runtime
+                    .core()
+                    .get_user_playlists()
+                    .await
+                    .map(|pls| pls.iter().any(|p| p.id == pid_u))
+                    .unwrap_or(false)
+            } else {
+                false
+            };
             let _ = weak.upgrade_in_event_loop(move |w| {
                 playlist::apply(&w, data);
-                // Ownership = the playlist's Qobuz owner IS the current user
-                // (Tauri parity: owner.id == current user id). A merely
-                // FOLLOWED/subscribed playlist is in my sidebar list but NOT
-                // owned, so `sidebar::contains` alone is the wrong signal (it is
-                // true for followed ones too). Owned => Delete; followed (in my
-                // list but not owned) => the Follow/Unfollow toggle.
-                let me = crate::library_db::current_user_id();
-                let owned = me.is_some_and(|uid| uid == owner_id);
-                let following = !owned && sidebar::contains(&w, &pid);
                 let st = w.global::<PlaylistState>();
                 st.set_is_owner(owned);
                 st.set_is_following(following);

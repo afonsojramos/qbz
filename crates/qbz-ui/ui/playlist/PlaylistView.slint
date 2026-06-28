@@ -596,9 +596,16 @@ export component PlaylistView inherits Rectangle {
                             horizontal-stretch: 0;
                             alignment: center;
                             CircleAction {
-                                icon: @image-url("../assets/icons/user-plus.svg");
+                                // The icon reflects the follow STATE so it reads at
+                                // a glance and FLIPS on click (the action feedback):
+                                // a check (accent-tinted via `active`) when you
+                                // follow, the user-plus "add" glyph when you don't.
+                                // The tooltip states the ACTION (mirrors Tauri).
+                                icon: PlaylistState.is-following
+                                    ? @image-url("../assets/icons/check.svg")
+                                    : @image-url("../assets/icons/user-plus.svg");
                                 active: PlaylistState.is-following;
-                                tooltip: PlaylistState.is-following ? @tr("Following on Qobuz") : @tr("Follow on Qobuz");
+                                tooltip: PlaylistState.is-following ? @tr("Unfollow on Qobuz") : @tr("Follow on Qobuz");
                                 clicked => {
                                     root.media-action("playlist", PlaylistState.id, "follow");
                                 }
