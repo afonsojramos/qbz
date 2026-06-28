@@ -1,15 +1,18 @@
 // Closed-sidebar playlists flyout. With the sidebar fully closed there is no
 // playlist list anywhere, so a header button (CompactPlaylistsBtn) opens this
-// popup. It lists SidebarState's entries (folders + playlists, the same flat
-// tree the sidebar shows), six rows visible with the rest scrolling, and an
-// always-visible footer linking to the Playlist Manager. Rendered at the
-// AppShell level because the header clips its overflow.
+// popup. A search header filters the entries as you type (same Rust-side
+// filter as the sidebar — see the header note), it lists SidebarState's
+// entries (folders + playlists, the same flat tree the sidebar shows), six
+// rows visible with the rest scrolling, and a footer with Import + Manage
+// playlists. Rendered at the AppShell level because the header clips its
+// overflow.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
-import { SidebarPlaylistsPopupState, SidebarState, SidebarActions, SidebarEntry } from "../state.slint";
+import { LineEdit } from "std-widgets.slint";
+import { SidebarPlaylistsPopupState, SidebarState, SidebarActions, SidebarEntry, OfflineState } from "../state.slint";
 
 // One entry row — a folder (bold, toggles expand) or a playlist (opens it).
 component PpRow inherits Rectangle {
@@ -62,6 +65,10 @@ component PpRow inherits Rectangle {
             } else {
                 SidebarActions.open-playlist(root.entry.id);
                 SidebarPlaylistsPopupState.open = false;
+                // Clear the shared filter so it doesn't silently scope the
+                // expanded sidebar's list later (search-query is global).
+                SidebarState.search-query = "";
+                SidebarActions.search-changed("");
             }
         }
     }
@@ -78,6 +85,8 @@ export component SidebarPlaylistsPopup inherits Rectangle {
     if SidebarPlaylistsPopupState.open: TouchArea {
         clicked => {
             SidebarPlaylistsPopupState.open = false;
+            SidebarState.search-query = "";
+            SidebarActions.search-changed("");
         }
     }
 
@@ -85,8 +94,8 @@ export component SidebarPlaylistsPopup inherits Rectangle {
         x: SidebarPlaylistsPopupState.anchor-x;
         y: SidebarPlaylistsPopupState.anchor-y;
         width: 248px;
-        // header(28) + list + divider(1) + footer(40) + paddings(8).
-        height: 28px + root.list-h + 1px + 40px + 8px;
+        // search(34) + list + divider(1) + import(40) + manage(40) + paddings(8).
+        height: 34px + root.list-h + 1px + 40px + 40px + 8px;
 
         Rectangle {
             background: Theme.surface-main;
@@ -104,19 +113,35 @@ export component SidebarPlaylistsPopup inherits Rectangle {
                 padding-top: 4px;
                 padding-bottom: 4px;
 
-                // Section header.
-                HorizontalLayout {
-                    height: 24px;
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    Text {
-                        text: @tr("PLAYLISTS");
-                        color: Theme.text-muted;
-                        font-size: 11px;
-                        font-weight: 600;
-                        letter-spacing: 0.5px;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
+                // Search header — filters the entries as you type. The filter
+                // is shared with the sidebar (applied Rust-side in
+                // crate::sidebar via search-changed, recursively across
+                // folders), so `SidebarState.entries` below is already the
+                // filtered set. Always visible (this flyout is search-first,
+                // unlike the sidebar's toggle). Auto-focus is deferred via a
+                // 1ms Timer for the same reason the sidebar does it: focusing
+                // during the mount/layout pass panics with "Recursion
+                // detected" (i-slint-core properties.rs).
+                Rectangle {
+                    height: 34px;
+                    pp-search := LineEdit {
+                        x: 8px;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width - 16px;
+                        height: 26px;
+                        placeholder-text: @tr("Search playlists");
+                        text <=> SidebarState.search-query;
+                        edited => {
+                            SidebarActions.search-changed(self.text);
+                        }
+                    }
+                    pp-focus-timer := Timer {
+                        interval: 1ms;
+                        running: true;
+                        triggered => {
+                            pp-search.focus();
+                            self.running = false;
+                        }
                     }
                 }
 
@@ -161,6 +186,48 @@ export component SidebarPlaylistsPopup inherits Rectangle {
                     background: Theme.border-subtle;
                 }
 
+                // Import — open the importer modal (mirrors the sidebar "..."
+                // menu's Import item). Dimmed + inert while offline, exactly
+                // like the sidebar; the modal's own offline banner is the
+                // second layer.
+                Rectangle {
+                    height: 40px;
+                    border-radius: 5px;
+                    background: (!OfflineState.offline && import-ta.has-hover) ? Theme.surface-hover : transparent;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            QbzIcon {
+                                source: @image-url("../assets/icons/import.svg");
+                                width: 15px;
+                                height: 15px;
+                                tint: OfflineState.offline ? Theme.text-muted : Theme.text-secondary;
+                            }
+                        }
+                        Text {
+                            text: @tr("Import");
+                            color: OfflineState.offline ? Theme.text-muted : Theme.text-secondary;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    import-ta := TouchArea {
+                        mouse-cursor: OfflineState.offline ? default : pointer;
+                        clicked => {
+                            if (!OfflineState.offline) {
+                                SidebarActions.import-playlist();
+                                SidebarPlaylistsPopupState.open = false;
+                                SidebarState.search-query = "";
+                                SidebarActions.search-changed("");
+                            }
+                        }
+                    }
+                }
+
                 // Footer — always visible link to the Playlist Manager.
                 Rectangle {
                     height: 40px;
@@ -192,6 +259,8 @@ export component SidebarPlaylistsPopup inherits Rectangle {
                         clicked => {
                             SidebarActions.manage-playlists();
                             SidebarPlaylistsPopupState.open = false;
+                            SidebarState.search-query = "";
+                            SidebarActions.search-changed("");
                         }
                     }
                 }
