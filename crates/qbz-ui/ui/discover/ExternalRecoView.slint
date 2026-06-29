@@ -11,11 +11,13 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { ExternalRecoState } from "../state.slint";
+import { ExternalRecoState, ExternalRecoActions } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
 import { ArtistCarousel } from "ArtistCarousel.slint";
 import { HomeSkeleton, SkeletonCarouselRow, SkeletonSlimRow } from "HomeSkeleton.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
+import { SecondaryButton } from "../primitives/SecondaryButton.slint";
 
 export component ExternalRecoView inherits VerticalLayout {
     callback open-album(string);
@@ -49,6 +51,34 @@ export component ExternalRecoView inherits VerticalLayout {
 
     spacing: 40px;
     alignment: start;
+
+    // Cache-window controls — pick how long the built recommendations are served
+    // from cache before a rebuild, and force an immediate rebuild ("Refresh now").
+    HorizontalLayout {
+        alignment: end;
+        spacing: 8px;
+        Text {
+            text: @tr("Cache window");
+            color: Theme.text-muted;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+        QbzSelect {
+            sm: true;
+            menu-width: 140px;
+            options: [@tr("24 hours"), @tr("36 hours"), @tr("48 hours"), @tr("72 hours")];
+            current-index: ExternalRecoState.cache-ttl-index;
+            selected(i) => {
+                ExternalRecoActions.set-cache-ttl(i);
+            }
+        }
+        SecondaryButton {
+            label: @tr("Refresh now");
+            clicked => {
+                ExternalRecoActions.refresh-now();
+            }
+        }
+    }
 
     // Initial full-page skeleton — only until the per-row pending flags are set
     // (or content arrives), after which the individual row skeletons take over.

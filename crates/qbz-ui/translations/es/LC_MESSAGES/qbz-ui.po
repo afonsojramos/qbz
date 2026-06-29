@@ -4114,3 +4114,177 @@ msgstr[1] "Se agregaron {} pistas a la cola"
 
 msgid "Unfollow on Qobuz"
 msgstr "Dejar de seguir en Qobuz"
+
+msgid "Stops in"
+msgstr "Se detiene en"
+
+msgid "Cancel Timer"
+msgstr "Cancelar temporizador"
+
+msgid "Stop playback after:"
+msgstr "Detener la reproducción después de:"
+
+msgid "30 min"
+msgstr "30 min"
+
+msgid "1 hr"
+msgstr "1 h"
+
+msgid "2 hr"
+msgstr "2 h"
+
+msgid "3 hr"
+msgstr "3 h"
+
+msgid "5 hr"
+msgstr "5 h"
+
+msgid "Custom…"
+msgstr "Personalizado…"
+
+msgid "min"
+msgstr "min"
+
+msgid "Set Timer"
+msgstr "Activar temporizador"
+
+msgid "Cancel stop after this"
+msgstr "Cancelar detener después de esto"
+
+msgid "LOGS"
+msgstr "REGISTROS"
+
+msgid "Application logs"
+msgstr "Registros de la aplicación"
+
+msgid "View the in-app log, copy it (secrets redacted), or upload it to share in a GitHub issue."
+msgstr "Consulta el registro de la app, cópialo (con los secretos ocultos) o súbelo para compartirlo en un issue de GitHub."
+
+msgid "Open log viewer"
+msgstr "Abrir el visor de registros"
+
+msgid "Setting"
+msgstr "Ajuste"
+
+msgid "Saved"
+msgstr "Guardado"
+
+msgid "Runtime"
+msgstr "En ejecución"
+
+msgid "Diagnostics"
+msgstr "Diagnóstico"
+
+msgid "Runtime vs saved configuration snapshot."
+msgstr "Comparación entre la configuración guardada y la activa."
+
+msgid "Exported"
+msgstr "Exportado"
+
+msgid "Export to clipboard"
+msgstr "Exportar al portapapeles"
+
+msgid "Cast Discovery"
+msgstr "Búsqueda de dispositivos Cast"
+
+msgid "Scanning…"
+msgstr "Buscando…"
+
+msgid "Scan for devices"
+msgstr "Buscar dispositivos"
+
+msgid "Graphics"
+msgstr "Gráficos"
+
+msgid "Environment"
+msgstr "Entorno"
+
+msgid "Logs"
+msgstr "Registros"
+
+msgid "All levels"
+msgstr "Todos los niveles"
+
+msgid "Error"
+msgstr "Error"
+
+msgid "Warn"
+msgstr "Aviso"
+
+msgid "Info"
+msgstr "Info"
+
+msgid "Debug"
+msgstr "Depuración"
+
+msgid "Trace"
+msgstr "Rastreo"
+
+msgid "Search logs…"
+msgstr "Buscar en los registros…"
+
+msgid "Auto-tail"
+msgstr "Auto-seguir"
+
+msgid "Time"
+msgstr "Hora"
+
+msgid "Level"
+msgstr "Nivel"
+
+msgid "Target"
+msgstr "Módulo"
+
+msgid "Message"
+msgstr "Mensaje"
+
+msgid "No log entries."
+msgstr "No hay registros."
+
+msgid "Copied"
+msgstr "Copiado"
+
+msgid "Copy all"
+msgstr "Copiar todo"
+
+msgid "Copy diagnostics bundle"
+msgstr "Copiar el paquete de diagnóstico"
+
+msgid "Uploading…"
+msgstr "Subiendo…"
+
+msgid "Upload (public)"
+msgstr "Subir (público)"
+
+msgid "Open log file"
+msgstr "Abrir el archivo de registro"
+
+msgid "Report an issue"
+msgstr "Reportar un problema"
+
+msgid "Go to logs"
+msgstr "Ir a los logs"
+
+msgid "Create issue report"
+msgstr "Crear reporte"
+
+msgid "To make bug and issue resolution easier, it's recommended to share the application logs. We have been careful to mask the logs we send so no sensitive data is included. The process is manual, never automatic, so you can verify what is being shared."
+msgstr "Para hacer más sencilla la resolución de bugs y problemas, es recomendable compartir los logs de la aplicación. Nos hemos encargado de ser muy cuidadosos y enmascarar los logs que se envían para no enviar ningún dato sensible; el proceso es manual, nada automático, para que tú puedas verificar lo que se comparte."
+
+msgid "Cache window"
+msgstr "Ventana de cache"
+
+msgid "24 hours"
+msgstr "24 horas"
+
+msgid "36 hours"
+msgstr "36 horas"
+
+msgid "48 hours"
+msgstr "48 horas"
+
+msgid "72 hours"
+msgstr "72 horas"
+
+msgid "Refresh now"
+msgstr "Actualizar ahora"

@@ -328,6 +328,26 @@ fn build_reorder_payload(
     }))
 }
 
+/// Read-only snapshot of the live QConnect session for the Diagnostics panel.
+///
+/// Every field is a PURE read of state the running service already maintains
+/// (lock -> read -> clone -> unlock). It never touches discovery, guard, or
+/// transport logic — QConnect is control-fragile, so this only observes.
+/// `last_error` is returned raw; the diagnostics controller redacts id-like
+/// substrings before it reaches the UI/export.
+#[derive(Default)]
+pub struct QconnectDiagSnapshot {
+    pub running: bool,
+    pub transport_connected: bool,
+    pub has_endpoint: bool,
+    pub last_error: Option<String>,
+    pub role: &'static str,
+    pub active_name: Option<String>,
+    pub active_brand: Option<String>,
+    pub active_model: Option<String>,
+    pub renderer_count: usize,
+}
+
 impl SlintQconnectService {
     pub fn new(runtime: Runtime, window: slint::Weak<AppWindow>) -> Self {
         let saved_name = load_persisted_device_name();
@@ -342,6 +362,76 @@ impl SlintQconnectService {
 
     pub async fn is_running(&self) -> bool {
         self.inner.lock().await.runtime.is_some()
+    }
+
+    /// Pure read of the live session for the Diagnostics panel (Settings >
+    /// Developer). Mirrors the Tauri `snapshotQconnect`: reads `inner.last_error`,
+    /// the transport-connected flag (`app.state_handle().transport_connected`),
+    /// and the session topology (renderers / active / local ids). Touches NO
+    /// guard or transport logic — lock, read, clone, unlock. When the service
+    /// isn't running it returns a default snapshot (role "none").
+    pub async fn diagnostics_snapshot(&self) -> QconnectDiagSnapshot {
+        // Pull the app + sync-state handles (and the static fields) under a brief
+        // inner lock, then release it before awaiting the per-handle locks.
+        let (app, sync_state, last_error, has_endpoint, running) = {
+            let guard = self.inner.lock().await;
+            match guard.runtime.as_ref() {
+                Some(rt) => (
+                    Some(Arc::clone(&rt.app)),
+                    Some(Arc::clone(&rt.sync_state)),
+                    guard.last_error.clone(),
+                    !rt.config.endpoint_url.is_empty(),
+                    true,
+                ),
+                None => (None, None, guard.last_error.clone(), false, false),
+            }
+        };
+
+        let mut snap = QconnectDiagSnapshot {
+            running,
+            has_endpoint,
+            last_error,
+            role: "none",
+            ..Default::default()
+        };
+
+        let (Some(app), Some(sync_state)) = (app, sync_state) else {
+            return snap;
+        };
+
+        // Transport-connected mirror (same source the event sink reads).
+        snap.transport_connected = app.state_handle().lock().await.transport_connected;
+
+        // Session topology: renderer count + the active renderer's identity.
+        let state = sync_state.lock().await;
+        let session = &state.session;
+        snap.renderer_count = session.renderers.len();
+        let active_id = session.active_renderer_id;
+        let local_id = session.local_renderer_id;
+        if let Some(active_id) = active_id {
+            if let Some(renderer) = session
+                .renderers
+                .iter()
+                .find(|r| r.renderer_id == active_id)
+            {
+                snap.active_name = renderer.friendly_name.clone();
+                snap.active_brand = renderer.brand.clone();
+                snap.active_model = renderer.model.clone();
+            }
+            // active == local -> we render locally; active != local -> we control
+            // a peer. Mirrors the Tauri role rule.
+            snap.role = if Some(active_id) == local_id {
+                "local-renderer"
+            } else {
+                "controller"
+            };
+        } else if snap.running || snap.transport_connected {
+            snap.role = "observer";
+        } else {
+            snap.role = "none";
+        }
+
+        snap
     }
 
     /// D5 (offline-MODE): force-disconnect on every transition INTO offline

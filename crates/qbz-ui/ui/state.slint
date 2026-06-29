@@ -370,6 +370,16 @@ export global ExternalRecoState {
     in property <DiscoverSection> top-albums;
     // Cold-start fallback: Qobuz editorial top artists.
     in property <[SlimItem]> top-artists: [];
+    // Results-cache freshness window selector index for the Recommendations tab:
+    // 0=24h 1=36h 2=48h 3=72h. Seeded from discover_prefs at startup; default 48h.
+    in-out property <int> cache-ttl-index: 2;
+}
+
+// Recommendations-tab-only actions: cache-window select + force refresh. Wired to
+// discover_prefs (persist) + external_reco (refetch). Other Discover tabs unaffected.
+export global ExternalRecoActions {
+    callback set-cache-ttl(int);   // index 0..3 -> persist hours + reseed
+    callback refresh-now();        // force-invalidate the results cache + refetch
 }
 
 // One genre in the Filter-by-genre popup's simple grid.
@@ -4217,6 +4227,93 @@ export global QueueState {
 
     // Reflects whether infinite-play is currently enabled.
     in property <bool> infinite-play: false;
+
+    // "Stop after this song" marker: the decimal-string id of the marked track,
+    // or "" for none. Each queue row compares its item.id to this to show the
+    // CircleStop glyph. `toggle-stop-after` flips the marker for a given track id.
+    callback toggle-stop-after(string /* track-id */);
+    in property <string> stop-after-id: "";
+}
+
+// Sleep timer (queue footer). Frontend-only: a Rust tokio task owns the monotonic
+// deadline + 1 Hz countdown and calls core().pause() at expiry. Non-persistent.
+export global SleepTimerState {
+    in property <bool> active: false;
+    in property <string> remaining: "";        // pre-formatted by Rust (single source of truth)
+    in-out property <bool> popover-open: false;
+    in-out property <int> selected-index: 0;    // preset index; last entry = Custom
+    in-out property <int> custom-minutes: 60;
+}
+export global SleepTimerActions {
+    callback set(int /* minutes */);
+    callback cancel();
+}
+
+// In-app log viewer (Settings > Developer). One row of the [LogRow] model.
+export struct LogRow {
+    ts: string,
+    level: string,
+    target: string,
+    message: string,
+}
+export global LogViewerState {
+    in-out property <bool> open: false;
+    in property <[LogRow]> rows: [];           // already filtered + capped by Rust
+    in property <int> total: 0;                // ring size
+    in property <int> shown: 0;                // after filter + cap
+    in-out property <string> filter-level: "all";  // all|error|warn|info|debug|trace
+    in-out property <string> search: "";
+    in-out property <bool> auto-tail: false;
+    in property <bool> uploading: false;
+    in property <string> uploaded-url: "";
+    in property <bool> copied: false;
+    callback refresh();
+    callback clear();
+    callback set-level(string);
+    callback set-search(string);
+    callback copy-all();
+    callback copy-bundle();
+    callback upload();             // public paste (already redacted) -> uploaded-url
+    callback open-log-file();
+    callback toggle-auto-tail(bool);
+    callback copy-url();           // copy the uploaded paste URL to the clipboard
+}
+
+// Report-an-issue modal (hamburger menu). Mirrors the Tauri ReportIssueModal:
+// explains the manual, redacted log-sharing flow, then offers "Go to logs"
+// (opens the log viewer) and "Create issue" (opens the GitHub new-issue page).
+export global ReportIssueState {
+    in-out property <bool> open: false;
+}
+export global ReportIssueActions {
+    callback create-issue();   // opens the GitHub new-issue URL (Rust: open::that)
+}
+
+// Diagnostics panel (Settings > Developer). One saved-vs-runtime table row.
+// status: 0 info | 1 match | 2 mismatch.
+export struct DiagRow {
+    label: string,
+    saved: string,
+    runtime: string,
+    status: int,
+}
+export global DiagnosticsState {
+    in property <bool> loaded: false;
+    in property <bool> loading: false;
+    in property <string> error: "";
+    in property <string> app-version: "";
+    in property <bool> copied: false;
+    in property <bool> cast-scanning: false;
+    in property <[DiagRow]> system-rows: [];
+    in property <[DiagRow]> playback-rows: [];
+    in property <[DiagRow]> qconnect-rows: [];
+    in property <[DiagRow]> cast-rows: [];
+    in property <[DiagRow]> audio-rows: [];
+    in property <[DiagRow]> graphics-rows: [];
+    in property <[DiagRow]> env-rows: [];
+    callback refresh();
+    callback export-clipboard();
+    callback cast-scan();
 }
 
 // One row in the "Add to playlist" picker.

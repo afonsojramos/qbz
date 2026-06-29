@@ -3886,10 +3886,17 @@ pub fn start_poll_loop(
             // and hand them to `Player::play_next`. The
             // `gapless_requested_for` guard stops the 450ms ticker from
             // re-firing while the download is in flight.
+            // Stop-after guard (last condition, short-circuited): if the CURRENT
+            // track is marked "stop after this", suppress the gapless pre-queue so
+            // it ends naturally and the track-end handler can fire
+            // `consume_stop_after_if`. Mirrors the Tauri `setGaplessGetNextTrackId`
+            // null-return for the marked track. Without this the engine seamlessly
+            // hands off and the marker never fires.
             if event.gapless_ready
                 && event.gapless_next_track_id == 0
                 && track_id != 0
                 && gapless_requested_for != track_id
+                && runtime.core().get_stop_after().await != Some(track_id)
             {
                 let upcoming = runtime.core().peek_upcoming(1).await;
                 if let Some(next) = upcoming.into_iter().next() {
@@ -4075,6 +4082,29 @@ pub fn start_poll_loop(
                     .await
                     .map(|t| t.id)
                     .unwrap_or(0);
+                // Stop-after-this-song: if the track that just ended is the marked
+                // one, HALT here (pause) — do NOT advance, do NOT infinite-refill.
+                // The queue stays intact and the finished track stays parked in
+                // now-playing. `consume_stop_after_if` is one-shot (clears the
+                // marker). Mirrors the Tauri end-of-track `consumeStopAfterIf` ->
+                // stopPlayback + early-return, ahead of any repeat/shuffle.
+                if ended_track_id != 0
+                    && runtime.core().consume_stop_after_if(ended_track_id).await
+                {
+                    if let Err(e) = runtime.core().pause() {
+                        log::warn!("[qbz-slint] stop-after: pause failed: {e}");
+                    }
+                    last_track_id = 0;
+                    was_playing = false;
+                    seen_position = 0;
+                    gapless_requested_for = 0;
+                    refresh_sidebar(true);
+                    let _ = weak.upgrade_in_event_loop(|w| {
+                        let np = w.global::<NowPlayingState>();
+                        np.set_playing(false);
+                    });
+                    continue;
+                }
                 last_track_id = 0;
                 was_playing = false;
                 seen_position = 0;

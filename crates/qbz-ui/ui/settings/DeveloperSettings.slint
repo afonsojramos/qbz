@@ -6,8 +6,9 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { QconnectDevState } from "../state.slint";
+import { QconnectDevState, LogViewerState } from "../state.slint";
 import { SettingRow } from "SettingRow.slint";
+import { DiagnosticsPanel } from "DiagnosticsPanel.slint";
 
 component GroupHeader inherits Text {
     color: Theme.text-muted;
@@ -58,4 +59,19 @@ export component DeveloperSettings inherits VerticalLayout {
             }
         }
     }
+
+    GroupHeader { text: @tr("LOGS"); }
+
+    SettingRow {
+        label: @tr("Application logs");
+        description: @tr("View the in-app log, copy it (secrets redacted), or upload it to share in a GitHub issue.");
+        SecondaryButton {
+            label: @tr("Open log viewer");
+            clicked => {
+                LogViewerState.open = true;
+            }
+        }
+    }
+
+    DiagnosticsPanel { }
 }

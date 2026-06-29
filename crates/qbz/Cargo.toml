@@ -49,6 +49,7 @@ qbz-ui = { path = "../qbz-ui" }
 qbz-dac-wizard = { path = "../qbz-dac-wizard" }
 qbz-text-utils = { path = "../qbz-text-utils" }
 qbz-slint-common = { path = "../qbz-slint-common" }
+qbz-log = { path = "../qbz-log" }
 log = { workspace = true }
 env_logger = "0.11"
 tokio = { workspace = true }

@@ -767,6 +767,32 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         queue.current()
     }
 
+    /// Set the "stop after this song" marker on a queue track id. Replaces any
+    /// previous marker (single marker). Silent no-op if the id is not in the queue.
+    /// Intentionally does NOT emit `CoreEvent::QueueUpdated` — the marker is a UI
+    /// intent the frontend reflects via its own queue snapshot, and emitting here
+    /// risks QConnect echo loops.
+    pub async fn set_stop_after(&self, track_id: u64) {
+        self.queue.write().await.set_stop_after(track_id);
+    }
+
+    /// Clear the "stop after" marker (user cancellation).
+    pub async fn clear_stop_after(&self) {
+        self.queue.write().await.clear_stop_after();
+    }
+
+    /// Read the current "stop after" marker, if any.
+    pub async fn get_stop_after(&self) -> Option<u64> {
+        self.queue.read().await.get_stop_after()
+    }
+
+    /// One-shot consume: if `finished_track_id` matches the marker, clear it and
+    /// return true (the auto-advance driver then halts instead of advancing).
+    /// Only the natural end-of-track path may call this — never a manual skip.
+    pub async fn consume_stop_after_if(&self, finished_track_id: u64) -> bool {
+        self.queue.write().await.consume_stop_after_if(finished_track_id)
+    }
+
     /// Reconcile the queue pointer to the track the audio engine is actually
     /// playing. A gapless hand-off advances inside the player without going
     /// through `next_track`, so the core pointer can lag the live track and

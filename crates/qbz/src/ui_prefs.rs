@@ -240,6 +240,20 @@ pub struct UiPrefs {
     /// Whether intelligent search (cache, ranking, preview dropdown) is enabled.
     #[serde(default = "default_intelligent_search")]
     pub intelligent_search: bool,
+    /// Appearance toggles (persisted; the live Slint globals are seeded from
+    /// these at startup, so the user's choice survives a restart).
+    #[serde(default = "default_window_title_show")]
+    pub window_title_show: bool,
+    #[serde(default = "default_show_volume_steppers")]
+    pub show_volume_steppers: bool,
+    #[serde(default = "default_sidebar_playlist_collage")]
+    pub sidebar_playlist_collage: bool,
+    #[serde(default = "default_local_library_track_artwork")]
+    pub local_library_track_artwork: bool,
+    #[serde(default = "default_in_app_toasts")]
+    pub in_app_toasts: bool,
+    #[serde(default = "default_theme_filter")]
+    pub theme_filter: i32,
     /// Whether desktop "now playing" system notifications fire on track change.
     /// Default ON (the notify backend ships default-on; this is the user gate).
     #[serde(default = "default_system_notifications")]
@@ -425,6 +439,25 @@ fn default_intelligent_search() -> bool {
     DEFAULT_INTELLIGENT_SEARCH
 }
 
+fn default_window_title_show() -> bool {
+    false
+}
+fn default_show_volume_steppers() -> bool {
+    false
+}
+fn default_sidebar_playlist_collage() -> bool {
+    true
+}
+fn default_local_library_track_artwork() -> bool {
+    false
+}
+fn default_in_app_toasts() -> bool {
+    true
+}
+fn default_theme_filter() -> i32 {
+    0
+}
+
 fn default_immersive_search_action() -> String {
     DEFAULT_IMMERSIVE_SEARCH_ACTION.to_string()
 }
@@ -450,6 +483,12 @@ impl Default for UiPrefs {
             large_spectrum_mode: default_large_spectrum_mode(),
             album_header_gradient: default_album_header_gradient(),
             intelligent_search: default_intelligent_search(),
+            window_title_show: default_window_title_show(),
+            show_volume_steppers: default_show_volume_steppers(),
+            sidebar_playlist_collage: default_sidebar_playlist_collage(),
+            local_library_track_artwork: default_local_library_track_artwork(),
+            in_app_toasts: default_in_app_toasts(),
+            theme_filter: default_theme_filter(),
             system_notifications: default_system_notifications(),
             musicbrainz_enabled: default_musicbrainz_enabled(),
             discord_rpc_enabled: false,

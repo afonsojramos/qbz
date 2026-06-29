@@ -127,7 +127,26 @@ pub fn ensure_loaded(
         return;
     }
     w.global::<ExternalRecoState>().set_loading(true);
-    spawn(runtime.clone(), weak.clone(), handle, image_cache.clone());
+    spawn(runtime.clone(), weak.clone(), handle, image_cache.clone(), false);
+}
+
+/// Force a full rebuild of the Recommendations tab, bypassing the instant
+/// results-cache paint (the "Refresh now" action). Resets the loaded/loading
+/// latches and runs `spawn` with `force = true`, which skips the cache-read
+/// early-return so every row is rebuilt and the results blob is overwritten.
+pub fn force_reload(
+    runtime: &Arc<AppRuntime<SlintAdapter>>,
+    weak: &slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: &ImageCache,
+) {
+    let Some(w) = weak.upgrade() else {
+        return;
+    };
+    let s = w.global::<ExternalRecoState>();
+    s.set_loaded(false);
+    s.set_loading(true);
+    spawn(runtime.clone(), weak.clone(), handle, image_cache.clone(), true);
 }
 
 fn rotation_seed() -> u64 {
@@ -142,6 +161,7 @@ fn spawn(
     weak: slint::Weak<AppWindow>,
     handle: &tokio::runtime::Handle,
     image_cache: ImageCache,
+    force: bool,
 ) {
     handle.spawn(async move {
         let cfg = crate::scrobbler_settings::get();
@@ -211,37 +231,50 @@ fn spawn(
             inputs.listenbrainz.is_some()
         );
         log::info!(
-            "[reco] spawn: lastfm={} listenbrainz={} source_key={source_key}",
+            "[reco] spawn: lastfm={} listenbrainz={} source_key={source_key} force={force}",
             inputs.lastfm.is_some(),
             inputs.listenbrainz.is_some()
         );
 
+        // Effective results-cache window (Recommendations setting -> seconds).
+        let ttl_secs = crate::discover_prefs::reco_cache_ttl_secs();
+
         // 1. Results cache: paint the NON-weekly rows INSTANTLY if a fresh
-        // (<48h) build is cached. The Weekly Exploration/Jams rows are NOT
-        // trusted from this blob — they follow ListenBrainz's own weekly cadence
-        // and have their own per-week cache, so we ALWAYS (re)build them via
-        // build_and_apply_weeklies (cheap on a weekly-cache hit). This is what
-        // stops a single transient empty build from hiding them for 48h.
-        if let Some(cache_mutex) = inputs.cache {
-            let cached = cache_mutex.lock().ok().and_then(|g| g.get_results(&source_key));
-            if let Some(json) = cached {
-                if let Ok(result) = serde_json::from_str::<ExternalCarousels>(&json) {
-                    apply_all(&weak, &image_cache, result);
-                    // The non-weekly rows painted instantly from the blob; the
-                    // two Weekly rows rebuild from their own per-week cache, so
-                    // show their skeletons until build_and_apply_weeklies fills
-                    // them (instant on a weekly-cache hit).
-                    if inputs.listenbrainz.is_some() {
-                        let w = weak.clone();
-                        let _ = w.upgrade_in_event_loop(|w| {
-                            let s = w.global::<ExternalRecoState>();
-                            s.set_pending_weekly_exploration(true);
-                            s.set_pending_weekly_jams(true);
-                        });
+        // (within the configured window) build is cached. The Weekly
+        // Exploration/Jams rows are NOT trusted from this blob — they follow
+        // ListenBrainz's own weekly cadence and have their own per-week cache, so
+        // we ALWAYS (re)build them via build_and_apply_weeklies (cheap on a
+        // weekly-cache hit). This is what stops a single transient empty build
+        // from hiding them for the whole window.
+        //
+        // A FORCED reload (the "Refresh now" action) skips this block entirely so
+        // the tab always rebuilds from scratch; the rebuild overwrites the blob
+        // via put_results below.
+        if !force {
+            if let Some(cache_mutex) = inputs.cache {
+                let cached = cache_mutex
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.get_results(&source_key, ttl_secs));
+                if let Some(json) = cached {
+                    if let Ok(result) = serde_json::from_str::<ExternalCarousels>(&json) {
+                        apply_all(&weak, &image_cache, result);
+                        // The non-weekly rows painted instantly from the blob; the
+                        // two Weekly rows rebuild from their own per-week cache, so
+                        // show their skeletons until build_and_apply_weeklies fills
+                        // them (instant on a weekly-cache hit).
+                        if inputs.listenbrainz.is_some() {
+                            let w = weak.clone();
+                            let _ = w.upgrade_in_event_loop(|w| {
+                                let s = w.global::<ExternalRecoState>();
+                                s.set_pending_weekly_exploration(true);
+                                s.set_pending_weekly_jams(true);
+                            });
+                        }
+                        build_and_apply_weeklies(&inputs, &weak, &image_cache).await;
+                        latch_loaded(&weak);
+                        return;
                     }
-                    build_and_apply_weeklies(&inputs, &weak, &image_cache).await;
-                    latch_loaded(&weak);
-                    return;
                 }
             }
         }

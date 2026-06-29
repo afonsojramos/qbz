@@ -14,10 +14,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const FOUND_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 /// TTL for negative (not-on-Qobuz) entries — 7 days.
 const MISS_TTL_SECS: i64 = 7 * 24 * 60 * 60;
-/// TTL for the cached BUILT result rows — 48 hours (fast opens + rotation: the
-/// tab paints instantly from cache within the window, and rebuilds every 48h so
-/// the content is never "eternally the same").
-const RESULTS_TTL_SECS: i64 = 48 * 60 * 60;
+/// Default TTL for the cached BUILT result rows — 48 hours (fast opens +
+/// rotation: the tab paints instantly from cache within the window, and rebuilds
+/// every 48h so the content is never "eternally the same"). The effective TTL is
+/// caller-configurable (Recommendations cache-window setting); this is the
+/// fallback when no preference is supplied.
+pub const DEFAULT_RESULTS_TTL_SECS: i64 = 48 * 60 * 60;
 /// TTL for a RESOLVED weekly playlist, keyed by its ListenBrainz playlist mbid —
 /// 9 days (a week + slack). ListenBrainz regenerates Weekly Exploration / Weekly
 /// Jams every Monday with a NEW mbid, so a new week is a natural cache miss while
@@ -131,8 +133,8 @@ impl RecoCache {
     }
 
     /// Get the cached BUILT result rows (JSON of `ExternalCarousels`) for `key`,
-    /// IF still within the 48h TTL. `None` -> the caller must rebuild.
-    pub fn get_results(&self, key: &str) -> Option<String> {
+    /// IF still within `ttl_secs`. `None` -> the caller must rebuild.
+    pub fn get_results(&self, key: &str, ttl_secs: i64) -> Option<String> {
         let row: Option<(String, i64)> = self
             .conn
             .query_row(
@@ -143,7 +145,7 @@ impl RecoCache {
             .optional()
             .unwrap_or(None);
         match row {
-            Some((data, built_at)) if Self::now() - built_at <= RESULTS_TTL_SECS => Some(data),
+            Some((data, built_at)) if Self::now() - built_at <= ttl_secs => Some(data),
             _ => None,
         }
     }
@@ -154,6 +156,14 @@ impl RecoCache {
             "INSERT OR REPLACE INTO reco_results (key, data, built_at) VALUES (?, ?, ?)",
             params![key, data, Self::now()],
         );
+    }
+
+    /// Drop the cached BUILT result rows for `key` (force-refresh). The next
+    /// build re-populates via `put_results`.
+    pub fn clear_results(&self, key: &str) {
+        let _ = self
+            .conn
+            .execute("DELETE FROM reco_results WHERE key = ?", params![key]);
     }
 
     /// Get a RESOLVED weekly playlist (JSON `Vec<TrackReco>`) by its exact

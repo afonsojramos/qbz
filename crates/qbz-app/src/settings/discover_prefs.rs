@@ -159,6 +159,10 @@ pub struct DiscoverPrefs {
     pub for_you: Vec<SectionPref>,
     /// Opt-out: show the external "Recommendations" tab in Discover. Default on.
     pub show_recommendations: bool,
+    /// Recommendations results-cache window, in hours. One of {24,36,48,72};
+    /// drives how long the built reco rows are served from cache before a
+    /// rebuild. Default 48.
+    pub reco_cache_ttl_hours: i64,
 }
 
 /// The exact `DEFAULT_PREFS` from `sectionPrefs.ts`.
@@ -207,6 +211,7 @@ pub fn default_prefs() -> DiscoverPrefs {
             pref(ArtistSpotlight, true),
         ],
         show_recommendations: true,
+        reco_cache_ttl_hours: 48,
     }
 }
 
@@ -299,6 +304,7 @@ impl DiscoverPrefs {
             "editorPicks": arr(&self.editor_picks),
             "forYou": arr(&self.for_you),
             "showRecommendations": self.show_recommendations,
+            "recoCacheTtlHours": self.reco_cache_ttl_hours,
         })
     }
 
@@ -319,6 +325,8 @@ impl DiscoverPrefs {
                 for_you: defaults.for_you,
                 // Legacy V1 (home-only array) predates the flag -> default on.
                 show_recommendations: true,
+                // Legacy V1 predates the cache-window setting -> default 48h.
+                reco_cache_ttl_hours: 48,
             }
         } else if value.is_object() {
             let get = |key: &str| value.get(key).and_then(|v| v.as_array());
@@ -331,6 +339,12 @@ impl DiscoverPrefs {
                     .get("showRecommendations")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true),
+                // Validate against the offered set; unknown / missing -> 48h.
+                reco_cache_ttl_hours: value
+                    .get("recoCacheTtlHours")
+                    .and_then(|v| v.as_i64())
+                    .filter(|h| [24, 36, 48, 72].contains(h))
+                    .unwrap_or(48),
             }
         } else {
             defaults

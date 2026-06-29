@@ -4130,3 +4130,177 @@ msgstr[1] "{} titres ajoutés à la file d'attente"
 
 msgid "Unfollow on Qobuz"
 msgstr "Ne plus suivre sur Qobuz"
+
+msgid "Stops in"
+msgstr "S'arrête dans"
+
+msgid "Cancel Timer"
+msgstr "Annuler la minuterie"
+
+msgid "Stop playback after:"
+msgstr "Arrêter la lecture après :"
+
+msgid "30 min"
+msgstr "30 min"
+
+msgid "1 hr"
+msgstr "1 h"
+
+msgid "2 hr"
+msgstr "2 h"
+
+msgid "3 hr"
+msgstr "3 h"
+
+msgid "5 hr"
+msgstr "5 h"
+
+msgid "Custom…"
+msgstr "Personnalisé…"
+
+msgid "min"
+msgstr "min"
+
+msgid "Set Timer"
+msgstr "Définir la minuterie"
+
+msgid "Cancel stop after this"
+msgstr "Annuler l'arrêt après ce titre"
+
+msgid "LOGS"
+msgstr "JOURNAUX"
+
+msgid "Application logs"
+msgstr "Journaux de l'application"
+
+msgid "View the in-app log, copy it (secrets redacted), or upload it to share in a GitHub issue."
+msgstr "Consultez le journal de l'application, copiez-le (secrets masqués) ou téléversez-le pour le partager dans une issue GitHub."
+
+msgid "Open log viewer"
+msgstr "Ouvrir le visualiseur de journaux"
+
+msgid "Setting"
+msgstr "Paramètre"
+
+msgid "Saved"
+msgstr "Enregistré"
+
+msgid "Runtime"
+msgstr "Exécution"
+
+msgid "Diagnostics"
+msgstr "Diagnostic"
+
+msgid "Runtime vs saved configuration snapshot."
+msgstr "Comparaison entre la configuration enregistrée et active."
+
+msgid "Exported"
+msgstr "Exporté"
+
+msgid "Export to clipboard"
+msgstr "Exporter vers le presse-papiers"
+
+msgid "Cast Discovery"
+msgstr "Découverte Cast"
+
+msgid "Scanning…"
+msgstr "Recherche…"
+
+msgid "Scan for devices"
+msgstr "Rechercher des appareils"
+
+msgid "Graphics"
+msgstr "Graphismes"
+
+msgid "Environment"
+msgstr "Environnement"
+
+msgid "Logs"
+msgstr "Journaux"
+
+msgid "All levels"
+msgstr "Tous les niveaux"
+
+msgid "Error"
+msgstr "Erreur"
+
+msgid "Warn"
+msgstr "Avert."
+
+msgid "Info"
+msgstr "Info"
+
+msgid "Debug"
+msgstr "Débogage"
+
+msgid "Trace"
+msgstr "Trace"
+
+msgid "Search logs…"
+msgstr "Rechercher dans les journaux…"
+
+msgid "Auto-tail"
+msgstr "Suivi auto"
+
+msgid "Time"
+msgstr "Heure"
+
+msgid "Level"
+msgstr "Niveau"
+
+msgid "Target"
+msgstr "Module"
+
+msgid "Message"
+msgstr "Message"
+
+msgid "No log entries."
+msgstr "Aucune entrée de journal."
+
+msgid "Copied"
+msgstr "Copié"
+
+msgid "Copy all"
+msgstr "Tout copier"
+
+msgid "Copy diagnostics bundle"
+msgstr "Copier le rapport de diagnostic"
+
+msgid "Uploading…"
+msgstr "Envoi…"
+
+msgid "Upload (public)"
+msgstr "Téléverser (public)"
+
+msgid "Open log file"
+msgstr "Ouvrir le fichier journal"
+
+msgid "Report an issue"
+msgstr "Signaler un problème"
+
+msgid "Go to logs"
+msgstr "Aller aux journaux"
+
+msgid "Create issue report"
+msgstr "Créer un rapport"
+
+msgid "To make bug and issue resolution easier, it's recommended to share the application logs. We have been careful to mask the logs we send so no sensitive data is included. The process is manual, never automatic, so you can verify what is being shared."
+msgstr "Pour faciliter la résolution des bugs et des problèmes, il est recommandé de partager les journaux de l'application. Nous avons pris soin de masquer les journaux envoyés afin qu'aucune donnée sensible ne soit incluse. Le processus est manuel, jamais automatique, pour que vous puissiez vérifier ce qui est partagé."
+
+msgid "Cache window"
+msgstr "Fenêtre de cache"
+
+msgid "24 hours"
+msgstr "24 heures"
+
+msgid "36 hours"
+msgstr "36 heures"
+
+msgid "48 hours"
+msgstr "48 heures"
+
+msgid "72 hours"
+msgstr "72 heures"
+
+msgid "Refresh now"
+msgstr "Actualiser maintenant"

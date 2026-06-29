@@ -375,9 +375,18 @@ impl QueueController {
             }
         }
 
+        let stop_after_id: slint::SharedString = state
+            .stop_after_track_id
+            .map(|id| id.to_string())
+            .unwrap_or_default()
+            .into();
+
         let weak = self.weak.clone();
         let _ = weak.upgrade_in_event_loop(move |w| {
             let qs = w.global::<QueueState>();
+            // Reflect the core's "stop after this song" marker so the .slint can
+            // render the CircleStop on the matching row (item.id == stop-after-id).
+            qs.set_stop_after_id(stop_after_id);
 
             // Snapshot prior decoded handles into ONE GLOBAL id -> artwork map
             // covering EVERY prior list (now-playing + upcoming + history +
@@ -787,6 +796,26 @@ impl QueueController {
             };
             if let Err(e) = this.playback.set_autoplay_mode(next) {
                 log::error!("[qbz-slint] queue: set autoplay mode failed: {e}");
+            }
+            this.refresh_async().await;
+        });
+    }
+
+    /// Toggle the "stop after this song" marker on the queue track with `id`
+    /// (a decimal string, matching `QueueItem.id`). Idempotent — tapping the same
+    /// track clears it. The marker auto-clears on queue mutation inside the core,
+    /// and `refresh_async` reflects the current marker into `QueueState.stop-after-id`.
+    pub fn toggle_stop_after(&self, id: String) {
+        let Ok(track_id) = id.parse::<u64>() else {
+            return;
+        };
+        let this = self.clone();
+        self.handle.spawn(async move {
+            let already = this.runtime.core().get_stop_after().await == Some(track_id);
+            if already {
+                this.runtime.core().clear_stop_after().await;
+            } else {
+                this.runtime.core().set_stop_after(track_id).await;
             }
             this.refresh_async().await;
         });

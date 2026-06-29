@@ -30,6 +30,9 @@ mod blacklist_manager;
 mod booklet;
 mod commands;
 mod custom_artwork;
+mod diagnostics;
+mod log_viewer;
+mod sleep_timer;
 pub use qbz_text_utils::{dates, strip_html};
 mod discover_browse;
 mod discord_rpc;
@@ -5177,7 +5180,10 @@ fn system_font_family() -> Option<String> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Composite logger: stderr (unchanged) + a bounded in-memory ring + an on-disk
+    // file, all redacted at the write choke point. Feeds the in-app log viewer and
+    // the diagnostics bundle. Honours RUST_LOG (default "info").
+    qbz_log::install("info");
 
     // Install the rustls process-level CryptoProvider ONCE, before ANY TLS use.
     // The full binary compiles BOTH rustls providers (aws-lc-rs via qbz-cast's
@@ -5340,6 +5346,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window
         .global::<AppearanceState>()
         .set_intelligent_search(crate::ui_prefs::load().intelligent_search);
+    // Appearance toggles that used to be live-only (no persistence): seed the
+    // live globals from the persisted prefs so the user's choice survives a
+    // restart. Their Rust handlers now persist via on_appearance_bool/select.
+    {
+        let prefs = crate::ui_prefs::load();
+        let appearance = window.global::<AppearanceState>();
+        appearance.set_window_title_show(prefs.window_title_show);
+        appearance.set_show_volume_steppers(prefs.show_volume_steppers);
+        appearance.set_sidebar_playlist_collage(prefs.sidebar_playlist_collage);
+        appearance.set_local_library_track_artwork(prefs.local_library_track_artwork);
+        appearance.set_in_app_toasts(prefs.in_app_toasts);
+        appearance.set_theme_filter(prefs.theme_filter);
+        window
+            .global::<SidebarState>()
+            .set_playlist_collage(prefs.sidebar_playlist_collage);
+        window
+            .global::<ToastState>()
+            .set_enabled(prefs.in_app_toasts);
+    }
     // Purchases opt-in nav visibility + title-bar placement (both default OFF).
     // Seeded here from the persisted prefs so the sidebar / header entries
     // reflect the user's choice on startup (the Slint equivalent of Tauri's
@@ -7546,6 +7571,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prefs.nav_tb_purchases = value;
                 crate::ui_prefs::save(&prefs);
             }
+            "window-title-show" => {
+                let mut prefs = crate::ui_prefs::load();
+                prefs.window_title_show = value;
+                crate::ui_prefs::save(&prefs);
+            }
+            "show-volume-steppers" => {
+                let mut prefs = crate::ui_prefs::load();
+                prefs.show_volume_steppers = value;
+                crate::ui_prefs::save(&prefs);
+            }
+            "sidebar-playlist-collage" => {
+                let mut prefs = crate::ui_prefs::load();
+                prefs.sidebar_playlist_collage = value;
+                crate::ui_prefs::save(&prefs);
+            }
+            "local-library-track-artwork" => {
+                let mut prefs = crate::ui_prefs::load();
+                prefs.local_library_track_artwork = value;
+                crate::ui_prefs::save(&prefs);
+            }
+            "in-app-toasts" => {
+                let mut prefs = crate::ui_prefs::load();
+                prefs.in_app_toasts = value;
+                crate::ui_prefs::save(&prefs);
+            }
             other => log::debug!("[qbz-slint] unhandled appearance-bool '{other}'"),
         });
         let theme_weak = window.as_weak();
@@ -7623,6 +7673,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = theme_weak.upgrade() {
                     crate::theme::apply_theme(&w, id);
                 }
+            }
+            "theme-filter" => {
+                // Theme-list filter cycle (0 = All, 1 = Dark, 2 = Light). Cosmetic,
+                // but persist it so the list doesn't reset to All every launch.
+                let mut prefs = crate::ui_prefs::load();
+                prefs.theme_filter = index;
+                crate::ui_prefs::save(&prefs);
             }
             other => log::debug!("[qbz-slint] unhandled appearance-select '{other}'"),
         });
@@ -10057,6 +10114,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let c = controller.clone();
             qs.on_toggle_infinite_play(move || c.toggle_infinite_play());
         }
+        {
+            let c = controller.clone();
+            qs.on_toggle_stop_after(move |id| c.toggle_stop_after(id.to_string()));
+        }
+        // Sleep timer (queue footer): a Rust-owned tokio task drives the countdown
+        // and pauses playback at the deadline.
+        {
+            let runtime = app_runtime.clone();
+            let weak = window.as_weak();
+            let handle = tokio_rt.handle().clone();
+            window
+                .global::<SleepTimerActions>()
+                .on_set(move |minutes| {
+                    sleep_timer::set(runtime.clone(), weak.clone(), handle.clone(), minutes)
+                });
+        }
+        {
+            let weak = window.as_weak();
+            window
+                .global::<SleepTimerActions>()
+                .on_cancel(move || sleep_timer::cancel(weak.clone()));
+        }
+        // Developer panel: in-app log viewer + the full diagnostics panel.
+        log_viewer::install(&window, app_runtime.clone(), tokio_rt.handle().clone());
+        diagnostics::install(&window, app_runtime.clone(), tokio_rt.handle().clone());
+        // Report-an-issue: "Create issue report" opens the GitHub new-issue page.
+        window.global::<ReportIssueActions>().on_create_issue(|| {
+            let url = "https://github.com/vicrodh/qbz/issues/new?template=bug_report.yml";
+            if let Err(e) = open::that(url) {
+                log::warn!("[qbz-slint] open GitHub issues failed: {e}");
+            }
+        });
         {
             let c = controller.clone();
             let weak = window.as_weak();
@@ -12801,6 +12890,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = weak.upgrade() {
                     discover_prefs::on_open_configurator(&w);
                 }
+            });
+    }
+    // Recommendations-tab cache controls (unique to this tab).
+    {
+        let weak = window.as_weak();
+        window
+            .global::<ExternalRecoActions>()
+            .on_set_cache_ttl(move |index| {
+                if let Some(w) = weak.upgrade() {
+                    discover_prefs::set_reco_cache_ttl_index(&w, index);
+                }
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<ExternalRecoActions>()
+            .on_refresh_now(move || {
+                external_reco::force_reload(&runtime, &weak, &handle, &image_cache);
             });
     }
     {

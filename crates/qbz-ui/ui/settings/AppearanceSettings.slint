@@ -591,6 +591,7 @@ export component AppearanceSettings inherits VerticalLayout {
             checked: AppearanceState.show-volume-steppers;
             toggled(v) => {
                 AppearanceState.show-volume-steppers = v;
+                AppearanceState.appearance-bool("show-volume-steppers", v);
             }
         }
     }

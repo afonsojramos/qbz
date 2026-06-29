@@ -93,6 +93,10 @@ where
     let display_name = session.display_name.clone();
     let subscription = session.subscription_label.clone();
     let token = session.user_auth_token.clone();
+    // Redaction (defense in depth): register the live auth token so any log line
+    // that embeds it bare (e.g. a signed stream URL, a header dump) is scrubbed
+    // before it reaches the in-memory ring, the on-disk log, or the clipboard.
+    qbz_log::register_secret(token.clone());
 
     // Emit LoggedIn through the core (idempotent set_session).
     core.set_session(session).await.map_err(|e| e.to_string())?;

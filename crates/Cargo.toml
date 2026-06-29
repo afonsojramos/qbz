@@ -36,10 +36,11 @@ members = [
     "qbz-music-link",
     "qbz-reco",
     "qbz-external-reco",
+    "qbz-log",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.2.15"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/vicrodh/qbz"

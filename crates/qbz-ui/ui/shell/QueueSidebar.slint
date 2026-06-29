@@ -14,9 +14,10 @@ import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
-import { ShellState, QueueState, QueueItem, NowPlayingState, UiFocusState } from "../state.slint";
+import { ShellState, QueueState, QueueItem, NowPlayingState, UiFocusState, SleepTimerState, SleepTimerActions } from "../state.slint";
 
 // Close button — mirrors the X control used by LyricsSidebar.
 component CloseButton inherits Rectangle {
@@ -206,11 +207,22 @@ component QueueRow inherits Rectangle {
         if root.show-number: VerticalLayout {
             alignment: center;
             width: 22px;
-            Text {
+            // "Stop after this song" marker replaces the track number on the
+            // marked row; otherwise the 1-based track number.
+            if root.item.id != QueueState.stop-after-id: Text {
                 text: (root.index + 1);
                 color: Theme.text-muted;
                 font-size: 12px;
                 horizontal-alignment: center;
+            }
+            if root.item.id == QueueState.stop-after-id: HorizontalLayout {
+                alignment: center;
+                QbzIcon {
+                    source: @image-url("../assets/icons/circle-stop.svg");
+                    width: 13px;
+                    height: 13px;
+                    tint: Theme.accent;
+                }
             }
         }
         if !root.show-number: Rectangle {
@@ -311,7 +323,13 @@ component QueueRow inherits Rectangle {
             }
             ContextMenuItem {
                 icon: @image-url("../assets/icons/circle-stop.svg");
-                label: @tr("Stop after this");
+                label: root.item.id == QueueState.stop-after-id
+                    ? @tr("Cancel stop after this")
+                    : @tr("Stop after this");
+                clicked => {
+                    QueueState.toggle-stop-after(root.item.id);
+                    track-menu.close();
+                }
             }
             ContextMenuItem {
                 icon: @image-url("../assets/icons/list-x.svg");
@@ -774,12 +792,151 @@ export component QueueSidebar inherits Rectangle {
                     }
                 }
             }
-            // Action 4 — Sleep timer. Visual parity with Tauri; the
-            // timer popover / functionality is not wired yet.
+            // Action 4 — Sleep timer. Clock turns accent when armed; the popover
+            // opens above the footer with the preset picker / armed countdown.
             VerticalLayout {
                 alignment: center;
                 IconButton {
                     icon: @image-url("../assets/icons/clock.svg");
+                    active: SleepTimerState.active;
+                    clicked => {
+                        sleep-menu.show();
+                    }
+                }
+                sleep-menu := PopupWindow {
+                    x: -188px;
+                    y: -214px;
+                    width: 220px;
+                    Rectangle {
+                        width: 220px;
+                        border-radius: Radius.md;
+                        background: Theme.surface-card;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 10px;
+
+                            // Armed: countdown + Cancel.
+                            if SleepTimerState.active: VerticalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: @tr("Stops in");
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                }
+                                Text {
+                                    text: SleepTimerState.remaining;
+                                    color: Theme.accent;
+                                    font-size: 16px;
+                                    font-weight: Typography.semibold;
+                                }
+                                Rectangle {
+                                    height: 32px;
+                                    border-radius: Radius.sm;
+                                    border-width: 1px;
+                                    border-color: Theme.border-subtle;
+                                    background: cancel-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+                                    Text {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: @tr("Cancel Timer");
+                                        color: Theme.text-secondary;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    cancel-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            SleepTimerActions.cancel();
+                                            sleep-menu.close();
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Idle: preset picker (+ optional custom minutes) + Set.
+                            if !SleepTimerState.active: VerticalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: @tr("Stop playback after:");
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                }
+                                QbzSelect {
+                                    options: [@tr("30 min"), @tr("1 hr"), @tr("2 hr"), @tr("3 hr"), @tr("5 hr"), @tr("Custom…")];
+                                    current-index: SleepTimerState.selected-index;
+                                    sm: true;
+                                    selected(idx) => {
+                                        SleepTimerState.selected-index = idx;
+                                    }
+                                }
+                                Rectangle {
+                                    height: SleepTimerState.selected-index == 5 ? 32px : 0px;
+                                    visible: SleepTimerState.selected-index == 5;
+                                    clip: true;
+                                    border-radius: Radius.sm;
+                                    border-width: 1px;
+                                    border-color: Theme.border-subtle;
+                                    background: Theme.surface-elevated;
+                                    HorizontalLayout {
+                                        padding-left: 9px;
+                                        padding-right: 9px;
+                                        spacing: 6px;
+                                        custom-input := TextInput {
+                                            horizontal-stretch: 1;
+                                            color: Theme.text-primary;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            single-line: true;
+                                            input-type: number;
+                                            text: SleepTimerState.custom-minutes;
+                                            changed has-focus => {
+                                                UiFocusState.text-input-focused = self.has-focus;
+                                            }
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Text {
+                                                text: @tr("min");
+                                                color: Theme.text-muted;
+                                                font-size: 11px;
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    height: 34px;
+                                    border-radius: Radius.sm;
+                                    background: set-ta.has-hover ? Theme.accent-hover : Theme.accent;
+                                    Text {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: @tr("Set Timer");
+                                        color: Theme.accent-text;
+                                        font-size: 12px;
+                                        font-weight: Typography.medium;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    set-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            SleepTimerActions.set(
+                                                SleepTimerState.selected-index == 0 ? 30
+                                                : SleepTimerState.selected-index == 1 ? 60
+                                                : SleepTimerState.selected-index == 2 ? 120
+                                                : SleepTimerState.selected-index == 3 ? 180
+                                                : SleepTimerState.selected-index == 4 ? 300
+                                                : custom-input.text.to-float());
+                                            sleep-menu.close();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
