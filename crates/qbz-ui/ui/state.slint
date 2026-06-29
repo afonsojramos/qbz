@@ -3807,6 +3807,10 @@ export global NowPlayingState {
     // Quality of the playing track, for the song-card badge.
     in property <string> quality-tier;    // "hires" | "cd" | "mp3" | ""
     in property <string> quality-detail;  // "24-bit / 96 kHz"
+    // Numeric stream params for the Spectral Ribbon overlay (header + freq axis
+    // Nyquist). 0 = unknown.
+    in property <int> sample-rate-hz: 0;
+    in property <int> bit-depth: 0;
 
     // Output backend + mode LEDs (Mode C "Small" bar reads these). Mirror of
     // the same four on SettingsState (:2154-2157) — surfaced here so the

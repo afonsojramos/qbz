@@ -97,38 +97,47 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Centered, aspect-correct coords.
     let c = (in.uv - vec2<f32>(0.5)) * vec2<f32>(aspect, 1.0);
 
-    // === Feedback advection: warp where we read the previous frame. ===
-    // Bass inhales toward center (sample farther out → content contracts).
-    let zoom = 1.0 + 0.004 + (sub + bass) * 0.012;
-    // Mids rotate/shear the swirl.
-    let ang = (0.003 + mids * 0.02) * sin(t * 0.2 + length(c) * 3.0);
+    let pres = clamp(u.energy_lo.w, 0.0, 1.0);
+
+    // === Feedback advection — turbulent, music-cranked. ===
+    // Bass inhale/zoom (stronger) + a beat kick.
+    let zoom = 1.0 + 0.006 + (sub + bass) * 0.03 + beat * 0.02;
+    // Mids swirl harder and faster; beats jolt the rotation.
+    let ang = (0.006 + mids * 0.05) * sin(t * 0.5 + length(c) * 4.0) + beat * 0.035;
     let ca = cos(ang);
     let sa = sin(ang);
     var w = c * zoom;
     w = vec2<f32>(w.x * ca - w.y * sa, w.x * sa + w.y * ca);
-    // Treble = curl-noise filaments.
-    w += curl_noise(c * 2.5 + vec2<f32>(t * 0.05, -t * 0.04)) * (0.0015 + air * 0.006);
+    // Two curl-noise octaves (treble + presence) → filaments + fine turbulence.
+    w += curl_noise(c * 2.5 + vec2<f32>(t * 0.12, -t * 0.10)) * (0.003 + air * 0.015);
+    w += curl_noise(c * 5.5 - vec2<f32>(t * 0.09, t * 0.08)) * (0.0015 + pres * 0.009);
     let warpUv = w / vec2<f32>(aspect, 1.0) + vec2<f32>(0.5);
 
     var field = textureSample(prev_tex, prev_samp, warpUv).rgb;
 
-    // Decay: louder = slower decay (ink lingers); quiet = calm/sparse.
-    field *= 0.90 + lvl * 0.075;
+    // Decay: faster so it stays ALIVE (not muddy); louder lingers a bit longer.
+    field *= 0.85 + lvl * 0.06;
 
-    // === New ink: two counter-rotating emitters in primary / secondary. ===
-    let e1 = vec2<f32>(sin(t * 0.27), cos(t * 0.31)) * (0.22 + bass * 0.18);
-    let e2 = vec2<f32>(sin(-t * 0.21 + 2.1), cos(-t * 0.19 + 1.3)) * (0.26 + mids * 0.16);
-    field += u.primary.rgb * blob(c, e1, 0.05 + bass * 0.06) * (0.10 + level * 0.55);
-    field += u.secondary.rgb * blob(c, e2, 0.06 + mids * 0.05) * (0.10 + level * 0.45);
+    // === FOUR emitters, fast orbits — more elements, more motion. ===
+    let e1 = vec2<f32>(sin(t * 0.5), cos(t * 0.6)) * (0.25 + bass * 0.2);
+    let e2 = vec2<f32>(sin(-t * 0.42 + 2.1), cos(-t * 0.38 + 1.3)) * (0.3 + mids * 0.18);
+    let e3 = vec2<f32>(sin(t * 0.74 + 1.0), cos(-t * 0.66 + 3.0)) * (0.22 + pres * 0.2);
+    let e4 = vec2<f32>(cos(t * 0.33 + 4.0), sin(t * 0.58 + 0.5)) * (0.34 + air * 0.16);
+    field += u.primary.rgb * blob(c, e1, 0.045 + bass * 0.06) * (0.14 + level * 0.8);
+    field += u.secondary.rgb * blob(c, e2, 0.05 + mids * 0.05) * (0.14 + level * 0.65);
+    field += u.accent.rgb * blob(c, e3, 0.04 + pres * 0.05) * (0.10 + level * 0.6);
+    field += u.primary.rgb * blob(c, e4, 0.035 + air * 0.04) * (0.07 + air * 0.6);
 
-    // === Beat splat: accent bloom that flows away on the current. ===
-    let splatPos = vec2<f32>(sin(t * 0.7) * 0.3, cos(t * 0.53) * 0.24);
-    field += u.accent.rgb * blob(c, splatPos, 0.04 + beat * 0.10) * beat * 1.3;
+    // === Beat splats — TWO, bigger and brighter, detonating on the onset. ===
+    let sp1 = vec2<f32>(sin(t * 0.9) * 0.35, cos(t * 0.7) * 0.28);
+    let sp2 = vec2<f32>(cos(t * 1.1 + 2.0) * 0.3, sin(t * 0.85 + 1.0) * 0.32);
+    field += u.accent.rgb * blob(c, sp1, 0.05 + beat * 0.14) * beat * 2.2;
+    field += u.secondary.rgb * blob(c, sp2, 0.04 + beat * 0.10) * beat * 1.6;
 
     // Treble shimmer on the crests.
     let luma = dot(field, vec3<f32>(0.33, 0.34, 0.33));
-    field += u.accent.rgb * air * smoothstep(0.45, 0.9, luma) * 0.12;
+    field += u.accent.rgb * air * smoothstep(0.4, 0.9, luma) * 0.18;
 
-    field = clamp(field, vec3<f32>(0.0), vec3<f32>(1.2));
+    field = clamp(field, vec3<f32>(0.0), vec3<f32>(1.3));
     return vec4<f32>(field, 1.0);
 }

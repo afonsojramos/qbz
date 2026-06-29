@@ -1620,6 +1620,16 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         np.set_source(source.into());
         np.set_quality_tier(quality_tier.into());
         np.set_quality_detail(quality_detail.into());
+        // Numeric stream params for the Spectral Ribbon overlay. `track.sample_rate`
+        // is Hz when >= 1000, else kHz — normalize to Hz.
+        np.set_sample_rate_hz(track.sample_rate.map_or(0, |sr| {
+            if sr >= 1000.0 {
+                sr as i32
+            } else {
+                (sr * 1000.0) as i32
+            }
+        }));
+        np.set_bit_depth(track.bit_depth.unwrap_or(0) as i32);
         np.set_duration_secs(duration as i32);
         np.set_position_secs(0);
         np.set_progress(0.0);

@@ -25,7 +25,7 @@ use qbz_audio::visualizer::{spawn_visualizer_thread, VizFrame, VizSink};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::adapter::SlintAdapter;
-use crate::{AppWindow, ImmersiveState, VisualizerState};
+use crate::{AppWindow, ImmersiveState, NowPlayingState, VisualizerState};
 
 /// Single-slot, latest-wins frame store shared with the FFT producer thread.
 /// Each cell holds at most the most recent frame for that stream; the UI drain
@@ -114,6 +114,11 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
     let mut last_level_smooth = 0.0f32;
     let mut last_beat = 0.0f32;
     let mut last_phase = 0.0f32;
+    // Spectral-ribbon (mode 4) reset tracking: track change / seek → clear.
+    let mut last_track_id = String::new();
+    let mut last_progress = 0.0f32;
+    // Smoothed highest-active-band fraction → the spectral-ribbon ceiling line.
+    let mut last_peak = 0.0f32;
     timer.start(
         slint::TimerMode::Repeated,
         std::time::Duration::from_millis(33),
@@ -130,10 +135,14 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
                 }
                 last_energy = b;
             }
+            // Capture the latest spectral frame for the spectral-ribbon shader
+            // (mode 4): a Some here = a new column to paint this tick.
+            let mut new_spectral: Option<Vec<f32>> = None;
             if let Some(b) = cells.spectral.lock().unwrap().take() {
                 for (i, v) in b.iter().enumerate() {
                     spectral.set_row_data(i, *v);
                 }
+                new_spectral = Some(b);
             }
             if let Some(b) = cells.waveform.lock().unwrap().take() {
                 for (i, v) in b.iter().enumerate() {
@@ -178,6 +187,40 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
                     if last_phase >= 4096.0 {
                         last_phase -= 4096.0;
                     }
+                    // Real-time ceiling (mode 4): the highest band with signal,
+                    // smoothed (EMA) so the line tracks the audio without jitter.
+                    if m == 4 {
+                        if let Some(bins) = new_spectral.as_ref() {
+                            let n = bins.len();
+                            if n > 1 {
+                                let mut hi = 0usize;
+                                for (i, &v) in bins.iter().enumerate() {
+                                    if v > 0.05 {
+                                        hi = i;
+                                    }
+                                }
+                                let target = hi as f32 / (n - 1) as f32;
+                                last_peak = last_peak * 0.85 + target * 0.15;
+                            }
+                        }
+                    }
+                    // Spectral feed: mode 4 (ribbon) AND mode 5 (line bed) both
+                    // consume the 512-band frame. The ribbon also needs the
+                    // playback fraction + a reset (track change / seek).
+                    let sp = if m == 4 || m == 5 { new_spectral.take() } else { None };
+                    let (progress, reset) = if m == 4 {
+                        let np = w.global::<NowPlayingState>();
+                        let tid = np.get_track_id().to_string();
+                        let prog = np.get_progress();
+                        let rst = tid != last_track_id
+                            || prog + 0.01 < last_progress
+                            || prog > last_progress + 0.15;
+                        last_track_id = tid;
+                        last_progress = prog;
+                        (prog, rst)
+                    } else {
+                        (0.0, false)
+                    };
                     let audio = crate::shader_underlay::FrameAudio {
                         level,
                         level_smooth: last_level_smooth,
@@ -186,6 +229,10 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
                         transient: last_tr,
                         energy: last_energy,
                         bands: bands8,
+                        spectral: sp,
+                        progress,
+                        reset,
+                        spectral_peak: last_peak,
                     };
                     if let Some(img) = crate::shader_underlay::render_frame(m, &audio) {
                         imm.set_shader_texture(img);

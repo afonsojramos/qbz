@@ -30,9 +30,26 @@ use slint::Image;
 /// the immersive viewport stretches this to fit. A plasma is organic/soft, so a
 /// fixed 720p target is plenty sharp for the spike (HiDPI-correct sizing is a
 /// Phase-1 concern, not a spike gate).
-const TEX_W: u32 = 1280;
-const TEX_H: u32 = 720;
+// 1440p offscreen target = ~2x supersampling over a typical window, so the 1px
+// line-bed lines and shader edges resolve smoothly once Slint scales it down.
+const TEX_W: u32 = 2560;
+const TEX_H: u32 = 1440;
 const TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Spectral-ribbon spectrogram dims: 512 frequency bands wide × time columns
+/// tall (R8). One row is written per new spectral frame at the playback-time
+/// column; un-written columns stay zero (the ribbon paints as the track plays).
+const SPECTRO_BANDS: u32 = 512;
+const SPECTRO_COLS: u32 = 2048;
+
+/// Line-bed lattice: 200 depth lines × 256 frequency points (matches the Tauri
+/// LinebedPanel NUM_LINES / VISUAL_BANDS).
+const LINEBED_LINES: u32 = 200;
+const LINEBED_BANDS: u32 = 256;
+/// Each band span is subdivided into LINEBED_SUBDIV Catmull-Rom steps in the
+/// vertex shader so the polylines read as smooth curves. MUST match SUBDIV in
+/// line_bed.wgsl. Vertex count per line = (LINEBED_BANDS - 1) * SUBDIV + 1.
+const LINEBED_SUBDIV: u32 = 6;
 
 /// Mirrors the WGSL `Uniforms` struct in all three `ui/shaders/*.wgsl`. Plain
 /// `f32` / `[f32;4]` (align 4) with manual field ordering so the byte offsets
@@ -79,6 +96,15 @@ pub struct FrameAudio {
     pub transient: f32,
     pub energy: [f32; 5], // sub, bass, mid, presence, air
     pub bands: [f32; 8],  // 8 log FFT bands (paired from the 16 bars)
+    /// Spectral-ribbon feed (mode 4): the latest 512-band frame to paint as a
+    /// new column (None = no new frame this tick), the playback fraction 0..1
+    /// for the column position, and a reset flag (track change / seek → clear).
+    pub spectral: Option<Vec<f32>>,
+    pub progress: f32,
+    pub reset: bool,
+    /// Smoothed fraction (0..1) of the highest active frequency band — drives the
+    /// spectral-ribbon real-time ceiling line (mode 4). 0 for the other modes.
+    pub spectral_peak: f32,
 }
 
 /// Album-art palette triad, normalized rgb (0..1, a = 1). Lives in its own
@@ -112,6 +138,127 @@ fn uniforms_bytes(u: &Uniforms) -> &[u8] {
     }
 }
 
+/// View a `&[f32]` as bytes for the heights upload. Same soundness as
+/// `uniforms_bytes` — plain `f32`, no padding holes.
+fn f32_bytes(s: &[f32]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, std::mem::size_of_val(s)) }
+}
+
+/// Line-bed (mode 5) reshaping + depth ring. Its own thread-local so
+/// `render_frame` can mutate it independently of the immutable `STATE` borrow.
+struct LineBedState {
+    smoothed: Vec<f32>, // 512-band receive-IIR accumulator
+    ring: Vec<f32>,     // LINEBED_LINES*LINEBED_BANDS, depth-ordered (row 0 = newest)
+}
+impl LineBedState {
+    fn new() -> Self {
+        Self {
+            smoothed: vec![0.0; SPECTRO_BANDS as usize],
+            ring: vec![0.0; (LINEBED_LINES * LINEBED_BANDS) as usize],
+        }
+    }
+    /// Receive-IIR a 512-band frame, reshape to 256 heights, push at the near row.
+    fn push(&mut self, bins: &[f32]) {
+        let n = self.smoothed.len().min(bins.len());
+        for i in 0..n {
+            self.smoothed[i] = self.smoothed[i] * 0.03 + bins[i] * 0.97;
+        }
+        let row = reshape_512_to_256(&self.smoothed);
+        let bands = LINEBED_BANDS as usize;
+        let lines = LINEBED_LINES as usize;
+        // Shift every row one slot deeper, then write the newest at row 0.
+        self.ring.copy_within(0..(lines - 1) * bands, bands);
+        self.ring[0..bands].copy_from_slice(&row);
+    }
+}
+thread_local! {
+    static LINEBED: RefCell<LineBedState> = RefCell::new(LineBedState::new());
+}
+thread_local! {
+    /// Last spectrogram column written (spectral-ribbon gap-fill).
+    static SPECTRO_LAST_COL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// 512 backend bands → 256 line heights in [0.1, 84] — Tauri's LinebedPanel
+/// chain (the backend bands are intentionally flat; this is what makes the
+/// ridges): frequency-warp bin map → peak-preserving smoothing → low-end tail
+/// roll-off → 3-point box → per-band gamma + soft clip.
+fn reshape_512_to_256(data: &[f32]) -> [f32; 256] {
+    let mut vis = [0.0f32; 256];
+    for i in 0..256 {
+        let seg_start = (i as f32 / 256.0).powf(1.32);
+        let seg_end = ((i + 1) as f32 / 256.0).powf(1.32);
+        let s = 4.0 + (460.0 - 4.0) * seg_start;
+        let e = 4.0 + (460.0 - 4.0) * seg_end;
+        let lower = (s.floor() as usize).max(4);
+        let upper = (e.ceil() as usize).min(460);
+        let (mut sum, mut peak, mut cnt) = (0.0f32, 0.0f32, 0u32);
+        let mut j = lower;
+        while j <= upper && j < data.len() {
+            sum += data[j];
+            if data[j] > peak {
+                peak = data[j];
+            }
+            cnt += 1;
+            j += 1;
+        }
+        let avg = if cnt > 0 { sum / cnt as f32 } else { 0.0 };
+        vis[i] = (avg * 0.52 + peak * 0.48) * 770.0;
+    }
+    apply_average(&mut vis);
+    // Low-end tail roll-off (first 7 bins).
+    for i in 0..7usize {
+        vis[i] *= 0.013_334_120_966_221_101 * ((i + 1) as f32).powf(1.6) + 0.7;
+    }
+    smooth3(&mut vis);
+    // Per-band gamma + soft clip + cap → [0.1, 84].
+    for i in 0..256 {
+        let frac = i as f32 / 255.0;
+        let exp = 1.35 + (0.9 - 1.35) * frac * frac;
+        let norm = (vis[i] / 770.0).max(0.0);
+        let shaped = norm.powf(exp);
+        let comp = 1.0 - (-shaped * 3.25).exp();
+        vis[i] = (comp * 84.0).clamp(0.1, 84.0);
+    }
+    vis
+}
+
+/// Two-pass peak-preserving smoothing (Tauri applyAverageTransform).
+fn apply_average(d: &mut [f32; 256]) {
+    let src = *d;
+    for i in 0..256 {
+        let prev = if i > 0 { src[i - 1] } else { src[i] };
+        let next = if i < 255 { src[i + 1] } else { src[i] };
+        let cur = src[i];
+        d[i] = if cur >= prev && cur >= next {
+            cur
+        } else {
+            (cur + prev.max(next)) / 2.0
+        };
+    }
+    let src2 = *d;
+    for i in 0..256 {
+        let prev = if i > 0 { src2[i - 1] } else { src2[i] };
+        let next = if i < 255 { src2[i + 1] } else { src2[i] };
+        let cur = src2[i];
+        d[i] = if cur >= prev && cur >= next {
+            cur
+        } else {
+            cur / 2.0 + prev.max(next) / 3.0 + prev.min(next) / 6.0
+        };
+    }
+}
+
+/// 3-point box smooth, one pass (Tauri smoothSpectrum).
+fn smooth3(d: &mut [f32; 256]) {
+    let src = *d;
+    for i in 0..256 {
+        let prev = if i > 0 { src[i - 1] } else { src[i] };
+        let next = if i < 255 { src[i + 1] } else { src[i] };
+        d[i] = (prev + src[i] + next) / 3.0;
+    }
+}
+
 struct RenderState {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -130,6 +277,12 @@ struct RenderState {
     /// plasma shader samples it (binding 1); each plasma frame is copied into it
     /// after the pass, so the next frame advects the previous one.
     history: wgpu::Texture,
+    /// Persistent spectrogram for the spectral-ribbon scene (binding 3); written
+    /// one column per spectral frame, sampled for display.
+    spectrogram: wgpu::Texture,
+    /// Line-bed (mode 5): the line-strip pipeline + its 256×200 heights texture.
+    linebed_pipeline: wgpu::RenderPipeline,
+    heights_tex: wgpu::Texture,
     start: std::time::Instant,
 }
 
@@ -140,6 +293,7 @@ const SHADER_SOURCES: &[&str] = &[
     include_str!("../../qbz-ui/ui/shaders/plasma.wgsl"),
     include_str!("../../qbz-ui/ui/shaders/tunnel.wgsl"),
     include_str!("../../qbz-ui/ui/shaders/aurora.wgsl"),
+    include_str!("../../qbz-ui/ui/shaders/spectral_ribbon.wgsl"),
 ];
 
 thread_local! {
@@ -160,7 +314,8 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                // VERTEX too: the line-bed vertex shader reads `resolution`.
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -182,6 +337,33 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
                 binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            // Binding 3: the spectral-ribbon spectrogram (R8). Only that scene
+            // samples it; the others declare a subset of the layout (valid).
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            // Binding 4: the line-bed heights as an R32Float TEXTURE (256 band ×
+            // 200 line), read via textureLoad in the VERTEX stage by line_bed.wgsl.
+            // A SAMPLED texture (not a storage buffer) so it works without the
+            // VERTEX_STORAGE downlevel capability that Slint's device lacks (a
+            // vertex storage buffer fails BGL creation: limit is 0). Others ignore.
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
                 count: None,
             },
         ],
@@ -222,6 +404,46 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         view_formats: &[],
     });
     let history_view = history.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // Spectral-ribbon spectrogram: 512 freq bands (width) × SPECTRO_COLS time
+    // columns (height), R8. Written one row per spectral frame in render_frame,
+    // sampled by spectral_ribbon.wgsl at binding 3.
+    let spectrogram = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("qbz-shader-spectrogram"),
+        size: wgpu::Extent3d {
+            width: SPECTRO_BANDS,
+            height: SPECTRO_COLS,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let spectrogram_view = spectrogram.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // Line-bed heights: an R32Float texture (256 band wide × 200 line tall,
+    // depth-ordered rows), uploaded per frame in the mode-5 path and read via
+    // textureLoad in the line_bed vertex shader. A sampled texture avoids the
+    // vertex-stage storage-buffer limit (0) on Slint's downlevel device.
+    let heights_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("qbz-linebed-heights"),
+        size: wgpu::Extent3d {
+            width: LINEBED_BANDS,
+            height: LINEBED_LINES,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let heights_view = heights_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
     // Clear the accumulator once so the first plasma frame samples black, not
     // uninitialized GPU memory.
     {
@@ -264,6 +486,14 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&spectrogram_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&heights_view),
             },
         ],
     });
@@ -314,6 +544,43 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         log::debug!("[shader] pipeline {} built (mode {})", i, i + 1);
     }
 
+    // Line-bed (mode 5): a SEPARATE pipeline — line-strip topology + alpha blend
+    // + the projecting vertex shader. Shares the pipeline layout / bind group.
+    let linebed_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("qbz-linebed-module"),
+        source: wgpu::ShaderSource::Wgsl(
+            include_str!("../../qbz-ui/ui/shaders/line_bed.wgsl").into(),
+        ),
+    });
+    let linebed_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("qbz-linebed-pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &linebed_module,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &linebed_module,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: TEX_FORMAT,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+
     let n = pipelines.len();
     STATE.with(|s| {
         *s.borrow_mut() = Some(RenderState {
@@ -323,6 +590,9 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
             uniform_buf,
             bind_group,
             history,
+            spectrogram,
+            linebed_pipeline,
+            heights_tex,
             start: std::time::Instant::now(),
         });
     });
@@ -369,11 +639,16 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
         let borrow = s.borrow();
         let st = borrow.as_ref()?;
 
-        // Bounds-guard: fall back to the plasma pipeline (index 0) if a mode is
-        // ever out of range, so the underlay degrades gracefully instead of
-        // panicking on an indexing error.
-        let idx = (mode - 1) as usize;
-        let pipeline = st.pipelines.get(idx).or_else(|| st.pipelines.first())?;
+        // Pick the pipeline: line-bed (mode 5) uses its own line-strip pipeline;
+        // the fullscreen scenes index by (mode - 1). Bounds-guard: fall back to
+        // the plasma pipeline (index 0) if a mode is ever out of range, so the
+        // underlay degrades gracefully instead of panicking on an indexing error.
+        let pipeline = if mode == 5 {
+            &st.linebed_pipeline
+        } else {
+            let idx = (mode - 1) as usize;
+            st.pipelines.get(idx).or_else(|| st.pipelines.first())?
+        };
 
         let pal = PALETTE.with(|p| *p.borrow());
         let uniforms = Uniforms {
@@ -386,7 +661,7 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
             level_smooth: a.level_smooth,
             transient: a.transient,
             energy_lo: [a.energy[0], a.energy[1], a.energy[2], a.energy[3]],
-            energy_hi: [a.energy[4], 0.0, 0.0, 0.0],
+            energy_hi: [a.energy[4], a.spectral_peak, 0.0, 0.0],
             bands_lo: [a.bands[0], a.bands[1], a.bands[2], a.bands[3]],
             bands_hi: [a.bands[4], a.bands[5], a.bands[6], a.bands[7]],
             primary: pal.primary,
@@ -395,6 +670,108 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
         };
         st.queue
             .write_buffer(&st.uniform_buf, 0, uniforms_bytes(&uniforms));
+
+        // Spectral ribbon (mode 4): feed the persistent spectrogram before the
+        // display pass. Reset (clear) on track-change/seek, then write the new
+        // 512-band column at the playback-time position (paint-as-you-play).
+        if mode == 4 {
+            if a.reset {
+                let zeros = vec![0u8; (SPECTRO_BANDS * SPECTRO_COLS) as usize];
+                st.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &st.spectrogram,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &zeros,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(SPECTRO_BANDS),
+                        rows_per_image: Some(SPECTRO_COLS),
+                    },
+                    wgpu::Extent3d {
+                        width: SPECTRO_BANDS,
+                        height: SPECTRO_COLS,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                SPECTRO_LAST_COL.with(|c| c.set(0));
+            }
+            if let Some(ref bins) = a.spectral {
+                if !bins.is_empty() {
+                    let col = (a.progress.clamp(0.0, 1.0) * (SPECTRO_COLS - 1) as f32) as u32;
+                    let n = SPECTRO_BANDS as usize;
+                    let mut row = vec![0u8; n];
+                    for (i, slot) in row.iter_mut().enumerate() {
+                        if i < bins.len() {
+                            *slot = (bins[i].clamp(0.0, 1.0) * 255.0) as u8;
+                        }
+                    }
+                    // Gap-fill: paint every column skipped since the last write
+                    // (progress updates ~1 Hz, so the column jumps several slots).
+                    let last = SPECTRO_LAST_COL.with(|c| c.get());
+                    let start = if col > last { last + 1 } else { col };
+                    let count = col + 1 - start;
+                    let mut data = Vec::with_capacity(n * count as usize);
+                    for _ in 0..count {
+                        data.extend_from_slice(&row);
+                    }
+                    st.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &st.spectrogram,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x: 0, y: start, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &data,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(SPECTRO_BANDS),
+                            rows_per_image: Some(count),
+                        },
+                        wgpu::Extent3d {
+                            width: SPECTRO_BANDS,
+                            height: count,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    SPECTRO_LAST_COL.with(|c| c.set(col));
+                }
+            }
+        }
+
+        // Line bed (mode 5): push the new spectral frame into the depth ring,
+        // reshape it (Tauri's 512→256 chain), and upload the 200×256 heights.
+        if mode == 5 {
+            if let Some(ref bins) = a.spectral {
+                if !bins.is_empty() {
+                    LINEBED.with(|lb| lb.borrow_mut().push(bins));
+                }
+            }
+            LINEBED.with(|lb| {
+                let lb = lb.borrow();
+                st.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &st.heights_tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    f32_bytes(&lb.ring),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(LINEBED_BANDS * 4),
+                        rows_per_image: Some(LINEBED_LINES),
+                    },
+                    wgpu::Extent3d {
+                        width: LINEBED_BANDS,
+                        height: LINEBED_LINES,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            });
+        }
 
         // Fresh target each frame. Image::try_from REQUIRES Rgba8Unorm/Srgb +
         // TEXTURE_BINDING | RENDER_ATTACHMENT (Slint graphics/wgpu_28.rs).
@@ -442,7 +819,13 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &st.bind_group, &[]);
-            pass.draw(0..3, 0..1);
+            if mode == 5 {
+                // 200 instanced line strips, each a subdivided Catmull-Rom curve
+                // of (255 * SUBDIV + 1) points.
+                pass.draw(0..((LINEBED_BANDS - 1) * LINEBED_SUBDIV + 1), 0..LINEBED_LINES);
+            } else {
+                pass.draw(0..3, 0..1);
+            }
         }
         // Plasma fluid (mode 1) feeds back: copy this frame into the history
         // accumulator so the next frame advects it. Tunnel/aurora skip this.

@@ -12,12 +12,14 @@ import { AlbumReactivePanel } from "AlbumReactivePanel.slint";
 import { StaticPanel } from "StaticPanel.slint";
 import { CoverflowPanel } from "CoverflowPanel.slint";
 import { SpectrumPanel } from "SpectrumPanel.slint";
+import { ImmersiveWaveBedPanel } from "ImmersiveWaveBedPanel.slint";
 import { ImmersiveLyricsFocusPanel } from "ImmersiveLyricsFocusPanel.slint";
 import { ImmersiveQueuePanel } from "ImmersiveQueuePanel.slint";
 import { ImmersiveTrackInfo } from "ImmersiveTrackInfo.slint";
 import { ImmersiveTrackInfoPanel } from "ImmersiveTrackInfoPanel.slint";
 import { ImmersiveSuggestionsPanel } from "ImmersiveSuggestionsPanel.slint";
 import { ImmersiveSongCard } from "ImmersiveSongCard.slint";
+import { ImmersiveSpectralOverlay } from "ImmersiveSpectralOverlay.slint";
 import { LyricsLinesView } from "../shell/LyricsLinesView.slint";
 
 component GhostButton inherits Rectangle {
@@ -241,7 +243,10 @@ component ImmersivePlayerBar inherits Rectangle {
     property <bool> vol-locked: (SettingsState.backend-is-alsa && SettingsState.alsa-plugin-is-hw && !NowPlayingState.is-remote)
         || NowPlayingState.volume-locked;
 
-    width: Math.min(root.viewport-width - 32px, 720px);
+    // 600 (was 720): trims 120px of dead space — the left group is left-anchored,
+    // the right group right-anchored, the playback group centered, so a narrower
+    // bar pulls each gap in by ~60px (owner request).
+    width: Math.min(root.viewport-width - 32px, 600px);
     height: 90px;
     border-radius: 16px;
     background: #00000080;
@@ -255,10 +260,14 @@ component ImmersivePlayerBar inherits Rectangle {
     GhostButton {
         x: 24px;
         y: 22px;
-        icon: @image-url("../assets/icons/heart.svg");
-        active: false;
+        // Reflect the live favorite state (filled + active when in library), same
+        // source as the main TransportControls heart — it was a static glyph.
+        icon: QueueState.now-playing-favorite
+            ? @image-url("../assets/icons/heart-filled.svg")
+            : @image-url("../assets/icons/heart.svg");
+        active: QueueState.now-playing-favorite;
         enabled: NowPlayingState.has-track && !NowPlayingState.is-ephemeral;
-        clicked => { root.media-action("track", NowPlayingState.track-id, "favorite"); }
+        clicked => { QueueState.toggle-now-playing-favorite(); }
     }
     GhostButton {
         x: 56px;
@@ -591,6 +600,15 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
                 }
             }
             ImmersiveMenuRow {
+                icon: @image-url("../assets/icons/audio-lines.svg");
+                label: @tr("Wave Bed");
+                active: root.is-focus && root.sh == 0 && root.md == 6;
+                clicked => {
+                    ImmersiveState.view-mode = 0; ImmersiveState.shader-mode = 0; ImmersiveState.mode = 6;
+                    root.picked();
+                }
+            }
+            ImmersiveMenuRow {
                 icon: @image-url("../assets/icons/mic-vocal.svg");
                 label: @tr("Lyrics");
                 active: root.is-focus && root.sh == 0 && root.md == 4;
@@ -634,6 +652,24 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
                 active: root.is-focus && root.sh == 3;
                 clicked => {
                     ImmersiveState.view-mode = 0; ImmersiveState.shader-mode = 3;
+                    root.picked();
+                }
+            }
+            ImmersiveMenuRow {
+                icon: @image-url("../assets/icons/chart-no-axes-column.svg");
+                label: @tr("Spectral Ribbon");
+                active: root.is-focus && root.sh == 4;
+                clicked => {
+                    ImmersiveState.view-mode = 0; ImmersiveState.shader-mode = 4;
+                    root.picked();
+                }
+            }
+            ImmersiveMenuRow {
+                icon: @image-url("../assets/icons/radio.svg");
+                label: @tr("Line Bed");
+                active: root.is-focus && root.sh == 5;
+                clicked => {
+                    ImmersiveState.view-mode = 0; ImmersiveState.shader-mode = 5;
                     root.picked();
                 }
             }
@@ -1139,7 +1175,7 @@ export component ImmersiveView inherits Rectangle {
             // Plasma -> Tunnel -> Aurora -> Off) as a quick keyboard shortcut;
             // the header shader picker is the discoverable control.
             if (event.text == "g" || event.text == "G") {
-                ImmersiveState.shader-mode = Math.mod(ImmersiveState.shader-mode + 1, 4);
+                ImmersiveState.shader-mode = Math.mod(ImmersiveState.shader-mode + 1, 6);
                 root.wake();
                 return accept;
             }
@@ -1186,6 +1222,15 @@ export component ImmersiveView inherits Rectangle {
         height: 100%;
         image-fit: fill;
         source: ImmersiveState.shader-texture;
+    }
+    // Spectral Ribbon (shader-mode 4): green axes + labels + stream header over
+    // the GPU heatmap (responsive — positions are viewport fractions matching
+    // the shader's plot rect in spectral_ribbon.wgsl).
+    if ImmersiveState.shader-mode == 4: ImmersiveSpectralOverlay {
+        x: 0px;
+        y: 0px;
+        viewport-width: root.width;
+        viewport-height: root.height;
     }
 
     // (1) Bottom: moving blurred-art atmosphere. Hidden while a shader scene is
@@ -1236,6 +1281,16 @@ export component ImmersiveView inherits Rectangle {
     // VisualizerState.energy from the same enabled tap). Same conditional-mount +
     // viewport-prop contract as the siblings (ADR-010).
     if ImmersiveState.shader-mode == 0 && ImmersiveState.view-mode == 0 && ImmersiveState.mode == 3: SpectrumPanel {
+        x: 0px;
+        y: 0px;
+        viewport-width: root.width;
+        viewport-height: root.height;
+    }
+    // (2d.2) Wave Bed foreground (mode == 6) — centered, VERTICAL-mirror waveform
+    // columns (owner: NOT the X-mirror Spectrum). Full-bleed; the bottom-right
+    // song card is mounted below, the same way the shader scenes get it (ADR-010
+    // conditional mount + viewport-prop contract).
+    if ImmersiveState.shader-mode == 0 && ImmersiveState.view-mode == 0 && ImmersiveState.mode == 6: ImmersiveWaveBedPanel {
         x: 0px;
         y: 0px;
         viewport-width: root.width;
@@ -1467,7 +1522,7 @@ export component ImmersiveView inherits Rectangle {
     // Immersive song card — minimal metadata (1:1 of the Tauri ImmersiveSongCard),
     // shown bottom-right ONLY over the shader backgrounds (Plasma/Tunnel/Aurora);
     // the focus panels render their own metadata. Always-on (not chrome-faded).
-    if ImmersiveState.shader-mode > 0 && NowPlayingState.has-track: ImmersiveSongCard {
+    if (ImmersiveState.shader-mode > 0 || (ImmersiveState.view-mode == 0 && ImmersiveState.mode == 6)) && NowPlayingState.has-track: ImmersiveSongCard {
         x: root.width - self.width - 24px;
         y: root.height - self.height - 24px;
     }
