@@ -290,10 +290,11 @@ struct RenderState {
 /// scene = one `include_str!` here + one entry in the picker (state/UI). All
 /// must declare the SAME `Uniforms` block (group0/binding0) as plasma.wgsl.
 const SHADER_SOURCES: &[&str] = &[
-    include_str!("../../qbz-ui/ui/shaders/plasma.wgsl"),
-    include_str!("../../qbz-ui/ui/shaders/tunnel.wgsl"),
-    include_str!("../../qbz-ui/ui/shaders/aurora.wgsl"),
-    include_str!("../../qbz-ui/ui/shaders/spectral_ribbon.wgsl"),
+    include_str!("../../qbz-ui/ui/shaders/plasma.wgsl"),          // [0] mode 1
+    include_str!("../../qbz-ui/ui/shaders/tunnel.wgsl"),          // [1] mode 2
+    include_str!("../../qbz-ui/ui/shaders/aurora.wgsl"),          // [2] mode 3
+    include_str!("../../qbz-ui/ui/shaders/spectral_ribbon.wgsl"), // [3] mode 4
+    include_str!("../../qbz-ui/ui/shaders/liquid_spectrum.wgsl"), // [4] mode 6
 ];
 
 thread_local! {
@@ -646,7 +647,9 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
         let pipeline = if mode == 5 {
             &st.linebed_pipeline
         } else {
-            let idx = (mode - 1) as usize;
+            // modes 1-4 → pipelines[0..3]; mode 6 (liquid spectrum) → pipelines[4].
+            // mode 5 is line_bed's own pipeline above, so the index skips it.
+            let idx = if mode == 6 { 4 } else { (mode - 1) as usize };
             st.pipelines.get(idx).or_else(|| st.pipelines.first())?
         };
 

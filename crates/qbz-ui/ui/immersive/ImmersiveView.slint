@@ -673,6 +673,22 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
                     root.picked();
                 }
             }
+            // POC — Liquid Spectrum (shader-mode 6) didn't pan out; PARKED for a
+            // future pass (not deleted). Re-enable = uncomment this row AND bump
+            // the `g`-cycle Math.mod back to 7. The shader (liquid_spectrum.wgsl)
+            // + Rust wiring (shader_underlay.rs SHADER_SOURCES[4] / render_frame
+            // mode 6) stay live but unreachable.
+            /*
+            ImmersiveMenuRow {
+                icon: @image-url("../assets/icons/circle-dot.svg");
+                label: @tr("Liquid Spectrum");
+                active: root.is-focus && root.sh == 6;
+                clicked => {
+                    ImmersiveState.view-mode = 0; ImmersiveState.shader-mode = 6;
+                    root.picked();
+                }
+            }
+            */
 
             // Divider between the two groups.
             Rectangle { height: 11px;
@@ -1171,9 +1187,10 @@ export component ImmersiveView inherits Rectangle {
                 VisualizerState.set-enabled(ShellState.large-active && ShellState.large-visualizer-on);
                 return accept;
             }
-            // 'g' (GPU) cycles the shader scene 0 -> 1 -> 2 -> 3 -> 0 (Off ->
-            // Plasma -> Tunnel -> Aurora -> Off) as a quick keyboard shortcut;
-            // the header shader picker is the discoverable control.
+            // 'g' (GPU) cycles the shader scene 0..5 (Off -> Plasma -> Tunnel ->
+            // Aurora -> Spectral Ribbon -> Line Bed -> Off). Liquid Spectrum (mode
+            // 6) is a PARKED POC — to bring it back, change the Math.mod to 7 and
+            // uncomment its picker row above. The header picker is the discoverable control.
             if (event.text == "g" || event.text == "G") {
                 ImmersiveState.shader-mode = Math.mod(ImmersiveState.shader-mode + 1, 6);
                 root.wake();
