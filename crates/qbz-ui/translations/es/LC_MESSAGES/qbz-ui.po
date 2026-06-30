@@ -4191,3 +4191,43 @@ msgid "Removed {} album from blacklist"
 msgid_plural "Removed {} albums from blacklist"
 msgstr[0] "Se eliminó {} álbum de la lista negra"
 msgstr[1] "Se eliminaron {} álbumes de la lista negra"
+
+# Recommendations (Discover external-reco) + JACK not-bit-perfect note
+msgid "RECOMMENDATIONS"
+msgstr "RECOMENDACIONES"
+
+msgid "Show Recommendations in Discover"
+msgstr "Mostrar Recomendaciones en Descubrir"
+
+msgid "A personalized Discover tab built from your listening. For the best results connect Last.fm and ListenBrainz below — MusicBrainz is used automatically to match releases."
+msgstr "Una pestaña de Descubrir personalizada a partir de lo que escuchas. Para mejores resultados conecta Last.fm y ListenBrainz abajo — MusicBrainz se usa automáticamente para emparejar lanzamientos."
+
+msgid "Recommendations"
+msgstr "Recomendaciones"
+
+msgid "More like the artists you love"
+msgstr "Más de los artistas que te encantan"
+
+msgid "Based on what you've been into lately"
+msgstr "Según lo que has escuchado últimamente"
+
+msgid "Weekly Exploration"
+msgstr "Exploración semanal"
+
+msgid "Weekly Jams"
+msgstr "Joyas de la semana"
+
+msgid "Popular artists on Qobuz"
+msgstr "Artistas populares en Qobuz"
+
+msgid "No recommendations yet"
+msgstr "Aún no hay recomendaciones"
+
+msgid "Connect Last.fm or ListenBrainz in Settings, or play more music, to get personalized recommendations."
+msgstr "Conecta Last.fm o ListenBrainz en Ajustes, o reproduce más música, para obtener recomendaciones personalizadas."
+
+msgid "JACK is not bit-perfect"
+msgstr "JACK no es bit-perfect"
+
+msgid "The JACK backend routes audio through the JACK graph, which resamples to the graph's sample rate. For bit-perfect playback use ALSA (direct) or PipeWire with passthrough."
+msgstr "El backend de JACK enruta el audio por el grafo de JACK, que remuestrea a la frecuencia del grafo. Para reproducción bit-perfect usa ALSA (directo) o PipeWire con passthrough."

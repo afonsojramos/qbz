@@ -4134,3 +4134,43 @@ msgstr "Ein nativer Musik-Streaming-Client für Linux, der für Audiophile entwi
 
 msgid "Built with Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide, and Kawarp."
 msgstr "Erstellt mit Slint und betrieben mit Rodio und Symphonia. Mit Dank an Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide und Kawarp."
+
+# Recommendations (Discover external-reco) + JACK not-bit-perfect note
+msgid "RECOMMENDATIONS"
+msgstr "EMPFEHLUNGEN"
+
+msgid "Show Recommendations in Discover"
+msgstr "Empfehlungen in Entdecken anzeigen"
+
+msgid "A personalized Discover tab built from your listening. For the best results connect Last.fm and ListenBrainz below — MusicBrainz is used automatically to match releases."
+msgstr "Ein personalisierter Entdecken-Tab basierend auf deinem Hörverhalten. Für beste Ergebnisse verbinde unten Last.fm und ListenBrainz — MusicBrainz wird automatisch zum Abgleich von Veröffentlichungen verwendet."
+
+msgid "Recommendations"
+msgstr "Empfehlungen"
+
+msgid "More like the artists you love"
+msgstr "Mehr von den Künstlern, die du liebst"
+
+msgid "Based on what you've been into lately"
+msgstr "Basierend auf dem, was du in letzter Zeit gehört hast"
+
+msgid "Weekly Exploration"
+msgstr "Wöchentliche Entdeckung"
+
+msgid "Weekly Jams"
+msgstr "Wöchentliche Lieblingssongs"
+
+msgid "Popular artists on Qobuz"
+msgstr "Beliebte Künstler auf Qobuz"
+
+msgid "No recommendations yet"
+msgstr "Noch keine Empfehlungen"
+
+msgid "Connect Last.fm or ListenBrainz in Settings, or play more music, to get personalized recommendations."
+msgstr "Verbinde Last.fm oder ListenBrainz in den Einstellungen oder höre mehr Musik, um personalisierte Empfehlungen zu erhalten."
+
+msgid "JACK is not bit-perfect"
+msgstr "JACK ist nicht bit-perfekt"
+
+msgid "The JACK backend routes audio through the JACK graph, which resamples to the graph's sample rate. For bit-perfect playback use ALSA (direct) or PipeWire with passthrough."
+msgstr "Das JACK-Backend leitet die Audioausgabe durch den JACK-Graphen, der auf die Graph-Abtastrate resampled. Für bit-perfekte Wiedergabe verwende ALSA (direkt) oder PipeWire mit Passthrough."

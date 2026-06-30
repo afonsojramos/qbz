@@ -4134,3 +4134,43 @@ msgstr "Um cliente nativo de streaming de música para Linux, projetado para aud
 
 msgid "Built with Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide, and Kawarp."
 msgstr "Desenvolvido com Slint e com tecnologia Rodio e Symphonia. Com agradecimentos a Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide e Kawarp."
+
+# Recommendations (Discover external-reco) + JACK not-bit-perfect note
+msgid "RECOMMENDATIONS"
+msgstr "RECOMENDAÇÕES"
+
+msgid "Show Recommendations in Discover"
+msgstr "Mostrar Recomendações em Descobrir"
+
+msgid "A personalized Discover tab built from your listening. For the best results connect Last.fm and ListenBrainz below — MusicBrainz is used automatically to match releases."
+msgstr "Uma aba Descobrir personalizada com base no que você ouve. Para melhores resultados, conecte Last.fm e ListenBrainz abaixo — o MusicBrainz é usado automaticamente para combinar lançamentos."
+
+msgid "Recommendations"
+msgstr "Recomendações"
+
+msgid "More like the artists you love"
+msgstr "Mais dos artistas que você ama"
+
+msgid "Based on what you've been into lately"
+msgstr "Com base no que você tem ouvido ultimamente"
+
+msgid "Weekly Exploration"
+msgstr "Exploração semanal"
+
+msgid "Weekly Jams"
+msgstr "Pérolas da semana"
+
+msgid "Popular artists on Qobuz"
+msgstr "Artistas populares no Qobuz"
+
+msgid "No recommendations yet"
+msgstr "Ainda não há recomendações"
+
+msgid "Connect Last.fm or ListenBrainz in Settings, or play more music, to get personalized recommendations."
+msgstr "Conecte Last.fm ou ListenBrainz nas Configurações, ou ouça mais música, para obter recomendações personalizadas."
+
+msgid "JACK is not bit-perfect"
+msgstr "JACK não é bit-perfect"
+
+msgid "The JACK backend routes audio through the JACK graph, which resamples to the graph's sample rate. For bit-perfect playback use ALSA (direct) or PipeWire with passthrough."
+msgstr "O backend JACK roteia o áudio pelo grafo do JACK, que faz resample para a taxa do grafo. Para reprodução bit-perfect, use ALSA (direto) ou PipeWire com passthrough."
