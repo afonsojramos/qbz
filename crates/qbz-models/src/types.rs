@@ -799,9 +799,17 @@ pub struct SearchResults {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResultsPage<T> {
+    #[serde(default = "Vec::new")]
     pub items: Vec<T>,
+    // `/album/suggest` returns a page with only `{limit, items}` (no `total`
+    // or `offset`); without defaults the whole response failed to deserialize
+    // and the album "Suggestions" carousel silently never showed. Defaulting
+    // the pagination scalars to 0 is harmless — only `items` is consumed there.
+    #[serde(default)]
     pub total: u32,
+    #[serde(default)]
     pub offset: u32,
+    #[serde(default)]
     pub limit: u32,
 }
 
