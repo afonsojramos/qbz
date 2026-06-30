@@ -75,7 +75,11 @@ case "$arch" in
     # fonts/*.ttf) — outside the `crates/` workspace that cross mounts. Mount
     # static/ at its host path so those relative imports resolve in the
     # container (cross 0.2.x mounts the project at the host path).
-    export CROSS_CONTAINER_OPTS="${CROSS_CONTAINER_OPTS:---memory=18g --memory-swap=26g} --volume $REPO/static:$REPO/static:ro"
+    # qbz_ui's single rustc demands ~30-33 GB (RSS+swap). --memory-swap must
+    # exceed that or Docker OOM-kills the build; 48g leaves headroom yet still
+    # caps a runaway well under the host's 30G RAM + 46G swap (no freeze). RAM
+    # cap 24g keeps ~6g for the desktop (overflow swaps, doesn't exhaust).
+    export CROSS_CONTAINER_OPTS="${CROSS_CONTAINER_OPTS:---memory=24g --memory-swap=48g} --volume $REPO/static:$REPO/static:ro"
     # Cross.toml (workspace root) injects the arm64 dev libs into the image.
     ( cd crates && cross build --release --target "$TARGET" -p qbz )
     install -Dm755 "crates/target/$TARGET/release/qbz" "$OUT"
