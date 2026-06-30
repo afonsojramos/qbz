@@ -181,7 +181,10 @@ export component AboutModal inherits Rectangle {
                 HorizontalLayout {
                     spacing: 16px;
                     Image {
-                        source: @image-url("../assets/qbz-logo.png");
+                        // 128px source (not the 512px original): a ~2.3x
+                        // downscale renders crisp at 56px, where the 9x downscale
+                        // from 512 aliased badly (femtovg has no mipmaps).
+                        source: @image-url("../assets/qbz-logo-128.png");
                         width: 56px;
                         height: 56px;
                         image-fit: contain;
@@ -258,7 +261,9 @@ export component AboutModal inherits Rectangle {
                         Text {
                             text: @tr("Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz.");
                             color: Theme.text-muted;
-                            font-size: 12px;
+                            // 11px so the trademark notice wraps to two lines
+                            // instead of three.
+                            font-size: 11px;
                             wrap: word-wrap;
                         }
 
@@ -397,7 +402,7 @@ export component AboutModal inherits Rectangle {
                         SectionHeading { text: @tr("Acknowledgments"); }
                         Rectangle { height: 12px; }
                         Text {
-                            text: @tr("Built with Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide, and Kawarp.");
+                            text: @tr("Built with Rust and Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, and Lucide.");
                             color: Theme.text-secondary;
                             font-size: 12px;
                             wrap: word-wrap;

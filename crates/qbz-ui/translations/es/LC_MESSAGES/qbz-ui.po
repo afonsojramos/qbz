@@ -4132,8 +4132,8 @@ msgstr "QBZ toma la información de tu cuenta de Last.fm y ListenBrainz si es qu
 msgid "A native music streaming client for Linux, designed for audiophiles who need bit-perfect Hi-Fi playback."
 msgstr "Un cliente nativo de streaming de música para Linux, diseñado para audiófilos que necesitan una reproducción de alta fidelidad con fidelidad de bits."
 
-msgid "Built with Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide, and Kawarp."
-msgstr "Construido con Slint, e impulsado por Rodio y Symphonia. Con agradecimientos a Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide y Kawarp."
+msgid "Built with Rust and Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, and Lucide."
+msgstr "Construido con Rust y Slint, e impulsado por Rodio y Symphonia. Con agradecimientos a Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh y Lucide."
 
 # Album blacklist (album-level blocking)
 msgid "Block this album"

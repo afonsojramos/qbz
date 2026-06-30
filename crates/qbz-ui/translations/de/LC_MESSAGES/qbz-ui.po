@@ -4132,8 +4132,8 @@ msgstr "QBZ verwendet die Daten Ihrer Last.fm- und ListenBrainz-Konten, sofern d
 msgid "A native music streaming client for Linux, designed for audiophiles who need bit-perfect Hi-Fi playback."
 msgstr "Ein nativer Musik-Streaming-Client für Linux, der für Audiophile entwickelt wurde, die eine bitgenaue Hi-Fi-Wiedergabe benötigen."
 
-msgid "Built with Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide, and Kawarp."
-msgstr "Erstellt mit Slint und betrieben mit Rodio und Symphonia. Mit Dank an Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide und Kawarp."
+msgid "Built with Rust and Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, and Lucide."
+msgstr "Erstellt mit Rust und Slint und betrieben mit Rodio und Symphonia. Mit Dank an Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh und Lucide."
 
 # Recommendations (Discover external-reco) + JACK not-bit-perfect note
 msgid "RECOMMENDATIONS"
