@@ -71,7 +71,11 @@ case "$arch" in
     # (losing the build) instead of swap-thrashing the host into a hard freeze
     # — the dev box has no hibernation and dies under memory pressure. Override
     # via CROSS_CONTAINER_OPTS if your box has more headroom.
-    export CROSS_CONTAINER_OPTS="${CROSS_CONTAINER_OPTS:---memory=18g --memory-swap=26g}"
+    # qbz-ui's Slint build imports fonts from the REPO ROOT (../../../../static/
+    # fonts/*.ttf) — outside the `crates/` workspace that cross mounts. Mount
+    # static/ at its host path so those relative imports resolve in the
+    # container (cross 0.2.x mounts the project at the host path).
+    export CROSS_CONTAINER_OPTS="${CROSS_CONTAINER_OPTS:---memory=18g --memory-swap=26g} --volume $REPO/static:$REPO/static:ro"
     # Cross.toml (workspace root) injects the arm64 dev libs into the image.
     ( cd crates && cross build --release --target "$TARGET" -p qbz )
     install -Dm755 "crates/target/$TARGET/release/qbz" "$OUT"
