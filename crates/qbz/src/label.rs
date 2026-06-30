@@ -861,6 +861,8 @@ fn top_track_to_item(t: &TopTrack) -> TrackItem {
         unlocking: false,
         // Disc grouping is album-detail only; flat lists carry none.
         disc_header_number: 0,
+        // Work grouping is album-detail only too.
+        work_header: "".into(),
     }
 }
 

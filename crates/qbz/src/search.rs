@@ -1202,6 +1202,8 @@ fn track_item(row: TrackRowData) -> TrackItem {
         unlocking: false,
         // Disc grouping is album-detail only; flat lists carry none.
         disc_header_number: 0,
+        // Work grouping is album-detail only too.
+        work_header: "".into(),
     }
 }
 

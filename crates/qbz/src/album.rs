@@ -90,6 +90,10 @@ pub struct TrackData {
     /// Used after mapping to decide where the "Disc N" headers fall when the
     /// album spans more than one disc.
     pub disc: u32,
+    /// Pre-formatted classical work-section header (e.g. "Symphony No. 9
+    /// (Beethoven)"), or "" when the track carries no `work` metadata. Used
+    /// after mapping to run-length stamp the per-work headers (PR #536).
+    pub work: String,
 }
 
 /// Fetch and map a full album by id.
@@ -279,6 +283,24 @@ fn truncate_words(text: &str, max: usize) -> String {
 // improvements.
 
 fn map_track(track: Track) -> TrackData {
+    // Classical work-section header, built before `title`/`performer` are moved
+    // out of `track`. Qobuz serves `work` on the track (null for non-classical)
+    // and a `composer` artist; the official player renders the work title with
+    // the composer parenthesized (PR #536). "" when there is no work.
+    let work = match track.work.as_ref().filter(|w| !w.is_empty()) {
+        Some(w) => {
+            let composer = track
+                .composer
+                .as_ref()
+                .map(|c| c.name.as_str())
+                .filter(|n| !n.is_empty());
+            match composer {
+                Some(c) => format!("{w} ({c})"),
+                None => w.clone(),
+            }
+        }
+        None => String::new(),
+    };
     let mut title = track.title;
     if let Some(version) = track.version.as_ref().filter(|v| !v.is_empty()) {
         title = format!("{title} ({version})");
@@ -304,6 +326,7 @@ fn map_track(track: Track) -> TrackData {
         explicit: track.parental_warning,
         // Tauri: `disc = track.media_number ?? 1`.
         disc: track.media_number.unwrap_or(1),
+        work,
     }
 }
 
@@ -361,6 +384,10 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
         multi
     };
     let mut prev_disc: Option<u32> = None;
+    // Run-length work grouping (PR #536): the header is stamped on the first
+    // row of each consecutive same-work run, mirroring the disc grouping above.
+    // Albums with no work metadata leave every header "" → flat list, unchanged.
+    let mut prev_work: Option<String> = None;
     let tracks: Vec<TrackItem> = data
         .tracks
         .into_iter()
@@ -375,6 +402,20 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
                 0
             };
             prev_disc = Some(track.disc);
+            // Work header on the first row of each consecutive same-work run;
+            // an empty work resets the run so a later same-named work re-heads.
+            let work_header = if !track.work.is_empty()
+                && prev_work.as_deref() != Some(track.work.as_str())
+            {
+                track.work.clone()
+            } else {
+                String::new()
+            };
+            prev_work = if track.work.is_empty() {
+                None
+            } else {
+                Some(track.work.clone())
+            };
             // Blacklist key: the row's own performer id, falling back to the
             // album's primary artist when the track carries none (Task 6).
             // NOTE: the album-track row model (`TrackData`) does NOT carry a
@@ -414,6 +455,7 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
             source: "qobuz".into(),
             unlocking: false,
             disc_header_number,
+            work_header: work_header.into(),
             }
         })
         .collect();

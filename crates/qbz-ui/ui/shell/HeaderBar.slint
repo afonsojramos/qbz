@@ -14,7 +14,7 @@ import { Spacing } from "../foundation/spacing.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions, SearchState, SidebarPlaylistsPopupState, OfflineState, SettingsState, OfflineModeActions, AppearanceState, KeyboardShortcutsState, LinkResolverState, UiFocusState, ReportIssueState } from "../state.slint";
+import { SessionState, NavState, ContentView, ShellState, HeaderMenuState, NavMenuEntry, SearchActions, SearchState, SidebarPlaylistsPopupState, OfflineState, SettingsState, OfflineModeActions, AppearanceState, KeyboardShortcutsState, LinkResolverState, UiFocusState, ReportIssueState, AboutState, WhatsNewActions } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SecondaryButton } from "../primitives/SecondaryButton.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
@@ -1020,7 +1020,7 @@ export component HeaderBar inherits Rectangle {
         x: parent.width - 234px - Spacing.md;
         y: Layout.header-height - 4px;
         width: 234px;
-        height: 310px;
+        height: 344px;
 
         Rectangle {
             background: Theme.surface-main;
@@ -1107,8 +1107,20 @@ export component HeaderBar inherits Rectangle {
                     }
                 }
                 MenuItem {
+                    icon: @image-url("../assets/icons/wand-sparkles.svg");
+                    label: @tr("What's New");
+                    clicked => {
+                        menu.close();
+                        WhatsNewActions.open();
+                    }
+                }
+                MenuItem {
                     icon: @image-url("../assets/icons/info.svg");
-                    label: @tr("About");
+                    label: @tr("About QBZ");
+                    clicked => {
+                        menu.close();
+                        AboutState.open = true;
+                    }
                 }
                 Rectangle {
                     height: 1px;

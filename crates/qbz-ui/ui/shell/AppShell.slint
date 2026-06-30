@@ -45,6 +45,8 @@ import { DiscoverConfigModal } from "../discover/DiscoverConfigModal.slint";
 import { KeyboardShortcutsModal } from "KeyboardShortcutsModal.slint";
 import { CustomizeShortcutsModal } from "CustomizeShortcutsModal.slint";
 import { LinkResolverModal } from "LinkResolverModal.slint";
+import { AboutModal } from "AboutModal.slint";
+import { WhatsNewModal } from "WhatsNewModal.slint";
 import { DragGhost } from "../primitives/DragGhost.slint";
 import { Toast } from "../primitives/Toast.slint";
 import { NowPlayingBar } from "NowPlayingBar.slint";
@@ -710,6 +712,19 @@ export component AppShell inherits Rectangle {
 
     // "Open Qobuz Link" (Ctrl+L) cross-platform link resolver.
     LinkResolverModal {
+        width: 100%;
+        height: 100%;
+    }
+
+    // About QBZ (hamburger menu). Self-gated on AboutState.open (ADR-009/010).
+    AboutModal {
+        width: 100%;
+        height: 100%;
+    }
+
+    // What's New (hamburger menu). Self-gated on WhatsNewState.open; opening it
+    // also kicks off the GitHub release fetch (crate::whats_new).
+    WhatsNewModal {
         width: 100%;
         height: 100%;
     }

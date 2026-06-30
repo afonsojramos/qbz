@@ -65,6 +65,21 @@ export component SplashScreen inherits Rectangle {
                             height: 30px;
                         }
                     }
+
+                    Rectangle { height: Spacing.xl; }
+
+                    // Legal disclaimer footer — the same trademark/affiliation
+                    // text the login screen (and Tauri) already shows; the splash
+                    // was missing it.
+                    Text {
+                        text: @tr("This application uses the Qobuz API but is not certified by Qobuz.")
+                            + " "
+                            + @tr("Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz.");
+                        color: Theme.text-muted;
+                        font-size: Typography.legal;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
                 }
             }
         }

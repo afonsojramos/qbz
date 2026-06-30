@@ -308,6 +308,11 @@ pub struct Track {
     /// it parenthesized after the title so remix and reissue albums are
     /// distinguishable from originals (issue #360).
     pub version: Option<String>,
+    /// Classical "work" the track belongs to (e.g. "Symphony No. 9 in D minor,
+    /// Op. 125"). Qobuz returns it on the track object (always present in the
+    /// envelope, `null` for non-classical catalog). Drives the per-work section
+    /// headers on the album view, mirroring the official Qobuz player (PR #536).
+    pub work: Option<String>,
     pub isrc: Option<String>,
     #[serde(default)]
     pub duration: u32,

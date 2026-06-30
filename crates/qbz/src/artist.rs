@@ -486,6 +486,9 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackData {
         // Artist top-tracks are a flat cross-album list and never render
         // "Disc N" headers, so the disc value is unused here — default to 1.
         disc: 1,
+        // Work-section headers are album-view only; the flat artist list never
+        // renders them, so leave it empty.
+        work: String::new(),
     }
 }
 
@@ -635,6 +638,7 @@ fn track_data_to_item(track: TrackData) -> TrackItem {
         source: "qobuz".into(),
         unlocking: false,
         disc_header_number: 0,
+        work_header: "".into(),
     }
 }
 

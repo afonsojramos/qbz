@@ -707,6 +707,8 @@ fn track_to_item(track: &qbz_models::QueueTrack, resolver_index: usize) -> Track
         unlocking: false,
         // Disc grouping is album-detail only; flat lists carry no header.
         disc_header_number: 0,
+        // Work grouping is album-detail only too.
+        work_header: "".into(),
     }
 }
 

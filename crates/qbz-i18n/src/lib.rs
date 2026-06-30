@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
 /// Supported language codes, indexed by the value stored in [`CURRENT`].
-const LANGS: [&str; 5] = ["en", "es", "de", "fr", "pt"];
+const LANGS: [&str; 7] = ["en", "es", "de", "fr", "pt", "ru", "ja"];
 
 /// Embedded `.po` sources. Path is relative to this file
 /// (`crates/qbz-i18n/src/lib.rs`): `../` = `qbz-i18n/`, `../../` = `crates/`.
@@ -23,12 +23,16 @@ const PO_ES: &str = include_str!("../../qbz-ui/translations/es/LC_MESSAGES/qbz-u
 const PO_DE: &str = include_str!("../../qbz-ui/translations/de/LC_MESSAGES/qbz-ui.po");
 const PO_FR: &str = include_str!("../../qbz-ui/translations/fr/LC_MESSAGES/qbz-ui.po");
 const PO_PT: &str = include_str!("../../qbz-ui/translations/pt/LC_MESSAGES/qbz-ui.po");
+const PO_RU: &str = include_str!("../../qbz-ui/translations/ru/LC_MESSAGES/qbz-ui.po");
+const PO_JA: &str = include_str!("../../qbz-ui/translations/ja/LC_MESSAGES/qbz-ui.po");
 
-/// Current language index (0=en, 1=es, 2=de, 3=fr, 4=pt). Defaults to en.
+/// Current language index (0=en, 1=es, 2=de, 3=fr, 4=pt, 5=ru, 6=ja). Defaults to en.
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 
 /// Lazily-parsed catalogs, one slot per language.
-static CATALOGS: [OnceLock<Catalog>; 5] = [
+static CATALOGS: [OnceLock<Catalog>; 7] = [
+    OnceLock::new(),
+    OnceLock::new(),
     OnceLock::new(),
     OnceLock::new(),
     OnceLock::new(),
@@ -51,6 +55,8 @@ fn catalog(idx: u8) -> &'static Catalog {
             2 => PO_DE,
             3 => PO_FR,
             4 => PO_PT,
+            5 => PO_RU,
+            6 => PO_JA,
             _ => PO_EN,
         };
         Catalog::parse(LANGS[idx], src)

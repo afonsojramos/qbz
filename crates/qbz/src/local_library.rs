@@ -789,6 +789,8 @@ fn map_local_track(t: qbz_library::LocalTrack) -> TrackItem {
         // disc; the local-album DETAIL view stamps this afterwards (see
         // apply_album_version) for multi-disc local albums.
         disc_header_number: 0,
+        // Work grouping is album-detail only too.
+        work_header: "".into(),
     }
 }
 

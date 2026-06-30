@@ -496,6 +496,14 @@ export struct TrackItem {
     // flows through the gettext pipeline, matching the Tauri markup
     // `{$t('album.disc')} {discNum}` (groupByDisc + isMultiDisc).
     disc-header-number: int,
+    // Classical "work" grouping: the work-section header (e.g. "Symphony No. 9
+    // (Beethoven)") rendered ABOVE this row. Set (non-empty) only on the first
+    // track of each consecutive same-work run, and only on albums that carry
+    // work metadata; "" otherwise (non-classical albums and every non-leading
+    // track render flat, with no header). Mirrors the official Qobuz player's
+    // per-work sections (PR #536); the album view stamps it, all other track
+    // surfaces leave it "" so the row stays flat.
+    work-header: string,
 }
 
 // Album detail screen state.
@@ -2831,7 +2839,7 @@ export global AppearanceState {
     in-out property <string> auto-theme-detected-de: "";
 
     // --- TYPOGRAPHY / SCALE / LANGUAGE -------------------------------------
-    in-out property <[string]> languages: [@tr("Auto"), "English", "Español", "Français", "Deutsch", "Português"];
+    in-out property <[string]> languages: [@tr("Auto"), "English", "Español", "Français", "Deutsch", "Português", "Русский", "日本語"];
     in-out property <int> language-index: 0;
     in-out property <[string]> fonts: ["LINE Seed JP", "Montserrat", "Noto Sans", "Source Sans 3", "System"];
     in-out property <int> font-index: 0;
@@ -5242,3 +5250,83 @@ export global LinkResolverActions {
 
 // UiFocusState (the hotkey text-input guard) lives in the leaf file
 // `focus-state.slint` and is re-exported at the top of this file.
+
+// ===================================================================
+// About modal (hamburger menu → "About QBZ").
+// ===================================================================
+
+// One author/contributor row: GitHub handle + the profile URL opened on click,
+// plus the GitHub avatar (fetched async by crate::about — default/blank until it
+// arrives).
+export struct AboutContributorRow {
+    name: string,
+    url: string,
+    avatar: image,
+}
+
+// One wrap row of contributor chips. Slint has no flex-wrap, so crate::about
+// pre-groups the flat contributor list into fixed-width rows (4 per row) and the
+// modal renders an outer VerticalLayout over the groups + an inner
+// HorizontalLayout over each group's items.
+export struct AboutContributorGroup {
+    items: [AboutContributorRow],
+}
+
+export global AboutState {
+    in-out property <bool> open: false;
+    // Seeded by crate::about at install time (and on language change for the
+    // attributions descriptions). Static for the lifetime of the app.
+    in property <string> version: "";
+    in property <string> platform-label: "";   // e.g. "Linux (Slint)"
+    in property <string> build-date: "";        // YYYY-MM-DD ("" hides it)
+    in property <string> build-commit: "";      // short hash ("" hides it)
+    in property <string> release-url: "https://github.com/vicrodh/qbz/releases";
+    // Contributors pre-grouped into wrap rows (see AboutContributorGroup).
+    in property <[AboutContributorGroup]> contributor-rows: [];
+    // The single author row (vicrodh) — kept as discrete fields since it
+    // renders differently (slightly larger) from the contributor list.
+    in property <string> author-name: "vicrodh";
+    in property <string> author-url: "https://github.com/vicrodh";
+    in property <image> author-avatar;
+}
+
+export global AboutActions {
+    // Open an external URL in the system browser (Rust: open::that).
+    callback open-url(string);
+}
+
+// ===================================================================
+// What's New modal (hamburger menu → "What's New").
+// ===================================================================
+
+// One rendered block of the release-notes body. `kind`: 0 = section heading,
+// 1 = bullet, 2 = paragraph. `level` is the bullet nesting depth (1, 2, …).
+// `id` is the slug for section blocks (TOC anchor; empty for bullets/paragraphs).
+export struct WhatsNewBlock {
+    kind: int,
+    level: int,
+    text: string,
+    id: string,
+}
+
+// One table-of-contents entry (level-0 section headings only).
+export struct WhatsNewTocEntry {
+    id: string,
+    label: string,
+}
+
+export global WhatsNewState {
+    in-out property <bool> open: false;
+    in property <bool> loading: false;
+    in property <string> version: "";
+    in property <string> date: "";          // formatted "Mon D, YYYY"
+    in property <bool> has-body: false;      // false → show the empty state
+    in property <[WhatsNewBlock]> blocks: [];
+    in property <[WhatsNewTocEntry]> toc: [];
+}
+
+export global WhatsNewActions {
+    // Open the modal AND kick off the GitHub release fetch (Rust).
+    callback open();
+    callback close();
+}

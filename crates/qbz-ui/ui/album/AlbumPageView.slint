@@ -834,6 +834,30 @@ export component AlbumPageView inherits Rectangle {
                                 }
                             }
                         }
+                        // Classical "work" section header — rendered above the
+                        // first row of each consecutive same-work run on albums
+                        // that carry work metadata (PR #536, mirroring the
+                        // official Qobuz player). Sits BELOW the disc header so
+                        // a box set reads disc → work → tracks. Non-classical
+                        // albums leave work-header "" and this never renders, so
+                        // the list stays flat — unchanged from before.
+                        if track.work-header != "": Rectangle {
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                padding-top: 14px;
+                                padding-bottom: 4px;
+                                Text {
+                                    text: track.work-header;
+                                    color: Theme.text-primary;
+                                    font-size: Typography.body;
+                                    font-weight: 700;
+                                    wrap: word-wrap;
+                                    horizontal-alignment: left;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                        }
                         TrackRow {
                             track: track;
                             index: index;

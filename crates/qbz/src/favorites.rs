@@ -501,6 +501,8 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
                     unlocking: false,
                     // Disc grouping is album-detail only; flat lists carry none.
                     disc_header_number: 0,
+                    // Work grouping is album-detail only too.
+                    work_header: "".into(),
                 })
                 .collect();
             // `tracks` is the full set the artwork pipeline targets;
