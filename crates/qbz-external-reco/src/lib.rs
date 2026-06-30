@@ -114,6 +114,16 @@ pub async fn build_weekly_jams(inputs: &RecoInputs<'_>) -> Vec<TrackReco> {
 pub async fn build_deep_cut_albums(inputs: &RecoInputs<'_>) -> Vec<AlbumReco> {
     carousels::build_deep_cut_albums(inputs).await
 }
+/// Album page: albums similar to a seed album, derived from its primary
+/// artist's Last.fm similar artists (one top album each). `exclude_pairs` are
+/// the (artist, title) already shown by the Qobuz suggestions row.
+pub async fn build_similar_albums_seeded(
+    inputs: &RecoInputs<'_>,
+    seed_artist: &str,
+    exclude_pairs: &[(String, String)],
+) -> Vec<AlbumReco> {
+    carousels::build_similar_albums_seeded(inputs, seed_artist, exclude_pairs).await
+}
 /// Cold-start editorial (top albums + artists).
 pub async fn build_editorial(inputs: &RecoInputs<'_>) -> (Vec<AlbumReco>, Vec<ArtistReco>) {
     carousels::build_editorial(inputs).await

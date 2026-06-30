@@ -835,6 +835,38 @@ pub fn apply_suggestions(window: &AppWindow, data: Suggestions) -> Vec<ArtworkJo
     jobs
 }
 
+/// Apply the Last.fm "similar albums" carousel (sits under the Qobuz
+/// suggestions, same heading). Runs on the Slint event loop. Returns its
+/// artwork jobs. `recos` is already deduped against the Qobuz row by the caller.
+pub fn apply_lastfm_suggestions(
+    window: &AppWindow,
+    recos: Vec<qbz_external_reco::AlbumReco>,
+) -> Vec<ArtworkJob> {
+    let items: Vec<AlbumCardItem> = recos
+        .iter()
+        .map(crate::external_reco::album_card)
+        .collect();
+    let jobs = recos
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| !a.artwork_url.is_empty())
+        .map(|(i, a)| ArtworkJob {
+            url: a.artwork_url.clone(),
+            target: ArtworkTarget::AlbumLastfmSuggestion { index: i },
+        })
+        .collect();
+    let show = !items.is_empty();
+    let section = DiscoverSection {
+        title: "".into(),
+        endpoint: "".into(),
+        albums: ModelRc::new(VecModel::from(items)),
+    };
+    let state = window.global::<AlbumState>();
+    state.set_lastfm_suggestions_section(section);
+    state.set_show_lastfm_suggestions(show);
+    jobs
+}
+
 /// Filter the visible track list by `query` (case-insensitive match on
 /// title or artist), against the unfiltered list kept in `FULL_TRACKS`.
 /// Runs on the Slint event loop.
@@ -876,6 +908,8 @@ pub fn reset_album(window: &AppWindow) {
     state.set_show_more_from_artist(false);
     state.set_suggestions_section(DiscoverSection::default());
     state.set_show_suggestions(false);
+    state.set_lastfm_suggestions_section(DiscoverSection::default());
+    state.set_show_lastfm_suggestions(false);
     state.set_show_external_links(false);
     state.set_lastfm_url("".into());
     state.set_discogs_url("".into());

@@ -107,6 +107,9 @@ pub enum ArtworkTarget {
     /// A card in AlbumState.suggestions-section.albums[index] (album-view
     /// "Listening suggestions" carousel).
     AlbumSuggestion { index: usize },
+    /// A card in AlbumState.lastfm-suggestions-section.albums[index]
+    /// (album-view Last.fm similar-albums carousel, under the suggestions).
+    AlbumLastfmSuggestion { index: usize },
     /// A card in AwardState.albums[index] (landing preview grid AND the
     /// full AwardAlbums listing — both source the `albums` model).
     AwardAlbum { index: usize },
@@ -1070,6 +1073,16 @@ fn apply_artwork(
         }
         ArtworkTarget::AlbumSuggestion { index } => {
             let model = window.global::<crate::AlbumState>().get_suggestions_section().albums;
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::AlbumLastfmSuggestion { index } => {
+            let model = window
+                .global::<crate::AlbumState>()
+                .get_lastfm_suggestions_section()
+                .albums;
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);

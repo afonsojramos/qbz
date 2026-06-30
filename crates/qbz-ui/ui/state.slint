@@ -606,6 +606,11 @@ export global AlbumState {
     // webplayer) from /album/suggest. Album cards -> open album.
     in property <DiscoverSection> suggestions-section;
     in property <bool> show-suggestions: false;
+    // Second suggestions row, sourced from Last.fm similar artists (one album
+    // each), deduped against the Qobuz row. Sits under the same heading, gated
+    // on Last.fm being connected. Empty -> hidden.
+    in property <DiscoverSection> lastfm-suggestions-section;
+    in property <bool> show-lastfm-suggestions: false;
     // External links sidebar block (Last.fm / Discogs / MusicBrainz),
     // Feishin-style. URLs are prebuilt by the controller from artist + title;
     // each row opens its url via AlbumActions.open-external-link. Hidden for

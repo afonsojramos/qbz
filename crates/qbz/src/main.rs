@@ -1546,8 +1546,37 @@ fn navigate_album(
                         });
 
                         let suggestions = album::load_suggestions(&runtime, &album_id).await;
+                        // Capture the Qobuz row's (artist, title) + ids before
+                        // `suggestions` moves — the Last.fm row dedups against them.
+                        let exclude_pairs: Vec<(String, String)> = suggestions
+                            .cards
+                            .iter()
+                            .map(|c| (c.artist.clone(), c.title.clone()))
+                            .collect();
+                        let exclude_ids: std::collections::HashSet<String> =
+                            suggestions.cards.iter().map(|c| c.id.clone()).collect();
+                        {
+                            let image_cache_sug = image_cache.clone();
+                            let _ = weak.upgrade_in_event_loop(move |w| {
+                                let jobs = album::apply_suggestions(&w, suggestions);
+                                artwork::spawn_loads(jobs, w.as_weak(), image_cache_sug);
+                            });
+                        }
+
+                        // Second suggestions row, from Last.fm similar artists
+                        // (only when Last.fm is connected). Best-effort: empty
+                        // result hides the row. Deduped vs the Qobuz row, and
+                        // the resolved row is cached per album for 30 days.
+                        let lastfm_recos = crate::external_reco::load_similar_albums_seeded(
+                            &runtime,
+                            &album_id,
+                            &carousel_artist_name,
+                            &exclude_pairs,
+                            &exclude_ids,
+                        )
+                        .await;
                         let _ = weak.upgrade_in_event_loop(move |w| {
-                            let jobs = album::apply_suggestions(&w, suggestions);
+                            let jobs = album::apply_lastfm_suggestions(&w, lastfm_recos);
                             artwork::spawn_loads(jobs, w.as_weak(), image_cache);
                         });
                     });

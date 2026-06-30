@@ -1089,6 +1089,23 @@ export component AlbumPageView inherits Rectangle {
                     root.media-action(k, i, a);
                 }
             }
+
+            // Second suggestions row, from Last.fm similar artists (one album
+            // each), deduped against the Qobuz row above. Grouped UNDER the same
+            // "Suggestions" heading (the carousel carries an empty title, no
+            // sub-label). Hidden unless Last.fm is connected and the row
+            // resolved at least one album.
+            if AlbumState.show-lastfm-suggestions: Rectangle { height: 14px; }
+            if AlbumState.show-lastfm-suggestions: Carousel {
+                section: AlbumState.lastfm-suggestions-section;
+                show-view-all: false;
+                album-clicked(id) => {
+                    root.media-action("album", id, "open");
+                }
+                media-action(k, i, a) => {
+                    root.media-action(k, i, a);
+                }
+            }
         }
     }
 
