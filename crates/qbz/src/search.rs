@@ -279,7 +279,7 @@ fn playlist_cover_urls(playlist: &Playlist) -> Vec<String> {
 pub fn map_album(album: Album) -> AlbumRow {
     AlbumRow {
         id: album.id,
-        title: album.title,
+        title: crate::album_map::format_album_title(&album.title, album.version.as_deref()),
         artist: album.artist.name,
         artist_id: album.artist.id.to_string(),
         genre: album

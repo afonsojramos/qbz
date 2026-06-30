@@ -423,6 +423,12 @@ pub struct Album {
     /// the album's featured artists.
     #[serde(default)]
     pub artists: Option<Vec<AlbumArtist>>,
+    /// Release variant label ("2009 Remaster", "Hi-Res", "Deluxe Edition", …).
+    /// Qobuz keeps this out of `title`; the web player appends it in parens so
+    /// re-editions of the same album are distinguishable. Surfaced the same way
+    /// on every album title (see `format_album_title`).
+    #[serde(default)]
+    pub version: Option<String>,
     /// Album-level composer credit (single Artist). The official web player
     /// renders this — NOT the per-track `composer` — as the "… • X
     /// (composer)" tail of the header credit line, and suppresses it when the

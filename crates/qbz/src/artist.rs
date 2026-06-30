@@ -552,7 +552,7 @@ pub(crate) fn map_release(release: PageArtistRelease) -> CardData {
         .unwrap_or_default();
     CardData {
         id: release.id,
-        title: release.title,
+        title: crate::album_map::format_album_title(&release.title, release.version.as_deref()),
         artist,
         artist_id: String::new(),
         genre: release.genre.map(|g| g.name).unwrap_or_default(),

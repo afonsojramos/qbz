@@ -328,10 +328,11 @@ fn map_album(album: Album) -> AlbumData {
         .map(|container| container.items)
         .unwrap_or_default();
     let tracks = raw_tracks.iter().cloned().map(map_track).collect();
+    let title = crate::album_map::format_album_title(&album.title, album.version.as_deref());
 
     AlbumData {
         id: album.id,
-        title: album.title,
+        title,
         artist,
         artist_id,
         artists,

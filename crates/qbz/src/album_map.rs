@@ -34,6 +34,18 @@ pub struct AlbumCard {
     pub plain_year: String,     // "1973"
 }
 
+/// Append a release `version` to a title the way the Qobuz web player does:
+/// `Octavarium (2009 Remaster)`, `A Dramatic Turn Of Events (Hi-Res)`. No-op
+/// when the version is absent/empty. Used by every album-title surface
+/// (discography, search, album header, suggestions) so re-editions of the same
+/// album are distinguishable instead of rendering as identical duplicates.
+pub fn format_album_title(title: &str, version: Option<&str>) -> String {
+    match version.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => format!("{title} ({v})"),
+        None => title.to_string(),
+    }
+}
+
 /// Map a decoded Qobuz album into an `AlbumCard`.
 ///
 /// Prefers the V2 nested shape (`audio_info` / `dates` / `track_count` /
@@ -83,12 +95,13 @@ pub fn map_album(album: Album) -> AlbumCard {
         .map(|n| n.to_string())
         .unwrap_or_default();
     let release_type = release_type_label(album.release_type.as_deref(), tc);
-    // Borrow `album` (artist) before any owned field is moved out below.
+    // Borrow `album` (artist + versioned title) before any owned field moves.
     let (artist, artist_id) = album_artist(&album);
+    let title = format_album_title(&album.title, album.version.as_deref());
     let genre = album.genre.map(|g| g.name).unwrap_or_default();
     AlbumCard {
         id: album.id,
-        title: album.title,
+        title,
         artist,
         artist_id,
         genre,
