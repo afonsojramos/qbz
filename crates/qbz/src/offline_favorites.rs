@@ -74,6 +74,7 @@ fn index_queue_track(row: &CachedTrackInfo, cover: &str) -> QueueTrack {
         version: None,
         artist: row.artist.clone(),
         album: row.album.clone().unwrap_or_default(),
+        album_version: None,
         duration_secs: row.duration_secs,
         artwork_url: (!cover.is_empty()).then(|| format!("file://{cover}")),
         hires: row.bit_depth.map(|d| d > 16).unwrap_or(false),

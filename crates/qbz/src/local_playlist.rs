@@ -888,6 +888,7 @@ pub(crate) fn row_queue_track(item: &RowItem) -> Option<QueueTrack> {
                 &album_title,
                 &album_artist,
                 &album_artwork,
+                None,
             ))
         }
         RowItem::Cached {
@@ -905,6 +906,7 @@ pub(crate) fn row_queue_track(item: &RowItem) -> Option<QueueTrack> {
             version: None,
             artist: artist.clone(),
             album: album.clone(),
+            album_version: None,
             duration_secs: *duration_secs,
             artwork_url: None,
             hires: bit_depth.map(|d| d >= 24).unwrap_or(false),

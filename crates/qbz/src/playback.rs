@@ -1171,6 +1171,8 @@ pub(crate) fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
         version: None,
         artist: track.artist.clone(),
         album: track.album_group_title.clone(),
+        // Local tracks have no Qobuz album-version concept.
+        album_version: None,
         duration_secs: track.duration_secs,
         artwork_url,
         hires: track.bit_depth.map(|d| d > 16).unwrap_or(false),
@@ -1432,6 +1434,18 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     };
     let artist = track.artist.clone();
     let album = track.album.clone();
+    // Album with its release variant appended ("Octavarium (2009 Remaster)") for
+    // the now-playing bar, MPRIS, and the desktop notification. Scrobbling keeps
+    // the CLEAN `album` (below) so Last.fm doesn't fragment stats across editions.
+    let album_display = match track
+        .album_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        Some(v) => format!("{album} ({v})"),
+        None => album.clone(),
+    };
     let album_id = track.album_id.clone().unwrap_or_default();
     let artist_id = track.artist_id.map(|id| id.to_string()).unwrap_or_default();
     let track_id_num = track.id;
@@ -1537,7 +1551,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
             mc.set_metadata(&qbz_media_controls::TrackMeta {
                 title: title.clone(),
                 artist: artist.clone(),
-                album: album.clone(),
+                album: album_display.clone(),
                 duration: (duration > 0).then(|| std::time::Duration::from_secs(duration as u64)),
                 art_url: mpris_art,
             });
@@ -1572,7 +1586,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         let notify_meta = qbz_media_controls::NotificationMeta {
             title: title.clone(),
             artist: artist.clone(),
-            album: album.clone(),
+            album: album_display.clone(),
             bit_depth: track.bit_depth,
             sample_rate: track.sample_rate,
             art_url: notify_art,
@@ -1609,7 +1623,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         np.set_has_track(true);
         np.set_title(title.into());
         np.set_artist(artist.into());
-        np.set_album(album.into());
+        np.set_album(album_display.into());
         np.set_album_id(album_id.into());
         np.set_artist_id(artist_id.into());
         np.set_track_id(track_id.into());
@@ -1704,6 +1718,7 @@ pub(crate) fn make_queue_track(
     album_title: &str,
     album_artist: &str,
     album_artwork: &str,
+    album_version: Option<&str>,
 ) -> QueueTrack {
     QueueTrack {
         id: track.id,
@@ -1716,6 +1731,10 @@ pub(crate) fn make_queue_track(
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| album_artist.to_string()),
         album: album_title.to_string(),
+        album_version: album_version
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string),
         duration_secs: track.duration as u64,
         artwork_url: if album_artwork.is_empty() {
             None
@@ -1954,6 +1973,7 @@ async fn fetch_album_for_play(
                 &album_title,
                 &album_artist,
                 &album_artwork,
+                album.version.as_deref(),
             )
         })
         .collect();
@@ -2237,6 +2257,7 @@ fn make_top_track_queue(
         version: track.version,
         artist: artist_name,
         album: album_title,
+        album_version: None,
         duration_secs: track.duration.unwrap_or(0) as u64,
         artwork_url,
         hires,
@@ -2292,6 +2313,7 @@ pub fn play_track_now(
             &album_title,
             &album_artist,
             &album_artwork,
+            None,
         );
 
         runtime.core().set_queue(vec![queue_track], Some(0)).await;
@@ -2327,6 +2349,7 @@ fn track_item_to_queue(it: &TrackItem) -> Option<QueueTrack> {
         version: None,
         artist: it.artist.to_string(),
         album: it.album.to_string(),
+        album_version: None,
         duration_secs: mmss_to_secs(it.duration.as_str()),
         artwork_url: {
             let u = it.artwork_url.to_string();
@@ -2665,7 +2688,7 @@ pub fn play_tracks(
                 .as_ref()
                 .map(|p| p.name.clone())
                 .unwrap_or_default();
-            make_queue_track(track, &album_id, &album_title, &album_artist, &album_artwork)
+            make_queue_track(track, &album_id, &album_title, &album_artist, &album_artwork, None)
         })
         .collect();
     if queue.is_empty() {
@@ -2871,7 +2894,7 @@ pub fn enqueue_album(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
             .iter()
             .filter(|track| !track_is_blacklisted_full(track, album_primary))
             .map(|track| {
-                make_queue_track(track, &album.id, &album_title, &album_artist, &album_artwork)
+                make_queue_track(track, &album.id, &album_title, &album_artist, &album_artwork, album.version.as_deref())
             })
             .collect();
         if tracks.is_empty() {
@@ -2974,7 +2997,7 @@ pub fn enqueue_album_next(
             .iter()
             .filter(|track| !track_is_blacklisted_full(track, album_primary))
             .map(|track| {
-                make_queue_track(track, &album.id, &album_title, &album_artist, &album_artwork)
+                make_queue_track(track, &album.id, &album_title, &album_artist, &album_artwork, album.version.as_deref())
             })
             .collect();
         if tracks.is_empty() {
@@ -3037,7 +3060,7 @@ pub fn enqueue_track(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
             .map(|p| p.name.clone())
             .unwrap_or_default();
         let queue_track =
-            make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork);
+            make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork, None);
         runtime.core().add_track(queue_track).await;
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
@@ -3087,7 +3110,7 @@ pub fn play_track_next(
             .map(|p| p.name.clone())
             .unwrap_or_default();
         let queue_track =
-            make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork);
+            make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork, None);
         runtime.core().add_track_next(queue_track).await;
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
@@ -3320,7 +3343,7 @@ pub fn enqueue_tracks(
                 .map(|p| p.name.clone())
                 .unwrap_or_default();
             let qt =
-                make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork);
+                make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork, None);
             if next {
                 runtime.core().add_track_next(qt).await;
             } else {

@@ -350,6 +350,7 @@ mod tests {
             version: None,
             artist: artist.to_string(),
             album: String::new(),
+            album_version: None,
             duration_secs: 0,
             artwork_url: None,
             hires: false,

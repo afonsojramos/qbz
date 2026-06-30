@@ -180,6 +180,10 @@ fn from_persisted(t: PersistedQueueTrack) -> QueueTrack {
         version: None,
         artist: t.artist,
         album: t.album,
+        // Album-version is cosmetic (now-playing/MPRIS); not persisted in the
+        // session schema, so a restored track shows the clean album until the
+        // next album-play repopulates it.
+        album_version: None,
         duration_secs: t.duration_secs,
         artwork_url: t.artwork_url,
         hires: t.hires,

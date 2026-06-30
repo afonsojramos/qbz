@@ -332,6 +332,7 @@ mod tests {
             version: None,
             artist: "a".into(),
             album: "al".into(),
+            album_version: None,
             duration_secs: 0,
             artwork_url: artwork.map(|s| s.to_string()),
             hires: false,

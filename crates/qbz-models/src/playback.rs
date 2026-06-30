@@ -21,6 +21,12 @@ pub struct QueueTrack {
     pub version: Option<String>,
     pub artist: String,
     pub album: String,
+    /// Album-level release variant ("2009 Remaster", "Hi-Res", …) — distinct
+    /// from the per-track `version`. Appended to the album name for the
+    /// now-playing bar + MPRIS (NOT for Last.fm scrobbling, which wants the
+    /// clean album name). Populated on the album-play path; None elsewhere.
+    #[serde(default)]
+    pub album_version: Option<String>,
     pub duration_secs: u64,
     pub artwork_url: Option<String>,
     #[serde(default)]

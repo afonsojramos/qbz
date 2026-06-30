@@ -920,6 +920,7 @@ pub fn selected_queue_tracks(window: &AppWindow) -> Vec<QueueTrack> {
                 &album_title,
                 &album_artist,
                 &album_artwork,
+                None,
             ));
         } else {
             log::warn!("[qbz-slint] bulk queue: row {id} not resolvable — skipped");

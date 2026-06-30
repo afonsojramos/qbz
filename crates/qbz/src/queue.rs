@@ -968,6 +968,7 @@ mod tests {
             version: version.map(|v| v.to_string()),
             artist: "Artist".to_string(),
             album: "Album".to_string(),
+            album_version: None,
             duration_secs: 100,
             artwork_url: None,
             hires: false,

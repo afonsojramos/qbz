@@ -1173,6 +1173,7 @@ mod tests {
             version: None,
             artist: "Artist".to_string(),
             album: "Album".to_string(),
+            album_version: None,
             duration_secs: 180,
             artwork_url: None,
             hires: false,

@@ -84,6 +84,7 @@ pub fn model_track_to_core_queue_track(track: &Track) -> QueueTrack {
         version: track.version.clone(),
         artist,
         album,
+        album_version: None,
         duration_secs: track.duration as u64,
         artwork_url,
         hires: track.hires,
