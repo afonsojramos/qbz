@@ -271,6 +271,9 @@ where
         .collect();
     let recent_albums = crate::recently::load_albums()
         .into_iter()
+        // Drop blocked albums (own id) at the SOURCE so the model + artwork jobs
+        // stay index-aligned. Recently Played is Qobuz album ids.
+        .filter(|album| !crate::artist_blacklist::is_album_blacklisted(&album.id))
         .map(|album| CardData {
             id: album.id,
             title: album.title,

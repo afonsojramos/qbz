@@ -293,8 +293,22 @@ where
         }
         FavTab::Albums => {
             let albums: Vec<Album> = serde_json::from_value(items).unwrap_or_default();
+            // Drop blocked albums at the SOURCE so the model + the artwork jobs
+            // (both derived from `items`) stay index-aligned.
+            let (bl, abl) = if crate::artist_blacklist::is_enabled() {
+                (
+                    crate::artist_blacklist::ids_snapshot(),
+                    crate::artist_blacklist::album_ids_snapshot(),
+                )
+            } else {
+                Default::default()
+            };
             FavData::Albums {
-                items: albums.into_iter().map(map_album).collect(),
+                items: albums
+                    .into_iter()
+                    .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
+                    .map(map_album)
+                    .collect(),
                 total,
             }
         }
@@ -521,10 +535,10 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
         }
         FavData::Albums { items, total } => {
             // Everything in the Albums tab is a favorite -> filled heart.
-            // Drop blocked albums (own id) and blacklisted-artist albums.
+            // (Blocked albums are already dropped at the FavData source so the
+            // model + artwork jobs stay index-aligned.)
             let cards: Vec<AlbumCardItem> = items
                 .into_iter()
-                .filter(|c| !crate::artist_blacklist::card_blacklisted(&c.id, &c.artist_id))
                 .map(|c| {
                     let mut it = to_item(c);
                     it.is_favorite = true;

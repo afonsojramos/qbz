@@ -158,9 +158,13 @@ fn credit_role(roles: Option<&Vec<String>>) -> String {
 
 /// Build the header credit line (E1): every credited artist with its role,
 /// falling back to the single primary interpreter when the album carries no
-/// `artists[]` array (some V2/discover shapes).
+/// `artists[]` array (some V2/discover shapes). Composers are appended from the
+/// tracklist — classical albums list the composer on the tracks (and the
+/// `composer` Artist), NOT in `album.artists` (which carries only performers),
+/// so the webplayer's "… • Mozart (compositor)" must be derived from there.
 fn build_credits(album: &Album) -> Vec<ArtistCreditData> {
-    match album.artists.as_ref().filter(|v| !v.is_empty()) {
+    let mut credits: Vec<ArtistCreditData> = match album.artists.as_ref().filter(|v| !v.is_empty())
+    {
         Some(list) => list
             .iter()
             .map(|a| ArtistCreditData {
@@ -174,7 +178,28 @@ fn build_credits(album: &Album) -> Vec<ArtistCreditData> {
             name: album.artist.name.clone(),
             role: String::new(),
         }],
+    };
+
+    // Append distinct composers from the tracklist (not already credited).
+    let mut seen: std::collections::HashSet<String> =
+        credits.iter().map(|c| c.id.clone()).collect();
+    let composer_label = qbz_i18n::t("Composer");
+    if let Some(items) = album.tracks.as_ref().map(|c| &c.items) {
+        for track in items {
+            if let Some(comp) = track.composer.as_ref() {
+                let id = comp.id.to_string();
+                if comp.name.is_empty() || !seen.insert(id.clone()) {
+                    continue;
+                }
+                credits.push(ArtistCreditData {
+                    id,
+                    name: comp.name.clone(),
+                    role: composer_label.clone(),
+                });
+            }
+        }
     }
+    credits
 }
 
 fn map_album(album: Album) -> AlbumData {

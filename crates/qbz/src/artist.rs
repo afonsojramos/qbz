@@ -355,7 +355,12 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
         .unwrap_or_default();
 
     // "Novedad más reciente" — the single latest-release highlight.
-    let last_release = page.last_release.map(map_release);
+    // Drop a blocked "Latest release" at the SOURCE so has_last_release is
+    // false (section hidden) and no stale cover job is queued.
+    let last_release = page
+        .last_release
+        .map(map_release)
+        .filter(|c| !crate::artist_blacklist::card_blacklisted(&c.id, &c.artist_id));
 
     // "Appears On" — tracks where the artist guests (tracks_appears_on).
     // These are TRACKS, not albums; rendered as a flat track section.
@@ -442,7 +447,11 @@ fn truncate_words(text: &str, max: usize) -> String {
 pub fn artwork_jobs(data: &ArtistData) -> Vec<ArtworkJob> {
     let mut jobs = Vec::new();
     if let Some(card) = data.last_release.as_ref() {
-        if !card.artwork_url.is_empty() {
+        // The model drops a blocked last-release (apply_artist), so skip its job
+        // too — otherwise the cover would land on the empty slot.
+        if !card.artwork_url.is_empty()
+            && !crate::artist_blacklist::card_blacklisted(&card.id, &card.artist_id)
+        {
             jobs.push(ArtworkJob {
                 target: ArtworkTarget::ArtistLastRelease,
                 url: card.artwork_url.clone(),
@@ -450,7 +459,14 @@ pub fn artwork_jobs(data: &ArtistData) -> Vec<ArtworkJob> {
         }
     }
     for (section_idx, section) in data.release_sections.iter().enumerate() {
-        for (album_idx, card) in section.cards.iter().enumerate() {
+        // album_idx must be the POST-FILTER index so it matches the filtered
+        // model apply_artist builds; otherwise a blocked card shifts every
+        // subsequent cover onto the wrong album (and clicks open the wrong one).
+        let mut album_idx = 0;
+        for card in section.cards.iter() {
+            if crate::artist_blacklist::card_blacklisted(&card.id, &card.artist_id) {
+                continue;
+            }
             if !card.artwork_url.is_empty() {
                 jobs.push(ArtworkJob {
                     target: ArtworkTarget::ArtistRelease {
@@ -460,6 +476,7 @@ pub fn artwork_jobs(data: &ArtistData) -> Vec<ArtworkJob> {
                     url: card.artwork_url.clone(),
                 });
             }
+            album_idx += 1;
         }
     }
     jobs
