@@ -69,9 +69,10 @@ const CONTRIBUTORS: &[&str] = &[
 ];
 
 /// How many contributor chips per wrap row. Slint has no flex-wrap, so the flat
-/// list is pre-grouped into fixed rows (see `AboutContributorGroup`). 4 mirrors
-/// the Tauri flex-wrap density at the ~720px panel width.
-const CONTRIBUTORS_PER_ROW: usize = 4;
+/// list is pre-grouped into fixed rows (see `AboutContributorGroup`). 5 fills
+/// the widened ~840px panel (10 contributors → 2 even rows) instead of the old
+/// 4-per-row / 3-row layout that left the wider modal half-empty.
+const CONTRIBUTORS_PER_ROW: usize = 5;
 
 /// Build the row-grouped contributor model. Avatars start blank (default image)
 /// and are filled in async by `spawn_avatar_loads`.

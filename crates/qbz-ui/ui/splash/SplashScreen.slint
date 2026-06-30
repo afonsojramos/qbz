@@ -65,23 +65,23 @@ export component SplashScreen inherits Rectangle {
                             height: 30px;
                         }
                     }
-
-                    Rectangle { height: Spacing.xl; }
-
-                    // Legal disclaimer footer — the same trademark/affiliation
-                    // text the login screen (and Tauri) already shows; the splash
-                    // was missing it.
-                    Text {
-                        text: @tr("This application uses the Qobuz API but is not certified by Qobuz.")
-                            + " "
-                            + @tr("Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz.");
-                        color: Theme.text-muted;
-                        font-size: Typography.legal;
-                        horizontal-alignment: center;
-                        wrap: word-wrap;
-                    }
                 }
             }
         }
+    }
+
+    // Legal disclaimer — pinned to the BOTTOM of the screen (the main
+    // container), like Tauri, NOT inside the splash card. Small footnote text.
+    Text {
+        text: @tr("This application uses the Qobuz API but is not certified by Qobuz.")
+            + " "
+            + @tr("Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz.");
+        color: Theme.text-muted;
+        font-size: 10px;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+        width: Math.min(root.width - 80px, 720px);
+        x: Math.round((root.width - self.width) / 2 / 1px) * 1px;
+        y: root.height - self.height - 24px;
     }
 }
