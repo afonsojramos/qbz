@@ -791,6 +791,8 @@ fn map_local_track(t: qbz_library::LocalTrack) -> TrackItem {
         disc_header_number: 0,
         // Work grouping is album-detail only too.
         work_header: "".into(),
+        work_composer_name: "".into(),
+        work_composer_id: "".into(),
     }
 }
 

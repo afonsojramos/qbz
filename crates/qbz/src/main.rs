@@ -294,6 +294,7 @@ fn seed_tray_appearance(w: &AppWindow, tray: &tray_settings::TraySettings) {
 fn seed_blacklist_status(w: &AppWindow) {
     let st = w.global::<BlacklistState>();
     st.set_count(crate::artist_blacklist::count() as i32);
+    st.set_album_count(crate::artist_blacklist::album_count() as i32);
     st.set_enabled(crate::artist_blacklist::is_enabled());
 }
 
@@ -4439,6 +4440,8 @@ fn wire_myqbz_detail(
     // `myqbz_detail::navigate` (whose resolveItems pass needs it) without
     // threading it through every entry point.
     myqbz_detail::set_runtime(app_runtime.clone());
+    // Blacklist Manager album-cover resolution needs the shared image cache.
+    blacklist_manager::set_image_cache(image_cache.clone());
 
     // After a toolbar re-derive the rendered model changed, so the visible
     // rows need their thumbnails reloaded — through the SOURCE-SPLIT dispatch
@@ -8903,6 +8906,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                ("album", "block") | ("album", "unblock") => {
+                    if let Some(w) = weak.upgrade() {
+                        let st = w.global::<AlbumState>();
+                        // Header menu: the open album is AlbumState, so resolve
+                        // the display fields (title/artist/cover) from it.
+                        let album_id = if id.is_empty() {
+                            st.get_id().to_string()
+                        } else {
+                            id.clone()
+                        };
+                        if !album_id.is_empty() {
+                            let was_blocked =
+                                crate::artist_blacklist::is_album_blacklisted(&album_id);
+                            // Optimistic flip on the header toggle.
+                            st.set_is_album_blocked(!was_blocked);
+                            let title = st.get_title().to_string();
+                            let artist = st.get_artist().to_string();
+                            let cover = st.get_artwork_url().to_string();
+                            let res = if was_blocked {
+                                crate::artist_blacklist::remove_album(&album_id)
+                            } else {
+                                crate::artist_blacklist::add_album(
+                                    &album_id, &title, &artist, &cover, None,
+                                )
+                            };
+                            match res {
+                                Ok(()) => {
+                                    seed_blacklist_status(&w);
+                                    let msg = if was_blocked {
+                                        qbz_i18n::t_args("Album \"{}\" unblocked", &[&title])
+                                    } else {
+                                        qbz_i18n::t_args("Album \"{}\" blocked", &[&title])
+                                    };
+                                    crate::toast::success_weak(&weak, msg);
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "[qbz-slint] album block toggle failed: {e}"
+                                    );
+                                    st.set_is_album_blocked(was_blocked);
+                                    let emsg = if was_blocked {
+                                        qbz_i18n::t("Failed to unblock album")
+                                    } else {
+                                        qbz_i18n::t("Failed to block album")
+                                    };
+                                    crate::toast::error_weak(&weak, emsg);
+                                }
+                            }
+                        }
+                    }
+                }
                 ("artist", "play-top") => playback::play_artist_top_tracks(
                     runtime.clone(),
                     weak.clone(),
@@ -12811,6 +12865,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_search_changed(move |q| {
                 if let Some(w) = weak.upgrade() {
                     blacklist_manager::search_changed(&w, q.to_string());
+                }
+            });
+    }
+    // --- Album blacklist callbacks ---
+    {
+        let weak = window.as_weak();
+        window
+            .global::<BlacklistActions>()
+            .on_set_tab(move |tab| {
+                if let Some(w) = weak.upgrade() {
+                    blacklist_manager::set_tab(&w, tab);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<BlacklistActions>()
+            .on_block_album(move |id, title, artist, cover| {
+                if let Some(w) = weak.upgrade() {
+                    blacklist_manager::block_album(
+                        &w,
+                        id.to_string(),
+                        title.to_string(),
+                        artist.to_string(),
+                        cover.to_string(),
+                    );
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<BlacklistActions>()
+            .on_remove_album(move |id| {
+                if let Some(w) = weak.upgrade() {
+                    blacklist_manager::remove_album(&w, id.to_string());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<BlacklistActions>()
+            .on_clear_all_albums(move || {
+                if let Some(w) = weak.upgrade() {
+                    blacklist_manager::clear_all_albums(&w);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let bl_runtime_b = app_runtime.clone();
+        let bl_handle_b = tokio_rt.handle().clone();
+        let bl_image_cache_b = image_cache.clone();
+        window
+            .global::<BlacklistActions>()
+            .on_album_select(move |id| {
+                let album_id = id.to_string();
+                nav::record(nav::NavEntry::Album(album_id.clone()));
+                navigate_album(
+                    bl_runtime_b.clone(),
+                    weak.clone(),
+                    &bl_handle_b,
+                    bl_image_cache_b.clone(),
+                    album_id,
+                );
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
                 }
             });
     }

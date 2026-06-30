@@ -13,7 +13,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
-import { AlbumCardItem, NavState, TooltipState } from "../state.slint";
+import { AlbumCardItem, NavState, TooltipState, BlacklistActions } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadge } from "../primitives/QualityBadge.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
@@ -340,7 +340,8 @@ export component AlbumCard inherits Rectangle {
                 x: 26px;
                 y: 56px;
                 width: 196px;
-                height: 142px;
+                // 6 items max (Open/Play/Play-next/Queue + favorite + block).
+                height: 6 * 33px + 10px;
                 ContextMenu {
                     ContextMenuItem {
                         icon: @image-url("../assets/icons/library-big.svg");
@@ -375,6 +376,15 @@ export component AlbumCard inherits Rectangle {
                         label: @tr("Add to favorites");
                         clicked => {
                             root.media-action("album", root.album.id, "favorite");
+                        }
+                    }
+                    // Block this album (album blacklist) — Qobuz cards only.
+                    // One-way: a blocked album drops from the grid on reload.
+                    if root.album.source != "local" && root.album.source != "plex": ContextMenuItem {
+                        icon: @image-url("../assets/icons/blind-eye.svg");
+                        label: @tr("Block this album");
+                        clicked => {
+                            BlacklistActions.block-album(root.album.id, root.album.title, root.album.artist, root.album.artwork-url);
                         }
                     }
                 }

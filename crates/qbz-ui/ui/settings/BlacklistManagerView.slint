@@ -134,6 +134,117 @@ component ArtistRow inherits Rectangle {
     }
 }
 
+// One blocked-album row (parallel to ArtistRow, with a cover thumbnail).
+component AlbumRow inherits Rectangle {
+    in property <string> album-title;
+    in property <string> artist-name;
+    in property <string> added-display;
+    in property <image> cover-image;
+    property <bool> hovered: ta.has-hover || rm-ta.has-hover;
+    callback select();
+    callback remove();
+    callback hover-changed(bool);
+    height: 64px;
+    border-radius: Radius.md;
+    background: root.hovered ? Theme.surface-elevated : Theme.surface-card;
+
+    changed hovered => {
+        root.hover-changed(self.hovered);
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 8px;
+        spacing: 12px;
+
+        Rectangle {
+            horizontal-stretch: 1;
+            ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.select();
+                }
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                // 48x48 cover with a blind-eye fallback (shows through until the
+                // network cover resolves, or when none exists).
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 48px;
+                        height: 48px;
+                        border-radius: Radius.sm;
+                        clip: true;
+                        background: Theme.surface-elevated;
+                        QbzIcon {
+                            source: @image-url("../assets/icons/blind-eye.svg");
+                            width: 20px;
+                            height: 20px;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                            tint: Theme.text-muted;
+                        }
+                        Image {
+                            width: 100%;
+                            height: 100%;
+                            source: root.cover-image;
+                            image-fit: cover;
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: root.album-title;
+                        color: Theme.text-primary;
+                        font-size: Typography.body;
+                        font-weight: Typography.medium;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.artist-name;
+                        color: Theme.text-secondary;
+                        font-size: Typography.legal;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: @tr("Added {}", root.added-display);
+                        color: Theme.text-muted;
+                        font-size: Typography.legal;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: Radius.sm;
+                background: rm-ta.has-hover ? Theme.danger-bg : transparent;
+                QbzIcon {
+                    source: @image-url("../assets/icons/x.svg");
+                    width: 18px;
+                    height: 18px;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                    tint: rm-ta.has-hover ? Theme.danger : Theme.text-muted;
+                }
+                rm-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.remove();
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component BlacklistManagerView inherits Rectangle {
     background: Theme.surface-main;
 
@@ -168,7 +279,7 @@ export component BlacklistManagerView inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 Text {
-                    text: @tr("Artist Blacklist");
+                    text: @tr("Blacklist");
                     color: Theme.text-primary;
                     font-size: Typography.section;
                     font-weight: Typography.bold;
@@ -176,10 +287,76 @@ export component BlacklistManagerView inherits Rectangle {
             }
         }
 
-        // Description.
+        // Tab bar — Artists | Albums (segmented, no pills per ADR-008).
+        HorizontalLayout {
+            vertical-stretch: 0;
+            spacing: 0;
+            alignment: start;
+            Rectangle {
+                width: tabs-row.preferred-width + 8px;
+                height: 36px;
+                border-radius: Radius.sm;
+                background: Theme.surface-elevated;
+                tabs-row := HorizontalLayout {
+                    x: 4px;
+                    width: self.preferred-width;
+                    height: 100%;
+                    padding: 4px;
+                    spacing: 4px;
+                    // Artists tab.
+                    Rectangle {
+                        width: artists-lbl.preferred-width + 28px;
+                        border-radius: Radius.sm;
+                        background: BlacklistState.active-tab == 0
+                            ? Theme.surface-card
+                            : (artists-ta.has-hover ? Theme.surface-hover : transparent);
+                        artists-lbl := Text {
+                            text: @tr("Artists");
+                            color: BlacklistState.active-tab == 0 ? Theme.text-primary : Theme.text-muted;
+                            font-size: Typography.legal;
+                            font-weight: Typography.medium;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                        }
+                        artists-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                BlacklistActions.set-tab(0);
+                            }
+                        }
+                    }
+                    // Albums tab.
+                    Rectangle {
+                        width: albums-lbl.preferred-width + 28px;
+                        border-radius: Radius.sm;
+                        background: BlacklistState.active-tab == 1
+                            ? Theme.surface-card
+                            : (albums-ta.has-hover ? Theme.surface-hover : transparent);
+                        albums-lbl := Text {
+                            text: @tr("Albums");
+                            color: BlacklistState.active-tab == 1 ? Theme.text-primary : Theme.text-muted;
+                            font-size: Typography.legal;
+                            font-weight: Typography.medium;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                        }
+                        albums-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                BlacklistActions.set-tab(1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Description (per tab).
         Text {
             vertical-stretch: 0;
-            text: @tr("Blacklisted artists are hidden from search results, radio, suggestions, and similar artists.");
+            text: BlacklistState.active-tab == 0
+                ? @tr("Blacklisted artists are hidden from search results, radio, suggestions, and similar artists.")
+                : @tr("Blocked albums are hidden from search, discovery, and listings — even when their artist is allowed.");
             color: Theme.text-muted;
             font-size: Typography.body;
             wrap: word-wrap;
@@ -295,8 +472,8 @@ export component BlacklistManagerView inherits Rectangle {
                 }
             }
 
-            // Clear-All — only when there is something to clear (full count).
-            if BlacklistState.count > 0: Rectangle {
+            // Clear-All — only when the active tab has something to clear.
+            if (BlacklistState.active-tab == 0 ? BlacklistState.count : BlacklistState.album-count) > 0: Rectangle {
                 width: clear-all-row.preferred-width + 28px;
                 height: 34px;
                 border-radius: Radius.sm;
@@ -340,7 +517,9 @@ export component BlacklistManagerView inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 Text {
-                    text: @tr("{} artists", BlacklistState.count);
+                    text: BlacklistState.active-tab == 0
+                        ? @tr("{} artists", BlacklistState.count)
+                        : @tr("{} albums", BlacklistState.album-count);
                     color: Theme.text-muted;
                     font-size: Typography.legal;
                     horizontal-alignment: right;
@@ -401,8 +580,8 @@ export component BlacklistManagerView inherits Rectangle {
                 }
             }
 
-            // 2) Empty blacklist.
-            if !BlacklistState.loading && BlacklistState.count == 0: VerticalLayout {
+            // 2) Empty blacklist (Artists tab).
+            if BlacklistState.active-tab == 0 && !BlacklistState.loading && BlacklistState.count == 0: VerticalLayout {
                 alignment: center;
                 spacing: 12px;
                 HorizontalLayout {
@@ -434,8 +613,8 @@ export component BlacklistManagerView inherits Rectangle {
                 }
             }
 
-            // 3) No search results (full list non-empty, filtered empty).
-            if !BlacklistState.loading && BlacklistState.count > 0 && BlacklistState.items.length == 0: VerticalLayout {
+            // 3) No search results (Artists tab; full list non-empty, filtered empty).
+            if BlacklistState.active-tab == 0 && !BlacklistState.loading && BlacklistState.count > 0 && BlacklistState.items.length == 0: VerticalLayout {
                 alignment: center;
                 spacing: 12px;
                 HorizontalLayout {
@@ -461,7 +640,7 @@ export component BlacklistManagerView inherits Rectangle {
             // 4) The list. Use Flickable + the shared custom scrollbar so the
             // scrollbar can reveal on list/gutter hover; std ScrollView does
             // not expose hover-controlled scrollbar visibility.
-            if !BlacklistState.loading && BlacklistState.items.length > 0: Rectangle {
+            if BlacklistState.active-tab == 0 && !BlacklistState.loading && BlacklistState.items.length > 0: Rectangle {
                 list-flick := Flickable {
                     width: 100%;
                     height: 100%;
@@ -494,6 +673,103 @@ export component BlacklistManagerView inherits Rectangle {
                     viewport-height: list-flick.viewport-height;
                     visible-height: list-flick.height;
                     viewport-y <=> list-flick.viewport-y;
+                    auto-hide: true;
+                    hover-active: root.list-hover-rows > 0;
+                }
+            }
+
+            // --- Albums tab branches -------------------------------------
+            // 2b) Empty (no blocked albums).
+            if BlacklistState.active-tab == 1 && !BlacklistState.loading && BlacklistState.album-count == 0: VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+                HorizontalLayout {
+                    alignment: center;
+                    QbzIcon {
+                        source: @image-url("../assets/icons/blind-eye.svg");
+                        width: 48px;
+                        height: 48px;
+                        tint: Theme.text-muted;
+                        opacity: 0.3;
+                    }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("No blocked albums");
+                        color: Theme.text-muted;
+                        font-size: Typography.heading;
+                    }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("To block an album, open its menu and choose Block this album.");
+                        color: Theme.text-muted;
+                        font-size: Typography.legal;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            // 3b) No search results (albums).
+            if BlacklistState.active-tab == 1 && !BlacklistState.loading && BlacklistState.album-count > 0 && BlacklistState.album-items.length == 0: VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+                HorizontalLayout {
+                    alignment: center;
+                    QbzIcon {
+                        source: @image-url("../assets/icons/search.svg");
+                        width: 48px;
+                        height: 48px;
+                        tint: Theme.text-muted;
+                        opacity: 0.3;
+                    }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("No results for \"{}\"", BlacklistState.search-query);
+                        color: Theme.text-muted;
+                        font-size: Typography.heading;
+                    }
+                }
+            }
+
+            // 4b) The blocked-albums list.
+            if BlacklistState.active-tab == 1 && !BlacklistState.loading && BlacklistState.album-items.length > 0: Rectangle {
+                album-flick := Flickable {
+                    width: 100%;
+                    height: 100%;
+                    viewport-width: self.width;
+                    viewport-height: album-content.preferred-height;
+                    album-content := VerticalLayout {
+                        width: parent.width - 18px;
+                        spacing: 4px;
+                        for item in BlacklistState.album-items: AlbumRow {
+                            album-title: item.album-title;
+                            artist-name: item.artist-name;
+                            added-display: item.added-display;
+                            cover-image: item.cover;
+                            select => {
+                                BlacklistActions.album-select(item.album-id);
+                            }
+                            remove => {
+                                BlacklistActions.remove-album(item.album-id);
+                            }
+                            hover-changed(h) => {
+                                root.list-hover-rows = h ? root.list-hover-rows + 1 : Math.max(0, root.list-hover-rows - 1);
+                            }
+                        }
+                    }
+                }
+                ListScrollbar {
+                    x: parent.width - self.width - 4px;
+                    width: 14px;
+                    height: 100%;
+                    viewport-height: album-flick.viewport-height;
+                    visible-height: album-flick.height;
+                    viewport-y <=> album-flick.viewport-y;
                     auto-hide: true;
                     hover-active: root.list-hover-rows > 0;
                 }
@@ -552,7 +828,9 @@ export component BlacklistManagerView inherits Rectangle {
                     font-weight: Typography.semibold;
                 }
                 Text {
-                    text: @tr("This will remove all {} blacklisted artists. This cannot be undone.", BlacklistState.count);
+                    text: BlacklistState.active-tab == 0
+                        ? @tr("This will remove all {} blacklisted artists. This cannot be undone.", BlacklistState.count)
+                        : @tr("This will remove all {} blocked albums. This cannot be undone.", BlacklistState.album-count);
                     color: Theme.text-secondary;
                     font-size: Typography.body;
                     wrap: word-wrap;
@@ -608,7 +886,11 @@ export component BlacklistManagerView inherits Rectangle {
                         danger-ta := TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
-                                BlacklistActions.clear-all();
+                                if (BlacklistState.active-tab == 0) {
+                                    BlacklistActions.clear-all();
+                                } else {
+                                    BlacklistActions.clear-all-albums();
+                                }
                                 root.confirm-clear-open = false;
                             }
                         }

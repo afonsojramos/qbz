@@ -492,8 +492,10 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackData {
         // "Disc N" headers, so the disc value is unused here — default to 1.
         disc: 1,
         // Work-section headers are album-view only; the flat artist list never
-        // renders them, so leave it empty.
+        // renders them, so leave them empty.
         work: String::new(),
+        work_composer_name: String::new(),
+        work_composer_id: String::new(),
     }
 }
 
@@ -644,6 +646,8 @@ fn track_data_to_item(track: TrackData) -> TrackItem {
         unlocking: false,
         disc_header_number: 0,
         work_header: "".into(),
+        work_composer_name: "".into(),
+        work_composer_id: "".into(),
     }
 }
 

@@ -504,6 +504,8 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
                     disc_header_number: 0,
                     // Work grouping is album-detail only too.
                     work_header: "".into(),
+                    work_composer_name: "".into(),
+                    work_composer_id: "".into(),
                 })
                 .collect();
             // `tracks` is the full set the artwork pipeline targets;

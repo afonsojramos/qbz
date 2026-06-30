@@ -342,24 +342,43 @@ export component AlbumPageView inherits Rectangle {
                         overflow: elide;
                     }
                     Rectangle { height: 4px; }
+                    // Full credited-artist line (E1): every contributor with its
+                    // role (e.g. "Faust • Melnikov • Mozart (compositor)"), each
+                    // name a clickable link to its artist page. Falls back to the
+                    // single interpreter when the album carries no artists[] list.
                     HorizontalLayout {
                         alignment: start;
-                        artist-area := TouchArea {
-                            width: artist-text.preferred-width;
-                            height: artist-text.preferred-height;
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.open-artist(AlbumState.artist-id);
-                            }
-                            artist-text := Text {
-                                text: AlbumState.artist;
-                                // Same color as the surrounding metadata,
-                                // bold to read as a link.
-                                color: artist-area.has-hover
-                                    ? Theme.text-primary
-                                    : Theme.text-secondary;
+                        for credit[idx] in AlbumState.artists: HorizontalLayout {
+                            if idx > 0: Text {
+                                text: "  •  ";
+                                color: Theme.text-secondary;
                                 font-size: Typography.heading;
                                 font-weight: Typography.bold;
+                                vertical-alignment: center;
+                            }
+                            credit-area := TouchArea {
+                                width: credit-text.preferred-width;
+                                height: credit-text.preferred-height;
+                                mouse-cursor: credit.id != "" ? pointer : default;
+                                enabled: credit.id != "";
+                                clicked => {
+                                    root.open-artist(credit.id);
+                                }
+                                credit-text := Text {
+                                    text: credit.name;
+                                    color: credit-area.has-hover && credit.id != ""
+                                        ? Theme.text-primary
+                                        : Theme.text-secondary;
+                                    font-size: Typography.heading;
+                                    font-weight: Typography.bold;
+                                }
+                            }
+                            if credit.role != "": Text {
+                                text: " (" + credit.role + ")";
+                                color: Theme.text-secondary;
+                                font-size: Typography.heading;
+                                font-weight: 400;
+                                vertical-alignment: center;
                             }
                         }
                     }
@@ -548,6 +567,7 @@ export component AlbumPageView inherits Rectangle {
                                     y: 38px;
                                     album-id: AlbumState.id;
                                     fully-cached: AlbumState.album-fully-cached;
+                                    is-blocked: AlbumState.is-album-blocked;
                                     media-action(k, i, a) => {
                                         root.media-action(k, i, a);
                                     }
@@ -847,14 +867,48 @@ export component AlbumPageView inherits Rectangle {
                                 padding-right: 12px;
                                 padding-top: 14px;
                                 padding-bottom: 4px;
+                                alignment: start;
                                 Text {
                                     text: track.work-header;
                                     color: Theme.text-primary;
                                     font-size: Typography.body;
                                     font-weight: 700;
-                                    wrap: word-wrap;
-                                    horizontal-alignment: left;
-                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                // " (Composer)" — the composer name links to its
+                                // artist page (E3). Hidden when the work carries
+                                // no composer.
+                                if track.work-composer-name != "": Text {
+                                    text: " (";
+                                    color: Theme.text-secondary;
+                                    font-size: Typography.body;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                                if track.work-composer-name != "": composer-ta := TouchArea {
+                                    width: composer-text.preferred-width;
+                                    height: composer-text.preferred-height;
+                                    mouse-cursor: track.work-composer-id != "" ? pointer : default;
+                                    enabled: track.work-composer-id != "";
+                                    clicked => {
+                                        root.media-action("artist", track.work-composer-id, "open");
+                                    }
+                                    composer-text := Text {
+                                        text: track.work-composer-name;
+                                        color: composer-ta.has-hover && track.work-composer-id != ""
+                                            ? Theme.text-primary
+                                            : Theme.text-secondary;
+                                        font-size: Typography.body;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                if track.work-composer-name != "": Text {
+                                    text: ")";
+                                    color: Theme.text-secondary;
+                                    font-size: Typography.body;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
                                 }
                             }
                         }

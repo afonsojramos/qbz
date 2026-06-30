@@ -980,6 +980,8 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
             disc_header_number: 0,
             // Work grouping is album-detail only too.
             work_header: "".into(),
+            work_composer_name: "".into(),
+            work_composer_id: "".into(),
         },
         RowItem::Local(track) | RowItem::Plex(track) => {
             let (tier, quality_detail, _) = crate::quality::badge(
@@ -1025,6 +1027,8 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
                 disc_header_number: 0,
                 // Work grouping is album-detail only too.
                 work_header: "".into(),
+                work_composer_name: "".into(),
+                work_composer_id: "".into(),
             }
         }
         RowItem::LocalFile { path } => {
@@ -1059,6 +1063,8 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
                 disc_header_number: 0,
                 // Work grouping is album-detail only too.
                 work_header: "".into(),
+                work_composer_name: "".into(),
+                work_composer_id: "".into(),
             }
         }
         // Honest unavailable row: distinct title + the raw stored ref in
@@ -1109,6 +1115,8 @@ fn row_item(item: &RowItem, queue: Option<&QueueTrack>) -> TrackItem {
             disc_header_number: 0,
             // Work grouping is album-detail only too.
             work_header: "".into(),
+            work_composer_name: "".into(),
+            work_composer_id: "".into(),
         },
     }
 }

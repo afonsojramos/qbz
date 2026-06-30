@@ -4134,3 +4134,60 @@ msgstr "Un cliente nativo de streaming de música para Linux, diseñado para aud
 
 msgid "Built with Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide, and Kawarp."
 msgstr "Construido con Slint, e impulsado por Rodio y Symphonia. Con agradecimientos a Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, Lucide y Kawarp."
+
+# Album blacklist (album-level blocking)
+msgid "Block this album"
+msgstr "Bloquear este álbum"
+
+msgid "Unblock album"
+msgstr "Desbloquear álbum"
+
+msgid "Album \"{}\" blocked"
+msgstr "Álbum \"{}\" bloqueado"
+
+msgid "Album \"{}\" unblocked"
+msgstr "Álbum \"{}\" desbloqueado"
+
+msgid "Failed to block album"
+msgstr "No se pudo bloquear el álbum"
+
+msgid "Failed to unblock album"
+msgstr "No se pudo desbloquear el álbum"
+
+msgid "{} albums"
+msgstr "{} álbumes"
+
+msgid "No blocked albums"
+msgstr "No hay álbumes bloqueados"
+
+msgid "To block an album, open its menu and choose Block this album."
+msgstr "Para bloquear un álbum, abre su menú y elige Bloquear este álbum."
+
+msgid "Blocked albums are hidden from search, discovery, and listings — even when their artist is allowed."
+msgstr "Los álbumes bloqueados se ocultan de la búsqueda, el descubrimiento y los listados, aunque su artista esté permitido."
+
+msgid "This will remove all {} blocked albums. This cannot be undone."
+msgstr "Esto quitará los {} álbumes bloqueados. No se puede deshacer."
+
+msgid "{} artists, {} albums blocked"
+msgstr "{} artistas, {} álbumes bloqueados"
+
+msgid "{} artists, {} albums blocked (disabled)"
+msgstr "{} artistas, {} álbumes bloqueados (desactivado)"
+
+msgid "Failed to clear album blacklist"
+msgstr "No se pudo limpiar la lista de álbumes bloqueados"
+
+msgid "Conductor"
+msgstr "Director"
+
+msgid "Orchestra"
+msgstr "Orquesta"
+
+msgid "Featured Artist"
+msgstr "Artista invitado"
+
+msgid "Removed {} album from blacklist"
+msgid_plural "Removed {} albums from blacklist"
+msgstr[0] "Se eliminó {} álbum de la lista negra"
+msgstr[1] "Se eliminaron {} álbumes de la lista negra"

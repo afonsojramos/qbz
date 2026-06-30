@@ -73,6 +73,9 @@ pub enum ArtworkTarget {
     /// targets a section row. Mirrors `CortinillaRow` but writes the immersive
     /// global instead of `SearchState`.
     ImmersiveSearchRow { flat_index: usize },
+    /// A blocked-album row cover in `BlacklistState.album-items[idx]` (the
+    /// Blacklist Manager Albums tab).
+    BlacklistAlbum { idx: usize },
     /// A release card in `ArtistState.release-sections[section_idx]
     /// .albums[album_idx]`.
     ArtistRelease { section_idx: usize, album_idx: usize },
@@ -817,6 +820,13 @@ fn apply_artwork(
             let model = window.global::<SearchState>().get_albums();
             if let Some(mut item) = model.row_data(idx) {
                 item.artwork = image;
+                model.set_row_data(idx, item);
+            }
+        }
+        ArtworkTarget::BlacklistAlbum { idx } => {
+            let model = window.global::<crate::BlacklistState>().get_album_items();
+            if let Some(mut item) = model.row_data(idx) {
+                item.cover = image;
                 model.set_row_data(idx, item);
             }
         }

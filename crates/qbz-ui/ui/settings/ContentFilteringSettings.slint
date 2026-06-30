@@ -86,16 +86,16 @@ export component ContentFilteringSettings inherits VerticalLayout {
                 alignment: center;
                 spacing: 3px;
                 Text {
-                    text: @tr("Artist Blacklist");
+                    text: @tr("Blacklist");
                     color: Theme.text-primary;
                     font-size: Typography.body;
                     font-weight: Typography.medium;
                 }
                 Text {
-                    // "{count} artist(s) blocked" + "(disabled)" suffix when off.
+                    // "{n} artists, {m} albums blocked" + "(disabled)" when off.
                     text: BlacklistState.enabled
-                        ? @tr("{} artist(s) blocked", BlacklistState.count)
-                        : @tr("{} artist(s) blocked (disabled)", BlacklistState.count);
+                        ? @tr("{} artists, {} albums blocked", BlacklistState.count, BlacklistState.album-count)
+                        : @tr("{} artists, {} albums blocked (disabled)", BlacklistState.count, BlacklistState.album-count);
                     color: Theme.text-muted;
                     font-size: 12px;
                 }

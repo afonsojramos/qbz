@@ -503,15 +503,38 @@ export struct TrackItem {
     // track render flat, with no header). Mirrors the official Qobuz player's
     // per-work sections (PR #536); the album view stamps it, all other track
     // surfaces leave it "" so the row stays flat.
+    //
+    // E3: `work-header` now holds the work TITLE only; the composer is split
+    // out below so its name can be a clickable link to the artist page.
     work-header: string,
+    // Classical work composer (E3): rendered as a clickable artist link inside
+    // the work header's parentheses. work-composer-id "" => plain (no link),
+    // and an empty name => no parenthetical at all. Set only on the work
+    // header's leading row, by the album view; "" everywhere else.
+    work-composer-name: string,
+    work-composer-id: string,
 }
 
 // Album detail screen state.
+// One credited album artist for the header credit line (E1: full
+// "Artist • Pianist • Composer (compositor)" list, not just the interpreter).
+export struct ArtistCredit {
+    // Qobuz artist id as a string (clickable → artist page). "" = not clickable.
+    id: string,
+    name: string,
+    // Localized role suffix shown in parens (e.g. "compositor"); "" for the
+    // main artist(s).
+    role: string,
+}
+
 export global AlbumState {
     in property <string> id;
     in property <string> title;
+    // Primary interpreter (kept for back-compat: now-playing, fallbacks).
     in property <string> artist;
     in property <string> artist-id;
+    // Full credited-artist list with roles for the header credit line.
+    in property <[ArtistCredit]> artists: [];
     // Network URL of the cover — used by the artwork right-click
     // menu for Open-in-browser and Save-as actions.
     in property <string> artwork-url;
@@ -556,6 +579,9 @@ export global AlbumState {
     in property <bool> is-favorite: false;
     // True while a favorite toggle is in flight (spinner on the heart).
     in property <bool> favorite-loading: false;
+    // Whether THIS album is blocked (album blacklist). Drives the header menu
+    // toggle ("Block this album" / "Unblock album"). Seeded on open.
+    in property <bool> is-album-blocked: false;
     // Multi-select (track selection) mode for the track list. in-out: the
     // toolbar toggle flips it from the UI; Rust resets it on album change.
     in-out property <bool> multi-select: false;
@@ -2183,10 +2209,25 @@ export struct BlacklistedArtistItem {
     has-notes: bool,
 }
 
+export struct BlacklistedAlbumItem {
+    // Qobuz album id is a STRING (alphanumeric), unlike the artist int id.
+    album-id: string,
+    album-title: string,
+    artist-name: string,
+    // Network cover URL; resolved to `cover` by the artwork pipeline.
+    cover-url: string,
+    cover: image,
+    added-at: int,
+    added-display: string,
+    notes: string,
+    has-notes: bool,
+}
+
 export global BlacklistState {
     // The CURRENTLY-VISIBLE rows (already search-filtered by the controller).
     in property <[BlacklistedArtistItem]> items: [];
     // Global enable flag (default-enabled, mirrors the backend default).
+    // Shared by both axes (artists + albums).
     in property <bool> enabled: true;
     in property <bool> loading: true;
     // FULL list count (NOT the filtered length) — drives the count badge and
@@ -2196,6 +2237,13 @@ export global BlacklistState {
     // Echoed back so the search input reflects the controller's query (and the
     // no-results message can interpolate it).
     in property <string> search-query: "";
+
+    // --- Album axis (parallel String-keyed list, shown under the Albums tab) ---
+    in property <[BlacklistedAlbumItem]> album-items: [];
+    // FULL blocked-album count (drives the Albums tab badge + empty state).
+    in property <int> album-count: 0;
+    // Active manager tab: 0 = Artists, 1 = Albums.
+    in property <int> active-tab: 0;
 }
 
 export global BlacklistActions {
@@ -2209,6 +2257,14 @@ export global BlacklistActions {
     callback remove(int /* artist id */);
     callback clear-all();
     callback search-changed(string /* query */);
+
+    // --- Album axis ---
+    callback set-tab(int /* 0=artists, 1=albums */);
+    callback album-select(string /* album id */);
+    callback remove-album(string /* album id */);
+    callback clear-all-albums();
+    // Block an album from a context menu (id + display fields for the manager).
+    callback block-album(string /* id */, string /* title */, string /* artist */, string /* cover-url */);
 }
 
 // === My QBZ — Mixtapes & Collections (read-only index grids) ============

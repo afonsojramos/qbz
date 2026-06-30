@@ -31,12 +31,15 @@ export component AlbumContextMenu inherits PopupWindow {
     in property <string> album-id;
     // Every track of the album already has a ready offline copy.
     in property <bool> fully-cached: false;
+    // Whether THIS album is on the album blacklist (drives the block toggle).
+    in property <bool> is-blocked: false;
     callback media-action(string, string, string);
 
     width: 224px;
-    // 7 rows x 33px + 3 separators x 1px + ContextMenu's 5/5 padding. The
-    // offline row swaps label/action on `fully-cached` — count is constant.
-    height: 7 * 33px + 3 * 1px + 10px;
+    // 8 rows x 33px + 4 separators x 1px + ContextMenu's 5/5 padding. The
+    // offline row swaps label/action on `fully-cached` (count constant); the
+    // block row swaps label/action on `is-blocked` (count constant).
+    height: 8 * 33px + 4 * 1px + 10px;
 
     ContextMenu {
         ContextMenuItem {
@@ -96,6 +99,24 @@ export component AlbumContextMenu inherits PopupWindow {
             label: @tr("Refresh offline copy");
             clicked => {
                 root.media-action("album", root.album-id, "recache");
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border-subtle; }
+        // Album blacklist toggle (surgical, album-id only — independent of the
+        // artist blacklist). Main.rs resolves the title/artist/cover from
+        // AlbumState (this is the open album) when blocking.
+        if !root.is-blocked: ContextMenuItem {
+            icon: @image-url("../assets/icons/blind-eye.svg");
+            label: @tr("Block this album");
+            clicked => {
+                root.media-action("album", root.album-id, "block");
+            }
+        }
+        if root.is-blocked: ContextMenuItem {
+            icon: @image-url("../assets/icons/blind-eye.svg");
+            label: @tr("Unblock album");
+            clicked => {
+                root.media-action("album", root.album-id, "unblock");
             }
         }
     }

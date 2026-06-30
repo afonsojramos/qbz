@@ -716,6 +716,8 @@ fn track_to_item(track: &qbz_models::QueueTrack, resolver_index: usize) -> Track
         disc_header_number: 0,
         // Work grouping is album-detail only too.
         work_header: "".into(),
+        work_composer_name: "".into(),
+        work_composer_id: "".into(),
     }
 }
 

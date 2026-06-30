@@ -23,11 +23,22 @@
 //! toasts being `format!` English).
 
 use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
-use crate::{AppWindow, BlacklistState, BlacklistedArtistItem};
+use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
+use crate::{AppWindow, BlacklistState, BlacklistedAlbumItem, BlacklistedArtistItem};
+
+/// Shared image cache for resolving blocked-album cover thumbnails (the artist
+/// tab has no covers; the album tab does). Set once during startup wiring.
+static IMAGE_CACHE: OnceLock<ImageCache> = OnceLock::new();
+
+/// Store the shared image cache for album-cover resolution (idempotent).
+pub fn set_image_cache(cache: ImageCache) {
+    let _ = IMAGE_CACHE.set(cache);
+}
 
 /// The live search query (Rust-side source of truth). The view echoes it back
 /// from `BlacklistState.search-query`; this is what `refilter` reads so a
@@ -82,14 +93,68 @@ fn build_items() -> (Vec<BlacklistedArtistItem>, i32) {
     (items, count)
 }
 
-/// Push the filtered items + full count + enabled flag + query into Slint.
+/// Build the visible (filtered) blocked-album items from the full title-sorted
+/// snapshot, applying the current query (matches album title OR artist name).
+/// Also returns the cover-load jobs for rows that carry a cover URL (resolved
+/// async; rows render the blind-eye fallback until the image lands).
+fn build_album_items() -> (Vec<BlacklistedAlbumItem>, i32, Vec<ArtworkJob>) {
+    let all = crate::artist_blacklist::get_all_albums();
+    let count = all.len() as i32;
+    let query = current_query();
+    let needle = query.trim().to_lowercase();
+
+    let mut jobs: Vec<ArtworkJob> = Vec::new();
+    let items: Vec<BlacklistedAlbumItem> = all
+        .into_iter()
+        .filter(|a| {
+            needle.is_empty()
+                || a.album_title.to_lowercase().contains(&needle)
+                || a.artist_name.to_lowercase().contains(&needle)
+        })
+        .enumerate()
+        .map(|(idx, a)| {
+            let notes = a.notes.clone().unwrap_or_default();
+            if !a.cover_url.is_empty() {
+                jobs.push(ArtworkJob {
+                    url: a.cover_url.clone(),
+                    target: ArtworkTarget::BlacklistAlbum { idx },
+                });
+            }
+            BlacklistedAlbumItem {
+                album_id: a.album_id.into(),
+                album_title: a.album_title.into(),
+                artist_name: a.artist_name.into(),
+                cover_url: a.cover_url.into(),
+                cover: slint::Image::default(),
+                added_at: a.added_at as i32,
+                added_display: format_added(a.added_at).into(),
+                has_notes: !notes.is_empty(),
+                notes: notes.into(),
+            }
+        })
+        .collect();
+
+    (items, count, jobs)
+}
+
+/// Push the filtered items + full count + enabled flag + query into Slint (both
+/// axes). Album covers resolve asynchronously via the shared image cache.
 fn push(w: &AppWindow) {
     let (items, count) = build_items();
+    let (album_items, album_count, jobs) = build_album_items();
     let st = w.global::<BlacklistState>();
     st.set_items(ModelRc::new(VecModel::from(items)));
     st.set_count(count);
+    st.set_album_items(ModelRc::new(VecModel::from(album_items)));
+    st.set_album_count(album_count);
     st.set_enabled(crate::artist_blacklist::is_enabled());
     st.set_search_query(SharedString::from(current_query()));
+    // Kick off cover loads (best-effort; needs the cache + a weak handle).
+    if let Some(cache) = IMAGE_CACHE.get() {
+        if !jobs.is_empty() {
+            crate::artwork::spawn_loads(jobs, w.as_weak(), cache.clone());
+        }
+    }
 }
 
 /// Load (or refresh) the manager: mark loading, read the store, push state,
@@ -165,6 +230,76 @@ pub fn clear_all(w: &AppWindow) {
         Err(e) => {
             log::error!("[qbz-slint] blacklist clear-all failed: {e}");
             crate::toast::error(w, qbz_i18n::t("Failed to clear blacklist"));
+        }
+    }
+}
+
+// --- Album axis actions -------------------------------------------------
+
+/// Switch the manager's active tab (0 = Artists, 1 = Albums).
+pub fn set_tab(w: &AppWindow, tab: i32) {
+    w.global::<BlacklistState>().set_active_tab(tab);
+}
+
+/// Block an album from a context menu (grid card / list row). Adds it and
+/// re-pushes the manager state + count badges; the source grid drops the card
+/// on its next navigation (no global observer — the artist-block convention).
+pub fn block_album(w: &AppWindow, id: String, title: String, artist: String, cover: String) {
+    if id.is_empty() {
+        return;
+    }
+    match crate::artist_blacklist::add_album(&id, &title, &artist, &cover, None) {
+        Ok(()) => {
+            // If the blocked album is the one currently open, reflect the header
+            // toggle immediately.
+            let album_st = w.global::<crate::AlbumState>();
+            if album_st.get_id().as_str() == id {
+                album_st.set_is_album_blocked(true);
+            }
+            push(w);
+            crate::toast::success(w, qbz_i18n::t_args("Album \"{}\" blocked", &[&title]));
+        }
+        Err(e) => {
+            log::error!("[qbz-slint] album block failed: {e}");
+            crate::toast::error(w, qbz_i18n::t("Failed to block album"));
+        }
+    }
+}
+
+/// Remove one album from the blacklist (optimistic re-push) + toast.
+pub fn remove_album(w: &AppWindow, album_id: String) {
+    let title = crate::artist_blacklist::get_all_albums()
+        .into_iter()
+        .find(|a| a.album_id == album_id)
+        .map(|a| a.album_title)
+        .unwrap_or_else(|| qbz_i18n::t("Album"));
+    match crate::artist_blacklist::remove_album(&album_id) {
+        Ok(()) => {
+            let album_st = w.global::<crate::AlbumState>();
+            if album_st.get_id().as_str() == album_id {
+                album_st.set_is_album_blocked(false);
+            }
+            push(w);
+            crate::toast::success(w, qbz_i18n::t_args("Album \"{}\" unblocked", &[&title]));
+        }
+        Err(e) => {
+            log::error!("[qbz-slint] album remove failed: {e}");
+            crate::toast::error(w, qbz_i18n::t("Failed to unblock album"));
+        }
+    }
+}
+
+/// Clear every blocked album + toast (count captured before).
+pub fn clear_all_albums(w: &AppWindow) {
+    let count = crate::artist_blacklist::album_count();
+    match crate::artist_blacklist::clear_all_albums() {
+        Ok(()) => {
+            push(w);
+            crate::toast::success(w, qbz_i18n::tf("Removed {} album from blacklist", "Removed {} albums from blacklist", count as i64, &[&count.to_string()]));
+        }
+        Err(e) => {
+            log::error!("[qbz-slint] album clear-all failed: {e}");
+            crate::toast::error(w, qbz_i18n::t("Failed to clear album blacklist"));
         }
     }
 }

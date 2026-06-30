@@ -17,7 +17,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { AlbumCardItem } from "../state.slint";
+import { AlbumCardItem, BlacklistActions } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { QualityBadgeFull } from "QualityBadgeFull.slint";
 import { ContextMenu } from "ContextMenu.slint";
@@ -382,7 +382,8 @@ export component AlbumListRow inherits Rectangle {
                     x: -170px;
                     y: 34px;
                     width: 196px;
-                    height: 142px;
+                    // 6 items max (Open/Play/Play-next/Queue/favorite + block).
+                    height: 6 * 33px + 10px;
                     ContextMenu {
                         ContextMenuItem {
                             icon: @image-url("../assets/icons/library-big.svg");
@@ -421,6 +422,14 @@ export component AlbumListRow inherits Rectangle {
                                 : @tr("Add to favorites");
                             clicked => {
                                 root.media-action("album", root.album.id, "favorite");
+                            }
+                        }
+                        // Block this album (album blacklist) — Qobuz rows only.
+                        if root.album.source != "local" && root.album.source != "plex": ContextMenuItem {
+                            icon: @image-url("../assets/icons/blind-eye.svg");
+                            label: @tr("Block this album");
+                            clicked => {
+                                BlacklistActions.block-album(root.album.id, root.album.title, root.album.artist, root.album.artwork-url);
                             }
                         }
                     }

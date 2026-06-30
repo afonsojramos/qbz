@@ -13,7 +13,7 @@ use qbz_models::{Album, Track};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget};
-use crate::{AlbumCardItem, AlbumState, AppWindow, DiscoverSection, TrackItem};
+use crate::{AlbumCardItem, AlbumState, AppWindow, ArtistCredit, DiscoverSection, TrackItem};
 
 thread_local! {
     /// The current album's full, unfiltered track list — kept so the
@@ -27,12 +27,23 @@ thread_local! {
     static PLAY_TRACKS: RefCell<Vec<Track>> = RefCell::new(Vec::new());
 }
 
+/// One credited album artist for the header credit line (E1). Plain/`Send`.
+pub struct ArtistCreditData {
+    pub id: String,
+    pub name: String,
+    /// Localized role suffix ("" for the main artist(s)).
+    pub role: String,
+}
+
 /// Plain, `Send` album data produced on the worker thread.
 pub struct AlbumData {
     pub id: String,
     pub title: String,
+    /// Primary interpreter (back-compat: now-playing, fallbacks).
     pub artist: String,
     pub artist_id: String,
+    /// Full credited-artist list with roles for the header credit line.
+    pub artists: Vec<ArtistCreditData>,
     /// Pre-formatted "year • label • genre • N tracks • duration".
     pub info_line: String,
     /// Meta-line segment BEFORE the label (the year) — rendered with the
@@ -90,10 +101,16 @@ pub struct TrackData {
     /// Used after mapping to decide where the "Disc N" headers fall when the
     /// album spans more than one disc.
     pub disc: u32,
-    /// Pre-formatted classical work-section header (e.g. "Symphony No. 9
-    /// (Beethoven)"), or "" when the track carries no `work` metadata. Used
-    /// after mapping to run-length stamp the per-work headers (PR #536).
+    /// Classical work TITLE (e.g. "Symphony No. 9"), or "" when the track
+    /// carries no `work` metadata. Used after mapping to run-length stamp the
+    /// per-work headers (PR #536). E3: the composer is split out below so the
+    /// view can render its name as a clickable artist link.
     pub work: String,
+    /// Work composer display name ("" when none); shown in the work header's
+    /// parentheses as a link.
+    pub work_composer_name: String,
+    /// Work composer artist id ("" => the name renders as plain text).
+    pub work_composer_id: String,
 }
 
 /// Fetch and map a full album by id.
@@ -126,9 +143,44 @@ fn format_release_date(iso: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+/// Localized role suffix for a credit (E1). "" for the main artist (no suffix);
+/// otherwise the first non-`main-artist` role, localized (e.g. "compositor").
+fn credit_role(roles: Option<&Vec<String>>) -> String {
+    let Some(roles) = roles else {
+        return String::new();
+    };
+    roles
+        .iter()
+        .find(|r| r.as_str() != "main-artist")
+        .map(|r| qbz_i18n::t(&qbz_qobuz::performers::format_role_label(r)))
+        .unwrap_or_default()
+}
+
+/// Build the header credit line (E1): every credited artist with its role,
+/// falling back to the single primary interpreter when the album carries no
+/// `artists[]` array (some V2/discover shapes).
+fn build_credits(album: &Album) -> Vec<ArtistCreditData> {
+    match album.artists.as_ref().filter(|v| !v.is_empty()) {
+        Some(list) => list
+            .iter()
+            .map(|a| ArtistCreditData {
+                id: a.id.to_string(),
+                name: a.name.clone(),
+                role: credit_role(a.roles.as_ref()),
+            })
+            .collect(),
+        None => vec![ArtistCreditData {
+            id: album.artist.id.to_string(),
+            name: album.artist.name.clone(),
+            role: String::new(),
+        }],
+    }
+}
+
 fn map_album(album: Album) -> AlbumData {
     let artist = album.artist.name.clone();
     let artist_id = album.artist.id.to_string();
+    let artists = build_credits(&album);
 
     // Full readable release date ("Feb 19, 2026"); was year-only before.
     // Prefer the flat ISO field, fall back to the nested V2 `dates.original`.
@@ -255,6 +307,7 @@ fn map_album(album: Album) -> AlbumData {
         title: album.title,
         artist,
         artist_id,
+        artists,
         info_line,
         meta_pre,
         meta_post,
@@ -302,23 +355,28 @@ fn truncate_words(text: &str, max: usize) -> String {
 // improvements.
 
 fn map_track(track: Track) -> TrackData {
-    // Classical work-section header, built before `title`/`performer` are moved
-    // out of `track`. Qobuz serves `work` on the track (null for non-classical)
-    // and a `composer` artist; the official player renders the work title with
-    // the composer parenthesized (PR #536). "" when there is no work.
-    let work = match track.work.as_ref().filter(|w| !w.is_empty()) {
-        Some(w) => {
-            let composer = track
-                .composer
-                .as_ref()
-                .map(|c| c.name.as_str())
-                .filter(|n| !n.is_empty());
-            match composer {
-                Some(c) => format!("{w} ({c})"),
-                None => w.clone(),
-            }
-        }
-        None => String::new(),
+    // Classical work metadata, read before `title`/`performer` are moved out of
+    // `track`. Qobuz serves `work` on the track (null for non-classical) and a
+    // `composer` artist; the official player renders the work title with the
+    // composer parenthesized AND the composer name is a link to the artist page
+    // (PR #536 + E3). `work` holds the TITLE only (for run-length grouping); the
+    // composer name + id are carried separately so the view can make the name a
+    // clickable link. All "" when there is no work.
+    let work = track
+        .work
+        .as_ref()
+        .filter(|w| !w.is_empty())
+        .cloned()
+        .unwrap_or_default();
+    let (work_composer_name, work_composer_id) = if work.is_empty() {
+        (String::new(), String::new())
+    } else {
+        track
+            .composer
+            .as_ref()
+            .filter(|c| !c.name.is_empty())
+            .map(|c| (c.name.clone(), c.id.to_string()))
+            .unwrap_or_default()
     };
     let mut title = track.title;
     if let Some(version) = track.version.as_ref().filter(|v| !v.is_empty()) {
@@ -346,6 +404,8 @@ fn map_track(track: Track) -> TrackData {
         // Tauri: `disc = track.media_number ?? 1`.
         disc: track.media_number.unwrap_or(1),
         work,
+        work_composer_name,
+        work_composer_id,
     }
 }
 
@@ -430,6 +490,15 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
             } else {
                 String::new()
             };
+            // Composer (name + id) accompanies the header only on its leading row.
+            let (work_composer_name, work_composer_id) = if work_header.is_empty() {
+                (String::new(), String::new())
+            } else {
+                (
+                    track.work_composer_name.clone(),
+                    track.work_composer_id.clone(),
+                )
+            };
             prev_work = if track.work.is_empty() {
                 None
             } else {
@@ -478,6 +547,8 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
             unlocking: false,
             disc_header_number,
             work_header: work_header.into(),
+            work_composer_name: work_composer_name.into(),
+            work_composer_id: work_composer_id.into(),
             }
         })
         .collect();
@@ -505,6 +576,16 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
     state.set_has_custom_cover(has_custom_cover);
     state.set_artist(data.artist.into());
     state.set_artist_id(data.artist_id.into());
+    let credits: Vec<ArtistCredit> = data
+        .artists
+        .into_iter()
+        .map(|c| ArtistCredit {
+            id: c.id.into(),
+            name: c.name.into(),
+            role: c.role.into(),
+        })
+        .collect();
+    state.set_artists(ModelRc::new(VecModel::from(credits)));
     state.set_info_line(data.info_line.into());
     state.set_meta_pre(data.meta_pre.into());
     state.set_meta_post(data.meta_post.into());
@@ -559,6 +640,7 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
     // Seed the header heart from the favorite-album cache (kept in sync with
     // the server at login + on every toggle).
     state.set_is_favorite(crate::fav_cache::is_album_favorite(album_id.as_str()));
+    state.set_is_album_blocked(crate::artist_blacklist::is_album_blacklisted(album_id.as_str()));
     state.set_favorite_loading(false);
 
     // Keep the unfiltered list for the track search + the raw tracks for the
