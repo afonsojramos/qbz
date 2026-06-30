@@ -147,6 +147,7 @@ pub struct SettingsSnapshot {
     // Audio — conditional flags.
     backend_is_alsa: bool,
     backend_is_pipewire: bool,
+    backend_is_jack: bool,
     alsa_plugin_is_hw: bool,
     // Playback.
     continue_playback: bool,
@@ -481,6 +482,7 @@ fn build_snapshot(
 
     let backend_is_alsa = active_backend == AudioBackendType::Alsa;
     let backend_is_pipewire = active_backend == AudioBackendType::PipeWire;
+    let backend_is_jack = active_backend == AudioBackendType::Jack;
     let alsa_plugin_is_hw = alsa_plugin == AlsaPlugin::Hw;
     let (out_backend_label, out_mode_label, out_backend_active, out_mode_active) =
         output_labels(&audio);
@@ -525,6 +527,7 @@ fn build_snapshot(
         skip_sink_switch: audio.skip_sink_switch,
         backend_is_alsa,
         backend_is_pipewire,
+        backend_is_jack,
         alsa_plugin_is_hw,
         continue_playback,
         show_context_icon: prefs.show_context_icon,
@@ -596,6 +599,7 @@ pub fn apply_snapshot(window: &AppWindow, snap: SettingsSnapshot) {
     // Audio — conditional flags.
     st.set_backend_is_alsa(snap.backend_is_alsa);
     st.set_backend_is_pipewire(snap.backend_is_pipewire);
+    st.set_backend_is_jack(snap.backend_is_jack);
     st.set_alsa_plugin_is_hw(snap.alsa_plugin_is_hw);
     // Playback.
     st.set_continue_playback(snap.continue_playback);
@@ -721,6 +725,7 @@ fn push_conditional_flags(ctx: &SettingsCtx, weak: &slint::Weak<AppWindow>) {
     let plugin = audio.alsa_plugin.unwrap_or(AlsaPlugin::Hw);
     let is_alsa = backend == AudioBackendType::Alsa;
     let is_pipewire = backend == AudioBackendType::PipeWire;
+    let is_jack = backend == AudioBackendType::Jack;
     let plugin_is_hw = plugin == AlsaPlugin::Hw;
     let plugin_index = ALSA_PLUGINS
         .iter()
@@ -730,6 +735,7 @@ fn push_conditional_flags(ctx: &SettingsCtx, weak: &slint::Weak<AppWindow>) {
         let st = w.global::<SettingsState>();
         st.set_backend_is_alsa(is_alsa);
         st.set_backend_is_pipewire(is_pipewire);
+        st.set_backend_is_jack(is_jack);
         st.set_alsa_plugin_is_hw(plugin_is_hw);
         st.set_alsa_plugin_index(plugin_index);
     });

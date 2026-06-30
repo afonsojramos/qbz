@@ -10,6 +10,7 @@ import { SettingsState, DacWizardActions } from "../state.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { WarningBanner } from "../primitives/WarningBanner.slint";
 import { SettingRow } from "SettingRow.slint";
 
 component GroupHeader inherits Text {
@@ -94,6 +95,13 @@ export component AudioSettings inherits VerticalLayout {
                 root.settings-select("backend", i);
             }
         }
+    }
+    // JACK routes through the JACK graph (resamples to the graph rate), so it
+    // can't be bit-perfect — surface that so the user isn't misled.
+    if SettingsState.backend-is-jack: WarningBanner {
+        variant: "warning";
+        title: @tr("JACK is not bit-perfect");
+        body: @tr("The JACK backend routes audio through the JACK graph, which resamples to the graph's sample rate. For bit-perfect playback use ALSA (direct) or PipeWire with passthrough.");
     }
     SettingRow {
         label: @tr("Output device");
