@@ -324,7 +324,7 @@ fn reset_all() {
 // Slint model (cheatsheet + customize editor share the groups)
 // ============================================================================
 
-fn build_groups() -> slint::ModelRc<crate::KeybindingCategoryGroup> {
+fn build_group_vec() -> Vec<crate::KeybindingCategoryGroup> {
     use slint::{ModelRc, VecModel};
     let bindings = active_bindings();
     let mut groups: Vec<crate::KeybindingCategoryGroup> = Vec::new();
@@ -346,7 +346,7 @@ fn build_groups() -> slint::ModelRc<crate::KeybindingCategoryGroup> {
             rows: ModelRc::new(VecModel::from(rows)),
         });
     }
-    ModelRc::new(VecModel::from(groups))
+    groups
 }
 
 fn modified_count() -> i32 {
@@ -360,8 +360,20 @@ fn modified_count() -> i32 {
 /// Repopulate the Slint state from the persisted bindings. Call at startup and
 /// after any change.
 pub fn refresh(window: &AppWindow) {
+    use slint::{ModelRc, VecModel};
     let state = window.global::<KeybindingsState>();
-    state.set_groups(build_groups());
+    let groups = build_group_vec();
+    // Full list (customize editor renders one column) + a round-robin split into
+    // three columns for the read-only cheatsheet (avoids one tall scroll).
+    let mut cols: [Vec<crate::KeybindingCategoryGroup>; 3] = Default::default();
+    for (i, g) in groups.iter().enumerate() {
+        cols[i % 3].push(g.clone());
+    }
+    let [c0, c1, c2] = cols;
+    state.set_groups(ModelRc::new(VecModel::from(groups)));
+    state.set_groups_col1(ModelRc::new(VecModel::from(c0)));
+    state.set_groups_col2(ModelRc::new(VecModel::from(c1)));
+    state.set_groups_col3(ModelRc::new(VecModel::from(c2)));
     state.set_modified_count(modified_count());
 }
 

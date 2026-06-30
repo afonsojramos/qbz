@@ -10,8 +10,70 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { KeyboardShortcutsState, KeybindingsState } from "../state.slint";
+import { KeyboardShortcutsState, KeybindingsState, KeybindingCategoryGroup } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+
+// One category block (uppercase header + its binding rows). Extracted so the
+// body can lay the groups out across THREE columns instead of one tall
+// scrolling column.
+component KbGroupBlock inherits VerticalLayout {
+    in property <KeybindingCategoryGroup> group;
+    spacing: 12px;
+
+    VerticalLayout {
+        spacing: 8px;
+        Text {
+            text: group.label;
+            color: Theme.text-muted;
+            font-size: Typography.legal;
+            font-weight: Typography.semibold;
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.border-subtle;
+        }
+    }
+
+    for entry in group.rows: Rectangle {
+        height: entry-row.preferred-height + 16px;
+        border-radius: Radius.sm;
+        background: Theme.surface-elevated;
+
+        entry-row := HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            spacing: 12px;
+
+            Text {
+                text: entry.label;
+                color: Theme.text-primary;
+                font-size: Typography.body;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+
+            // Keycap — a subtle key-like chip (Radius.sm, NOT a pill, ADR-008).
+            Rectangle {
+                width: keycap-label.preferred-width + 16px;
+                height: keycap-label.preferred-height + 8px;
+                border-radius: Radius.sm;
+                background: Theme.surface-card;
+                border-width: 1px;
+                border-color: Theme.border-muted;
+                keycap-label := Text {
+                    text: entry.shortcut;
+                    color: Theme.text-secondary;
+                    font-size: Typography.legal;
+                    font-family: "monospace";
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                }
+            }
+        }
+    }
+}
 
 export component KeyboardShortcutsModal inherits Rectangle {
     visible: KeyboardShortcutsState.open;
@@ -37,7 +99,7 @@ export component KeyboardShortcutsModal inherits Rectangle {
                 + footer-row.preferred-height + 2px;
             property <length> content-height: chrome-height + body.preferred-height + 40px;
 
-            width: Math.min(root.width - 80px, 660px);
+            width: Math.min(root.width - 80px, 980px);
             height: Math.min(self.content-height, root.height - 80px);
             x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
             y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
@@ -131,70 +193,26 @@ export component KeyboardShortcutsModal inherits Rectangle {
                         viewport-width: self.width;
                         viewport-height: body.preferred-height;
 
-                        body := VerticalLayout {
+                        // Groups laid out across THREE columns (round-robin by
+                        // index) so the cheatsheet fits without a tall scroll.
+                        body := HorizontalLayout {
                             padding: 20px;
                             spacing: 24px;
 
-                            for group in KeybindingsState.groups: VerticalLayout {
-                                spacing: 12px;
-
-                                // Uppercase category header + underline.
-                                VerticalLayout {
-                                    spacing: 8px;
-                                    Text {
-                                        // Already localized in Rust; render as-is.
-                                        text: group.label;
-                                        color: Theme.text-muted;
-                                        font-size: Typography.legal;
-                                        font-weight: Typography.semibold;
-                                    }
-                                    Rectangle {
-                                        height: 1px;
-                                        background: Theme.border-subtle;
-                                    }
-                                }
-
-                                // One row per binding: label LEFT, keycap RIGHT.
-                                for entry in group.rows: Rectangle {
-                                    height: entry-row.preferred-height + 16px;
-                                    border-radius: Radius.sm;
-                                    background: Theme.surface-elevated;
-
-                                    entry-row := HorizontalLayout {
-                                        padding-left: 12px;
-                                        padding-right: 12px;
-                                        padding-top: 8px;
-                                        padding-bottom: 8px;
-                                        spacing: 12px;
-
-                                        Text {
-                                            text: entry.label;
-                                            color: Theme.text-primary;
-                                            font-size: Typography.body;
-                                            horizontal-stretch: 1;
-                                            vertical-alignment: center;
-                                        }
-
-                                        // Keycap — a subtle key-like chip
-                                        // (Radius.sm, NOT a pill per ADR-008).
-                                        Rectangle {
-                                            width: keycap-label.preferred-width + 16px;
-                                            height: keycap-label.preferred-height + 8px;
-                                            border-radius: Radius.sm;
-                                            background: Theme.surface-card;
-                                            border-width: 1px;
-                                            border-color: Theme.border-muted;
-                                            keycap-label := Text {
-                                                text: entry.shortcut;
-                                                color: Theme.text-secondary;
-                                                font-size: Typography.legal;
-                                                font-family: "monospace";
-                                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                                            }
-                                        }
-                                    }
-                                }
+                            VerticalLayout {
+                                alignment: start;
+                                spacing: 24px;
+                                for group in KeybindingsState.groups-col1: KbGroupBlock { group: group; }
+                            }
+                            VerticalLayout {
+                                alignment: start;
+                                spacing: 24px;
+                                for group in KeybindingsState.groups-col2: KbGroupBlock { group: group; }
+                            }
+                            VerticalLayout {
+                                alignment: start;
+                                spacing: 24px;
+                                for group in KeybindingsState.groups-col3: KbGroupBlock { group: group; }
                             }
                         }
                     }

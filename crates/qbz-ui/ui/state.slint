@@ -5254,6 +5254,11 @@ export struct KeybindingCategoryGroup {
 export global KeybindingsState {
     // Ordered category groups, rebuilt in Rust whenever a binding changes.
     in property <[KeybindingCategoryGroup]> groups: [];
+    // Same groups split round-robin into three columns, for the read-only
+    // cheatsheet's 3-column layout (the editor still uses the full `groups`).
+    in property <[KeybindingCategoryGroup]> groups-col1: [];
+    in property <[KeybindingCategoryGroup]> groups-col2: [];
+    in property <[KeybindingCategoryGroup]> groups-col3: [];
     // Count of actions whose binding differs from default ("N modified").
     in property <int> modified-count: 0;
 
