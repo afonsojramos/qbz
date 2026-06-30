@@ -12,7 +12,7 @@ import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { LineEdit } from "std-widgets.slint";
-import { SidebarPlaylistsPopupState, SidebarState, SidebarActions, SidebarEntry, OfflineState } from "../state.slint";
+import { SidebarPlaylistsPopupState, SidebarState, SidebarActions, SidebarEntry, OfflineState , UiFocusState } from "../state.slint";
 
 // One entry row — a folder (bold, toggles expand) or a playlist (opens it).
 component PpRow inherits Rectangle {
@@ -130,6 +130,7 @@ export component SidebarPlaylistsPopup inherits Rectangle {
                         width: parent.width - 16px;
                         height: 26px;
                         placeholder-text: @tr("Search playlists");
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                         text <=> SidebarState.search-query;
                         edited => {
                             SidebarActions.search-changed(self.text);

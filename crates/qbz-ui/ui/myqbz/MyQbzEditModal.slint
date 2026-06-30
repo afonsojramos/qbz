@@ -14,7 +14,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { MyQbzEditState, MyQbzEditActions } from "../state.slint";
+import { MyQbzEditState, MyQbzEditActions , UiFocusState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzPrimaryButton } from "../primitives/QbzPrimaryButton.slint";
 import { SecondaryButton } from "../primitives/SecondaryButton.slint";
@@ -74,6 +74,7 @@ export component MyQbzEditModal inherits Rectangle {
                 // --- Body: rename (name input) ---------------------------
                 if root.is-rename: rename-input := LineEdit {
                     text <=> MyQbzEditState.draft-name;
+                    changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                     accepted => {
                         if (root.can-submit) {
                             MyQbzEditActions.submit-rename();

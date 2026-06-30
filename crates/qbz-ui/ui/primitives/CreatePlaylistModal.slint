@@ -8,7 +8,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { CreatePlaylistState, CreatePlaylistActions } from "../state.slint";
+import { CreatePlaylistState, CreatePlaylistActions , UiFocusState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { QbzSelect } from "QbzSelect.slint";
 import { LineEdit, TextEdit } from "std-widgets.slint";
@@ -79,6 +79,7 @@ export component CreatePlaylistModal inherits Rectangle {
                     }
                     name-input := LineEdit {
                         placeholder-text: @tr("My Playlist");
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                         text <=> CreatePlaylistState.name;
                         accepted => {
                             CreatePlaylistActions.submit();

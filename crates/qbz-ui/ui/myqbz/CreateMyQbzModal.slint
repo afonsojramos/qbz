@@ -12,7 +12,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { MyQbzCreateState, MyQbzCreateActions } from "../state.slint";
+import { MyQbzCreateState, MyQbzCreateActions , UiFocusState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzPrimaryButton } from "../primitives/QbzPrimaryButton.slint";
 import { SecondaryButton } from "../primitives/SecondaryButton.slint";
@@ -125,6 +125,7 @@ export component CreateMyQbzModal inherits Rectangle {
                     }
                     name-input := LineEdit {
                         text <=> MyQbzCreateState.name;
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                         accepted => {
                             MyQbzCreateActions.submit();
                         }

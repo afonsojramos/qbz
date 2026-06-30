@@ -823,6 +823,7 @@ component PmListRow inherits Rectangle {
                         height: 28px;
                         width: parent.width;
                         placeholder-text: @tr("Search folders");
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                         text <=> root.folder-query;
                         edited => {
                             PlaylistManagerActions.search-folders(self.text);

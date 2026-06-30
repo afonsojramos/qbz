@@ -8,7 +8,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { ScrobbleState, ScrobbleActions, DiscordState, SettingsState } from "../state.slint";
+import { ScrobbleState, ScrobbleActions, DiscordState, SettingsState , UiFocusState } from "../state.slint";
 import { SettingRow } from "SettingRow.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
@@ -258,6 +258,7 @@ export component IntegrationsSettings inherits VerticalLayout {
                     LineEdit {
                         text: ScrobbleState.listenbrainz-token-input;
                         placeholder-text: @tr("ListenBrainz token");
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                         input-type: password;
                         enabled: !ScrobbleState.listenbrainz-busy;
                         edited(s) => {

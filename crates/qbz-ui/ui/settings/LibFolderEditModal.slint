@@ -10,7 +10,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { LibFolderEditState, LibraryManageActions } from "../state.slint";
+import { LibFolderEditState, LibraryManageActions , UiFocusState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
@@ -192,6 +192,7 @@ export component LibFolderEditModal inherits Rectangle {
                     label: @tr("Display name");
                     LineEdit {
                         placeholder-text: @tr("Optional friendly name");
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                         text <=> LibFolderEditState.alias;
                     }
                     Text {

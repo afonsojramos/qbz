@@ -4,7 +4,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { CreateFolderState, CreateFolderActions } from "../state.slint";
+import { CreateFolderState, CreateFolderActions , UiFocusState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { LineEdit } from "std-widgets.slint";
 
@@ -65,6 +65,7 @@ export component CreateFolderModal inherits Rectangle {
 
                 name-input := LineEdit {
                     placeholder-text: @tr("Folder name");
+                    changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                     text <=> CreateFolderState.name;
                     accepted => {
                         CreateFolderActions.submit();

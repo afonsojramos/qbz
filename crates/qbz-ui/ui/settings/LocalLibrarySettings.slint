@@ -9,7 +9,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { LibraryFoldersState, LibraryManageActions, LibraryScanState, PlexSettingsState, PlexAuthActions } from "../state.slint";
+import { LibraryFoldersState, LibraryManageActions, LibraryScanState, PlexSettingsState, PlexAuthActions , UiFocusState } from "../state.slint";
 import { SettingRow } from "SettingRow.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzCheckbox } from "../primitives/QbzCheckbox.slint";
@@ -537,6 +537,7 @@ export component LocalLibrarySettings inherits VerticalLayout {
                     LineEdit {
                         text: PlexSettingsState.server-url;
                         placeholder-text: @tr("http://127.0.0.1:32400");
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                         edited(s) => {
                             PlexSettingsState.server-url = s;
                         }
@@ -639,6 +640,7 @@ export component LocalLibrarySettings inherits VerticalLayout {
                     LineEdit {
                         text: PlexSettingsState.token-input;
                         placeholder-text: @tr("X-Plex-Token");
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                         input-type: password;
                         edited(s) => {
                             PlexSettingsState.token-input = s;

@@ -9,7 +9,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { FolderEditState, FolderEditActions, PmIconPreset, PmColorSwatch } from "../state.slint";
+import { FolderEditState, FolderEditActions, PmIconPreset, PmColorSwatch , UiFocusState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { QbzToggle } from "QbzToggle.slint";
 import { LineEdit } from "std-widgets.slint";
@@ -76,6 +76,7 @@ export component FolderEditModal inherits Rectangle {
                     }
                     name-input := LineEdit {
                         placeholder-text: @tr("Enter folder name");
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                         text <=> FolderEditState.name;
                         accepted => { FolderEditActions.save(); }
                     }
