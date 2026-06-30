@@ -32,6 +32,25 @@ pub struct BlacklistedArtist {
     pub notes: Option<String>,
 }
 
+/// A blacklisted album entry.
+///
+/// The album axis is a parallel, `String`-keyed pipeline alongside the
+/// `u64` artist one: Qobuz album ids are alphanumeric strings, so they
+/// cannot be stored in the artist table's INTEGER primary key. This is its
+/// own table in the same database. Blocking an album hides it by its OWN
+/// id regardless of artist — the surgical fix for Qobuz's same-name artist
+/// merges (e.g. a Trance "Anthrax" release landing on the Thrash Anthrax id).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlacklistedAlbum {
+    pub album_id: String,
+    pub album_title: String,
+    pub artist_name: String,
+    pub cover_url: String,
+    pub added_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
 /// Blacklist settings (enable/disable toggle).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlacklistSettings {
@@ -49,7 +68,10 @@ pub struct BlacklistService {
     conn: Connection,
     /// In-memory set for O(1) lookups.
     blacklisted_ids: RwLock<HashSet<u64>>,
+    /// In-memory set of blocked album ids (String-keyed) for O(1) lookups.
+    blacklisted_album_ids: RwLock<HashSet<String>>,
     /// Feature flag - when false, `is_blacklisted()` always returns false.
+    /// Shared by both axes: it also gates `is_album_blacklisted()`.
     enabled: AtomicBool,
 }
 
@@ -68,11 +90,13 @@ impl BlacklistService {
         let service = Self {
             conn,
             blacklisted_ids: RwLock::new(HashSet::new()),
+            blacklisted_album_ids: RwLock::new(HashSet::new()),
             enabled: AtomicBool::new(true),
         };
 
         service.init_schema()?;
         service.load_from_db()?;
+        service.load_albums_from_db()?;
         service.load_settings()?;
 
         Ok(service)
@@ -89,11 +113,13 @@ impl BlacklistService {
         let service = Self {
             conn,
             blacklisted_ids: RwLock::new(HashSet::new()),
+            blacklisted_album_ids: RwLock::new(HashSet::new()),
             enabled: AtomicBool::new(true),
         };
 
         service.init_schema()?;
         service.load_from_db()?;
+        service.load_albums_from_db()?;
         service.load_settings()?;
 
         Ok(service)
@@ -124,6 +150,20 @@ impl BlacklistService {
 
                 -- Insert default settings if not present
                 INSERT OR IGNORE INTO blacklist_settings (id, enabled) VALUES (1, 1);
+
+                -- Album blacklist entries (parallel String-keyed axis)
+                CREATE TABLE IF NOT EXISTS album_blacklist (
+                    album_id TEXT PRIMARY KEY,
+                    album_title TEXT NOT NULL,
+                    artist_name TEXT,
+                    cover_url TEXT,
+                    added_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                    notes TEXT
+                );
+
+                -- Index for album title search in UI
+                CREATE INDEX IF NOT EXISTS idx_album_blacklist_title
+                    ON album_blacklist(album_title COLLATE NOCASE);
                 "#,
             )
             .map_err(|e| format!("Failed to initialize blacklist schema: {}", e))?;
@@ -155,6 +195,30 @@ impl BlacklistService {
             "[Blacklist] Loaded {} blacklisted artists into memory",
             count
         );
+        Ok(())
+    }
+
+    /// Load all blocked album ids from database into memory.
+    fn load_albums_from_db(&self) -> Result<(), String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT album_id FROM album_blacklist")
+            .map_err(|e| format!("Failed to prepare album blacklist query: {}", e))?;
+
+        let ids: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| format!("Failed to query album blacklist: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let count = ids.len();
+        let mut set = self
+            .blacklisted_album_ids
+            .write()
+            .map_err(|_| "Failed to acquire album write lock")?;
+        *set = ids.into_iter().collect();
+
+        log::info!("[Blacklist] Loaded {} blocked albums into memory", count);
         Ok(())
     }
 
@@ -324,6 +388,129 @@ impl BlacklistService {
         log::info!("[Blacklist] Cleared all entries");
         Ok(())
     }
+
+    // ----- Album axis (String-keyed, shares the `enabled` flag) -----
+
+    /// Check if an album is blacklisted - O(1) operation.
+    ///
+    /// Returns false if the (shared) feature flag is disabled.
+    #[inline]
+    pub fn is_album_blacklisted(&self, album_id: &str) -> bool {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.blacklisted_album_ids
+            .read()
+            .map(|set| set.contains(album_id))
+            .unwrap_or(false)
+    }
+
+    /// Add an album to the blacklist.
+    pub fn add_album(
+        &self,
+        album_id: &str,
+        album_title: &str,
+        artist_name: &str,
+        cover_url: &str,
+        notes: Option<&str>,
+    ) -> Result<(), String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO album_blacklist
+                 (album_id, album_title, artist_name, cover_url, added_at, notes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![album_id, album_title, artist_name, cover_url, now, notes],
+            )
+            .map_err(|e| format!("Failed to add album to blacklist: {}", e))?;
+
+        if let Ok(mut set) = self.blacklisted_album_ids.write() {
+            set.insert(album_id.to_string());
+        }
+
+        log::info!(
+            "[Blacklist] Added album: {} (id={})",
+            album_title,
+            album_id
+        );
+        Ok(())
+    }
+
+    /// Remove an album from the blacklist.
+    pub fn remove_album(&self, album_id: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "DELETE FROM album_blacklist WHERE album_id = ?1",
+                params![album_id],
+            )
+            .map_err(|e| format!("Failed to remove album from blacklist: {}", e))?;
+
+        if let Ok(mut set) = self.blacklisted_album_ids.write() {
+            set.remove(album_id);
+        }
+
+        log::info!("[Blacklist] Removed album id={}", album_id);
+        Ok(())
+    }
+
+    /// Get all blacklisted albums, ordered by title (case-insensitive).
+    pub fn get_all_albums(&self) -> Result<Vec<BlacklistedAlbum>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT album_id, album_title, artist_name, cover_url, added_at, notes
+                 FROM album_blacklist
+                 ORDER BY album_title COLLATE NOCASE",
+            )
+            .map_err(|e| format!("Failed to prepare album query: {}", e))?;
+
+        let albums = stmt
+            .query_map([], |row| {
+                Ok(BlacklistedAlbum {
+                    album_id: row.get(0)?,
+                    album_title: row.get(1)?,
+                    artist_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    cover_url: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    added_at: row.get(4)?,
+                    notes: row.get(5)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query album blacklist: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(albums)
+    }
+
+    /// Get count of blacklisted albums.
+    ///
+    /// Does not respect the enabled flag.
+    pub fn album_count(&self) -> usize {
+        self.blacklisted_album_ids
+            .read()
+            .map(|set| set.len())
+            .unwrap_or(0)
+    }
+
+    /// Clear all blacklisted albums.
+    ///
+    /// Does not touch the settings row nor the artist table.
+    pub fn clear_all_albums(&self) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM album_blacklist", [])
+            .map_err(|e| format!("Failed to clear album blacklist: {}", e))?;
+
+        if let Ok(mut set) = self.blacklisted_album_ids.write() {
+            set.clear();
+        }
+
+        log::info!("[Blacklist] Cleared all album entries");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -394,5 +581,87 @@ mod tests {
         s.clear_all().unwrap();
         assert_eq!(s.count(), 0);
         assert!(!s.is_enabled()); // clear_all does NOT touch enabled
+    }
+
+    // ----- Album axis -----
+
+    #[test]
+    fn album_add_and_check() {
+        let s = svc();
+        s.add_album("abc123", "Bogus Anthrax", "Anthrax", "http://c", None)
+            .unwrap();
+        assert!(s.is_album_blacklisted("abc123"));
+        assert!(!s.is_album_blacklisted("zzz999"));
+    }
+
+    #[test]
+    fn album_remove_is_not_error_when_absent() {
+        let s = svc();
+        s.add_album("a", "T", "Ar", "", None).unwrap();
+        s.remove_album("a").unwrap();
+        assert!(!s.is_album_blacklisted("a"));
+        s.remove_album("nope").unwrap(); // absent -> Ok
+    }
+
+    #[test]
+    fn album_get_all_sorted_by_title_with_fields_roundtrip() {
+        let s = svc();
+        s.add_album("2", "zeta", "Z Artist", "http://z", Some("n"))
+            .unwrap();
+        s.add_album("1", "Alpha", "A Artist", "", None).unwrap();
+        let all = s.get_all_albums().unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].album_title, "Alpha"); // case-insensitive asc
+        assert_eq!(all[1].album_title, "zeta");
+        assert_eq!(all[0].artist_name, "A Artist");
+        assert_eq!(all[0].cover_url, "");
+        assert_eq!(all[1].cover_url, "http://z");
+        assert_eq!(all[1].notes.as_deref(), Some("n"));
+    }
+
+    #[test]
+    fn album_upsert_replaces() {
+        let s = svc();
+        s.add_album("5", "Old", "A", "u1", Some("n")).unwrap();
+        s.add_album("5", "New", "B", "u2", None).unwrap();
+        let all = s.get_all_albums().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].album_title, "New");
+        assert_eq!(all[0].cover_url, "u2");
+        assert_eq!(all[0].notes, None);
+    }
+
+    #[test]
+    fn shared_enabled_flag_gates_both_axes() {
+        let s = svc();
+        s.add(1, "Artist", None).unwrap();
+        s.add_album("alb", "Album", "Artist", "", None).unwrap();
+        s.set_enabled(false).unwrap();
+        assert!(!s.is_blacklisted(1)); // both off
+        assert!(!s.is_album_blacklisted("alb"));
+        assert_eq!(s.count(), 1); // counts ignore the flag
+        assert_eq!(s.album_count(), 1);
+        s.set_enabled(true).unwrap();
+        assert!(s.is_blacklisted(1)); // both back on
+        assert!(s.is_album_blacklisted("alb"));
+    }
+
+    #[test]
+    fn axes_are_independent() {
+        let s = svc();
+        s.add_album("alb", "Album", "Artist", "", None).unwrap();
+        assert_eq!(s.album_count(), 1);
+        assert_eq!(s.count(), 0); // blocking an album leaves the artist set empty
+
+        s.add(7, "Artist", None).unwrap();
+        s.clear_all_albums().unwrap();
+        assert_eq!(s.album_count(), 0);
+        assert_eq!(s.count(), 1); // clear_all_albums leaves artist rows intact
+        assert!(s.is_blacklisted(7));
+
+        s.add_album("alb2", "A2", "Ar", "", None).unwrap();
+        s.clear_all().unwrap();
+        assert_eq!(s.count(), 0);
+        assert_eq!(s.album_count(), 1); // clear_all (artists) leaves albums intact
     }
 }
