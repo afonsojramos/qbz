@@ -423,6 +423,12 @@ pub struct Album {
     /// the album's featured artists.
     #[serde(default)]
     pub artists: Option<Vec<AlbumArtist>>,
+    /// Album-level composer credit (single Artist). The official web player
+    /// renders this — NOT the per-track `composer` — as the "… • X
+    /// (composer)" tail of the header credit line, and suppresses it when the
+    /// name is the "Various Composers" placeholder. See `album::build_credits`.
+    #[serde(default)]
+    pub composer: Option<Artist>,
 }
 
 /// Album artist contributor entry (main artist + featured artists).
