@@ -198,10 +198,12 @@ pub fn shortcut_from_parts(ctrl: bool, alt: bool, shift: bool, token: &str) -> O
 }
 
 const KEY_DISPLAY: &[(&str, &str)] = &[
-    ("ArrowLeft", "←"),
-    ("ArrowRight", "→"),
-    ("ArrowUp", "↑"),
-    ("ArrowDown", "↓"),
+    // Solid triangles, not the thin Unicode arrows (←→↑↓) whose heads were
+    // nearly invisible at keycap size — these render a clear, filled arrowhead.
+    ("ArrowLeft", "◀"),
+    ("ArrowRight", "▶"),
+    ("ArrowUp", "▲"),
+    ("ArrowDown", "▼"),
     ("Space", "Space"),
     ("Escape", "Esc"),
     ("Enter", "↵"),

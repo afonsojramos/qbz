@@ -329,11 +329,17 @@ export component CustomizeShortcutsModal inherits Rectangle {
                                 spacing: 8px;
                                 padding-left: 16px;
                                 padding-right: 16px;
-                                QbzIcon {
-                                    source: @image-url("../assets/icons/rotate-ccw.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    tint: Theme.danger;
+                                // Wrap the icon so it sits on the text's vertical
+                                // center (a bare fixed-size icon in the row rode
+                                // high next to the body-size label).
+                                VerticalLayout {
+                                    alignment: center;
+                                    QbzIcon {
+                                        source: @image-url("../assets/icons/rotate-ccw.svg");
+                                        width: 14px;
+                                        height: 14px;
+                                        tint: Theme.danger;
+                                    }
                                 }
                                 Text {
                                     text: @tr("Reset All to Defaults");
