@@ -1856,7 +1856,12 @@ async fn record_recent(runtime: &Runtime) {
 /// (D-FEAT). Local / Plex / no-id tracks => kept (fail-open).
 fn queue_track_blacklisted(track: &QueueTrack) -> bool {
     let source = track.source.as_deref().unwrap_or("qobuz");
-    crate::artist_blacklist::is_track_blacklisted(source, track.artist_id, None)
+    crate::artist_blacklist::is_track_blacklisted(
+        source,
+        track.artist_id,
+        None,
+        track.album_id.as_deref(),
+    )
 }
 
 /// Drop blacklisted entries from a freshly-built `QueueTrack` queue. Keeps
@@ -1883,7 +1888,12 @@ fn track_is_blacklisted_full(track: &Track, album_primary: Option<u64>) -> bool 
         .map(|p| p.id)
         .or(album_primary);
     let composer = track.composer.as_ref().map(|c| c.id);
-    crate::artist_blacklist::is_track_blacklisted("qobuz", performer, composer)
+    crate::artist_blacklist::is_track_blacklisted(
+        "qobuz",
+        performer,
+        composer,
+        track.album.as_ref().map(|a| a.id.as_str()),
+    )
 }
 
 /// Play `album_id` from `start_index`: fetch the album, build the queue,

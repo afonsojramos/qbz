@@ -22,7 +22,9 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
-use qbz_app::settings::artist_blacklist::{BlacklistService, BlacklistedArtist, DB_FILE_NAME};
+use qbz_app::settings::artist_blacklist::{
+    BlacklistService, BlacklistedAlbum, BlacklistedArtist, DB_FILE_NAME,
+};
 
 /// Per-user blacklist service. `None` outside an active session (online or
 /// offline); pure fail-open behavior in that window.
@@ -91,6 +93,26 @@ pub fn is_blacklisted_id_str(artist_id: &str) -> bool {
     is_blacklisted(id)
 }
 
+/// True when the album id is blocked (and the feature is enabled). Album ids
+/// are alphanumeric strings; an empty id never matches. Fail-open `false` when
+/// no session is bound. Orthogonal to artist blocking — an album is hidden by
+/// its OWN id regardless of its artist.
+pub fn is_album_blacklisted(album_id: &str) -> bool {
+    if album_id.is_empty() {
+        return false;
+    }
+    with_service(false, |s| s.is_album_blacklisted(album_id))
+}
+
+/// Card-grid predicate: `true` when an album-card-shaped row (string album id +
+/// string primary-artist id) should be hidden from a grid/carousel. Honors the
+/// enabled gate + no-session fail-open via the underlying checks. Album axis
+/// (own id) OR artist axis (primary-artist id). Use for the read-only album
+/// grids that map an `AlbumCard`-like row rather than a typed `Album`.
+pub fn card_blacklisted(album_id: &str, artist_id: &str) -> bool {
+    is_album_blacklisted(album_id) || is_blacklisted_id_str(artist_id)
+}
+
 /// Stamp value for a `TrackItem.is-blacklisted` cell (Task 6). The single
 /// rule every in-scope track controller (album / playlist / favorites / the
 /// four Q-mixes) reuses so render and the Task 7 queue filters agree on what
@@ -117,10 +139,15 @@ pub fn is_blacklisted_id_str(artist_id: &str) -> bool {
 /// reload / re-push path (which re-invokes `stamp_row` per row) — same as how
 /// favorites re-push after a `fav_cache` change. There is intentionally no
 /// global listener/observer.
-pub fn stamp_row(source: &str, artist_ids: &[&str]) -> bool {
+pub fn stamp_row(source: &str, artist_ids: &[&str], album_id: Option<&str>) -> bool {
     // Local / Plex / ephemeral rows are protected — never blacklisted.
     if source != "qobuz" {
         return false;
+    }
+    // Album axis (orthogonal): the row's own album id being blocked drops it
+    // regardless of artist. Then the artist axis (performer/composer/primary).
+    if album_id.is_some_and(is_album_blacklisted) {
+        return true;
     }
     artist_ids.iter().any(|id| is_blacklisted_id_str(id))
 }
@@ -144,12 +171,15 @@ pub fn is_track_blacklisted(
     source: &str,
     performer_id: Option<u64>,
     composer_id: Option<u64>,
+    album_id: Option<&str>,
 ) -> bool {
-    // Reuse stamp_row's guard + check by funneling the numeric ids through the
+    // Reuse stamp_row's guard + checks by funneling the numeric ids through the
     // same string path — the SINGLE underlying predicate shared with rendering.
+    // The album id (a blocked album hides all its tracks) is passed straight
+    // through, so render greyout and queue-drop can never diverge.
     let performer = performer_id.map(|id| id.to_string()).unwrap_or_default();
     let composer = composer_id.map(|id| id.to_string()).unwrap_or_default();
-    stamp_row(source, &[performer.as_str(), composer.as_str()])
+    stamp_row(source, &[performer.as_str(), composer.as_str()], album_id)
 }
 
 /// True when the blacklist feature is enabled. Default-enabled (`true`) when no
@@ -180,6 +210,29 @@ pub fn get_all() -> Vec<BlacklistedArtist> {
 /// is bound.
 pub fn count() -> usize {
     with_service(0, |s| s.count())
+}
+
+/// Snapshot of the full blocked-album-id set, for `qbz_core` album/track
+/// filtering. Empty when no session is bound. Reflects persisted rows (ignores
+/// the enabled flag — callers gate on [`is_enabled`] separately).
+pub fn album_ids_snapshot() -> HashSet<String> {
+    with_service(HashSet::new(), |s| {
+        s.get_all_albums()
+            .map(|list| list.into_iter().map(|a| a.album_id).collect())
+            .unwrap_or_default()
+    })
+}
+
+/// All blocked albums (title-sorted), for the manager view. Empty on no session
+/// or query error.
+pub fn get_all_albums() -> Vec<BlacklistedAlbum> {
+    with_service(Vec::new(), |s| s.get_all_albums().unwrap_or_default())
+}
+
+/// Count of blocked albums (ignores the enabled flag). `0` when no session is
+/// bound.
+pub fn album_count() -> usize {
+    with_service(0, |s| s.album_count())
 }
 
 // ---------------------------------------------------------------------------
@@ -213,9 +266,30 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
     mutate(|s| s.set_enabled(enabled))
 }
 
-/// Clear all blacklisted artists (leaves the enabled flag untouched).
+/// Clear all blacklisted artists (leaves the enabled flag + albums untouched).
 pub fn clear_all() -> Result<(), String> {
     mutate(|s| s.clear_all())
+}
+
+/// Add an album to the blacklist.
+pub fn add_album(
+    album_id: &str,
+    album_title: &str,
+    artist_name: &str,
+    cover_url: &str,
+    notes: Option<&str>,
+) -> Result<(), String> {
+    mutate(|s| s.add_album(album_id, album_title, artist_name, cover_url, notes))
+}
+
+/// Remove an album from the blacklist.
+pub fn remove_album(album_id: &str) -> Result<(), String> {
+    mutate(|s| s.remove_album(album_id))
+}
+
+/// Clear all blocked albums (leaves the enabled flag + artists untouched).
+pub fn clear_all_albums() -> Result<(), String> {
+    mutate(|s| s.clear_all_albums())
 }
 
 #[cfg(test)]
@@ -253,14 +327,39 @@ mod tests {
         assert!(ids_snapshot().contains(&42), "snapshot contains the added id");
         assert_eq!(count(), 1);
 
+        // Album axis: orthogonal, String-keyed, shares the enabled flag.
+        assert!(!is_album_blacklisted("zzz"), "nothing album-blocked yet");
+        add_album("zzz", "Bogus", "X", "", None).expect("add_album succeeds");
+        assert!(is_album_blacklisted("zzz"), "added album id is blocked");
+        assert!(!is_album_blacklisted(""), "empty album id never matches");
+        assert!(
+            album_ids_snapshot().contains("zzz"),
+            "album snapshot contains the added id"
+        );
+        assert_eq!(album_count(), 1);
+        // A blocked album drops via the shared stamp predicate, artist-independent.
+        assert!(stamp_row("qobuz", &[], Some("zzz")), "album-blocked row drops");
+        assert!(
+            !stamp_row("local", &[], Some("zzz")),
+            "non-qobuz row is protected even when album-blocked"
+        );
+        assert_eq!(count(), 1, "album add did not touch the artist count");
+
         teardown();
         assert!(!is_blacklisted(42), "fail-open after teardown");
         assert!(ids_snapshot().is_empty(), "empty snapshot after teardown");
+        assert!(!is_album_blacklisted("zzz"), "album fail-open after teardown");
+        assert!(album_ids_snapshot().is_empty(), "empty album snapshot");
         assert_eq!(count(), 0);
+        assert_eq!(album_count(), 0);
         assert!(is_enabled(), "default-enabled after teardown");
         assert!(
             add(1, "Y", None).is_err(),
             "mutation with no session returns the Tauri error string"
+        );
+        assert!(
+            add_album("a", "b", "c", "", None).is_err(),
+            "album mutation with no session returns the error string"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

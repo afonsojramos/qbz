@@ -109,16 +109,35 @@ where
     Ok(map_album(album))
 }
 
+/// Localize an ISO `YYYY-MM-DD` release date to a short readable form
+/// ("Feb 19, 2026"), via the active locale. Empty when absent or unparseable
+/// (the header simply omits the date segment, as before). Mirrors the
+/// `info_modals` date formatter but with the short month (`%b`).
+fn format_release_date(iso: Option<&str>) -> String {
+    let Some(raw) = iso.map(str::trim).filter(|s| !s.is_empty()) else {
+        return String::new();
+    };
+    let head = raw.get(0..10).unwrap_or(raw);
+    chrono::NaiveDate::parse_from_str(head, "%Y-%m-%d")
+        .map(|d| {
+            d.format_localized("%b %-d, %Y", crate::dates::current_locale())
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
 fn map_album(album: Album) -> AlbumData {
     let artist = album.artist.name.clone();
     let artist_id = album.artist.id.to_string();
 
-    let year = album
-        .release_date_original
-        .as_deref()
-        .and_then(|date| date.get(0..4))
-        .unwrap_or("")
-        .to_string();
+    // Full readable release date ("Feb 19, 2026"); was year-only before.
+    // Prefer the flat ISO field, fall back to the nested V2 `dates.original`.
+    let date_display = format_release_date(
+        album
+            .release_date_original
+            .as_deref()
+            .or_else(|| album.dates.as_ref().and_then(|d| d.original.as_deref())),
+    );
 
     // Meta line, split around the label so the header can render the label
     // as a clickable link (Tauri's `date • [label] • genre • N tracks •
@@ -142,8 +161,8 @@ fn map_album(album: Album) -> AlbumData {
     let duration_str = album.duration.map(format_duration);
 
     let mut pre_parts: Vec<String> = Vec::new();
-    if !year.is_empty() {
-        pre_parts.push(year.clone());
+    if !date_display.is_empty() {
+        pre_parts.push(date_display.clone());
     }
     let mut post_parts: Vec<String> = Vec::new();
     if let Some(g) = &genre_str {
@@ -429,8 +448,11 @@ pub fn apply_album(window: &AppWindow, data: AlbumData) {
             } else {
                 track.artist_id.as_str()
             };
-            let is_blacklisted =
-                crate::artist_blacklist::stamp_row("qobuz", &[row_artist_id]);
+            let is_blacklisted = crate::artist_blacklist::stamp_row(
+                "qobuz",
+                &[row_artist_id],
+                Some(album_id.as_str()),
+            );
             TrackItem {
             id: track.id.clone().into(),
             number: track.number.into(),
@@ -601,6 +623,7 @@ where
         .into_iter()
         .map(crate::artist::map_release)
         .filter(|c| c.id != current_album_id)
+        .filter(|c| !crate::artist_blacklist::card_blacklisted(&c.id, &c.artist_id))
         .take(MORE_FROM_ARTIST_MAX)
         .collect();
     let show = !cards.is_empty();
@@ -667,6 +690,7 @@ where
         .into_iter()
         .map(crate::album_map::map_album)
         .filter(|c| c.id != album_id)
+        .filter(|c| !crate::artist_blacklist::card_blacklisted(&c.id, &c.artist_id))
         .collect();
     let show = !cards.is_empty();
     Suggestions { cards, show }

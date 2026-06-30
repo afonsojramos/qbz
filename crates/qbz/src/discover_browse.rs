@@ -79,14 +79,17 @@ pub fn navigate(
                 // featured-aware via discover_album_blacklisted). Tauri's
                 // discover surfaces log-only — no count adjustment (the
                 // endpoints carry no `total`; pagination is has_more-driven).
-                let bl = if crate::artist_blacklist::is_enabled() {
-                    crate::artist_blacklist::ids_snapshot()
+                let (bl, abl) = if crate::artist_blacklist::is_enabled() {
+                    (
+                        crate::artist_blacklist::ids_snapshot(),
+                        crate::artist_blacklist::album_ids_snapshot(),
+                    )
                 } else {
                     Default::default()
                 };
-                if !bl.is_empty() {
+                if !bl.is_empty() || !abl.is_empty() {
                     data.items
-                        .retain(|a| !qbz_core::core::discover_album_blacklisted(a, &bl));
+                        .retain(|a| !qbz_core::core::discover_album_blacklisted(a, &bl, &abl));
                 }
                 // CardData is plain/Send — map it to the (non-Send)
                 // AlbumCardItem inside the event-loop closure below.
@@ -154,14 +157,17 @@ pub fn load_more(
                 let has_more = data.has_more;
                 // T8: same featured-aware drop as the first page (log-only,
                 // no count adjustment).
-                let bl = if crate::artist_blacklist::is_enabled() {
-                    crate::artist_blacklist::ids_snapshot()
+                let (bl, abl) = if crate::artist_blacklist::is_enabled() {
+                    (
+                        crate::artist_blacklist::ids_snapshot(),
+                        crate::artist_blacklist::album_ids_snapshot(),
+                    )
                 } else {
                     Default::default()
                 };
-                if !bl.is_empty() {
+                if !bl.is_empty() || !abl.is_empty() {
                     data.items
-                        .retain(|a| !qbz_core::core::discover_album_blacklisted(a, &bl));
+                        .retain(|a| !qbz_core::core::discover_album_blacklisted(a, &bl, &abl));
                 }
                 let cards: Vec<CardData> =
                     data.items.into_iter().map(crate::home::map_album).collect();

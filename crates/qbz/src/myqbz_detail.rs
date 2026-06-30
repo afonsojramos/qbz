@@ -437,6 +437,13 @@ pub fn refresh_view(window: &AppWindow) {
         cell.borrow()
             .iter()
             .filter(|it| {
+                // Drop blocked albums by their own id. Album-type Qobuz items
+                // only — `source_item_id` is the Qobuz album id.
+                !(matches!(it.item_type, ItemType::Album)
+                    && source_str(it.source) == "qobuz"
+                    && crate::artist_blacklist::is_album_blacklisted(&it.source_item_id))
+            })
+            .filter(|it| {
                 // Type filter (single-select).
                 type_filter == "all" || item_type_str(it.item_type) == type_filter
             })

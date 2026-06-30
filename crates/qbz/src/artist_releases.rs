@@ -47,6 +47,9 @@ pub fn apply_page(
         items.iter().map(|a| a.id.to_string()).collect();
     let mut new_ids: Vec<String> = Vec::new();
     for card in cards {
+        if crate::artist_blacklist::card_blacklisted(&card.id, &card.artist_id) {
+            continue;
+        }
         let item = crate::artist::card_to_item(card);
         let id = item.id.to_string();
         if seen.contains(&id) {

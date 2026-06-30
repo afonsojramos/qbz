@@ -476,6 +476,7 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
                     is_blacklisted: crate::artist_blacklist::stamp_row(
                         "qobuz",
                         &[t.artist_id.as_str(), t.composer_id.as_str()],
+                        Some(t.album_id.as_str()),
                     ),
                     id: t.id.clone().into(),
                     number: "".into(),
@@ -518,8 +519,10 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
         }
         FavData::Albums { items, total } => {
             // Everything in the Albums tab is a favorite -> filled heart.
+            // Drop blocked albums (own id) and blacklisted-artist albums.
             let cards: Vec<AlbumCardItem> = items
                 .into_iter()
+                .filter(|c| !crate::artist_blacklist::card_blacklisted(&c.id, &c.artist_id))
                 .map(|c| {
                     let mut it = to_item(c);
                     it.is_favorite = true;

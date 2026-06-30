@@ -27,6 +27,20 @@ use crate::{
 /// the same so a typical label loads in one shot.
 pub const PAGE_SIZE: u32 = 500;
 
+/// Snapshot both blacklist axes (artist ids + album ids), empty when the
+/// feature is disabled. Label surfaces were entirely unfiltered before; this
+/// closes both axes at once (the artist leak too).
+fn bl_snapshots() -> (HashSet<u64>, HashSet<String>) {
+    if crate::artist_blacklist::is_enabled() {
+        (
+            crate::artist_blacklist::ids_snapshot(),
+            crate::artist_blacklist::album_ids_snapshot(),
+        )
+    } else {
+        (HashSet::new(), HashSet::new())
+    }
+}
+
 pub struct LabelData {
     pub id: String,
     pub name: String,
@@ -71,7 +85,13 @@ where
     // /label/getAlbums caps each page below the full catalog; trust the
     // `has_more` flag, falling back to a total comparison when it's absent.
     let has_more = albums_page.has_more.unwrap_or(total > item_count);
-    let albums = albums_page.items.into_iter().map(map_album).collect();
+    let (bl, abl) = bl_snapshots();
+    let albums = albums_page
+        .items
+        .into_iter()
+        .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
+        .map(map_album)
+        .collect();
 
     Ok(LabelData {
         id: label_id.to_string(),
@@ -106,7 +126,13 @@ where
     let has_more = page
         .has_more
         .unwrap_or(item_count >= PAGE_SIZE as usize || total > loaded);
-    let albums = page.items.into_iter().map(map_album).collect();
+    let (bl, abl) = bl_snapshots();
+    let albums = page
+        .items
+        .into_iter()
+        .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
+        .map(map_album)
+        .collect();
     Ok((albums, total, has_more))
 }
 
@@ -482,6 +508,8 @@ where
         .filter_map(|v| serde_json::from_value::<Track>(v).ok())
         .collect();
 
+    let (bl, abl) = bl_snapshots();
+
     // Critics' Picks — the releases container whose id mentions
     // award/critic/press (mirrors LabelView.svelte:402-413).
     let critics: Vec<AlbumCard> = page
@@ -505,6 +533,7 @@ where
                     items
                         .iter()
                         .filter_map(|v| serde_json::from_value::<Album>(v.clone()).ok())
+                        .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
                         .map(map_album)
                         .collect()
                 })
@@ -531,7 +560,12 @@ where
         .get_label_albums(label_id, 20, 0, None, None, None, None, None)
         .await
     {
-        Ok(p) => p.items.into_iter().map(map_album).collect(),
+        Ok(p) => p
+            .items
+            .into_iter()
+            .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
+            .map(map_album)
+            .collect(),
         Err(e) => {
             log::warn!("[qbz-slint] label releases carousel failed: {e}");
             Vec::new()
@@ -837,8 +871,12 @@ fn truncate_words(text: &str, max: usize) -> String {
 
 fn top_track_to_item(t: &TopTrack) -> TrackItem {
     TrackItem {
-        // Label landing top-tracks are out of Task 6 row-stamping scope.
-        is_blacklisted: false,
+        // Label landing is Qobuz-only; stamp on the row's artist + album id.
+        is_blacklisted: crate::artist_blacklist::stamp_row(
+            "qobuz",
+            &[t.artist_id.as_str()],
+            Some(t.album_id.as_str()),
+        ),
         id: t.id.clone().into(),
         number: "".into(),
         title: t.title.clone().into(),

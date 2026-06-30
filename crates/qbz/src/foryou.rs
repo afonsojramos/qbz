@@ -148,14 +148,17 @@ where
             // into one `total` decrement — this For You carousel surfaces
             // no count (it's a fixed 18-item rail) and applies no separate
             // availability filter, so we just drop the blacklisted rows.
-            let bl = if crate::artist_blacklist::is_enabled() {
-                crate::artist_blacklist::ids_snapshot()
+            let (bl, abl) = if crate::artist_blacklist::is_enabled() {
+                (
+                    crate::artist_blacklist::ids_snapshot(),
+                    crate::artist_blacklist::album_ids_snapshot(),
+                )
             } else {
                 Default::default()
             };
             page.items
                 .into_iter()
-                .filter(|a| !qbz_core::core::album_blacklisted(a, &bl))
+                .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
                 .map(map_album)
                 .collect()
         }
@@ -209,8 +212,11 @@ where
             // T8: similar-albums (flat Album). Filter-then-truncate: drop
             // blacklisted BEFORE take(18) (Tauri parity — may yield fewer
             // than the limit, no backfill).
-            let bl = if crate::artist_blacklist::is_enabled() {
-                crate::artist_blacklist::ids_snapshot()
+            let (bl, abl) = if crate::artist_blacklist::is_enabled() {
+                (
+                    crate::artist_blacklist::ids_snapshot(),
+                    crate::artist_blacklist::album_ids_snapshot(),
+                )
             } else {
                 Default::default()
             };
@@ -218,7 +224,7 @@ where
                 .map(|p| p.items)
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|a| !qbz_core::core::album_blacklisted(a, &bl))
+                .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
                 .take(18)
                 .map(map_album)
                 .collect()
@@ -322,6 +328,15 @@ where
         };
         for rel in &group.items {
             if !seen.insert(rel.id.clone()) {
+                continue;
+            }
+            // Drop blocked albums (own id) and blacklisted-artist releases.
+            let rel_artist_id = rel
+                .artist
+                .as_ref()
+                .map(|a| a.id.to_string())
+                .unwrap_or_default();
+            if crate::artist_blacklist::card_blacklisted(&rel.id, &rel_artist_id) {
                 continue;
             }
             let year = rel

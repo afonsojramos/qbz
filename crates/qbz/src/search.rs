@@ -1032,9 +1032,15 @@ where
     } else {
         std::collections::HashSet::new()
     };
+    // Album axis shares the same enabled gate.
+    let album_blacklist = if crate::artist_blacklist::is_enabled() {
+        crate::artist_blacklist::album_ids_snapshot()
+    } else {
+        std::collections::HashSet::new()
+    };
     let core = runtime.core();
     let (results, favs) = tokio::join!(
-        core.search_all(query, &blacklist),
+        core.search_all(query, &blacklist, &album_blacklist),
         core.favorite_artist_ids(),
     );
     let results = results.map_err(|e| e.to_string())?;
@@ -1066,6 +1072,12 @@ where
     } else {
         std::collections::HashSet::new()
     };
+    // Album axis shares the same enabled gate.
+    let album_blacklist = if crate::artist_blacklist::is_enabled() {
+        crate::artist_blacklist::album_ids_snapshot()
+    } else {
+        std::collections::HashSet::new()
+    };
     // Offline / not-signed-in → the dropdown is local-only, so widen the local
     // section caps (and the raw fetch that feeds the derived album/artist groups).
     let caps = LocalCaps::for_session(expand_local);
@@ -1075,7 +1087,7 @@ where
     // fill in (a Qobuz error falls into the local-only branch below instead of
     // discarding everything; the local rows are already resolved by then).
     let (results, local_rows) = tokio::join!(
-        core.search_all(query, &blacklist),
+        core.search_all(query, &blacklist, &album_blacklist),
         load_cortinilla_local(query, caps.fetch_limit(), true)
     );
     let mut data = match results {
@@ -1126,13 +1138,19 @@ where
     } else {
         std::collections::HashSet::new()
     };
+    // Album axis shares the same enabled gate.
+    let album_blacklist = if crate::artist_blacklist::is_enabled() {
+        crate::artist_blacklist::album_ids_snapshot()
+    } else {
+        std::collections::HashSet::new()
+    };
     let caps = LocalCaps::for_session(expand_local);
     let core = runtime.core();
     // Qobuz catalog + local albums CONCURRENTLY. Local is ungated (immersive
     // search has its own "search action" enable, independent of the main
     // cortinilla's intelligent-search toggle).
     let (results, local_rows) = tokio::join!(
-        core.search_all(query, &blacklist),
+        core.search_all(query, &blacklist, &album_blacklist),
         load_cortinilla_local(query, caps.fetch_limit(), false)
     );
     // A Qobuz error (offline / not signed in) still yields a local-only dropdown
@@ -1538,6 +1556,17 @@ where
 {
     let core = runtime.core();
     let search_type = search_type.as_deref();
+    // Page-2+ was unfiltered before (the core pass-throughs carry no &bl).
+    // Post-filter here, closing both the album and the artist leak. Shared
+    // enabled gate.
+    let (bl, abl) = if crate::artist_blacklist::is_enabled() {
+        (
+            crate::artist_blacklist::ids_snapshot(),
+            crate::artist_blacklist::album_ids_snapshot(),
+        )
+    } else {
+        Default::default()
+    };
     match category {
         SearchCategory::Albums => {
             let page = core
@@ -1545,7 +1574,11 @@ where
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(MoreRows::Albums(
-                page.items.into_iter().map(map_album).collect(),
+                page.items
+                    .into_iter()
+                    .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
+                    .map(map_album)
+                    .collect(),
             ))
         }
         SearchCategory::Tracks => {
@@ -1554,7 +1587,11 @@ where
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(MoreRows::Tracks(
-                page.items.into_iter().map(map_track).collect(),
+                page.items
+                    .into_iter()
+                    .filter(|t| !qbz_core::core::track_blacklisted(t, &bl, &abl))
+                    .map(map_track)
+                    .collect(),
             ))
         }
         SearchCategory::Artists => {
@@ -1567,6 +1604,7 @@ where
             Ok(MoreRows::Artists(
                 page.items
                     .iter()
+                    .filter(|a| !bl.contains(&a.id))
                     .map(|a| map_artist(a, favs.contains(&a.id)))
                     .collect(),
             ))

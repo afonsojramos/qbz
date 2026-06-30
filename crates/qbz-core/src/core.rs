@@ -31,9 +31,15 @@ use qbz_qobuz::QobuzClient;
 
 use crate::error::CoreError;
 
-/// Set of blacklisted artist ids. Empty until the blacklist module is
-/// migrated out of src-tauri (roadmap task #9).
+/// Set of blacklisted artist ids. Built per call from the live blacklist store
+/// (`qbz-app`); empty only under fail-open (no session bound / feature off).
 pub type BlacklistFilter = std::collections::HashSet<u64>;
+
+/// Set of blocked album ids (Qobuz album ids are alphanumeric `String`s, so a
+/// separate, parallel axis from the `u64` artist filter). An album is hidden by
+/// its OWN id regardless of artist — the surgical fix for Qobuz same-name
+/// artist merges. Empty under fail-open.
+pub type AlbumBlacklistFilter = std::collections::HashSet<String>;
 
 fn parse_page<T: serde::de::DeserializeOwned>(
     value: &serde_json::Value,
@@ -54,6 +60,7 @@ fn parse_page<T: serde::de::DeserializeOwned>(
 fn pick_most_popular(
     value: &serde_json::Value,
     blacklist: &BlacklistFilter,
+    album_bl: &AlbumBlacklistFilter,
 ) -> Option<MostPopularItem> {
     let items = value.get("most_popular")?.get("items")?.as_array()?;
     for entry in items {
@@ -65,6 +72,7 @@ fn pick_most_popular(
         };
         match kind {
             "artists" => {
+                // Artists have no album id — artist axis only.
                 if let Ok(a) = serde_json::from_value::<Artist>(content.clone()) {
                     if !blacklist.contains(&a.id) {
                         return Some(MostPopularItem::Artists(a));
@@ -73,7 +81,7 @@ fn pick_most_popular(
             }
             "albums" => {
                 if let Ok(al) = serde_json::from_value::<Album>(content.clone()) {
-                    if !blacklist.contains(&al.artist.id) {
+                    if !album_bl.contains(&al.id) && !blacklist.contains(&al.artist.id) {
                         return Some(MostPopularItem::Albums(al));
                     }
                 }
@@ -81,9 +89,12 @@ fn pick_most_popular(
             "tracks" => {
                 if let Ok(t) = serde_json::from_value::<Track>(content.clone()) {
                     let blocked = t
-                        .performer
+                        .album
                         .as_ref()
-                        .map_or(false, |p| blacklist.contains(&p.id));
+                        .is_some_and(|a| album_bl.contains(&a.id))
+                        || t.performer
+                            .as_ref()
+                            .map_or(false, |p| blacklist.contains(&p.id));
                     if !blocked {
                         return Some(MostPopularItem::Tracks(t));
                     }
@@ -104,9 +115,14 @@ fn pick_most_popular(
 ///
 /// Fail-open: an empty filter never blocks; an album with no matching id is
 /// kept.
-pub fn album_blacklisted(album: &Album, bl: &BlacklistFilter) -> bool {
-    if bl.is_empty() {
+pub fn album_blacklisted(album: &Album, bl: &BlacklistFilter, album_bl: &AlbumBlacklistFilter) -> bool {
+    if bl.is_empty() && album_bl.is_empty() {
         return false;
+    }
+    // Album axis (orthogonal): the album's OWN id being blocked hides it
+    // regardless of artist.
+    if album_bl.contains(&album.id) {
+        return true;
     }
     if bl.contains(&album.artist.id) {
         return true;
@@ -129,9 +145,17 @@ pub fn album_blacklisted(album: &Album, bl: &BlacklistFilter) -> bool {
 /// performer id* — only `performer`, `composer`, and a free-text `performers`
 /// string. We deliberately do NOT name-match the free-text string; this rule
 /// is strictly id-based.
-pub fn track_blacklisted(track: &Track, bl: &BlacklistFilter) -> bool {
-    if bl.is_empty() {
+pub fn track_blacklisted(track: &Track, bl: &BlacklistFilter, album_bl: &AlbumBlacklistFilter) -> bool {
+    if bl.is_empty() && album_bl.is_empty() {
         return false;
+    }
+    // Album axis: a track of a blocked album is hidden too.
+    if track
+        .album
+        .as_ref()
+        .is_some_and(|a| album_bl.contains(&a.id))
+    {
+        return true;
     }
     track
         .performer
@@ -148,9 +172,16 @@ pub fn track_blacklisted(track: &Track, bl: &BlacklistFilter) -> bool {
 /// Discover albums expose only a flat `artists[]` vec (no separate primary
 /// `artist`), so any matching contributor id — primary or featured — blocks
 /// the album. Fail-open: an empty filter never blocks.
-pub fn discover_album_blacklisted(album: &DiscoverAlbum, bl: &BlacklistFilter) -> bool {
-    if bl.is_empty() {
+pub fn discover_album_blacklisted(
+    album: &DiscoverAlbum,
+    bl: &BlacklistFilter,
+    album_bl: &AlbumBlacklistFilter,
+) -> bool {
+    if bl.is_empty() && album_bl.is_empty() {
         return false;
+    }
+    if album_bl.contains(&album.id) {
+        return true;
     }
     album.artists.iter().any(|a| bl.contains(&a.id))
 }
@@ -160,12 +191,14 @@ pub fn discover_album_blacklisted(album: &DiscoverAlbum, bl: &BlacklistFilter) -
 pub(crate) fn parse_search_all(
     value: &serde_json::Value,
     blacklist: &BlacklistFilter,
+    album_bl: &AlbumBlacklistFilter,
 ) -> SearchAllResults {
     let mut albums = parse_page::<Album>(value, "albums");
     let mut tracks = parse_page::<Track>(value, "tracks");
     let mut artists = parse_page::<Artist>(value, "artists");
     let playlists = parse_page::<Playlist>(value, "playlists");
 
+    // Artists have no album id — artist axis only.
     let before = artists.items.len();
     artists.items.retain(|a| !blacklist.contains(&a.id));
     artists.total = artists
@@ -173,7 +206,7 @@ pub(crate) fn parse_search_all(
         .saturating_sub((before - artists.items.len()) as u32);
 
     let before = albums.items.len();
-    albums.items.retain(|al| !album_blacklisted(al, blacklist));
+    albums.items.retain(|al| !album_blacklisted(al, blacklist, album_bl));
     albums.total = albums
         .total
         .saturating_sub((before - albums.items.len()) as u32);
@@ -181,7 +214,7 @@ pub(crate) fn parse_search_all(
     let before = tracks.items.len();
     tracks
         .items
-        .retain(|track| !track_blacklisted(track, blacklist));
+        .retain(|track| !track_blacklisted(track, blacklist, album_bl));
     tracks.total = tracks
         .total
         .saturating_sub((before - tracks.items.len()) as u32);
@@ -191,7 +224,7 @@ pub(crate) fn parse_search_all(
         tracks,
         artists,
         playlists,
-        most_popular: pick_most_popular(value, blacklist),
+        most_popular: pick_most_popular(value, blacklist, album_bl),
     }
 }
 
@@ -911,9 +944,10 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         &self,
         query: &str,
         blacklist: &BlacklistFilter,
+        album_blacklist: &AlbumBlacklistFilter,
     ) -> Result<SearchAllResults, CoreError> {
         let json = self.catalog_search(query, 30, 0).await?;
-        Ok(parse_search_all(&json, blacklist))
+        Ok(parse_search_all(&json, blacklist, album_blacklist))
     }
 
     /// Get album by ID
@@ -2761,7 +2795,7 @@ mod tests {
             "playlists": { "items": [], "total": 0, "offset": 0, "limit": 30 }
         });
         let blocked: BlacklistFilter = [999].into_iter().collect();
-        let out = parse_search_all(&json, &blocked);
+        let out = parse_search_all(&json, &blocked, &no_albums());
         assert_eq!(out.artists.items.len(), 1);
         assert_eq!(out.artists.items[0].name, "Keep");
         assert_eq!(out.artists.total, 1);
@@ -2770,8 +2804,14 @@ mod tests {
 
     // --- D-FEAT featured-aware blacklist helpers ---
 
-    use qbz_models::types::AlbumArtist;
+    use qbz_models::types::{AlbumArtist, AlbumSummary};
     use qbz_models::{DiscoverAlbumImage, DiscoverArtist};
+
+    /// Empty album-blacklist filter for the artist-axis tests (the album axis
+    /// is exercised by the dedicated album-id tests below).
+    fn no_albums() -> AlbumBlacklistFilter {
+        AlbumBlacklistFilter::new()
+    }
 
     // Album and Track do not derive Default in qbz-models, so test fixtures
     // construct full struct literals. Only the artist-id fields are meaningful
@@ -2848,6 +2888,7 @@ mod tests {
                 ..Default::default()
             }),
             copyright: None,
+            work: None,
         }
     }
 
@@ -2855,7 +2896,7 @@ mod tests {
     fn album_blacklisted_blocks_on_primary_artist() {
         let album = album_with_artists(1, &[]);
         let bl: BlacklistFilter = [1].into_iter().collect();
-        assert!(album_blacklisted(&album, &bl));
+        assert!(album_blacklisted(&album, &bl, &no_albums()));
     }
 
     #[test]
@@ -2863,42 +2904,42 @@ mod tests {
         // Primary is 1 (kept), featured 999 is blocked.
         let album = album_with_artists(1, &[999]);
         let bl: BlacklistFilter = [999].into_iter().collect();
-        assert!(album_blacklisted(&album, &bl));
+        assert!(album_blacklisted(&album, &bl, &no_albums()));
     }
 
     #[test]
     fn album_blacklisted_keeps_when_no_match() {
         let album = album_with_artists(1, &[2, 3]);
         let bl: BlacklistFilter = [999].into_iter().collect();
-        assert!(!album_blacklisted(&album, &bl));
+        assert!(!album_blacklisted(&album, &bl, &no_albums()));
     }
 
     #[test]
     fn album_blacklisted_empty_filter_is_false() {
         let album = album_with_artists(1, &[999]);
         let bl: BlacklistFilter = BlacklistFilter::new();
-        assert!(!album_blacklisted(&album, &bl));
+        assert!(!album_blacklisted(&album, &bl, &no_albums()));
     }
 
     #[test]
     fn track_blacklisted_blocks_on_performer() {
         let track = track_with(Some(5), None);
         let bl: BlacklistFilter = [5].into_iter().collect();
-        assert!(track_blacklisted(&track, &bl));
+        assert!(track_blacklisted(&track, &bl, &no_albums()));
     }
 
     #[test]
     fn track_blacklisted_blocks_on_composer() {
         let track = track_with(Some(1), Some(7));
         let bl: BlacklistFilter = [7].into_iter().collect();
-        assert!(track_blacklisted(&track, &bl));
+        assert!(track_blacklisted(&track, &bl, &no_albums()));
     }
 
     #[test]
     fn track_blacklisted_keeps_when_no_match() {
         let track = track_with(Some(1), Some(2));
         let bl: BlacklistFilter = [999].into_iter().collect();
-        assert!(!track_blacklisted(&track, &bl));
+        assert!(!track_blacklisted(&track, &bl, &no_albums()));
     }
 
     #[test]
@@ -2906,14 +2947,14 @@ mod tests {
         // No performer + no composer => kept (fail-open).
         let track = track_with(None, None);
         let bl: BlacklistFilter = [1, 2, 3].into_iter().collect();
-        assert!(!track_blacklisted(&track, &bl));
+        assert!(!track_blacklisted(&track, &bl, &no_albums()));
     }
 
     #[test]
     fn track_blacklisted_empty_filter_is_false() {
         let track = track_with(Some(5), Some(7));
         let bl: BlacklistFilter = BlacklistFilter::new();
-        assert!(!track_blacklisted(&track, &bl));
+        assert!(!track_blacklisted(&track, &bl, &no_albums()));
     }
 
     #[test]
@@ -2949,9 +2990,116 @@ mod tests {
             awards: None,
         };
         let blocked: BlacklistFilter = [999].into_iter().collect();
-        assert!(discover_album_blacklisted(&album, &blocked));
+        assert!(discover_album_blacklisted(&album, &blocked, &no_albums()));
         let kept: BlacklistFilter = [555].into_iter().collect();
-        assert!(!discover_album_blacklisted(&album, &kept));
+        assert!(!discover_album_blacklisted(&album, &kept, &no_albums()));
+    }
+
+    // --- Album-id axis (orthogonal to the artist axis) ---
+
+    fn album_with_id(id: &str, primary_artist: u64) -> Album {
+        let mut a = album_with_artists(primary_artist, &[]);
+        a.id = id.to_string();
+        a
+    }
+
+    fn track_with_album(album_id: &str) -> Track {
+        let mut t = track_with(Some(1), Some(2));
+        t.album = Some(AlbumSummary {
+            id: album_id.to_string(),
+            title: String::new(),
+            image: Default::default(),
+            label: None,
+            genre: None,
+        });
+        t
+    }
+
+    #[test]
+    fn album_blocked_by_own_id_regardless_of_artist() {
+        // Artist filter EMPTY; only the album id is blocked. The widened
+        // fail-open guard must NOT early-return here.
+        let album = album_with_id("blk", 1);
+        let abl: AlbumBlacklistFilter = ["blk".to_string()].into_iter().collect();
+        assert!(album_blacklisted(&album, &BlacklistFilter::new(), &abl));
+        let other: AlbumBlacklistFilter = ["zzz".to_string()].into_iter().collect();
+        assert!(!album_blacklisted(&album, &BlacklistFilter::new(), &other));
+    }
+
+    #[test]
+    fn album_blocked_keeps_sibling_album_of_same_artist() {
+        // The merged-artist use case: blocking one album by id leaves the same
+        // artist's other releases visible.
+        let blocked_album = album_with_id("bad", 1);
+        let good_album = album_with_id("good", 1);
+        let abl: AlbumBlacklistFilter = ["bad".to_string()].into_iter().collect();
+        assert!(album_blacklisted(&blocked_album, &BlacklistFilter::new(), &abl));
+        assert!(!album_blacklisted(&good_album, &BlacklistFilter::new(), &abl));
+    }
+
+    #[test]
+    fn track_blocked_by_album_id() {
+        let track = track_with_album("blk");
+        let abl: AlbumBlacklistFilter = ["blk".to_string()].into_iter().collect();
+        assert!(track_blacklisted(&track, &BlacklistFilter::new(), &abl));
+        // No album / different id => kept.
+        assert!(!track_blacklisted(
+            &track_with(Some(1), None),
+            &BlacklistFilter::new(),
+            &abl
+        ));
+    }
+
+    #[test]
+    fn discover_album_blocked_by_own_id() {
+        let mut album = DiscoverAlbum {
+            id: "blk".to_string(),
+            title: String::new(),
+            version: None,
+            track_count: None,
+            duration: None,
+            parental_warning: None,
+            image: DiscoverAlbumImage {
+                small: None,
+                thumbnail: None,
+                large: None,
+            },
+            artists: vec![DiscoverArtist {
+                id: 1,
+                name: String::new(),
+                roles: None,
+            }],
+            label: None,
+            genre: None,
+            dates: None,
+            audio_info: None,
+            awards: None,
+        };
+        let abl: AlbumBlacklistFilter = ["blk".to_string()].into_iter().collect();
+        assert!(discover_album_blacklisted(&album, &BlacklistFilter::new(), &abl));
+        album.id = "other".to_string();
+        assert!(!discover_album_blacklisted(&album, &BlacklistFilter::new(), &abl));
+    }
+
+    #[test]
+    fn parse_search_all_filters_blocked_album() {
+        let json = serde_json::json!({
+            "albums": {
+                "items": [
+                    { "id": "keep", "title": "Keep", "artist": { "id": 1, "name": "A" } },
+                    { "id": "blk",  "title": "Bogus", "artist": { "id": 1, "name": "A" } }
+                ],
+                "total": 2, "offset": 0, "limit": 30
+            },
+            "tracks":  { "items": [], "total": 0, "offset": 0, "limit": 30 },
+            "artists": { "items": [], "total": 0, "offset": 0, "limit": 30 },
+            "playlists": { "items": [], "total": 0, "offset": 0, "limit": 30 }
+        });
+        let abl: AlbumBlacklistFilter = ["blk".to_string()].into_iter().collect();
+        let out = parse_search_all(&json, &BlacklistFilter::new(), &abl);
+        assert_eq!(out.albums.items.len(), 1);
+        assert_eq!(out.albums.items[0].id, "keep");
+        assert_eq!(out.albums.total, 1);
     }
 
     #[test]

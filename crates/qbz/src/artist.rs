@@ -150,7 +150,12 @@ where
         .await
         .map_err(|e| e.to_string())?;
     let has_more = resp.has_more;
-    let cards = resp.items.into_iter().map(map_release).collect();
+    let cards = resp
+        .items
+        .into_iter()
+        .map(map_release)
+        .filter(|c| !crate::artist_blacklist::card_blacklisted(&c.id, &c.artist_id))
+        .collect();
     Ok((cards, has_more))
 }
 
@@ -668,6 +673,7 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
         .collect();
     let last_release_item = data
         .last_release
+        .filter(|c| !crate::artist_blacklist::card_blacklisted(&c.id, &c.artist_id))
         .map(card_to_item)
         .unwrap_or_default();
     let release_sections: Vec<ArtistReleaseSection> = data
@@ -677,8 +683,14 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
             // Apply the persisted per-bucket sort up front so the first paint
             // already honors the user's choice.
             let sort = crate::artist_prefs::get_sort(&section.release_type);
-            let mut albums: Vec<AlbumCardItem> =
-                section.cards.into_iter().map(card_to_item).collect();
+            // Drop blocked albums (own id). The artist axis is moot here (you're
+            // on the artist's own page) and CardData.artist_id is blank anyway.
+            let mut albums: Vec<AlbumCardItem> = section
+                .cards
+                .into_iter()
+                .filter(|c| !crate::artist_blacklist::card_blacklisted(&c.id, &c.artist_id))
+                .map(card_to_item)
+                .collect();
             crate::album_map::sort_album_items(&mut albums, &sort);
             ArtistReleaseSection {
                 release_type: section.release_type.into(),

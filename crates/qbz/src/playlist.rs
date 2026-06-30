@@ -515,6 +515,7 @@ pub(crate) fn to_item(track: &Track) -> TrackItem {
         is_blacklisted: crate::artist_blacklist::stamp_row(
             "qobuz",
             &[performer_id.as_str(), composer_id.as_str()],
+            track.album.as_ref().map(|a| a.id.as_str()),
         ),
         id: track.id.to_string().into(),
         number: "".into(),
