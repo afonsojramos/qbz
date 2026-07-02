@@ -273,17 +273,103 @@ fn album_matches_filters(a: &qbz_library::LocalAlbum, f: &AlbumFilter) -> bool {
     passes_q && passes_f && passes_s
 }
 
-/// Build LocalAlbumCard artwork jobs for the full `albums` set (gen-stamped).
-fn album_artwork_jobs(cards: &[crate::album_map::AlbumCard], gen: u64) -> Vec<ArtworkJob> {
-    cards
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| !c.artwork_url.is_empty())
-        .map(|(i, c)| ArtworkJob {
-            target: ArtworkTarget::LocalAlbumCard { index: i, gen },
-            url: c.artwork_url.clone(),
-        })
-        .collect()
+/// Last row band reported by the windowed albums grid (item indices into
+/// `albums-visible`, prefetch margin already included by the grid). Kept so
+/// model rebuilds (load/derive) can re-dispatch — the grid only fires its
+/// callback when the band CHANGES, not when the rows under it change.
+static ALBUMS_WINDOW: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 59));
+
+/// Cover ids currently in the artwork pipeline for the albums window
+/// (dedupe during fast scroll). Freed on apply; cleared on reloads.
+fn albums_inflight() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Plex params + image-cache handle captured at load time so the window
+/// dispatcher can spawn artwork jobs outside the load path.
+fn albums_dispatch_ctx() -> &'static std::sync::Mutex<Option<(String, String, ImageCache)>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<Option<(String, String, ImageCache)>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// A windowed artwork job finished (applied or dropped) — free its slot so
+/// the dispatcher can request the id again after an eviction.
+pub fn album_artwork_job_done(id: &str) {
+    albums_inflight().lock().unwrap().remove(id);
+}
+
+/// The windowed grid reported a new visible row band.
+pub fn albums_window_changed(window: &AppWindow, first: i32, last: i32) {
+    let first = first.max(0) as usize;
+    let last = last.max(first as i32) as usize;
+    *ALBUMS_WINDOW.lock().unwrap() = (first, last);
+    dispatch_albums_window(window);
+}
+
+/// Dispatch covers for the current albums window (over `albums-visible`) and
+/// evict decoded covers far outside it back to the placeholder, so cover RAM
+/// scales with the viewport instead of the library. Delivery is id-keyed
+/// (`LocalAlbumById`), so a derive re-sort between dispatch and apply cannot
+/// land a cover on the wrong card; a full reload bumps `ALBUMS_GEN` and the
+/// apply arm drops the stale image.
+pub fn dispatch_albums_window(window: &AppWindow) {
+    let (first, last) = *ALBUMS_WINDOW.lock().unwrap();
+    let Some((base_url, token, image_cache)) = albums_dispatch_ctx().lock().unwrap().clone()
+    else {
+        return;
+    };
+    let gen = ALBUMS_GEN.load(Ordering::SeqCst);
+    let s = window.global::<LocalLibraryState>();
+    let visible = s.get_albums_visible();
+    let len = visible.row_count();
+    if len == 0 {
+        return;
+    }
+    let last = last.min(len - 1);
+    if first > last {
+        return;
+    }
+    // Retention = the window plus one window-span on each side. Beyond it,
+    // covers return to the placeholder; re-entry is cheap (byte-budgeted
+    // decoded cache, else a bounded 264px re-decode from the source file).
+    let span = last - first + 1;
+    let keep_lo = first.saturating_sub(span);
+    let keep_hi = (last + span).min(len - 1);
+    let mut jobs = Vec::new();
+    {
+        let mut inflight = albums_inflight().lock().unwrap();
+        for vi in first..=last {
+            let Some(item) = visible.row_data(vi) else { continue };
+            if item.artwork.size().width > 0 || item.artwork_url.is_empty() {
+                continue;
+            }
+            let id = item.id.to_string();
+            if inflight.insert(id.clone()) {
+                jobs.push(ArtworkJob {
+                    target: ArtworkTarget::LocalAlbumById { id, gen },
+                    url: item.artwork_url.to_string(),
+                });
+            }
+        }
+    }
+    for vi in (0..keep_lo).chain(keep_hi + 1..len) {
+        let Some(item) = visible.row_data(vi) else { continue };
+        if item.artwork.size().width > 0 {
+            set_local_album_artwork(window, item.id.as_str(), slint::Image::default());
+        }
+    }
+    if !jobs.is_empty() {
+        crate::artwork::spawn_local_or_plex_loads(
+            jobs,
+            base_url,
+            token,
+            window.as_weak(),
+            image_cache,
+        );
+    }
 }
 
 /// Set a freshly-decoded local-album cover (by id) on every rendered model:
@@ -380,6 +466,16 @@ pub fn derive_albums(window: &AppWindow) {
         s.set_albums_visible(ModelRc::new(VecModel::from(filtered)));
         s.set_albums_grouped(empty_sections());
         s.set_albums_alpha(ModelRc::new(VecModel::from(Vec::<AlphaJump>::new())));
+        if s.get_albums_view_mode() == "list" {
+            // The LIST view renders the same albums-visible model but is NOT
+            // windowed (only AlbumGrid fires window-changed) — dispatch every
+            // missing cover and do no eviction, like pre-windowing.
+            dispatch_albums_all_visible(window);
+        } else {
+            // The rows under the window band changed (search/sort/filter) but
+            // the band itself didn't — the grid won't re-fire, so re-dispatch.
+            dispatch_albums_window(window);
+        }
         return;
     }
 
@@ -426,6 +522,100 @@ pub fn derive_albums(window: &AppWindow) {
     s.set_albums_grouped(ModelRc::new(VecModel::from(sections)));
     s.set_albums_alpha(ModelRc::new(VecModel::from(jumps)));
     s.set_albums_visible(ModelRc::new(VecModel::from(Vec::<AlbumCardItem>::new())));
+    dispatch_albums_all_grouped(window);
+}
+
+/// Flat LIST-view artwork: same `albums-visible` model as the grid, but the
+/// list is not windowed (only `AlbumGrid` fires `window-changed`) — dispatch
+/// every missing cover, no eviction. Phase 1 limit.
+fn dispatch_albums_all_visible(window: &AppWindow) {
+    let Some((base_url, token, image_cache)) = albums_dispatch_ctx().lock().unwrap().clone()
+    else {
+        return;
+    };
+    let gen = ALBUMS_GEN.load(Ordering::SeqCst);
+    let s = window.global::<LocalLibraryState>();
+    let visible = s.get_albums_visible();
+    let mut jobs = Vec::new();
+    {
+        let mut inflight = albums_inflight().lock().unwrap();
+        for vi in 0..visible.row_count() {
+            let Some(item) = visible.row_data(vi) else { continue };
+            if item.artwork.size().width > 0 || item.artwork_url.is_empty() {
+                continue;
+            }
+            let id = item.id.to_string();
+            if inflight.insert(id.clone()) {
+                jobs.push(ArtworkJob {
+                    target: ArtworkTarget::LocalAlbumById { id, gen },
+                    url: item.artwork_url.to_string(),
+                });
+            }
+        }
+    }
+    if !jobs.is_empty() {
+        crate::artwork::spawn_local_or_plex_loads(
+            jobs,
+            base_url,
+            token,
+            window.as_weak(),
+            image_cache,
+        );
+    }
+}
+
+/// The Albums grid/list view-mode toggled. Switching TO the list needs a full
+/// dispatch (the list is not windowed and the grid's window may have evicted
+/// covers the list now shows); switching to the grid is handled by AlbumGrid's
+/// own `init => notify-window()` on mount.
+pub fn albums_view_mode_changed(window: &AppWindow) {
+    let s = window.global::<LocalLibraryState>();
+    if s.get_albums_group() == "off" && s.get_albums_view_mode() == "list" {
+        dispatch_albums_all_visible(window);
+    }
+}
+
+/// Grouped-mode artwork: `albums-visible` is EMPTY there (the sections render
+/// from `albums-grouped`), so the viewport window doesn't apply — keep the
+/// pre-windowing behavior and dispatch every missing cover. Phase 1 limit;
+/// per-section windowing needs the sections' content offsets.
+fn dispatch_albums_all_grouped(window: &AppWindow) {
+    let Some((base_url, token, image_cache)) = albums_dispatch_ctx().lock().unwrap().clone()
+    else {
+        return;
+    };
+    let gen = ALBUMS_GEN.load(Ordering::SeqCst);
+    let s = window.global::<LocalLibraryState>();
+    let grouped = s.get_albums_grouped();
+    let mut jobs = Vec::new();
+    {
+        let mut inflight = albums_inflight().lock().unwrap();
+        for gi in 0..grouped.row_count() {
+            let Some(sec) = grouped.row_data(gi) else { continue };
+            for i in 0..sec.albums.row_count() {
+                let Some(item) = sec.albums.row_data(i) else { continue };
+                if item.artwork.size().width > 0 || item.artwork_url.is_empty() {
+                    continue;
+                }
+                let id = item.id.to_string();
+                if inflight.insert(id.clone()) {
+                    jobs.push(ArtworkJob {
+                        target: ArtworkTarget::LocalAlbumById { id, gen },
+                        url: item.artwork_url.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    if !jobs.is_empty() {
+        crate::artwork::spawn_local_or_plex_loads(
+            jobs,
+            base_url,
+            token,
+            window.as_weak(),
+            image_cache,
+        );
+    }
 }
 
 /// Clear all quality/format/source filters, then re-derive.
@@ -568,23 +758,21 @@ fn spawn_albums_load(
             match loaded {
                 Some((albums, cards)) => {
                     *local_albums() = albums;
-                    let jobs = album_artwork_jobs(&cards, gen);
                     let items: Vec<AlbumCardItem> =
                         cards.into_iter().map(crate::album_map::to_item).collect();
                     s.set_albums(ModelRc::new(VecModel::from(items.clone())));
                     s.set_album_count(items.len() as i32);
                     s.set_albums_loading(false);
                     s.set_albums_load_failed(false);
+                    // WINDOWED artwork (was: a job for every album in the
+                    // library). Stash the dispatch context BEFORE derive —
+                    // derive dispatches the covers itself (flat = viewport
+                    // band via dispatch_albums_window; grouped = full set).
+                    // The spawn is Plex-aware: /library/... → PlexThumb,
+                    // else LocalFile.
+                    *albums_dispatch_ctx().lock().unwrap() =
+                        Some((plex.base_url.clone(), plex.token.clone(), image_cache));
                     derive_albums(&w);
-                    // Route covers through the Plex-aware spawn: Plex rows carry
-                    // a /library/... path → PlexThumb; local rows → LocalFile.
-                    crate::artwork::spawn_local_or_plex_loads(
-                        jobs,
-                        plex.base_url.clone(),
-                        plex.token.clone(),
-                        w.as_weak(),
-                        image_cache,
-                    );
                 }
                 None => {
                     s.set_albums_loading(false);
@@ -603,6 +791,9 @@ pub fn reload_albums(
 ) {
     let _ = weak.upgrade_in_event_loop(move |w| {
         let gen = ALBUMS_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+        // The gen bump orphans every in-flight windowed job (dropped on
+        // apply) — free their dedupe slots so the new set can re-request.
+        albums_inflight().lock().unwrap().clear();
         let s = w.global::<LocalLibraryState>();
         s.set_albums_loading(true);
         s.set_albums_load_failed(false);

@@ -5829,6 +5829,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::warn!("[qbz-slint] select_bundled_translation('{lang}') failed: {e:?}");
     }
     reseed_i18n_labels(&window);
+    // Shader scenes need the wgpu underlay: on the femtovg-GL / software tiers
+    // they would render black, so hide them from the immersive picker + `g`.
+    window
+        .global::<ImmersiveState>()
+        .set_shader_scenes_available(use_gpu_renderer);
     // Tell the user their renderer override was rolled back (set in
     // renderer_tier_from_prefs when the previous start died before painting).
     if RENDERER_REVERTED.load(std::sync::atomic::Ordering::Relaxed) {
@@ -14871,6 +14876,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         window
             .global::<LocalLibraryActions>()
+            .on_albums_window_changed(move |first, last| {
+                // Windowed albums grid: dispatch covers for the reported row
+                // band and evict the ones far outside it.
+                if let Some(w) = weak.upgrade() {
+                    local_library::albums_window_changed(&w, first, last);
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        window
+            .global::<LocalLibraryActions>()
             .on_albums_set_sort(move |sort| {
                 if let Some(w) = weak.upgrade() {
                     w.global::<LocalLibraryState>().set_albums_sort(sort);
@@ -14896,6 +14913,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_albums_set_view(move |mode| {
                 if let Some(w) = weak.upgrade() {
                     w.global::<LocalLibraryState>().set_albums_view_mode(mode);
+                    // Switching to the (non-windowed) list view needs covers
+                    // the grid's window may have evicted.
+                    local_library::albums_view_mode_changed(&w);
                 }
             });
     }

@@ -31,7 +31,8 @@ pub const MAX_CACHE_BYTES: u64 = 200 * 1024 * 1024;
 pub type ImageCache = Arc<Mutex<Option<ImageCacheService>>>;
 
 /// Which card an artwork download targets.
-#[derive(Clone, Copy)]
+/// (`Clone` only — `LocalAlbumById` carries a `String`, so no `Copy`.)
+#[derive(Clone)]
 pub enum ArtworkTarget {
     /// A card in a Discover descriptor list's embedded album section
     /// (`DiscoverState.home-sections` / `editor-sections`
@@ -123,10 +124,11 @@ pub enum ArtworkTarget {
     FavoriteAlbum { index: usize },
     /// A card in DiscoverBrowseState.albums[index].
     DiscoverBrowseAlbum { index: usize },
-    /// A card in LocalLibraryState.albums[index] (Local Library grid). `gen`
-    /// is the albums generation at fetch time; a stale cover (the model was
-    /// replaced by a search/sort/retry) is dropped on apply.
-    LocalAlbumCard { index: usize, gen: u64 },
+    /// A Local Library album cover, addressed BY ID (windowed dispatch over
+    /// `albums-visible` — id-keyed delivery is immune to derive re-sorts
+    /// between dispatch and apply). `gen` is the albums generation at fetch
+    /// time; a stale cover (the model was replaced by a reload) is dropped.
+    LocalAlbumById { id: String, gen: u64 },
     /// A card in LocalLibraryState.folders[index] (Folders-flat grid).
     LocalFolderCard { index: usize },
     /// A subfolder cover card in LocalLibraryState.folder-detail-subfolders[index]
@@ -448,7 +450,17 @@ pub fn spawn_local_or_plex_loads(
             } else {
                 ArtworkRef::LocalFile(job.url.clone())
             };
-            let (pixels, width, height) = fetch_and_decode_ref(&art, &cache, decode_size).await?;
+            let Some((pixels, width, height)) =
+                fetch_and_decode_ref(&art, &cache, decode_size).await
+            else {
+                // Failed fetch/decode never reaches apply_artwork — free the
+                // windowed-dispatch dedupe slot here so a later band pass can
+                // retry this cover instead of skipping it for the session.
+                if let ArtworkTarget::LocalAlbumById { id, .. } = &job.target {
+                    crate::local_library::album_artwork_job_done(id);
+                }
+                return None;
+            };
             let target = job.target;
             let url = job.url;
             let _ = window.upgrade_in_event_loop(move |w| {
@@ -1232,17 +1244,16 @@ fn apply_artwork(
                 .global::<crate::PurchaseDetailState>()
                 .set_artwork(image);
         }
-        ArtworkTarget::LocalAlbumCard { index, gen } => {
+        ArtworkTarget::LocalAlbumById { id, gen } => {
+            // The job is done either way — free its in-flight slot so the
+            // window dispatcher can re-request it after an eviction.
+            crate::local_library::album_artwork_job_done(&id);
             // Drop the cover if a reload superseded the set it belongs to.
             if !crate::local_library::albums_gen_current(gen) {
                 return;
             }
-            let model = window.global::<crate::LocalLibraryState>().get_albums();
-            if let Some(item) = model.row_data(index) {
-                // Dual-set by id onto the full set + visible + grouped sections.
-                let id = item.id.to_string();
-                crate::local_library::set_local_album_artwork(window, &id, image);
-            }
+            // Set by id onto the full set + visible + grouped sections.
+            crate::local_library::set_local_album_artwork(window, &id, image);
         }
         ArtworkTarget::LocalFolderCard { index } => {
             let model = window.global::<crate::LocalLibraryState>().get_folders();

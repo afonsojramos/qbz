@@ -21,9 +21,23 @@ component AlbumGrid inherits Rectangle {
     in property <bool> show-favorite: true;
     in property <bool> show-source-badge: false;
     in property <bool> select-mode: false;
+    // --- Viewport windowing (opt-in; default OFF = identical to before) ---
+    // With `windowed` on, only cards within ~one viewport of the visible band
+    // mount a real AlbumCard; the rest are same-footprint placeholders, so
+    // the height formula below (the scroll geometry) never changes.
+    // `visible-top`/`visible-height` arrive in the surrounding Flickable's
+    // CONTENT coordinates; `content-offset` is this grid's approximate y
+    // inside that content — small errors are absorbed by the margin.
+    in property <bool> windowed: false;
+    in property <length> visible-top: 0px;
+    in property <length> visible-height: 0px;
+    in property <length> content-offset: 0px;
     callback open-album(string);
     callback open-artist(string);
     callback media-action(string, string, string);
+    // Fired (windowed only) when the row band changes — [first, last] item
+    // indices, prefetch margin included. The consumer dispatches artwork.
+    callback window-changed(int /* first index */, int /* last index */);
 
     property <int> columns: Math.max(
         1,
@@ -33,23 +47,58 @@ component AlbumGrid inherits Rectangle {
         ? self.rows * root.card-height + Math.max(0, self.rows - 1) * root.card-gap
         : 0px;
 
-    for album[i] in root.albums: AlbumCard {
+    // Row band = visible rows ± one full viewport. Row-granular ints, so the
+    // `changed` handlers only fire when a row boundary is crossed (~every
+    // 270px of scroll), not per scrolled pixel.
+    property <length> row-stride: root.card-height + root.card-gap;
+    property <length> local-top: root.visible-top - root.content-offset;
+    property <int> first-window-row: root.windowed
+        ? Math.max(0, Math.floor((root.local-top - root.visible-height) / root.row-stride))
+        : 0;
+    property <int> last-window-row: root.windowed
+        ? Math.max(0, Math.floor((root.local-top + 2 * root.visible-height) / root.row-stride))
+        : 0;
+    changed first-window-row => { root.notify-window(); }
+    changed last-window-row => { root.notify-window(); }
+    // Column count changes on first layout and on window resize — the band's
+    // ITEM indices depend on it, so re-notify.
+    changed columns => { root.notify-window(); }
+    init => { root.notify-window(); }
+    function notify-window() {
+        if (root.windowed) {
+            root.window-changed(
+                root.first-window-row * root.columns,
+                (root.last-window-row + 1) * root.columns - 1);
+        }
+    }
+
+    for album[i] in root.albums: card-slot := Rectangle {
         x: Math.mod(i, root.columns) * (root.card-width + root.card-gap);
         y: Math.floor(i / root.columns) * (root.card-height + root.card-gap);
         width: root.card-width;
         height: root.card-height;
-        album: album;
-        show-favorite: root.show-favorite;
-        show-source-badge: root.show-source-badge;
-        select-mode: root.select-mode;
-        clicked(id) => {
-            root.open-album(id);
-        }
-        media-action(kind, id, action) => {
-            if (kind == "artist") {
-                root.open-artist(id);
-            } else {
-                root.media-action(kind, id, action);
+        property <bool> in-window: !root.windowed
+            || (Math.floor(i / root.columns) >= root.first-window-row
+                && Math.floor(i / root.columns) <= root.last-window-row);
+        // Placeholder tile while the real card is unmounted (fast scroll).
+        border-radius: 8px;
+        background: card-slot.in-window ? transparent : Theme.surface-elevated;
+        if card-slot.in-window: AlbumCard {
+            width: root.card-width;
+            height: root.card-height;
+            album: album;
+            show-favorite: root.show-favorite;
+            show-source-badge: root.show-source-badge;
+            select-mode: root.select-mode;
+            clicked(id) => {
+                root.open-album(id);
+            }
+            media-action(kind, id, action) => {
+                if (kind == "artist") {
+                    root.open-artist(id);
+                } else {
+                    root.media-action(kind, id, action);
+                }
             }
         }
     }
@@ -74,6 +123,14 @@ export component AlbumCollectionView inherits VerticalLayout {
     in property <length> card-height: 246px;
     in property <length> card-gap: 24px;
     in property <length> list-row-gap: 4px;
+    // Viewport windowing — forwarded to the FLAT grid only (grouped sections
+    // keep full mounts; their per-section offsets are unknown here). OFF by
+    // default so Discover Browse / Labels / Favorites are untouched.
+    in property <bool> windowed: false;
+    in property <length> visible-top: 0px;
+    in property <length> visible-height: 0px;
+    in property <length> content-offset: 0px;
+    callback window-changed(int /* first index */, int /* last index */);
     callback open-album(string);
     callback open-artist(string);
     callback media-action(string, string, string);
@@ -147,6 +204,13 @@ export component AlbumCollectionView inherits VerticalLayout {
         card-width: root.card-width;
         card-height: root.card-height;
         card-gap: root.card-gap;
+        windowed: root.windowed;
+        visible-top: root.visible-top;
+        visible-height: root.visible-height;
+        content-offset: root.content-offset;
+        window-changed(first, last) => {
+            root.window-changed(first, last);
+        }
         open-album(id) => {
             root.open-album(id);
         }

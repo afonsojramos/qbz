@@ -1169,6 +1169,18 @@ export component LocalLibraryView inherits Rectangle {
                                 show-favorite: false;
                                 // Always-visible source badge (local | qobuz-offline | plex).
                                 show-source-badge: true;
+                                // Viewport windowing (Phase 1): only cards near the
+                                // visible band mount + get artwork dispatched. The
+                                // offset is the page's padding-top (16px); the grid's
+                                // one-viewport margin absorbs the small extras
+                                // (multi-select bar) above the grid.
+                                windowed: true;
+                                visible-top: -albums-flick.viewport-y;
+                                visible-height: albums-flick.height;
+                                content-offset: 16px;
+                                window-changed(first, last) => {
+                                    LocalLibraryActions.albums-window-changed(first, last);
+                                }
                                 open-album(id) => {
                                     LocalLibraryActions.open-album(id);
                                 }
