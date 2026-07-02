@@ -317,12 +317,15 @@ fn card_item(c: &MixtapeCollection) -> MixtapeCardItem {
     // missing/undecodable path is treated as "no custom cover" so the mosaic
     // shows instead of an empty full-bleed square — and so `has_custom` drives
     // cover_count + the URL closure consistently below.
+    // Decoded to the card tier (the grid card renders at 184px) so a rebuild
+    // per keystroke/sort never retains full-resolution sources; the decoded-
+    // pixel cache makes the repeats a lookup.
     let decoded_custom = c
         .custom_artwork_path
         .as_ref()
         .filter(|p| !p.is_empty())
         .filter(|p| std::path::Path::new(p).exists())
-        .and_then(|p| slint::Image::load_from_path(std::path::Path::new(p)).ok());
+        .and_then(|p| crate::artwork::load_local_cover(p, 264));
     let (custom_image, has_custom) = match decoded_custom {
         Some(img) => (img, true),
         None => (slint::Image::default(), false),

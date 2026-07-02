@@ -651,12 +651,13 @@ pub fn apply(window: &AppWindow, data: PlaylistData) {
         crate::local_playlist::clear_open_snapshot();
     }
     // Custom artwork overrides the collage / server image. Load the
-    // local file directly (it lives in the artwork cache on disk).
+    // local file directly (it lives in the artwork cache on disk),
+    // decoded to the card tier (the header cover renders at 150px).
     let custom = data
         .custom_artwork_path
         .as_ref()
         .filter(|p| std::path::Path::new(p).exists())
-        .and_then(|p| slint::Image::load_from_path(std::path::Path::new(p)).ok());
+        .and_then(|p| crate::artwork::load_local_cover(p, 264));
     let state = window.global::<PlaylistState>();
     state.set_id(data.id.into());
     state.set_name(data.name.into());

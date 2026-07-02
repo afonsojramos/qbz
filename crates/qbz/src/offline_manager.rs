@@ -83,22 +83,18 @@ fn album_size(group: &[CachedTrackInfo]) -> u64 {
 /// Resolution order (B5): the index's `artwork_path` when set, the CMAF
 /// bundle's `tracks-cmaf/<id>/cover.jpg`, then the `cover.jpg` sibling of
 /// the audio file (v1-format rows). Computed on the worker (a `String` is
-/// `Send`); the image itself is loaded on the UI thread (`slint::Image` is
-/// NOT `Send`).
+/// `Send`).
 fn cover_path(cache_path: &str, track: &CachedTrackInfo) -> String {
     track.resolve_cover_path(cache_path).unwrap_or_default()
 }
 
-/// Load a cover image from a path on the UI thread (empty path / missing -> default).
-fn load_cover(path: &str) -> slint::Image {
-    if path.is_empty() {
-        return slint::Image::default();
-    }
-    slint::Image::load_from_path(std::path::Path::new(path)).unwrap_or_default()
-}
+/// Album rows render their cover at 40px; decode to the rows tier so the
+/// model holds ~36KB per cover instead of the full-resolution source.
+const COVER_DECODE_SIZE: u32 = 96;
 
 /// Worker-built, `Send` row data. Converted to the (non-`Send`) `OfflineRow`
-/// on the UI thread, where the cover image is decoded.
+/// on the UI thread; the cover is pre-decoded to size on the worker
+/// (`DecodedPixels` is `Send`, `slint::Image` is not).
 struct RowData {
     kind: &'static str,
     album_id: String,
@@ -108,7 +104,7 @@ struct RowData {
     meta: String,
     status: i32,
     progress: f32,
-    cover_path: String,
+    cover: Option<crate::artwork::DecodedPixels>,
     number: String,
 }
 
@@ -234,7 +230,7 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
             ),
             status: album_status,
             progress: 0.0,
-            cover_path,
+            cover: crate::artwork::decode_local_pixels(&cover_path, COVER_DECODE_SIZE),
             number: String::new(),
         });
         for (i, t) in group.iter().enumerate() {
@@ -250,7 +246,7 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
                 meta: fmt_duration(t.duration_secs),
                 status: track_status_int(&t.status),
                 progress: t.progress_percent as f32 / 100.0,
-                cover_path: String::new(),
+                cover: None,
                 number: (i + 1).to_string(),
             });
         }
@@ -268,8 +264,8 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
 
     let _ = weak.upgrade_in_event_loop(move |w| {
         let st = w.global::<OfflineManagerState>();
-        // Build OfflineRow on the UI thread (decodes the cover images here —
-        // slint::Image is not Send, so it can't be built on the worker).
+        // Build OfflineRow on the UI thread (slint::Image is not Send, so it
+        // can't be built on the worker); the pixels were decoded there.
         let offline_rows: Vec<OfflineRow> = rows
             .into_iter()
             .map(|rd| OfflineRow {
@@ -281,7 +277,10 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
                 meta: rd.meta.into(),
                 status: rd.status,
                 progress: rd.progress,
-                cover: load_cover(&rd.cover_path),
+                cover: rd
+                    .cover
+                    .map(|(px, pw, ph)| crate::artwork::pixels_to_image(&px, pw, ph))
+                    .unwrap_or_default(),
                 number: rd.number.into(),
                 selected: false,
             })

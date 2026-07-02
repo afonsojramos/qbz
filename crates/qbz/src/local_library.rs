@@ -3554,12 +3554,14 @@ fn folder_display_name(path: &str) -> String {
 }
 
 /// Load a cover from a cached artwork path (strips an optional `file://`).
+/// Decoded to the rows tier (the album header renders it at 56px) so the
+/// ephemeral model never retains full-resolution sources.
 fn load_cover(path: &Option<String>) -> slint::Image {
     let Some(p) = path.as_deref().filter(|s| !s.is_empty()) else {
         return slint::Image::default();
     };
     let p = p.strip_prefix("file://").unwrap_or(p);
-    slint::Image::load_from_path(std::path::Path::new(p)).unwrap_or_default()
+    crate::artwork::load_local_cover(p, 96).unwrap_or_default()
 }
 
 /// Group ephemeral tracks into album blocks (sorted by title), each with its

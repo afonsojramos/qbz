@@ -1164,13 +1164,14 @@ pub fn apply(window: &AppWindow, c: MixtapeCollection) {
     state.set_found(true);
 
     // Custom cover (overrides the mosaic) — load the local file directly (it
-    // lives in the artwork cache on disk; same as the playlist controller).
+    // lives in the artwork cache on disk; same as the playlist controller),
+    // decoded to the card tier (the hero renders it at 186px).
     let has_custom = c
         .custom_artwork_path
         .as_ref()
         .filter(|p| !p.is_empty())
         .filter(|p| std::path::Path::new(p).exists())
-        .and_then(|p| slint::Image::load_from_path(std::path::Path::new(p)).ok());
+        .and_then(|p| crate::artwork::load_local_cover(p, 264));
     if let Some(img) = has_custom {
         state.set_has_custom_cover(true);
         state.set_custom_cover(img);

@@ -1176,12 +1176,13 @@ pub fn apply(window: &AppWindow, data: LocalPlaylistData) {
     state.set_is_local(true);
     state.set_offline_only(data.offline_only);
     state.set_is_owner(true);
-    // Custom artwork (local file) or the row-collage fallback.
+    // Custom artwork (local file) or the row-collage fallback. Decoded to the
+    // card tier (the header cover renders at 150px).
     let custom = data
         .custom_artwork_path
         .as_ref()
         .filter(|p| std::path::Path::new(p).exists())
-        .and_then(|p| slint::Image::load_from_path(std::path::Path::new(p)).ok());
+        .and_then(|p| crate::artwork::load_local_cover(p, 264));
     if let Some(img) = custom {
         state.set_cover(img);
         state.set_cover_url(data.custom_artwork_path.clone().unwrap_or_default().into());
@@ -1476,10 +1477,11 @@ fn apply_qobuz_offline(
     // Read-only offline: Qobuz-side edits (rename / remove tracks / custom
     // order writes) can't reach the API, so the owner affordances hide.
     state.set_is_owner(false);
+    // Card-tier decode (150px header cover), matching `apply`.
     let custom = custom_artwork_path
         .as_ref()
         .filter(|p| std::path::Path::new(p).exists())
-        .and_then(|p| slint::Image::load_from_path(std::path::Path::new(p)).ok());
+        .and_then(|p| crate::artwork::load_local_cover(p, 264));
     if let Some(img) = custom {
         state.set_cover(img);
         state.set_cover_url(custom_artwork_path.unwrap_or_default().into());

@@ -302,16 +302,17 @@ where
         .collect();
 
     // Qobuz Playlists row — both the Home and Editor's Picks tabs draw from
-    // the SAME `containers.playlists` (one fetch). Capped at 100 (raised from
-    // Tauri's 18) so the client-side category filter has material to work with;
-    // the carousel still pages, and the un-filtered view shows the same first
-    // cards. Each card carries its tag slugs for the filter.
+    // the SAME `containers.playlists` (one fetch). Capped at 40 (raised from
+    // Tauri's 18) so the client-side category filter has material to work with
+    // without holding 100 cards' covers in memory; the carousel still pages,
+    // and the un-filtered view shows the same first cards. Each card carries
+    // its tag slugs for the filter.
     let playlist_items: Vec<DiscoverPlaylist> =
         containers.playlists.map(|c| c.data.items).unwrap_or_default();
     let editor_playlists: Vec<PlaylistCardData> =
-        playlist_items.iter().cloned().take(100).map(map_playlist).collect();
+        playlist_items.iter().cloned().take(40).map(map_playlist).collect();
     let playlists: Vec<PlaylistCardData> =
-        playlist_items.into_iter().take(100).map(map_playlist).collect();
+        playlist_items.into_iter().take(40).map(map_playlist).collect();
 
     // Category tags for the multi-select filter (slug + localized name).
     let playlist_tags: Vec<(String, String)> = containers

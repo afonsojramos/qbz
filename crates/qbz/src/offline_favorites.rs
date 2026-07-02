@@ -39,22 +39,19 @@ type Runtime = std::sync::Arc<qbz_app::shell::AppRuntime<SlintAdapter>>;
 /// `play_tracks` track-list semantics).
 static RAIL_QUEUE: LazyLock<Mutex<Vec<QueueTrack>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
-/// Worker-built, `Send` row data; the cover image is decoded on the UI
-/// thread (`slint::Image` is not `Send`) — the offline_manager pattern.
+/// Worker-built, `Send` row data; the cover is pre-decoded to size on the
+/// worker (`DecodedPixels` is `Send`) and the `slint::Image` is built on the
+/// UI thread — the offline_manager pattern.
 struct RowData {
     id: String,
     title: String,
     artist: String,
-    cover_path: String,
+    cover: Option<crate::artwork::DecodedPixels>,
 }
 
-/// Load a cover image from a path on the UI thread (empty/missing -> default).
-fn load_cover(path: &str) -> slint::Image {
-    if path.is_empty() {
-        return slint::Image::default();
-    }
-    slint::Image::load_from_path(std::path::Path::new(path)).unwrap_or_default()
-}
+/// Rail rows (SlimCard) render their cover at 44px; decode to the rows tier
+/// so the model never holds full-resolution sources.
+const COVER_DECODE_SIZE: u32 = 96;
 
 /// kHz normalization: Qobuz metadata carries kHz (96.0), library rows Hz
 /// (96000.0) — same defensive rule as `local_queue_track`.
@@ -144,7 +141,7 @@ pub fn load(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 id: t.track_id.to_string(),
                 title: t.title.clone(),
                 artist: t.artist.clone(),
-                cover_path: cover,
+                cover: crate::artwork::decode_local_pixels(&cover, COVER_DECODE_SIZE),
             });
         }
         for lt in &lib_rows {
@@ -159,7 +156,10 @@ pub fn load(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 id: qid.to_string(),
                 title: lt.title.clone(),
                 artist: lt.artist.clone(),
-                cover_path: lt.artwork_path.clone().unwrap_or_default(),
+                cover: crate::artwork::decode_local_pixels(
+                    lt.artwork_path.as_deref().unwrap_or_default(),
+                    COVER_DECODE_SIZE,
+                ),
             });
         }
 
@@ -195,7 +195,10 @@ pub fn load(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
                     subtitle: rd.artist.into(),
                     rank: "".into(),
                     artwork_url: "".into(),
-                    artwork: load_cover(&rd.cover_path),
+                    artwork: rd
+                        .cover
+                        .map(|(px, pw, ph)| crate::artwork::pixels_to_image(&px, pw, ph))
+                        .unwrap_or_default(),
                     following: false,
                 })
                 .collect();
