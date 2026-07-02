@@ -12,13 +12,23 @@
         pkgs = import nixpkgs { inherit system; };
 
         # ──────────────────────────────────────────────
-        # VERSION BUMP: update version, rev, and hashes
-        # when tagging a new release.
+        # VERSION BUMP: update version, rev, and srcHash
+        # when tagging a new release. (npmHash is gone —
+        # v2.0+ is the Slint crates/ workspace, no node.)
         # ──────────────────────────────────────────────
         qbzVersion = "1.2.15";
         qbzRev     = "v${qbzVersion}";
         srcHash    = "sha256-G7wR5HV0qwlrCPmKTv68+EeDTTyCAvvmPr7GDhrwTaA=";
-        npmHash    = "sha256-RIR3erHN27fU9tTNQdUK0/5QDS9Dgd+O03PfqlYfRcM=";
+
+        # Runtime libraries winit/wgpu/glutin dlopen at runtime — a Nix
+        # binary cannot find system copies, so the installed program is
+        # wrapped with this library path.
+        runtimeLibs = with pkgs; [
+          wayland
+          libxkbcommon
+          libglvnd
+          vulkan-loader
+        ];
       in
       {
         packages.default = pkgs.rustPlatform.buildRustPackage rec {
@@ -32,53 +42,46 @@
             hash  = srcHash;
           };
 
-          cargoRoot = "src-tauri";
+          cargoRoot = "crates";
           buildAndTestSubdir = cargoRoot;
+          # Build only the app binary, not every workspace member's tests.
+          cargoBuildFlags = [ "-p" "qbz" ];
 
           cargoLock = {
-            lockFile = "${src}/src-tauri/Cargo.lock";
-          };
-
-          npmDeps = pkgs.fetchNpmDeps {
-            name = "${pname}-${version}-npm-deps";
-            inherit src;
-            hash = npmHash;
+            lockFile = "${src}/crates/Cargo.lock";
           };
 
           env.LIBCLANG_PATH = "${pkgs.lib.getLib pkgs.llvmPackages.libclang}/lib";
 
           nativeBuildInputs = with pkgs; [
             clang
-            cargo-tauri.hook
-            nodejs
-            npmHooks.npmConfigHook
             pkg-config
+            cmake
+            nasm
             makeWrapper
           ];
 
           buildInputs = with pkgs; [
             alsa-lib
-            openssl
-            webkitgtk_4_1
-            libappindicator-gtk3
-            libayatana-appindicator
+            fontconfig
+            freetype
           ];
 
-          checkFlags = [
-            # These require a writable HOME and D-Bus keyring service
-            "--skip=credentials::tests::test_credentials_roundtrip"
-            "--skip=credentials::tests::test_encryption_roundtrip"
-          ];
+          # The qbz_ui rustc alone peaks ~30 GB; running the test profile on
+          # top of the build doubles the wall time and memory exposure for
+          # no packaging value. Engine crates are tested in the repo's CI.
+          doCheck = false;
 
           postInstall = ''
             wrapProgram $out/bin/qbz \
-              --prefix LD_LIBRARY_PATH : ${
-                pkgs.lib.makeLibraryPath [
-                  pkgs.libappindicator
-                  pkgs.libappindicator-gtk3
-                  pkgs.libayatana-appindicator
-                ]
-              }
+              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs}
+
+            install -Dm644 $src/packaging/linux/qbz.desktop \
+              $out/share/applications/qbz.desktop
+            for size in 32 48 64 128 256 512; do
+              install -Dm644 $src/packaging/icons/"$size"x"$size".png \
+                $out/share/icons/hicolor/"$size"x"$size"/apps/qbz.png
+            done
           '';
 
           meta = with pkgs.lib; {
@@ -96,9 +99,7 @@
 
           # `inputsFrom` pulls in buildInputs/nativeBuildInputs from the
           # package but does NOT propagate `env.*` attributes, so we must
-          # re-export LIBCLANG_PATH here — otherwise `mupdf-sys`'s bindgen
-          # fails with "Unable to find libclang" when running
-          # `npm run tauri dev` inside `nix develop` (issue #312).
+          # re-export LIBCLANG_PATH here for bindgen.
           LIBCLANG_PATH = "${pkgs.lib.getLib pkgs.llvmPackages.libclang}/lib";
 
           packages = with pkgs; [
@@ -108,17 +109,11 @@
           ];
 
           # The package's `postInstall` wraps the installed binary with
-          # LD_LIBRARY_PATH so libappindicator is dlopen-able at runtime.
-          # Inside `nix develop` we run `target/debug/qbz` directly, with
-          # no wrapper, so we replicate that here — otherwise the tray
-          # init panics with "Failed to load ayatana-appindicator3 or
-          # appindicator3 dynamic library" (issue #312).
+          # LD_LIBRARY_PATH for the dlopen'd display/GPU stack. Inside
+          # `nix develop` we run `crates/target/debug/qbz` directly, with
+          # no wrapper, so replicate it here.
           shellHook = ''
-            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [
-              pkgs.libappindicator
-              pkgs.libappindicator-gtk3
-              pkgs.libayatana-appindicator
-            ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           '';
         };
       });

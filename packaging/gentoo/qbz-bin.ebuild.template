@@ -18,13 +18,20 @@ LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64 ~arm64"
 
+# v2.0+ (Slint/winit binary): no webkit/gtk/appindicator — the measured
+# runtime link set plus the wayland/x11/GL/dbus stack dlopen'd by winit/wgpu.
 RDEPEND="
-	net-libs/webkit-gtk:4.1
-	x11-libs/gtk+:3
 	media-libs/alsa-lib
-	dev-libs/openssl
-	dev-libs/libayatana-appindicator
+	media-libs/fontconfig
+	media-libs/freetype
+	media-libs/libpng
+	app-arch/bzip2
+	dev-libs/expat
+	sys-libs/zlib
 	x11-libs/libxkbcommon
+	dev-libs/wayland
+	media-libs/libglvnd
+	sys-apps/dbus
 "
 
 BDEPEND=""
