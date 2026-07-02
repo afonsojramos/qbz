@@ -32,6 +32,8 @@ mod booklet;
 mod commands;
 mod custom_artwork;
 mod diagnostics;
+#[cfg(target_os = "linux")]
+mod glibc_compat;
 mod log_viewer;
 mod sleep_timer;
 pub use qbz_text_utils::{dates, strip_html};

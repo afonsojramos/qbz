@@ -39,6 +39,17 @@ fn main() {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
     println!("cargo:rustc-env=QBZ_BUILD_COMMIT={commit}");
+
+    // glibc symbol-version compat (Linux). glibc 2.43 re-versioned six libm
+    // float functions; linking on such a host makes the binary require
+    // GLIBC_2.43 and refuse to start on older distros. Redirect each to the
+    // f64-based wrapper in `src/glibc_compat.rs` via `--wrap`, so the binary
+    // only needs the ancient symbols and runs on glibc >= 2.39. See that module.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        for func in ["sinhf", "coshf", "atan2f", "acosf", "asinf", "acoshf"] {
+            println!("cargo:rustc-link-arg-bin=qbz=-Wl,--wrap={func}");
+        }
+    }
 }
 
 /// Convert a Unix timestamp (seconds, UTC) to a `YYYY-MM-DD` string using
