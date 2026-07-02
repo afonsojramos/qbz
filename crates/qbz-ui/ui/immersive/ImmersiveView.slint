@@ -1257,6 +1257,8 @@ export component ImmersiveView inherits Rectangle {
         fallback-image: NowPlayingState.artwork-large.width > 0
             ? NowPlayingState.artwork-large
             : NowPlayingState.artwork;
+        // Only animate while playing: paused = frozen warp, no display-rate redraws.
+        animated: NowPlayingState.playing;
         dim: 0.15;
     }
 
