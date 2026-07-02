@@ -267,15 +267,15 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
-    // UI Scale — hidden per owner request (only the global scale factor works
-    // for now). Code kept commented for re-enable; do NOT delete.
-    /*
+    // Interface size — the working replacement for the old percentage "UI
+    // Scale" placeholder that was parked here (commented, unwired). Window
+    // scale-factor preset via SLINT_SCALE_FACTOR (main.rs); restart to apply.
     SettingRow {
-        unsupported: true;
-        label: @tr("UI Scale");
+        label: @tr("Interface size");
+        description: @tr("Scales the whole interface, like browser zoom. Small fits more content on screen, Large and Extra large improve readability (requires restart)");
         QbzSelect {
-            menu-width: 140px;
-            options: AppearanceState.ui-scales;
+            menu-width: 200px;
+            options: AppearanceState.ui-scale-options;
             current-index: AppearanceState.ui-scale-index;
             selected(i) => {
                 AppearanceState.ui-scale-index = i;
@@ -283,7 +283,6 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
-    */
 
     SettingRow {
         label: @tr("Immersive search");

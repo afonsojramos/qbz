@@ -23,6 +23,22 @@ const MAX_CONCURRENT: usize = 16;
 /// modest DPI without holding full ~600px source textures in memory.
 const DECODE_SIZE: u32 = 264;
 
+/// Interface-size preset multiplier for decode targets, set ONCE at startup
+/// (main.rs, before any artwork job runs). Under a scaled UI every card gets
+/// `preset ×` more physical pixels, so decode sizes must grow with it or
+/// covers go soft at Large/XL; Small shrinks them, saving decoded-cache RAM.
+static UI_SCALE_FACTOR: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+
+pub fn set_ui_scale_factor(factor: f32) {
+    let _ = UI_SCALE_FACTOR.set(factor);
+}
+
+/// Scale a base decode size by the interface-size preset, rounded up.
+pub fn scaled_decode(base: u32) -> u32 {
+    let factor = UI_SCALE_FACTOR.get().copied().unwrap_or(1.0);
+    (base as f32 * factor).ceil() as u32
+}
+
 /// Default image-cache size budget (matches the Tauri default).
 pub const MAX_CACHE_BYTES: u64 = 200 * 1024 * 1024;
 
@@ -241,7 +257,7 @@ impl ArtworkTarget {
     /// huge buffers in the model — a 2000-row playlist would hold
     /// hundreds of MB. Decode row thumbnails small.
     fn decode_size(&self) -> u32 {
-        match self {
+        scaled_decode(match self {
             ArtworkTarget::SearchTrack { .. }
             | ArtworkTarget::FavoriteTrack { .. }
             | ArtworkTarget::MixTrack { .. }
@@ -261,7 +277,7 @@ impl ArtworkTarget {
             // Detail list-row thumbnails render at 36px.
             ArtworkTarget::MyQbzDetailRow { .. } => 96,
             _ => DECODE_SIZE,
-        }
+        })
     }
 }
 

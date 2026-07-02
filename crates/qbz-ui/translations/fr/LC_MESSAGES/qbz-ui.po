@@ -4174,3 +4174,21 @@ msgstr "JACK n'est pas bit-perfect"
 
 msgid "The JACK backend routes audio through the JACK graph, which resamples to the graph's sample rate. For bit-perfect playback use ALSA (direct) or PipeWire with passthrough."
 msgstr "Le backend JACK achemine l'audio via le graphe JACK, qui rééchantillonne à la fréquence du graphe. Pour une lecture bit-perfect, utilisez ALSA (direct) ou PipeWire avec passthrough."
+
+msgid "Extra large"
+msgstr "Très grand"
+
+msgid "INTERFACE"
+msgstr "INTERFACE"
+
+msgid "Interface size"
+msgstr "Taille de l'interface"
+
+msgid "Scales the whole interface, like browser zoom. Small fits more content on screen, Large and Extra large improve readability (requires restart)"
+msgstr "Met à l'échelle toute l'interface, comme le zoom du navigateur. Petit affiche plus de contenu à l'écran, Grand et Très grand améliorent la lisibilité (redémarrage requis)"
+
+msgid "Interface size changed — restart QBZ to apply"
+msgstr "Taille de l'interface modifiée — redémarrez QBZ pour appliquer"
+
+msgid "Extra small"
+msgstr "Très petit"

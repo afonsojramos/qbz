@@ -183,6 +183,41 @@ pub fn renderer_index(key: &str) -> i32 {
     }
 }
 
+/// Interface-size select index (0 = Extra small, 1 = Small, 2 = Default,
+/// 3 = Large, 4 = Extra large) -> persisted key. Unknown indices fall back
+/// to "default".
+pub fn ui_scale_for_index(index: i32) -> &'static str {
+    match index {
+        0 => "xs",
+        1 => "small",
+        3 => "large",
+        4 => "xl",
+        _ => "default",
+    }
+}
+
+/// Inverse: select index for a persisted interface-size key.
+pub fn ui_scale_index(key: &str) -> i32 {
+    match key {
+        "xs" => 0,
+        "small" => 1,
+        "large" => 3,
+        "xl" => 4,
+        _ => 2,
+    }
+}
+
+/// Numeric window-scale multiplier for a persisted interface-size key.
+pub fn ui_scale_factor(key: &str) -> f32 {
+    match key {
+        "xs" => 0.8,
+        "small" => 0.9,
+        "large" => 1.2,
+        "xl" => 1.5,
+        _ => 1.0,
+    }
+}
+
 /// Miniplayer default-view select index -> persisted key (mirrors the
 /// miniplayer's own reader in `miniplayer.rs`). 0 = "remember".
 pub fn mini_default_view_for_index(index: i32) -> &'static str {
@@ -427,6 +462,18 @@ pub struct UiPrefs {
     /// window comes up, the next start reverts this to "auto".
     #[serde(default = "default_renderer")]
     pub renderer: String,
+    /// Interface-size preset: `"default"` | `"small"` | `"large"` | `"xl"`.
+    /// Read at the very top of main() (before ANY thread exists) to set
+    /// SLINT_SCALE_FACTOR, so changes apply on restart.
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: String,
+    /// Last observed compositor device-pixel-ratio. SLINT_SCALE_FACTOR
+    /// OVERRIDES the compositor DPR (it does not multiply), so a scaled
+    /// launch must bake the real DPR into the env value itself:
+    /// `env = last_dpr × preset`. Refreshed a few seconds after the window
+    /// maps (winit reports the real compositor value there).
+    #[serde(default = "default_last_dpr")]
+    pub last_dpr: f32,
 }
 
 /// Sentinel for "no saved window position" (let the WM place the window).
@@ -436,6 +483,14 @@ fn default_window_pos() -> i32 {
 
 fn default_renderer() -> String {
     "auto".to_string()
+}
+
+fn default_ui_scale() -> String {
+    "default".to_string()
+}
+
+fn default_last_dpr() -> f32 {
+    1.0
 }
 
 fn default_mini_surface() -> i32 {
@@ -566,6 +621,8 @@ impl Default for UiPrefs {
             window_x: default_window_pos(),
             window_y: default_window_pos(),
             renderer: default_renderer(),
+            ui_scale: default_ui_scale(),
+            last_dpr: default_last_dpr(),
         }
     }
 }

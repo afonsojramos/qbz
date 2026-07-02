@@ -2904,12 +2904,14 @@ export global AppearanceState {
     in-out property <string> auto-theme-detected-de: "";
 
     // --- TYPOGRAPHY / SCALE / LANGUAGE -------------------------------------
+    // NOTE: the old Tauri-style percentage `ui-scales` placeholder properties
+    // that lived here were superseded by the working interface-size presets
+    // (`ui-scale-options` / `ui-scale-index` in the INTERFACE SIZE block
+    // further down, wired to SLINT_SCALE_FACTOR in main.rs).
     in-out property <[string]> languages: [@tr("Auto"), "English", "Español", "Français", "Deutsch", "Português", "Русский", "日本語"];
     in-out property <int> language-index: 0;
     in-out property <[string]> fonts: ["LINE Seed JP", "Montserrat", "Noto Sans", "Source Sans 3", "System"];
     in-out property <int> font-index: 0;
-    in-out property <[string]> ui-scales: ["80%", "85%", "90%", "95%", "100%", "110%", "125%", "150%", "175%"];
-    in-out property <int> ui-scale-index: 4;
 
     // Immersive search action — what selecting a result in the Immersive search
     // cortinilla does (index: 0=Disabled, 1=Replace queue, 2=Play next,
@@ -3004,6 +3006,13 @@ export global AppearanceState {
     in-out property <bool> renderer-setting-visible: false;
     in-out property <[string]> renderer-options: [@tr("Auto (recommended)"), @tr("GPU"), @tr("GPU (compatibility)"), @tr("Software")];
     in-out property <int> renderer-index: 0;
+
+    // --- INTERFACE SIZE ----------------------------------------------------
+    // Window scale-factor preset (XS 0.8 / Small 0.9 / Default 1.0 /
+    // Large 1.2 / XL 1.5) — startup-time choice, restart to apply.
+    // Index 2 = Default.
+    in-out property <[string]> ui-scale-options: [@tr("Extra small"), @tr("Small"), @tr("Default"), @tr("Large"), @tr("Extra large")];
+    in-out property <int> ui-scale-index: 2;
 
     // --- IMMERSIVE ---------------------------------------------------------
     in-out property <[string]> immersive-views: [
@@ -3617,6 +3626,15 @@ export global LocationViewState {
 export global LocationViewActions {
     callback open-artist(string /* qobuz id */);
     callback load-more();
+}
+
+// Interface-size preset (UI scale). Seeded once from Rust before the shell
+// renders. The actual scaling happens through the window scale factor
+// (SLINT_SCALE_FACTOR set in main.rs) — this global only lets bindings that
+// must stay PHYSICALLY constant divide the preset back out (e.g. the window
+// minimums, so an XL window still fits a 1366x768 screen).
+export global UiScale {
+    in-out property <float> factor: 1.0;
 }
 
 // Shell chrome state — collapsible left sidebar and right-side panels.

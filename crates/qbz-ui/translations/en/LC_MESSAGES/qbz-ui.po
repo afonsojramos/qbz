@@ -60,3 +60,21 @@ msgstr[1] "Added {} tracks to queue"
 
 msgid "Unfollow on Qobuz"
 msgstr "Unfollow on Qobuz"
+
+msgid "Extra large"
+msgstr "Extra large"
+
+msgid "INTERFACE"
+msgstr "INTERFACE"
+
+msgid "Interface size"
+msgstr "Interface size"
+
+msgid "Scales the whole interface, like browser zoom. Small fits more content on screen, Large and Extra large improve readability (requires restart)"
+msgstr "Scales the whole interface, like browser zoom. Small fits more content on screen, Large and Extra large improve readability (requires restart)"
+
+msgid "Interface size changed — restart QBZ to apply"
+msgstr "Interface size changed — restart QBZ to apply"
+
+msgid "Extra small"
+msgstr "Extra small"

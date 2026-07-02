@@ -293,6 +293,11 @@ fn seed_tray_appearance(w: &AppWindow, tray: &tray_settings::TraySettings) {
     appearance.set_renderer_index(crate::ui_prefs::renderer_index(
         &crate::ui_prefs::load().renderer,
     ));
+    // Interface-size row (all platforms). Same choke point as the renderer
+    // row so the dropdown always reflects the persisted value.
+    appearance.set_ui_scale_index(crate::ui_prefs::ui_scale_index(
+        &crate::ui_prefs::load().ui_scale,
+    ));
 }
 
 /// Refresh the blacklist count + enabled flag on `BlacklistState` (T10).
@@ -1097,13 +1102,16 @@ fn install_browser_mouse_nav(window: &AppWindow) {
             // (mirrors miniplayer.rs). The startup restore clamps to the
             // monitor; here we just record what the WM settled on. A change
             // guard avoids redundant writes on the many no-op events the WM
-            // emits. The app minimum is 940x600 (app.slint) — ignore smaller
-            // frames (minimize reports 0x0, mid-transition frames undershoot).
+            // emits. The app minimum is 940x600 PHYSICAL-equivalent — the
+            // .slint mins divide the interface-size preset out, so the
+            // LOGICAL minimum scales with it (XL windows sit well below 940
+            // logical). Ignore smaller frames (minimize reports 0x0,
+            // mid-transition frames undershoot).
             WindowEvent::Resized(size) => {
                 let scale = slint_window.scale_factor().max(0.01) as f64;
                 let lw = (size.width as f64 / scale) as f32;
                 let lh = (size.height as f64 / scale) as f32;
-                if lw >= 940.0 && lh >= 600.0 {
+                if lw >= 940.0 / active_ui_scale() && lh >= 600.0 / active_ui_scale() {
                     let mut prefs = crate::ui_prefs::load();
                     if (prefs.window_width - lw).abs() > 0.5
                         || (prefs.window_height - lh).abs() > 0.5
@@ -5744,11 +5752,48 @@ fn poll_ready<F: std::future::Future>(fut: F) -> Option<F::Output> {
     }
 }
 
+/// Interface-size preset factor active for THIS process run. The persisted
+/// pref can change mid-session (Settings dropdown), but the window scale only
+/// applies on restart — geometry math must use the factor the window was
+/// actually created with, so read this, not the pref.
+static ACTIVE_UI_SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+
+fn active_ui_scale() -> f32 {
+    ACTIVE_UI_SCALE.get().copied().unwrap_or(1.0)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // UI SCALE PRESET — must run FIRST: SLINT_SCALE_FACTOR has to be in the
+    // environment before the backend/window exist (winit reads it at window
+    // creation), and `set_var` must run before any thread spawns (the tokio
+    // runtime below). The env var OVERRIDES the compositor DPR rather than
+    // multiplying it, so the last observed real DPR is baked into the value
+    // (see `last_dpr` in ui_prefs). Default preset => the var is NOT set at
+    // all: stock DPR handling (incl. live monitor changes) stays intact.
+    let ui_scale_factor = {
+        let prefs = crate::ui_prefs::load();
+        let factor = crate::ui_prefs::ui_scale_factor(&prefs.ui_scale);
+        if factor != 1.0 {
+            let effective = prefs.last_dpr.max(0.5) * factor;
+            std::env::set_var("SLINT_SCALE_FACTOR", effective.to_string());
+        }
+        let _ = ACTIVE_UI_SCALE.set(factor);
+        factor
+    };
+
     // Composite logger: stderr (unchanged) + a bounded in-memory ring + an on-disk
     // file, all redacted at the write choke point. Feeds the in-app log viewer and
     // the diagnostics bundle. Honours RUST_LOG (default "info").
     qbz_log::install("info");
+    if ui_scale_factor != 1.0 {
+        log::info!(
+            "[ui-scale] preset factor {ui_scale_factor} -> SLINT_SCALE_FACTOR={}",
+            std::env::var("SLINT_SCALE_FACTOR").unwrap_or_default()
+        );
+    }
+    // Artwork decode targets grow with the preset so covers stay sharp at
+    // Large/XL (and shrink RAM at Small). Set before any artwork job runs.
+    crate::artwork::set_ui_scale_factor(ui_scale_factor);
 
     // Install the rustls process-level CryptoProvider ONCE, before ANY TLS use.
     // The full binary compiles BOTH rustls providers (aws-lc-rs via qbz-cast's
@@ -5816,11 +5861,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // for a few seconds (renderer/driver init crashes happen at or shortly
     // after realization; surviving this long counts as a working renderer).
     // Single-shot timer — the binding must outlive this scope's run loop.
+    // Piggybacked: persist the REAL compositor DPR as `last_dpr` (the surface
+    // is mapped by now, so winit reports the true value — unlike right after
+    // creation on Wayland). Read from the WINIT window, not the Slint one:
+    // SLINT_SCALE_FACTOR overrides Slint's factor but winit still sees the
+    // compositor's. The next scaled launch bakes this into the env value.
     let _renderer_sentinel_timer = slint::Timer::default();
+    let sentinel_weak = window.as_weak();
     _renderer_sentinel_timer.start(
         slint::TimerMode::SingleShot,
         std::time::Duration::from_secs(5),
-        clear_renderer_sentinel,
+        move || {
+            clear_renderer_sentinel();
+            if let Some(w) = sentinel_weak.upgrade() {
+                w.window().with_winit_window(|win| {
+                    let real_dpr = win.scale_factor() as f32;
+                    let mut prefs = crate::ui_prefs::load();
+                    if real_dpr > 0.1 && (prefs.last_dpr - real_dpr).abs() > 0.01 {
+                        log::info!("[ui-scale] observed compositor DPR {real_dpr} -> persisted");
+                        prefs.last_dpr = real_dpr;
+                        crate::ui_prefs::save(&prefs);
+                    }
+                });
+            }
+        },
     );
     // Now that the AppWindow (and its translation global context) exists, switch
     // the Slint bundled translations to `lang` and reseed the non-reactive
@@ -5840,6 +5904,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window
         .global::<ShellState>()
         .set_reduce_motion(!use_gpu_renderer);
+    // Interface-size preset: publish the factor so `.slint` bindings that must
+    // stay physically constant (the window minimums) can divide it back out.
+    // Extra small also gets the font compensation: a plain 0.8 drops body text
+    // to 12px; boosting Typography tokens ~10% lands at ~13px (readable) while
+    // layout metrics keep the full 0.8 — that density is the point of XS.
+    // Small (0.9) needs none: body lands at 13.5px on its own.
+    window.global::<UiScale>().set_factor(ui_scale_factor);
+    if ui_scale_factor < 0.85 {
+        window.global::<Typography>().set_boost(1.1);
+    }
     // Diagnostic for the circle-AA investigation (and the future UI-scale
     // presets): femtovg's fringe AA halves at fractional scale factors
     // (internal dpi = ceil(scale)), so knowing the real factor matters.
@@ -5894,21 +5968,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Main window geometry: restore the persisted LOGICAL size + (best-effort)
     // position, each clamped to the current monitor so a smaller / disconnected
     // display never opens an oversized or stranded window. 0 size = never saved
-    // → keep the `.slint` preferred size. The monitor query is best-effort
-    // (`with_winit_window` returns None before the surface exists → the WM's own
-    // clamping is the fallback, and the Resized handler re-saves the result).
-    if restored_prefs.window_width >= 940.0 && restored_prefs.window_height >= 600.0 {
-        let mut w = restored_prefs.window_width;
-        let mut h = restored_prefs.window_height;
+    // → keep the `.slint` preferred size, EXCEPT under a >1 interface-size
+    // preset, where even the preferred size may exceed a small monitor once the
+    // preset multiplies it — clamp it exactly like a restored one. Monitor
+    // sizes are divided by the SLINT scale factor (the effective, preset-baked
+    // one); winit's own factor is the raw compositor DPR and under-clamps when
+    // a preset is active. The minimum is physically constant across presets
+    // (mirrors the `/ UiScale.factor` bindings in app.slint). The monitor query
+    // is best-effort (`with_winit_window` returns None before the surface
+    // exists → the WM's own clamping is the fallback, and the Resized handler
+    // re-saves the result).
+    let min_logical_w = 940.0 / ui_scale_factor;
+    let min_logical_h = 600.0 / ui_scale_factor;
+    // Plausibility gate for the persisted size: at least the scaled minimum,
+    // but never stricter than the historical 940x600 (so sizes saved under a
+    // previous, less-scaled preset still restore — the .slint mins clamp them
+    // up if the current preset needs more).
+    let has_saved_size = restored_prefs.window_width >= min_logical_w.min(940.0)
+        && restored_prefs.window_height >= min_logical_h.min(600.0);
+    if has_saved_size || ui_scale_factor > 1.0 {
+        let mut w = if has_saved_size { restored_prefs.window_width } else { 1180.0 };
+        let mut h = if has_saved_size { restored_prefs.window_height } else { 760.0 };
+        let slint_scale = (window.window().scale_factor() as f64).max(0.01);
         window.window().with_winit_window(|win| {
             if let Some(mon) = win.current_monitor() {
-                let scale = win.scale_factor().max(0.01);
-                let avail_w = (mon.size().width as f64 / scale) as f32;
-                let avail_h = (mon.size().height as f64 / scale) as f32;
-                if avail_w >= 940.0 {
+                let avail_w = (mon.size().width as f64 / slint_scale) as f32;
+                let avail_h = (mon.size().height as f64 / slint_scale) as f32;
+                if avail_w >= min_logical_w {
                     w = w.min(avail_w);
                 }
-                if avail_h >= 600.0 {
+                if avail_h >= min_logical_h {
                     h = h.min(avail_h);
                 }
             }
@@ -8253,6 +8342,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 crate::toast::info_weak(
                     &theme_weak,
                     qbz_i18n::t("Renderer changed — restart QBZ to apply"),
+                );
+            }
+            "ui-scale" => {
+                // 0 = Extra small, 1 = Small, 2 = Default, 3 = Large,
+                // 4 = Extra large. Startup-time choice — SLINT_SCALE_FACTOR is
+                // set at the very top of main() before the backend exists, so
+                // it applies on the next launch.
+                let mut prefs = crate::ui_prefs::load();
+                prefs.ui_scale = crate::ui_prefs::ui_scale_for_index(index).to_string();
+                crate::ui_prefs::save(&prefs);
+                crate::toast::info_weak(
+                    &theme_weak,
+                    qbz_i18n::t("Interface size changed — restart QBZ to apply"),
                 );
             }
             "language" => {

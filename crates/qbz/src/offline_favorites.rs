@@ -141,7 +141,10 @@ pub fn load(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 id: t.track_id.to_string(),
                 title: t.title.clone(),
                 artist: t.artist.clone(),
-                cover: crate::artwork::decode_local_pixels(&cover, COVER_DECODE_SIZE),
+                cover: crate::artwork::decode_local_pixels(
+                    &cover,
+                    crate::artwork::scaled_decode(COVER_DECODE_SIZE),
+                ),
             });
         }
         for lt in &lib_rows {
@@ -158,7 +161,7 @@ pub fn load(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
                 artist: lt.artist.clone(),
                 cover: crate::artwork::decode_local_pixels(
                     lt.artwork_path.as_deref().unwrap_or_default(),
-                    COVER_DECODE_SIZE,
+                    crate::artwork::scaled_decode(COVER_DECODE_SIZE),
                 ),
             });
         }

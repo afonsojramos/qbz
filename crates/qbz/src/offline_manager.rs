@@ -230,7 +230,10 @@ pub async fn rebuild(weak: slint::Weak<AppWindow>) {
             ),
             status: album_status,
             progress: 0.0,
-            cover: crate::artwork::decode_local_pixels(&cover_path, COVER_DECODE_SIZE),
+            cover: crate::artwork::decode_local_pixels(
+                &cover_path,
+                crate::artwork::scaled_decode(COVER_DECODE_SIZE),
+            ),
             number: String::new(),
         });
         for (i, t) in group.iter().enumerate() {
