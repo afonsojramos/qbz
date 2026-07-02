@@ -10,10 +10,10 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppCommand {
     /// Begin OAuth sign-in. Per the 2026-05-18 decision the POC uses the
-    /// external system-browser flow only (no in-app webview).
+    /// external system-browser flow only (no in-app webview). The former
+    /// separate "use system browser" link (and its command) was removed
+    /// 2026-07-02 — the one button IS the system-browser flow.
     SignInViaBrowser,
-    /// Explicitly use the system browser for OAuth.
-    UseSystemBrowser,
     /// Start an offline-only session with no Qobuz access.
     StartOffline,
     /// Open the Qobuz Terms of Service in the system browser.
@@ -25,7 +25,6 @@ impl AppCommand {
     pub fn id(&self) -> &'static str {
         match self {
             Self::SignInViaBrowser => "sign_in_via_browser",
-            Self::UseSystemBrowser => "use_system_browser",
             Self::StartOffline => "start_offline",
             Self::OpenTermsOfService => "open_terms_of_service",
         }
@@ -40,13 +39,12 @@ mod tests {
     fn command_ids_are_distinct_and_stable() {
         let all = [
             AppCommand::SignInViaBrowser,
-            AppCommand::UseSystemBrowser,
             AppCommand::StartOffline,
             AppCommand::OpenTermsOfService,
         ];
         let ids: Vec<&str> = all.iter().map(AppCommand::id).collect();
-        assert_eq!(ids.len(), 4);
+        assert_eq!(ids.len(), 3);
         let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
-        assert_eq!(unique.len(), 4, "command ids must be unique");
+        assert_eq!(unique.len(), 3, "command ids must be unique");
     }
 }

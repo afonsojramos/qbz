@@ -4192,3 +4192,19 @@ msgstr "Oberflächengröße geändert — QBZ neu starten, um sie zu übernehmen
 
 msgid "Extra small"
 msgstr "Extra klein"
+
+# Login-screen browser-flow narration (2026-07-02)
+msgid "Sign in with your browser"
+msgstr "Mit deinem Browser anmelden"
+
+msgid "Continue in your web browser — QBZ is waiting for you to finish signing in."
+msgstr "Fahre in deinem Webbrowser fort — QBZ wartet, bis du die Anmeldung abgeschlossen hast."
+
+msgid "The browser may open in the background without taking focus — check your other windows."
+msgstr "Der Browser öffnet sich möglicherweise im Hintergrund, ohne den Fokus zu übernehmen — prüfe deine anderen Fenster."
+
+msgid "Signing you in…"
+msgstr "Du wirst angemeldet…"
+
+msgid "Sign-in failed"
+msgstr "Anmeldung fehlgeschlagen"

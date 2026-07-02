@@ -78,3 +78,19 @@ msgstr "Interface size changed — restart QBZ to apply"
 
 msgid "Extra small"
 msgstr "Extra small"
+
+# Login-screen browser-flow narration (2026-07-02)
+msgid "Sign in with your browser"
+msgstr "Sign in with your browser"
+
+msgid "Continue in your web browser — QBZ is waiting for you to finish signing in."
+msgstr "Continue in your web browser — QBZ is waiting for you to finish signing in."
+
+msgid "The browser may open in the background without taking focus — check your other windows."
+msgstr "The browser may open in the background without taking focus — check your other windows."
+
+msgid "Signing you in…"
+msgstr "Signing you in…"
+
+msgid "Sign-in failed"
+msgstr "Sign-in failed"

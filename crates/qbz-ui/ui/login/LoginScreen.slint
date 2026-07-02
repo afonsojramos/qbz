@@ -14,13 +14,13 @@ import { Typography } from "../foundation/typography.slint";
 import { QbzCheckbox } from "../primitives/QbzCheckbox.slint";
 import { QbzPrimaryButton } from "../primitives/QbzPrimaryButton.slint";
 import { QbzTextLink } from "../primitives/QbzTextLink.slint";
-import { OfflineState } from "../state.slint";
+import { OfflineState, LoginState } from "../state.slint";
 
 export component LoginScreen inherits Rectangle {
     in-out property <bool> tos-accepted: true;
 
     callback sign-in-via-browser();
-    callback use-system-browser();
+    callback cancel-login();
     callback start-offline();
     callback open-tos();
 
@@ -109,9 +109,11 @@ export component LoginScreen inherits Rectangle {
                     Rectangle { height: Spacing.lg; }
 
                     // --- Sign in ---------------------------------------------
+                    // Opens the user's default web browser (no embedded
+                    // webview) — the label + status below must say so.
                     QbzPrimaryButton {
-                        label: @tr("Sign in via Browser");
-                        enabled: root.tos-accepted;
+                        label: @tr("Sign in with your browser");
+                        enabled: root.tos-accepted && LoginState.phase == 0;
                         clicked => {
                             root.sign-in-via-browser();
                         }
@@ -119,13 +121,67 @@ export component LoginScreen inherits Rectangle {
 
                     Rectangle { height: Spacing.md; }
 
-                    // --- Secondary links -------------------------------------
-                    HorizontalLayout {
-                        alignment: center;
-                        QbzTextLink {
-                            label: @tr("Use your system browser instead");
-                            clicked => {
-                                root.use-system-browser();
+                    // --- Browser-flow status ---------------------------------
+                    // The browser may open in the background without stealing
+                    // focus, and the code exchange takes a few seconds — the
+                    // screen must narrate instead of sitting inert.
+                    if LoginState.phase == 1: VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: @tr("Continue in your web browser — QBZ is waiting for you to finish signing in.");
+                            color: Theme.text-secondary;
+                            font-size: Typography.body;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: @tr("The browser may open in the background without taking focus — check your other windows.");
+                            color: Theme.text-muted;
+                            font-size: Typography.legal;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        Rectangle { height: 4px; }
+                        HorizontalLayout {
+                            alignment: center;
+                            QbzTextLink {
+                                label: @tr("Cancel");
+                                clicked => {
+                                    root.cancel-login();
+                                }
+                            }
+                        }
+                    }
+                    if LoginState.phase == 2: Text {
+                        text: @tr("Signing you in…");
+                        color: Theme.text-secondary;
+                        font-size: Typography.body;
+                        horizontal-alignment: center;
+                    }
+                    if LoginState.phase == 0 && LoginState.error != "": VerticalLayout {
+                        spacing: 0px;
+                        Rectangle {
+                            background: Theme.surface-elevated;
+                            border-radius: Radius.sm;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 4px;
+                                Text {
+                                    text: @tr("Sign-in failed");
+                                    color: Theme.text-primary;
+                                    font-size: Typography.body;
+                                    font-weight: Typography.medium;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: LoginState.error;
+                                    color: Theme.text-muted;
+                                    font-size: Typography.legal;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
                             }
                         }
                     }

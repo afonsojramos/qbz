@@ -5067,6 +5067,20 @@ export global OfflineState {
         : 0;
 }
 
+// ============================ Login flow ==================================
+// Browser sign-in progress, driven by the Rust auth flow (crate::auth via
+// main.rs). The app has no embedded webview, so the login screen must
+// narrate the system-browser OAuth — the browser may open in the background
+// without stealing focus, and the code exchange takes a few seconds.
+export global LoginState {
+    // 0 = idle · 1 = waiting for the user to finish in the browser ·
+    // 2 = authorization code received, exchanging it for a session.
+    in property <int> phase: 0;
+    // Last sign-in failure ("" = none). Cleared when a new attempt starts
+    // and on successful shell entry.
+    in property <string> error: "";
+}
+
 // Settings > Offline, MODE group — Rust-wired actions (crate::offline_mode).
 export global OfflineModeActions {
     // (Re)seed the MODE-group toggle states from the engine store. Fired by

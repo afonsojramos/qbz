@@ -23,13 +23,29 @@ pub struct SessionInfo {
     pub subscription: String,
 }
 
+/// Progress milestones of the browser OAuth, reported to the login UI so
+/// the screen can narrate the flow (the browser may open in the background
+/// without stealing focus, and the code exchange takes a few seconds).
+#[derive(Clone, Copy, Debug)]
+pub enum LoginPhase {
+    /// The browser was opened; waiting for the user to finish signing in
+    /// and for the redirect to land on the local listener.
+    WaitingForBrowser,
+    /// The authorization code was captured; exchanging it for a session.
+    Authenticating,
+}
+
 /// Run the full system-browser OAuth login. Returns the authenticated
-/// session info on success.
-pub async fn login_via_system_browser<A>(
+/// session info on success. `on_phase` fires at each milestone (see
+/// [`LoginPhase`]); it may be called from this async context, so it must
+/// hop to the UI thread itself.
+pub async fn login_via_system_browser<A, F>(
     runtime: &Arc<AppRuntime<A>>,
+    on_phase: F,
 ) -> Result<SessionInfo, String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
+    F: Fn(LoginPhase) + Send + Sync,
 {
     let core = runtime.core();
 
@@ -65,6 +81,7 @@ where
 
     log::info!("[qbz-slint] opening system browser for OAuth (port {port})");
     open::that(&oauth_url).map_err(|e| format!("Failed to open browser: {e}"))?;
+    on_phase(LoginPhase::WaitingForBrowser);
 
     let code = tokio::time::timeout(OAUTH_TIMEOUT, capture_oauth_code(listener))
         .await
@@ -72,6 +89,7 @@ where
         .ok_or_else(|| "OAuth login cancelled or no code received".to_string())?;
 
     log::info!("[qbz-slint] OAuth code captured, exchanging for session");
+    on_phase(LoginPhase::Authenticating);
 
     let session = {
         let client_lock = core.client();

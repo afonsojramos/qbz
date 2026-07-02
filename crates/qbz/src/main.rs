@@ -332,6 +332,11 @@ async fn enter_shell(
         let offline_state = w.global::<OfflineState>();
         offline_state.set_has_previous_session(true);
         offline_state.set_login_error("".into());
+        // Reset the browser sign-in narration for the next visit to the
+        // login screen (logout → login).
+        let login_state = w.global::<LoginState>();
+        login_state.set_phase(0);
+        login_state.set_error("".into());
         seed_tray_appearance(&w, &tray);
         // Seed the My QBZ branding (label + icon) from the per-user store so
         // the sidebar row + Settings row paint the custom values immediately.
@@ -6445,22 +6450,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Sign in via the system browser → real OAuth → shell.
-    // "Sign in via Browser" and "Use your system browser instead" are the
-    // same flow in the MVP (the in-app webview path is intentionally absent).
+    // Sign in via the system browser → real OAuth → shell. The app has no
+    // embedded webview: the one blue button opens the default browser, and
+    // LoginState narrates the flow (waiting / authenticating / error) so the
+    // login screen never sits inert while the OAuth is pending.
+    // The in-flight task is kept so the screen's Cancel link can abort it
+    // (dropping the task drops the one-shot listener and frees the port).
+    let login_task: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+        Arc::new(std::sync::Mutex::new(None));
     let on_browser_login = {
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
         let image_cache = image_cache.clone();
         let settings_ctx = settings_ctx.clone();
+        let login_task = login_task.clone();
         move || {
+            // Runs on the UI thread: flip to the waiting state immediately so
+            // a second click cannot start a parallel flow, and clear any
+            // previous failure.
+            if let Some(w) = weak.upgrade() {
+                let login_state = w.global::<LoginState>();
+                if login_state.get_phase() != 0 {
+                    return;
+                }
+                login_state.set_error("".into());
+                login_state.set_phase(1);
+            }
             let runtime = runtime.clone();
             let weak = weak.clone();
             let image_cache = image_cache.clone();
             let settings_ctx = settings_ctx.clone();
-            handle.spawn(async move {
-                match auth::login_via_system_browser(&runtime).await {
+            let task = handle.spawn(async move {
+                let phase_weak = weak.clone();
+                let result = auth::login_via_system_browser(&runtime, move |phase| {
+                    let value = match phase {
+                        auth::LoginPhase::WaitingForBrowser => 1,
+                        auth::LoginPhase::Authenticating => 2,
+                    };
+                    let _ = phase_weak.upgrade_in_event_loop(move |w| {
+                        w.global::<LoginState>().set_phase(value);
+                    });
+                })
+                .await;
+                match result {
                     Ok(session) => {
                         log::info!(
                             "[qbz-slint] authenticated as user {}",
@@ -6468,9 +6501,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                         enter_shell(runtime, weak, image_cache, settings_ctx, session).await;
                     }
-                    Err(e) => log::error!("[qbz-slint] sign-in failed: {e}"),
+                    Err(e) => {
+                        log::error!("[qbz-slint] sign-in failed: {e}");
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            let login_state = w.global::<LoginState>();
+                            login_state.set_phase(0);
+                            login_state.set_error(e.into());
+                        });
+                    }
                 }
             });
+            *login_task.lock().unwrap() = Some(task);
         }
     };
 
@@ -6481,11 +6522,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             login();
         });
     }
+
+    // Cancel link on the login screen (visible only while waiting for the
+    // browser): abort the pending OAuth task and return to idle. Aborting
+    // drops the local listener; the browser tab just fails to redirect.
     {
-        let login = on_browser_login.clone();
-        window.on_use_system_browser(move || {
-            dispatch(AppCommand::UseSystemBrowser);
-            login();
+        let weak = window.as_weak();
+        let login_task = login_task.clone();
+        window.on_cancel_login(move || {
+            if let Some(task) = login_task.lock().unwrap().take() {
+                task.abort();
+            }
+            if let Some(w) = weak.upgrade() {
+                let login_state = w.global::<LoginState>();
+                login_state.set_phase(0);
+                login_state.set_error("".into());
+            }
+            log::info!("[qbz-slint] browser sign-in cancelled by user");
         });
     }
 
@@ -6520,6 +6573,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let handle = tokio_rt.handle().clone();
         let image_cache = image_cache.clone();
         let settings_ctx = settings_ctx.clone();
+        let login_task = login_task.clone();
         window.on_recovery_login(move || {
             // Logged BEFORE the spawn: records the click arriving from the
             // UI chain even if the async attempt below stalls or fails.
@@ -6528,7 +6582,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let weak = weak.clone();
             let image_cache = image_cache.clone();
             let settings_ctx = settings_ctx.clone();
-            handle.spawn(async move {
+            let task = handle.spawn(async move {
                 // No pre-lift anywhere: the auth endpoints are EXEMPT from
                 // the offline gate (qbz-qobuz client), so the token login and
                 // the OAuth exchange pass the closed gate — and
@@ -6559,9 +6613,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "[qbz-slint] recovery login: saved session unusable — falling back to browser OAuth"
                         );
                         let _ = weak.upgrade_in_event_loop(|w| {
+                            // Seed the waiting narration before the browser
+                            // opens so the screen never shows an idle button
+                            // while the flow is already running.
+                            let login_state = w.global::<LoginState>();
+                            login_state.set_error("".into());
+                            login_state.set_phase(1);
                             w.set_screen(AppScreen::Login);
                         });
-                        match auth::login_via_system_browser(&runtime).await {
+                        let phase_weak = weak.clone();
+                        let login_result =
+                            auth::login_via_system_browser(&runtime, move |phase| {
+                                let value = match phase {
+                                    auth::LoginPhase::WaitingForBrowser => 1,
+                                    auth::LoginPhase::Authenticating => 2,
+                                };
+                                let _ = phase_weak.upgrade_in_event_loop(move |w| {
+                                    w.global::<LoginState>().set_phase(value);
+                                });
+                            })
+                            .await;
+                        match login_result {
                             Ok(session) => {
                                 log::info!(
                                     "[qbz-slint] recovery browser sign-in succeeded for user {}",
@@ -6580,7 +6652,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // the offline shell.
                                 let _ = weak.upgrade_in_event_loop(move |w| {
                                     toast::error(&w, format!("Sign-in failed: {e}"));
-                                    w.global::<OfflineState>().set_login_error(e.into());
+                                    let login_state = w.global::<LoginState>();
+                                    login_state.set_phase(0);
+                                    login_state.set_error(e.into());
                                 });
                             }
                         }
@@ -6598,6 +6672,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             });
+            // Same slot the login screen's Cancel link aborts — the browser
+            // leg of this recovery flow is cancellable like a normal sign-in.
+            *login_task.lock().unwrap() = Some(task);
         });
     }
 
