@@ -89,6 +89,18 @@ strsim = "0.11"
 # Note: Linux-specific dependencies (alsa) go in individual crate Cargo.toml files
 # because workspace manifests cannot have [target] sections
 
+[profile.release]
+# Strip symbol tables from release binaries. Measured on 2026-07-02:
+# 400 MB -> 218 MB (-45%). There are no .debug_* sections in a default
+# release build — the weight is .strtab (151 MB) + .symtab (22 MB), inflated
+# by Slint's generated generic symbol names. Trade-off: panic backtraces show
+# addresses instead of names; the release workflow archives the UNSTRIPPED
+# binary as an Actions artifact per tag for offline symbolication.
+# Codegen knobs (opt-level / codegen-units / jobs) intentionally stay in the
+# workflows' env (CARGO_PROFILE_RELEASE_*) — they are CI-memory tuning, not
+# a property of the package.
+strip = "symbols"
+
 [patch.crates-io]
 # Slint 1.16's femtovg-wgpu renderer leaves the wgpu surface alpha mode at
 # `Auto`, which resolves as an opaque compositor surface on KWin/Wayland and
