@@ -9,16 +9,40 @@
 use image::{imageops, Rgba, RgbaImage};
 use slint::Color;
 
+/// One-pass downscale of a decoded cover to the two tiny sampling sizes the
+/// cover-derived visuals below consume (8x8: atmosphere + glow; 16x16:
+/// spectrum + lyrics accent). Each helper used to redo its own
+/// full-size-to-tiny resize plus a full pixel-buffer copy — on the
+/// now-playing track-change path that happened four times ON the UI thread.
+/// Computing the tinies once (off-thread) preserves each helper's exact
+/// sampling input. Takes the pixel Vec by value: no copy on the hot path.
+pub fn cover_tiny_samples(
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+) -> Option<(RgbaImage, RgbaImage)> {
+    let src = RgbaImage::from_raw(width, height, pixels)?;
+    let tiny8 = imageops::resize(&src, 8, 8, imageops::FilterType::Triangle);
+    let tiny16 = imageops::resize(&src, 16, 16, imageops::FilterType::Triangle);
+    Some((tiny8, tiny16))
+}
+
 /// Generate a 128x128 atmospheric image from decoded RGBA artwork pixels.
 /// Mirrors `src/lib/immersive/utils/texture-loader.ts::generateAtmosphere`.
 pub fn generate_atmosphere(pixels: &[u8], width: u32, height: u32) -> Option<(Vec<u8>, u32, u32)> {
     let src = RgbaImage::from_raw(width, height, pixels.to_vec())?;
     let tiny = imageops::resize(&src, 8, 8, imageops::FilterType::Triangle);
-    let scaled = imageops::resize(&tiny, 128, 128, imageops::FilterType::CatmullRom);
+    Some(atmosphere_from_tiny8(&tiny))
+}
+
+/// Atmosphere pipeline over a pre-downscaled 8x8 sample (`cover_tiny_samples`).
+/// Same stages as [`generate_atmosphere`] past its own 8x8 resize.
+pub fn atmosphere_from_tiny8(tiny8: &RgbaImage) -> (Vec<u8>, u32, u32) {
+    let scaled = imageops::resize(tiny8, 128, 128, imageops::FilterType::CatmullRom);
     let blurred = imageops::blur(&scaled, 16.0);
     let adjusted = color_adjust(blurred);
     let final_img = vignette(adjusted, 0.20);
-    Some((final_img.into_raw(), 128, 128))
+    (final_img.into_raw(), 128, 128)
 }
 
 /// Static Slint image for album/artist headers that reuse Immersive's blurred
@@ -35,11 +59,8 @@ pub fn generate_atmosphere_image(pixels: &[u8], width: u32, height: u32) -> Opti
 }
 
 /// AlbumReactive glow color: the most saturated non-extreme 8x8 sample.
-pub fn glow_color(pixels: &[u8], width: u32, height: u32) -> Color {
-    let Some(src) = RgbaImage::from_raw(width, height, pixels.to_vec()) else {
-        return Color::from_argb_u8(0x59, 100, 100, 255);
-    };
-    let tiny = imageops::resize(&src, 8, 8, imageops::FilterType::Triangle);
+/// Takes the pre-downscaled 8x8 sample from [`cover_tiny_samples`].
+pub fn glow_color(tiny: &RgbaImage) -> Color {
     let mut best_sat = 0.0f32;
     let mut best = (100u8, 100u8, 255u8);
 
@@ -74,16 +95,13 @@ pub fn glow_color(pixels: &[u8], width: u32, height: u32) -> Color {
 /// vivid + mid-bright so it reads on the black bg; the secondary stop rotates
 /// +55° for a clear gradient. A cover with essentially no chromatic pixels (a
 /// true B&W cover) falls back to a default duotone.
+/// Takes the pre-downscaled 16x16 sample from [`cover_tiny_samples`].
 /// Returns (primary at the base, secondary at the tip).
-pub fn spectrum_colors(pixels: &[u8], width: u32, height: u32) -> (Color, Color) {
+pub fn spectrum_colors(tiny: &RgbaImage) -> (Color, Color) {
     let default = (
         Color::from_rgb_u8(0, 220, 200),
         Color::from_rgb_u8(150, 50, 255),
     );
-    let Some(src) = RgbaImage::from_raw(width, height, pixels.to_vec()) else {
-        return default;
-    };
-    let tiny = imageops::resize(&src, 16, 16, imageops::FilterType::Triangle);
 
     // Hue histogram over CHROMATIC pixels, weighted by COVERAGE (one vote per
     // pixel). 24 bins of 15°. Near-grey / near-black / near-white pixels carry
@@ -167,12 +185,9 @@ pub fn spectrum_colors(pixels: &[u8], width: u32, height: u32) -> (Color, Color)
 /// focus line reads against the warm/dark atmosphere (owner-reported: a warm
 /// cover gave salmon-on-orange). A near-grey (B&W) cover has no usable hue, so
 /// it falls back to a fixed high-contrast teal.
-pub fn lyrics_accent_color(pixels: &[u8], width: u32, height: u32) -> Color {
+/// Takes the pre-downscaled 16x16 sample from [`cover_tiny_samples`].
+pub fn lyrics_accent_color(tiny: &RgbaImage) -> Color {
     let default = Color::from_rgb_u8(0x3f, 0xd9, 0xc8); // bright teal
-    let Some(src) = RgbaImage::from_raw(width, height, pixels.to_vec()) else {
-        return default;
-    };
-    let tiny = imageops::resize(&src, 16, 16, imageops::FilterType::Triangle);
 
     // Coverage-weighted dominant hue (same binning as spectrum_colors: one vote
     // per chromatic pixel, so the perceived dominant tone wins over a speck).

@@ -1288,35 +1288,83 @@ fn load_now_playing_artwork_large(weak: slint::Weak<AppWindow>, art: qbz_models:
         else {
             return;
         };
+        // ALL pixel crunching stays HERE, off the UI thread. The decode is up
+        // to 1000px, and the four cover-derived visuals below each used to run
+        // their own full-size-to-tiny resize (plus a full buffer copy) INSIDE
+        // the event loop — a visible stall at every track boundary on weak
+        // hardware. Only the finished Send carriers (SharedPixelBuffer +
+        // Colors) cross into the event loop; the !Send slint::Image is built
+        // there, matching the pixels_to_image pattern.
+
+        // Full-res cover buffer for the hover preview / immersive cover.
+        // Mirrors pixels_to_image's length guard (None → empty image).
+        let artwork_buf = {
+            let mut buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
+            let dst = buf.make_mut_bytes();
+            if dst.len() == pixels.len() {
+                dst.copy_from_slice(&pixels);
+                Some(buf)
+            } else {
+                None
+            }
+        };
+
+        // One shared downscale (8x8 + 16x16, consuming `pixels` — no copy)
+        // feeds atmosphere + glow + spectrum + lyrics accent with the exact
+        // sampling inputs each helper used to compute for itself.
+        let analysis = crate::immersive::cover_tiny_samples(pixels, w, h).map(
+            |(tiny8, tiny16)| {
+                let (bg_pixels, bg_w, bg_h) =
+                    crate::immersive::atmosphere_from_tiny8(&tiny8);
+                let bg_buf = {
+                    let mut buf =
+                        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(bg_w, bg_h);
+                    let dst = buf.make_mut_bytes();
+                    if dst.len() == bg_pixels.len() {
+                        dst.copy_from_slice(&bg_pixels);
+                        Some(buf)
+                    } else {
+                        None
+                    }
+                };
+                let glow = crate::immersive::glow_color(&tiny8);
+                let (spec_primary, spec_secondary) =
+                    crate::immersive::spectrum_colors(&tiny16);
+                let spec_accent = crate::immersive::lyrics_accent_color(&tiny16);
+                (bg_buf, glow, spec_primary, spec_secondary, spec_accent)
+            },
+        );
+
         let _ = weak.upgrade_in_event_loop(move |win| {
-            let img = crate::artwork::pixels_to_image(&pixels, w, h);
+            let img = match artwork_buf {
+                Some(buf) => slint::Image::from_rgba8(buf),
+                None => slint::Image::default(),
+            };
             // The hover-preview cover is ALWAYS needed (independent of the
             // immersive overlay), so set it unconditionally first.
             win.global::<NowPlayingState>().set_artwork_large(img);
 
-            // ALWAYS (re)generate the immersive ambient atmosphere (Codex's
+            // ALWAYS (re)apply the immersive ambient atmosphere (Codex's
             // blurred moving background) + glow + spectrum colors from this cover.
-            // The overlay is conditionally mounted so generating while closed is
+            // The overlay is conditionally mounted so applying while closed is
             // cheap; the track-change reset clears bg-image, so this MUST run
             // unconditionally — a URL dedupe here left bg-image empty after the
             // reset and the atmosphere fell back to the raw (sharp) cover.
-            let imm = win.global::<ImmersiveState>();
-            if let Some((bg_pixels, bg_w, bg_h)) = crate::immersive::generate_atmosphere(&pixels, w, h)
-            {
-                let bg = crate::artwork::pixels_to_image(&bg_pixels, bg_w, bg_h);
-                imm.set_bg_image(bg);
+            if let Some((bg_buf, glow, spec_primary, spec_secondary, spec_accent)) = analysis {
+                let imm = win.global::<ImmersiveState>();
+                if let Some(bg_buf) = bg_buf {
+                    imm.set_bg_image(slint::Image::from_rgba8(bg_buf));
+                }
+                imm.set_glow_color(glow);
+                imm.set_spectrum_primary(spec_primary);
+                imm.set_spectrum_secondary(spec_secondary);
+                imm.set_lyrics_accent(spec_accent);
+                // Feed the same album-art triad to the wgpu shader underlay so the
+                // immersive shaders (Plasma/Tunnel/Aurora) are album-colored instead
+                // of hardcoded. Pushed on track change; read on every shader frame
+                // (thread-local — must be written on the UI thread, so it stays here).
+                crate::shader_underlay::set_palette(spec_primary, spec_secondary, spec_accent);
             }
-            imm.set_glow_color(crate::immersive::glow_color(&pixels, w, h));
-            let (spec_primary, spec_secondary) =
-                crate::immersive::spectrum_colors(&pixels, w, h);
-            let spec_accent = crate::immersive::lyrics_accent_color(&pixels, w, h);
-            imm.set_spectrum_primary(spec_primary);
-            imm.set_spectrum_secondary(spec_secondary);
-            imm.set_lyrics_accent(spec_accent);
-            // Feed the same album-art triad to the wgpu shader underlay so the
-            // immersive shaders (Plasma/Tunnel/Aurora) are album-colored instead
-            // of hardcoded. Pushed on track change; read on every shader frame.
-            crate::shader_underlay::set_palette(spec_primary, spec_secondary, spec_accent);
         });
     });
 }
@@ -1384,6 +1432,17 @@ pub static NOTIFICATIONS_ENABLED: std::sync::atomic::AtomicBool =
 /// yet / cleared.
 static MPRIS_LAST_META: std::sync::Mutex<Option<(u64, Option<String>)>> =
     std::sync::Mutex::new(None);
+
+/// Force-flag for the poll loop's per-tick dirty-guards (`last_ui_push` /
+/// `last_remote_ui_push` in `start_poll_loop`). `refresh_now_playing_meta`
+/// seeds the bar OPTIMISTICALLY (position 0 / playing true / purchases
+/// mirror) before audio actually starts; when the play is then refused or
+/// fails (offline refusal, fetch error) the engine snapshot never moves, so
+/// the guards would skip the corrective push forever and the bar would stick
+/// on "playing". Set after every optimistic seed; the loop consumes it at the
+/// top of the next tick and re-pushes engine/peer truth unconditionally.
+static FORCE_UI_REPUSH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Compare-and-record the MPRIS metadata dedupe key. Returns `true` when
 /// `key` differs from the last pushed value (→ caller pushes now), recording
@@ -1665,6 +1724,12 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         // load_now_playing_artwork_large swaps in the new one — a brief stale
         // blur is imperceptible; a blank/raw-cover fallback is not.
     });
+
+    // The bar was just seeded optimistically — make the poll loop's next tick
+    // re-push engine/peer truth even if the raw snapshot is unchanged (see
+    // FORCE_UI_REPUSH). Set AFTER the closure post above: the corrective push
+    // is also an event-loop post, so FIFO ordering keeps it after the seed.
+    FORCE_UI_REPUSH.store(true, std::sync::atomic::Ordering::Relaxed);
 
     load_now_playing_artwork(weak.clone(), bar_artwork);
     load_now_playing_artwork_large(weak.clone(), preview_artwork);
@@ -3703,9 +3768,29 @@ pub fn start_poll_loop(
         // taken so re-entering controller mode refreshes meta.
         let mut last_peer_track_id: u64 = 0;
 
+        // Dirty-guards for the per-tick UI pushes. Slint Property::set has no
+        // equality check, so re-pushing identical values every 450ms dirties
+        // bindings and forces a full-window repaint even when fully idle.
+        // Each snapshot holds everything its push closure depends on (f32s as
+        // bits); when unchanged, the upgrade_in_event_loop is skipped. Reset
+        // to None whenever another owner (peer/cast poll) may have written the
+        // bar, so returning to this branch re-pushes unconditionally.
+        let mut last_ui_push: Option<(u64, u64, u64, bool, u32, u32, u32)> = None;
+        let mut last_remote_ui_push = None;
+
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(450));
         loop {
             ticker.tick().await;
+
+            // A meta refresh outside this loop just seeded the bar
+            // optimistically (position 0 / playing true — see FORCE_UI_REPUSH).
+            // Drop both dirty-guards so this tick re-pushes engine/peer truth
+            // even when the raw snapshot did not move (refused/failed play,
+            // paused track hit by a mid-track Plex quality patch).
+            if FORCE_UI_REPUSH.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                last_ui_push = None;
+                last_remote_ui_push = None;
+            }
 
             // --- QConnect CONTROLLER mode: peer-state reflection ----------
             // When QBZ is CONTROLLING a peer renderer, the event sink stops the
@@ -3763,8 +3848,6 @@ pub fn start_poll_loop(
                 } else {
                     0.0
                 };
-                let elapsed = fmt_elapsed(position_secs);
-                let remaining = fmt_remaining(position_secs, duration_secs);
                 let playing = remote.playing;
                 // Reflect the PEER's actual volume on the bar so a drag starts
                 // from a safe level (never QBZ's local 100). When the peer hasn't
@@ -3780,21 +3863,41 @@ pub fn start_poll_loop(
                 // local order is generated (WS-authoritative for shuffle order).
                 let shuffle_on = remote.shuffle_mode;
                 let repeat_mode = remote.repeat_mode;
-                let _ = weak.upgrade_in_event_loop(move |w| {
-                    let np = w.global::<NowPlayingState>();
-                    np.set_position_secs(position_secs as i32);
-                    if duration_secs > 0 {
-                        np.set_duration_secs(duration_secs as i32);
-                    }
-                    np.set_progress(progress);
-                    np.set_seekable_max(1.0);
-                    np.set_elapsed(elapsed.into());
-                    np.set_remaining(remaining.into());
-                    np.set_playing(playing);
-                    np.set_volume(remote_volume);
-                    np.set_shuffle(shuffle_on);
-                    np.set_repeat_mode(repeat_mode);
-                });
+                // Skip the UI hop when nothing the push depends on changed
+                // since the last push (see the dirty-guard comment above).
+                // While playing, `position_ms` extrapolates every tick, so
+                // pushes proceed; paused, the bar stops being repainted.
+                // track_id guarantees the push after a peer track change (the
+                // meta refresh above just reset the bar's position to 0).
+                let remote_snapshot = (
+                    remote.track_id,
+                    position_ms,
+                    duration_secs,
+                    playing,
+                    remote_volume.to_bits(),
+                    shuffle_on,
+                    repeat_mode,
+                );
+                if last_remote_ui_push != Some(remote_snapshot) {
+                    last_remote_ui_push = Some(remote_snapshot);
+                    let elapsed = fmt_elapsed(position_secs);
+                    let remaining = fmt_remaining(position_secs, duration_secs);
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        let np = w.global::<NowPlayingState>();
+                        np.set_position_secs(position_secs as i32);
+                        if duration_secs > 0 {
+                            np.set_duration_secs(duration_secs as i32);
+                        }
+                        np.set_progress(progress);
+                        np.set_seekable_max(1.0);
+                        np.set_elapsed(elapsed.into());
+                        np.set_remaining(remaining.into());
+                        np.set_playing(playing);
+                        np.set_volume(remote_volume);
+                        np.set_shuffle(shuffle_on);
+                        np.set_repeat_mode(repeat_mode);
+                    });
+                }
                 // A peer owns audio — there is no local fetch wait, so the bar's
                 // fetch spinner must never linger here. Force-clear it (only on
                 // the edge — avoid re-posting set_loading(false) every tick).
@@ -3807,6 +3910,9 @@ pub fn start_poll_loop(
                 last_track_id = 0;
                 was_playing = false;
                 seen_position = 0;
+                // The peer push owns the bar now — force the local branch to
+                // re-push on return even if its raw values coincide.
+                last_ui_push = None;
                 continue;
             }
 
@@ -3823,6 +3929,17 @@ pub fn start_poll_loop(
                     last_track_id = 0;
                     was_playing = false;
                     seen_position = 0;
+                    // The cast poll owns the bar while casting — force a fresh
+                    // local push on return even if the raw values coincide.
+                    last_ui_push = None;
+                    // Same invariant for the PEER edge trackers: the remote
+                    // branch above did not run, so without this reset a
+                    // re-taken peer whose snapshot happens to match the last
+                    // controller push would be skipped, leaving the cast
+                    // renderer's values on the bar (mirrors the local path's
+                    // reset below).
+                    last_peer_track_id = 0;
+                    last_remote_ui_push = None;
                     continue;
                 }
             }
@@ -3830,6 +3947,7 @@ pub fn start_poll_loop(
             // Not in controller mode (no peer / returned to local): reset the
             // peer-track edge var so re-entering the peer state refreshes meta.
             last_peer_track_id = 0;
+            last_remote_ui_push = None;
             // Lyrics position source back to the local player (Q7 resolver).
             crate::lyrics_sync::clear_remote_anchor();
 
@@ -3983,36 +4101,66 @@ pub fn start_poll_loop(
                 && duration > 0
                 && seen_position + 2 >= duration;
 
-            // Push the live values onto NowPlayingState.
-            let progress = if duration > 0 {
-                (position as f32 / duration as f32).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let elapsed = fmt_elapsed(position);
-            let remaining = fmt_remaining(position, duration);
-            let _ = weak.upgrade_in_event_loop(move |w| {
-                let np = w.global::<NowPlayingState>();
-                np.set_position_secs(position as i32);
-                if duration > 0 {
-                    np.set_duration_secs(duration as i32);
-                }
-                np.set_progress(progress);
-                np.set_cache(cache);
-                np.set_seekable_max(seekable_max);
-                np.set_elapsed(elapsed.into());
-                np.set_remaining(remaining.into());
-                np.set_playing(is_playing);
-                np.set_volume(volume.clamp(0.0, 1.0));
-                // Keep the Purchases globals in step with play/pause + the live
-                // track id every tick (the meta-apply seeds them on a track
-                // change; this follows pause/resume + the engine's own id flips).
-                // track_id 0 (idle) → "" active id (no row highlighted).
-                mirror_now_playing_to_purchases(&w, track_id, is_playing);
-                // REQ-1 fan-out: mirror to the miniplayer window (no-op when
-                // the mini is closed). Single tick, no second poll loop.
-                crate::miniplayer::mirror_tick(&w);
-            });
+            // Push the live values onto NowPlayingState — but only when
+            // something the push depends on actually changed (see the
+            // dirty-guard comment above). While playing, `position` advances,
+            // so pushes proceed; fully idle (track_id == 0, nothing playing)
+            // the UI hop is skipped entirely and the window stays clean.
+            // The purchases mirror is a pure function of (track_id,
+            // is_playing) — both in the snapshot — so it is safely skipped
+            // with the rest. The miniplayer mirror is NOT: it fans out
+            // main-window state that changes without moving this snapshot
+            // (async meta/lyrics/artwork arrivals, mute, cast/qconnect
+            // flags), so while the mini is open it keeps ticking below.
+            let ui_snapshot = (
+                track_id,
+                position,
+                duration,
+                is_playing,
+                volume.to_bits(),
+                cache.to_bits(),
+                seekable_max.to_bits(),
+            );
+            if last_ui_push != Some(ui_snapshot) {
+                last_ui_push = Some(ui_snapshot);
+                let progress = if duration > 0 {
+                    (position as f32 / duration as f32).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let elapsed = fmt_elapsed(position);
+                let remaining = fmt_remaining(position, duration);
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    let np = w.global::<NowPlayingState>();
+                    np.set_position_secs(position as i32);
+                    if duration > 0 {
+                        np.set_duration_secs(duration as i32);
+                    }
+                    np.set_progress(progress);
+                    np.set_cache(cache);
+                    np.set_seekable_max(seekable_max);
+                    np.set_elapsed(elapsed.into());
+                    np.set_remaining(remaining.into());
+                    np.set_playing(is_playing);
+                    np.set_volume(volume.clamp(0.0, 1.0));
+                    // Keep the Purchases globals in step with play/pause + the live
+                    // track id every tick (the meta-apply seeds them on a track
+                    // change; this follows pause/resume + the engine's own id flips).
+                    // track_id 0 (idle) → "" active id (no row highlighted).
+                    mirror_now_playing_to_purchases(&w, track_id, is_playing);
+                    // REQ-1 fan-out: mirror to the miniplayer window (no-op when
+                    // the mini is closed). Single tick, no second poll loop.
+                    crate::miniplayer::mirror_tick(&w);
+                });
+            } else if crate::miniplayer::is_open() {
+                // Snapshot unchanged, but the mini window is open: its mirror
+                // must still tick (it copies main-window state — lyrics
+                // status/lines, meta, artwork on the track edge — that other
+                // async paths update without moving the playback snapshot).
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    crate::miniplayer::mirror_tick(&w);
+                });
+            }
 
             // Clear the fetch spinner once the audio for the in-flight play is
             // actually advancing: a non-zero track with the clock moving
