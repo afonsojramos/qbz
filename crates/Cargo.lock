@@ -5406,6 +5406,7 @@ dependencies = [
  "env_logger",
  "futures-util",
  "i-slint-backend-winit",
+ "i-slint-renderer-femtovg",
  "image",
  "ksni",
  "log",
