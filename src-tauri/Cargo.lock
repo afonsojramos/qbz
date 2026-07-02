@@ -5034,7 +5034,9 @@ dependencies = [
  "qbz-core",
  "qbz-models",
  "qbz-player",
+ "qbz-qobuz",
  "rand 0.10.1",
+ "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",
@@ -5062,6 +5064,7 @@ dependencies = [
  "rustfft",
  "serde",
  "serde_json",
+ "spectrum-analyzer",
  "symphonia",
  "thiserror 2.0.18",
  "tokio",
@@ -5089,6 +5092,7 @@ dependencies = [
  "mdns-sd",
  "rupnp",
  "rust_cast",
+ "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -5153,6 +5157,7 @@ name = "qbz-integrations"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "discord-rich-presence",
  "log",
  "reqwest 0.12.28",
  "rusqlite",
