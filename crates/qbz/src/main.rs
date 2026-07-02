@@ -286,6 +286,13 @@ fn seed_tray_appearance(w: &AppWindow, tray: &tray_settings::TraySettings) {
     appearance.set_tray_close_to_tray(tray.close_to_tray);
     appearance.set_tray_mac_hide_dock(tray.mac_hide_dock);
     appearance.set_tray_icon_theme_index(tray_settings::icon_theme_index(&tray.tray_icon_theme));
+    // Renderer row (Linux-only: on macOS the renderer is always Skia, so the
+    // row stays hidden). Piggybacks this appearance-seed choke point so the
+    // dropdown always reflects the persisted value when Settings opens.
+    appearance.set_renderer_setting_visible(cfg!(target_os = "linux"));
+    appearance.set_renderer_index(crate::ui_prefs::renderer_index(
+        &crate::ui_prefs::load().renderer,
+    ));
 }
 
 /// Refresh the blacklist count + enabled flag on `BlacklistState` (T10).
@@ -5379,6 +5386,364 @@ fn system_font_family() -> Option<String> {
     None
 }
 
+/// Renderer tiers, best first. `FemtovgGl` is the middle tier for weak GPUs
+/// (Raspberry Pi-class): they expose a real Vulkan adapter (v3dv/panfrost/…) that
+/// wgpu happily binds, but that driver path crawls there — Mesa's GLES driver is
+/// the fast path on such hardware, so femtovg-over-GL beats femtovg-over-wgpu.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RendererTier {
+    Wgpu,
+    FemtovgGl,
+    Software,
+}
+
+/// What the renderer selection actually decided, surfaced in the Developer
+/// tools diagnostics ("which renderer am I really running, and why?"). Set
+/// once during `select_slint_backend`; read by `diagnostics.rs`.
+pub struct RendererDecision {
+    /// Active tier label, e.g. "wgpu (femtovg)" | "GL (femtovg)" | "software"
+    /// | "skia (Metal)" on macOS.
+    pub tier: &'static str,
+    /// Why it was chosen: env var, Settings override, auto-detect, or the
+    /// auto-revert after a failed start.
+    pub source: String,
+}
+
+pub static RENDERER_DECISION: std::sync::OnceLock<RendererDecision> = std::sync::OnceLock::new();
+/// Adapter enumeration summary from `detect_hardware_gpu` ("-" if the probe
+/// never ran, i.e. the tier was forced by env/Settings).
+static RENDERER_ADAPTERS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// Set when a persisted (non-auto) renderer override was reverted because the
+/// previous start died before its first paint; read once the UI is up to show
+/// the explanatory toast.
+static RENDERER_REVERTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// One-line diagnostics summary of the active renderer + adapters.
+pub fn renderer_decision_summary() -> (String, String) {
+    match RENDERER_DECISION.get() {
+        Some(d) => (
+            format!("{} — {}", d.tier, d.source),
+            RENDERER_ADAPTERS.get().cloned().unwrap_or_else(|| "—".to_string()),
+        ),
+        None => ("—".to_string(), "—".to_string()),
+    }
+}
+
+/// Startup auto-revert sentinel for a persisted (non-auto) renderer override.
+/// Armed BEFORE the risky backend init, disarmed a few seconds after the main
+/// window is up. If it survives to the next start, that start reverts the
+/// override to "auto" so a bad renderer choice can't lock the user out of
+/// Settings. Lives next to ui_prefs.json.
+fn renderer_sentinel_path() -> Option<std::path::PathBuf> {
+    Some(dirs::data_dir()?.join("qbz").join("renderer_attempt"))
+}
+
+fn arm_renderer_sentinel(key: &str) {
+    let Some(path) = renderer_sentinel_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&path, key) {
+        log::warn!("[renderer] could not arm the startup sentinel: {e}");
+    }
+}
+
+fn clear_renderer_sentinel() {
+    if let Some(path) = renderer_sentinel_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn renderer_sentinel_armed() -> bool {
+    renderer_sentinel_path().map(|p| p.exists()).unwrap_or(false)
+}
+
+/// Decide + activate the Slint backend, returning whether the GPU (wgpu) renderer was
+/// selected. `false` => femtovg-GL or the pure software renderer is active and the caller
+/// must skip the wgpu shader underlay (neither exposes a WGPU28 GraphicsAPI). See the big
+/// comment at the call site for the full rationale.
+fn select_slint_backend() -> Result<bool, slint::PlatformError> {
+    let (mut tier, mut source) = requested_renderer_tier();
+
+    // macOS renders via Skia (see Cargo.toml) — femtovg-GL is not compiled there,
+    // so the GL middle tier degrades to the wgpu path.
+    if cfg!(target_os = "macos") && tier == RendererTier::FemtovgGl {
+        log::info!("[renderer] GL tier unavailable on macOS -> using wgpu (skia)");
+        tier = RendererTier::Wgpu;
+        source.push_str(" (GL unavailable on macOS)");
+    }
+
+    // Make ONLY the miniplayer window borderless at CREATION (the flag is true solely
+    // while MiniPlayerWindow::new() runs). Decorations cannot be reliably removed
+    // post-creation on Wayland/KDE (server-side decorations are negotiated when the
+    // surface is created), so the AppWindow keeps its system titlebar while the mini
+    // never has one.
+    let attributes_hook = |attributes: i_slint_backend_winit::winit::window::WindowAttributes| {
+        let creating_mini = crate::miniplayer::is_creating_mini();
+        log::info!("[mini] window-attributes hook: creating_mini={creating_mini}");
+        // Per-window swapchain alpha (vendored femtovg-wgpu patch): this hook runs
+        // on the event loop thread right before the window ADAPTER — and therefore
+        // its renderer backend — is created, and the backend CAPTURES the flag at
+        // construction (surface (re)creation happens later and repeats on every
+        // Wayland re-show, so a live read there would leak this latched value
+        // across windows). Net effect: only the miniplayer gets a transparent
+        // (blended) swapchain, for its whole lifetime; the main window keeps an
+        // Opaque one, sparing the compositor a full-window alpha blend every frame.
+        #[cfg(not(target_os = "macos"))]
+        i_slint_renderer_femtovg::wgpu::set_surface_prefers_transparent(creating_mini);
+        if creating_mini {
+            attributes.with_decorations(false)
+        } else {
+            attributes
+        }
+    };
+
+    match tier {
+        RendererTier::Wgpu => {
+            // Explicit configuration instead of `default()`: default leaves the
+            // adapter PowerPreference at None. Prefer the low-power (integrated)
+            // adapter — this UI is mostly idle and doesn't need a discrete GPU.
+            // WGPU_POWER_PREF still wins if set (same as WGPUSettings::default()).
+            let mut wgpu_settings = slint::wgpu_28::WGPUSettings::default();
+            wgpu_settings.power_preference = slint::wgpu_28::wgpu::PowerPreference::from_env()
+                .unwrap_or(slint::wgpu_28::wgpu::PowerPreference::LowPower);
+            log::info!(
+                "[renderer] selecting wgpu (GPU) renderer (power_preference={:?})",
+                wgpu_settings.power_preference
+            );
+            slint::BackendSelector::new()
+                .require_wgpu_28(slint::wgpu_28::WGPUConfiguration::Automatic(wgpu_settings))
+                .with_winit_window_attributes_hook(attributes_hook)
+                .select()?;
+        }
+        RendererTier::FemtovgGl => {
+            log::info!(
+                "[renderer] selecting femtovg GL renderer (winit + renderer-femtovg); \
+                 shader underlay disabled"
+            );
+            slint::BackendSelector::new()
+                .backend_name("winit".to_string())
+                .renderer_name("femtovg".to_string())
+                .with_winit_window_attributes_hook(attributes_hook)
+                .select()?;
+        }
+        RendererTier::Software => {
+            log::info!(
+                "[renderer] selecting software renderer (winit + renderer-software); \
+                 shader underlay disabled"
+            );
+            slint::BackendSelector::new()
+                .backend_name("winit".to_string())
+                .renderer_name("software".to_string())
+                .with_winit_window_attributes_hook(attributes_hook)
+                .select()?;
+        }
+    }
+    let _ = RENDERER_DECISION.set(RendererDecision {
+        tier: match tier {
+            RendererTier::Wgpu if cfg!(target_os = "macos") => "skia (Metal)",
+            RendererTier::Wgpu => "wgpu (femtovg)",
+            RendererTier::FemtovgGl => "GL (femtovg)",
+            RendererTier::Software => "software",
+        },
+        source,
+    });
+    Ok(tier == RendererTier::Wgpu)
+}
+
+/// Resolve the renderer preference, with its human-readable source for the
+/// diagnostics: QBZ_RENDERER env override first, then the persisted Settings
+/// choice (guarded by the auto-revert sentinel), else auto-detect.
+fn requested_renderer_tier() -> (RendererTier, String) {
+    match std::env::var("QBZ_RENDERER")
+        .ok()
+        .map(|s| s.trim().to_ascii_lowercase())
+    {
+        Some(v) if matches!(v.as_str(), "software" | "cpu" | "soft") => {
+            log::info!("[renderer] QBZ_RENDERER={v} -> forcing software renderer");
+            (RendererTier::Software, format!("QBZ_RENDERER={v}"))
+        }
+        Some(v) if matches!(v.as_str(), "gpu" | "wgpu" | "hardware" | "hw") => {
+            log::info!("[renderer] QBZ_RENDERER={v} -> forcing wgpu (GPU) renderer");
+            (RendererTier::Wgpu, format!("QBZ_RENDERER={v}"))
+        }
+        Some(v) if matches!(v.as_str(), "gl" | "gles" | "femtovg") => {
+            log::info!("[renderer] QBZ_RENDERER={v} -> forcing femtovg GL renderer");
+            (RendererTier::FemtovgGl, format!("QBZ_RENDERER={v}"))
+        }
+        Some(v) if !v.is_empty() && v != "auto" => {
+            log::warn!("[renderer] QBZ_RENDERER='{v}' unrecognized -> auto-detecting");
+            (detect_hardware_gpu(), "auto-detect".to_string())
+        }
+        _ => renderer_tier_from_prefs(),
+    }
+}
+
+/// Resolve the persisted Settings>Appearance renderer key ("auto" | "wgpu" |
+/// "gl" | "software"). A non-auto override is wrapped in the startup sentinel:
+/// armed here (before the risky backend/window init), disarmed shortly after
+/// the main window is up. If we find it still armed from the PREVIOUS run,
+/// that run never reached first paint with this override — revert to "auto"
+/// and auto-detect, so users can't lock themselves out with a bad choice.
+fn renderer_tier_from_prefs() -> (RendererTier, String) {
+    let mut prefs = crate::ui_prefs::load();
+    let key = prefs.renderer.clone();
+    if key == "auto" {
+        return (detect_hardware_gpu(), "auto-detect".to_string());
+    }
+    if renderer_sentinel_armed() {
+        log::warn!(
+            "[renderer] previous start with renderer='{key}' never reached first paint \
+             -> reverting the setting to auto"
+        );
+        clear_renderer_sentinel();
+        prefs.renderer = "auto".to_string();
+        crate::ui_prefs::save(&prefs);
+        RENDERER_REVERTED.store(true, std::sync::atomic::Ordering::Relaxed);
+        return (
+            detect_hardware_gpu(),
+            format!("auto-detect (reverted: '{key}' failed to start)"),
+        );
+    }
+    let tier = match key.as_str() {
+        "wgpu" => RendererTier::Wgpu,
+        "gl" => RendererTier::FemtovgGl,
+        "software" => RendererTier::Software,
+        other => {
+            log::warn!("[renderer] unknown persisted renderer '{other}' -> auto-detecting");
+            return (detect_hardware_gpu(), "auto-detect".to_string());
+        }
+    };
+    log::info!("[renderer] Settings renderer override '{key}' (sentinel armed)");
+    arm_renderer_sentinel(&key);
+    (tier, format!("Settings ({key})"))
+}
+
+/// Probe wgpu's adapters and classify the best renderer tier available.
+/// Conservative: any probe failure, an empty list, or an all-CPU list => Software,
+/// because software Vulkan/GL adapters (llvmpipe / lavapipe) report `DeviceType::Cpu`.
+/// A non-CPU adapter is WEAK (GL tier) when its name/driver matches a known
+/// GLES-class embedded driver, when it's an integrated GPU on arm Linux, or when
+/// its texture limits are tiny; anything else is a real GPU (wgpu tier).
+/// Adapters reachable only through wgpu's GL backend never count for the wgpu
+/// tier: the femtovg-wgpu renderer masks `Backends::GL` out of its instance
+/// (vendored wgpu.rs passes it as `backends_to_avoid`), so the wgpu tier could
+/// never bind them — they only prove the femtovg-GL tier works.
+fn detect_hardware_gpu() -> RendererTier {
+    use slint::wgpu_28::wgpu;
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+    // wgpu's native `enumerate_adapters` resolves immediately; poll it once.
+    let adapters = match poll_ready(instance.enumerate_adapters(wgpu::Backends::all())) {
+        Some(a) => a,
+        None => {
+            log::warn!("[renderer] wgpu adapter enumeration was not immediately ready -> software");
+            return RendererTier::Software;
+        }
+    };
+    if adapters.is_empty() {
+        log::warn!("[renderer] wgpu found no adapters -> software renderer");
+        return RendererTier::Software;
+    }
+    // Embedded/mobile GPU drivers whose Vulkan path is the slow one (Mesa's GL
+    // driver is the mature path on that hardware). `hasvk` is Mesa's legacy
+    // Intel gen7/7.5 (Ivy Bridge / Haswell) Vulkan driver — same story: GL is
+    // the fast path there. llvmpipe normally reports DeviceType::Cpu and is
+    // skipped above, listed only as a belt-and-braces.
+    const WEAK_GPU_MARKERS: [&str; 8] =
+        ["v3dv", "hasvk", "panfrost", "panvk", "lima", "mali", "videocore", "llvmpipe"];
+    let mut best = RendererTier::Software;
+    let mut adapter_summary: Vec<String> = Vec::new();
+    for adapter in &adapters {
+        let info = adapter.get_info();
+        if info.device_type == wgpu::DeviceType::Cpu {
+            log::info!(
+                "[renderer] wgpu adapter: '{}' backend={:?} type={:?} class=cpu",
+                info.name,
+                info.backend,
+                info.device_type
+            );
+            adapter_summary.push(format!("{} [{:?}, cpu]", info.name, info.backend));
+            continue;
+        }
+        // The wgpu tier can never bind this adapter if it only shows up on
+        // wgpu's GL backend: the actual renderer init excludes GL (see the fn
+        // doc). A GPU with no usable Vulkan ICD would otherwise be classified
+        // strong here and then wgpu-init would fall back to llvmpipe (CPU
+        // rasterization) or panic "Failed to find an appropriate adapter".
+        let gl_backend = info.backend == wgpu::Backend::Gl;
+        let name = info.name.to_ascii_lowercase();
+        let driver = format!("{} {}", info.driver, info.driver_info).to_ascii_lowercase();
+        let weak = WEAK_GPU_MARKERS.iter().any(|m| name.contains(m) || driver.contains(m))
+            // Integrated GPU on arm Linux (Pi & friends). Deliberately NOT plain
+            // aarch64: Apple Silicon is integrated+aarch64 and is a strong GPU.
+            || (cfg!(all(
+                target_os = "linux",
+                any(target_arch = "aarch64", target_arch = "arm")
+            )) && info.device_type == wgpu::DeviceType::IntegratedGpu)
+            || adapter.limits().max_texture_dimension_2d <= 4096;
+        let class = if weak {
+            "weak"
+        } else if gl_backend {
+            "gl-only"
+        } else {
+            "strong"
+        };
+        log::info!(
+            "[renderer] wgpu adapter: '{}' backend={:?} type={:?} driver='{}' class={}",
+            info.name,
+            info.backend,
+            info.device_type,
+            info.driver,
+            class
+        );
+        adapter_summary.push(format!(
+            "{} [{:?}, {}, {}]",
+            info.name, info.backend, info.driver, class
+        ));
+        if !weak && !gl_backend {
+            best = RendererTier::Wgpu;
+        } else if best == RendererTier::Software {
+            best = RendererTier::FemtovgGl;
+        }
+    }
+    let _ = RENDERER_ADAPTERS.set(adapter_summary.join("; "));
+    match best {
+        RendererTier::Wgpu => log::info!("[renderer] real GPU adapter found -> wgpu renderer"),
+        RendererTier::FemtovgGl => log::info!(
+            "[renderer] only weak (GLES-class) GPU adapters available -> femtovg GL renderer"
+        ),
+        RendererTier::Software => log::warn!(
+            "[renderer] only software (CPU) GPU adapters available (llvmpipe/lavapipe) \
+             -> software renderer"
+        ),
+    }
+    best
+}
+
+/// Poll a future exactly once with a no-op waker. Used for wgpu's native
+/// `enumerate_adapters`, which is synchronous under the hood; returns None if it were
+/// ever Pending (mirrors Slint's own internal `poll_once`).
+fn poll_ready<F: std::future::Future>(fut: F) -> Option<F::Output> {
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    fn noop(_: *const ()) {}
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+    // SAFETY: the vtable's clone/wake/drop are all no-ops over a null data pointer, so
+    // the Waker is trivially valid and never dereferences the pointer.
+    let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = Box::pin(fut);
+    match fut.as_mut().poll(&mut cx) {
+        Poll::Ready(v) => Some(v),
+        Poll::Pending => None,
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Composite logger: stderr (unchanged) + a bounded in-memory ring + an on-disk
     // file, all redacted at the write choke point. Feeds the in-app log viewer and
@@ -5400,31 +5765,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tokio_rt = tokio::runtime::Runtime::new()?;
     let _enter = tokio_rt.enter();
 
-    // WGPU UNDERLAY SPIKE: select a wgpu-capable backend BEFORE the first window
-    // is created. require_wgpu_28 forces the winit backend (the only one that
-    // honours a graphics-API request) — which the app already uses, so the tray's
-    // WinitWindowAccessor stays valid. The renderer is femtovg-wgpu (Cargo.toml),
-    // so the femtovg text pipeline is preserved. Automatic config lets Slint init
-    // wgpu (downlevel-webgl2 limits — fine for fragment-only shaders). If this
-    // ever fails on the owner's GPU/driver, that failure IS the spike result.
-    slint::BackendSelector::new()
-        .require_wgpu_28(slint::wgpu_28::WGPUConfiguration::default())
-        // Make ONLY the miniplayer window borderless at CREATION (the flag is
-        // true solely while MiniPlayerWindow::new() runs). Decorations cannot be
-        // reliably removed post-creation on Wayland/KDE (server-side decorations
-        // are negotiated when the surface is created), so the AppWindow keeps its
-        // system titlebar while the mini never has one. Transparency is already
-        // default-on in this backend, so the mini's rounded card shows through.
-        .with_winit_window_attributes_hook(|attributes| {
-            let creating_mini = crate::miniplayer::is_creating_mini();
-            log::info!("[mini] window-attributes hook: creating_mini={creating_mini}");
-            if creating_mini {
-                attributes.with_decorations(false)
-            } else {
-                attributes
-            }
-        })
-        .select()?;
+    // RENDERER SELECTION — pick wgpu (GPU) vs femtovg GL vs Slint's software
+    // renderer BEFORE the first window is created. All three use the winit backend,
+    // so the tray/miniplayer WinitWindowAccessor stays valid either way.
+    //
+    // Why this is not an unconditional `require_wgpu_28` anymore: on a host with a
+    // real GPU (dev boxes, Apple Silicon) wgpu flies. But on a host WITHOUT one — a
+    // VM with no GPU passthrough — wgpu happily binds a *software* Vulkan/GL adapter
+    // (llvmpipe / lavapipe) and then CPU-rasterizes the entire UI every frame at
+    // 60fps, which pegs the CPU and makes the app crawl. The old Tauri/WebKitGTK
+    // build never hit this because its software path is far more optimized. And on
+    // weak-GPU hosts (Raspberry Pi-class) the real Vulkan adapter (v3dv/panfrost)
+    // is itself the slow path — Mesa's GLES driver is the fast one there, so those
+    // get the femtovg GL middle tier. Everything without a usable GPU falls back
+    // to Slint's pure software renderer. The wgpu shader underlay is non-fatal (it
+    // just stays dark), so GL/software modes only lose the immersive visualizer
+    // eye-candy — the rest of the UI is intact and fast.
+    //
+    // Manual override: QBZ_RENDERER=software|cpu|soft forces software;
+    // QBZ_RENDERER=gl|gles|femtovg forces femtovg GL; QBZ_RENDERER=gpu|wgpu|hardware|hw
+    // forces wgpu; unset / "auto" auto-detects.
+    let use_gpu_renderer = select_slint_backend()?;
 
     // UI language: resolve the persisted language BEFORE the first window is
     // created, and set the Rust-side language now so `t()`/date helpers are
@@ -5451,6 +5812,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let window = AppWindow::new()?;
+    // Renderer auto-revert sentinel: disarm it once the window has been alive
+    // for a few seconds (renderer/driver init crashes happen at or shortly
+    // after realization; surviving this long counts as a working renderer).
+    // Single-shot timer — the binding must outlive this scope's run loop.
+    let _renderer_sentinel_timer = slint::Timer::default();
+    _renderer_sentinel_timer.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_secs(5),
+        clear_renderer_sentinel,
+    );
     // Now that the AppWindow (and its translation global context) exists, switch
     // the Slint bundled translations to `lang` and reseed the non-reactive
     // option arrays so the first paint is fully in the persisted language.
@@ -5458,6 +5829,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::warn!("[qbz-slint] select_bundled_translation('{lang}') failed: {e:?}");
     }
     reseed_i18n_labels(&window);
+    // Tell the user their renderer override was rolled back (set in
+    // renderer_tier_from_prefs when the previous start died before painting).
+    if RENDERER_REVERTED.load(std::sync::atomic::Ordering::Relaxed) {
+        crate::toast::warning(
+            &window,
+            qbz_i18n::t("Renderer setting reverted to Auto — the previous start didn't finish"),
+        );
+    }
     install_browser_mouse_nav(&window);
     wire_window_controls(&window);
     // FONT TEST (slint-mvp): render with bundled Inter 18pt. Inter is a
@@ -5672,29 +6051,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // WGPU UNDERLAY SPIKE: capture Slint's own wgpu Device/Queue at RenderingSetup
+    // WGPU UNDERLAY: capture Slint's own wgpu Device/Queue at RenderingSetup
     // so shader_underlay allocates its texture + submits on the SAME device Slint
     // renders with (mandatory for Image::try_from). The render itself happens in
     // the 30fps drain (visualizer.rs). Only one rendering notifier is allowed per
     // window; the shader underlay owns it. Errors here are non-fatal — the shader
     // just stays dark and the rest of the UI is unaffected.
-    if let Err(e) = window
-        .window()
-        .set_rendering_notifier(move |state, graphics_api| {
-            match state {
-                slint::RenderingState::RenderingSetup => {
-                    if let slint::GraphicsAPI::WGPU28 { device, queue, .. } = graphics_api {
-                        crate::shader_underlay::setup(device.clone(), queue.clone());
+    //
+    // Only registered when the GPU (wgpu) renderer was actually selected. In software
+    // mode there is no WGPU28 GraphicsAPI to hook, so registering it would be a no-op
+    // at best — skip it so software mode carries zero wgpu machinery.
+    if use_gpu_renderer {
+        if let Err(e) = window
+            .window()
+            .set_rendering_notifier(move |state, graphics_api| {
+                match state {
+                    slint::RenderingState::RenderingSetup => {
+                        if let slint::GraphicsAPI::WGPU28 { device, queue, .. } = graphics_api {
+                            crate::shader_underlay::setup(device.clone(), queue.clone());
+                        }
                     }
+                    slint::RenderingState::RenderingTeardown => {
+                        crate::shader_underlay::teardown();
+                    }
+                    _ => {}
                 }
-                slint::RenderingState::RenderingTeardown => {
-                    crate::shader_underlay::teardown();
-                }
-                _ => {}
-            }
-        })
-    {
-        log::warn!("[shader] set_rendering_notifier failed: {e:?} — underlay disabled");
+            })
+        {
+            log::warn!("[shader] set_rendering_notifier failed: {e:?} — underlay disabled");
+        }
+    } else {
+        log::info!("[shader] software renderer active — wgpu shader underlay disabled");
     }
 
     // MusicBrainz cache — opens a SQLite store at
@@ -7835,6 +8222,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut prefs = crate::ui_prefs::load();
                 prefs.startup_page = crate::ui_prefs::startup_page_for_index(index).to_string();
                 crate::ui_prefs::save(&prefs);
+            }
+            "renderer" => {
+                // 0 = Auto, 1 = GPU (wgpu), 2 = GPU compatibility (femtovg GL),
+                // 3 = Software. Startup-time choice — select_slint_backend()
+                // reads it before the window exists, so it applies on the next
+                // launch (a non-auto pick is protected by the auto-revert
+                // sentinel there).
+                let mut prefs = crate::ui_prefs::load();
+                prefs.renderer = crate::ui_prefs::renderer_for_index(index).to_string();
+                crate::ui_prefs::save(&prefs);
+                crate::toast::info_weak(
+                    &theme_weak,
+                    qbz_i18n::t("Renderer changed — restart QBZ to apply"),
+                );
             }
             "language" => {
                 // 0 = Auto, 1 = English, 2 = Español, 3 = Français, 4 = Deutsch,

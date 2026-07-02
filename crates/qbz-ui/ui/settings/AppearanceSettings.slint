@@ -785,5 +785,27 @@ export component AppearanceSettings inherits VerticalLayout {
     }
     */
 
+    // ===================================================================
+    // RENDERER  (Linux only — visibility seeded from Rust; macOS is
+    // always Skia/Metal so the group never shows there)
+    // ===================================================================
+    if AppearanceState.renderer-setting-visible: Rectangle { height: 12px; }
+    if AppearanceState.renderer-setting-visible: Divider { }
+    if AppearanceState.renderer-setting-visible: Rectangle { height: 12px; }
+    if AppearanceState.renderer-setting-visible: GroupHeader { text: @tr("RENDERER"); }
+    if AppearanceState.renderer-setting-visible: SettingRow {
+        label: @tr("Rendering backend");
+        description: @tr("Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)");
+        QbzSelect {
+            menu-width: 200px;
+            options: AppearanceState.renderer-options;
+            current-index: AppearanceState.renderer-index;
+            selected(i) => {
+                AppearanceState.renderer-index = i;
+                AppearanceState.appearance-select("renderer", i);
+            }
+        }
+    }
+
     Rectangle { height: 40px; }
 }

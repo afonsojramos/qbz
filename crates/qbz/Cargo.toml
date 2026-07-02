@@ -104,8 +104,20 @@ qbz-credentials = { path = "../qbz-credentials" }
 # wgpu pegs CPU on Metal for animated views). Both resolve to a *-wgpu renderer
 # (require_wgpu_28 in main.rs), so the shader underlay works on both. Features
 # merge with the base `slint` dep above for the matching target.
+# `renderer-femtovg` (GL) is the MIDDLE tier for weak GPUs (Raspberry Pi-class:
+# v3dv/panfrost/lima report a real Vulkan adapter but crawl under wgpu, while
+# Mesa's GLES path is mature and fast) — selected via renderer_name("femtovg")
+# in select_slint_backend (main.rs); no wgpu, so no shader underlay on that tier.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-slint = { version = "=1.16.1", features = ["renderer-femtovg-wgpu"] }
+slint = { version = "=1.16.1", features = ["renderer-femtovg-wgpu", "renderer-femtovg"] }
+# Direct access to our VENDORED femtovg renderer (see [patch.crates-io] in the
+# workspace Cargo.toml) for the per-window swapchain-alpha opt-in:
+# `wgpu::set_surface_prefers_transparent` is flipped from the winit
+# window-attributes hook so only the miniplayer gets a transparent (blended)
+# swapchain and the main window stays Opaque. Pinned exact like
+# i-slint-backend-winit above; `wgpu` matches the feature slint already
+# enables via renderer-femtovg-wgpu (pure unification, no extra code).
+i-slint-renderer-femtovg = { version = "=1.16.1", features = ["wgpu"] }
 
 # Linux system tray via StatusNotifierItem. Same crate + rationale as the
 # Tauri build (src-tauri/Cargo.toml): libayatana-appindicator never dispatches

@@ -95,5 +95,8 @@ strsim = "0.11"
 # makes borderless transparent windows show a black rectangular backing. The
 # patch keeps Slint pinned but chooses a supported non-opaque composite alpha
 # mode when the surface advertises one, so the miniplayer card can have real
-# transparent rounded corners.
+# transparent rounded corners. The non-opaque mode is PER-WINDOW opt-in
+# (`wgpu::set_surface_prefers_transparent`, flipped from qbz's winit
+# window-attributes hook): only the miniplayer pays the compositor-blend cost,
+# the main window keeps an Opaque swapchain.
 i-slint-renderer-femtovg = { path = "vendor/i-slint-renderer-femtovg-1.16.1" }

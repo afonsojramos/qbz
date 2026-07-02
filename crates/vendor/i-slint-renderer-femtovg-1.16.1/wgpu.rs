@@ -11,15 +11,48 @@ use crate::{FemtoVGRenderer, GraphicsBackend, WindowSurface};
 
 use wgpu_28 as wgpu;
 
-fn preferred_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMode {
-    [
-        wgpu::CompositeAlphaMode::PreMultiplied,
-        wgpu::CompositeAlphaMode::PostMultiplied,
-        wgpu::CompositeAlphaMode::Inherit,
-    ]
-    .into_iter()
-    .find(|mode| modes.contains(mode))
-    .unwrap_or(wgpu::CompositeAlphaMode::Auto)
+/// QBZ vendor patch: per-window swapchain alpha opt-in. When true, a
+/// `WGPUBackend` constructed via `new_suspended` captures a preference for a
+/// non-opaque composite alpha mode (needed for the borderless transparent
+/// miniplayer); when false (default) its surfaces stay Opaque/Auto so the
+/// compositor does not alpha-blend the whole main window every frame. The app
+/// sets this from its winit window-attributes hook, which runs on the event
+/// loop thread right before the window ADAPTER — and therefore this backend —
+/// is created. The value is captured PER BACKEND at construction rather than
+/// read in `set_surface`: `set_surface` re-runs at every winit re-realization
+/// (Wayland destroys the window on hide, and even the first realization is
+/// deferred to a later event-loop iteration), long after the hook fired, so
+/// reading the global there would leak the last-created window's preference
+/// into whichever window is (re)realized next.
+static SURFACE_PREFERS_TRANSPARENT: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// QBZ vendor patch: mark whether `WGPUBackend`s constructed from now on
+/// prefer a transparent (non-opaque) composite alpha mode for their surfaces.
+pub fn set_surface_prefers_transparent(transparent: bool) {
+    SURFACE_PREFERS_TRANSPARENT.store(transparent, core::sync::atomic::Ordering::Relaxed);
+}
+
+fn preferred_alpha_mode(
+    modes: &[wgpu::CompositeAlphaMode],
+    transparent: bool,
+) -> wgpu::CompositeAlphaMode {
+    if transparent {
+        [
+            wgpu::CompositeAlphaMode::PreMultiplied,
+            wgpu::CompositeAlphaMode::PostMultiplied,
+            wgpu::CompositeAlphaMode::Inherit,
+        ]
+        .into_iter()
+        .find(|mode| modes.contains(mode))
+        .unwrap_or(wgpu::CompositeAlphaMode::Auto)
+    } else if modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+        wgpu::CompositeAlphaMode::Opaque
+    } else {
+        // Auto is always valid (wgpu resolves it to Opaque or Inherit) and is
+        // upstream Slint's behavior, so this is the graceful fallback.
+        wgpu::CompositeAlphaMode::Auto
+    }
 }
 
 pub struct WGPUBackend {
@@ -28,6 +61,10 @@ pub struct WGPUBackend {
     queue: RefCell<Option<wgpu::Queue>>,
     surface_config: RefCell<Option<wgpu::SurfaceConfiguration>>,
     surface: RefCell<Option<wgpu::Surface<'static>>>,
+    /// QBZ vendor patch: captured from `SURFACE_PREFERS_TRANSPARENT` at
+    /// construction — this backend's window keeps the same alpha preference
+    /// across every surface re-creation.
+    prefers_transparent: bool,
 }
 
 pub struct WGPUWindowSurface {
@@ -52,6 +89,8 @@ impl GraphicsBackend for WGPUBackend {
             queue: Default::default(),
             surface_config: Default::default(),
             surface: Default::default(),
+            prefers_transparent: SURFACE_PREFERS_TRANSPARENT
+                .load(core::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -170,10 +209,13 @@ impl FemtoVGRenderer<WGPUBackend> {
             .copied()
             .unwrap_or_else(|| swapchain_capabilities.formats[0]);
         surface_config.format = swapchain_format;
-        surface_config.alpha_mode = preferred_alpha_mode(&swapchain_capabilities.alpha_modes);
+        let wants_transparent = self.graphics_backend.prefers_transparent;
+        surface_config.alpha_mode =
+            preferred_alpha_mode(&swapchain_capabilities.alpha_modes, wants_transparent);
         i_slint_core::debug_log!(
-            "[qbz-slint] femtovg-wgpu surface alpha modes: {:?}; selected: {:?}",
+            "[qbz-slint] femtovg-wgpu surface alpha modes: {:?}; transparent={}; selected: {:?}",
             swapchain_capabilities.alpha_modes,
+            wants_transparent,
             surface_config.alpha_mode
         );
         surface.configure(&device, &surface_config);

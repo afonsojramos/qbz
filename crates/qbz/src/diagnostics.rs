@@ -487,6 +487,19 @@ pub async fn build_full_report(runtime: &Runtime) -> String {
             opt(&d.env_gsk_renderer)
         ),
     );
+    {
+        let (renderer_runtime, renderer_adapters) = crate::renderer_decision_summary();
+        md_line(
+            &mut out,
+            "Renderer (Slint)",
+            &format!(
+                "saved {} / runtime {}",
+                crate::ui_prefs::load().renderer,
+                renderer_runtime
+            ),
+        );
+        md_line(&mut out, "GPU Adapters", &renderer_adapters);
+    }
     md_line(&mut out, "GDK Scale", &opt(&d.gfx_gdk_scale));
     md_line(&mut out, "GDK DPI Scale", &opt(&d.gfx_gdk_dpi_scale));
     md_line(&mut out, "Compositing Mode", compositing);
@@ -827,6 +840,11 @@ fn build_audio_rows(
 }
 
 fn build_graphics_rows(d: &qbz_app::diagnostics::RuntimeDiagnostics) -> Vec<DiagRow> {
+    // Active Slint renderer decision (wgpu / GL / software + why), recorded at
+    // startup by select_slint_backend. Saved side = the Settings>Appearance
+    // preference; runtime side = what actually got selected.
+    let (renderer_runtime, renderer_adapters) = crate::renderer_decision_summary();
+    let renderer_saved = crate::ui_prefs::load().renderer;
     let hw_saved = yn(d.gfx_hardware_acceleration);
     let hw_runtime = yn(d.runtime_hw_accel_enabled);
     let x11_saved = yn(d.gfx_force_x11);
@@ -850,6 +868,8 @@ fn build_graphics_rows(d: &qbz_app::diagnostics::RuntimeDiagnostics) -> Vec<Diag
     };
 
     vec![
+        row("Renderer (Slint)", &renderer_saved, &renderer_runtime, 0),
+        row("GPU Adapters", "—", &renderer_adapters, 0),
         row(
             "Hardware Acceleration",
             hw_saved,

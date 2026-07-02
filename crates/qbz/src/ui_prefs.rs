@@ -162,6 +162,27 @@ pub fn startup_page_index(key: &str) -> i32 {
     }
 }
 
+/// Renderer select index (0 = Auto, 1 = GPU, 2 = GPU compatibility/GL,
+/// 3 = Software) -> persisted key. Unknown indices fall back to "auto".
+pub fn renderer_for_index(index: i32) -> &'static str {
+    match index {
+        1 => "wgpu",
+        2 => "gl",
+        3 => "software",
+        _ => "auto",
+    }
+}
+
+/// Inverse: select index for a persisted renderer key.
+pub fn renderer_index(key: &str) -> i32 {
+    match key {
+        "wgpu" => 1,
+        "gl" => 2,
+        "software" => 3,
+        _ => 0,
+    }
+}
+
 /// Miniplayer default-view select index -> persisted key (mirrors the
 /// miniplayer's own reader in `miniplayer.rs`). 0 = "remember".
 pub fn mini_default_view_for_index(index: i32) -> &'static str {
@@ -398,11 +419,23 @@ pub struct UiPrefs {
     pub window_x: i32,
     #[serde(default = "default_window_pos")]
     pub window_y: i32,
+    /// Renderer tier override: `"auto"` (heuristic picks the best tier) |
+    /// `"wgpu"` | `"gl"` | `"software"`. Linux-only surface; read BEFORE the
+    /// window exists (`select_slint_backend`), so changes apply on restart.
+    /// A non-"auto" value is protected by the startup auto-revert sentinel
+    /// (see `renderer_sentinel` in main.rs): if the app dies before the first
+    /// window comes up, the next start reverts this to "auto".
+    #[serde(default = "default_renderer")]
+    pub renderer: String,
 }
 
 /// Sentinel for "no saved window position" (let the WM place the window).
 fn default_window_pos() -> i32 {
     i32::MIN
+}
+
+fn default_renderer() -> String {
+    "auto".to_string()
 }
 
 fn default_mini_surface() -> i32 {
@@ -532,6 +565,7 @@ impl Default for UiPrefs {
             window_height: 0.0,
             window_x: default_window_pos(),
             window_y: default_window_pos(),
+            renderer: default_renderer(),
         }
     }
 }

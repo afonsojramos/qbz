@@ -2994,6 +2994,14 @@ export global AppearanceState {
     in-out property <[string]> tray-icon-themes: [@tr("Auto"), @tr("Mono light"), @tr("Mono dark"), @tr("Color")];
     in-out property <int> tray-icon-theme-index: 0;
 
+    // --- RENDERER ----------------------------------------------------------
+    // Linux-only: the renderer tier (wgpu / GL / software) is a startup-time
+    // choice there. Hidden by default; Rust flips this on for Linux. macOS is
+    // always Skia/Metal, so the row never shows.
+    in-out property <bool> renderer-setting-visible: false;
+    in-out property <[string]> renderer-options: [@tr("Auto (recommended)"), @tr("GPU"), @tr("GPU (compatibility)"), @tr("Software")];
+    in-out property <int> renderer-index: 0;
+
     // --- IMMERSIVE ---------------------------------------------------------
     in-out property <[string]> immersive-views: [
         @tr("Remember last used"), @tr("Coverflow"), @tr("Static"), @tr("Vinyl"), @tr("Visualizer"),
