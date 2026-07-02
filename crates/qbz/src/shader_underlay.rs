@@ -10,11 +10,14 @@
 //!   * `setup()` is called once by the rendering notifier in main.rs at
 //!     `RenderingState::RenderingSetup`, with Slint's OWN wgpu Device/Queue —
 //!     mandatory so `Image::try_from` operates on the same device Slint renders
-//!     with. It builds the pipeline + uniform buffer + bind group (persistent).
+//!     with. It only STASHES them (cheap); pipelines/textures build lazily on
+//!     the first frame a shader scene is active (one-time hitch on first open),
+//!     and each scene's pipeline compiles on its first use.
 //!   * `render_frame()` is called from the 30 fps drain in visualizer.rs while a
-//!     shader scene is active. It renders one frame into a FRESH texture (the
-//!     documented upstream pattern — avoids read-while-write aliasing) and
-//!     returns an `Image`. The caller sets it on `ImmersiveState.shader-texture`.
+//!     shader scene is active AND the immersive view is open. It renders one
+//!     frame into the next texture of a rotating 3-deep pool sized to the
+//!     window (capped at `TEX_W`x`TEX_H`) and returns an `Image`. The caller
+//!     sets it on `ImmersiveState.shader-texture`.
 //!   * `teardown()` clears the state at `RenderingState::RenderingTeardown`.
 //!
 //! All three run on the UI thread (notifier + Timer share it), so the state lives
@@ -26,12 +29,11 @@ use std::cell::RefCell;
 use slint::wgpu_28::wgpu;
 use slint::Image;
 
-/// Offscreen render target size. The `Image` is shown with `image-fit: fill`, so
-/// the immersive viewport stretches this to fit. A plasma is organic/soft, so a
-/// fixed 720p target is plenty sharp for the spike (HiDPI-correct sizing is a
-/// Phase-1 concern, not a spike gate).
-// 1440p offscreen target = ~2x supersampling over a typical window, so the 1px
-// line-bed lines and shader edges resolve smoothly once Slint scales it down.
+/// Offscreen render target CEILING. The actual target tracks the window's
+/// physical pixel size (no point burning fill rate above it on small screens —
+/// Raspberry Pi class hardware) but never exceeds this cap; the `Image` is
+/// shown with `image-fit: fill`, so the immersive viewport stretches whatever
+/// size to fit.
 const TEX_W: u32 = 2560;
 const TEX_H: u32 = 1440;
 const TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -177,6 +179,11 @@ thread_local! {
 thread_local! {
     /// Last spectrogram column written (spectral-ribbon gap-fill).
     static SPECTRO_LAST_COL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Reused upload scratch for the spectral-ribbon column writes (mode 4):
+    /// (one quantized 512-band row, the gap-fill repetition of it). Avoids two
+    /// Vec allocations per spectral frame.
+    static SPECTRO_SCRATCH: RefCell<(Vec<u8>, Vec<u8>)> =
+        const { RefCell::new((Vec::new(), Vec::new())) };
 }
 
 /// 512 backend bands → 256 line heights in [0.1, 84] — Tauri's LinebedPanel
@@ -259,31 +266,62 @@ fn smooth3(d: &mut [f32; 256]) {
     }
 }
 
-struct RenderState {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    /// One render pipeline per shader scene, indexed by `mode - 1`:
-    ///   pipelines[0] = plasma  (mode 1) — feedback fluid, samples `history`
-    ///   pipelines[1] = tunnel  (mode 2)
-    ///   pipelines[2] = aurora  (mode 3)
-    /// All share one pipeline layout + bind group (uniform + history texture +
-    /// sampler); tunnel/aurora ignore bindings 1/2 (a shader using a SUBSET of
-    /// the layout is valid). `render_frame` picks the pipeline by index and, for
-    /// plasma, copies the frame into `history`.
-    pipelines: Vec<wgpu::RenderPipeline>,
-    uniform_buf: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
+/// GPU resources whose size tracks the window (recreated on resize by
+/// `render_frame`): the plasma history accumulator, the bind group (the VIEW of
+/// `history` is baked into it), and the rotating pool of offscreen targets.
+struct SizedResources {
+    /// Clamped target size: min(window physical size, TEX_W x TEX_H).
+    size: (u32, u32),
     /// Persistent feedback accumulator for the plasma fluid (Direction A). The
     /// plasma shader samples it (binding 1); each plasma frame is copied into it
     /// after the pass, so the next frame advects the previous one.
     history: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+    /// Rotating 3-deep pool of offscreen targets (replaces a fresh 14.7 MB
+    /// texture per frame). Safe: Slint's femtovg renderer holds only the
+    /// CURRENT frame's texture (per-item graphics cache keyed on the `source`
+    /// property; `ImageCacheKey` is None for WGPU textures so nothing lingers
+    /// in the shared texture cache — see vendored femtovg images.rs) — so a
+    /// pool texture is re-rendered ~2 ticks after Slint stopped referencing
+    /// it, and same-queue submission ordering serializes any residual GPU
+    /// reads regardless.
+    targets: [wgpu::Texture; 3],
+    next_target: usize,
+}
+
+/// Everything built lazily on the FIRST frame a shader scene is active —
+/// compiling six WGSL pipelines + allocating the history/spectrogram textures
+/// at first window paint costs startup time and VRAM even when the immersive
+/// shaders are never opened. Scene pipelines are additionally per-scene lazy.
+struct GpuResources {
+    bgl: wgpu::BindGroupLayout,
+    pipeline_layout: wgpu::PipelineLayout,
+    uniform_buf: wgpu::Buffer,
+    sampler: wgpu::Sampler,
     /// Persistent spectrogram for the spectral-ribbon scene (binding 3); written
-    /// one column per spectral frame, sampled for display.
+    /// one column per spectral frame, sampled for display. Fixed size.
     spectrogram: wgpu::Texture,
-    /// Line-bed (mode 5): the line-strip pipeline + its 256×200 heights texture.
-    linebed_pipeline: wgpu::RenderPipeline,
+    /// Line-bed (mode 5) 256×200 heights texture (binding 4). Fixed size.
     heights_tex: wgpu::Texture,
+    /// One render pipeline per fullscreen shader scene, indexed like
+    /// `SHADER_SOURCES` (modes 1-4 → 0..3, mode 6 → 4), each compiled+cached on
+    /// its first use. All share one pipeline layout + bind group (uniform +
+    /// history texture + sampler); scenes ignore the bindings they don't
+    /// declare (a shader using a SUBSET of the layout is valid). `render_frame`
+    /// picks the pipeline by index and, for plasma, copies the frame into
+    /// `history`.
+    pipelines: Vec<Option<wgpu::RenderPipeline>>,
+    /// Line-bed (mode 5): its own line-strip pipeline, also lazy.
+    linebed_pipeline: Option<wgpu::RenderPipeline>,
+    sized: SizedResources,
+}
+
+struct RenderState {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
     start: std::time::Instant,
+    /// None until the first `render_frame` with a shader scene active.
+    res: Option<GpuResources>,
 }
 
 /// The WGSL source for each scene, in mode order (index = mode - 1). Adding a
@@ -302,11 +340,27 @@ thread_local! {
     static PALETTE: RefCell<Palette> = const { RefCell::new(Palette::DEFAULT) };
 }
 
-/// Build the persistent pipeline from Slint's device/queue. Called once at
-/// `RenderingSetup`. Idempotent-ish: a second call rebuilds (cheap; only happens
-/// if the rendering surface is torn down and re-created).
+/// Stash Slint's device/queue. Called once at `RenderingSetup`. Deliberately
+/// CHEAP: no WGSL compilation, no texture allocation — those happen lazily in
+/// `render_frame` on first shader use, so sessions that never open a shader
+/// scene pay nothing at window paint. A second call re-stashes and drops any
+/// built resources (only happens if the rendering surface is re-created).
 pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
-    // One bind group layout shared by all three pipelines: the uniform buffer
+    STATE.with(|s| {
+        *s.borrow_mut() = Some(RenderState {
+            device,
+            queue,
+            start: std::time::Instant::now(),
+            res: None,
+        });
+    });
+    log::info!("[shader] wgpu device/queue captured (GPU resources build on first shader use)");
+}
+
+/// Build the shared (size-independent) GPU resources plus the initial sized
+/// set. Runs once, on the first frame a shader scene is active.
+fn build_shared(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32) -> GpuResources {
+    // One bind group layout shared by all pipelines: the uniform buffer
     // (binding 0) plus the feedback history texture (binding 1) + its sampler
     // (binding 2). Only the plasma fluid samples 1/2; tunnel/aurora declare just
     // binding 0 (a pipeline whose shader uses a SUBSET of the layout is valid).
@@ -377,7 +431,8 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         mapped_at_creation: false,
     });
 
-    // Bilinear sampler + persistent history texture for the plasma feedback loop.
+    // Bilinear sampler for the plasma feedback history (the history texture
+    // itself is size-dependent and lives in build_sized).
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("qbz-shader-feedback-sampler"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -388,23 +443,6 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         mipmap_filter: wgpu::MipmapFilterMode::Nearest,
         ..Default::default()
     });
-    let history = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("qbz-shader-history"),
-        size: wgpu::Extent3d {
-            width: TEX_W,
-            height: TEX_H,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: TEX_FORMAT,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let history_view = history.create_view(&wgpu::TextureViewDescriptor::default());
 
     // Spectral-ribbon spectrogram: 512 freq bands (width) × SPECTRO_COLS time
     // columns (height), R8. Written one row per spectral frame in render_frame,
@@ -423,7 +461,6 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let spectrogram_view = spectrogram.create_view(&wgpu::TextureViewDescriptor::default());
 
     // Line-bed heights: an R32Float texture (256 band wide × 200 line tall,
     // depth-ordered rows), uploaded per frame in the mode-5 path and read via
@@ -443,7 +480,77 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let heights_view = heights_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("qbz-shader-pl"),
+        bind_group_layouts: &[&bgl],
+        // wgpu 28.x: replaces `push_constant_ranges`. We use none.
+        immediate_size: 0,
+    });
+
+    // Scene pipelines compile on their first use (see render_frame); start empty.
+    let mut pipelines: Vec<Option<wgpu::RenderPipeline>> =
+        Vec::with_capacity(SHADER_SOURCES.len());
+    pipelines.resize_with(SHADER_SOURCES.len(), || None);
+
+    let sized = build_sized(
+        device,
+        queue,
+        &bgl,
+        &uniform_buf,
+        &sampler,
+        &spectrogram,
+        &heights_tex,
+        w,
+        h,
+    );
+
+    GpuResources {
+        bgl,
+        pipeline_layout,
+        uniform_buf,
+        sampler,
+        spectrogram,
+        heights_tex,
+        pipelines,
+        linebed_pipeline: None,
+        sized,
+    }
+}
+
+/// (Re)build the window-size-tracking resources: the plasma history
+/// accumulator, the rotating target pool, and the bind group (the history VIEW
+/// is baked into it, so a size change forces a bind-group rebuild). A resize
+/// drops the plasma feedback content — it re-accumulates within a few frames.
+#[allow(clippy::too_many_arguments)]
+fn build_sized(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    bgl: &wgpu::BindGroupLayout,
+    uniform_buf: &wgpu::Buffer,
+    sampler: &wgpu::Sampler,
+    spectrogram: &wgpu::Texture,
+    heights_tex: &wgpu::Texture,
+    w: u32,
+    h: u32,
+) -> SizedResources {
+    let history = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("qbz-shader-history"),
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: TEX_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let history_view = history.create_view(&wgpu::TextureViewDescriptor::default());
 
     // Clear the accumulator once so the first plasma frame samples black, not
     // uninitialized GPU memory.
@@ -472,9 +579,12 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         queue.submit(Some(enc.finish()));
     }
 
+    let spectrogram_view = spectrogram.create_view(&wgpu::TextureViewDescriptor::default());
+    let heights_view = heights_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("qbz-shader-bg"),
-        layout: &bgl,
+        layout: bgl,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -486,7 +596,7 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::Sampler(&sampler),
+                resource: wgpu::BindingResource::Sampler(sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
@@ -499,63 +609,95 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         ],
     });
 
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("qbz-shader-pl"),
-        bind_group_layouts: &[&bgl],
-        // wgpu 28.x: replaces `push_constant_ranges`. We use none.
-        immediate_size: 0,
-    });
-
-    // Build one pipeline per scene (plasma + tunnel + aurora). They share the
-    // pipeline layout / bind group / uniform buffer / vertex stage; only the
-    // fragment shader source differs. `vs_main` / `fs_main` entry points are
-    // identical across all three WGSL files (the fullscreen-triangle template).
-    let mut pipelines: Vec<wgpu::RenderPipeline> = Vec::with_capacity(SHADER_SOURCES.len());
-    for (i, src) in SHADER_SOURCES.iter().enumerate() {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("qbz-shader-module"),
-            source: wgpu::ShaderSource::Wgsl((*src).into()),
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("qbz-shader-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
+    // The rotating offscreen pool. Image::try_from REQUIRES Rgba8Unorm/Srgb +
+    // TEXTURE_BINDING | RENDER_ATTACHMENT (Slint graphics/wgpu_28.rs); COPY_SRC
+    // feeds the plasma history copy.
+    let make_target = || {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("qbz-shader-target"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
             },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: TEX_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        pipelines.push(pipeline);
-        log::debug!("[shader] pipeline {} built (mode {})", i, i + 1);
-    }
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEX_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    };
+    let targets = [make_target(), make_target(), make_target()];
 
-    // Line-bed (mode 5): a SEPARATE pipeline — line-strip topology + alpha blend
-    // + the projecting vertex shader. Shares the pipeline layout / bind group.
+    SizedResources {
+        size: (w, h),
+        history,
+        bind_group,
+        targets,
+        next_target: 0,
+    }
+}
+
+/// Compile one fullscreen scene pipeline (`SHADER_SOURCES[idx]`). All scenes
+/// share the pipeline layout / bind group / uniform buffer / vertex stage; only
+/// the fragment shader source differs. `vs_main` / `fs_main` entry points are
+/// identical across the scene WGSL files (the fullscreen-triangle template).
+fn build_scene_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+    idx: usize,
+) -> wgpu::RenderPipeline {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("qbz-shader-module"),
+        source: wgpu::ShaderSource::Wgsl(SHADER_SOURCES[idx].into()),
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("qbz-shader-pipeline"),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: TEX_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    log::debug!("[shader] scene pipeline {idx} built");
+    pipeline
+}
+
+/// Line-bed (mode 5): a SEPARATE pipeline — line-strip topology + alpha blend
+/// + the projecting vertex shader. Shares the pipeline layout / bind group.
+fn build_linebed_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
     let linebed_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("qbz-linebed-module"),
         source: wgpu::ShaderSource::Wgsl(
             include_str!("../../qbz-ui/ui/shaders/line_bed.wgsl").into(),
         ),
     });
-    let linebed_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("qbz-linebed-pipeline"),
-        layout: Some(&pipeline_layout),
+        layout: Some(pipeline_layout),
         vertex: wgpu::VertexState {
             module: &linebed_module,
             entry_point: Some("vs_main"),
@@ -580,24 +722,7 @@ pub fn setup(device: wgpu::Device, queue: wgpu::Queue) {
         }),
         multiview_mask: None,
         cache: None,
-    });
-
-    let n = pipelines.len();
-    STATE.with(|s| {
-        *s.borrow_mut() = Some(RenderState {
-            device,
-            queue,
-            pipelines,
-            uniform_buf,
-            bind_group,
-            history,
-            spectrogram,
-            linebed_pipeline,
-            heights_tex,
-            start: std::time::Instant::now(),
-        });
-    });
-    log::info!("[shader] wgpu underlay ready ({n} scenes, {TEX_W}x{TEX_H} {TEX_FORMAT:?})");
+    })
 }
 
 /// Drop the pipeline at surface teardown.
@@ -627,30 +752,75 @@ pub fn set_palette(primary: slint::Color, secondary: slint::Color, accent: slint
     });
 }
 
-/// Render one frame of scene `mode` into a fresh texture and return it as a
-/// Slint `Image`. `mode` is the `ImmersiveState.shader-mode` value (1 = plasma,
-/// 2 = tunnel, 3 = aurora); the pipeline index is `mode - 1`. Returns `None`
-/// before `setup()` has run, for `mode <= 0`, or for an out-of-range mode
-/// (defensive — the UI never sends one). Driven at 30 fps from visualizer.rs.
-pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
-    if mode <= 0 {
+/// Render one frame of scene `mode` into the next pool target and return it as
+/// a Slint `Image`. `mode` is the `ImmersiveState.shader-mode` value (1 =
+/// plasma, 2 = tunnel, 3 = aurora, ...). `win_w`/`win_h` is the window's
+/// PHYSICAL pixel size: the offscreen target is clamped to it (capped at
+/// `TEX_W`x`TEX_H`) and the pool is rebuilt when it changes. Returns `None`
+/// before `setup()` has run, for `mode <= 0`, or for a zero-sized window.
+/// Driven at 30 fps from visualizer.rs while the immersive view is open with a
+/// shader scene active.
+pub fn render_frame(mode: i32, a: &FrameAudio, win_w: u32, win_h: u32) -> Option<Image> {
+    if mode <= 0 || win_w == 0 || win_h == 0 {
         return None;
     }
     STATE.with(|s| {
-        let borrow = s.borrow();
-        let st = borrow.as_ref()?;
+        let mut borrow = s.borrow_mut();
+        let st = borrow.as_mut()?;
+        let (tw, th) = (win_w.min(TEX_W), win_h.min(TEX_H));
 
-        // Pick the pipeline: line-bed (mode 5) uses its own line-strip pipeline;
-        // the fullscreen scenes index by (mode - 1). Bounds-guard: fall back to
-        // the plasma pipeline (index 0) if a mode is ever out of range, so the
-        // underlay degrades gracefully instead of panicking on an indexing error.
-        let pipeline = if mode == 5 {
-            &st.linebed_pipeline
+        // Lazy one-time build of the shared GPU resources (first shader open).
+        if st.res.is_none() {
+            let t0 = std::time::Instant::now();
+            st.res = Some(build_shared(&st.device, &st.queue, tw, th));
+            log::info!(
+                "[shader] GPU resources built lazily in {:?} ({tw}x{th} {TEX_FORMAT:?})",
+                t0.elapsed()
+            );
+        }
+        let res = st.res.as_mut()?;
+        if res.sized.size != (tw, th) {
+            res.sized = build_sized(
+                &st.device,
+                &st.queue,
+                &res.bgl,
+                &res.uniform_buf,
+                &res.sampler,
+                &res.spectrogram,
+                &res.heights_tex,
+                tw,
+                th,
+            );
+            log::info!("[shader] render targets resized to {tw}x{th}");
+        }
+
+        // Rotate the target pool BEFORE taking the pipeline reference (the
+        // pipeline borrow below is shared; this is the last `res` mutation
+        // besides the lazy pipeline builds).
+        let texture = res.sized.targets[res.sized.next_target].clone();
+        res.sized.next_target = (res.sized.next_target + 1) % res.sized.targets.len();
+
+        // Pick (and lazily compile+cache) the pipeline: line-bed (mode 5) uses
+        // its own line-strip pipeline; the fullscreen scenes map mode →
+        // SHADER_SOURCES index. Bounds-guard: fall back to the plasma pipeline
+        // (index 0) if a mode is ever out of range, so the underlay degrades
+        // gracefully instead of panicking on an indexing error.
+        let pipeline: &wgpu::RenderPipeline = if mode == 5 {
+            if res.linebed_pipeline.is_none() {
+                res.linebed_pipeline =
+                    Some(build_linebed_pipeline(&st.device, &res.pipeline_layout));
+            }
+            res.linebed_pipeline.as_ref()?
         } else {
             // modes 1-4 → pipelines[0..3]; mode 6 (liquid spectrum) → pipelines[4].
             // mode 5 is line_bed's own pipeline above, so the index skips it.
             let idx = if mode == 6 { 4 } else { (mode - 1) as usize };
-            st.pipelines.get(idx).or_else(|| st.pipelines.first())?
+            let idx = if idx < SHADER_SOURCES.len() { idx } else { 0 };
+            if res.pipelines[idx].is_none() {
+                res.pipelines[idx] =
+                    Some(build_scene_pipeline(&st.device, &res.pipeline_layout, idx));
+            }
+            res.pipelines[idx].as_ref()?
         };
 
         let pal = PALETTE.with(|p| *p.borrow());
@@ -659,8 +829,8 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
             phase: a.phase,
             beat: a.beat,
             level: a.level,
-            res_x: TEX_W as f32,
-            res_y: TEX_H as f32,
+            res_x: tw as f32,
+            res_y: th as f32,
             level_smooth: a.level_smooth,
             transient: a.transient,
             energy_lo: [a.energy[0], a.energy[1], a.energy[2], a.energy[3]],
@@ -672,17 +842,19 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
             accent: pal.accent,
         };
         st.queue
-            .write_buffer(&st.uniform_buf, 0, uniforms_bytes(&uniforms));
+            .write_buffer(&res.uniform_buf, 0, uniforms_bytes(&uniforms));
 
         // Spectral ribbon (mode 4): feed the persistent spectrogram before the
         // display pass. Reset (clear) on track-change/seek, then write the new
         // 512-band column at the playback-time position (paint-as-you-play).
         if mode == 4 {
             if a.reset {
+                // Full-texture clear — rare (track change / seek only), so the
+                // 1 MB zero buffer is not worth keeping around.
                 let zeros = vec![0u8; (SPECTRO_BANDS * SPECTRO_COLS) as usize];
                 st.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
-                        texture: &st.spectrogram,
+                        texture: &res.spectrogram,
                         mip_level: 0,
                         origin: wgpu::Origin3d::ZERO,
                         aspect: wgpu::TextureAspect::All,
@@ -705,41 +877,46 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
                 if !bins.is_empty() {
                     let col = (a.progress.clamp(0.0, 1.0) * (SPECTRO_COLS - 1) as f32) as u32;
                     let n = SPECTRO_BANDS as usize;
-                    let mut row = vec![0u8; n];
-                    for (i, slot) in row.iter_mut().enumerate() {
-                        if i < bins.len() {
-                            *slot = (bins[i].clamp(0.0, 1.0) * 255.0) as u8;
+                    SPECTRO_SCRATCH.with(|scratch| {
+                        let (row, data) = &mut *scratch.borrow_mut();
+                        row.clear();
+                        row.resize(n, 0);
+                        for (i, slot) in row.iter_mut().enumerate() {
+                            if i < bins.len() {
+                                *slot = (bins[i].clamp(0.0, 1.0) * 255.0) as u8;
+                            }
                         }
-                    }
-                    // Gap-fill: paint every column skipped since the last write
-                    // (progress updates ~1 Hz, so the column jumps several slots).
-                    let last = SPECTRO_LAST_COL.with(|c| c.get());
-                    let start = if col > last { last + 1 } else { col };
-                    let count = col + 1 - start;
-                    let mut data = Vec::with_capacity(n * count as usize);
-                    for _ in 0..count {
-                        data.extend_from_slice(&row);
-                    }
-                    st.queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &st.spectrogram,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d { x: 0, y: start, z: 0 },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        &data,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(SPECTRO_BANDS),
-                            rows_per_image: Some(count),
-                        },
-                        wgpu::Extent3d {
-                            width: SPECTRO_BANDS,
-                            height: count,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                    SPECTRO_LAST_COL.with(|c| c.set(col));
+                        // Gap-fill: paint every column skipped since the last write
+                        // (progress updates ~1 Hz, so the column jumps several slots).
+                        let last = SPECTRO_LAST_COL.with(|c| c.get());
+                        let start = if col > last { last + 1 } else { col };
+                        let count = col + 1 - start;
+                        data.clear();
+                        data.reserve(n * count as usize);
+                        for _ in 0..count {
+                            data.extend_from_slice(&row[..]);
+                        }
+                        st.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &res.spectrogram,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d { x: 0, y: start, z: 0 },
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            &data[..],
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(SPECTRO_BANDS),
+                                rows_per_image: Some(count),
+                            },
+                            wgpu::Extent3d {
+                                width: SPECTRO_BANDS,
+                                height: count,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                        SPECTRO_LAST_COL.with(|c| c.set(col));
+                    });
                 }
             }
         }
@@ -756,7 +933,7 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
                 let lb = lb.borrow();
                 st.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
-                        texture: &st.heights_tex,
+                        texture: &res.heights_tex,
                         mip_level: 0,
                         origin: wgpu::Origin3d::ZERO,
                         aspect: wgpu::TextureAspect::All,
@@ -776,24 +953,9 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
             });
         }
 
-        // Fresh target each frame. Image::try_from REQUIRES Rgba8Unorm/Srgb +
-        // TEXTURE_BINDING | RENDER_ATTACHMENT (Slint graphics/wgpu_28.rs).
-        let texture = st.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("qbz-shader-target"),
-            size: wgpu::Extent3d {
-                width: TEX_W,
-                height: TEX_H,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: TEX_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        // Render into the pool texture picked above (a clone = the same
+        // underlying wgpu texture; Image::try_from consumes our handle while
+        // the pool keeps its own).
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = st
@@ -821,7 +983,7 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
                 multiview_mask: None,
             });
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &st.bind_group, &[]);
+            pass.set_bind_group(0, &res.sized.bind_group, &[]);
             if mode == 5 {
                 // 200 instanced line strips, each a subdivided Catmull-Rom curve
                 // of (255 * SUBDIV + 1) points.
@@ -841,14 +1003,14 @@ pub fn render_frame(mode: i32, a: &FrameAudio) -> Option<Image> {
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::TexelCopyTextureInfo {
-                    texture: &st.history,
+                    texture: &res.sized.history,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::Extent3d {
-                    width: TEX_W,
-                    height: TEX_H,
+                    width: tw,
+                    height: th,
                     depth_or_array_layers: 1,
                 },
             );

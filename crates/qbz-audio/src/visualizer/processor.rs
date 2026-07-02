@@ -65,9 +65,17 @@ pub trait VizSink: Send + Sync {
     fn submit(&self, frame: VizFrame);
 }
 
+/// Disabled-state idle poll. Instead of spinning at `TARGET_FPS` while the tap
+/// is off, the producer parks for this long between `enabled` re-checks. An
+/// enable path MAY `unpark()` the thread (via the returned `JoinHandle`'s
+/// `.thread()`) for an instant wake — the Slint frontend does; callers that
+/// don't still get picked up within this bound.
+const IDLE_POLL: Duration = Duration::from_millis(200);
+
 /// Spawn the FFT processing thread. Idempotency is the caller's concern (the
 /// `Visualizer`/shell guards against a double start). Returns the join handle;
-/// callers that run for the app lifetime can drop it.
+/// callers that run for the app lifetime can drop it (or keep `.thread()` to
+/// `unpark()` on enable, see [`IDLE_POLL`]).
 pub fn spawn_visualizer_thread(tap: VisualizerTap, sink: Arc<dyn VizSink>) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("visualizer-fft".to_string())
@@ -78,9 +86,10 @@ pub fn spawn_visualizer_thread(tap: VisualizerTap, sink: Arc<dyn VizSink>) -> Jo
 }
 
 /// Main FFT processing loop. Reads samples from the tap's ring buffer, computes
-/// all five streams at `TARGET_FPS`, and submits them to the sink. Pacing,
-/// `enabled`/`sample_rate` reads, and the `SpectralAnalyzer` cadence are
-/// byte-for-byte identical to the historical Tauri loop.
+/// all five streams at `TARGET_FPS`, and submits them to the sink. The enabled
+/// path (pacing, `sample_rate` reads, `SpectralAnalyzer` cadence, DSP) matches
+/// the historical Tauri loop; while DISABLED the thread parks (see [`IDLE_POLL`])
+/// instead of spinning at `TARGET_FPS`.
 fn run_fft_loop(tap: VisualizerTap, sink: Arc<dyn VizSink>) {
     // Pre-allocate all buffers to avoid allocations in the hot path
     let mut samples = vec![0.0f32; FFT_SIZE];
@@ -88,9 +97,9 @@ fn run_fft_loop(tap: VisualizerTap, sink: Arc<dyn VizSink>) {
     let mut output = vec![0.0f32; NUM_BARS];
     let mut smoothed = vec![0.0f32; NUM_BARS];
 
-    // Waveform buffer: 256 L + 256 R = 512 floats
+    // Waveform: 256 L + 256 R = 512 floats, written straight into the per-frame
+    // Box (see the submit site — the Box itself must stay per-frame).
     const WAVEFORM_POINTS: usize = 256;
-    let mut waveform_buf = vec![0.0f32; WAVEFORM_POINTS * 2];
 
     // Energy bands state
     let mut energy_bands = [0.0f32; NUM_ENERGY_BANDS];
@@ -115,9 +124,18 @@ fn run_fft_loop(tap: VisualizerTap, sink: Arc<dyn VizSink>) {
     let frame_duration = Duration::from_micros(1_000_000 / TARGET_FPS);
 
     loop {
+        if !tap.enabled.load(Ordering::Relaxed) {
+            // Disabled: park instead of pacing at TARGET_FPS doing nothing.
+            // Spurious wakeups are fine (the loop just re-checks the atomic);
+            // the bounded timeout means no enable path is REQUIRED to unpark.
+            // Never blocks shutdown: the thread is detached and always wakes.
+            std::thread::park_timeout(IDLE_POLL);
+            continue;
+        }
+
         let frame_start = Instant::now();
 
-        if tap.enabled.load(Ordering::Relaxed) {
+        {
             let sample_rate = tap.sample_rate.load(Ordering::Relaxed);
 
             // Get samples from ring buffer
@@ -165,7 +183,12 @@ fn run_fft_loop(tap: VisualizerTap, sink: Arc<dyn VizSink>) {
                     sink.submit(VizFrame::Viz16(bars));
 
                     // --- Energy Bands: compute RMS per frequency band from spectrum ---
+                    // ONE spectrum pass per band; the smoothed band value AND the
+                    // transient raw RMS both derive from the same `compressed`
+                    // aggregate (the former separate raw-RMS loop computed the
+                    // identical per-band value — merged, not changed).
                     let data = spectrum.data();
+                    let mut raw_sum = 0.0f32;
                     for (band_idx, &(lo, hi)) in ENERGY_BAND_RANGES.iter().enumerate() {
                         let mut sum_sq = 0.0f32;
                         let mut count = 0u32;
@@ -193,36 +216,15 @@ fn run_fft_loop(tap: VisualizerTap, sink: Arc<dyn VizSink>) {
                                 smoothed_energy[band_idx] * 0.85 + compressed * 0.15;
                         }
                         energy_bands[band_idx] = smoothed_energy[band_idx];
+                        // Transient feed: raw (pre-smoothed) value, bass/sub-bass
+                        // weighted 2x for beat detection.
+                        let weight = if band_idx < 2 { 2.0 } else { 1.0 };
+                        raw_sum += compressed * weight;
                     }
                     sink.submit(VizFrame::Energy5(energy_bands));
 
                     // --- Transient Detection: detect sharp RMS jumps ---
-                    // Use raw (pre-smoothed) RMS for transient sensitivity.
-                    // Weight bass/sub-bass more heavily for beat detection.
-                    let raw_rms = {
-                        let mut raw_sum = 0.0f32;
-                        for (band_idx, &(lo, hi)) in ENERGY_BAND_RANGES.iter().enumerate() {
-                            let mut sum_sq = 0.0f32;
-                            let mut cnt = 0u32;
-                            for (freq, magnitude) in data.iter() {
-                                let f = freq.val();
-                                if f >= lo && f < hi {
-                                    let mag = magnitude.val();
-                                    sum_sq += mag * mag;
-                                    cnt += 1;
-                                }
-                            }
-                            let band_rms = if cnt > 0 {
-                                (sum_sq / cnt as f32).sqrt()
-                            } else {
-                                0.0
-                            };
-                            // Bass/sub-bass weighted 2x for beat detection
-                            let weight = if band_idx < 2 { 2.0 } else { 1.0 };
-                            raw_sum += (band_rms * 6.0).powf(0.5).clamp(0.0, 1.0) * weight;
-                        }
-                        raw_sum / (NUM_ENERGY_BANDS as f32 + 2.0) // account for extra bass weight
-                    };
+                    let raw_rms = raw_sum / (NUM_ENERGY_BANDS as f32 + 2.0); // account for extra bass weight
                     let rms_delta = raw_rms - prev_rms;
 
                     if transient_cooldown > 0 {
@@ -246,15 +248,16 @@ fn run_fft_loop(tap: VisualizerTap, sink: Arc<dyn VizSink>) {
             // Raw waveform data for the oscilloscope (stereo L/R).
             // samples[] is interleaved: L0, R0, L1, R1, ...
             // 1024 samples = 512 stereo pairs → downsample to 256 per channel
+            // The Box allocation is load-bearing: ownership moves through the
+            // sink into the UI's single-slot cell, so it cannot be reused here.
             let stereo_pairs = FFT_SIZE / 2; // 512
             let step = stereo_pairs / WAVEFORM_POINTS; // 512/256 = 2
+            let mut wave = Box::new([0.0f32; 512]);
             for i in 0..WAVEFORM_POINTS {
                 let base = i * step * 2; // index into interleaved buffer
-                waveform_buf[i] = samples[base]; // L
-                waveform_buf[WAVEFORM_POINTS + i] = samples[base + 1]; // R
+                wave[i] = samples[base]; // L
+                wave[WAVEFORM_POINTS + i] = samples[base + 1]; // R
             }
-            let mut wave = Box::new([0.0f32; 512]);
-            wave.copy_from_slice(&waveform_buf);
             sink.submit(VizFrame::Wave256x2(wave));
         }
 

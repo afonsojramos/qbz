@@ -60,7 +60,8 @@ impl VizSink for SlintVizSink {
 
 thread_local! {
     /// Keeps the drain timer alive for the app lifetime (a dropped `Timer` stops
-    /// firing). Lives on the UI thread, like the models it writes.
+    /// firing) and reachable from the set-enabled handler, which restarts/stops
+    /// it with the tap. Lives on the UI thread, like the models it writes.
     static DRAIN_TIMER: RefCell<Option<slint::Timer>> = const { RefCell::new(None) };
 }
 
@@ -86,18 +87,14 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
     st.set_energy(ModelRc::from(energy.clone()));
     st.set_waveform(ModelRc::from(waveform.clone()));
 
-    // set-enabled → toggle capture on the tap directly.
-    {
-        let tap = tap.clone();
-        st.on_set_enabled(move |on| tap.set_enabled(on));
-    }
-
     // Producer thread: computes the five streams, latches each into its cell.
+    // Keep its `Thread` handle so the set-enabled handler (registered below,
+    // after the drain timer exists) can unpark it out of its disabled idle.
     let cells = Arc::new(VizCells::default());
     let sink = Arc::new(SlintVizSink {
         cells: cells.clone(),
     });
-    let _ = spawn_visualizer_thread(tap, sink);
+    let fft_thread = spawn_visualizer_thread(tap.clone(), sink).thread().clone();
 
     // ~30 fps drain on the UI thread: copy the latest frames into the models.
     let weak = window.as_weak();
@@ -159,15 +156,18 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
 
             // WGPU UNDERLAY SPIKE: render one GPU shader frame into the wgpu
             // texture and hand it to ImmersiveState. Only runs while a shader
-            // scene is active (shader-mode > 0); otherwise zero GPU cost. The
-            // device/queue were captured by the rendering notifier (main.rs);
-            // render_frame is a no-op until that fires.
+            // scene is active (shader-mode > 0) AND the immersive view is OPEN
+            // — the close handlers clear `open` but deliberately keep
+            // shader-mode (reopening restores the scene), so without the open
+            // check the fragment pass would keep running invisibly after close.
+            // The device/queue were captured by the rendering notifier
+            // (main.rs); render_frame is a no-op until that fires.
             last_tr *= 0.85;
             last_beat *= 0.88;
             if let Some(w) = weak.upgrade() {
                 let imm = w.global::<ImmersiveState>();
                 let m = imm.get_shader_mode();
-                if m > 0 {
+                if m > 0 && imm.get_open() {
                     // Derive the enriched audio pack from the latched cells.
                     let mut bands8 = [0.0f32; 8];
                     for i in 0..8 {
@@ -234,13 +234,51 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
                         reset,
                         spectral_peak: last_peak,
                     };
-                    if let Some(img) = crate::shader_underlay::render_frame(m, &audio) {
+                    // Window physical size → the underlay clamps its offscreen
+                    // target to it (capped at its 2560x1440 ceiling).
+                    let win_size = w.window().size();
+                    if let Some(img) = crate::shader_underlay::render_frame(
+                        m,
+                        &audio,
+                        win_size.width,
+                        win_size.height,
+                    ) {
                         imm.set_shader_texture(img);
                     }
                 }
             }
         },
     );
+    // The drain only needs to run while the tap captures (it used to tick for
+    // the whole app lifetime doing lock/None-takes). Register the callback via
+    // start(), then park it stopped; the set-enabled handler below restarts /
+    // stops it together with the tap. All on the UI thread.
+    timer.stop();
     DRAIN_TIMER.with(|t| *t.borrow_mut() = Some(timer));
-    log::info!("[viz] producer + 30fps drain installed (tap disabled until immersive opens)");
+
+    // set-enabled → toggle capture on the tap, wake the parked FFT producer,
+    // and start/stop the UI drain timer. Registered AFTER the timer is stored
+    // so any invoke — including the initial seed in main.rs, which runs right
+    // after install() — always finds it.
+    {
+        let tap = tap.clone();
+        st.on_set_enabled(move |on| {
+            tap.set_enabled(on);
+            if on {
+                // The producer parks (park_timeout) while disabled; unpark for
+                // an instant wake instead of waiting out its idle poll.
+                fft_thread.unpark();
+            }
+            DRAIN_TIMER.with(|t| {
+                if let Some(timer) = t.borrow().as_ref() {
+                    if on {
+                        timer.restart();
+                    } else {
+                        timer.stop();
+                    }
+                }
+            });
+        });
+    }
+    log::info!("[viz] producer + 30fps drain installed (idle until the tap enables)");
 }
